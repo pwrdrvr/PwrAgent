@@ -36,11 +36,21 @@ const VISUAL_MAX_DIFF_PIXELS = 20;
 const VISUAL_CLOCK_TIME = new Date("2026-08-02T12:00:00.000Z");
 const VISUAL_APP_VERSION = "1.2.3-beta.1";
 const VISUAL_INITIAL_LOAD_DURATION = "3 ms";
+// Pin the backing scale factor. Chromium otherwise rasterizes at the attached
+// display's native scale, so the same CSS layout produces pixel-different
+// images in 1x and Retina 2x sessions. `scale: "css"` normalizes only the
+// screenshot dimensions, not that backing rasterization. The checked-in
+// goldens encode 1x output, matching the established PwrSnap visual harness.
+const VISUAL_ELECTRON_ARGS = ["--force-device-scale-factor=1"];
 
 async function waitForFonts(page: Page): Promise<void> {
   await page.evaluate(async () => {
     await document.fonts.ready;
   });
+}
+
+async function expectPinnedDeviceScale(page: Page): Promise<void> {
+  expect(await page.evaluate(() => window.devicePixelRatio)).toBe(1);
 }
 
 test.describe("visual regression", () => {
@@ -59,11 +69,16 @@ test.describe("visual regression", () => {
         specDir,
         "fixtures/codex-todo-list/replay.fixture.json",
       ),
-      env: { PWRAGENT_E2E_APP_VERSION: VISUAL_APP_VERSION },
+      env: {
+        PWRAGENT_E2E_APP_VERSION: VISUAL_APP_VERSION,
+        TZ: "UTC",
+      },
+      extraArgs: VISUAL_ELECTRON_ARGS,
       windowSize: VISUAL_WINDOW_SIZE,
     });
 
     try {
+      await expectPinnedDeviceScale(app.window);
       await app.window.clock.setFixedTime(VISUAL_CLOCK_TIME);
       await app.window
         .getByRole("button", { name: /Add AGENTS docs for media VCL/i })
@@ -122,11 +137,16 @@ test.describe("visual regression", () => {
         specDir,
         "fixtures/approval-pending/replay.fixture.json",
       ),
-      env: { PWRAGENT_E2E_APP_VERSION: VISUAL_APP_VERSION },
+      env: {
+        PWRAGENT_E2E_APP_VERSION: VISUAL_APP_VERSION,
+        TZ: "UTC",
+      },
+      extraArgs: VISUAL_ELECTRON_ARGS,
       windowSize: VISUAL_WINDOW_SIZE,
     });
 
     try {
+      await expectPinnedDeviceScale(app.window);
       await app.window.clock.setFixedTime(VISUAL_CLOCK_TIME);
       await app.window
         .getByRole("button", { name: /Approval pending replay/i })
