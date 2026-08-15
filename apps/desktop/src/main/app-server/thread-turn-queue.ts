@@ -316,6 +316,7 @@ export class ThreadTurnQueue {
 
   private async startEntry(entry: ThreadTurnQueueEntry): Promise<ThreadTurnQueueStartResult> {
     const key = this.keyFor(entry);
+    let startFailed = false;
     this.startingKeys.add(key);
     this.rememberAdmittedEntry({ entryId: entry.id });
     try {
@@ -332,13 +333,26 @@ export class ThreadTurnQueue {
       await this.emit({ type: "started", entry, turnId: result.turnId });
       return result;
     } catch (error) {
+      startFailed = true;
       this.recentlyAdmittedEntries.delete(entry.id);
       const normalized = error instanceof Error ? error : new Error(String(error));
       await this.emit({ type: "failed", entry, error: normalized });
       throw normalized;
     } finally {
       this.startingKeys.delete(key);
+      if (startFailed) {
+        void this.drainAfterFailedStart(entry);
+      }
     }
+  }
+
+  private async drainAfterFailedStart(entry: ThreadTurnQueueEntry): Promise<void> {
+    const params = {
+      backend: entry.backend,
+      threadId: entry.threadId,
+    };
+    if (this.options.isThreadActive?.(params) ?? false) return;
+    await this.startNext(this.keyFor(params));
   }
 
   private queueFor(key: string): ThreadTurnQueueEntry[] {

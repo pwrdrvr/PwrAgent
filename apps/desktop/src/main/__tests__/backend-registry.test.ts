@@ -16257,6 +16257,46 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("drains submissions queued behind a rejected in-flight Codex start", async () => {
+    const startTurnDelay = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnDelay: startTurnDelay.promise,
+      startTurnErrors: [new Error("first start failed"), undefined],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const first = registry.submitTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "first" }],
+    });
+    await waitForCondition(() => codexClient.startTurnCallCount === 1);
+    await expect(
+      registry.submitTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "second" }],
+      }),
+    ).resolves.toMatchObject({ status: "queued", position: 1 });
+
+    startTurnDelay.resolve();
+
+    await expect(first).rejects.toThrow("first start failed");
+    await vi.waitFor(() => {
+      expect(codexClient.startTurnCallCount).toBe(2);
+    });
+    expect(codexClient.startTurnCalls[0]).toMatchObject({
+      threadId: "thread-1",
+      input: [{ type: "text", text: "second" }],
+    });
+
+    await registry.close();
+  });
+
   it("does not generate a Codex title when startTurn fails before lifecycle confirmation", async () => {
     const titleService = {
       generateTitle: vi.fn(async () => ({

@@ -151,6 +151,90 @@ describe("ThreadTurnQueue", () => {
     });
   });
 
+  it("drains a queued submission when an in-flight start rejects after release", async () => {
+    let rejectStart!: (reason?: unknown) => void;
+    let resolveSecondStarted!: () => void;
+    const starting = new Promise<never>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    const secondStarted = new Promise<void>((resolve) => {
+      resolveSecondStarted = resolve;
+    });
+    const startedEntries: string[] = [];
+    const queue = new ThreadTurnQueue({
+      startTurn: async (entry) => {
+        if (entry.id === "first") {
+          return await starting;
+        }
+        startedEntries.push(entry.id);
+        resolveSecondStarted();
+        return {
+          backend: entry.backend,
+          threadId: entry.threadId,
+          turnId: `turn-${entry.id}`,
+        };
+      },
+      onLifecycle: vi.fn(),
+    });
+
+    const first = queue.submit(buildEntry({ id: "first" }));
+    await Promise.resolve();
+    await expect(queue.submit(buildEntry({ id: "second" }))).resolves.toMatchObject({
+      status: "queued",
+      position: 1,
+    });
+
+    await queue.releaseThread({ backend: "codex", threadId: "thread-1" });
+    rejectStart(new Error("backend rejected start"));
+
+    await expect(first).rejects.toThrow("backend rejected start");
+    await secondStarted;
+    expect(startedEntries).toEqual(["second"]);
+    expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
+      .toEqual([]);
+  });
+
+  it("waits for a later release when a failed start leaves the thread active", async () => {
+    let active = false;
+    let rejectStart!: (reason?: unknown) => void;
+    const starting = new Promise<never>((_resolve, reject) => {
+      rejectStart = reject;
+    });
+    const startedEntries: string[] = [];
+    const queue = new ThreadTurnQueue({
+      isThreadActive: () => active,
+      startTurn: async (entry) => {
+        if (entry.id === "first") {
+          return await starting;
+        }
+        startedEntries.push(entry.id);
+        return {
+          backend: entry.backend,
+          threadId: entry.threadId,
+          turnId: `turn-${entry.id}`,
+        };
+      },
+      onLifecycle: vi.fn(),
+    });
+
+    const first = queue.submit(buildEntry({ id: "first" }));
+    await Promise.resolve();
+    await queue.submit(buildEntry({ id: "second" }));
+
+    active = true;
+    rejectStart(new Error("backend rejected start"));
+
+    await expect(first).rejects.toThrow("backend rejected start");
+    await Promise.resolve();
+    expect(startedEntries).toEqual([]);
+    expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
+      .toMatchObject([{ id: "second" }]);
+
+    active = false;
+    await queue.releaseThread({ backend: "codex", threadId: "thread-1" });
+    expect(startedEntries).toEqual(["second"]);
+  });
+
   it("guards duplicate terminal release signals", async () => {
     let active = true;
     const startedEntries: string[] = [];
