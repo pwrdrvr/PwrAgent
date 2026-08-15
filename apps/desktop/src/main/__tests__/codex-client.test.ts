@@ -9496,6 +9496,38 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("persists a thread workspace without resuming or starting a turn", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.updateThreadWorkspace({
+      threadId: "thread-workspace",
+      cwd: " /Users/example/project/.worktrees/thread-workspace ",
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+    const requests = transport!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: unknown },
+    );
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "thread/settings/update",
+        params: {
+          threadId: "thread-workspace",
+          cwd: "/Users/example/project/.worktrees/thread-workspace",
+        },
+      }),
+    );
+    expect(requests.map((request) => request.method)).not.toContain("thread/resume");
+    expect(requests.map((request) => request.method)).not.toContain("turn/start");
+
+    await client.close();
+  });
+
   it("best-effort resumes an existing thread before starting a review", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

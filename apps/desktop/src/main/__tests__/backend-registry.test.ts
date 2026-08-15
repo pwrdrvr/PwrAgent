@@ -1486,6 +1486,10 @@ class MockBackendClient {
       sha?: string | null;
     } | null;
   };
+  lastUpdateThreadWorkspaceParams?: {
+    threadId: string;
+    cwd: string;
+  };
   lastSetThreadPermissionsParams?: {
     threadId: string;
     cwd?: string;
@@ -1678,6 +1682,14 @@ class MockBackendClient {
     } | null;
   }): Promise<{ threadId: string }> {
     this.lastUpdateThreadMetadataParams = params;
+    return { threadId: params.threadId };
+  }
+
+  async updateThreadWorkspace(params: {
+    threadId: string;
+    cwd: string;
+  }): Promise<{ threadId: string }> {
+    this.lastUpdateThreadWorkspaceParams = params;
     return { threadId: params.threadId };
   }
 
@@ -10504,7 +10516,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("does not let Codex source metadata replace active handoff workspace overlays", async () => {
+  it("lets fresh Codex source metadata replace stale handoff workspace overlays", async () => {
     const projectA = "/Users/huntharo/projects/ProjectA";
     const handoffWorktreePath = "/Users/huntharo/projects/ProjectA/.worktrees/thread-1";
     const localThread: AppServerThreadSummary = {
@@ -10557,13 +10569,20 @@ script = "echo setup"
     await expect(
       overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
     ).resolves.toMatchObject({
-      extraLinkedDirectories: [handoffDirectory],
+      extraLinkedDirectories: [
+        {
+          id: expectedDir(projectA),
+          label: "ProjectA",
+          path: expectedDir(projectA),
+          kind: "local",
+        },
+      ],
     });
 
     await registry.close();
   });
 
-  it("does not let Codex source worktree metadata replace active handoff workspace overlays", async () => {
+  it("lets fresh Codex source worktree metadata replace stale handoff workspace overlays", async () => {
     const projectA = "/Users/huntharo/projects/ProjectA";
     const codexWorktreePath =
       "/Users/huntharo/.codex/profiles/sstk/worktrees/original/ProjectA";
@@ -10619,13 +10638,21 @@ script = "echo setup"
     await expect(
       overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
     ).resolves.toMatchObject({
-      extraLinkedDirectories: [handoffDirectory],
+      extraLinkedDirectories: [
+        {
+          id: expectedDir(codexWorktreePath),
+          label: "ProjectA",
+          path: expectedDir(projectA),
+          worktreePath: expectedDir(codexWorktreePath),
+          kind: "worktree",
+        },
+      ],
     });
 
     await registry.close();
   });
 
-  it("does not backfill Codex worktree metadata over active handoff workspace overlays", async () => {
+  it("backfills fresh Codex worktree metadata over stale handoff workspace overlays", async () => {
     const projectA = "/Users/huntharo/projects/ProjectA";
     const codexWorktreePath =
       "/Users/huntharo/.codex/profiles/sstk/worktrees/original/ProjectA";
@@ -10693,11 +10720,19 @@ script = "echo setup"
       callerReason: "startup-prewarm",
     });
 
-    expect(enrichThreadDirectories).not.toHaveBeenCalled();
+    expect(enrichThreadDirectories).toHaveBeenCalledTimes(1);
     await expect(
       overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
     ).resolves.toMatchObject({
-      extraLinkedDirectories: [handoffDirectory],
+      extraLinkedDirectories: [
+        {
+          id: expectedDir(codexWorktreePath),
+          label: "ProjectA",
+          path: expectedDir(projectA),
+          worktreePath: expectedDir(codexWorktreePath),
+          kind: "worktree",
+        },
+      ],
     });
 
     await registry.close();
@@ -38293,6 +38328,10 @@ script = "printf setup"
         branch: "feature/handoff",
       },
     });
+    expect(codexClient.lastUpdateThreadWorkspaceParams).toEqual({
+      threadId: "thread-1",
+      cwd: "/repo/app/.worktrees/app-feature-handoff",
+    });
     await expect(
       overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
     ).resolves.toMatchObject({
@@ -39073,6 +39112,10 @@ script = "printf setup"
       gitInfo: {
         branch: "HEAD",
       },
+    });
+    expect(codexClient.lastUpdateThreadWorkspaceParams).toEqual({
+      threadId: "thread-1",
+      cwd: "/repo/app",
     });
     await expect(
       overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),

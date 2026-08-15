@@ -630,6 +630,10 @@ type BackendClient = {
       sha?: string | null;
     } | null;
   }): Promise<{ threadId: string }>;
+  updateThreadWorkspace?(params: {
+    threadId: string;
+    cwd: string;
+  }): Promise<{ threadId: string }>;
   generateTitle?: ThreadTitleGenerator["generateTitle"];
   generateStructuredObject?(params: {
     model?: string;
@@ -776,9 +780,9 @@ type BackendRegistryForkThreadRequest = ForkThreadRequest & {
  * Resolve the live workspace CWD for thread-scoped commands.
  *
  * Worktree threads must run from LinkedDirectorySummary.worktreePath; Local
- * threads run from LinkedDirectorySummary.path. Persisted environment runtime
- * cwd is intentionally not consulted here because it can lag behind a
- * Local/Worktree handoff.
+ * threads run from LinkedDirectorySummary.path. A handoff overlay projects an
+ * acknowledged workspace change immediately; source reconciliation replaces it
+ * when Codex later reports a different usable workspace.
  */
 function resolveThreadWorkspaceCwd(
   thread: AppServerThreadSummary | undefined,
@@ -1192,7 +1196,7 @@ function shouldRepairCachedDirectoryRelationship(params: {
   }
 
   if (overlayHasHandoffWorkspace(params.overlay)) {
-    return false;
+    return true;
   }
 
   if (params.directory.kind === "worktree") {
@@ -9885,6 +9889,14 @@ export class DesktopBackendRegistry {
       directory: result.linkedDirectory,
       gitBranch: resultBranch,
     });
+    await this.updateThreadWorkspaceCwd({
+      backend: request.backend,
+      threadId: request.threadId,
+      cwd: result.linkedDirectory.worktreePath ?? result.targetPath,
+    });
+    if (request.backend === "codex") {
+      this.invalidateThreadListCache("codex");
+    }
     await this.updateThreadGitBranchMetadata({
       backend: request.backend,
       threadId: request.threadId,
@@ -9903,8 +9915,7 @@ export class DesktopBackendRegistry {
       });
     }
     // Do not rewrite Codex rollout JSONL files here. Codex may still hold the
-    // session file open; replacing it can orphan later transcript writes. The
-    // next turn resolves cwd from the overlay updated above.
+    // session file open; replacing it can orphan later transcript writes.
     if (result.archivedSourceWorktree) {
       await this.overlayStore.upsertWorktreeSnapshot({
         backend: request.backend,
@@ -19532,10 +19543,6 @@ export class DesktopBackendRegistry {
       ) {
         return false;
       }
-      if (overlayHasHandoffWorkspace(params.overlaysByThreadId[thread.id])) {
-        return false;
-      }
-
       const projectKey = thread.projectKey?.trim();
       if (!isLikelyToolManagedWorktreePath(projectKey)) {
         return false;
@@ -19559,10 +19566,6 @@ export class DesktopBackendRegistry {
       > = {};
 
       for (const thread of enrichedThreads) {
-        if (overlayHasHandoffWorkspace(params.overlaysByThreadId[thread.id])) {
-          continue;
-        }
-
         const directory = buildCachedWorktreeDirectory(thread);
         if (!directory) {
           const warningKey = `${thread.id}:${thread.projectKey ?? ""}`;
@@ -22730,6 +22733,31 @@ export class DesktopBackendRegistry {
         threadId: params.threadId,
       });
     }
+  }
+
+  private async updateThreadWorkspaceCwd(params: {
+    backend: AppServerBackendKind;
+    cwd: string;
+    threadId: string;
+  }): Promise<void> {
+    if (params.backend !== "codex") {
+      return;
+    }
+
+    const cwd = params.cwd.trim();
+    if (!cwd) {
+      throw new Error("Workspace handoff did not produce a target CWD.");
+    }
+
+    await this.withCodexThreadClient(params.threadId, async (client) => {
+      if (!client.updateThreadWorkspace) {
+        throw new Error("Codex does not support updating a thread workspace CWD.");
+      }
+      await client.updateThreadWorkspace({
+        threadId: params.threadId,
+        cwd,
+      });
+    });
   }
 
   private scheduleThreadTitleGeneration(params: {

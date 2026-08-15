@@ -6699,6 +6699,7 @@ function buildReviewStartPayload(params: {
 
 function buildThreadSettingsUpdatePayload(params: {
   threadId: string;
+  cwd?: string;
   model?: string;
   serviceTier?: string | null;
   reasoningEffort?: string;
@@ -6707,6 +6708,10 @@ function buildThreadSettingsUpdatePayload(params: {
   const payload: CodexThreadSettingsUpdateParams = {
     threadId: params.threadId,
   };
+
+  if (params.cwd?.trim()) {
+    payload.cwd = params.cwd.trim();
+  }
 
   if (params.model?.trim()) {
     payload.model = params.model.trim();
@@ -6722,7 +6727,8 @@ function buildThreadSettingsUpdatePayload(params: {
     payload.effort = effort;
   }
 
-  return payload.model !== undefined ||
+  return payload.cwd !== undefined ||
+    payload.model !== undefined ||
     payload.serviceTier !== undefined ||
     payload.effort !== undefined
     ? payload
@@ -8502,7 +8508,13 @@ export class CodexAppServerClient {
       }).catch(() => undefined);
     }
 
-    const settingsPayload = buildThreadSettingsUpdatePayload(params);
+    const settingsPayload = buildThreadSettingsUpdatePayload({
+      threadId: params.threadId,
+      model: params.model,
+      serviceTier: params.serviceTier,
+      reasoningEffort: params.reasoningEffort,
+      fastMode: params.fastMode,
+    });
     if (settingsPayload) {
       await requestWithFallbacks({
         client: this.connection,
@@ -8626,6 +8638,29 @@ export class CodexAppServerClient {
           gitInfo: params.gitInfo,
         },
       ],
+      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    });
+
+    return {
+      threadId: extractThreadIdFromValue(result) ?? params.threadId,
+    };
+  }
+
+  async updateThreadWorkspace(params: {
+    threadId: string;
+    cwd: string;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+
+    const payload = buildThreadSettingsUpdatePayload(params);
+    if (!payload) {
+      throw new Error("A non-empty workspace CWD is required.");
+    }
+
+    const result = await requestWithFallbacks({
+      client: this.connection,
+      methods: ["thread/settings/update"],
+      payloads: [payload],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
 
