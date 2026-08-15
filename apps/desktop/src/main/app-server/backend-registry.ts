@@ -8839,6 +8839,9 @@ export class DesktopBackendRegistry {
       typeof this.overlayStore.readThreadToolAccounting === "function"
         ? await this.overlayStore.readThreadToolAccounting({
             backend,
+            ...(request.includeAllToolInvocations
+              ? { includeAllInvocations: true }
+              : {}),
             threadId: request.threadId,
           })
         : undefined;
@@ -10578,6 +10581,9 @@ export class DesktopBackendRegistry {
       typeof this.overlayStore.readThreadToolAccounting === "function"
         ? await this.overlayStore.readThreadToolAccounting({
             backend,
+            ...(request.includeAllToolInvocations
+              ? { includeAllInvocations: true }
+              : {}),
             threadId: request.threadId,
           })
         : undefined;
@@ -10656,6 +10662,7 @@ export class DesktopBackendRegistry {
     });
     const accounting = await this.overlayStore.readThreadToolAccounting({
       backend: request.backend,
+      includeAllInvocations: true,
       threadId: request.threadId,
     });
     await this.emitThreadToolAccountingUpdated({

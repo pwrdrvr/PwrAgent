@@ -3316,6 +3316,7 @@ describe("app server ipc", () => {
     expect(readThread).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "thread-large",
+      includeAllToolInvocations: undefined,
       includeTurns: undefined,
       before: undefined,
       limit: undefined,
@@ -3331,7 +3332,7 @@ describe("app server ipc", () => {
     expect(output).not.toContain("x".repeat(60_000));
   });
 
-  it("forwards inspection-only transcript reads to the backend registry", async () => {
+  it("forwards inspection-only full-accounting reads to the backend registry", async () => {
     const { APP_SERVER_READ_THREAD_CHANNEL } = await import("../../shared/ipc");
     readThread.mockResolvedValueOnce({
       backend: "codex",
@@ -3352,12 +3353,18 @@ describe("app server ipc", () => {
 
     await handlers.get(APP_SERVER_READ_THREAD_CHANNEL)?.(
       {},
-      { backend: "codex", threadId: "sub-agent-1", viewOnly: true },
+      {
+        backend: "codex",
+        includeAllToolInvocations: true,
+        threadId: "sub-agent-1",
+        viewOnly: true,
+      },
     );
 
     expect(readThread).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "sub-agent-1",
+      includeAllToolInvocations: true,
       includeTurns: undefined,
       before: undefined,
       limit: undefined,

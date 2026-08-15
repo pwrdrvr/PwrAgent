@@ -37,6 +37,7 @@ export function ToolOutputIncidentExplorerWindow() {
     try {
       const response = await desktopApi.readThread({
         backend: route.backend,
+        includeAllToolInvocations: true,
         limit: HISTORY_PAGE_LIMIT,
         threadId: route.threadId,
         viewOnly: true,
@@ -460,6 +461,20 @@ function findInvocationDetail(
   let matched: AppServerThreadActivityDetail | undefined;
   for (const entry of response.replay.entries) {
     if (entry.type !== "activity") continue;
+    const entryCommandDetails = entry.details.filter((detail) => detail.command);
+    if (entry.id === invocation.itemId) {
+      return entryCommandDetails.find((detail) =>
+        detail.command?.rawCommand === invocation.normalizedCommand
+        || detail.command?.displayCommand === invocation.normalizedCommand
+      )
+        ?? entryCommandDetails.find((detail) =>
+          detail.command?.output?.length === invocation.outputChars
+        )
+        ?? entryCommandDetails.find((detail) =>
+          detail.command?.output !== undefined
+        )
+        ?? entryCommandDetails[0];
+    }
     for (const detail of entry.details) {
       if (
         !detail.command

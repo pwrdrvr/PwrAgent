@@ -1723,7 +1723,10 @@ class DesktopAppServerService {
           backend: request.backend,
           threadId: request.threadId,
           before: request.before,
+          includeAllToolInvocations: request.includeAllToolInvocations,
+          includeTurns: request.includeTurns,
           limit: request.limit,
+          viewOnly: request.viewOnly,
         });
     }
     const backend = request.backend ?? "codex";
@@ -1731,6 +1734,7 @@ class DesktopAppServerService {
     const response = await registry.readThread({
       backend,
       threadId: request.threadId,
+      includeAllToolInvocations: request.includeAllToolInvocations,
       includeTurns: request.includeTurns,
       before: request.before,
       limit: request.limit,

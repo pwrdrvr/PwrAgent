@@ -22,10 +22,11 @@ afterEach(() => {
 describe("ToolOutputIncidentExplorerWindow", () => {
   it("uses standard thread identity chrome without exposing the raw thread id", async () => {
     const copyText = vi.fn(async () => undefined);
+    const readThread = vi.fn(async () => buildResponse());
     const showThreadFromToolOutputIncidentExplorer = vi.fn(async () => undefined);
     installApi({
       copyText,
-      readThread: async () => buildResponse(),
+      readThread,
       showThreadFromToolOutputIncidentExplorer,
     });
     window.location.hash =
@@ -38,6 +39,9 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(screen.getByText("Grok")).toHaveClass("chip--backend");
     expect(screen.queryByText("acp:grok")).not.toBeInTheDocument();
     expect(screen.queryByText("thread-1")).not.toBeInTheDocument();
+    expect(readThread).toHaveBeenCalledWith(expect.objectContaining({
+      includeAllToolInvocations: true,
+    }));
 
     const threadChip = screen.getByRole("button", { name: "Open thread Noisy work" });
     fireEvent.click(threadChip);
@@ -58,6 +62,40 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(screen.getByText("warning")).toBeInTheDocument();
     expect(screen.queryByText(/Only the truncated output retained/))
       .not.toBeInTheDocument();
+  });
+
+  it("shows historical output using the analyzer's normalized detail identity", async () => {
+    const response = buildResponse();
+    response.toolAccounting!.invocations[0]!.itemId = "historical-detail";
+    const entry = response.replay.entries[0];
+    if (entry?.type === "activity") {
+      entry.id = "historical-activity";
+      entry.details[0]!.id = "historical-detail";
+      entry.details[0]!.command!.output = "retained historical output\n";
+    }
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    expect(await screen.findByText("retained historical output"))
+      .toBeInTheDocument();
+  });
+
+  it("still shows findings persisted with the legacy activity entry identity", async () => {
+    const response = buildResponse();
+    response.toolAccounting!.invocations[0]!.itemId = "legacy-activity";
+    const entry = response.replay.entries[0];
+    if (entry?.type === "activity") {
+      entry.id = "legacy-activity";
+      entry.details[0]!.id = "unrelated-detail-id";
+      entry.details[0]!.command!.output = "legacy retained output\n";
+    }
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    expect(await screen.findByText("legacy retained output"))
+      .toBeInTheDocument();
   });
 
   it("steers only when the finding belongs to the exact active turn", async () => {

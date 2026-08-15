@@ -88,14 +88,15 @@ describe("DesktopBackendRegistry replay integration", () => {
       ],
     });
     const persistThreadToolHistoryAnalysis = vi.fn(async () => undefined);
+    const readThreadToolAccounting = vi.fn(async () => ({
+      alerts: [],
+      invocations: [],
+      summaries: [],
+    }));
     const overlayStore = {
       ...createOverlayStoreMock(),
       persistThreadToolHistoryAnalysis,
-      readThreadToolAccounting: async () => ({
-        alerts: [],
-        invocations: [],
-        summaries: [],
-      }),
+      readThreadToolAccounting,
     } as unknown as OverlayStoreLike;
     const registry = new DesktopBackendRegistry({
       codexClient: replayClient,
@@ -115,6 +116,11 @@ describe("DesktopBackendRegistry replay integration", () => {
     expect(persistThreadToolHistoryAnalysis).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: "fork-thread" }),
     );
+    expect(readThreadToolAccounting).toHaveBeenCalledWith({
+      backend: "codex",
+      includeAllInvocations: true,
+      threadId: "fork-thread",
+    });
     await registry.close();
   });
 

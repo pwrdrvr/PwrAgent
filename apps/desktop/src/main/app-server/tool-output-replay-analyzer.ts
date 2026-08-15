@@ -85,7 +85,10 @@ export function analyzeNormalizedToolReplay(params: {
             : {}),
           findingId: invocationId,
           invocationId,
-          itemId: entry.id,
+          // Normalized activity entries group several protocol items. The
+          // command detail id is the identity Tool Calls uses to retrieve the
+          // retained output; the entry id cannot locate that detail later.
+          itemId: detail.id,
           noisy: Boolean(reason),
           ...(reason ? { noisyReason: reason } : {}),
           ...(normalized.normalizedCommand

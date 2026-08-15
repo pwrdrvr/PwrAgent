@@ -18,6 +18,7 @@ describe("normalized tool-output replay analyzer", () => {
 
     expect(analysis.invocations[0]).toMatchObject({
       category: "mcp",
+      itemId: "detail-1",
       noisy: true,
       source: "history",
     });

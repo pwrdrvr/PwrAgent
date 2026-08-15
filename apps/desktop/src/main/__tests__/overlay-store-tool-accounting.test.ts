@@ -337,6 +337,48 @@ describe("SqliteOverlayStore tool invocation accounting", () => {
     expect(accounting.invocations.map((entry) => entry.invocationId).sort())
       .toEqual(["history-1", "history-2", "live-1"]);
   });
+
+  it("returns every finding only for an explicit unbounded accounting read", async () => {
+    const historical = Array.from({ length: 225 }, (_, index) =>
+      buildInvocation({
+        findingId: `history-${index}`,
+        invocationId: `history-${index}`,
+        itemId: `detail-${index}`,
+        noisy: true,
+        observedAt: 1_800_000_000_000 + index,
+        source: "history",
+      })
+    );
+    await store.persistThreadToolHistoryAnalysis({
+      backend: "codex",
+      coverage: {
+        analyzedAt: 1_800_000_001_000,
+        analyzerVersion: "1",
+        completeness: "complete",
+        entryCount: 225,
+        invocationCount: 225,
+        missingOutputCount: 0,
+        pageCount: 3,
+      },
+      invocations: historical,
+      threadId: "thread-1",
+    });
+
+    const ordinary = await store.readThreadToolAccounting({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const explorer = await store.readThreadToolAccounting({
+      backend: "codex",
+      includeAllInvocations: true,
+      threadId: "thread-1",
+    });
+
+    expect(ordinary.invocations).toHaveLength(200);
+    expect(explorer.invocations).toHaveLength(225);
+    expect(new Set(explorer.invocations.map((entry) => entry.invocationId)).size)
+      .toBe(225);
+  });
 });
 
 function buildInvocation(

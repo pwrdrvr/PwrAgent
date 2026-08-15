@@ -864,6 +864,12 @@ export type AppServerReadThreadRequest = {
   before?: string;
   limit?: number;
   /**
+   * Return every persisted tool invocation instead of the ordinary 200-row
+   * thread-snapshot cap. Reserved for the thread-scoped incident explorer,
+   * which must agree with explicit full-history analysis coverage.
+   */
+  includeAllToolInvocations?: boolean;
+  /**
    * Reads transcript data without applying PwrAgent's normal selected-thread
    * enrichment writes. Used by inspection-only secondary windows such as the
    * native sub-agent transcript viewer.

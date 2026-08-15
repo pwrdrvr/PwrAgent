@@ -1847,8 +1847,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
   async readThreadToolAccounting(params: {
     backend: ThreadOverlayState["backend"];
+    includeAllInvocations?: boolean;
     threadId: string;
   }): Promise<ThreadToolAccounting> {
+    const invocationLimit = params.includeAllInvocations ? -1 : 200;
     const invocationRows = this.stateDb.raw
       .prepare(
         `SELECT *
@@ -1856,9 +1858,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
          WHERE backend = ?
            AND thread_id = ?
          ORDER BY observed_at DESC, invocation_id DESC
-         LIMIT 200`,
+         LIMIT ?`,
       )
-      .all(params.backend, params.threadId) as ThreadToolInvocationRow[];
+      .all(
+        params.backend,
+        params.threadId,
+        invocationLimit,
+      ) as ThreadToolInvocationRow[];
     const summaryRows = this.stateDb.raw
       .prepare(
         `SELECT
