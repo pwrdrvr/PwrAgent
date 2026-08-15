@@ -4254,7 +4254,24 @@ export function useThreadSessionState(params: {
       return;
     }
 
-    if (session.loading || session.activeTurnId) {
+    if (session.loading) {
+      return;
+    }
+
+    if (session.activeTurnId) {
+      const remoteSummaryAdvanced =
+        thread.federation?.ref.target.scope === "remote"
+        && thread.updatedAt != null
+        && session.hydratedUpdatedAt !== thread.updatedAt;
+      if (remoteSummaryAdvanced) {
+        // Federation events are live-only. A selected mounted thread can miss
+        // commentary or a request-user-input notification during a transport
+        // gap, then remain active indefinitely because the missing prompt is
+        // the only way to finish its turn. The owner's navigation snapshot is
+        // the durable catch-up signal: when its updatedAt advances beyond the
+        // detail snapshot we hydrated, re-read even while the turn is active.
+        void loadLatest(thread);
+      }
       return;
     }
 

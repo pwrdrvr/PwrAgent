@@ -12131,6 +12131,134 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("rehydrates an active remote thread when its navigation summary advances", async () => {
+    const activeTurn = {
+      id: "turn-1",
+      status: "in_progress" as const,
+      startedAt: 5_000,
+    };
+    const pendingRequest: AppServerToolRequestUserInputNotification = {
+      method: "item/tool/requestUserInput",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "input-1",
+        requestId: "input-request-1",
+        questions: [
+          {
+            id: "scope",
+            header: "Scope",
+            question: "How should I proceed?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              {
+                label: "Skip backport (Recommended)",
+                description: "The target branch has no affected suite.",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    const initialEntry: AppServerThreadMessageEntry = {
+      type: "message",
+      id: "user-1",
+      role: "user",
+      text: "Backport the change.",
+      turn: activeTurn,
+    };
+    const caughtUpEntry: AppServerThreadMessageEntry = {
+      type: "message",
+      id: "commentary-1",
+      role: "assistant",
+      phase: "commentary",
+      text: "The release branch has no affected suite.",
+      turn: activeTurn,
+    };
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [initialEntry],
+        hasPreviousPage: false,
+        threadStatus: "active",
+      }))
+      .mockResolvedValueOnce({
+        ...readThreadResponse({
+          entries: [initialEntry, caughtUpEntry],
+          hasPreviousPage: false,
+          threadStatus: "active",
+        }),
+        pendingRequest,
+      });
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const remoteThread = (updatedAt: number): NavigationThreadSummary => ({
+      ...buildThread({ id: "thread-1", updatedAt }),
+      threadStatus: "active",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: {
+            scope: "remote",
+            instanceId: "owner-m5",
+          },
+          threadId: "thread-1",
+        },
+        instanceLabel: "Remote M5",
+        capabilities: [
+          "thread_detail",
+          "pending_request_control",
+          "event_subscriptions",
+        ],
+      },
+    });
+
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: remoteThread(updatedAt),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+
+    await waitForThreadHydration(result);
+    expect(readThread).toHaveBeenCalledTimes(1);
+    expect(result.current.activeTurnId).toBe("turn-1");
+    expect(result.current.pendingUserInput).toBeUndefined();
+
+    rerender({ updatedAt: 2_000 });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(result.current.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            id: "commentary-1",
+            text: "The release branch has no affected suite.",
+          }),
+        ]),
+      );
+      expect(result.current.pendingStatusText).toBe("Waiting for input");
+      expect(result.current.pendingUserInput).toMatchObject({
+        requestId: "input-request-1",
+        questions: [{ id: "scope" }],
+      });
+    });
+    expect(readThread).toHaveBeenLastCalledWith(expect.objectContaining({
+      federationTarget: {
+        scope: "remote",
+        instanceId: "owner-m5",
+      },
+      threadId: "thread-1",
+    }));
+  });
+
   it("cancels missed-completion reconciliation when navigation becomes active again", async () => {
     const activeTurn = {
       id: "turn-1",
