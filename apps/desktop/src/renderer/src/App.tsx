@@ -679,6 +679,7 @@ function DesktopAppShell(props: {
       if (event.notification.method === "thread/toolAccounting/updated") {
         const params = event.notification.params as {
           threadId: string;
+          incidentNotice?: ThreadToolIncidentNoticeState;
           toolAccounting?: ThreadToolAccounting;
           triggeredAlerts?: ThreadToolInvocationAlert[];
         };
@@ -687,10 +688,24 @@ function DesktopAppShell(props: {
            replaces minted a durable notice per turn — a busy thread reached
            "1 of 41" in the stack with no way to clear them in bulk. */
         if (!params.toolAccounting) return;
+        /* Only a freshly tripped threshold raises the card. Folding on every
+           accounting update would re-alert on last week's calls the first
+           time an old thread runs anything, which is history, not an
+           incident. The fold still summarizes the whole thread once a new
+           alert makes it worth showing. */
+        if (!params.triggeredAlerts?.length) return;
         const noticeId = threadIncidentNoticeId({
           backend: event.backend,
           threadId: params.threadId,
         });
+        /* Persisted disposition wins over anything this session inferred: it
+           may predate this renderer entirely. */
+        if (params.incidentNotice) {
+          toolIncidentStateRef.current.set(noticeId, {
+            ...toolIncidentStateRef.current.get(noticeId),
+            ...params.incidentNotice,
+          });
+        }
         const incidentState = toolIncidentStateRef.current.get(noticeId);
         const summary = buildThreadIncidentSummary({
           accounting: params.toolAccounting,
@@ -794,6 +809,15 @@ function DesktopAppShell(props: {
             ),
           });
         };
+        /* Anchor the cost window the first time this thread warns. Recording
+           it only on dismissal would date the window to whenever the operator
+           happened to click, not to the first warning. */
+        if (
+          incidentState?.firstWarningAt === undefined
+          && summary.firstWarningAt !== undefined
+        ) {
+          persistIncident({});
+        }
         dispatchAppNotice({
           type: "show",
           notice: buildToolAccountingNotice({

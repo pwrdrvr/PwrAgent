@@ -758,6 +758,84 @@ describe("App", () => {
     });
   });
 
+  it("does not raise a tool-output card when no new threshold tripped", async () => {
+    /* Accounting updates fire on every tool call. Folding on all of them
+       re-alerted about last week's calls the first time an old thread ran
+       anything. */
+    const agentEventListeners = new Set<(event: AgentEvent) => void>();
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        onAgentEvent: (listener: (event: AgentEvent) => void) => {
+          agentEventListeners.add(listener);
+          return () => {
+            agentEventListeners.delete(listener);
+          };
+        },
+        readSettings: async () =>
+          await new Promise<never>(() => {
+            // Keep the shell mounted without needing a full settings fixture.
+          }),
+      },
+    });
+    render(<App />);
+    await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
+
+    act(() => {
+      const event = {
+        backend: "codex",
+        notification: {
+          method: "thread/toolAccounting/updated",
+          params: {
+            threadId: "thread-1",
+            toolAccounting: {
+              alerts: [],
+              invocations: [{
+                backend: "codex",
+                category: "shell",
+                debugLines: 0,
+                errorLines: 0,
+                estimatedOutputTokens: 5_000,
+                infoLines: 0,
+                invocationId: "old-large-call",
+                itemId: "old-item",
+                noisy: true,
+                observedAt: 1_000,
+                outputChars: 20_000,
+                outputLines: 100,
+                outputTruncated: false,
+                status: "completed",
+                threadId: "thread-1",
+                toolName: "commandExecution",
+                turnId: "turn-old",
+                updatedAt: 1_000,
+                warningLines: 0,
+              }],
+              summaries: [],
+            },
+            /* No triggeredAlerts: nothing crossed a threshold just now. */
+          },
+        },
+      } as AgentEvent;
+      for (const listener of agentEventListeners) listener(event);
+    });
+
+    expect(screen.queryByText("Large tool output")).not.toBeInTheDocument();
+  });
+
   it("reveals the sidebar when adding a project from the hidden-sidebar masthead", async () => {
     const pickDirectoryFromDisk = vi.fn(async () => ({
       canceled: false as const,

@@ -17,6 +17,7 @@ import type {
   ThreadPrAutoDispatchPending,
 } from "./navigation";
 import type { ThreadPricingSummary, ThreadUsageLineRecord } from "../token-usage-pricing";
+import type { ThreadToolIncidentNoticeState } from "./tool-output-incidents";
 
 export type AppServerBuiltinBackendKind = "codex";
 export type AcpBackendId = `acp:${string}`;
@@ -1380,6 +1381,12 @@ export type AppServerNotification =
       params: {
         threadId: string;
         toolAccounting: ThreadToolAccounting;
+        /**
+         * The operator's persisted disposition for this thread's incident
+         * card. Carried here so a renderer that just launched knows what was
+         * dismissed or muted before it existed, without a per-thread read.
+         */
+        incidentNotice?: ThreadToolIncidentNoticeState;
         triggeredAlerts?: ThreadToolInvocationAlert[];
       };
     }

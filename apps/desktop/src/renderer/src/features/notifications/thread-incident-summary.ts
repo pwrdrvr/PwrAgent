@@ -21,6 +21,17 @@ import {
  * This fold answers that instead, and it updates in place as the numbers move.
  */
 
+/**
+ * Whether the fold saw the whole thread.
+ *
+ * The live notification carries `readThreadToolAccounting`'s default page,
+ * which caps at 200 invocations — so on a long thread these counts describe
+ * recent activity, not the thread. The card says which it is rather than
+ * presenting a capped count as a total; the explorer, which reads with
+ * `includeAllToolInvocations`, is where the real totals live.
+ */
+export const INCIDENT_SNAPSHOT_INVOCATION_CAP = 200;
+
 export type ThreadIncidentSummary = {
   backend: string;
   currency?: string;
@@ -33,6 +44,8 @@ export type ThreadIncidentSummary = {
   estimatedReplayWasteMicros?: number;
   firstWarningAt?: number;
   flaggedInvocationCount: number;
+  /** False when the fold ran against a capped snapshot of a longer thread. */
+  coversWholeThread: boolean;
   lastWarningAt?: number;
   /** Calls that reached the harness output cap and were truncated. */
   overCapCount: number;
@@ -95,6 +108,7 @@ export function buildThreadIncidentSummary(params: {
       ? { estimatedReplayWasteMicros: Math.round(replayedTokens * rate) }
       : {}),
     ...(Number.isFinite(firstWarningAt) ? { firstWarningAt } : {}),
+    coversWholeThread: invocations.length < INCIDENT_SNAPSHOT_INVOCATION_CAP,
     flaggedInvocationCount: flagged.length,
     lastWarningAt: flagged.reduce(
       (latest, entry) => Math.max(latest, entry.observedAt),
@@ -167,12 +181,7 @@ export function threadIncidentNoticeId(params: {
   return ["tool-accounting", params.backend, params.threadId].join(":");
 }
 
-export function formatIncidentMicros(
-  micros: number,
-  currency: string | undefined,
-): string {
-  const units = micros / 1_000_000;
-  const rounded = units >= 100 ? Math.round(units) : Number(units.toFixed(2));
-  if (!currency || currency === "USD") return `$${rounded.toLocaleString()}`;
-  return `${rounded.toLocaleString()} ${currency}`;
-}
+/* One currency formatter for the whole feature: the card and the turn strip
+   render the same ledger units, so they must not disagree about credits or
+   sub-dollar precision. */
+export { formatMicrosCurrency as formatIncidentMicros } from "../thread-detail/tool-output-incident-insights";

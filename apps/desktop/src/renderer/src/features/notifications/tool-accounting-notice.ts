@@ -67,8 +67,9 @@ export function describeToolAccountingIncident(params: {
   summary: ThreadIncidentSummary;
 }): string {
   const summary = params.summary;
+  const scope = summary.coversWholeThread ? "" : " in recent activity";
   const lines = [
-    `${summary.flaggedInvocationCount.toLocaleString()} tool call${summary.flaggedInvocationCount === 1 ? "" : "s"} flagged across ${summary.turnsWithWarnings.toLocaleString()} turn${summary.turnsWithWarnings === 1 ? "" : "s"}.`,
+    `${summary.flaggedInvocationCount.toLocaleString()} tool call${summary.flaggedInvocationCount === 1 ? "" : "s"} flagged across ${summary.turnsWithWarnings.toLocaleString()} turn${summary.turnsWithWarnings === 1 ? "" : "s"}${scope}.`,
   ];
   if (summary.pollingInvocationCount > 0) {
     lines.push(

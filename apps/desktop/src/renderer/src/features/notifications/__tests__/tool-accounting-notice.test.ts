@@ -6,7 +6,10 @@ import type {
 import { resolveToolIncidentVisibility } from "@pwragent/shared";
 import { describe, expect, it, vi } from "vitest";
 import { buildToolAccountingNotice } from "../tool-accounting-notice";
-import { buildThreadIncidentSummary } from "../thread-incident-summary";
+import {
+  buildThreadIncidentSummary,
+  formatIncidentMicros,
+} from "../thread-incident-summary";
 
 describe("buildThreadIncidentSummary", () => {
   it("folds a thread's flagged calls into one incident", () => {
@@ -207,6 +210,7 @@ describe("buildToolAccountingNotice", () => {
 function summaryFor() {
   return {
     backend: "codex",
+    coversWholeThread: true,
     flaggedInvocationCount: 3,
     overCapCount: 0,
     pollingInvocationCount: 0,
@@ -266,3 +270,45 @@ function usageLine(
     ...overrides,
   } as ThreadUsageLineRecord;
 }
+
+describe("snapshot coverage", () => {
+  it("says so when the fold only saw recent activity", () => {
+    /* The live notification carries a 200-row page, so a long thread's counts
+       are recent activity — the card must not present them as totals. */
+    const capped = Array.from({ length: 200 }, (_, index) =>
+      invocation({ invocationId: `capped-${index}`, observedAt: 1_000 + index }));
+    const summary = buildThreadIncidentSummary({
+      accounting: accounting(capped),
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(summary?.coversWholeThread).toBe(false);
+    expect(buildToolAccountingNotice({
+      onDismiss: vi.fn(),
+      onExamine: vi.fn(),
+      showCost: false,
+      summary: summary!,
+    }).message).toContain("in recent activity");
+  });
+
+  it("presents a short thread's counts as the whole thread", () => {
+    const summary = buildThreadIncidentSummary({
+      accounting: accounting([invocation({})]),
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(summary?.coversWholeThread).toBe(true);
+    expect(buildToolAccountingNotice({
+      onDismiss: vi.fn(),
+      onExamine: vi.fn(),
+      showCost: false,
+      summary: summary!,
+    }).message).not.toContain("in recent activity");
+  });
+
+  it("formats credits the same way the turn strip does", () => {
+    expect(formatIncidentMicros(2_400_000, "credits")).toBe("2.4 cr");
+  });
+});
