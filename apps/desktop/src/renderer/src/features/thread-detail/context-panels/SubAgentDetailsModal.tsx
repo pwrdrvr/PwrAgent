@@ -69,7 +69,15 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
         ) ?? [],
       ).filter((el) => !el.hasAttribute("disabled"));
 
-    focusables()[0]?.focus();
+    // Close explicitly, not `focusables()[0]`: the header's timing line is
+    // tabbable once the run settles (its duration carries the exact end
+    // timestamp), and it precedes the actions in DOM order. Taking the first
+    // focusable would open a finished sub-agent with focus parked on a span
+    // and its tooltip already showing.
+    const closeButton = contentRef.current?.querySelector<HTMLElement>(
+      ".subagent-modal__close",
+    );
+    (closeButton ?? focusables()[0])?.focus();
 
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -324,7 +332,21 @@ function ClampedTextSection(props: ClampedTextSectionProps) {
     if (!element || expanded) {
       return;
     }
-    setOverflowing(element.scrollHeight > element.clientHeight + 1);
+    const measure = () => {
+      setOverflowing(element.scrollHeight > element.clientHeight + 1);
+    };
+    measure();
+    // Whether the clamp bites depends on how the text wraps, which depends on
+    // width — so a resized window can start truncating a block that measured
+    // as fitting. Without re-measuring, the rest of the text is unreachable:
+    // clipped, with no expander offered. ResizeObserver is absent under jsdom;
+    // the initial measure is enough there.
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
   }, [expanded, text]);
 
   useEffect(() => {

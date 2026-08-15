@@ -61,6 +61,20 @@ describe("SubAgentDetailsModal", () => {
     ).toHaveTextContent("PwrAgent task monitor");
   });
 
+  it("opens with focus on Close even once the run has settled", () => {
+    // A settled run makes the header's duration tabbable (it carries the exact
+    // end timestamp), and it sits ahead of the actions in DOM order. Focus
+    // must still land on a control, not on that span with its tooltip open.
+    renderModal({
+      status: "success",
+      completedAt: subAgent.createdAt + 1_000,
+      updatedAt: subAgent.createdAt + 1_000,
+    });
+
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
   it("keeps focus in place when the sub-agent streams an update", () => {
     const { rerender } = renderModal();
 
