@@ -449,16 +449,14 @@ describe("StateDb", () => {
   it("creates thread tool accounting tables", () => {
     const tables = stateDb.raw
       .prepare(
-        `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?, ?) ORDER BY name`,
+        `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (?, ?) ORDER BY name`,
       )
       .all(
         "thread_tool_invocation_alerts",
         "thread_tool_invocations",
-        "thread_tool_analysis",
       ) as Array<{ name: string }>;
 
     expect(tables.map((table) => table.name)).toEqual([
-      "thread_tool_analysis",
       "thread_tool_invocation_alerts",
       "thread_tool_invocations",
     ]);
