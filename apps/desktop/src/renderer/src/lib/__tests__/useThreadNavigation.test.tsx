@@ -23,12 +23,14 @@ import { useThreadNavigation } from "../useThreadNavigation";
 
 describe("useThreadNavigation", () => {
   beforeEach(() => {
+    window.sessionStorage.clear();
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   });
 
   afterEach(() => {
     endNativeDragInteraction();
+    window.sessionStorage.clear();
     delete (window as unknown as {
       __pwragentNavigationPreferences?: unknown;
     }).__pwragentNavigationPreferences;
@@ -39,6 +41,59 @@ describe("useThreadNavigation", () => {
       __pwragentFederationLabel?: unknown;
     }).__pwragentFederationLabel;
     vi.restoreAllMocks();
+  });
+
+  it("restores the selected thread after a full renderer reload", async () => {
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+        {
+          id: "thread-2",
+          title: "Focused before reload",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot: vi.fn(async () => snapshot),
+      onAgentEvent: () => () => undefined,
+    };
+    const firstRenderer = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => {
+      expect(firstRenderer.result.current.selectedThread?.id).toBe("thread-1");
+    });
+    act(() => {
+      firstRenderer.result.current.selectThread(snapshot.threads[1]!);
+    });
+    await waitFor(() => {
+      expect(firstRenderer.result.current.selectedThread?.id).toBe("thread-2");
+    });
+    firstRenderer.unmount();
+
+    const reloadedRenderer = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => {
+      expect(reloadedRenderer.result.current.selectedThread?.id).toBe("thread-2");
+    });
+    reloadedRenderer.unmount();
   });
 
   function createDeferred<T>(): {
