@@ -5,6 +5,30 @@ import type {
   ThreadToolInvocationRecord,
 } from "./normalized-app-server";
 
+/**
+ * Characters per output token. A coarse estimate, but the same one the
+ * accounting analyzer and the incident explorer must agree on: a meter drawn
+ * against a different ratio than the detector that flagged the case would
+ * disagree with its own reason string.
+ */
+export const TOOL_OUTPUT_TOKEN_CHAR_RATIO = 4;
+
+/**
+ * The observed model-visible output cap, in characters (~10k tokens). This is
+ * the denominator that makes a per-case meter mean something absolute: a call
+ * at 100% is one the harness will truncate, and every character under it
+ * replays on every later inference item in the turn.
+ */
+export const TOOL_OUTPUT_CAP_CHARS = 40_000;
+
+/** Output at or above this is large enough to be worth flagging on its own. */
+export const TOOL_OUTPUT_WARNING_CHARS = 4_000;
+
+/** Fraction of the observed output cap this invocation consumed. Uncapped. */
+export function toolOutputCapShare(outputChars: number): number {
+  return outputChars / TOOL_OUTPUT_CAP_CHARS;
+}
+
 export type OpenToolOutputIncidentExplorerWindowRequest = {
   backend: AppServerBackendKind;
   projectLabel?: string;

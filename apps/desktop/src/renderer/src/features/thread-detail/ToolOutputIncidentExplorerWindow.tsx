@@ -12,6 +12,24 @@ import { formatBackendLabel } from "../../lib/backend-label";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { ThreadChip } from "./ThreadChip";
 import { detailMatchesInvocationItem } from "./tool-call-details";
+import type {
+  CategoryShare,
+  IncidentSortMode,
+  TurnCostRow,
+  TurnCostStrip,
+} from "./tool-output-incident-insights";
+import {
+  buildCategoryComposition,
+  buildTurnCostStrip,
+  capMeterWidth,
+  formatCapShare,
+  formatCategoryLabel,
+  formatCompactTokens,
+  formatInvocationIdentity,
+  isOverOutputCap,
+  sortIncidentCases,
+  summarizeIncidents,
+} from "./tool-output-incident-insights";
 
 const HISTORY_PAGE_LIMIT = 100;
 
@@ -22,13 +40,24 @@ export function ToolOutputIncidentExplorerWindow() {
   const [latest, setLatest] = useState<AppServerReadThreadResponse>();
   const [selectedId, setSelectedId] = useState<string>();
   const [category, setCategory] = useState<ThreadToolInvocationCategory | "all">("all");
+  const [turnFilter, setTurnFilter] = useState<string>();
+  const [sortMode, setSortMode] = useState<IncidentSortMode>("largest");
   const [search, setSearch] = useState("");
   const [prompt, setPrompt] = useState("");
+  const [identityExpanded, setIdentityExpanded] = useState(false);
   const [output, setOutput] = useState<string>();
   const [outputSearch, setOutputSearch] = useState("");
   const [status, setStatus] = useState<string>();
+  const [statusTone, setStatusTone] = useState<"error" | "info">("info");
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
+
+  /* Stable identity: `refresh` depends on it, and a refresh that changed every
+     render would re-run the effect that calls it on every render. */
+  const reportError = useCallback((error: unknown) => {
+    setStatusTone("error");
+    setStatus(error instanceof Error ? error.message : String(error));
+  }, []);
 
   const refresh = useCallback(async () => {
     if (!route || !desktopApi?.readThread) return;
@@ -45,11 +74,11 @@ export function ToolOutputIncidentExplorerWindow() {
       setLatest(response);
       setAccounting(response.toolAccounting);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
+      reportError(error);
     } finally {
       setLoading(false);
     }
-  }, [desktopApi, route]);
+  }, [desktopApi, reportError, route]);
 
   useEffect(() => {
     document.title = route ? `Tool-output incidents — ${route.title}` : "Tool-output incidents";
@@ -71,20 +100,39 @@ export function ToolOutputIncidentExplorerWindow() {
     });
   }, [desktopApi, refresh]);
 
+  const allInvocations = useMemo(
+    () => accounting?.invocations ?? [],
+    [accounting?.invocations],
+  );
+  const flagged = useMemo(
+    () => allInvocations.filter((invocation) => invocation.noisy),
+    [allInvocations],
+  );
+  const summary = useMemo(() => summarizeIncidents(allInvocations), [allInvocations]);
+  const turnStrip = useMemo(() => buildTurnCostStrip(allInvocations), [allInvocations]);
+  const composition = useMemo(() => buildCategoryComposition(flagged), [flagged]);
+  const turnLabels = useMemo(
+    () => new Map(turnStrip.rows.map((row) => [row.key, row.label])),
+    [turnStrip.rows],
+  );
+
   const invocations = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
-    return (accounting?.invocations ?? []).filter((invocation) =>
-      invocation.noisy
-      && (category === "all" || invocation.category === category)
-      && (
-        !normalizedSearch
-        || (invocation.normalizedCommand ?? invocation.toolName)
-          .toLowerCase()
-          .includes(normalizedSearch)
-        || invocation.noisyReason?.toLowerCase().includes(normalizedSearch)
-      )
+    return sortIncidentCases(
+      flagged.filter((invocation) =>
+        (category === "all" || invocation.category === category)
+        && (turnFilter === undefined || (invocation.turnId ?? "") === turnFilter)
+        && (
+          !normalizedSearch
+          || (invocation.normalizedCommand ?? invocation.toolName)
+            .toLowerCase()
+            .includes(normalizedSearch)
+          || invocation.noisyReason?.toLowerCase().includes(normalizedSearch)
+        )
+      ),
+      sortMode,
     );
-  }, [accounting?.invocations, category, search]);
+  }, [category, flagged, search, sortMode, turnFilter]);
   const selected = invocations.find((invocation) => invocation.invocationId === selectedId)
     ?? invocations[0];
 
@@ -95,6 +143,7 @@ export function ToolOutputIncidentExplorerWindow() {
           reason: selected.noisyReason ?? "large tool output",
         })
       : "");
+    setIdentityExpanded(false);
     setOutput(undefined);
     setOutputSearch("");
     if (!selected || !latest || !desktopApi?.readThread || !route) return;
@@ -108,28 +157,17 @@ export function ToolOutputIncidentExplorerWindow() {
     }).then((value) => {
       if (!cancelled) setOutput(value);
     }).catch((error) => {
-      if (!cancelled) setStatus(error instanceof Error ? error.message : String(error));
+      if (!cancelled) reportError(error);
     });
     return () => {
       cancelled = true;
     };
-  }, [desktopApi, latest, route, selected]);
+  }, [desktopApi, latest, reportError, route, selected]);
 
   if (!route) {
     return <p className="incident-explorer__error">Invalid incident explorer route.</p>;
   }
 
-  const categories = Array.from(new Set(
-    (accounting?.invocations ?? []).filter((entry) => entry.noisy).map((entry) => entry.category),
-  ));
-  const totals = invocations.reduce(
-    (sum, invocation) => ({
-      chars: sum.chars + invocation.outputChars,
-      tokens: sum.tokens + invocation.estimatedOutputTokens,
-      worst: Math.max(sum.worst, invocation.outputChars),
-    }),
-    { chars: 0, tokens: 0, worst: 0 },
-  );
   const activeTurnId = findActiveTurnId(latest);
   const canSteerSelected = Boolean(
     selected?.turnId
@@ -138,6 +176,7 @@ export function ToolOutputIncidentExplorerWindow() {
   );
   const canSendAsNewTurn = Boolean(!activeTurnId && desktopApi?.startTurn);
   const visibleOutputLines = filterOutputLines(output, outputSearch);
+  const laterTripsInTurn = selected ? countLaterTripsInTurn(allInvocations, selected) : 0;
 
   const analyze = async (): Promise<void> => {
     if (!desktopApi?.analyzeThreadToolHistory) return;
@@ -149,13 +188,14 @@ export function ToolOutputIncidentExplorerWindow() {
         threadId: route.threadId,
       });
       setAccounting(response.accounting);
+      setStatusTone(response.coverage.completeness === "complete" ? "info" : "error");
       setStatus(
         response.coverage.completeness === "complete"
           ? `Analyzed ${response.coverage.invocationCount.toLocaleString()} tool calls across ${response.coverage.pageCount.toLocaleString()} page${response.coverage.pageCount === 1 ? "" : "s"}.`
           : response.coverage.explanation ?? "Analysis is incomplete.",
       );
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
+      reportError(error);
     } finally {
       setAnalyzing(false);
     }
@@ -173,6 +213,7 @@ export function ToolOutputIncidentExplorerWindow() {
           requestId: `tool-output-incident:${selected.invocationId}:${Date.now()}`,
           threadId: route.threadId,
         });
+        setStatusTone("info");
         setStatus("Steering delivered to the exact active turn.");
       } else if (canSendAsNewTurn) {
         await desktopApi?.startTurn?.({
@@ -180,10 +221,11 @@ export function ToolOutputIncidentExplorerWindow() {
           input: [{ type: "text", text: prompt.trim() }],
           threadId: route.threadId,
         });
+        setStatusTone("info");
         setStatus("Prompt sent as a new turn.");
       }
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : String(error));
+      reportError(error);
     }
   };
 
@@ -221,7 +263,7 @@ export function ToolOutputIncidentExplorerWindow() {
                 backend: route.backend,
                 threadId: route.threadId,
               }).catch((error: unknown) => {
-                setStatus(error instanceof Error ? error.message : String(error));
+                reportError(error);
               });
             }}
           />
@@ -233,25 +275,112 @@ export function ToolOutputIncidentExplorerWindow() {
         </span>
         <div className="activity-titlebar__spacer" />
         <div className="incident-explorer__actions">
-          <button type="button" onClick={() => void analyze()} disabled={analyzing}>
+          <button
+            className="incident-explorer__button"
+            type="button"
+            onClick={() => void analyze()}
+            disabled={analyzing}
+          >
             {accounting?.analysis ? "Refresh analysis" : "Analyze history"}
           </button>
-          <button type="button" onClick={() => void refresh()} disabled={loading}>Refresh</button>
-          <button type="button" onClick={() => window.close()}>Close</button>
+          <button
+            className="incident-explorer__button incident-explorer__button--ghost"
+            type="button"
+            onClick={() => void refresh()}
+            disabled={loading}
+          >
+            Refresh
+          </button>
         </div>
       </header>
-      <div className="incident-explorer__metrics" aria-label="Incident metrics">
-        <Metric label="Cases" value={invocations.length.toLocaleString()} />
-        <Metric label="Total output" value={`${totals.chars.toLocaleString()} chars`} />
-        <Metric label="Estimated tokens" value={totals.tokens.toLocaleString()} />
-        <Metric label="Worst case" value={`${totals.worst.toLocaleString()} chars`} />
+
+      <div className="incident-explorer__summary" aria-label="Incident metrics">
+        <div className="incident-explorer__headline">
+          <p className="incident-explorer__eyebrow">Replay cost from flagged calls</p>
+          <p className="incident-explorer__hero">
+            <strong>{formatCompactTokens(summary.incidentTokens)}</strong>
+            <span>
+              tokens · {Math.round(summary.share * 100)}% of all tool output
+            </span>
+          </p>
+          <span
+            aria-hidden="true"
+            className="incident-explorer__meter"
+          >
+            <i style={{ width: `${Math.round(summary.share * 100)}%` }} />
+          </span>
+          <p className="incident-explorer__caption">
+            <b>{summary.caseCount}</b> {summary.caseCount === 1 ? "case" : "cases"}
+            {" · "}{summary.turnCount} {summary.turnCount === 1 ? "turn" : "turns"}
+            {" · "}{summary.incidentChars.toLocaleString()} chars
+            {" · worst "}{summary.worstChars.toLocaleString()}
+          </p>
+        </div>
+        <div className="incident-explorer__composition-group" role="group" aria-label="Filter by category">
+          <p className="incident-explorer__eyebrow">Where it went</p>
+          <CompositionBar composition={composition} />
+          <div className="incident-explorer__legend">
+            <button
+              aria-pressed={category === "all"}
+              className="incident-explorer__legend-item"
+              onClick={() => setCategory("all")}
+              type="button"
+            >
+              <i className="incident-explorer__swatch incident-explorer__swatch--all" />
+              All categories
+              <em>{formatCompactTokens(summary.incidentTokens)}</em>
+            </button>
+            {composition.map((entry, index) => (
+              <button
+                aria-pressed={category === entry.category}
+                className="incident-explorer__legend-item"
+                disabled={entry.category === "other"}
+                key={entry.category}
+                onClick={() => setCategory(
+                  entry.category === "other"
+                    ? "all"
+                    : entry.category as ThreadToolInvocationCategory,
+                )}
+                type="button"
+              >
+                <i
+                  className="incident-explorer__swatch"
+                  data-rank={Math.min(index + 1, 5)}
+                />
+                {entry.label}
+                <em>
+                  {formatCompactTokens(entry.estimatedOutputTokens)}
+                  {" · "}{Math.round(entry.share * 100)}%
+                </em>
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
+
+      <TurnStrip
+        onSelect={(row) => setTurnFilter(
+          turnFilter === row.key ? undefined : row.key,
+        )}
+        selectedKey={turnFilter}
+        strip={turnStrip}
+      />
+
       {accounting?.analysis?.completeness === "partial" ? (
         <p className="incident-explorer__coverage" role="status">
           Partial coverage: {accounting.analysis.explanation}
         </p>
       ) : null}
-      {status ? <p className="incident-explorer__status" role="status">{status}</p> : null}
+      {status ? (
+        <p
+          className="incident-explorer__status"
+          data-tone={statusTone}
+          role="status"
+        >
+          {status}
+        </p>
+      ) : null}
+
       <div className="incident-explorer__body">
         <aside className="incident-explorer__list" aria-label="Incident cases">
           <div className="incident-explorer__filters">
@@ -263,30 +392,42 @@ export function ToolOutputIncidentExplorerWindow() {
               value={search}
             />
             <select
-              aria-label="Filter by category"
-              onChange={(event) => setCategory(event.currentTarget.value as typeof category)}
-              value={category}
+              aria-label="Sort cases"
+              onChange={(event) => setSortMode(event.currentTarget.value as IncidentSortMode)}
+              value={sortMode}
             >
-              <option value="all">All categories</option>
-              {categories.map((entry) => <option key={entry} value={entry}>{entry}</option>)}
+              <option value="largest">Largest first</option>
+              <option value="newest">Newest first</option>
+              <option value="turn">By turn</option>
             </select>
           </div>
-          {groupInvocations(invocations).map((group) => (
+          {turnFilter !== undefined || category !== "all" ? (
+            <div className="incident-explorer__active-filters">
+              <span>
+                Showing {invocations.length.toLocaleString()} of {flagged.length.toLocaleString()} cases
+              </span>
+              <button
+                className="incident-explorer__button incident-explorer__button--ghost"
+                onClick={() => {
+                  setCategory("all");
+                  setTurnFilter(undefined);
+                }}
+                type="button"
+              >
+                Clear filters
+              </button>
+            </div>
+          ) : null}
+          {groupCases(invocations, sortMode, turnLabels).map((group) => (
             <section className="incident-explorer__group" key={group.key}>
-              <h2>{group.turnLabel} · {group.category}</h2>
+              {group.label ? <h3>{group.label}</h3> : null}
               {group.invocations.map((invocation) => (
-                <button
-                  className="incident-explorer__case"
-                  data-selected={invocation.invocationId === selected?.invocationId}
+                <CaseRow
+                  invocation={invocation}
                   key={invocation.invocationId}
-                  onClick={() => setSelectedId(invocation.invocationId)}
-                  type="button"
-                >
-                  <span>{invocation.normalizedCommand ?? invocation.toolName}</span>
-                  <small>
-                    {invocation.outputChars.toLocaleString()} chars · {formatTimestamp(invocation.observedAt)}
-                  </small>
-                </button>
+                  onSelect={() => setSelectedId(invocation.invocationId)}
+                  selected={invocation.invocationId === selected?.invocationId}
+                />
               ))}
             </section>
           ))}
@@ -294,54 +435,122 @@ export function ToolOutputIncidentExplorerWindow() {
             <p className="incident-explorer__empty">No findings match these filters.</p>
           ) : null}
         </aside>
+
         <main className="incident-explorer__detail">
           {selected ? (
             <>
               <section className="incident-explorer__evidence">
-                <h2>Selected invocation</h2>
-                <dl>
-                  <dt>Identity</dt><dd><code>{selected.normalizedCommand ?? selected.toolName}</code></dd>
-                  <dt>Observed</dt><dd>{formatTimestamp(selected.observedAt)}</dd>
-                  <dt>Status</dt><dd>{selected.status}{selected.exitCode !== undefined ? ` · exit ${selected.exitCode}` : ""}</dd>
-                  <dt>Output</dt><dd>{selected.outputChars.toLocaleString()} chars · ~{selected.estimatedOutputTokens.toLocaleString()} tokens</dd>
-                  <dt>Availability</dt><dd>{selected.outputState ?? (selected.outputTruncated ? "truncated" : "unavailable until replay is loaded")}</dd>
-                  <dt>Reason</dt><dd>{selected.noisyReason ?? "large output"}</dd>
-                  <dt>Source</dt><dd>{selected.source ?? "live"}</dd>
-                </dl>
-              </section>
-              <section className="incident-explorer__prompt">
                 <div className="incident-explorer__section-heading">
-                  <h2>Proposed steering</h2>
-                  <button type="button" onClick={() => void desktopApi?.copyText?.(prompt)}>Copy</button>
+                  <h2>Selected invocation</h2>
+                  <button
+                    className="incident-explorer__button incident-explorer__button--ghost"
+                    onClick={() => void desktopApi?.copyText?.(
+                      selected.normalizedCommand ?? selected.toolName,
+                    )}
+                    type="button"
+                  >
+                    Copy command
+                  </button>
                 </div>
-                <textarea
-                  aria-label="Editable proposed steering prompt"
-                  onChange={(event) => setPrompt(event.currentTarget.value)}
-                  rows={10}
-                  value={prompt}
-                />
-                <button
-                  className="incident-explorer__primary"
-                  disabled={!prompt.trim() || (!canSendAsNewTurn && !canSteerSelected)}
-                  onClick={() => void sendPrompt()}
-                  type="button"
+                <div
+                  className="incident-explorer__identity"
+                  data-expanded={identityExpanded}
                 >
-                  {canSteerSelected ? "Steer exact active turn" : "Send next turn"}
-                </button>
-                {!canSteerSelected && activeTurnId ? (
-                  <p>The selected finding belongs to another turn. It cannot steer the active turn; send it after that turn ends.</p>
-                ) : null}
+                  <code>{selected.normalizedCommand ?? selected.toolName}</code>
+                  <button
+                    className="incident-explorer__button incident-explorer__button--ghost"
+                    onClick={() => setIdentityExpanded((value) => !value)}
+                    type="button"
+                  >
+                    {identityExpanded ? "Collapse" : "Expand"}
+                  </button>
+                </div>
+                <div className="incident-explorer__facts">
+                  <Fact
+                    label={selected.status}
+                    tone={selected.status === "failed" ? "error" : "ok"}
+                    value={selected.exitCode !== undefined ? `exit ${selected.exitCode}` : "—"}
+                  />
+                  <Fact
+                    label={formatCategoryLabel(selected.category)}
+                    value={turnLabels.get(selected.turnId ?? "") ?? "No turn"}
+                  />
+                  <Fact label="observed" value={formatTimestamp(selected.observedAt)} />
+                  <Fact
+                    label="output"
+                    tone={selected.outputState === "available" ? undefined : "warning"}
+                    value={describeAvailability(selected)}
+                  />
+                  <Fact label="source" value={selected.source ?? "live"} />
+                </div>
+
+                <div className="incident-explorer__budget">
+                  <div className="incident-explorer__budget-head">
+                    <strong>{selected.estimatedOutputTokens.toLocaleString()} tokens</strong>
+                    <span>{formatCapShare(selected.outputChars)}</span>
+                  </div>
+                  <span aria-hidden="true" className="incident-explorer__meter">
+                    <i
+                      data-critical={isOverOutputCap(selected.outputChars)}
+                      style={{ width: `${capMeterWidth(selected.outputChars) * 100}%` }}
+                    />
+                  </span>
+                  <p className="incident-explorer__caption">
+                    {selected.outputChars.toLocaleString()} chars ·{" "}
+                    {laterTripsInTurn > 0
+                      ? `replayed on the ${laterTripsInTurn.toLocaleString()} later round ${laterTripsInTurn === 1 ? "trip" : "trips"} in this turn`
+                      : "no later round trips in this turn replayed it"}
+                  </p>
+                  <p className="incident-explorer__reason">
+                    {selected.noisyReason ?? "large output"}
+                  </p>
+                </div>
               </section>
+
+              <section className="incident-explorer__prompt">
+                <details className="incident-explorer__steer">
+                  <summary>Proposed steering</summary>
+                  <textarea
+                    aria-label="Editable proposed steering prompt"
+                    onChange={(event) => setPrompt(event.currentTarget.value)}
+                    rows={8}
+                    value={prompt}
+                  />
+                </details>
+                <div className="incident-explorer__prompt-actions">
+                  <button
+                    className="incident-explorer__button incident-explorer__primary"
+                    disabled={!prompt.trim() || (!canSendAsNewTurn && !canSteerSelected)}
+                    onClick={() => void sendPrompt()}
+                    type="button"
+                  >
+                    {canSteerSelected ? "Steer exact active turn" : "Send next turn"}
+                  </button>
+                  <button
+                    className="incident-explorer__button"
+                    onClick={() => void desktopApi?.copyText?.(prompt)}
+                    type="button"
+                  >
+                    Copy
+                  </button>
+                  {!canSteerSelected && activeTurnId ? (
+                    <p>The selected finding belongs to another turn. It cannot steer the active turn; send it after that turn ends.</p>
+                  ) : null}
+                </div>
+              </section>
+
               <section className="incident-explorer__output">
                 <div className="incident-explorer__section-heading">
                   <h2>Captured output</h2>
-                  <input
-                    aria-label="Search captured output"
-                    onChange={(event) => setOutputSearch(event.currentTarget.value)}
-                    placeholder="Search output"
-                    type="search"
-                    value={outputSearch}
-                  />
+                  {output !== undefined ? (
+                    <input
+                      aria-label="Search captured output"
+                      onChange={(event) => setOutputSearch(event.currentTarget.value)}
+                      placeholder="Search output"
+                      type="search"
+                      value={outputSearch}
+                    />
+                  ) : null}
                 </div>
                 {output !== undefined ? (
                   <ol className="incident-explorer__output-lines">
@@ -352,9 +561,10 @@ export function ToolOutputIncidentExplorerWindow() {
                     ))}
                   </ol>
                 ) : (
-                  <p className="incident-explorer__empty">
+                  <p className="incident-explorer__unavailable">
+                    <b>Not retained by normalized replay</b>
                     {selected.outputState === "compacted"
-                      ? "Output was compacted out of normalized replay."
+                      ? `The ${selected.outputChars.toLocaleString()} characters this call returned were compacted out. Size and category come from tool accounting, recorded when the call ran.`
                       : selected.outputState === "truncated"
                         ? "Only the truncated output retained by normalized replay is available."
                         : "Output is unavailable in the currently available normalized replay."}
@@ -369,8 +579,161 @@ export function ToolOutputIncidentExplorerWindow() {
   );
 }
 
-function Metric(props: { label: string; value: string }) {
-  return <div><span>{props.label}</span><strong>{props.value}</strong></div>;
+function CompositionBar(props: { composition: CategoryShare[] }) {
+  if (props.composition.length === 0) return null;
+  return (
+    <span aria-hidden="true" className="incident-explorer__composition">
+      {props.composition.map((entry, index) => (
+        <i
+          data-rank={Math.min(index + 1, 5)}
+          key={entry.category}
+          style={{ width: `${entry.share * 100}%` }}
+        />
+      ))}
+    </span>
+  );
+}
+
+/**
+ * The second cost driver. A solid bar reads as volume, a tick rail reads as
+ * discrete events — deliberately different marks, because a turn that is long
+ * on trips and short on tokens is a different problem than the reverse, and
+ * the two need to be told apart at a glance.
+ */
+function TurnStrip(props: {
+  onSelect: (row: TurnCostRow) => void;
+  selectedKey?: string;
+  strip: TurnCostStrip;
+}) {
+  if (props.strip.rows.length === 0) return null;
+  return (
+    <section className="incident-explorer__turns" aria-label="Cost by turn">
+      <div className="incident-explorer__turns-head">
+        <p className="incident-explorer__eyebrow">
+          {props.strip.ordering === "cost" ? "Costliest turns" : "Cost by turn"}
+        </p>
+        <p className="incident-explorer__turns-legend">
+          <span className="incident-explorer__turns-key" data-kind="tokens" /> output tokens
+          {" · "}
+          <span className="incident-explorer__turns-key" data-kind="trips" /> round trips
+        </p>
+      </div>
+      {props.strip.rows.map((row) => (
+        <button
+          aria-pressed={props.selectedKey === row.key}
+          className="incident-explorer__turn"
+          key={row.key}
+          onClick={() => props.onSelect(row)}
+          type="button"
+        >
+          <span className="incident-explorer__turn-label">
+            {row.label}
+            <span>{` · ${formatClockTime(row.firstObservedAt)}`}</span>
+          </span>
+          <span aria-hidden="true" className="incident-explorer__turn-bar">
+            <i
+              data-critical={row.overCapCount > 0}
+              style={{ width: `${scaleWidth(row.estimatedOutputTokens, props.strip.maxTokens)}%` }}
+            />
+          </span>
+          <span className="incident-explorer__turn-number">
+            {formatCompactTokens(row.estimatedOutputTokens)} tok
+          </span>
+          <span aria-hidden="true" className="incident-explorer__turn-trips">
+            <i style={{ width: `${scaleWidth(row.callCount, props.strip.maxCallCount)}%` }} />
+          </span>
+          <span className="incident-explorer__turn-number">
+            {row.callCount.toLocaleString()} {row.callCount === 1 ? "call" : "calls"}
+          </span>
+        </button>
+      ))}
+      {props.strip.hiddenTurnCount > 0 ? (
+        <p className="incident-explorer__turns-note">
+          {props.strip.hiddenTurnCount.toLocaleString()} quieter{" "}
+          {props.strip.hiddenTurnCount === 1 ? "turn is" : "turns are"} not shown.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function CaseRow(props: {
+  invocation: ThreadToolInvocationRecord;
+  onSelect: () => void;
+  selected: boolean;
+}) {
+  const invocation = props.invocation;
+  const command = invocation.normalizedCommand ?? invocation.toolName;
+  const identity = formatInvocationIdentity(command);
+  const critical = isOverOutputCap(invocation.outputChars);
+  return (
+    <button
+      aria-current={props.selected}
+      className="incident-explorer__case"
+      data-selected={props.selected}
+      onClick={props.onSelect}
+      title={command}
+      type="button"
+    >
+      <span className="incident-explorer__case-top">
+        <span className="incident-explorer__case-id">
+          <b>{identity.lead}</b>
+          {identity.detail ? <span>{` ${identity.detail}`}</span> : null}
+        </span>
+        <span className="incident-explorer__case-tokens">
+          {formatCompactTokens(invocation.estimatedOutputTokens)}
+        </span>
+      </span>
+      <span aria-hidden="true" className="incident-explorer__meter">
+        <i
+          data-critical={critical}
+          style={{ width: `${capMeterWidth(invocation.outputChars) * 100}%` }}
+        />
+      </span>
+      <span className="incident-explorer__case-sub">
+        {formatCapShare(invocation.outputChars, { short: true })}
+        {" · "}{invocation.outputChars.toLocaleString()} chars
+        {" · "}{formatClockTime(invocation.observedAt)}
+      </span>
+    </button>
+  );
+}
+
+function Fact(props: {
+  label: string;
+  tone?: "error" | "ok" | "warning";
+  value: string;
+}) {
+  return (
+    <span className="incident-explorer__fact" data-tone={props.tone}>
+      <b>{props.label}</b>
+      {props.value}
+    </span>
+  );
+}
+
+function scaleWidth(value: number, max: number): number {
+  if (max <= 0) return 0;
+  return Math.max(2, Math.round(value / max * 100));
+}
+
+function describeAvailability(invocation: ThreadToolInvocationRecord): string {
+  return invocation.outputState
+    ?? (invocation.outputTruncated ? "truncated" : "unavailable");
+}
+
+/**
+ * Round trips after this call inside the same turn. Every one of them replays
+ * this output, which is what makes a single large result compound.
+ */
+function countLaterTripsInTurn(
+  invocations: ThreadToolInvocationRecord[],
+  selected: ThreadToolInvocationRecord,
+): number {
+  return invocations.filter((invocation) =>
+    (invocation.turnId ?? "") === (selected.turnId ?? "")
+    && invocation.observedAt > selected.observedAt
+  ).length;
 }
 
 function readIncidentRoute(): {
@@ -402,26 +765,33 @@ function findActiveTurnId(response: AppServerReadThreadResponse | undefined): st
   return undefined;
 }
 
-function groupInvocations(invocations: ThreadToolInvocationRecord[]) {
+function groupCases(
+  invocations: ThreadToolInvocationRecord[],
+  sortMode: IncidentSortMode,
+  turnLabels: Map<string, string>,
+) {
+  if (sortMode !== "turn") {
+    return [{ invocations, key: "all", label: "" }];
+  }
   const groups = new Map<string, {
-    category: ThreadToolInvocationCategory;
     invocations: ThreadToolInvocationRecord[];
     key: string;
-    turnLabel: string;
+    label: string;
   }>();
   for (const invocation of invocations) {
-    const turn = invocation.turnId ?? "No turn";
-    const key = `${turn}:${invocation.category}`;
+    const key = invocation.turnId ?? "";
     const group = groups.get(key) ?? {
-      category: invocation.category,
       invocations: [],
       key,
-      turnLabel: invocation.turnId ? `Turn ${shortId(invocation.turnId)}` : "No turn",
+      label: turnLabels.get(key) ?? "Unassigned",
     };
     group.invocations.push(invocation);
     groups.set(key, group);
   }
-  return [...groups.values()];
+  return [...groups.values()].map((group) => ({
+    ...group,
+    label: `${group.label} · ${group.invocations.length} ${group.invocations.length === 1 ? "case" : "cases"}`,
+  }));
 }
 
 async function readInvocationOutput(params: {
@@ -500,6 +870,9 @@ function formatTimestamp(timestamp: number): string {
   return new Date(timestamp).toLocaleString();
 }
 
-function shortId(value: string): string {
-  return value.length > 12 ? `${value.slice(0, 8)}…` : value;
+function formatClockTime(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }

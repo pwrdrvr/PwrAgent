@@ -188,6 +188,70 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     await waitFor(() => expect(within(metrics).getByText("2")).toBeInTheDocument());
     expect(readCount).toBe(2);
   });
+
+  it("ranks cases by output size and measures each against the output cap", async () => {
+    installApi({ readThread: async () => buildMultiTurnResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const cases = await screen.findByLabelText("Incident cases");
+    const rows = within(cases).getAllByRole("button", { name: /chars/ });
+    expect(rows[0]).toHaveAttribute("title", expect.stringContaining("wide-scan"));
+    expect(rows[0]).toHaveTextContent("50% of cap");
+    expect(rows[1]).toHaveTextContent("15% of cap");
+  });
+
+  it("reports round trips per turn, counting calls that were never flagged", async () => {
+    installApi({ readThread: async () => buildMultiTurnResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const turns = await screen.findByLabelText("Cost by turn");
+    /* turn-1 holds one flagged call plus two quiet ones; the quiet calls
+       replay context too, so they belong in the round-trip count. */
+    expect(within(turns).getByRole("button", { name: /Turn 1/ }))
+      .toHaveTextContent("3 calls");
+    expect(within(turns).getByRole("button", { name: /Turn 2/ }))
+      .toHaveTextContent("1 call");
+  });
+
+  it("filters the case list to a single turn", async () => {
+    installApi({ readThread: async () => buildMultiTurnResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const turns = await screen.findByLabelText("Cost by turn");
+    const cases = screen.getByLabelText("Incident cases");
+    expect(within(cases).getAllByRole("button", { name: /chars/ })).toHaveLength(2);
+
+    const secondTurn = within(turns).getByRole("button", { name: /Turn 2/ });
+    fireEvent.click(secondTurn);
+
+    await waitFor(() => expect(secondTurn).toHaveAttribute("aria-pressed", "true"));
+    const filtered = within(cases).getAllByRole("button", { name: /chars/ });
+    expect(filtered).toHaveLength(1);
+    expect(filtered[0]).toHaveAttribute("title", expect.stringContaining("pnpm test"));
+    expect(within(cases).getByText("Showing 1 of 2 cases")).toBeInTheDocument();
+
+    fireEvent.click(within(cases).getByRole("button", { name: "Clear filters" }));
+    await waitFor(() =>
+      expect(within(cases).getAllByRole("button", { name: /chars/ })).toHaveLength(2));
+  });
+
+  it("filters by category from the composition legend", async () => {
+    installApi({ readThread: async () => buildMultiTurnResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const legend = await screen.findByRole("group", { name: "Filter by category" });
+    fireEvent.click(within(legend).getByRole("button", { name: /Tests & builds/ }));
+
+    const cases = screen.getByLabelText("Incident cases");
+    await waitFor(() =>
+      expect(within(cases).getAllByRole("button", { name: /chars/ })).toHaveLength(1));
+    expect(within(cases).getAllByRole("button", { name: /chars/ })[0])
+      .toHaveAttribute("title", expect.stringContaining("pnpm test"));
+  });
 });
 
 function installApi(api: Record<string, unknown>): void {
@@ -247,6 +311,74 @@ function buildResponse(
         hasPreviousPage: false,
         supportsPagination: true,
       },
+      threadStatus: "active",
+    },
+  };
+}
+
+/**
+ * Two turns, mixed categories, and quiet calls alongside flagged ones — the
+ * shape the summary band and turn strip are built to read.
+ */
+function buildMultiTurnResponse(): AppServerReadThreadResponse {
+  const base = buildInvocation();
+  const invocations: ThreadToolInvocationRecord[] = [
+    {
+      ...base,
+      category: "shell",
+      estimatedOutputTokens: 5_000,
+      invocationId: "invocation-wide",
+      itemId: "item-wide",
+      normalizedCommand: "rg --files wide-scan",
+      observedAt: 1_800_000_000_000,
+      outputChars: 20_000,
+      turnId: "turn-1",
+    },
+    {
+      ...base,
+      category: "shell",
+      estimatedOutputTokens: 40,
+      invocationId: "invocation-quiet-1",
+      itemId: "item-quiet-1",
+      noisy: false,
+      normalizedCommand: "git status",
+      observedAt: 1_800_000_001_000,
+      outputChars: 160,
+      turnId: "turn-1",
+    },
+    {
+      ...base,
+      category: "shell",
+      estimatedOutputTokens: 40,
+      invocationId: "invocation-quiet-2",
+      itemId: "item-quiet-2",
+      noisy: false,
+      normalizedCommand: "git diff --stat",
+      observedAt: 1_800_000_002_000,
+      outputChars: 160,
+      turnId: "turn-1",
+    },
+    {
+      ...base,
+      category: "build-test",
+      estimatedOutputTokens: 1_500,
+      invocationId: "invocation-tests",
+      itemId: "item-tests",
+      normalizedCommand: "pnpm test",
+      observedAt: 1_800_000_003_000,
+      outputChars: 6_000,
+      turnId: "turn-2",
+    },
+  ];
+  return {
+    backend: "codex",
+    fetchedAt: 1,
+    threadId: "thread-1",
+    toolAccounting: { alerts: [], invocations, summaries: [] },
+    replay: {
+      entries: [],
+      messages: [],
+      pagination: { hasPreviousPage: false, supportsPagination: true },
       threadStatus: "active",
     },
   };

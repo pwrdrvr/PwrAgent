@@ -6,16 +6,23 @@ import type {
   ThreadToolInvocationRecord,
   ThreadToolInvocationStatus,
 } from "@pwragent/shared";
-import { buildThreadToolIncidentPrompt } from "@pwragent/shared";
+import {
+  buildThreadToolIncidentPrompt,
+  TOOL_OUTPUT_CAP_CHARS,
+  TOOL_OUTPUT_TOKEN_CHAR_RATIO,
+  TOOL_OUTPUT_WARNING_CHARS,
+} from "@pwragent/shared";
 import { redactCommandText } from "../util/redact-command-text";
 
-const OUTPUT_TOKEN_CHAR_RATIO = 4;
+/* Shared with the incident explorer so its meters are drawn against the same
+   cap this detector reasons about. */
+const OUTPUT_TOKEN_CHAR_RATIO = TOOL_OUTPUT_TOKEN_CHAR_RATIO;
 const NOISY_POLL_LOOKBACK_MS = 5 * 60 * 1000;
 const NOISY_POLL_MIN_INVOCATIONS = 5;
 const NOISY_POLL_MIN_INTERVAL_MS = 15_000;
 const NOISY_POLL_MAX_INTERVAL_MS = 75_000;
-const LARGE_OUTPUT_WARNING_CHARS = 4_000;
-const LARGE_OUTPUT_CRITICAL_CHARS = 40_000;
+const LARGE_OUTPUT_WARNING_CHARS = TOOL_OUTPUT_WARNING_CHARS;
+const LARGE_OUTPUT_CRITICAL_CHARS = TOOL_OUTPUT_CAP_CHARS;
 const ACCOUNTED_TOOL_ITEM_TYPES = new Set([
   "commandExecution",
   "dynamicToolCall",
