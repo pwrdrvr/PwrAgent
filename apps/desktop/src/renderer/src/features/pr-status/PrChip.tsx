@@ -188,7 +188,12 @@ export function PrChip(props: PrChipProps) {
             handleActivate(event);
           }
         }}
-        onMouseEnter={(event) => tooltipController.show(event.currentTarget, card)}
+        onMouseEnter={(event) =>
+          tooltipController.showWithHoverIntent(event.currentTarget, card)
+        }
+        onMouseMove={(event) =>
+          tooltipController.showWithHoverIntent(event.currentTarget, card)
+        }
         onMouseLeave={tooltipController.hide}
       >
         <span className="pr-chip__dot" aria-hidden="true" />
@@ -224,4 +229,3 @@ export function PrChip(props: PrChipProps) {
     </>
   );
 }
-

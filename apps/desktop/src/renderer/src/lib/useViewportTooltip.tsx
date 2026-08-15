@@ -16,6 +16,12 @@ import {
 const VIEWPORT_PADDING = 12;
 /** Gap between the tooltip and the target element (above or below). */
 const TOOLTIP_GAP = 10;
+/**
+ * Pointer dwell required before dense metadata tooltips open. Consumers opt
+ * into this path when pointer travel across many nearby targets would
+ * otherwise flash a trail of tooltips.
+ */
+export const TOOLTIP_HOVER_INTENT_DELAY_MS = 500;
 
 function tooltipViewportTop(): number {
   // On Windows the fixed custom title bar occupies the top of the renderer,
@@ -79,6 +85,11 @@ export function useViewportTooltip(options: {
   tooltipId: string;
   show: (target: HTMLElement, content: ReactNode) => void;
   /**
+   * Arm a tooltip after the pointer rests. Call on both mouse enter and mouse
+   * move so continued travel restarts the dwell instead of opening the card.
+   */
+  showWithHoverIntent: (target: HTMLElement, content: ReactNode) => void;
+  /**
    * Replace the content of an already-visible tooltip in place (no-op
    * while hidden). Keeps the current position until the re-measure pass
    * settles, so live data updates don't blink the tooltip.
@@ -91,8 +102,17 @@ export function useViewportTooltip(options: {
 } {
   const tooltipRef = useRef<HTMLDivElement>(null);
   const targetRef = useRef<HTMLElement | null>(null);
+  const hoverIntentTimerRef = useRef<number | null>(null);
   const tooltipId = useId();
   const [state, setState] = useState<TooltipState | undefined>(undefined);
+
+  const clearHoverIntent = useCallback((): void => {
+    if (hoverIntentTimerRef.current === null) {
+      return;
+    }
+    window.clearTimeout(hoverIntentTimerRef.current);
+    hoverIntentTimerRef.current = null;
+  }, []);
 
   // Measure the rendered tooltip and clamp position so it stays in the
   // viewport and on the side of the target where it fits. The first
@@ -144,6 +164,7 @@ export function useViewportTooltip(options: {
   }, [state]);
 
   const show = useCallback((target: HTMLElement, content: ReactNode): void => {
+    clearHoverIntent();
     if (isNativeDragInteractionActive()) {
       targetRef.current = null;
       setState(undefined);
@@ -157,16 +178,33 @@ export function useViewportTooltip(options: {
       targetBottom: rect.bottom,
       targetCenter: rect.left + rect.width / 2,
     });
-  }, []);
+  }, [clearHoverIntent]);
+
+  const showWithHoverIntent = useCallback(
+    (target: HTMLElement, content: ReactNode): void => {
+      if (targetRef.current === target) {
+        return;
+      }
+      clearHoverIntent();
+      hoverIntentTimerRef.current = window.setTimeout(() => {
+        hoverIntentTimerRef.current = null;
+        show(target, content);
+      }, TOOLTIP_HOVER_INTENT_DELAY_MS);
+    },
+    [clearHoverIntent, show],
+  );
 
   const update = useCallback((content: ReactNode): void => {
     setState((current) => (current ? { ...current, content } : current));
   }, []);
 
   const hide = useCallback((): void => {
+    clearHoverIntent();
     targetRef.current = null;
     setState(undefined);
-  }, []);
+  }, [clearHoverIntent]);
+
+  useEffect(() => clearHoverIntent, [clearHoverIntent]);
 
   // A hover tooltip is shown on pointerenter/focus, but those handlers give
   // us no dismissal signal when the window loses focus (cmd-tab away leaves
@@ -225,5 +263,13 @@ export function useViewportTooltip(options: {
         )
       : null;
 
-  return { tooltipId, show, update, hide, visible, tooltipNode };
+  return {
+    tooltipId,
+    show,
+    showWithHoverIntent,
+    update,
+    hide,
+    visible,
+    tooltipNode,
+  };
 }

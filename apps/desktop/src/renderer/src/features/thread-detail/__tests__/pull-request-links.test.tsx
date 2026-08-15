@@ -380,7 +380,7 @@ describe("pull request links in transcript markdown", () => {
     const pendingChip = screen.getByRole("button", {
       name: /draft · checks pending/,
     });
-    fireEvent.mouseEnter(pendingChip);
+    fireEvent.focus(pendingChip);
     expect(screen.getByRole("tooltip")).toHaveTextContent(
       "Document JDK 17 for EMR jobs",
     );
@@ -494,7 +494,7 @@ describe("pull request links in transcript markdown", () => {
       initialText: "2h ago",
       updatedText: "3h ago",
     },
-  ])("updates a visible hover card when only $field changes", ({
+  ])("updates a visible status card when only $field changes", ({
     initial,
     initialText,
     selector,
@@ -515,7 +515,7 @@ describe("pull request links in transcript markdown", () => {
       </PullRequestLinkProvider>,
     );
     const markdownNode = screen.getByText("Draft PR:").parentElement;
-    fireEvent.mouseEnter(screen.getByRole("button", {
+    fireEvent.focus(screen.getByRole("button", {
       name: /Open ExampleOrg\/catalog-service#13290/,
     }));
     expect(screen.getByRole("tooltip").querySelector(selector))
@@ -563,7 +563,7 @@ describe("pull request links in transcript markdown", () => {
     const hydratedChip = screen.getByRole("button", {
       name: /draft · checks pending/,
     });
-    fireEvent.mouseEnter(hydratedChip);
+    fireEvent.focus(hydratedChip);
     expect(screen.getByRole("tooltip")).toHaveTextContent(
       "Document JDK 17 for EMR jobs",
     );

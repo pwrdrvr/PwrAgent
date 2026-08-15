@@ -1,7 +1,8 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PrSummary } from "@pwragent/shared";
+import { TOOLTIP_HOVER_INTENT_DELAY_MS } from "../../../lib/useViewportTooltip";
 import { PrChip } from "../PrChip";
 import { pullRequestCopyTargets } from "../PrChipContextMenu";
 
@@ -10,6 +11,7 @@ vi.mock("../../../lib/copy-text", () => ({ copyText }));
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   copyText.mockClear();
 });
 
@@ -190,6 +192,7 @@ describe("PrChip", () => {
   });
 
   it("opens a structured status card on hover", () => {
+    vi.useFakeTimers();
     const chip = renderChip(basePr({
       title: "fix(desktop): honor selected review project cwd",
       additions: 38,
@@ -200,6 +203,7 @@ describe("PrChip", () => {
     }));
 
     fireEvent.mouseEnter(chip);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_INTENT_DELAY_MS));
 
     const card = document.querySelector(".pr-status-card") as HTMLElement;
     expect(card).not.toBeNull();
@@ -217,6 +221,7 @@ describe("PrChip", () => {
   });
 
   it("mounts no card at all until the chip is hovered", () => {
+    vi.useFakeTimers();
     // A sidebar renders hundreds of these. The card element is built on every
     // render but must stay an inert object — nothing in the document — until
     // `show` hands it to the portal.
@@ -229,6 +234,7 @@ describe("PrChip", () => {
     expect(document.querySelector(".pr-status-card")).toBeNull();
 
     fireEvent.mouseEnter(chip);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_INTENT_DELAY_MS));
     expect(document.querySelector(".pr-status-card")).not.toBeNull();
 
     fireEvent.mouseLeave(chip);
@@ -249,7 +255,7 @@ describe("PrChip", () => {
     // Nothing to point at while hidden — a dangling reference is worse than none.
     expect(chip).not.toHaveAttribute("aria-describedby");
 
-    fireEvent.mouseEnter(chip);
+    fireEvent.focus(chip);
 
     const describedBy = chip.getAttribute("aria-describedby");
     expect(describedBy).toBeTruthy();
@@ -257,7 +263,7 @@ describe("PrChip", () => {
     expect(card).toHaveClass("pr-status-card");
     expect(card?.textContent).toContain("412");
 
-    fireEvent.mouseLeave(chip);
+    fireEvent.blur(chip);
     expect(chip).not.toHaveAttribute("aria-describedby");
   });
 

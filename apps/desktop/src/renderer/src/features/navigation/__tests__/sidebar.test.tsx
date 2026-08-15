@@ -5262,7 +5262,7 @@ describe("Sidebar", () => {
     const branchChip = screen.getByRole("button", {
       name: "Copy branch codex/thread-centric-ui",
     });
-    fireEvent.mouseEnter(branchChip);
+    fireEvent.focus(branchChip);
     await waitFor(() => {
       expect(
         screen
@@ -5274,7 +5274,7 @@ describe("Sidebar", () => {
           )
       ).toBe(true);
     });
-    fireEvent.mouseLeave(branchChip);
+    fireEvent.blur(branchChip);
     await clickElement(branchChip);
 
     expect(copyText).toHaveBeenNthCalledWith(
@@ -5327,7 +5327,7 @@ describe("Sidebar", () => {
     const branchChip = screen.getByRole("button", {
       name: "Copy branch codex/thread-centric-ui",
     });
-    fireEvent.mouseEnter(branchChip);
+    fireEvent.focus(branchChip);
 
     await waitFor(() => {
       expect(screen.getByRole("tooltip").textContent).toBe(
