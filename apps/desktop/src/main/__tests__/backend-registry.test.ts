@@ -29063,10 +29063,15 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("rejects self-control, idle targets, and stale expected turns", async () => {
+  it("preserves idle and stale steers as follow-ups while rejecting invalid stops", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
-        methods: ["thread/resume", "turn/interrupt", "turn/steer"],
+        methods: [
+          "thread/resume",
+          "turn/start",
+          "turn/interrupt",
+          "turn/steer",
+        ],
       },
       threads: [{
         id: "idle-thread",
@@ -29117,6 +29122,34 @@ script = "printf setup"
       structuredContent: { code: "no_active_turn" },
     });
 
+    const idleSteer = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "steer_thread",
+      args: {
+        backend: "codex",
+        threadId: "idle-thread",
+        requestId: "steer-idle",
+        prompt: "Apply the corrected branch guidance.",
+      },
+    });
+    expect(idleSteer).toMatchObject({
+      structuredContent: {
+        backend: "codex",
+        threadId: "idle-thread",
+        requestId: "steer-idle",
+        turnId: "turn-1",
+        disposition: "started",
+        fallbackReason: "no_active_turn",
+      },
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "idle-thread",
+      input: [{ type: "text", text: "Apply the corrected branch guidance." }],
+    });
+
     const stale = await callRegistryMcpTool({
       registry,
       backend: "codex",
@@ -29132,13 +29165,13 @@ script = "printf setup"
       },
     });
     expect(stale).toMatchObject({
-      isError: true,
       structuredContent: {
-        code: "stale_target",
-        data: {
-          activeTurnId: "turn-new",
-          expectedTurnId: "turn-old",
-        },
+        backend: "codex",
+        threadId: "live-thread",
+        requestId: "steer-stale",
+        disposition: "queued",
+        fallbackReason: "stale_target",
+        queueEntryId: expect.stringMatching(/^thread-turn:/),
       },
     });
 
@@ -29159,6 +29192,111 @@ script = "printf setup"
       structuredContent: { code: "forbidden" },
     });
     expect(codexClient.interruptTurnCallCount).toBe(0);
+
+    await registry.close();
+  });
+
+  it("starts one follow-up when the target finishes during steer admission", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/resume", "turn/start", "turn/steer"],
+      },
+      threads: [{
+        id: "target-thread",
+        title: "target-thread",
+        titleSource: "fallback",
+        source: "codex",
+        linkedDirectories: [],
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    for (const [threadId, turnId] of [
+      ["target-thread", "target-turn"],
+      ["parent-thread", "parent-turn"],
+    ] as const) {
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId, turnId, turn: { id: turnId } },
+        },
+      });
+    }
+
+    const steerTurn = vi.spyOn(codexClient, "steerTurn")
+      .mockImplementationOnce(async () => {
+        await registry.publishLocalEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "target-thread",
+              turnId: "target-turn",
+              turn: {
+                id: "target-turn",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+        throw new Error("no active turn to steer");
+      });
+    const args = {
+      backend: "codex",
+      threadId: "target-thread",
+      requestId: "steer-race",
+      expectedTurnId: "target-turn",
+      prompt: "Switch to the real remote-tracking branch.",
+    };
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "steer_thread",
+      args,
+    });
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: "codex",
+        threadId: "target-thread",
+        requestId: "steer-race",
+        turnId: "turn-1",
+        disposition: "started",
+        fallbackReason: "no_active_turn",
+      },
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "target-thread",
+      input: [{
+        type: "text",
+        text: "Switch to the real remote-tracking branch.",
+      }],
+    });
+
+    const replay = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "steer_thread",
+      args,
+    });
+    expect(replay).toMatchObject({
+      structuredContent: {
+        disposition: "started",
+        idempotentReplay: true,
+        requestId: "steer-race",
+      },
+    });
+    expect(steerTurn).toHaveBeenCalledTimes(1);
+    expect(codexClient.startTurnCallCount).toBe(1);
 
     await registry.close();
   });
@@ -30021,6 +30159,90 @@ script = "printf setup"
       structuredContent: { code: "not_found" },
     });
     expect(federatedControl).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("preserves a stale remote steer through the federated follow-up path", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{
+        id: "parent-thread",
+        title: "M4 runner-host conversion preflight",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    const federatedControl = vi.fn(async () => {
+      throw new PwrAgentFederatedThreadMessageError(
+        "no_active_turn",
+        "Remote thread has no active turn.",
+      );
+    });
+    const federatedSend = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "remote-thread",
+      turnId: "remote-follow-up",
+      title: "Remote target",
+      instanceId: "pwr_studio",
+      instanceLabel: "Studio Mac",
+    }));
+    registry.setFederatedThreadControlHandler(federatedControl);
+    registry.setFederatedThreadMessageHandler(federatedSend);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "steer_thread",
+      args: {
+        backend: "codex",
+        threadId: "remote-thread",
+        instanceId: "pwr_studio",
+        requestId: "steer-remote-stale",
+        prompt: "Apply the branch correction before continuing.",
+      },
+    });
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: "codex",
+        threadId: "remote-thread",
+        instanceId: "pwr_studio",
+        requestId: "steer-remote-stale",
+        turnId: "remote-follow-up",
+        disposition: "started",
+        fallbackReason: "no_active_turn",
+      },
+    });
+    expect(federatedControl).toHaveBeenCalledOnce();
+    expect(federatedSend).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex",
+      threadId: "remote-thread",
+      instanceId: "pwr_studio",
+      input: [{
+        type: "text",
+        text: "Apply the branch correction before continuing.",
+      }],
+    }));
+    expect(codexClient.startTurnCallCount).toBe(0);
 
     await registry.close();
   });

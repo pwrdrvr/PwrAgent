@@ -195,7 +195,7 @@ function descriptionForOperation(
     case "send_message_to_thread":
       return "Send a follow-up as a new turn to another PwrAgent thread. If a turn is active, PwrAgent queues the follow-up. Use steer_thread for guidance to the active turn. Use stop_thread for an urgent interruption. Find an unknown thread with search_threads or read_thread. Pass instanceId from a remote result when available. Set includeRemote=false for local resolution. Reply normally to the current thread. Return threadLink verbatim.";
     case "steer_thread":
-      return "Steer the active turn on another PwrAgent thread. Use this when guidance must reach a long turn at the next tool boundary. This tool never reports a queued follow-up as steered. Use send_message_to_thread for a new turn and stop_thread for an urgent interruption. The owner rejects a stale expectedTurnId. Pass instanceId when known. Set includeRemote=false for local resolution. Reuse requestId only to retry the same steer. This thread cannot steer itself.";
+      return "Advise another PwrAgent thread. PwrAgent steers a matching active turn at the next tool boundary. If the target is idle or changes before admission, PwrAgent preserves the guidance. It starts a follow-up turn or queues one behind the current turn. The result disposition is steered, started, or queued, so this tool never reports a fallback as steered. Use send_message_to_thread when a distinct new turn is required and stop_thread for an urgent interruption. Pass instanceId when known. Set includeRemote=false for local resolution. Reuse requestId only to retry the same steer. This thread cannot steer itself.";
     case "stop_thread":
       return "Stop the active turn on another PwrAgent thread immediately. Use this only for an urgent interruption. This tool interrupts the backend and does not queue text. The owner rejects a stale expectedTurnId. Pass instanceId when known. Set includeRemote=false for local resolution. Reuse requestId only to retry the same stop. This thread cannot stop itself.";
     case "start_review":
@@ -779,7 +779,9 @@ function threadTurnControlInputSchema(
       expectedTurnId: {
         type: "string",
         description:
-          "Optional compare-and-act guard. The action fails as stale if the owning instance reports another active turn.",
+          options.prompt
+            ? "Optional guard for inline steering. If that turn is no longer active, PwrAgent preserves the guidance as a follow-up instead."
+            : "Optional compare-and-act guard. The action fails as stale if the owning instance reports another active turn.",
       },
       ...(options.prompt
         ? {
