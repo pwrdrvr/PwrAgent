@@ -15425,6 +15425,17 @@ a.transcript-message__messaging-origin:focus-visible {
   display: grid;
   align-items: center;
   grid-template-columns: 128px minmax(0, 1fr) 72px minmax(0, 0.62fr) 66px;
+  gap: 12px;
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 
 /* Cost rides at the end of the row, in the ledger's own units. It is the one
@@ -15442,17 +15453,6 @@ a.transcript-message__messaging-origin:focus-visible {
   font-variant-numeric: tabular-nums;
   text-align: right;
   white-space: nowrap;
-  gap: 12px;
-  width: calc(100% + 16px);
-  margin: 0 -8px;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
 }
 
 .incident-explorer__turn:hover {
