@@ -95,8 +95,6 @@ describe("card drag under zoom", () => {
           ]}
           sessionKeys={{}}
           localInstanceLabel="Mac-Mini-M4"
-          floating={false}
-          onClose={() => undefined}
           onOpenLocalThread={() => undefined}
           onFocusLocalInstance={() => undefined}
         />,

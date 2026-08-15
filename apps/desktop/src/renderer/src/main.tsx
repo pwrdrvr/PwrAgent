@@ -141,6 +141,9 @@ const AutomationRunWindow = lazy(async () => ({
   default: (await import("./features/automations/AutomationRunWindow"))
     .AutomationRunWindow,
 }));
+const StarMapWindow = lazy(async () => ({
+  default: (await import("./features/star-map/StarMapWindow")).StarMapWindow,
+}));
 
 /**
  * Routes recognized by `chooseRoot` below. The Messaging Activity
@@ -161,6 +164,10 @@ const routes: Array<{
   {
     match: (hash) => hash === "messaging-activity",
     render: () => <MessagingActivityWindow />,
+  },
+  {
+    match: (hash) => hash === "star-map",
+    render: () => <StarMapWindow />,
   },
   {
     match: (hash) => hash === "changelog",

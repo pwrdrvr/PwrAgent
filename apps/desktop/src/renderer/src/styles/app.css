@@ -5137,13 +5137,13 @@ textarea,
    Every section inside is optional; see PrStatusCard.tsx for why. */
 .pr-status-card {
   position: fixed;
-  /* 140, not the 90 most portal tooltips use, because PR chips render inside
-     the Star Map layer (`.app-shell__star-map-layer`, z-index 120) as well as
-     the normal shell. `.app-shell` is `position: relative` with `z-index: auto`
-     and so opens no stacking context, which puts that layer in the ROOT
-     stacking context alongside this portal — at 90 the card paints UNDER the
-     map it was opened from. Same reason `.messaging-status-tooltip` sits at
-     140 over the Settings overlay. */
+  /* 140, not the 90 most portal tooltips use, because PR chips render over
+     full-window overlay surfaces (the Settings layer at 120) as well as the
+     normal shell. `.app-shell` is `position: relative` with `z-index: auto`
+     and so opens no stacking context, which puts those layers in the ROOT
+     stacking context alongside this portal — at 90 the card paints UNDER
+     the overlay it was opened from. Same reason `.messaging-status-tooltip`
+     sits at 140 over the Settings overlay. */
   z-index: 140;
   width: 272px;
   max-width: calc(100vw - 32px);
@@ -6716,7 +6716,7 @@ textarea,
 .app-toast-stack {
   position: fixed;
   /* App-level notices must remain visible over full-window surfaces such as
-     Star Map (120) and its floating thread (130). */
+     the Settings layer (120). */
   z-index: 140;
   left: 16px;
   bottom: 16px;
@@ -10603,19 +10603,21 @@ textarea,
   outline-offset: 1px;
 }
 
-.thread-header__star-map-toggle.is-open {
-  color: var(--accent-bright);
-}
-
-/* Full-window layer over the app shell (same tier as Settings). A faint
-   accent aurora washes down from the top of the sky; the stars are a
-   seeded SVG field colored from --text-primary so they read as space in
-   both themes. */
-.app-shell__star-map-layer {
+/* Root container of the dedicated Star Map window. A faint accent aurora
+   washes down from the top of the sky; the stars are a seeded SVG field
+   colored from --text-primary so they read as space in both themes.
+   `position: relative; z-index: 0` opens a stacking context — the map's
+   internal card z-scale (up to STAR_MAP_CARD_MAX_Z) stays scoped inside
+   it, exactly as the old full-window layer's z-index did, so cards can't
+   paint over the body-portaled tooltips (`.star-map-card__tooltip`,
+   `.pr-status-card`). */
+.star-map-window {
   display: flex;
-  position: absolute;
-  z-index: 120;
-  inset: 0;
+  position: relative;
+  z-index: 0;
+  flex-direction: column;
+  width: 100%;
+  height: 100vh;
   min-width: 0;
   min-height: 0;
   background:
@@ -10640,12 +10642,6 @@ textarea,
   position: absolute;
   inset: 0;
   transition: transform 240ms ease, opacity 240ms ease;
-}
-
-/* A floating thread shoves the map off to the left behind it. */
-.star-map--floating .star-map__viewport {
-  transform: translateX(-36%);
-  opacity: 0.85;
 }
 
 .star-map__sky {
@@ -11194,37 +11190,6 @@ textarea,
   50% {
     opacity: 0.45;
   }
-}
-
-/* The map covers the app chrome (including the header toggle that opened
-   it), so it carries its own exit. Top-RIGHT to stay clear of the macOS
-   traffic lights. */
-.star-map__close {
-  display: inline-flex;
-  position: absolute;
-  top: 14px;
-  right: 16px;
-  z-index: 4;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--bg-panel) 85%, transparent);
-  color: var(--text-secondary);
-  font-size: 11px;
-  cursor: pointer;
-  -webkit-app-region: no-drag;
-}
-
-.star-map__close:hover {
-  border-color: var(--accent-border);
-  color: var(--text-primary);
-}
-
-.star-map__close:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 .star-map__cloud {
@@ -12335,8 +12300,6 @@ textarea,
    the window can still be moved while the map is open. */
 .star-map__filters,
 .star-map__filters *,
-.star-map__close,
-.star-map__close *,
 .star-map-instance,
 .star-map-instance *,
 .star-map-card,
@@ -12347,71 +12310,6 @@ textarea,
 .star-map__cluster-label *,
 .star-map__cluster-overflow {
   -webkit-app-region: no-drag;
-}
-
-/* Floating thread over the map: the already-mounted main pane elevates
-   above the layer as a movable rounded card. */
-.app-main--star-map-float {
-  position: absolute;
-  z-index: 130;
-  inset: 24px 24px 24px 264px;
-  flex-direction: column;
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--bg-app);
-  box-shadow: var(--shadow-popover);
-  overflow: hidden;
-  transform: translate(
-    var(--star-map-float-dx, 0px),
-    var(--star-map-float-dy, 0px)
-  );
-}
-
-.star-map-float-handle {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-panel);
-  cursor: grab;
-  user-select: none;
-}
-
-.star-map-float-handle:active {
-  cursor: grabbing;
-}
-
-.star-map-float-handle__grip {
-  width: 28px;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--border-strong);
-}
-
-.star-map-float-handle__title {
-  flex: 1;
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.star-map-float-handle__close {
-  padding: 3px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.star-map-float-handle__close:hover {
-  border-color: var(--accent-border);
-  color: var(--text-primary);
 }
 
 /* Floating chat cards.
@@ -18241,9 +18139,10 @@ a.transcript-message__messaging-origin:focus-visible {
   z-index: 140;
 }
 
-/* Star Map thread-card title tooltip — same escape, same fix: its trigger sits
-   inside `.app-shell__star-map-layer` (z-index 120), which shares the root
-   stacking context with this portal because `.app-shell` opens none. */
+/* Star Map thread-card title tooltip — same escape, same fix: its trigger
+   sits inside `.star-map-window` (the dedicated map window's stacking
+   context), and the map's internal card z-scale would otherwise bury a
+   body-portaled tooltip left at the default 90. */
 .star-map-card__tooltip {
   z-index: 140;
 }

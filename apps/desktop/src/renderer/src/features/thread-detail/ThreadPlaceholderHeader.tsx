@@ -59,7 +59,7 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
   const sidebarHidden = props.layout ? !props.layout.sidebarOpen : false;
   const showMasthead = sidebarHidden && !isWindows && Boolean(props.masthead);
   const starMapTooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const starMapLabel = props.starMap?.active ? "Close Star Map" : "Open Star Map";
+  const starMapLabel = "Open Star Map";
 
   return (
     <header className="thread-header thread-header--placeholder">
@@ -114,14 +114,11 @@ export function ThreadPlaceholderHeader(props: ThreadPlaceholderHeaderProps) {
           {props.starMap ? (
             <button
               type="button"
-              className={`thread-header__star-map-toggle${
-                props.starMap.active ? " is-open" : ""
-              }`}
+              className="thread-header__star-map-toggle"
               aria-label={starMapLabel}
-              aria-pressed={props.starMap.active}
               onClick={() => {
                 starMapTooltip.hide();
-                props.starMap?.onToggle();
+                props.starMap?.onOpen();
               }}
               onMouseEnter={(event) =>
                 starMapTooltip.show(event.currentTarget, starMapLabel)

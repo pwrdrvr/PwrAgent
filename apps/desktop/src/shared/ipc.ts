@@ -21,6 +21,28 @@ export const FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL =
 export const STAR_MAP_READ_ARRANGEMENT_CHANNEL = "star-map:read-arrangement";
 export const STAR_MAP_SET_CARD_POSITION_CHANNEL = "star-map:set-card-position";
 export const STAR_MAP_INTAKE_CHANNEL = "star-map:intake";
+/**
+ * Fire-and-forget IPC: opens the dedicated Federation Star Map window
+ * (or focuses it if already open). The map is a separate BrowserWindow
+ * with its own traffic lights and lifecycle — see `showStarMapWindow`
+ * in `apps/desktop/src/main/star-map-window.ts`.
+ */
+export const STAR_MAP_OPEN_WINDOW_CHANNEL = "star-map:open-window";
+/**
+ * Renderer → main invoke from the Star Map window: focus the primary
+ * (non-federation) main window and navigate it to a thread. The main
+ * process resolves the target window and relays the request over
+ * `WINDOW_SHOW_THREAD_CHANNEL`.
+ */
+export const STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL =
+  "star-map:open-thread-in-main";
+/**
+ * Renderer → main invoke from the Star Map window: focus the primary
+ * (non-federation) main window without navigating it anywhere — the
+ * local instance card's "open" action.
+ */
+export const STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL =
+  "star-map:focus-main-window";
 export const APP_SERVER_READ_THREAD_CHANNEL = "app-server:read-thread";
 export const APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL =
   "app-server:get-thread-file-diff";

@@ -71,6 +71,31 @@ async function launchAuditApp(options?: {
   return app;
 }
 
+/**
+ * Poll `electronApp.windows()` for the dedicated Star Map window. The
+ * BrowserWindow is created with `show: false`, so Playwright's `window`
+ * event fires before the URL has loaded; polling sidesteps the race
+ * (same pattern as `appearance-broadcast.spec.ts`).
+ */
+async function waitForStarMapWindow(
+  app: Awaited<ReturnType<typeof launchElectronApp>>,
+): Promise<Page> {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    for (const candidate of app.electronApp.windows()) {
+      if (candidate.url().includes("#star-map")) {
+        return candidate;
+      }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error(
+    `Star Map window did not open; current windows: ${app.electronApp
+      .windows()
+      .map((win) => win.url())
+      .join(", ")}`,
+  );
+}
+
 // The smoke thread never reaches the Star Map: `deriveInboxState` keeps a
 // first-snapshot thread out of the inbox, and with no PR, no unpushed
 // commits and an idle status it matches none of the attention categories,
@@ -431,16 +456,27 @@ for (const theme of AUDIT_THEMES) {
     // for as long as it sat there bare every active thread failed
     // `aria-required-children` (critical) with nothing to catch it: the
     // idle fixture never renders the live region, and the Star Map blocks
-    // do use an active fixture but the map layer covers the thread view.
-    // It now renders inside a listitem wrapper. This block is the gate on
-    // that, so keep the fixture active and the scan unscoped.
+    // audit a different window entirely. It now renders inside a listitem
+    // wrapper. This block is the gate on that, so keep the fixture active
+    // and the scan unscoped.
     test("star map fixture surfaces have no violations", async () => {
       const app = await launchAuditApp({ fixturePath: STAR_MAP_FIXTURE, theme });
       try {
         const attentionThread = app.window
           .getByRole("button", { name: /Star map attention thread/i })
           .first();
-        const starMap = app.window.getByRole("region", {
+
+        await expect(attentionThread).toBeVisible();
+        // The map lives in its own OS window; the header control spawns
+        // it and every map assertion below runs against that window.
+        await app.window.getByRole("button", { name: "Open Star Map" }).click();
+        const mapWindow = await waitForStarMapWindow(app);
+        // The audit harness emulates reduced motion per Page, and the map
+        // window is a different Page than the one `launchAuditApp`
+        // configured — without this the card rise animation leaves text
+        // mid-fade and axe reports phantom contrast misses.
+        await mapWindow.emulateMedia({ reducedMotion: "reduce" });
+        const starMap = mapWindow.getByRole("region", {
           name: "Star Map",
           exact: true,
         });
@@ -448,55 +484,38 @@ for (const theme of AUDIT_THEMES) {
           name: "Open thread: Star map attention thread",
         });
 
-        await test.step("star map layer", async () => {
-          await expect(attentionThread).toBeVisible();
-          await app.window.getByRole("button", { name: "Open Star Map" }).click();
+        await test.step("star map window", async () => {
           await expect(starMap).toBeVisible();
           // Gate on a card rather than only the map body: cards populate
-          // after the layer mounts, and an empty map skips the card contrast.
+          // after the window mounts, and an empty map skips the card contrast.
           await expect(starMapCard).toBeVisible();
-          await runAxe(app.window, "star map layer");
-
-          await starMap
-            .getByRole("button", { name: "Close Star Map" })
-            .click();
-          await expect(starMap).toHaveCount(0);
-          await expect(
-            app.window.getByRole("button", { name: "Open Star Map" }),
-          ).toBeVisible();
+          await runAxe(mapWindow, "star map window");
         });
 
         await test.step("star map intake dialog", async () => {
-          await expect(
-            app.window.getByRole("button", { name: "Open Star Map" }),
-          ).toBeVisible();
-          await app.window.getByRole("button", { name: "Open Star Map" }).click();
           await expect(starMap).toBeVisible();
           await expect(starMapCard).toBeVisible();
           // The [+] beside the local body carries the runner hostname, so
           // match the stable copy rather than a machine-specific label.
           await starMap.getByRole("button", { name: /^New thread on / }).click();
-          const intake = app.window.getByRole("dialog", {
+          const intake = mapWindow.getByRole("dialog", {
             name: /^New thread on /,
           });
           await expect(intake).toBeVisible();
           await expect(
             intake.getByRole("button", { name: "Start thread" }),
           ).toBeVisible();
-          await runAxe(app.window, "star map intake dialog");
+          await runAxe(mapWindow, "star map intake dialog");
 
           await intake
             .getByRole("button", { name: "Close", exact: true })
             .click();
           await expect(intake).toHaveCount(0);
-          await starMap
-            .getByRole("button", { name: "Close Star Map" })
-            .click();
-          await expect(starMap).toHaveCount(0);
-          await expect(attentionThread).toBeVisible();
         });
 
         await test.step("open thread view with an active thread", async () => {
+          // Runs in the MAIN window; the map window staying open no
+          // longer covers the thread view.
           await attentionThread.click();
           await expect(app.window.getByText("The star map is live.")).toBeVisible();
           // Assert the live region is actually painted. Without this the

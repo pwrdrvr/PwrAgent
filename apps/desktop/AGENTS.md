@@ -369,11 +369,14 @@ existing replay-fixture harness and runs `@axe-core/playwright`'s
 Things to know when extending the audit:
 
 - **Surface coverage.** Each `test(...)` block drives the renderer to a
-  state (open thread, settings overlay, settings → messaging, the Star
-  Map layer, the Star Map intake dialog) and then calls `runAxe(window)`.
-  Add a new block per surface you want gated; go through
-  `launchAuditApp()`, which emulates reduced motion and takes an optional
-  `fixturePath` / `theme`.
+  state (open thread, settings overlay, settings → messaging, the
+  dedicated Star Map window, the Star Map intake dialog) and then calls
+  `runAxe(window)`. Add a new block per surface you want gated; go
+  through `launchAuditApp()`, which emulates reduced motion and takes an
+  optional `fixturePath` / `theme`. A surface in a secondary
+  BrowserWindow is a different Playwright `Page`: pass THAT page to
+  `runAxe`, and re-emulate reduced motion on it — `launchAuditApp` only
+  configured the main window's page.
 - **Seed the fixture so the surface is actually populated.** The smoke
   fixture's thread reaches no Star Map lane — `deriveInboxState` keeps a
   first-snapshot thread out of the inbox, and an idle thread with no PR
@@ -825,11 +828,13 @@ budget is a record of what a path costs, not permission for it to cost that.
     cards stay one family. Plain text tooltips keep `.viewport-tooltip`.
   - **Check the layer your trigger lives in.** The portal renders on
     `document.body`, and `.app-shell` opens no stacking context, so
-    full-window layers (Settings and Star Map at `z-index: 120`) sit in the
-    same root stacking context and will paint OVER a tooltip left at the
-    default 90. Anything reachable from those surfaces needs an explicit
-    higher layer — see `.messaging-status-tooltip`, `.pr-status-card`, and
-    `.star-map-card__tooltip`.
+    full-window layers (Settings at `z-index: 120`) sit in the same root
+    stacking context and will paint OVER a tooltip left at the default
+    90. Anything reachable from those surfaces needs an explicit higher
+    layer — see `.messaging-status-tooltip` and `.pr-status-card`. The
+    dedicated Star Map window has the same shape: `.star-map-window`
+    opens a stacking context that scopes the card z-scale, so its portal
+    tooltips (`.star-map-card__tooltip`) also carry an explicit layer.
   - **A card with content worth hearing needs `aria-describedby`.** Point the
     trigger at the hook's `tooltipId` while `visible`; nothing else references
     the portal, so an unwired card is sighted-only. Do not solve this by

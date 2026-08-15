@@ -18,7 +18,6 @@ import {
   type FederationPeerSummary,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
-import { CloseIcon } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useFederationHealth } from "../../lib/useFederationHealth";
@@ -254,12 +253,9 @@ type StarMapScreenProps = {
   draftThreadKeys?: Record<string, boolean>;
   /** Fallback label for the local instance card (instanceLabel setting). */
   localInstanceLabel?: string;
-  /** A thread is floating over the map; the map shoves left behind it. */
-  floating: boolean;
-  onClose: () => void;
-  /** Open a local thread floating over the map. */
+  /** Open a local thread in the main window's full thread view. */
   onOpenLocalThread: (thread: NavigationThreadSummary) => void;
-  /** The local instance card's open action: back to the thread shell. */
+  /** The local instance card's open action: focus the main window. */
   onFocusLocalInstance: () => void;
   /** Refresh the App's navigation snapshot (after intake creates locally). */
   onRefreshLocalThreads?: () => void;
@@ -405,14 +401,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
    */
   const topAnchoredView = !orbitMode && !projectsMode;
 
-  // Focus the layer on open AND whenever the floating thread closes -
-  // "Back to map" leaves focus inside <main>, and without a refocus the
-  // layer's Escape-to-close handler would never hear the key again.
+  // Focus the layer on mount so the camera keys and the Escape
+  // selection-unwind work without the operator clicking into the map
+  // first.
   useEffect(() => {
-    if (!props.floating) {
-      layerRef.current?.focus();
-    }
-  }, [props.floating]);
+    layerRef.current?.focus();
+  }, []);
 
   // The constellation lays out in pixels of the real viewport, not
   // percentages - lanes need true widths to guarantee cards never overlap.
@@ -1300,11 +1294,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
    *
    * A map you fly over should move the way every other map you fly over
    * moves, and the pointer gestures alone leave the operator's other hand
-   * with nothing to do. Disabled while a thread floats over the map: the
-   * map has shoved aside and `w` belongs to the composer.
+   * with nothing to do.
    */
   const heldCameraKeys = useStarMapCameraKeys({
-    enabled: !props.floating,
     layerRef,
     liveViewRef: viewRef,
     canvas: panZoomCanvas,
@@ -2704,20 +2696,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
   return (
     <div
       ref={layerRef}
-      className={`star-map${props.floating ? " star-map--floating" : ""}`}
+      className="star-map"
       role="region"
       aria-label="Star Map"
       tabIndex={-1}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
           event.stopPropagation();
-          // Escape unwinds one layer at a time: drop the selection first,
-          // and only close the map once there is nothing left to drop.
+          // Escape unwinds the selection; with nothing left to drop it
+          // deliberately does nothing. The map lives in its own OS window
+          // now, and closing a whole window is the OS chrome's job — an
+          // Escape that tears the window down would punish the reflexive
+          // "dismiss the popover" tap.
           if (selection.size > 0) {
             setSelection(new Set());
-            return;
           }
-          props.onClose();
         }
       }}
     >
@@ -3157,17 +3150,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
           </button>
         </p>
       ) : null}
-      {/* The map layer covers the app chrome, including the header toggle
-          that opened it, so it must carry its own way out. */}
-      <button
-        type="button"
-        className="star-map__close"
-        aria-label="Close Star Map"
-        onClick={props.onClose}
-      >
-        <CloseIcon size={14} />
-        <span>Close map</span>
-      </button>
       <div className="star-map__chrome">
         {/* Same wordmark primitive as the sidebar/Settings nav so the brand
             reads identically across every window (theme-contract test). */}
@@ -3229,9 +3211,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
           </span>
         </div>
       ) : null}
-      {/* Bottom-left: the keys the map flies with. Hidden while a thread
-          floats over the map, because the camera is off then. */}
-      {props.floating ? null : <StarMapKeyHint held={heldCameraKeys} />}
+      {/* Bottom-left: the keys the map flies with. */}
+      <StarMapKeyHint held={heldCameraKeys} />
       {/* The only thing on the surface that admits a selection exists.
           `role="status"` so the count is heard, not just seen — the cards
           themselves carry no selected state to a screen reader. */}

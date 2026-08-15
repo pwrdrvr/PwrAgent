@@ -590,6 +590,14 @@ export type DesktopApi = {
   dispatchStarMapIntake?: (
     request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
   ) => Promise<StarMapIntakeResponse>;
+  /** Spawns or focuses the dedicated Federation Star Map window. */
+  openStarMapWindow?: () => Promise<void>;
+  /** From the Star Map window: focus the main window and open a thread there. */
+  openStarMapThreadInMainWindow?: (
+    request: WindowShowThreadRequest,
+  ) => Promise<void>;
+  /** From the Star Map window: focus the main window without navigating. */
+  focusMainWindowFromStarMap?: () => Promise<void>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest

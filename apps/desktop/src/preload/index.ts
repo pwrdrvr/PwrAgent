@@ -543,7 +543,10 @@ import {
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
   FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
+  STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL,
   STAR_MAP_INTAKE_CHANNEL,
+  STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL,
+  STAR_MAP_OPEN_WINDOW_CHANNEL,
   STAR_MAP_READ_ARRANGEMENT_CHANNEL,
   STAR_MAP_SET_CARD_POSITION_CHANNEL,
   FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
@@ -1038,6 +1041,17 @@ const desktopApi = Object.freeze({
     request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
   ): Promise<StarMapIntakeResponse> =>
     await ipcRenderer.invoke(STAR_MAP_INTAKE_CHANNEL, request),
+  openStarMapWindow: async (): Promise<void> => {
+    await ipcRenderer.invoke(STAR_MAP_OPEN_WINDOW_CHANNEL);
+  },
+  openStarMapThreadInMainWindow: async (
+    request: WindowShowThreadRequest,
+  ): Promise<void> => {
+    await ipcRenderer.invoke(STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL, request);
+  },
+  focusMainWindowFromStarMap: async (): Promise<void> => {
+    await ipcRenderer.invoke(STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL);
+  },
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
