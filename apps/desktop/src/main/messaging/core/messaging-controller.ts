@@ -139,6 +139,10 @@ import {
 } from "./messaging-monitor-card.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import {
+  messagingOutboundImageDataUrl,
+  resolveMessagingOutboundFile,
+} from "./messaging-outbound-file.js";
+import {
   defaultAgentBackendSupport,
   defaultAgentScopeForChannel,
   type MessagingDefaultAgentScopeKind,
@@ -1018,6 +1022,8 @@ export class MessagingController {
       }
       case "send_private_response":
         return await this.sendPrivateResponseFromAgentMessagingOrigin(request);
+      case "send_messaging_file":
+        return await this.sendMessagingFileFromAgentMessagingOrigin(request);
       case "attach_thread_here":
         return await this.attachThreadHereFromAgentMessagingOrigin(request);
       case "inspect_messaging_pdfs":
@@ -16684,6 +16690,202 @@ export class MessagingController {
         deliveredAt: result.deliveredAt,
         outcome: "delivered",
         recipient: summarizeMessagingActor(origin.origin.event.actor),
+      },
+    };
+  }
+
+  private async sendMessagingFileFromAgentMessagingOrigin(
+    request: Extract<
+      PwrAgentMessagingRequest,
+      { operation: "send_messaging_file" }
+    >,
+  ): Promise<PwrAgentMessagingResponse> {
+    const caption = typeof request.args?.caption === "string"
+      ? request.args.caption.trim()
+      : "";
+    const filename = typeof request.args?.filename === "string"
+      ? request.args.filename.trim()
+      : "";
+    const mediaKind = request.args?.mediaKind;
+    if (
+      mediaKind !== undefined
+      && mediaKind !== "auto"
+      && mediaKind !== "document"
+      && mediaKind !== "image"
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "send_messaging_file mediaKind must be document, image, or auto.",
+        },
+      };
+    }
+    if (caption.length > 4_000) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "send_messaging_file caption must be at most 4,000 characters.",
+        },
+      };
+    }
+    const sendPrivately = request.args?.private === true;
+    if (sendPrivately && !request.context.turnId) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message:
+            "Private file delivery requires the active messaging turn that identified the requesting user.",
+        },
+      };
+    }
+    const origin = await this.resolveAgentMessagingOrigin(request.context);
+    if (!origin.ok) {
+      return origin;
+    }
+
+    const outbound = await resolveMessagingOutboundFile({
+      path: typeof request.args?.path === "string" ? request.args.path : "",
+      ...(filename ? { filename } : {}),
+      ...(mediaKind ? { mediaKind } : {}),
+    }, this.capabilityProfile.outboundAttachments ?? {});
+    if (!outbound.ok) {
+      return {
+        ok: false,
+        error: {
+          code: outbound.code,
+          message: outbound.message,
+        },
+      };
+    }
+
+    let deliveryEvent = origin.origin.event;
+    if (sendPrivately) {
+      if (!this.options.adapter.resolvePrivateConversation) {
+        return {
+          ok: false,
+          error: {
+            code: "unsupported_operation",
+            message:
+              "This messaging provider cannot send a private file to the requesting user.",
+          },
+        };
+      }
+      let privateConversation: MessagingPrivateConversationResolveResult;
+      try {
+        privateConversation = await this.options.adapter.resolvePrivateConversation({
+          actor: origin.origin.event.actor,
+          source: origin.origin.event.channel,
+          routingState: origin.origin.event.routingState,
+        });
+      } catch (error) {
+        return {
+          ok: false,
+          error: {
+            code: "internal_error",
+            message:
+              error instanceof Error
+                ? `Could not resolve a private conversation: ${error.message}`
+                : "Could not resolve a private conversation.",
+          },
+        };
+      }
+      if (
+        privateConversation.outcome !== "resolved"
+        || !privateConversation.conversation
+        || privateConversation.channel !== origin.origin.event.channel.channel
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: privateConversation.outcome === "unsupported"
+              ? "unsupported_operation"
+              : "internal_error",
+            message:
+              privateConversation.errorMessage
+              ?? "The messaging provider could not resolve a private conversation.",
+          },
+        };
+      }
+      deliveryEvent = {
+        ...origin.origin.event,
+        id: `${origin.origin.event.id}:private-file:${this.now()}`,
+        channel: {
+          channel: privateConversation.channel,
+          conversation: privateConversation.conversation,
+        },
+        receivedAt: this.now(),
+        routingState: privateConversation.routingState,
+      };
+    }
+
+    const sourceBinding = origin.origin.deliveryBinding ?? origin.origin.binding;
+    const filePart = outbound.mediaKind === "image"
+      ? {
+          type: "image" as const,
+          url: messagingOutboundImageDataUrl(outbound.mimeType, outbound.data),
+          alt: outbound.filename,
+        }
+      : {
+          type: "file" as const,
+          name: outbound.filename,
+          data: outbound.data,
+          mimeType: outbound.mimeType,
+          sizeBytes: outbound.sizeBytes,
+          description: caption || undefined,
+        };
+    const result = await this.deliver(
+      {
+        id: this.newIntentId("messaging-file"),
+        kind: "message",
+        bindingId: sourceBinding?.id,
+        createdAt: this.now(),
+        role: "assistant",
+        parts: [
+          ...(caption
+            ? [{ type: "text" as const, text: caption, markdown: "markdown" as const }]
+            : []),
+          filePart,
+        ],
+      },
+      sendPrivately ? undefined : sourceBinding,
+      deliveryEvent,
+    );
+    if (!isVisibleAssistantStreamDelivery(result)) {
+      return {
+        ok: false,
+        error: {
+          code: result.outcome === "unsupported"
+            ? "unsupported_operation"
+            : "internal_error",
+          message:
+            result.errorMessage
+            ?? "The file was not delivered to the messaging surface.",
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      data: {
+        channel: deliveryEvent.channel.channel,
+        conversation: summarizeMessagingConversation(
+          deliveryEvent.channel.conversation,
+        ),
+        deliveredAt: result.deliveredAt,
+        filename: outbound.filename,
+        mediaKind: outbound.mediaKind,
+        mimeType: outbound.mimeType,
+        outcome: "delivered",
+        private: sendPrivately,
+        sizeBytes: outbound.sizeBytes,
+        ...(sendPrivately
+          ? { recipient: summarizeMessagingActor(origin.origin.event.actor) }
+          : {}),
       },
     };
   }

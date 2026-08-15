@@ -17,6 +17,7 @@ export const PWRAGENT_MESSAGING_TOOL_NAMESPACE = "pwragent_messaging";
 export const PWRAGENT_MESSAGING_OPERATION_NAMES = [
   "get_current_messaging_surface",
   "send_private_response",
+  "send_messaging_file",
   "attach_thread_here",
   "inspect_messaging_pdfs",
   "search_messaging_pdf_text",
@@ -136,6 +137,31 @@ export type SendPrivateResponseToolArgs = {
   text: string;
 };
 
+export type SendMessagingFileMediaKind = "document" | "image" | "auto";
+
+export type SendMessagingFileToolArgs = {
+  /**
+   * Absolute local filesystem path of the file to deliver. The file is read
+   * on this machine and sent only to the active messaging origin.
+   */
+  path: string;
+  /** Optional display name. Defaults to the path's basename. */
+  filename?: string;
+  /** Optional caption or accompanying text delivered with the file. */
+  caption?: string;
+  /**
+   * How to present the file. `auto` sends images as photos when the provider
+   * supports it and everything else as a document.
+   */
+  mediaKind?: SendMessagingFileMediaKind;
+  /**
+   * When true, deliver privately to the requesting user using the same
+   * private-conversation resolver as `send_private_response`. This does not
+   * suppress the source conversation's final response.
+   */
+  private?: boolean;
+};
+
 export type AttachThreadHerePlacement =
   | "auto"
   | "new_child"
@@ -186,6 +212,19 @@ export type SendPrivateResponseResult = {
   deliveredAt: number;
   outcome: "delivered";
   recipient: PwrAgentMessagingActorSummary;
+};
+
+export type SendMessagingFileResult = {
+  channel: MessagingChannelKind;
+  conversation: PwrAgentMessagingConversationSummary;
+  deliveredAt: number;
+  filename: string;
+  mediaKind: Exclude<SendMessagingFileMediaKind, "auto">;
+  mimeType: string;
+  outcome: "delivered";
+  private: boolean;
+  recipient?: PwrAgentMessagingActorSummary;
+  sizeBytes: number;
 };
 
 export type PwrAgentMessagingPdfAttachmentSummary = {
@@ -242,6 +281,7 @@ export type PwrAgentMessagingToolArgsByOperation = {
   get_current_messaging_surface: GetCurrentMessagingSurfaceToolArgs;
   get_current_location: GetCurrentMessagingSurfaceToolArgs;
   send_private_response: SendPrivateResponseToolArgs;
+  send_messaging_file: SendMessagingFileToolArgs;
   attach_thread_here: AttachThreadHereToolArgs;
   inspect_messaging_pdfs: InspectMessagingPdfsToolArgs;
   search_messaging_pdf_text: SearchMessagingPdfTextToolArgs;
@@ -272,6 +312,7 @@ export type PwrAgentMessagingResponse =
             location: PwrAgentMessagingLocationSummary;
           }
         | SendPrivateResponseResult
+        | SendMessagingFileResult
         | AttachThreadHereResult
         | {
             attachments: PwrAgentMessagingPdfAttachmentSummary[];

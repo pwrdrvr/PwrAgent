@@ -58,6 +58,7 @@ describe("PwrAgent messaging agent tools", () => {
       .toEqual([
       "get_current_messaging_surface",
       "send_private_response",
+      "send_messaging_file",
       "attach_thread_here",
       "inspect_messaging_pdfs",
       "search_messaging_pdf_text",
@@ -66,6 +67,7 @@ describe("PwrAgent messaging agent tools", () => {
     expect(router.buildMcpTools().map((tool) => tool.name)).toEqual([
       "get_current_messaging_surface",
       "send_private_response",
+      "send_messaging_file",
       "attach_thread_here",
     ]);
     const privateResponseTool = specs[0]?.type === "namespace"
@@ -82,6 +84,24 @@ describe("PwrAgent messaging agent tools", () => {
               "start a continuation from the first private reply",
             ),
           }),
+        }),
+      }),
+    });
+    const sendFileTool = specs[0]?.type === "namespace"
+      ? specs[0].tools.find((tool) => tool.name === "send_messaging_file")
+      : undefined;
+    expect(sendFileTool).toMatchObject({
+      description: expect.stringContaining("absolute filesystem path"),
+      inputSchema: expect.objectContaining({
+        required: ["path"],
+        properties: expect.objectContaining({
+          path: expect.objectContaining({ type: "string" }),
+          filename: expect.objectContaining({ type: "string" }),
+          caption: expect.objectContaining({ type: "string" }),
+          mediaKind: expect.objectContaining({
+            enum: ["document", "image", "auto"],
+          }),
+          private: expect.objectContaining({ type: "boolean" }),
         }),
       }),
     });

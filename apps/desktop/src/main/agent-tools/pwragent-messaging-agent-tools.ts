@@ -120,6 +120,8 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
       return "Inspect the current messaging surface, actor, conversation, binding, bound thread, and native child-topic support.";
     case "send_private_response":
       return "Send the final response privately to the user who started this messaging turn. Use this only after an explicit request or to protect secrets. After success, end the turn without a public copy. Set awaitReply and replyInstructions to start a continuation from one private reply. Only the continuation's final response returns to the source surface. This tool works only in an active messaging turn and cannot target another user.";
+    case "send_messaging_file":
+      return "Send a local file to the current messaging surface. Use this only for a generated file that is not already in the response. Examples include a rendered PDF, screenshot, zip, or installer. Do not auto-send every artifact. Requires an absolute filesystem path. Optional caption, filename, mediaKind, and private. private=true DMs the requesting user without suppressing the source reply. Works only on the active messaging origin and cannot target another user.";
     case "attach_thread_here":
       return "Attach a known PwrAgent thread to the current messaging surface. Use new_child for a native child topic when supported. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename the PwrAgent thread.";
     case "inspect_messaging_pdfs":
@@ -166,6 +168,45 @@ function inputSchemaForOperation(
             maxLength: 40_000,
             description:
               "Complete private response to deliver to the requesting user. Do not include an additional public copy in the final response.",
+          },
+        },
+      };
+    case "send_messaging_file":
+      return {
+        type: "object",
+        additionalProperties: false,
+        required: ["path"],
+        properties: {
+          path: {
+            type: "string",
+            minLength: 1,
+            description:
+              "Absolute local filesystem path of the file to send. Relative paths are rejected.",
+          },
+          filename: {
+            type: "string",
+            minLength: 1,
+            maxLength: 255,
+            description:
+              "Optional display name for the attachment. Defaults to the path's basename.",
+          },
+          caption: {
+            type: "string",
+            minLength: 1,
+            maxLength: 4_000,
+            description:
+              "Optional caption or accompanying text delivered with the file.",
+          },
+          mediaKind: {
+            type: "string",
+            enum: ["document", "image", "auto"],
+            description:
+              "How to present the file. auto sends images as photos when the provider supports it and everything else as a document.",
+          },
+          private: {
+            type: "boolean",
+            description:
+              "When true, deliver privately to the requesting user. This does not suppress the source conversation's final response.",
           },
         },
       };

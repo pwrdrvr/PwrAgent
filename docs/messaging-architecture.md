@@ -148,6 +148,14 @@ private delivery suppresses the source-conversation final response. Provider
 user IDs and DM routing remain validated and opaque inside the adapter; the
 Agent cannot select an arbitrary recipient.
 
+`send_messaging_file` is the opt-in companion for generated files that are not
+already in the assistant response (rendered PDFs, screenshots, zips). The model
+must call it with an absolute local path. The controller reads the file,
+size/type-checks it against the provider's `outboundAttachments` profile, and
+delivers a `MessagingFilePart` or `MessagingImagePart` only to the active
+messaging origin. `private=true` reuses the private-conversation resolver but
+does not suppress the source reply.
+
 Because Codex fixes a thread's dynamic-tool catalog at thread creation, the
 controller also recognizes explicit private-response requests as a compatibility
 path for older threads. It suppresses source output from the start of the turn

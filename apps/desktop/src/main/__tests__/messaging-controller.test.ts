@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -22152,7 +22152,8 @@ describe("RBAC capability enforcement", () => {
       }),
     ).toEqual({ owns: true, allowed: false, permission: "tools.thread_inspection" });
 
-    // The benign messaging-context surface stays allowed.
+    // The benign messaging-context surface stays allowed. Sending a file
+    // needs only the conversation floor permission Chat User already has.
     expect(
       harness.controller.checkDynamicToolPermission({
         backend: "codex",
@@ -22160,6 +22161,15 @@ describe("RBAC capability enforcement", () => {
         turnId: "turn-1",
         category: "messaging_context",
         tool: "get_current_messaging_surface",
+      }),
+    ).toEqual({ owns: true, allowed: true });
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "messaging_context",
+        tool: "send_messaging_file",
       }),
     ).toEqual({ owns: true, allowed: true });
 
@@ -22447,6 +22457,236 @@ describe("RBAC capability enforcement", () => {
         allowed: false,
         permission: "federation.remote_control",
       });
+    });
+  });
+});
+
+describe("send_messaging_file agent tool", () => {
+  async function startMessagingTurn(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+  ): Promise<void> {
+    const event = buildTextEvent("please attach the pdf");
+    await harness.store.upsertBinding({
+      id: "binding:telegram:dm::chat-1:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+    await harness.controller.handleInboundEvent(event);
+    harness.delivered.length = 0;
+  }
+
+  it("returns not_found when there is no active messaging origin", async () => {
+    const harness = await createHarness();
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "send_messaging_file",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: { path: "/tmp/resume.pdf" },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "not_found",
+        message: "No active messaging origin is recorded for this Agent turn.",
+      },
+    });
+    expect(harness.delivered).toEqual([]);
+  });
+
+  it("delivers a PDF as a document intent on the current surface", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-send-file-"));
+    tempDirs.push(tempDir);
+    const filePath = path.join(tempDir, "hunt-haro-resume.pdf");
+    await writeFile(filePath, Buffer.from("%PDF-1.4 resume"));
+    const harness = await createHarness();
+    await startMessagingTurn(harness);
+
+    const response = await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_messaging_file",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: {
+        path: filePath,
+        caption: "One-page resume",
+        filename: "hunt-haro-resume.pdf",
+      },
+    });
+
+    expect(response).toMatchObject({
+      ok: true,
+      data: {
+        channel: "telegram",
+        conversation: { id: "chat-1", kind: "dm" },
+        filename: "hunt-haro-resume.pdf",
+        mediaKind: "document",
+        mimeType: "application/pdf",
+        outcome: "delivered",
+        private: false,
+        sizeBytes: Buffer.byteLength("%PDF-1.4 resume"),
+      },
+    });
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        role: "assistant",
+        parts: [
+          expect.objectContaining({
+            type: "text",
+            text: "One-page resume",
+          }),
+          expect.objectContaining({
+            type: "file",
+            name: "hunt-haro-resume.pdf",
+            mimeType: "application/pdf",
+            data: expect.any(Uint8Array),
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("delivers a PNG as an image part", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-send-image-"));
+    tempDirs.push(tempDir);
+    const filePath = path.join(tempDir, "shot.png");
+    await writeFile(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+    const harness = await createHarness();
+    await startMessagingTurn(harness);
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "send_messaging_file",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: { path: filePath },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        mediaKind: "image",
+        mimeType: "image/png",
+        filename: "shot.png",
+      },
+    });
+    expect(harness.delivered).toContainEqual(
+      expect.objectContaining({
+        kind: "message",
+        parts: [
+          expect.objectContaining({
+            type: "image",
+            url: expect.stringMatching(/^data:image\/png;base64,/u),
+          }),
+        ],
+      }),
+    );
+  });
+
+  it("delivers privately when requested without suppressing the source turn", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-send-private-file-"));
+    tempDirs.push(tempDir);
+    const filePath = path.join(tempDir, "secret.pdf");
+    await writeFile(filePath, Buffer.from("%PDF-1.4 secret"));
+    const resolvePrivateConversation = vi.fn(async () => ({
+      channel: "telegram" as const,
+      conversation: {
+        id: "user-1",
+        kind: "dm" as const,
+      },
+      outcome: "resolved" as const,
+      routingState: { opaque: { chatId: 1 } },
+      updatedAt: 1000,
+    }));
+    const harness = await createHarness({ resolvePrivateConversation });
+    await startMessagingTurn(harness);
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "send_messaging_file",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: {
+          path: filePath,
+          private: true,
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        private: true,
+        conversation: { id: "user-1", kind: "dm" },
+        recipient: { platformUserId: "user-1" },
+      },
+    });
+    expect(resolvePrivateConversation).toHaveBeenCalledWith({
+      actor: expect.objectContaining({ platformUserId: "user-1" }),
+      source: expect.objectContaining({
+        conversation: expect.objectContaining({ id: "chat-1" }),
+      }),
+      routingState: undefined,
+    });
+  });
+
+  it("denies send_messaging_file when the originating actor lacks message.reply", async () => {
+    const permissions = new Set<MessagingPermissionId>([
+      "elicitation.answer",
+      "message.reply",
+    ]);
+    const harness = await createHarness({
+      rbacPolicy: {
+        isEnforcing: () => true,
+        resolve: () => ({
+          permissions,
+          roleIds: ["test-role"],
+          matchedSubjects: [],
+          rejected: false,
+        }),
+      },
+    });
+    await startMessagingTurn(harness);
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "messaging_context",
+        tool: "send_messaging_file",
+      }),
+    ).toEqual({ owns: true, allowed: true });
+
+    permissions.delete("message.reply");
+    expect(
+      harness.controller.checkDynamicToolPermission({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        category: "messaging_context",
+        tool: "send_messaging_file",
+      }),
+    ).toEqual({
+      owns: true,
+      allowed: false,
+      permission: "message.reply",
     });
   });
 });
