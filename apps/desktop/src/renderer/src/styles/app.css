@@ -15621,6 +15621,15 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--text-muted);
 }
 
+/* Repeat marker rides in the token slot: it qualifies the cost rather than
+   competing with it, so it stays smaller and takes the warning tone. */
+.incident-explorer__repeat {
+  margin-right: 6px;
+  color: var(--status-warning);
+  font-size: 10px;
+  font-weight: 650;
+}
+
 .incident-explorer__case-tokens {
   color: var(--text-secondary);
   font-family: var(--font-mono);

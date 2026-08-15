@@ -81,7 +81,7 @@ export type TurnCostStrip = {
 };
 
 export type CategoryShare = {
-  category: ThreadToolInvocationCategory | "other";
+  category: RefinedToolCategory | "other";
   estimatedOutputTokens: number;
   label: string;
   /** Share of flagged output tokens, 0–1. */
@@ -103,10 +103,80 @@ const CATEGORY_LABELS: Record<ThreadToolInvocationCategory, string> = {
   unknown: "Other",
 };
 
+/**
+ * Display-level refinements of the persisted category.
+ *
+ * The stored enum is assigned by pattern-matching the tool name or the
+ * command's first token, so every `cat`/`sed` lands in one undifferentiated
+ * `file-io` bucket. That bucket was 80% of one thread's entire output, which
+ * tells the operator where to look and nothing about what to change. Reading
+ * an agent instruction file over and over is a different problem from reading
+ * a source file once, and the command text already distinguishes them.
+ *
+ * Derived rather than persisted so it applies to threads recorded before any
+ * of this existed — the same reason the size test is derived.
+ */
+const AGENT_INSTRUCTION_PATTERN = /\b(?:AGENTS|CLAUDE)\.md\b/i;
+const SKILL_FILE_PATTERN = /\bSKILL\.md\b|[/\\]skills?[/\\]|[/\\]plugins[/\\]/i;
+
+export type RefinedToolCategory =
+  | ThreadToolInvocationCategory
+  | "agent-instructions"
+  | "skill-files";
+
+export function refineToolCategory(
+  invocation: Pick<
+    ThreadToolInvocationRecord,
+    "category" | "normalizedCommand" | "toolName"
+  >,
+): RefinedToolCategory {
+  if (invocation.category !== "file-io" && invocation.category !== "search") {
+    return invocation.category;
+  }
+  const command = invocation.normalizedCommand ?? invocation.toolName;
+  if (AGENT_INSTRUCTION_PATTERN.test(command)) return "agent-instructions";
+  if (SKILL_FILE_PATTERN.test(command)) return "skill-files";
+  return invocation.category;
+}
+
 export function formatCategoryLabel(
-  category: ThreadToolInvocationCategory | "other",
+  category: RefinedToolCategory | "other",
 ): string {
-  return category === "other" ? "Other" : CATEGORY_LABELS[category];
+  if (category === "other") return "Other";
+  if (category === "agent-instructions") return "Agent instructions";
+  if (category === "skill-files") return "Skill files";
+  return CATEGORY_LABELS[category];
+}
+
+/**
+ * Commands this thread ran more than once. Re-running the identical read is a
+ * signal in its own right: either the turn lost the earlier result to
+ * compaction, or the file is being rewritten underneath it. Both are causes
+ * of cost rather than symptoms of it, and neither is visible from any single
+ * row's size.
+ */
+export function countRepeatedCommands(
+  invocations: readonly ThreadToolInvocationRecord[],
+): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const invocation of invocations) {
+    const command = invocation.normalizedCommand;
+    if (!command) continue;
+    counts.set(command, (counts.get(command) ?? 0) + 1);
+  }
+  for (const [command, count] of counts) {
+    if (count < 2) counts.delete(command);
+  }
+  return counts;
+}
+
+export function repeatCountFor(
+  invocation: Pick<ThreadToolInvocationRecord, "normalizedCommand">,
+  repeats: Map<string, number>,
+): number {
+  return invocation.normalizedCommand
+    ? repeats.get(invocation.normalizedCommand) ?? 1
+    : 1;
 }
 
 export function summarizeIncidents(
@@ -203,16 +273,17 @@ export function buildCategoryComposition(
   options?: { limit?: number },
 ): CategoryShare[] {
   const limit = options?.limit ?? DEFAULT_CATEGORY_LIMIT;
-  const groups = new Map<ThreadToolInvocationCategory, CategoryShare>();
+  const groups = new Map<RefinedToolCategory, CategoryShare>();
   for (const invocation of invocations) {
-    const share = groups.get(invocation.category) ?? {
-      category: invocation.category,
+    const category = refineToolCategory(invocation);
+    const share = groups.get(category) ?? {
+      category,
       estimatedOutputTokens: 0,
-      label: formatCategoryLabel(invocation.category),
+      label: formatCategoryLabel(category),
       share: 0,
     };
     share.estimatedOutputTokens += invocation.estimatedOutputTokens;
-    groups.set(invocation.category, share);
+    groups.set(category, share);
   }
 
   const total = sumTokens(invocations);
@@ -220,7 +291,11 @@ export function buildCategoryComposition(
     .sort((left, right) => right.estimatedOutputTokens - left.estimatedOutputTokens);
   const head = ranked.slice(0, limit);
   const tail = ranked.slice(limit);
-  if (tail.length > 0) {
+  if (tail.length === 1 && tail[0]) {
+    /* "Other (1)" hides a real name behind a label that says less than the
+       name did — a single MCP bucket read as an unexplained remainder. */
+    head.push(tail[0]);
+  } else if (tail.length > 1) {
     head.push({
       category: "other",
       estimatedOutputTokens: sumEntries(tail),
@@ -326,7 +401,49 @@ export function formatCapShare(
 export function formatCompactTokens(tokens: number): string {
   if (tokens < 1_000) return tokens.toLocaleString();
   const thousands = tokens / 1_000;
-  return `${thousands >= 100 ? Math.round(thousands) : Number(thousands.toFixed(1))}k`;
+  return `${(thousands >= 100
+    ? Math.round(thousands)
+    : Number(thousands.toFixed(1))
+  ).toLocaleString()}k`;
+}
+
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * When a turn ran, at the precision that distinguishes it from its neighbours.
+ *
+ * A bare clock time is ambiguous the moment a thread spans midnight, and these
+ * threads run for days — two rows both reading "2:00 PM" are three days apart
+ * and the strip gives no hint of it.
+ */
+export function formatTurnWhen(timestamp: number, now: number): string {
+  const elapsed = now - timestamp;
+  if (elapsed < 0) return formatClock(timestamp);
+  if (elapsed < HOUR_MS) {
+    return `${Math.max(1, Math.round(elapsed / MINUTE_MS))}m ago`;
+  }
+  if (elapsed < DAY_MS) {
+    const hours = Math.floor(elapsed / HOUR_MS);
+    const minutes = Math.round((elapsed % HOUR_MS) / MINUTE_MS);
+    return minutes > 0 ? `${hours}h ${minutes}m ago` : `${hours}h ago`;
+  }
+  if (elapsed < 7 * DAY_MS) {
+    const day = new Date(timestamp)
+      .toLocaleDateString(undefined, { weekday: "short" });
+    return `${day} ${formatClock(timestamp)}`;
+  }
+  const date = new Date(timestamp)
+    .toLocaleDateString(undefined, { day: "numeric", month: "numeric" });
+  return `${date} ${formatClock(timestamp)}`;
+}
+
+function formatClock(timestamp: number): string {
+  return new Date(timestamp).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function elideMiddle(value: string, budget: number): string {

@@ -6,8 +6,11 @@ import {
   capMeterWidth,
   formatCapShare,
   formatCompactTokens,
+  countRepeatedCommands,
   formatInvocationIdentity,
+  formatTurnWhen,
   invocationStatusTone,
+  refineToolCategory,
   isOverOutputCap,
   sortIncidentCases,
   summarizeIncidents,
@@ -256,3 +259,82 @@ function invocation(
     ...overrides,
   };
 }
+
+describe("formatTurnWhen", () => {
+  const now = new Date("2026-08-15T14:00:00Z").getTime();
+
+  it("counts minutes, then hours and minutes, for the last day", () => {
+    expect(formatTurnWhen(now - 12 * 60_000, now)).toBe("12m ago");
+    expect(formatTurnWhen(now - (3 * 3_600_000 + 20 * 60_000), now))
+      .toBe("3h 20m ago");
+    expect(formatTurnWhen(now - 5 * 3_600_000, now)).toBe("5h ago");
+  });
+
+  it("names the weekday inside a week and dates anything older", () => {
+    /* A bare clock time is ambiguous the moment a thread spans days, and
+       these threads run for days — two rows reading "2:00 PM" can be three
+       days apart. */
+    const threeDaysAgo = formatTurnWhen(now - 3 * 86_400_000, now);
+    expect(threeDaysAgo).toMatch(/^[A-Za-z]{3} /);
+    const older = formatTurnWhen(now - 30 * 86_400_000, now);
+    expect(older).toMatch(/^\d+\/\d+ /);
+  });
+});
+
+describe("countRepeatedCommands", () => {
+  it("reports commands the thread ran more than once", () => {
+    const repeats = countRepeatedCommands([
+      invocation({ normalizedCommand: "sed -n '1,420p' runbook.md" }),
+      invocation({ normalizedCommand: "sed -n '1,420p' runbook.md" }),
+      invocation({ normalizedCommand: "sed -n '1,420p' runbook.md" }),
+      invocation({ normalizedCommand: "cat README.md" }),
+    ]);
+
+    expect(repeats.get("sed -n '1,420p' runbook.md")).toBe(3);
+    expect(repeats.has("cat README.md")).toBe(false);
+  });
+});
+
+describe("refineToolCategory", () => {
+  it("separates agent instructions and skill files from bulk file reads", () => {
+    /* `file-io` was 80% of one thread's output. Knowing it was the same
+       instruction files, re-read, is the part that suggests a fix. */
+    expect(refineToolCategory({
+      category: "file-io",
+      normalizedCommand: "cat AGENTS.md",
+      toolName: "commandExecution",
+    })).toBe("agent-instructions");
+    expect(refineToolCategory({
+      category: "file-io",
+      normalizedCommand: "sed -n '1,400p' .agents/skills/manage-macos/SKILL.md",
+      toolName: "commandExecution",
+    })).toBe("skill-files");
+    expect(refineToolCategory({
+      category: "file-io",
+      normalizedCommand: "cat src/index.ts",
+      toolName: "commandExecution",
+    })).toBe("file-io");
+  });
+
+  it("leaves non-file categories alone", () => {
+    expect(refineToolCategory({
+      category: "git",
+      normalizedCommand: "git diff AGENTS.md",
+      toolName: "commandExecution",
+    })).toBe("git");
+  });
+});
+
+describe("buildCategoryComposition tail", () => {
+  it("names a single folded category instead of calling it Other", () => {
+    const composition = buildCategoryComposition([
+      invocation({ category: "file-io", estimatedOutputTokens: 500 }),
+      invocation({ category: "git", estimatedOutputTokens: 400 }),
+      invocation({ category: "search", estimatedOutputTokens: 300 }),
+      invocation({ category: "shell", estimatedOutputTokens: 200 }),
+      invocation({ category: "mcp", estimatedOutputTokens: 100 }),
+    ]);
+
+    expect(composition.at(-1)?.label).toBe("MCP");
+  });
+});

@@ -4,7 +4,6 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadActivityDetail,
   ThreadToolAccounting,
-  ThreadToolInvocationCategory,
   ThreadToolInvocationRecord,
 } from "@pwragent/shared";
 import {
@@ -19,6 +18,7 @@ import { detailMatchesInvocationItem } from "./tool-call-details";
 import type {
   CategoryShare,
   IncidentSortMode,
+  RefinedToolCategory,
   TurnCostRow,
   TurnCostStrip,
 } from "./tool-output-incident-insights";
@@ -26,12 +26,16 @@ import {
   buildCategoryComposition,
   buildTurnCostStrip,
   capMeterWidth,
+  countRepeatedCommands,
   formatCapShare,
   formatCategoryLabel,
   formatCompactTokens,
   formatInvocationIdentity,
+  formatTurnWhen,
   invocationStatusTone,
   isOverOutputCap,
+  refineToolCategory,
+  repeatCountFor,
   sortIncidentCases,
   summarizeIncidents,
 } from "./tool-output-incident-insights";
@@ -44,7 +48,7 @@ export function ToolOutputIncidentExplorerWindow() {
   const [accounting, setAccounting] = useState<ThreadToolAccounting>();
   const [latest, setLatest] = useState<AppServerReadThreadResponse>();
   const [selectedId, setSelectedId] = useState<string>();
-  const [category, setCategory] = useState<ThreadToolInvocationCategory | "all">("all");
+  const [category, setCategory] = useState<RefinedToolCategory | "all">("all");
   const [turnFilter, setTurnFilter] = useState<string>();
   const [sortMode, setSortMode] = useState<IncidentSortMode>("largest");
   const [search, setSearch] = useState("");
@@ -116,6 +120,10 @@ export function ToolOutputIncidentExplorerWindow() {
   const summary = useMemo(() => summarizeIncidents(allInvocations), [allInvocations]);
   const turnStrip = useMemo(() => buildTurnCostStrip(allInvocations), [allInvocations]);
   const composition = useMemo(() => buildCategoryComposition(flagged), [flagged]);
+  const repeatedCommands = useMemo(
+    () => countRepeatedCommands(flagged),
+    [flagged],
+  );
   /* Every turn, not just the rows the strip had room for — a case in a turn
      that fell below the row limit still belongs to that turn. */
   const turnLabels = turnStrip.labelsByKey;
@@ -124,7 +132,7 @@ export function ToolOutputIncidentExplorerWindow() {
     const normalizedSearch = search.trim().toLowerCase();
     return sortIncidentCases(
       flagged.filter((invocation) =>
-        (category === "all" || invocation.category === category)
+        (category === "all" || refineToolCategory(invocation) === category)
         && (turnFilter === undefined || (invocation.turnId ?? "") === turnFilter)
         && (
           !normalizedSearch
@@ -181,6 +189,8 @@ export function ToolOutputIncidentExplorerWindow() {
   const canSendAsNewTurn = Boolean(!activeTurnId && desktopApi?.startTurn);
   const visibleOutputLines = filterOutputLines(output, outputSearch);
   const laterTripsInTurn = selected ? countLaterTripsInTurn(allInvocations, selected) : 0;
+  /* One clock read per render, shared by every turn row. */
+  const renderedAt = Date.now();
 
   const analyze = async (): Promise<void> => {
     if (!desktopApi?.analyzeThreadToolHistory) return;
@@ -351,9 +361,7 @@ export function ToolOutputIncidentExplorerWindow() {
                 disabled={entry.category === "other"}
                 key={entry.category}
                 onClick={() => setCategory(
-                  entry.category === "other"
-                    ? "all"
-                    : entry.category as ThreadToolInvocationCategory,
+                  entry.category === "other" ? "all" : entry.category,
                 )}
                 type="button"
               >
@@ -373,6 +381,7 @@ export function ToolOutputIncidentExplorerWindow() {
       </div>
 
       <TurnStrip
+        now={renderedAt}
         onSelect={(row) => setTurnFilter(
           turnFilter === row.key ? undefined : row.key,
         )}
@@ -439,7 +448,9 @@ export function ToolOutputIncidentExplorerWindow() {
                 <CaseRow
                   invocation={invocation}
                   key={invocation.invocationId}
+                  now={renderedAt}
                   onSelect={() => setSelectedId(invocation.invocationId)}
+                  repeatCount={repeatCountFor(invocation, repeatedCommands)}
                   selected={invocation.invocationId === selected?.invocationId}
                 />
               ))}
@@ -492,9 +503,16 @@ export function ToolOutputIncidentExplorerWindow() {
                     value={selected.exitCode !== undefined ? `exit ${selected.exitCode}` : "—"}
                   />
                   <Fact
-                    label={formatCategoryLabel(selected.category)}
+                    label={formatCategoryLabel(refineToolCategory(selected))}
                     value={turnLabels.get(selected.turnId ?? "") ?? "No turn"}
                   />
+                  {repeatCountFor(selected, repeatedCommands) > 1 ? (
+                    <Fact
+                      label="repeated"
+                      tone="warning"
+                      value={`${repeatCountFor(selected, repeatedCommands)}× in this thread`}
+                    />
+                  ) : null}
                   <Fact label="observed" value={formatTimestamp(selected.observedAt)} />
                   <Fact
                     label="output"
@@ -621,6 +639,9 @@ function CompositionBar(props: { composition: CategoryShare[] }) {
  * the two need to be told apart at a glance.
  */
 function TurnStrip(props: {
+  /* Captured once by the caller so every row in a render measures "ago"
+     against the same instant. */
+  now: number;
   onSelect: (row: TurnCostRow) => void;
   selectedKey?: string;
   strip: TurnCostStrip;
@@ -648,7 +669,9 @@ function TurnStrip(props: {
         >
           <span className="incident-explorer__turn-label">
             {row.label}
-            <span>{` · ${formatClockTime(row.firstObservedAt)}`}</span>
+            <span title={new Date(row.firstObservedAt).toLocaleString()}>
+              {` · ${formatTurnWhen(row.firstObservedAt, props.now)}`}
+            </span>
           </span>
           <span aria-hidden="true" className="incident-explorer__turn-bar">
             <i
@@ -679,7 +702,9 @@ function TurnStrip(props: {
 
 function CaseRow(props: {
   invocation: ThreadToolInvocationRecord;
+  now: number;
   onSelect: () => void;
+  repeatCount: number;
   selected: boolean;
 }) {
   const invocation = props.invocation;
@@ -692,7 +717,7 @@ function CaseRow(props: {
       className="incident-explorer__case"
       data-selected={props.selected}
       onClick={props.onSelect}
-      title={command}
+      title={`${command}\n${new Date(invocation.observedAt).toLocaleString()}`}
       type="button"
     >
       <span className="incident-explorer__case-top">
@@ -701,6 +726,16 @@ function CaseRow(props: {
           {identity.detail ? <span>{` ${identity.detail}`}</span> : null}
         </span>
         <span className="incident-explorer__case-tokens">
+          {props.repeatCount > 1 ? (
+            /* Re-running the identical read is its own finding: the turn
+               either lost the earlier result or the file keeps changing. */
+            <b
+              className="incident-explorer__repeat"
+              title={`This exact command ran ${props.repeatCount} times in this thread`}
+            >
+              {props.repeatCount}×
+            </b>
+          ) : null}
           {formatCompactTokens(invocation.estimatedOutputTokens)}
         </span>
       </span>
@@ -713,7 +748,7 @@ function CaseRow(props: {
       <span className="incident-explorer__case-sub">
         {formatCapShare(invocation.outputChars, { short: true })}
         {" · "}{invocation.outputChars.toLocaleString()} chars
-        {" · "}{formatClockTime(invocation.observedAt)}
+        {" · "}{formatTurnWhen(invocation.observedAt, props.now)}
       </span>
     </button>
   );
@@ -897,9 +932,3 @@ function formatTimestamp(timestamp: number): string {
   return new Date(timestamp).toLocaleString();
 }
 
-function formatClockTime(timestamp: number): string {
-  return new Date(timestamp).toLocaleTimeString(undefined, {
-    hour: "numeric",
-    minute: "2-digit",
-  });
-}
