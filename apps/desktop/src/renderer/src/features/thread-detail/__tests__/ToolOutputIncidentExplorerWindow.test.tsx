@@ -242,6 +242,27 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       .toHaveAttribute("aria-pressed", "false");
   });
 
+  it("filters cases from the chronological timeline spark", async () => {
+    installApi({ readThread: async () => buildMultiTurnResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const timeline = await screen.findByRole("group", {
+      name: "Tool cost per turn, in order",
+    });
+    const columns = within(timeline).getAllByRole("button");
+    expect(columns).toHaveLength(2);
+    /* Hover text carries the numbers the bars encode. */
+    expect(columns[0]).toHaveAttribute("title", expect.stringMatching(/Turn 1 .*3 calls/));
+
+    fireEvent.click(columns[1]!);
+    const cases = screen.getByLabelText("Incident cases");
+    await waitFor(() =>
+      expect(within(cases).getAllByRole("button", { name: /chars/ })).toHaveLength(1));
+    expect(within(cases).getAllByRole("button", { name: /chars/ })[0])
+      .toHaveAttribute("title", expect.stringContaining("pnpm test"));
+  });
+
   it("filters the case list to a single turn", async () => {
     installApi({ readThread: async () => buildMultiTurnResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";

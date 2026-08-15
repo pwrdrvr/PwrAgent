@@ -501,6 +501,19 @@ describe("turn strip scope and ranking", () => {
     expect(strip.totalTurnCount).toBe(2);
   });
 
+  it("exposes the unscoped chronological timeline alongside the ranked rows", () => {
+    /* The spark chart is the "when": all turns, time order, no scope — a long
+       poll only reads as a pattern when adjacency survives. */
+    const strip = buildTurnCostStrip([
+      invocation({ noisy: false, observedAt: 20, outputChars: 200, turnId: "turn-quiet" }),
+      invocation({ observedAt: 10, outputChars: 20_000, turnId: "turn-loud" }),
+    ]);
+
+    expect(strip.rows.map((row) => row.key)).toEqual(["turn-loud"]);
+    expect(strip.timeline.map((row) => row.key))
+      .toEqual(["turn-loud", "turn-quiet"]);
+  });
+
   it("keeps ordinals identical across scopes", () => {
     /* "Turn 2" must name the same turn whichever scope is active, or the
        label stops matching the case list. */

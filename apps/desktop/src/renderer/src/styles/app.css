@@ -15379,6 +15379,80 @@ a.transcript-message__messaging-origin:focus-visible {
   font-variant-numeric: tabular-nums;
 }
 
+/* When it went: one column per turn across the whole thread, time order.
+   Tokens rise from the shared baseline, round trips hang below it, so a long
+   poll reads as trip spikes with no matching output directly above them. */
+.incident-explorer__timeline-block {
+  margin-top: 10px;
+}
+
+.incident-explorer__timeline {
+  display: flex;
+  align-items: stretch;
+  height: 40px;
+  overflow: hidden;
+}
+
+/* Column separation comes from a transparent right border rather than gap:
+   a 300-turn thread in a narrow window must compress to 1px columns instead
+   of overflowing, and gaps do not shrink. */
+.incident-explorer .incident-explorer__timeline-turn {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 1px;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.incident-explorer .incident-explorer__timeline-turn:last-child {
+  border-right: 0;
+}
+
+.incident-explorer__timeline-turn:hover .incident-explorer__timeline-tokens i,
+.incident-explorer__timeline-turn[aria-pressed="true"] .incident-explorer__timeline-tokens i {
+  background: var(--accent-strong);
+}
+
+.incident-explorer__timeline-turn[aria-pressed="true"] {
+  background: var(--accent-soft);
+}
+
+.incident-explorer__timeline-tokens {
+  display: flex;
+  flex: 1;
+  align-items: flex-end;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.incident-explorer__timeline-tokens i {
+  display: block;
+  width: 100%;
+  min-height: 1px;
+  background: var(--accent);
+}
+
+.incident-explorer__timeline-tokens i[data-critical="true"] {
+  background: var(--status-error);
+}
+
+.incident-explorer__timeline-trips {
+  display: flex;
+  flex: 0 0 11px;
+  align-items: flex-start;
+}
+
+.incident-explorer__timeline-trips i {
+  display: block;
+  width: 100%;
+  min-height: 1px;
+  background: color-mix(in srgb, var(--text-secondary) 66%, transparent);
+}
+
 /* Cost by turn. The solid bar is output volume; the tick rail is round trips.
    They are deliberately different marks because they are different problems:
    a turn heavy on ticks and light on bar is a polling loop, and the fix for

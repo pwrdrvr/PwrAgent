@@ -399,6 +399,15 @@ export function ToolOutputIncidentExplorerWindow() {
               </button>
             ))}
           </div>
+          <TurnTimeline
+            {...(currency ? { currency } : {})}
+            now={renderedAt}
+            onSelect={(row) => setTurnFilter(
+              turnFilter === row.key ? undefined : row.key,
+            )}
+            selectedKey={turnFilter}
+            timeline={turnStrip.timeline}
+          />
         </div>
       </div>
 
@@ -762,6 +771,73 @@ function TurnStrip(props: {
         </p>
       ) : null}
     </section>
+  );
+}
+
+/**
+ * The whole thread, one column per turn, in time order. Tokens above, round
+ * trips below on a shared axis — a long poll is a stretch of trip spikes with
+ * no matching output, which no ranked list can show because ranking discards
+ * adjacency. Hover carries the numbers; click filters cases to the turn.
+ */
+function TurnTimeline(props: {
+  currency?: string;
+  now: number;
+  onSelect: (row: TurnCostRow) => void;
+  selectedKey?: string;
+  timeline: TurnCostRow[];
+}) {
+  if (props.timeline.length < 2) return null;
+  const maxTokens = props.timeline.reduce(
+    (max, row) => Math.max(max, row.estimatedOutputTokens),
+    0,
+  );
+  const maxCalls = props.timeline.reduce(
+    (max, row) => Math.max(max, row.callCount),
+    0,
+  );
+  return (
+    <div className="incident-explorer__timeline-block">
+      <p className="incident-explorer__eyebrow">When it went</p>
+      <div
+        aria-label="Tool cost per turn, in order"
+        className="incident-explorer__timeline"
+        role="group"
+      >
+        {props.timeline.map((row) => {
+          const description = [
+            row.label,
+            formatTurnWhen(row.firstObservedAt, props.now),
+            `${formatCompactTokens(row.estimatedOutputTokens)} tok`,
+            `${row.callCount.toLocaleString()} ${row.callCount === 1 ? "call" : "calls"}`,
+            ...(row.costMicros !== undefined
+              ? [formatMicrosCurrency(row.costMicros, props.currency)]
+              : []),
+          ].join(" · ");
+          return (
+            <button
+              aria-label={description}
+              aria-pressed={props.selectedKey === row.key}
+              className="incident-explorer__timeline-turn"
+              key={row.key}
+              onClick={() => props.onSelect(row)}
+              title={description}
+              type="button"
+            >
+              <span aria-hidden="true" className="incident-explorer__timeline-tokens">
+                <i
+                  data-critical={row.overCapCount > 0}
+                  style={{ height: `${scaleWidth(row.estimatedOutputTokens, maxTokens)}%` }}
+                />
+              </span>
+              <span aria-hidden="true" className="incident-explorer__timeline-trips">
+                <i style={{ height: `${scaleWidth(row.callCount, maxCalls)}%` }} />
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

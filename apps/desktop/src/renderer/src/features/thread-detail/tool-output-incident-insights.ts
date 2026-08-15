@@ -94,6 +94,13 @@ export type TurnCostStrip = {
   rankedBy: "billed" | "estimate";
   rows: TurnCostRow[];
   scope: TurnStripScope;
+  /**
+   * Every turn with recorded tool calls, in time order and unscoped — the
+   * whole thread at a glance. The ranked rows answer "which turns cost the
+   * most"; this answers "when", which is where a long poll shows up as a
+   * stretch of round-trip spikes with no matching output.
+   */
+  timeline: TurnCostRow[];
   /** Turns with any recorded tool call — the "all" scope's population. */
   totalTurnCount: number;
   hiddenTurnCount: number;
@@ -399,6 +406,7 @@ export function buildTurnCostStrip(
     rankedBy,
     rows,
     scope,
+    timeline: chronological,
     totalTurnCount: chronological.length,
   };
 }
