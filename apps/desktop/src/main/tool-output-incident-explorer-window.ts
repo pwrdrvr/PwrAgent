@@ -15,10 +15,10 @@ import {
   showAuxiliaryWindowWhenReady,
 } from "./auxiliary-window-chrome";
 import { getMainLogger } from "./log";
+import { themedWindowBackgroundColor } from "./native-appearance";
 import {
   readBootstrapAppearance,
   themedWindowAdditionalArguments,
-  themedWindowBackgroundColor,
 } from "./settings/appearance-bootstrap";
 import {
   applyWindowSecurityHardening,
