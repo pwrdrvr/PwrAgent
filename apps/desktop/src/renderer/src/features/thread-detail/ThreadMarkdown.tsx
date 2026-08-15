@@ -143,6 +143,10 @@ function TranscriptCode(props: {
   children: ReactNode;
   className?: string;
   desktopApi?: Pick<DesktopApi, "copyText">;
+  editorName?: string;
+  onOpenSkillInEditor?: (skill: SkillActionTarget) => void;
+  onViewSkillMarkdown?: (skill: SkillActionTarget) => void;
+  skill?: AppServerSkillSummary;
   threadLinks: ThreadLinkContextValue | undefined;
 }) {
   const insideCodeBlock = useContext(CodeBlockContext);
@@ -173,6 +177,18 @@ function TranscriptCode(props: {
 
   if (insideLink) {
     return <code className="transcript-message__code">{props.children}</code>;
+  }
+
+  if (props.skill?.path) {
+    return (
+      <SkillChip
+        editorName={props.editorName}
+        onOpenInEditor={props.onOpenSkillInEditor}
+        onViewMarkdown={props.onViewSkillMarkdown}
+        skill={props.skill}
+        transcript={true}
+      />
+    );
   }
 
   const copyText = extractTextContent(props.children);
@@ -238,6 +254,17 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
             (skill): skill is AppServerSkillSummary & { path: string } => Boolean(skill.path)
           )
           .map((skill) => [skill.path, skill])
+      ),
+    [props.skills]
+  );
+  const skillsByToken = useMemo(
+    () =>
+      new Map(
+        (props.skills ?? [])
+          .filter(
+            (skill): skill is AppServerSkillSummary & { path: string } => Boolean(skill.path)
+          )
+          .map((skill) => [`$${skill.name}`, skill])
       ),
     [props.skills]
   );
@@ -516,10 +543,19 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         );
       },
       code(codeProps) {
+        const skill = skillsByToken.get(extractTextContent(codeProps.children));
         return (
           <TranscriptCode
             className={codeProps.className}
             desktopApi={props.desktopApi}
+            editorName={editorApplication?.name}
+            onOpenSkillInEditor={editorApplication && props.desktopApi?.openApplication
+              ? openSkillMarkdownInEditor
+              : undefined}
+            onViewSkillMarkdown={props.desktopApi?.readMarkdownFile
+              ? viewSkillMarkdown
+              : undefined}
+            skill={skill}
             threadLinks={threadLinks}
           >
             {codeProps.children}
@@ -651,6 +687,7 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
       pullRequestLinks,
       sourceMarkdownText,
       skillsByPath,
+      skillsByToken,
       threadLinks,
       viewSkillMarkdown,
     ]
