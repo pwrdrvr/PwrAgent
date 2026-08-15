@@ -141,7 +141,9 @@ import { buildMessagingConversationKey } from "./messaging-store.js";
 import {
   messagingOutboundImageDataUrl,
   resolveMessagingOutboundFile,
+  type MessagingOutboundFileAccess,
 } from "./messaging-outbound-file.js";
+import { resolveScratchProjectsRoots } from "../../app-server/scratch-projects.js";
 import {
   defaultAgentBackendSupport,
   defaultAgentScopeForChannel,
@@ -839,6 +841,12 @@ export type MessagingControllerOptions = {
    * not abort the controller's mutation flow.
    */
   onBindingChanged?: () => void;
+  /**
+   * Extra roots the agent may send files from, plus optional extra private
+   * storage roots to refuse. Production callers omit this; tests use it to
+   * point at a temp workspace without writing into ~/.pwragent.
+   */
+  outboundFileAccess?: MessagingOutboundFileAccess;
 };
 
 export class MessagingController {
@@ -16748,11 +16756,15 @@ export class MessagingController {
       return origin;
     }
 
-    const outbound = await resolveMessagingOutboundFile({
-      path: typeof request.args?.path === "string" ? request.args.path : "",
-      ...(filename ? { filename } : {}),
-      ...(mediaKind ? { mediaKind } : {}),
-    }, this.capabilityProfile.outboundAttachments ?? {});
+    const outbound = await resolveMessagingOutboundFile(
+      {
+        path: typeof request.args?.path === "string" ? request.args.path : "",
+        ...(filename ? { filename } : {}),
+        ...(mediaKind ? { mediaKind } : {}),
+      },
+      this.capabilityProfile.outboundAttachments ?? {},
+      await this.resolveOutboundFileAccess(request.context),
+    );
     if (!outbound.ok) {
       return {
         ok: false,
@@ -16887,6 +16899,43 @@ export class MessagingController {
           ? { recipient: summarizeMessagingActor(origin.origin.event.actor) }
           : {}),
       },
+    };
+  }
+
+  private async resolveOutboundFileAccess(
+    context: PwrAgentMessagingRequest["context"],
+  ): Promise<MessagingOutboundFileAccess> {
+    const configured = this.options.outboundFileAccess;
+    const allowedRoots = [
+      ...resolveScratchProjectsRoots(),
+      ...(configured?.allowedRoots ?? []),
+    ];
+    try {
+      const navigation = await this.options.backend.getNavigationSnapshot({
+        backend: context.backend,
+      });
+      const thread = navigation.threads.find(
+        (candidate) =>
+          candidate.source === context.backend
+          && candidate.id === context.threadId,
+      );
+      if (thread?.projectKey) {
+        allowedRoots.push(thread.projectKey);
+      }
+      for (const directory of thread?.linkedDirectories ?? []) {
+        allowedRoots.push(directory.path);
+        if (directory.worktreePath) {
+          allowedRoots.push(directory.worktreePath);
+        }
+      }
+    } catch {
+      // Scratch-project and configured roots still apply.
+    }
+    return {
+      allowedRoots,
+      ...(configured?.privateStorageRoots
+        ? { privateStorageRoots: configured.privateStorageRoots }
+        : {}),
     };
   }
 

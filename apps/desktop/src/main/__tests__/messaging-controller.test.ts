@@ -55,6 +55,7 @@ import {
   updateWorkingCardActivities,
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
+import type { MessagingOutboundFileAccess } from "../messaging/core/messaging-outbound-file";
 import type { MessagingRbacPolicyProvider } from "../messaging/rbac-policy-service";
 import type { MessagingPermissionId } from "@pwragent/shared";
 import type { MessagingAdapter, MessagingBackendBridge } from "../messaging/core/messaging-adapter";
@@ -22508,7 +22509,9 @@ describe("send_messaging_file agent tool", () => {
     tempDirs.push(tempDir);
     const filePath = path.join(tempDir, "hunt-haro-resume.pdf");
     await writeFile(filePath, Buffer.from("%PDF-1.4 resume"));
-    const harness = await createHarness();
+    const harness = await createHarness({
+      outboundFileAccess: { allowedRoots: [tempDir] },
+    });
     await startMessagingTurn(harness);
 
     const response = await harness.controller.handlePwrAgentMessagingRequest({
@@ -22565,7 +22568,9 @@ describe("send_messaging_file agent tool", () => {
     tempDirs.push(tempDir);
     const filePath = path.join(tempDir, "shot.png");
     await writeFile(filePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
-    const harness = await createHarness();
+    const harness = await createHarness({
+      outboundFileAccess: { allowedRoots: [tempDir] },
+    });
     await startMessagingTurn(harness);
 
     await expect(
@@ -22614,7 +22619,10 @@ describe("send_messaging_file agent tool", () => {
       routingState: { opaque: { chatId: 1 } },
       updatedAt: 1000,
     }));
-    const harness = await createHarness({ resolvePrivateConversation });
+    const harness = await createHarness({
+      outboundFileAccess: { allowedRoots: [tempDir] },
+      resolvePrivateConversation,
+    });
     await startMessagingTurn(harness);
 
     await expect(
@@ -22645,6 +22653,36 @@ describe("send_messaging_file agent tool", () => {
       }),
       routingState: undefined,
     });
+  });
+
+  it("refuses a host path outside the thread workspace", async () => {
+    const allowed = await mkdtemp(path.join(os.tmpdir(), "pwragent-send-allowed-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "pwragent-send-outside-"));
+    tempDirs.push(allowed, outside);
+    const filePath = path.join(outside, "secrets.pdf");
+    await writeFile(filePath, Buffer.from("%PDF-1.4 secrets"));
+    const harness = await createHarness({
+      outboundFileAccess: { allowedRoots: [allowed] },
+    });
+    await startMessagingTurn(harness);
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "send_messaging_file",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: { path: filePath },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "forbidden",
+      },
+    });
+    expect(harness.delivered).toEqual([]);
   });
 
   it("denies send_messaging_file when the originating actor lacks message.reply", async () => {
@@ -22706,6 +22744,7 @@ async function createHarness(options?: {
   listSkills?: NonNullable<MessagingBackendBridge["listSkills"]> | false;
   navigation?: NavigationSnapshot;
   now?: () => number;
+  outboundFileAccess?: MessagingOutboundFileAccess;
   pendingIntentTtlMs?: number;
   pdfAnalysisEnabled?: MessagingControllerOptions["pdfAnalysisEnabled"];
   channel?: MessagingChannelKind;
@@ -23265,6 +23304,7 @@ async function createHarness(options?: {
     inputDebounceMs: options?.inputDebounceMs ?? 0,
     logger: options?.logger,
     now: options?.now ?? (() => 1000),
+    outboundFileAccess: options?.outboundFileAccess,
     pendingIntentTtlMs: options?.pendingIntentTtlMs,
     pdfAnalysisEnabled: options?.pdfAnalysisEnabled,
     sleepUntil: options?.sleepUntil,

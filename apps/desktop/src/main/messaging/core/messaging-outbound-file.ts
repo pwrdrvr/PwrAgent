@@ -1,5 +1,6 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { resolveReadableLocalFilePath } from "../../app-server/local-file-input.js";
 import { classifyMessagingAttachment } from "./messaging-attachment-mime.js";
 
 export type MessagingOutboundMediaKind = "document" | "image";
@@ -16,6 +17,11 @@ export type MessagingOutboundFileCapabilities = {
   supportsImageUpload?: boolean;
 };
 
+export type MessagingOutboundFileAccess = {
+  allowedRoots: readonly string[];
+  privateStorageRoots?: readonly string[];
+};
+
 export type MessagingOutboundFile =
   | {
       ok: true;
@@ -27,13 +33,22 @@ export type MessagingOutboundFile =
     }
   | {
       ok: false;
-      code: "invalid_arguments" | "not_found" | "unsupported_operation";
+      code:
+        | "forbidden"
+        | "invalid_arguments"
+        | "not_found"
+        | "unsupported_operation";
       message: string;
     };
+
+const OUTSIDE_ALLOWED_ROOTS_MESSAGE =
+  "send_messaging_file can only send files from this thread's workspace "
+  + "or a PwrAgent generated-output directory.";
 
 export async function resolveMessagingOutboundFile(
   request: MessagingOutboundFileRequest,
   capabilities: MessagingOutboundFileCapabilities,
+  access: MessagingOutboundFileAccess,
 ): Promise<MessagingOutboundFile> {
   const rawPath = typeof request.path === "string" ? request.path.trim() : "";
   if (!rawPath || rawPath.includes("\0") || !path.isAbsolute(rawPath)) {
@@ -45,15 +60,29 @@ export async function resolveMessagingOutboundFile(
     };
   }
 
+  const readable = await resolveReadableLocalFilePath(rawPath, {
+    allowedRoots: access.allowedRoots,
+    privateStorageRoots: access.privateStorageRoots,
+  });
+  if (!readable.ok) {
+    return readable.reason === "not_found"
+      ? {
+          ok: false,
+          code: "not_found",
+          message: `File not found: ${rawPath}`,
+        }
+      : {
+          ok: false,
+          code: "forbidden",
+          message: OUTSIDE_ALLOWED_ROOTS_MESSAGE,
+        };
+  }
+
   let fileStat: Awaited<ReturnType<typeof stat>>;
   try {
-    fileStat = await stat(rawPath);
-  } catch {
-    return {
-      ok: false,
-      code: "not_found",
-      message: `File not found: ${rawPath}`,
-    };
+    fileStat = await stat(readable.path);
+  } catch (error) {
+    return mapOutboundFileSystemError(error, rawPath);
   }
   if (!fileStat.isFile()) {
     return {
@@ -72,16 +101,25 @@ export async function resolveMessagingOutboundFile(
 
   const maxBytes = capabilities.maxUploadBytes ?? Infinity;
   if (fileStat.size > maxBytes) {
+    return oversizedFileError(fileStat.size, maxBytes);
+  }
+
+  let data: Uint8Array;
+  try {
+    data = new Uint8Array(await readFile(readable.path));
+  } catch (error) {
+    return mapOutboundFileSystemError(error, rawPath);
+  }
+  if (data.byteLength <= 0) {
     return {
       ok: false,
       code: "invalid_arguments",
-      message:
-        `File is ${fileStat.size} bytes, which exceeds this messaging surface's `
-        + `upload limit of ${maxBytes} bytes.`,
+      message: "send_messaging_file requires a non-empty file.",
     };
   }
-
-  const data = new Uint8Array(await readFile(rawPath));
+  if (data.byteLength > maxBytes) {
+    return oversizedFileError(data.byteLength, maxBytes);
+  }
   const filename = sanitizeOutboundFilename(
     request.filename ?? path.basename(rawPath),
   );
@@ -176,4 +214,43 @@ function resolveOutboundMediaKind(params: {
 function sanitizeOutboundFilename(name: string): string {
   const base = path.basename(name).trim();
   return base && base !== "." && base !== ".." ? base : "file";
+}
+
+function oversizedFileError(
+  sizeBytes: number,
+  maxBytes: number,
+): Extract<MessagingOutboundFile, { ok: false }> {
+  return {
+    ok: false,
+    code: "invalid_arguments",
+    message:
+      `File is ${sizeBytes} bytes, which exceeds this messaging surface's `
+      + `upload limit of ${maxBytes} bytes.`,
+  };
+}
+
+function mapOutboundFileSystemError(
+  error: unknown,
+  rawPath: string,
+): Extract<MessagingOutboundFile, { ok: false }> {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === "ENOENT") {
+    return {
+      ok: false,
+      code: "not_found",
+      message: `File not found: ${rawPath}`,
+    };
+  }
+  if (code === "EACCES" || code === "EPERM") {
+    return {
+      ok: false,
+      code: "forbidden",
+      message: OUTSIDE_ALLOWED_ROOTS_MESSAGE,
+    };
+  }
+  return {
+    ok: false,
+    code: "invalid_arguments",
+    message: "Could not read the file for send_messaging_file.",
+  };
 }
