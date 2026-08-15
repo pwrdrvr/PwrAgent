@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type {
+  AppServerThreadMessageOrigin,
   CreateInstanceThreadResult,
   CreateInstanceThreadToolArgs,
   FederationHealthStatus,
@@ -420,20 +421,30 @@ async function createInstanceThread(
     ? groupingParent.instanceId
     : undefined;
   const draft = buildLaunchpadDraft({ snapshot, directory, args });
-  const response = await backend.materializeDirectoryLaunchpad({
-    directoryKey: args.projectKey,
-    launchpad: draft,
-    ...(groupingParent
-      ? {
-          parentThreadId: groupingParent.threadId,
-          parentThreadBackend: groupingParent.backend,
-          ...(parentThreadInstanceId
-            ? { parentThreadInstanceId }
-            : {}),
-        }
-      : {}),
-    ...(args.input ? { input: [{ type: "text", text: args.input }] } : {}),
-  });
+  const messageOrigin: AppServerThreadMessageOrigin = {
+    kind: "agent",
+    sourceThread: {
+      backend: context.backend,
+      threadId: context.threadId,
+    },
+  };
+  const response = await backend.materializeDirectoryLaunchpad(
+    {
+      directoryKey: args.projectKey,
+      launchpad: draft,
+      ...(groupingParent
+        ? {
+            parentThreadId: groupingParent.threadId,
+            parentThreadBackend: groupingParent.backend,
+            ...(parentThreadInstanceId
+              ? { parentThreadInstanceId }
+              : {}),
+          }
+        : {}),
+      ...(args.input ? { input: [{ type: "text", text: args.input }] } : {}),
+    },
+    { messageOrigin },
+  );
   const mountDisposition = groupingParent && localInstanceId
     ? await mountRemoteChildAtGroupingRoot(
         runtime,
