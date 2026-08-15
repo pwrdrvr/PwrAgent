@@ -12,6 +12,7 @@ import {
   formatMessagingPlatformName,
   MESSAGING_PLATFORM_ICONS,
 } from "../../lib/messaging-platform-branding";
+import { useHoverTransitionGrace } from "../../lib/useHoverTransitionGrace";
 import { useMessagingPlatformStatuses } from "./useMessagingPlatformStatuses";
 import type { DesktopApi } from "../../lib/desktop-api";
 
@@ -84,6 +85,13 @@ export function MessagingStatusBar(props: {
   >({});
   const rootRef = useRef<HTMLDivElement | null>(null);
   const popoverId = useId();
+  const {
+    cancelHoverDismiss,
+    dismissAfterGrace,
+    dismissImmediately,
+  } = useHoverTransitionGrace(() => {
+    setOpen(false);
+  });
 
   const runtimeMessagingEnabled =
     settingsSnapshot?.runtime?.messaging?.disabled !== undefined
@@ -190,12 +198,12 @@ export function MessagingStatusBar(props: {
     if (!open) return;
     const onPointerDown = (event: PointerEvent) => {
       if (rootRef.current?.contains(event.target as Node)) return;
-      setOpen(false);
+      dismissImmediately();
       setPinned(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape") return;
-      setOpen(false);
+      dismissImmediately();
       setPinned(false);
     };
     document.addEventListener("pointerdown", onPointerDown);
@@ -204,7 +212,7 @@ export function MessagingStatusBar(props: {
       document.removeEventListener("pointerdown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [open]);
+  }, [dismissImmediately, open]);
 
   const handleToggleMessaging = async (): Promise<void> => {
     if (!props.desktopApi?.setMessagingEnabled) {
@@ -284,9 +292,14 @@ export function MessagingStatusBar(props: {
       className="messaging-status-bar"
       role="group"
       aria-label="Messaging platform status"
-      onPointerEnter={() => setOpen(true)}
+      onPointerEnter={() => {
+        cancelHoverDismiss();
+        setOpen(true);
+      }}
       onPointerLeave={() => {
-        if (!pinned) setOpen(false);
+        if (!pinned) {
+          dismissAfterGrace();
+        }
       }}
     >
       <button
@@ -301,10 +314,11 @@ export function MessagingStatusBar(props: {
         } messaging status.`}
         onClick={() => {
           if (pinned) {
-            setOpen(false);
+            dismissImmediately();
             setPinned(false);
             return;
           }
+          cancelHoverDismiss();
           setOpen(true);
           setPinned(true);
         }}
@@ -329,6 +343,7 @@ export function MessagingStatusBar(props: {
           className="messaging-status-popover"
           role="dialog"
           aria-label="Messaging platforms"
+          onPointerEnter={cancelHoverDismiss}
         >
           <div className="messaging-status-popover__panel">
             <div className="messaging-status-popover__head">
@@ -390,7 +405,7 @@ export function MessagingStatusBar(props: {
                 type="button"
                 className="messaging-status-popover__activity"
                 onClick={() => {
-                  setOpen(false);
+                  dismissImmediately();
                   setPinned(false);
                   props.onOpenActivity?.();
                 }}
