@@ -15401,6 +15401,32 @@ a.transcript-message__messaging-origin:focus-visible {
   font-size: 10px;
 }
 
+/* Scope toggle: quiet segmented pair, same visual weight as the legend so it
+   reads as a view control rather than a primary action. */
+.incident-explorer__turns-scope {
+  display: flex;
+  gap: 2px;
+  margin: 0 12px 6px auto;
+}
+
+.incident-explorer__turns-scope button {
+  padding: 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.incident-explorer__turns-scope button[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
 .incident-explorer__turns-key {
   display: inline-block;
   width: 14px;

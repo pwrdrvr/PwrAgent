@@ -21,6 +21,7 @@ import type {
   RefinedToolCategory,
   TurnCostRow,
   TurnCostStrip,
+  TurnStripScope,
 } from "./tool-output-incident-insights";
 import {
   buildCategoryComposition,
@@ -51,6 +52,7 @@ export function ToolOutputIncidentExplorerWindow() {
   const [selectedId, setSelectedId] = useState<string>();
   const [category, setCategory] = useState<RefinedToolCategory | "all" | "other">("all");
   const [turnFilter, setTurnFilter] = useState<string>();
+  const [turnScope, setTurnScope] = useState<TurnStripScope>("flagged");
   const [sortMode, setSortMode] = useState<IncidentSortMode>("largest");
   const [search, setSearch] = useState("");
   const [prompt, setPrompt] = useState("");
@@ -122,9 +124,10 @@ export function ToolOutputIncidentExplorerWindow() {
   const usageLines = latest?.pricing?.lines;
   const turnStrip = useMemo(
     () => buildTurnCostStrip(allInvocations, {
+      scope: turnScope,
       ...(usageLines ? { usageLines } : {}),
     }),
-    [allInvocations, usageLines],
+    [allInvocations, turnScope, usageLines],
   );
   const currency = usageLines?.[0]?.currency;
   const composition = useMemo(() => buildCategoryComposition(flagged), [flagged]);
@@ -402,6 +405,7 @@ export function ToolOutputIncidentExplorerWindow() {
       <TurnStrip
         {...(currency ? { currency } : {})}
         now={renderedAt}
+        onScopeChange={setTurnScope}
         showCost={turnStrip.rows.some((row) => row.costMicros !== undefined)}
         onSelect={(row) => setTurnFilter(
           turnFilter === row.key ? undefined : row.key,
@@ -665,17 +669,43 @@ function TurnStrip(props: {
      against the same instant. */
   now: number;
   showCost: boolean;
+  onScopeChange: (scope: TurnStripScope) => void;
   onSelect: (row: TurnCostRow) => void;
   selectedKey?: string;
   strip: TurnCostStrip;
 }) {
-  if (props.strip.rows.length === 0) return null;
+  if (props.strip.totalTurnCount === 0) return null;
+  const strip = props.strip;
   return (
     <section className="incident-explorer__turns" aria-label="Cost by turn">
       <div className="incident-explorer__turns-head">
         <p className="incident-explorer__eyebrow">
-          {props.strip.ordering === "cost" ? "Costliest turns" : "Cost by turn"}
+          {strip.ordering === "cost"
+            ? strip.rankedBy === "billed"
+              ? "Costliest turns · by billed cost"
+              : "Costliest turns · by output × round trips"
+            : "Cost by turn"}
         </p>
+        <div
+          aria-label="Turn scope"
+          className="incident-explorer__turns-scope"
+          role="group"
+        >
+          <button
+            aria-pressed={strip.scope === "flagged"}
+            onClick={() => props.onScopeChange("flagged")}
+            type="button"
+          >
+            Flagged ({strip.flaggedTurnCount.toLocaleString()})
+          </button>
+          <button
+            aria-pressed={strip.scope === "all"}
+            onClick={() => props.onScopeChange("all")}
+            type="button"
+          >
+            All with tool calls ({strip.totalTurnCount.toLocaleString()})
+          </button>
+        </div>
         <p className="incident-explorer__turns-legend">
           <span className="incident-explorer__turns-key" data-kind="tokens" /> output tokens
           {" · "}
@@ -721,10 +751,14 @@ function TurnStrip(props: {
           ) : null}
         </button>
       ))}
-      {props.strip.hiddenTurnCount > 0 ? (
+      {strip.hiddenTurnCount > 0 || strip.scope === "flagged" ? (
         <p className="incident-explorer__turns-note">
-          {props.strip.hiddenTurnCount.toLocaleString()} lower-cost{" "}
-          {props.strip.hiddenTurnCount === 1 ? "turn is" : "turns are"} not shown.
+          {strip.hiddenTurnCount > 0
+            ? `${strip.hiddenTurnCount.toLocaleString()} lower-cost ${strip.hiddenTurnCount === 1 ? "turn is" : "turns are"} not shown. `
+            : ""}
+          {strip.scope === "flagged"
+            ? `${(strip.totalTurnCount - strip.flaggedTurnCount).toLocaleString()} turns made only small tool calls; turns with no tool calls are never listed.`
+            : "Turns with no tool calls are never listed."}
         </p>
       ) : null}
     </section>

@@ -487,3 +487,69 @@ describe("turn cost", () => {
     expect(formatMicrosCurrency(2_400_000, "credits")).toBe("2.4 cr");
   });
 });
+
+describe("turn strip scope and ranking", () => {
+  it("defaults to turns with flagged calls and reports both populations", () => {
+    const strip = buildTurnCostStrip([
+      invocation({ observedAt: 10, outputChars: 20_000, turnId: "turn-loud" }),
+      invocation({ noisy: false, observedAt: 20, outputChars: 200, turnId: "turn-quiet" }),
+    ]);
+
+    expect(strip.scope).toBe("flagged");
+    expect(strip.rows.map((row) => row.key)).toEqual(["turn-loud"]);
+    expect(strip.flaggedTurnCount).toBe(1);
+    expect(strip.totalTurnCount).toBe(2);
+  });
+
+  it("keeps ordinals identical across scopes", () => {
+    /* "Turn 2" must name the same turn whichever scope is active, or the
+       label stops matching the case list. */
+    const rows = [
+      invocation({ noisy: false, observedAt: 10, outputChars: 200, turnId: "turn-quiet" }),
+      invocation({ observedAt: 20, outputChars: 20_000, turnId: "turn-loud" }),
+    ];
+    const flaggedScope = buildTurnCostStrip(rows);
+    const allScope = buildTurnCostStrip(rows, { scope: "all" });
+
+    expect(flaggedScope.rows[0]?.label).toBe("Turn 2");
+    expect(allScope.rows.map((row) => row.label)).toEqual(["Turn 1", "Turn 2"]);
+  });
+
+  it("ranks by billed cost when the ledger has priced the turns", () => {
+    /* "Costliest" next to a visible price column has to mean dollars — the
+       token/trip blend ranked turns in an order no column explained. */
+    const strip = buildTurnCostStrip(
+      [
+        invocation({ estimatedOutputTokens: 9_000, observedAt: 10, turnId: "turn-tokens" }),
+        invocation({ estimatedOutputTokens: 1_000, observedAt: 20, turnId: "turn-dollars" }),
+        invocation({ estimatedOutputTokens: 500, observedAt: 30, turnId: "turn-cheap" }),
+      ],
+      {
+        limit: 2,
+        usageLines: [
+          { createdAt: 1, currency: "USD", totalCostMicros: 900_000, turnId: "turn-tokens" },
+          { createdAt: 2, currency: "USD", totalCostMicros: 5_000_000, turnId: "turn-dollars" },
+          { createdAt: 3, currency: "USD", totalCostMicros: 100_000, turnId: "turn-cheap" },
+        ] as never,
+      },
+    );
+
+    expect(strip.rankedBy).toBe("billed");
+    expect(strip.rows.map((row) => row.key))
+      .toEqual(["turn-dollars", "turn-tokens"]);
+  });
+
+  it("falls back to the blend when nothing is priced", () => {
+    const strip = buildTurnCostStrip(
+      [
+        invocation({ estimatedOutputTokens: 9_000, observedAt: 10, turnId: "turn-a" }),
+        invocation({ estimatedOutputTokens: 1_000, observedAt: 20, turnId: "turn-b" }),
+        invocation({ estimatedOutputTokens: 500, observedAt: 30, turnId: "turn-c" }),
+      ],
+      { limit: 2 },
+    );
+
+    expect(strip.rankedBy).toBe("estimate");
+    expect(strip.rows[0]?.key).toBe("turn-a");
+  });
+});

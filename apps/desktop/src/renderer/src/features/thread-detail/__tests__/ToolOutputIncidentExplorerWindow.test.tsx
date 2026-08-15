@@ -215,6 +215,33 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       .toHaveTextContent("1 call");
   });
 
+  it("widens the turn strip from flagged turns to every turn with tool calls", async () => {
+    const response = buildMultiTurnResponse();
+    /* A turn of only small calls: invisible in the flagged scope, present in
+       the all scope. */
+    response.toolAccounting!.invocations.push({
+      ...response.toolAccounting!.invocations[1]!,
+      invocationId: "invocation-quiet-turn",
+      itemId: "item-quiet-turn",
+      noisy: false,
+      observedAt: 1_800_000_005_000,
+      outputChars: 120,
+      turnId: "turn-3",
+    });
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const turns = await screen.findByLabelText("Cost by turn");
+    expect(within(turns).queryByRole("button", { name: /Turn 3/ })).toBeNull();
+
+    fireEvent.click(within(turns).getByRole("button", { name: /All with tool calls/ }));
+    expect(await within(turns).findByRole("button", { name: /Turn 3/ }))
+      .toBeInTheDocument();
+    expect(within(turns).getByRole("button", { name: /Flagged \(2\)/ }))
+      .toHaveAttribute("aria-pressed", "false");
+  });
+
   it("filters the case list to a single turn", async () => {
     installApi({ readThread: async () => buildMultiTurnResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";

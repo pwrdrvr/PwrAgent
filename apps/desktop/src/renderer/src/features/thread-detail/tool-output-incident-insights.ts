@@ -57,6 +57,8 @@ export type TurnCostRow = {
   costMicros?: number;
   estimatedOutputTokens: number;
   firstObservedAt: number;
+  /** Calls that pass `isFlaggedToolInvocation` — the scope toggle's test. */
+  flaggedCallCount: number;
   key: string;
   label: string;
   /** Calls that reached the harness's output cap, where output is truncated. */
@@ -64,7 +66,11 @@ export type TurnCostRow = {
   turnId?: string;
 };
 
+export type TurnStripScope = "all" | "flagged";
+
 export type TurnCostStrip = {
+  /** Turns in scope that contain at least one flagged call. */
+  flaggedTurnCount: number;
   /**
    * Every turn's label, including turns the row limit dropped. Callers label
    * cases from this rather than from `rows` — a case belonging to a turn that
@@ -76,10 +82,20 @@ export type TurnCostStrip = {
   maxTokens: number;
   /**
    * "time" reads as a timeline. Past the row limit that stops being legible,
-   * so the strip ranks by cost instead and reports what it dropped.
+   * so the strip ranks instead and reports what it dropped.
    */
   ordering: "cost" | "time";
+  /**
+   * What the "cost" ordering actually ranks by, so the header can say it
+   * instead of leaving the reader to reverse-engineer the sort. "billed" is
+   * ledger money; "estimate" is the two-axis blend of output tokens and
+   * round trips, used when nothing is priced.
+   */
+  rankedBy: "billed" | "estimate";
   rows: TurnCostRow[];
+  scope: TurnStripScope;
+  /** Turns with any recorded tool call — the "all" scope's population. */
+  totalTurnCount: number;
   hiddenTurnCount: number;
 };
 
@@ -279,9 +295,14 @@ export function summarizeIncidents(
  */
 export function buildTurnCostStrip(
   invocations: ThreadToolInvocationRecord[],
-  options?: { limit?: number; usageLines?: readonly ThreadUsageLineRecord[] },
+  options?: {
+    limit?: number;
+    scope?: TurnStripScope;
+    usageLines?: readonly ThreadUsageLineRecord[];
+  },
 ): TurnCostStrip {
   const limit = options?.limit ?? DEFAULT_TURN_ROW_LIMIT;
+  const scope = options?.scope ?? "flagged";
   /* Billed cost per turn, joined by turn id. The ledger is the authority on
      money; the token bar is an estimate from character counts, so the two are
      reported side by side rather than one derived from the other. */
@@ -300,6 +321,7 @@ export function buildTurnCostStrip(
       callCount: 0,
       estimatedOutputTokens: 0,
       firstObservedAt: invocation.observedAt,
+      flaggedCallCount: 0,
       key,
       label: "",
       overCapCount: 0,
@@ -308,6 +330,7 @@ export function buildTurnCostStrip(
     row.callCount += 1;
     row.estimatedOutputTokens += invocation.estimatedOutputTokens;
     row.firstObservedAt = Math.min(row.firstObservedAt, invocation.observedAt);
+    if (isFlaggedToolInvocation(invocation)) row.flaggedCallCount += 1;
     if (isOverOutputCap(invocation.outputChars)) row.overCapCount += 1;
     groups.set(key, row);
   }
@@ -326,15 +349,28 @@ export function buildTurnCostStrip(
     row.label = row.turnId ? `Turn ${(ordinal += 1)}` : "Unassigned";
   }
 
-  const ordering: TurnCostStrip["ordering"] = chronological.length > limit
+  /* Ordinals are assigned before scoping, so "Turn 92" names the same turn
+     in both scopes and in the case list. */
+  const scoped = scope === "flagged"
+    ? chronological.filter((row) => row.flaggedCallCount > 0)
+    : chronological;
+
+  const ordering: TurnCostStrip["ordering"] = scoped.length > limit
     ? "cost"
     : "time";
-  /* Rank on BOTH axes, not just output. Sorting by tokens alone would cut the
-     80-call polling turn that returns almost nothing — the pathology the tick
-     rail exists to show — and leave the strip claiming it was "quieter". */
+  /* Billed money outranks any estimate: when the ledger has priced these
+     turns, "costliest" means dollars, full stop — an invented blend next to a
+     visible price column reads as a sort nobody can name. The blend remains
+     only for unpriced threads, where it still beats tokens alone (which would
+     cut the 80-call polling turn the tick rail exists to show). */
+  const rankedBy: TurnCostStrip["rankedBy"] = scoped.some(
+    (row) => row.costMicros !== undefined,
+  )
+    ? "billed"
+    : "estimate";
   const scale = {
-    calls: chronological.reduce((max, row) => Math.max(max, row.callCount), 0),
-    tokens: chronological.reduce(
+    calls: scoped.reduce((max, row) => Math.max(max, row.callCount), 0),
+    tokens: scoped.reduce(
       (max, row) => Math.max(max, row.estimatedOutputTokens),
       0,
     ),
@@ -343,19 +379,27 @@ export function buildTurnCostStrip(
     (scale.tokens > 0 ? row.estimatedOutputTokens / scale.tokens : 0)
     + (scale.calls > 0 ? row.callCount / scale.calls : 0);
   const ordered = ordering === "cost"
-    ? [...chronological].sort((left, right) =>
-        score(right) - score(left)
+    ? [...scoped].sort((left, right) =>
+        (rankedBy === "billed"
+          ? (right.costMicros ?? -1) - (left.costMicros ?? -1)
+          : 0)
+        || score(right) - score(left)
         || right.estimatedOutputTokens - left.estimatedOutputTokens
         || right.callCount - left.callCount)
-    : chronological;
+    : scoped;
   const rows = ordered.slice(0, limit);
   return {
-    hiddenTurnCount: chronological.length - rows.length,
+    flaggedTurnCount: chronological
+      .filter((row) => row.flaggedCallCount > 0).length,
+    hiddenTurnCount: scoped.length - rows.length,
     labelsByKey: new Map(chronological.map((row) => [row.key, row.label])),
     maxCallCount: rows.reduce((max, row) => Math.max(max, row.callCount), 0),
     maxTokens: rows.reduce((max, row) => Math.max(max, row.estimatedOutputTokens), 0),
     ordering,
+    rankedBy,
     rows,
+    scope,
+    totalTurnCount: chronological.length,
   };
 }
 
