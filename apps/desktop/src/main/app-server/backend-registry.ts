@@ -13576,6 +13576,9 @@ export class DesktopBackendRegistry {
         if (/unsupported|does not support/i.test(message)) {
           return failure("unsupported_capability", message);
         }
+        if (/no active turn/i.test(message)) {
+          return failure("no_active_turn", message);
+        }
         if (/active|expected turn|stale|in progress/i.test(message)) {
           return failure("stale_target", message, {
             expectedTurnId: active.turnId,
@@ -24982,7 +24985,7 @@ export class DesktopBackendRegistry {
         : response;
     }
 
-    const promise = this.performThreadTurnControl(request);
+    const promise = this.performThreadTurnControlWithFallback(request);
     if (
       this.acceptedThreadControlRequests.size
       >= MAX_ACCEPTED_THREAD_CONTROL_REQUESTS
@@ -25008,6 +25011,73 @@ export class DesktopBackendRegistry {
       }
       throw error;
     }
+  }
+
+  private async performThreadTurnControlWithFallback(
+    request: PwrAgentThreadOrchestrationRequest<"steer_thread" | "stop_thread">,
+  ): Promise<PwrAgentThreadOrchestrationResponse> {
+    const controlled = await this.performThreadTurnControl(request);
+    if (
+      request.operation !== "steer_thread"
+      || controlled.ok
+      || (
+        controlled.error.code !== "no_active_turn"
+        && controlled.error.code !== "stale_target"
+      )
+    ) {
+      return controlled;
+    }
+
+    const delivered = await this.sendMessageToThread({
+      operation: "send_message_to_thread",
+      context: request.context,
+      args: {
+        backend: request.args.backend,
+        threadId: request.args.threadId,
+        ...(request.args.instanceId
+          ? { instanceId: request.args.instanceId }
+          : {}),
+        ...(typeof request.args.includeRemote === "boolean"
+          ? { includeRemote: request.args.includeRemote }
+          : {}),
+        prompt: request.args.prompt,
+      },
+    });
+    if (!delivered.ok) {
+      return delivered;
+    }
+    if (!("threadUrl" in delivered.data) || !("settings" in delivered.data)) {
+      return threadOrchestrationFailure(
+        "internal_error",
+        "Steer fallback returned an unexpected delivery result.",
+      );
+    }
+
+    const fallback = delivered.data;
+    return {
+      ok: true,
+      data: {
+        backend: fallback.backend,
+        threadId: fallback.threadId,
+        ...(fallback.instanceId ? { instanceId: fallback.instanceId } : {}),
+        requestId: request.args.requestId,
+        turnId: fallback.turnId,
+        disposition: fallback.queueStatus === "queued" ? "queued" : "started",
+        fallbackReason: controlled.error.code,
+        ...(fallback.queueEntryId
+          ? { queueEntryId: fallback.queueEntryId }
+          : {}),
+        ...(fallback.position === undefined
+          ? {}
+          : { position: fallback.position }),
+        promptPreview: fallback.promptPreview,
+        threadUrl: fallback.threadUrl,
+        threadLink: fallback.threadLink,
+        ...(fallback.messageId ? { messageId: fallback.messageId } : {}),
+        ...(fallback.messageUrl ? { messageUrl: fallback.messageUrl } : {}),
+        ...(fallback.messageLink ? { messageLink: fallback.messageLink } : {}),
+      },
+    };
   }
 
   private async performThreadTurnControl(

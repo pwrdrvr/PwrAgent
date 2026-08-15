@@ -125,7 +125,7 @@ describe("pwragent thread orchestration agent tools", () => {
             type: "function",
             name: "steer_thread",
             description: expect.stringMatching(
-              /next tool boundary.*never reports a queued follow-up as steered/,
+              /next tool boundary.*starting a follow-up turn or queuing it.*never reports a fallback as steered/,
             ),
             deferLoading: false,
             inputSchema: expect.objectContaining({
