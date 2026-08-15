@@ -322,6 +322,49 @@ export class AcpSessionReplayNormalizer {
     return this.replay();
   }
 
+  rewindToPromptIndex(targetPromptIndex: number): AppServerThreadReplay {
+    if (!Number.isInteger(targetPromptIndex) || targetPromptIndex < 0) {
+      throw new Error("ACP rewind target must be a non-negative prompt index");
+    }
+    let promptIndex = 0;
+    let boundary = this.entries.length;
+    for (let index = 0; index < this.entries.length; index += 1) {
+      const entry = this.entries[index];
+      if (entry?.type !== "message" || entry.role !== "user") {
+        continue;
+      }
+      if (promptIndex === targetPromptIndex) {
+        boundary = index;
+        break;
+      }
+      promptIndex += 1;
+    }
+    if (boundary === this.entries.length && promptIndex <= targetPromptIndex) {
+      throw new Error(`ACP rewind target ${targetPromptIndex} was not found`);
+    }
+
+    this.entries = this.entries.slice(0, boundary);
+    const retainedMessageIds = new Set(
+      this.entries
+        .filter(
+          (entry): entry is AppServerThreadEntry & { type: "message" } =>
+            entry.type === "message",
+        )
+        .map((entry) => entry.id),
+    );
+    this.messages = this.messages.filter((message) =>
+      retainedMessageIds.has(message.id)
+    );
+    this.currentTurnId = undefined;
+    this.currentTurnStartedAt = undefined;
+    this.activeAssistantMessageId = undefined;
+    this.activeAssistantMessagePhase = undefined;
+    this.assistantMessageSequence = 0;
+    this.knownToolCallIds.clear();
+    this.status = "idle";
+    return this.replay();
+  }
+
   apply(update: AcpSessionUpdate): AppServerThreadReplay {
     const kind = readKind(update.update);
     const createdAt =
@@ -438,6 +481,10 @@ export class AcpSessionReplayNormalizer {
           receivedAt: createdAt,
           waitingForAgent: readBoolean(update.update, "waitingForAgent"),
         });
+      } else if (kind === "pwragent_rewind_marker") {
+        this.rewindToPromptIndex(
+          readNumber(update.update, "targetPromptIndex") ?? -1,
+        );
       } else {
         // An unrecognized kind is worth a breadcrumb — it is how new protocol
         // traffic gets spotted — but it must not be destructive. The bubble

@@ -60,6 +60,136 @@ function readRawAcpSessionPayload(
 }
 
 describe("AcpAgentClient", () => {
+  it("sends Grok steering and workflow-budget extension payloads", async () => {
+    const transport = new FakeAcpAgentTransport({
+      "session/new": { sessionId: "grok-session" },
+      "_x.ai/session/steer": {
+        result: { status: "queued", delivery: "currentTurn" },
+      },
+      "_x.ai/session/workflow_budget": {
+        result: { defaultAgentBudget: 64, maxAgentBudget: 256 },
+      },
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+    });
+    await client.initialize();
+    const session = await client.startSession({
+      executionMode: "default",
+      mcpServers: "none",
+    });
+
+    await expect(client.steerSession({
+      sessionId: session.sessionId,
+      text: "Add berries",
+      content: [{ type: "text", text: "Add berries" }],
+      interjectionId: "steer-1",
+    })).resolves.toEqual({ delivery: "currentTurn" });
+    await expect(client.configureWorkflowBudget({
+      sessionId: session.sessionId,
+      defaultAgentBudget: 64,
+      maxAgentBudget: 256,
+    })).resolves.toEqual({ defaultAgentBudget: 64, maxAgentBudget: 256 });
+
+    expect(transport.requests.slice(-2)).toEqual([
+      {
+        method: "_x.ai/session/steer",
+        params: {
+          sessionId: "grok-session",
+          text: "Add berries",
+          interjectionId: "steer-1",
+          content: [{ type: "text", text: "Add berries" }],
+        },
+        timeoutMs: 20_000,
+      },
+      {
+        method: "_x.ai/session/workflow_budget",
+        params: {
+          sessionId: "grok-session",
+          defaultAgentBudget: 64,
+          maxAgentBudget: 256,
+        },
+        timeoutMs: 20_000,
+      },
+    ]);
+  });
+
+  it("lists and executes Grok conversation-only rewind extensions", async () => {
+    const transport = new FakeAcpAgentTransport({
+      "session/new": { sessionId: "grok-session" },
+      "_x.ai/rewind/points": {
+        rewind_points: [
+          {
+            prompt_index: 0,
+            created_at: "2026-08-14T12:00:00Z",
+            num_file_snapshots: 2,
+            has_file_changes: true,
+            prompt_preview: "Write a breakfast poem",
+          },
+        ],
+      },
+      "_x.ai/rewind/execute": {
+        success: true,
+        prompt_text: "Write a breakfast poem",
+      },
+    });
+    const client = new AcpAgentClient({
+      backendId: "acp:grok",
+      store,
+      transport,
+      now: () => 2000,
+    });
+    await client.initialize();
+    const session = await client.startSession({
+      cwd: "/repo",
+      executionMode: "default",
+      mcpServers: "none",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      kind: "user_message_chunk",
+      content: "Write a breakfast poem",
+    });
+    transport.emitSessionUpdate(session.sessionId, {
+      kind: "agent_message_chunk",
+      content: "Toast in the morning",
+    });
+
+    await expect(client.listRewindPoints(session.sessionId)).resolves.toEqual([
+      {
+        promptIndex: 0,
+        createdAt: Date.parse("2026-08-14T12:00:00Z"),
+        fileSnapshotCount: 2,
+        hasFileChanges: true,
+        promptPreview: "Write a breakfast poem",
+      },
+    ]);
+    await expect(client.rewindSession({
+      sessionId: session.sessionId,
+      targetPromptIndex: 0,
+    })).resolves.toEqual({ promptText: "Write a breakfast poem" });
+
+    expect(transport.requests.slice(-2)).toEqual([
+      {
+        method: "_x.ai/rewind/points",
+        params: { sessionId: "grok-session" },
+        timeoutMs: 20_000,
+      },
+      {
+        method: "_x.ai/rewind/execute",
+        params: {
+          sessionId: "grok-session",
+          targetPromptIndex: 0,
+          force: true,
+          mode: "conversation_only",
+        },
+        timeoutMs: 20_000,
+      },
+    ]);
+    expect(client.readReplay(session.sessionId).entries).toEqual([]);
+  });
+
   it("tracks non-turn RPCs until their transport requests settle", async () => {
     const sessionResponse = createDeferred<unknown>();
     const runtimeOptionResponse = createDeferred<unknown>();

@@ -3617,6 +3617,7 @@ export function useThreadSessionState(params: {
   loading: boolean;
   loadingMore: boolean;
   loadOlder: () => Promise<void>;
+  reload: () => Promise<void>;
   messages: AppServerThreadMessage[];
   contextWindow?: ThreadContextWindowState;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
@@ -4054,6 +4055,12 @@ export function useThreadSessionState(params: {
       updateSession,
     ]
   );
+
+  const reload = useCallback(async (): Promise<void> => {
+    if (thread) {
+      await loadLatest(thread);
+    }
+  }, [loadLatest, thread]);
 
   useEffect(() => {
     if (!threadKey) {
@@ -6111,6 +6118,7 @@ export function useThreadSessionState(params: {
     loading: selectedSession?.loading ?? false,
     loadingMore: selectedSession?.loadingMore ?? false,
     loadOlder,
+    reload,
     messages,
     contextWindow: selectedSession?.contextWindow,
     pendingAssistantMessage: selectedSession?.pendingAssistantMessage,

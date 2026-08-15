@@ -56,6 +56,10 @@ import {
 import { pageNormalizedReplay } from "./thread-replay-pagination";
 import {
   type AcpBackendId,
+  type ListAcpThreadRewindPointsRequest,
+  type ListAcpThreadRewindPointsResponse,
+  type RewindAcpThreadRequest,
+  type RewindAcpThreadResponse,
   buildAppendPinRank,
   buildThreadMarkdownLink,
   buildThreadUrl,
@@ -111,6 +115,8 @@ import {
   type CancelQueuedTurnResponse,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
+  type ConfigureGrokWorkflowBudgetRequest,
+  type ConfigureGrokWorkflowBudgetResponse,
   type ControlActiveTurnRequest,
   type ControlActiveTurnResponse,
   type ForkThreadRequest,
@@ -14132,15 +14138,56 @@ export class DesktopBackendRegistry {
     }
   }
 
+  async listAcpThreadRewindPoints(
+    request: ListAcpThreadRewindPointsRequest,
+  ): Promise<ListAcpThreadRewindPointsResponse> {
+    const rewindPoints = await this.acpBackend.listRewindPoints(
+      request.backend,
+      request.threadId,
+    );
+    return {
+      backend: request.backend,
+      threadId: request.threadId,
+      rewindPoints,
+    };
+  }
+
+  async rewindAcpThread(
+    request: RewindAcpThreadRequest,
+  ): Promise<RewindAcpThreadResponse> {
+    const result = await this.acpBackend.rewindSession({
+      backend: request.backend,
+      sessionId: request.threadId,
+      targetPromptIndex: request.targetPromptIndex,
+    });
+    return {
+      backend: request.backend,
+      threadId: request.threadId,
+      targetPromptIndex: request.targetPromptIndex,
+      ...(result.promptText ? { promptText: result.promptText } : {}),
+    };
+  }
+
+  async configureGrokWorkflowBudget(
+    request: ConfigureGrokWorkflowBudgetRequest,
+  ): Promise<ConfigureGrokWorkflowBudgetResponse> {
+    const policy = await this.acpBackend.configureWorkflowBudget({
+      backend: request.backend,
+      sessionId: request.threadId,
+      defaultAgentBudget: request.defaultAgentBudget,
+      maxAgentBudget: request.maxAgentBudget,
+    });
+    return {
+      backend: request.backend,
+      threadId: request.threadId,
+      policy,
+    };
+  }
+
   private async submitSteerTurn(
     params: SteerTurnRequest,
     messageOrigin?: AppServerThreadMessageOrigin,
   ): Promise<SteerTurnResponse> {
-    if (isAcpBackendId(params.backend)) {
-      throw new Error(
-        "ACP backend " + params.backend + " does not support turn steering",
-      );
-    }
     const input = await enrichLocalFileInputs(params.input, {
       privateStorageRoots: this.localFilePrivateStorageRoots,
     });
@@ -14152,6 +14199,40 @@ export class DesktopBackendRegistry {
       origin: messageOrigin,
       text: extractFirstMeaningfulTextInput(params.input),
     });
+    if (isAcpBackendId(params.backend)) {
+      const promptPayload = inputToAcpPrompt(input);
+      if (!promptPayload) {
+        this.forgetPendingThreadMessageContext(pendingMessageContextId);
+        throw new Error("ACP steering requires text or image input");
+      }
+      const text = promptPayload.prompt
+        || promptPayload.promptContent.flatMap((block) =>
+          block.type === "text" && block.text.trim() ? [block.text] : []
+        )[0]
+        || "Additional image context.";
+      try {
+        await this.acpBackend.steerSession({
+          backend: params.backend,
+          content: promptPayload.promptContent,
+          interjectionId: params.requestId,
+          sessionId: params.threadId,
+          text,
+        });
+      } catch (error) {
+        this.forgetPendingThreadMessageContext(pendingMessageContextId);
+        throw error;
+      }
+      this.bindPendingThreadMessageContext(
+        pendingMessageContextId,
+        params.expectedTurnId,
+      );
+      return {
+        backend: params.backend,
+        threadId: params.threadId,
+        turnId: params.expectedTurnId,
+        disposition: "steered",
+      };
+    }
     const steerWithClient = async (
       client: BackendClient,
     ): Promise<{ threadId: string; turnId: string }> => {

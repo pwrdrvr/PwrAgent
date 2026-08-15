@@ -2200,6 +2200,13 @@ type KimiStartPrompt = (params: {
   turnId?: string;
 }) => { sessionId: string; turnId: string };
 
+type AcpSteerSession = (params: {
+  sessionId: string;
+  text: string;
+  content: unknown[];
+  interjectionId: string;
+}) => Promise<{ delivery: "currentTurn" | "nextTurn" }>;
+
 function createKimiAcpRegistry(options?: {
   acpBackendId?: AcpBackendId;
   installedAgent?: AcpInstalledAgentRecord;
@@ -2229,6 +2236,7 @@ function createKimiAcpRegistry(options?: {
   availableCommandsOnSessionStart?: AppServerAvailableCommandSummary[];
   createScratchProjectDirectory?: () => Promise<string>;
   startSession?: KimiStartSession;
+  steerSession?: AcpSteerSession;
 }) {
   const acpBackendId =
     options?.installedAgent?.backendId
@@ -2244,6 +2252,9 @@ function createKimiAcpRegistry(options?: {
   const startPrompt: KimiStartPrompt =
     options?.startPrompt ??
     vi.fn(() => ({ sessionId, turnId: "turn-1" }));
+  const steerSession: AcpSteerSession =
+    options?.steerSession
+    ?? vi.fn(async () => ({ delivery: "currentTurn" as const }));
   const replay: AppServerThreadReplay =
     options?.replay ?? {
       entries: [],
@@ -2303,6 +2314,7 @@ function createKimiAcpRegistry(options?: {
     }): Promise<BackendAcpSessionRuntimeState> =>
       sessions.find((session) => session.sessionId === params.sessionId)?.acpRuntime
       ?? { updatedAt: 1000 }),
+    steerSession,
   };
   const registry = new DesktopBackendRegistry({
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
@@ -2336,6 +2348,7 @@ function createKimiAcpRegistry(options?: {
     sendControlPrompt,
     sessions,
     startPrompt,
+    steerSession,
   };
 }
 
@@ -17214,6 +17227,52 @@ command = "pnpm dev"
     ).rejects.toThrow("expected active turn id `turn-0` but found `turn-1`");
 
     expect(codexClient.steerTurnCallCount).toBe(1);
+
+    await registry.close();
+  });
+
+  it("steers an active Grok turn through its ACP extension", async () => {
+    const backend = "acp:grok" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: backend,
+        sessionId: "grok-session-1",
+        title: "Breakfast poem",
+        createdAt: 1000,
+        updatedAt: 2000,
+        executionMode: "default",
+        status: "active",
+      },
+    ];
+    const installedAgent = {
+      ...createKimiAgentRecord(backend),
+      registryId: "grok",
+      name: "Grok Build",
+    };
+    const { registry, steerSession } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      installedAgent,
+      sessions,
+    });
+
+    await expect(registry.steerTurn({
+      backend,
+      threadId: "grok-session-1",
+      expectedTurnId: "turn-1",
+      input: [{ type: "text", text: "Add blueberries" }],
+      requestId: "grok-steer-1",
+    })).resolves.toEqual({
+      backend,
+      threadId: "grok-session-1",
+      turnId: "turn-1",
+      disposition: "steered",
+    });
+    expect(steerSession).toHaveBeenCalledWith({
+      sessionId: "grok-session-1",
+      text: "Add blueberries",
+      content: [{ type: "text", text: "Add blueberries" }],
+      interjectionId: "grok-steer-1",
+    });
 
     await registry.close();
   });

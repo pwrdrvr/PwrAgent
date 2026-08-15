@@ -7,6 +7,42 @@ import {
 import grokReviewSession from "./fixtures/grok-managed-review-session.json";
 
 describe("AcpSessionReplayNormalizer", () => {
+  it("rewinds the local replay to the selected user prompt boundary", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    for (const [receivedAt, role, content] of [
+      [1000, "user", "First prompt"],
+      [1001, "assistant", "First answer"],
+      [2000, "user", "Second prompt"],
+      [2001, "assistant", "Second answer"],
+    ] as const) {
+      normalizer.apply({
+        sessionId: "session-1",
+        receivedAt,
+        update: {
+          kind: role === "user" ? "user_message_chunk" : "agent_message_chunk",
+          content,
+        },
+      });
+    }
+
+    const replay = normalizer.rewindToPromptIndex(1);
+
+    expect(replay.messages.map((message) => message.text)).toEqual([
+      "First prompt",
+      "First answer",
+    ]);
+    expect(replay.lastUserMessage).toBe("First prompt");
+    expect(replay.lastAssistantMessage).toBe("First answer");
+    expect(replay.threadStatus).toBe("idle");
+  });
+
+  it("rejects a rewind target that is not present", () => {
+    const normalizer = new AcpSessionReplayNormalizer();
+    expect(() => normalizer.rewindToPromptIndex(0)).toThrow(
+      "ACP rewind target 0 was not found",
+    );
+  });
+
   it("keeps inferred provider work inside user-message boundaries", () => {
     const replay = inferAcpReplayTurns({
       entries: [

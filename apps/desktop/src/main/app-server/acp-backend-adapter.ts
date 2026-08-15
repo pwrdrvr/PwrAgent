@@ -1,6 +1,7 @@
 import path from "node:path";
 import {
   type AcpBackendId,
+  type AcpThreadRewindPoint,
   type AgentEvent,
   type AppServerBackendKind,
   type AppServerNotification,
@@ -17,6 +18,7 @@ import {
   type BackendLaunchpadOptions,
   type BackendModelOption,
   type BackendSummary,
+  type GrokWorkflowBudgetPolicy,
   type ThreadExecutionMode,
   isAcpBackendId,
 } from "@pwragent/shared";
@@ -128,14 +130,18 @@ export type AcpRuntimeClient = Pick<
     Pick<
       AcpAgentClient,
       | "didSessionLoadReplayHistory"
+      | "configureWorkflowBudget"
       | "hasActiveOperations"
       | "hasActiveTurns"
       | "hasRetainableSessions"
+      | "listRewindPoints"
       | "ownsSession"
       | "readProviderStatus"
       | "sendControlPrompt"
       | "setRuntimeOption"
+      | "steerSession"
       | "supportsSessionLoad"
+      | "rewindSession"
     >
   >;
 
@@ -317,7 +323,7 @@ export function buildAcpCapabilities(
     startReview: agentCapabilities?.managedReview === true,
     reviewRunner: agentCapabilities?.managedReview === true,
     interruptTurn: true,
-    steerTurn: false,
+    steerTurn: agentCapabilities?.steerTurn === true,
     transcriptPagination: false,
     toolUse: true,
     approvalRequests: true,
@@ -1392,6 +1398,119 @@ export class AcpBackendAdapter {
         session,
       });
     }
+  }
+
+  async listRewindPoints(
+    backend: AcpBackendId,
+    sessionId: string,
+  ): Promise<AcpThreadRewindPoint[]> {
+    const session = this.requireIdleGrokRewindSession(backend, sessionId);
+    const client = await this.getClientForSession(backend, sessionId);
+    if (!client.listRewindPoints) {
+      throw new Error("Installed Grok Build does not support conversation rewind");
+    }
+    await client.ensureSession(session);
+    return await client.listRewindPoints(sessionId);
+  }
+
+  async rewindSession(params: {
+    backend: AcpBackendId;
+    sessionId: string;
+    targetPromptIndex: number;
+  }): Promise<{ promptText?: string }> {
+    const session = this.requireIdleGrokRewindSession(
+      params.backend,
+      params.sessionId,
+    );
+    const client = await this.getClientForSession(
+      params.backend,
+      params.sessionId,
+    );
+    if (!client.rewindSession) {
+      throw new Error("Installed Grok Build does not support conversation rewind");
+    }
+    await client.ensureSession(session);
+    return await client.rewindSession({
+      sessionId: params.sessionId,
+      targetPromptIndex: params.targetPromptIndex,
+    });
+  }
+
+  async steerSession(params: {
+    backend: AcpBackendId;
+    content: AcpPromptContentBlock[];
+    interjectionId: string;
+    sessionId: string;
+    text: string;
+  }): Promise<{ delivery: "currentTurn" | "nextTurn" }> {
+    if (params.backend !== "acp:grok") {
+      throw new Error(`ACP backend ${params.backend} does not support turn steering`);
+    }
+    const session = this.getSession(params.backend, params.sessionId);
+    if (!session) {
+      throw new Error(`ACP session not found: ${params.sessionId}`);
+    }
+    if (session.status !== "active") {
+      throw new Error("The Grok turn finished before steering was accepted");
+    }
+    const client = await this.getClientForSession(
+      params.backend,
+      params.sessionId,
+    );
+    if (!client.steerSession) {
+      throw new Error("Installed Grok Build does not support turn steering over ACP");
+    }
+    return await client.steerSession({
+      sessionId: params.sessionId,
+      text: params.text,
+      content: params.content,
+      interjectionId: params.interjectionId,
+    });
+  }
+
+  async configureWorkflowBudget(params: {
+    backend: "acp:grok";
+    sessionId: string;
+    defaultAgentBudget?: number;
+    maxAgentBudget?: number;
+  }): Promise<GrokWorkflowBudgetPolicy> {
+    const session = this.getSession(params.backend, params.sessionId);
+    if (!session) {
+      throw new Error(`ACP session not found: ${params.sessionId}`);
+    }
+    if (session.status === "active") {
+      throw new Error("Wait for the active Grok turn to finish before changing budgets");
+    }
+    const client = await this.getClientForSession(
+      params.backend,
+      params.sessionId,
+    );
+    if (!client.configureWorkflowBudget) {
+      throw new Error("Installed Grok Build does not support workflow budget controls");
+    }
+    await client.ensureSession(session);
+    return await client.configureWorkflowBudget({
+      sessionId: params.sessionId,
+      defaultAgentBudget: params.defaultAgentBudget,
+      maxAgentBudget: params.maxAgentBudget,
+    });
+  }
+
+  private requireIdleGrokRewindSession(
+    backend: AcpBackendId,
+    sessionId: string,
+  ): AcpSessionMetadata {
+    if (backend !== "acp:grok") {
+      throw new Error("Conversation rewind is only available for Grok Build threads");
+    }
+    const session = this.getSession(backend, sessionId);
+    if (!session) {
+      throw new Error(`ACP session not found: ${sessionId}`);
+    }
+    if (session.status === "active") {
+      throw new Error("Wait for the active Grok turn to finish before rewinding");
+    }
+    return session;
   }
 
   async getClient(backend: AcpBackendId): Promise<AcpRuntimeClient> {

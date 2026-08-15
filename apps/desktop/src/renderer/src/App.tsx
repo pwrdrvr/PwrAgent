@@ -1546,6 +1546,7 @@ function DesktopAppShell(props: {
     launchpadError: navigation.launchpadError,
     onProviderSelected: refreshSelectedAcpProvider,
     onShowNotice: showAppNotice,
+    onReloadThread: session.reload,
     initialLoadDurationMs: session.initialLoadDurationMs,
     loading: session.loading,
     loadingMore: session.loadingMore,

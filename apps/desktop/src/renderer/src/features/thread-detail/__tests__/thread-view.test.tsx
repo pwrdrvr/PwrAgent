@@ -234,6 +234,131 @@ describe("ThreadView", () => {
     cleanup();
   });
 
+  it("rewinds Grok with the explicit conversation-only UI flow", async () => {
+    const listAcpThreadRewindPoints = vi.fn(async () => ({
+      backend: "acp:grok" as const,
+      threadId: "grok-thread",
+      rewindPoints: [
+        {
+          promptIndex: 0,
+          fileSnapshotCount: 1,
+          hasFileChanges: true,
+          promptPreview: "Write a breakfast poem",
+        },
+      ],
+    }));
+    const rewindAcpThread = vi.fn(async () => ({
+      backend: "acp:grok" as const,
+      threadId: "grok-thread",
+      targetPromptIndex: 0,
+    }));
+    const onReloadThread = vi.fn(async () => undefined);
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{ listAcpThreadRewindPoints, rewindAcpThread }}
+        loading={false}
+        loadingMore={false}
+        messageCount={1}
+        onLoadOlder={async () => undefined}
+        onReloadThread={onReloadThread}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={{
+          id: "grok-thread",
+          title: "Breakfast",
+          titleSource: "explicit",
+          source: "acp:grok",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Rewind Grok conversation" }),
+    );
+    expect(await screen.findByText("Write a breakfast poem")).toBeInTheDocument();
+    expect(screen.getByText(/Files stay exactly as they are/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Rewind conversation" }));
+
+    await waitFor(() => {
+      expect(rewindAcpThread).toHaveBeenCalledWith({
+        backend: "acp:grok",
+        threadId: "grok-thread",
+        targetPromptIndex: 0,
+      });
+      expect(onReloadThread).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("reads and updates distinct Grok workflow default and maximum budgets", async () => {
+    const configureGrokWorkflowBudget = vi
+      .fn()
+      .mockResolvedValueOnce({
+        backend: "acp:grok",
+        threadId: "grok-thread",
+        policy: { defaultAgentBudget: 128, maxAgentBudget: 1024 },
+      })
+      .mockResolvedValueOnce({
+        backend: "acp:grok",
+        threadId: "grok-thread",
+        policy: { defaultAgentBudget: 64, maxAgentBudget: 256 },
+      });
+    render(
+      <ThreadView
+        addOptimisticUserMessage={(_text) => "optimistic-1"}
+        backends={[]}
+        clearPendingRequest={() => undefined}
+        composerDisabled={false}
+        desktopApi={{ configureGrokWorkflowBudget }}
+        loading={false}
+        loadingMore={false}
+        messageCount={0}
+        onLoadOlder={async () => undefined}
+        removeOptimisticMessage={(_id) => undefined}
+        selectedThread={{
+          id: "grok-thread",
+          title: "Breakfast",
+          titleSource: "explicit",
+          source: "acp:grok",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+        }}
+        skills={[]}
+        transcriptEntries={[]}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Configure Grok workflow budgets" }),
+    );
+    const defaultInput = await screen.findByRole("spinbutton", {
+      name: /Default when omitted/,
+    });
+    const maximumInput = screen.getByRole("spinbutton", {
+      name: /Enforced maximum/,
+    });
+    fireEvent.change(defaultInput, { target: { value: "64" } });
+    fireEvent.change(maximumInput, { target: { value: "256" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save budgets" }));
+
+    await waitFor(() => {
+      expect(configureGrokWorkflowBudget).toHaveBeenLastCalledWith({
+        backend: "acp:grok",
+        threadId: "grok-thread",
+        defaultAgentBudget: 64,
+        maxAgentBudget: 256,
+      });
+    });
+  });
+
   it("shows draggable empty thread chrome with messaging status", async () => {
     const statuses = [
       {

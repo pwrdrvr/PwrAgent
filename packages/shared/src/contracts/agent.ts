@@ -1,4 +1,5 @@
 import type {
+  AcpBackendId,
   AppServerBackendKind,
   AppServerMcpElicitationResponse,
   AppServerNotification,
@@ -530,6 +531,59 @@ export type SteerTurnResponse = {
   turnId: string;
   disposition?: "steered" | "scheduled";
   scheduledAction?: ScheduledThreadAction;
+};
+
+export type AcpThreadRewindPoint = {
+  promptIndex: number;
+  createdAt?: number;
+  fileSnapshotCount: number;
+  hasFileChanges: boolean;
+  promptPreview: string;
+};
+
+export type ListAcpThreadRewindPointsRequest = {
+  backend: AcpBackendId;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+};
+
+export type ListAcpThreadRewindPointsResponse = {
+  backend: AcpBackendId;
+  threadId: ThreadIdentifier;
+  rewindPoints: AcpThreadRewindPoint[];
+};
+
+export type RewindAcpThreadRequest = {
+  backend: AcpBackendId;
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  targetPromptIndex: number;
+};
+
+export type RewindAcpThreadResponse = {
+  backend: AcpBackendId;
+  threadId: ThreadIdentifier;
+  targetPromptIndex: number;
+  promptText?: string;
+};
+
+export type GrokWorkflowBudgetPolicy = {
+  defaultAgentBudget: number;
+  maxAgentBudget: number;
+};
+
+export type ConfigureGrokWorkflowBudgetRequest = {
+  backend: "acp:grok";
+  federationTarget?: FederationTarget;
+  threadId: ThreadIdentifier;
+  defaultAgentBudget?: number;
+  maxAgentBudget?: number;
+};
+
+export type ConfigureGrokWorkflowBudgetResponse = {
+  backend: "acp:grok";
+  threadId: ThreadIdentifier;
+  policy: GrokWorkflowBudgetPolicy;
 };
 
 export type SetThreadExecutionModeRequest = {
