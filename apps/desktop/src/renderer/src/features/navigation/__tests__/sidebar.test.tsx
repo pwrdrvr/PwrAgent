@@ -1494,7 +1494,7 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("opens a local sub-thread launchpad only for local parent threads", () => {
+  it("offers Local and New Worktree sub-thread launchpads for local parents", () => {
     const onCreateSubthread = vi.fn(async () => undefined);
     render(
       <Sidebar
@@ -1515,10 +1515,14 @@ describe("Sidebar", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
     expect(screen.queryByRole("menuitem", { name: "Sub-thread in Same Worktree" })).toBeNull();
-    expect(screen.queryByRole("menuitem", { name: "Sub-thread in New Worktree" })).toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in Local" }));
 
     expect(onCreateSubthread).toHaveBeenCalledWith(localThread, "local");
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Sub-thread in New Worktree" }));
+
+    expect(onCreateSubthread).toHaveBeenCalledWith(localThread, "new-worktree");
   });
 
   it("forks a Codex thread from the thread context menu", () => {
@@ -1555,7 +1559,7 @@ describe("Sidebar", () => {
     expect(onForkThread).toHaveBeenCalledWith(sharedThread, "new-worktree");
   });
 
-  it("forks local parent threads in Local instead of Same Worktree", () => {
+  it("offers Local and New Worktree forks for local parent threads", () => {
     const onForkThread = vi.fn(async () => undefined);
     const forkBackends: BackendSummary[] = [
       {
@@ -1585,10 +1589,14 @@ describe("Sidebar", () => {
 
     fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
     expect(screen.queryByRole("menuitem", { name: "Fork into Same Worktree" })).toBeNull();
-    expect(screen.queryByRole("menuitem", { name: "Fork into New Worktree" })).toBeNull();
     fireEvent.click(screen.getByRole("menuitem", { name: "Fork in Local" }));
 
     expect(onForkThread).toHaveBeenCalledWith(localThread, "local");
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "Local checkout cleanup" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Fork into New Worktree" }));
+
+    expect(onForkThread).toHaveBeenCalledWith(localThread, "new-worktree");
   });
 
   it("hides fork actions when the backend does not advertise fork support", () => {
