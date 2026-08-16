@@ -21,6 +21,18 @@ counts, run-now, pause/resume, edit/delete, and recent run history. The global
 Automations view is a secondary overview reached from the sidebar; it does not
 replace the Recents and Directories thread lenses.
 
+Each automation attaches to one Agent thread for reporting, follow-up, and
+capability inspection.
+
+## Execution Model
+
+- Scheduled runs execute headlessly from the automation definition, invocation
+  metadata, and bounded prior-run context.
+- Run artifacts and read-only transcripts remain separate from the Agent
+  conversation transcript.
+- Notable results appear as source-labeled cards and do not trigger automatic
+  Agent turns.
+
 ## Trigger Model
 
 Automations store explicit trigger definitions. The first trigger kind is the
@@ -94,6 +106,13 @@ relative to the source event, usually as a source-thread reply. Providers that
 support platform broadcast flags can also expose the reply in the parent channel
 while preserving thread context. Action results are recorded on the run artifact
 so the Agent can answer whether a reply was posted, skipped, or failed.
+
+## Monitoring
+
+- Channel-level monitoring is persisted separately from thread bindings.
+- Each enabled monitor owns one idempotent timer and one managed status surface.
+- Stopping a monitor disables its subscription without revoking the thread
+  binding.
 
 ## Runtime Disable
 

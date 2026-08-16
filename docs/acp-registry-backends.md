@@ -58,6 +58,16 @@ the active PwrAgent profile sqlite database under `~/.pwragent/profiles/<name>/`
 Installed agents continue to be listed from profile state when the registry is
 temporarily unavailable.
 
+- Runtime capability discovery uses a hidden scratch session and never creates
+  a user-visible PwrAgent thread.
+- Persist discovered runtime capabilities separately from curated ACP product
+  capabilities.
+- User-facing controls prefer ACP `configOptions` and use `modes` only as a
+  compatibility fallback.
+- ACP runtime options remain separate from PwrAgent `ThreadExecutionMode`.
+- Discovery failures preserve runnable records, while successful snapshots
+  refresh after forty-eight hours, version changes, or forced requests.
+
 ACP session metadata does not include full transcript history. Providers that
 support `session/load` remain the source of truth for restored ACP transcripts.
 If PwrAgent later needs to persist fallback history for an ACP provider that
