@@ -84,7 +84,7 @@ describe("acpToolUpdateNotifications", () => {
     ]);
   });
 
-  it("does not resurrect an ACP tool when its start arrives after completion", () => {
+  it("enriches an ACP terminal tool when its start arrives late without resurrecting it", () => {
     const resolver = new AcpLiveToolUpdateResolver();
     const context = {
       backendId: "acp:grok",
@@ -99,17 +99,130 @@ describe("acpToolUpdateNotifications", () => {
         toolCallId: "out-of-order-1",
         status: "completed",
       },
-    })).toBeDefined();
-    expect(resolver.resolve({
+    })).toBeUndefined();
+    const enrichedTerminal = resolver.resolve({
       ...context,
       update: {
         sessionUpdate: "tool_call",
         toolCallId: "out-of-order-1",
         kind: "read",
         title: "Read config.toml",
+        rawInput: { path: "/repo/config.toml" },
         status: "in_progress",
       },
+    });
+    expect(enrichedTerminal).toMatchObject({
+      kind: "read",
+      status: "completed",
+      title: "Read config.toml",
+    });
+    expect(acpToolUpdateNotifications({
+      threadId: context.threadId,
+      turnId: context.turnId,
+      update: enrichedTerminal!,
+    })).toEqual([
+      expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "out-of-order-1",
+            status: "completed",
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("keeps ACP terminal metadata and output for follow-up terminal updates", () => {
+    const resolver = new AcpLiveToolUpdateResolver();
+    const context = {
+      backendId: "acp:grok",
+      threadId: "session-1",
+      turnId: "turn-1",
+    };
+
+    expect(resolver.resolve({
+      ...context,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "grok-read-1",
+        kind: "read",
+        title: "Read config.toml",
+        rawInput: { path: "/repo/config.toml" },
+        status: "in_progress",
+      },
+    })).toBeDefined();
+    expect(resolver.resolve({
+      ...context,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "grok-read-1",
+        kind: "tool",
+        title: "tool",
+        status: "completed",
+      },
+    })).toMatchObject({
+      kind: "read",
+      title: "Read config.toml",
+      status: "completed",
+    });
+
+    const enrichedCompletion = resolver.resolve({
+      ...context,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "grok-read-1",
+        status: "completed",
+        content: { type: "text", text: "Read 42 lines" },
+      },
+    });
+    expect(enrichedCompletion).toMatchObject({
+      kind: "read",
+      title: "Read config.toml",
+      status: "completed",
+      content: { type: "text", text: "Read 42 lines" },
+    });
+    expect(acpToolUpdateNotifications({
+      threadId: context.threadId,
+      turnId: context.turnId,
+      update: enrichedCompletion!,
+    })).toEqual([
+      expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            command: "Read config.toml",
+            data: { output: "Read 42 lines" },
+            status: "completed",
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("holds an uncorrelated sparse ACP terminal only until its turn completes", () => {
+    const resolver = new AcpLiveToolUpdateResolver();
+    const context = {
+      backendId: "acp:grok",
+      threadId: "session-1",
+      turnId: "turn-1",
+    };
+
+    expect(resolver.resolve({
+      ...context,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "sparse-terminal-1",
+        status: "Completed",
+      },
     })).toBeUndefined();
+    expect(resolver.drainDeferredTerminalUpdates(context)).toEqual([
+      expect.objectContaining({
+        toolCallId: "sparse-terminal-1",
+        status: "Completed",
+      }),
+    ]);
+    expect(resolver.drainDeferredTerminalUpdates(context)).toEqual([]);
   });
 
   it("keeps malformed ACP calls distinct when the provider omits an item id", () => {

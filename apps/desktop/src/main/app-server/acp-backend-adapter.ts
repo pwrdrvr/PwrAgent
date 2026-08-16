@@ -2204,6 +2204,25 @@ export class AcpBackendAdapter {
               this.shouldEmitLiveToolNotification(agent.backendId, notification),
             )
           : [];
+        const deferredTerminalToolNotifications =
+          updateKind === "turn_finished" && turnId && !fromSessionLoad
+            ? this.liveToolUpdateResolver
+                .drainDeferredTerminalUpdates({
+                  backendId: agent.backendId,
+                  threadId: sessionId,
+                  turnId,
+                })
+                .flatMap((deferredUpdate) =>
+                  acpToolUpdateNotifications({
+                    threadId: sessionId,
+                    turnId,
+                    update: deferredUpdate,
+                  }),
+                )
+                .filter((notification) =>
+                  this.shouldEmitLiveToolNotification(agent.backendId, notification),
+                )
+            : [];
         if (title) {
           await this.emit({
             backend: agent.backendId,
@@ -2291,7 +2310,10 @@ export class AcpBackendAdapter {
             });
           }
         }
-        for (const notification of toolNotifications) {
+        for (const notification of [
+          ...toolNotifications,
+          ...deferredTerminalToolNotifications,
+        ]) {
           await this.emit({
             backend: agent.backendId,
             notification,

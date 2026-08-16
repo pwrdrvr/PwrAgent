@@ -32,7 +32,8 @@ import {
 export class AcpLiveToolUpdateResolver {
   private readonly activeUpdates = new Map<string, Record<string, unknown>>();
   private anonymousToolSequence = 0;
-  private readonly terminalUpdateKeys = new Set<string>();
+  private readonly deferredTerminalUpdateKeys = new Set<string>();
+  private readonly terminalUpdates = new Map<string, Record<string, unknown>>();
 
   resolve(params: {
     backendId: string;
@@ -64,23 +65,57 @@ export class AcpLiveToolUpdateResolver {
       params.turnId ?? "no-turn",
       toolCallId,
     ].join("\0");
-    if (this.terminalUpdateKeys.has(key)) {
-      // Terminal events win over a delayed start. We still retain the raw
-      // update, but never resurrect a completed tool as an in-progress row.
-      return undefined;
-    }
-
+    const terminal = this.terminalUpdates.get(key);
     const resolved = mergeAcpLiveToolUpdates(
-      this.activeUpdates.get(key),
+      this.activeUpdates.get(key) ?? terminal,
       params.update,
     );
+    if (terminal) {
+      // Once the provider has made a call terminal, a delayed start can still
+      // enrich its title/input, but must never turn the existing row back into
+      // an in-progress operation.
+      resolved.status = normalizeAcpToolStatus(readString(terminal, "status"));
+    }
     if (isTerminalToolStatus(resolved.status)) {
       this.activeUpdates.delete(key);
-      this.rememberTerminalUpdateKey(key);
+      this.rememberTerminalUpdate(key, resolved);
+
+      const isMeaningful = hasMeaningfulAcpToolMetadata(resolved);
+      if (!terminal && !isMeaningful) {
+        // A sparse terminal can arrive before its rich `tool_call`. Hold the
+        // generic completion until that call arrives or the turn ends, rather
+        // than sending a generic update that delivery dedupe cannot correct.
+        this.deferredTerminalUpdateKeys.add(key);
+        return undefined;
+      }
+      if (this.deferredTerminalUpdateKeys.has(key) && !isMeaningful) {
+        return undefined;
+      }
+      this.deferredTerminalUpdateKeys.delete(key);
     } else {
       this.activeUpdates.set(key, resolved);
     }
     return resolved;
+  }
+
+  drainDeferredTerminalUpdates(params: {
+    backendId: string;
+    threadId: string;
+    turnId: string;
+  }): Record<string, unknown>[] {
+    const prefix = [params.backendId, params.threadId, params.turnId].join("\0");
+    const updates: Record<string, unknown>[] = [];
+    for (const key of this.deferredTerminalUpdateKeys) {
+      if (!key.startsWith(`${prefix}\0`)) {
+        continue;
+      }
+      const update = this.terminalUpdates.get(key);
+      if (update) {
+        updates.push(update);
+      }
+      this.deferredTerminalUpdateKeys.delete(key);
+    }
+    return updates;
   }
 
   clearTurn(params: {
@@ -94,28 +129,36 @@ export class AcpLiveToolUpdateResolver {
         this.activeUpdates.delete(key);
       }
     }
-    for (const key of this.terminalUpdateKeys) {
+    for (const key of this.deferredTerminalUpdateKeys) {
       if (key.startsWith(`${prefix}\0`)) {
-        this.terminalUpdateKeys.delete(key);
+        this.deferredTerminalUpdateKeys.delete(key);
+      }
+    }
+    for (const key of this.terminalUpdates.keys()) {
+      if (key.startsWith(`${prefix}\0`)) {
+        this.terminalUpdates.delete(key);
       }
     }
   }
 
   clear(): void {
     this.activeUpdates.clear();
-    this.terminalUpdateKeys.clear();
+    this.deferredTerminalUpdateKeys.clear();
+    this.terminalUpdates.clear();
   }
 
-  private rememberTerminalUpdateKey(key: string): void {
-    this.terminalUpdateKeys.add(key);
+  private rememberTerminalUpdate(key: string, update: Record<string, unknown>): void {
+    this.terminalUpdates.delete(key);
+    this.terminalUpdates.set(key, update);
     // A terminal event normally clears at turn completion. Keep a bounded
-    // tombstone set as a defensive fallback for a provider that omits it.
-    while (this.terminalUpdateKeys.size > 512) {
-      const oldest = this.terminalUpdateKeys.values().next().value;
-      if (oldest === undefined) {
+    // cache as a defensive fallback for a provider that omits it.
+    while (this.terminalUpdates.size > 512) {
+      const oldest = this.terminalUpdates.keys().next().value;
+      if (typeof oldest !== "string") {
         return;
       }
-      this.terminalUpdateKeys.delete(oldest);
+      this.terminalUpdates.delete(oldest);
+      this.deferredTerminalUpdateKeys.delete(oldest);
     }
   }
 }
@@ -347,7 +390,21 @@ function isGenericAcpToolKind(value: string): boolean {
 }
 
 function isTerminalToolStatus(status: unknown): boolean {
-  return status === "completed" || status === "failed" || status === "cancelled";
+  return typeof status === "string" && ["completed", "failed", "cancelled"].includes(
+    status.toLowerCase(),
+  );
+}
+
+function hasMeaningfulAcpToolMetadata(update: Record<string, unknown>): boolean {
+  const item = liveItemForAcpToolUpdate(update);
+  const command = item ? readString(item, "command") : undefined;
+  return Boolean(command && !isGenericAcpToolMetadata(command));
+}
+
+function isGenericAcpToolMetadata(value: string): boolean {
+  return /^(?:tool|tool call|tool_call|tool call update|tool_call_update|unknown|other|tool details unavailable)$/i.test(
+    value.trim(),
+  );
 }
 
 function readAcpToolOutput(record: Record<string, unknown>): string | undefined {
@@ -406,6 +463,19 @@ function mergeAcpLiveToolUpdates(
   }
 
   const merged = { ...previous, ...update };
+  for (const key of ["kind", "title", "name", "command"] as const) {
+    const previousValue = readString(previous, key);
+    const updateValue = readString(update, key);
+    if (
+      previousValue
+      && (!updateValue
+        || (key === "kind"
+          ? isGenericAcpToolKind(updateValue)
+          : isGenericAcpToolMetadata(updateValue)))
+    ) {
+      merged[key] = previousValue;
+    }
+  }
   for (const key of ["_meta", "rawInput", "rawOutput"] as const) {
     const previousRecord = readRecord(previous[key]);
     const updateRecord = readRecord(update[key]);
