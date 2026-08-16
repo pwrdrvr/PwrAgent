@@ -98,6 +98,7 @@ function createMockSpawnChild(
 }
 
 vi.mock("electron", () => ({
+  app: { isPackaged: false },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => Promise<unknown>) => {
       handlers.set(channel, handler);
@@ -1034,6 +1035,11 @@ describe("settings ipc", () => {
       ).toHaveBeenCalledWith(
         expect.objectContaining({
           enabledRegistryIds: ["gemini", "grok", "kimi", "qwen"],
+          managedGrok: {
+            enabled: true,
+            checkMode: "once-per-process",
+            requirePlatformSignature: false,
+          },
           preferences: {
             grok: { overridePath: "/opt/pwragent/bin/grok" },
             qwen: { overridePath: "/opt/pwragent/bin/qwen" },

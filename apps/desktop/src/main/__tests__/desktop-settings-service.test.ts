@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
+import { managedGrokBuildsEnabledForRuntime } from "../settings/desktop-config";
 import {
   MemoryDesktopSecretStore,
   type DesktopSecretStore,
@@ -1652,6 +1653,57 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.acpAgents.kimi.enabled).toBe(false);
     // Untouched agents stay enabled.
     expect(snapshot.acpAgents.gemini.enabled).toBe(true);
+  });
+
+  it("defaults managed Grok builds on and round-trips the opt-out", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).acpAgents.grok.managedBuilds).toBe(true);
+
+    const packagedDefault = new DesktopSettingsService({
+      configPath: path.join(root, "packaged-config.toml"),
+      defaultManagedGrokBuilds: false,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect(
+      (await packagedDefault.readSettings()).acpAgents.grok.managedBuilds,
+    ).toBe(false);
+
+    await service.writeConfigPatch({
+      acpAgents: { grok: { managedBuilds: false } },
+    });
+
+    const tomlOnDisk = fs.readFileSync(configPath, "utf8");
+    expect(tomlOnDisk).toContain("[acp_agents.grok]");
+    expect(tomlOnDisk).toContain("managed_builds = false");
+    expect((await service.readSettings()).acpAgents.grok.managedBuilds).toBe(false);
+  });
+
+  it("suppresses managed Grok builds only for unpackaged E2E runtimes", () => {
+    const config = {
+      acpAgents: { grok: { managedBuilds: true } },
+    } as Parameters<typeof managedGrokBuildsEnabledForRuntime>[0];
+    const e2eEnv = { PWRAGENT_E2E: "1" };
+
+    expect(managedGrokBuildsEnabledForRuntime(config, {
+      env: e2eEnv,
+      isPackaged: false,
+    })).toBe(false);
+    expect(managedGrokBuildsEnabledForRuntime(config, {
+      env: e2eEnv,
+      isPackaged: true,
+    })).toBe(true);
+    expect(managedGrokBuildsEnabledForRuntime(config, {
+      env: {},
+      isPackaged: false,
+    })).toBe(true);
   });
 
   it("sets CODEX_HOME for the selected Codex auth profile", () => {

@@ -48,6 +48,12 @@ function enabledSnapshotFor(
   return agents?.[registryId]?.enabled !== false;
 }
 
+function managedGrokBuildsSnapshot(
+  snapshot: DesktopSettingsSnapshot | undefined,
+): boolean {
+  return snapshot?.acpAgents.grok?.managedBuilds !== false;
+}
+
 /**
  * Renders each discovered ACP agent (Gemini / Grok / Kimi / Qwen) as its own
  * `SettingsSection`, styled identically to the Codex section (SettingsField
@@ -65,6 +71,8 @@ export function AcpAgentsSettings(props: {
   onCliPathChange?: (registryId: string, cliPath: string) => Promise<boolean>;
   /** Persist a per-agent enabled flag (off = hidden from the model picker). */
   onEnabledChange?: (registryId: string, enabled: boolean) => Promise<void>;
+  /** Persist whether PwrAgent downloads and prefers its Grok fork build. */
+  onManagedGrokBuildsChange?: (enabled: boolean) => Promise<boolean>;
 }) {
   const [entries, setEntries] = useState<AcpAgentSettingsEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -138,6 +146,7 @@ export function AcpAgentsSettings(props: {
             entry={entry}
             cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
             enabled={enabledSnapshotFor(props.snapshot, entry.registryId)}
+            managedGrokBuilds={managedGrokBuildsSnapshot(props.snapshot)}
             saving={props.saving}
             refreshing={refreshing || loading || props.catalogRefreshing}
             onCliPathChange={
@@ -163,6 +172,7 @@ export function AcpAgentsSettings(props: {
                 : undefined
             }
             onEnabledChange={props.onEnabledChange}
+            onManagedGrokBuildsChange={props.onManagedGrokBuildsChange}
             onRefresh={() => refresh(true, true)}
           />
         </Fragment>
@@ -272,6 +282,7 @@ function AcpAgentSection(props: {
   entry: AcpAgentSettingsEntry;
   cliPathSnapshot: DesktopSettingsValue<string> | undefined;
   enabled: boolean;
+  managedGrokBuilds: boolean;
   saving?: boolean;
   refreshing?: boolean;
   onCliPathChange?: (
@@ -279,6 +290,7 @@ function AcpAgentSection(props: {
     cliPath: string,
   ) => Promise<AcpCliPathUpdateResult>;
   onEnabledChange?: (registryId: string, enabled: boolean) => Promise<void>;
+  onManagedGrokBuildsChange?: (enabled: boolean) => Promise<boolean>;
   onRefresh: () => Promise<boolean>;
 }) {
   const { entry, enabled } = props;
@@ -383,6 +395,27 @@ function AcpAgentSection(props: {
                 label={`Enable ${entry.name}`}
                 onChange={(next) => {
                   void props.onEnabledChange?.(entry.registryId, next);
+                }}
+              />
+            }
+          />
+        ) : null}
+
+        {entry.registryId === "grok" && props.onManagedGrokBuildsChange ? (
+          <SettingsField
+            label="PwrAgent build"
+            sub="Download verified releases from pwrdrvr/grok-build and prefer the newest one for new threads. Packaged macOS and Windows apps require platform signing; manual paths still win."
+            control={
+              <SettingsSwitch
+                checked={props.managedGrokBuilds}
+                disabled={props.saving || pathUpdating || props.refreshing || !enabled}
+                label="Use managed PwrAgent Grok builds"
+                onChange={(next) => {
+                  void props.onManagedGrokBuildsChange?.(next).then((saved) => {
+                    if (saved) {
+                      void props.onRefresh();
+                    }
+                  });
                 }}
               />
             }

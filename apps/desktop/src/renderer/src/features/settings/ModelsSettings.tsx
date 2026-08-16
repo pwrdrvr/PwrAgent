@@ -101,6 +101,8 @@ export function ModelsSettings(props: {
   onAcpCliPathChange: (registryId: string, cliPath: string) => Promise<boolean>;
   /** Persist a per-ACP-agent enabled flag (off = hidden from the model picker). */
   onAcpEnabledChange: (registryId: string, enabled: boolean) => Promise<void>;
+  /** Persist the Grok managed-build preference. */
+  onManagedGrokBuildsChange?: (enabled: boolean) => Promise<boolean>;
 }) {
   const [codexPath, setCodexPath] = useState(props.snapshot.models.codex.path.value);
   const [codexMode, setCodexMode] = useState<CodexPathMode>(
@@ -362,6 +364,7 @@ export function ModelsSettings(props: {
         snapshot={props.snapshot}
         onCliPathChange={props.onAcpCliPathChange}
         onEnabledChange={props.onAcpEnabledChange}
+        onManagedGrokBuildsChange={props.onManagedGrokBuildsChange}
       />
     </SettingsSectionStack>
   );

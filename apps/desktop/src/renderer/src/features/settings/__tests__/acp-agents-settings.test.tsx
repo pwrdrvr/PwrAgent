@@ -68,18 +68,47 @@ function acpSnapshot(
   cliPath: string,
   source: "config" | "env" = "config",
   enabled = true,
+  managedBuilds = true,
 ): DesktopSettingsSnapshot {
   return {
     acpAgents: {
       [registryId]: {
         cliPath: { value: cliPath, source },
         enabled,
+        ...(registryId === "grok" ? { managedBuilds } : {}),
       },
     },
   } as unknown as DesktopSettingsSnapshot;
 }
 
 describe("AcpAgentsSettings", () => {
+  it("lets Grok users opt out of managed PwrAgent builds", async () => {
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1_000,
+      entries: [grokEntry()],
+    }));
+    const onManagedGrokBuildsChange = vi.fn(async () => true);
+
+    render(
+      <AcpAgentsSettings
+        desktopApi={{ listAcpAgents } as DesktopApi}
+        snapshot={acpSnapshot("grok", "")}
+        onManagedGrokBuildsChange={onManagedGrokBuildsChange}
+      />,
+    );
+
+    const toggle = await screen.findByRole("switch", {
+      name: "Use managed PwrAgent Grok builds",
+    });
+    await waitFor(() => expect(toggle).toBeEnabled());
+    toggle.click();
+
+    await waitFor(() => {
+      expect(onManagedGrokBuildsChange).toHaveBeenCalledWith(false);
+      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true, force: true });
+    });
+  });
+
   it("refreshes backend summaries after capability discovery completes", async () => {
     const onBackendSummariesRefresh = vi.fn();
     window.addEventListener(
