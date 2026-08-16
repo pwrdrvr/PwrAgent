@@ -3422,6 +3422,108 @@ textarea,
   font-variant-numeric: tabular-nums;
 }
 
+/* The Attention tab's hover card. Every other lens tab hovers one line of
+   `.viewport-tooltip`; this one reports two or three counts, each with its own
+   indicator and a consequence, which as running text became four sentences
+   with em-dashes doing the structural work.
+
+   Measurements are `.context-usage-card`'s (width, padding, radius, shadow,
+   eyebrow, row scale) so the app's hover cards stay one family — that one
+   rather than `.pr-status-card` because both of these sit at z-index 90:
+   the lens switch is sidebar chrome and is not reachable from the Settings
+   overlay at 120, so neither needs the 140 a PR chip does. */
+.attention-card {
+  position: fixed;
+  z-index: 90;
+  width: 264px;
+  max-width: calc(100vw - 32px);
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--popover-bg);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
+  color: var(--text-primary);
+  pointer-events: none;
+  text-align: left;
+}
+
+.attention-card__eyebrow {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.attention-card__caption {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.attention-card__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* The indicator column is fixed so the labels start on one line no matter
+   which indicator a row carries — a cookie is 8px and a scanner 16px, and
+   letting them size the column staggers the text. */
+.attention-card__row {
+  display: grid;
+  align-items: center;
+  gap: 0 10px;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+}
+
+/* Reuse of the tab's own readout classes, which carry the colour and the zero
+   state. Inside the card they hold only the indicator, so drop the tab's inner
+   gap and let the grid do the spacing. */
+.attention-card__row .lens-switch__signal {
+  justify-content: center;
+  gap: 0;
+}
+
+.attention-card__row-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.attention-card__row-label {
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.attention-card__row-note {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.attention-card__row-value {
+  align-self: center;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Same rule the tab runs: a zero is shown, never hidden, but it stops claiming
+   the reader's eye. Keeping the card and the tab on one rule is what makes the
+   card read as the tab expanded rather than a second opinion. */
+.attention-card__row[data-zero="true"] .attention-card__row-label,
+.attention-card__row[data-zero="true"] .attention-card__row-value {
+  color: var(--text-muted);
+}
+
 /* The turn readouts, stacked. One row is the common case and reads exactly as
    it did when it was a bare child of the tab — a single-item column is its own
    content box, so nothing moves. The second row only exists while a peer has

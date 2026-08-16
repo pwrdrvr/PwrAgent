@@ -22,6 +22,22 @@ const TOOLTIP_GAP = 10;
  */
 export const TOOLTIP_HOVER_DELAY_MS = 250;
 
+/**
+ * Strips that own the top of a window: the Windows custom title bar, and the
+ * macOS stoplight gutters (`padding-left: 80px` is the traffic lights' room).
+ * All three are `-webkit-app-region: drag`.
+ *
+ * Deliberately not every drag region. `.thread-header` and
+ * `.settings-titlebar` drag too, but they sit to the RIGHT of the stoplights
+ * and are content strips — flooring tooltips below them would push half the
+ * sidebar's tooltips down the window to protect nothing.
+ */
+const TOP_WINDOW_CHROME_SELECTORS = [
+  ".app-titlebar",
+  ".sidebar__masthead",
+  ".settings-nav__masthead",
+];
+
 function tooltipViewportTop(): number {
   // On Windows the fixed custom title bar occupies the top of the renderer,
   // while `.app-shell` begins immediately below it. Portal tooltips live on
@@ -30,7 +46,25 @@ function tooltipViewportTop(): number {
   // without the custom strip, preserving the ordinary viewport behavior.
   const appShell = document.querySelector<HTMLElement>(".app-shell");
   const appShellTop = appShell?.getBoundingClientRect().top ?? 0;
-  return Math.max(VIEWPORT_PADDING, appShellTop + VIEWPORT_PADDING);
+  let viewportTop = Math.max(VIEWPORT_PADDING, appShellTop + VIEWPORT_PADDING);
+  // macOS reserves its traffic lights INSIDE the renderer (`titleBarStyle:
+  // "hiddenInset"`), so `.app-shell` starts at 0 and the clamp above happily
+  // parks a tooltip on top of the close/minimize/zoom buttons and the wordmark
+  // beside them. Nothing about that region is hoverable content — it is native
+  // window chrome that a tooltip must never cover.
+  for (const selector of TOP_WINDOW_CHROME_SELECTORS) {
+    const chrome = document.querySelector<HTMLElement>(selector);
+    if (!chrome) {
+      continue;
+    }
+    const rect = chrome.getBoundingClientRect();
+    // Only a strip actually anchored to the top of the window is a floor. One
+    // scrolled or laid out further down is ordinary content.
+    if (rect.height > 0 && rect.top <= appShellTop + VIEWPORT_PADDING) {
+      viewportTop = Math.max(viewportTop, rect.bottom);
+    }
+  }
+  return viewportTop;
 }
 
 type TooltipState = {

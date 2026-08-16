@@ -305,13 +305,15 @@ const browseModeIcons = {
 
 // Nothing on the tab spells out what the lens shows now that the labels are
 // gone, so the viewport tooltip carries both the name and the explanation.
+// Attention is absent for the same reason it is absent from `browseModeIcons`:
+// it reports state rather than just naming a lens, so it hovers a structured
+// card (`AttentionLensTab`) instead of a line of text.
 const browseModeTooltips = {
-  attention: "Attention — threads in progress or waiting to be reviewed",
   drafts: "Drafts — threads with a reply you started and never sent",
   inbox: "Updated — all threads, most recently updated first",
   recents: "Created — all threads, newest created first",
   directories: "Directories — threads grouped by linked Git directory",
-} satisfies Record<BrowseMode, string>;
+} satisfies Record<Exclude<BrowseMode, "attention">, string>;
 
 /**
  * The Drafts tab's count, for the tooltip and the accessible name.
@@ -2896,27 +2898,54 @@ function AttentionLensTab(props: {
   reviewThreadCount: number;
   onSelect: () => void;
 }) {
-  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  // A card, not a text tooltip. Every other lens tab explains itself in one
+  // line; this one reports two or three counts, each with its own indicator
+  // and — once a peer is running work — a consequence. Run through
+  // `.viewport-tooltip` that became four stacked sentences with em-dashes
+  // doing the structural work. See "Structured hover cards" in AGENTS.md.
+  const tooltip = useViewportTooltip({ className: "attention-card" });
   const remoteActiveThreadCount = props.remoteActiveThreadCount;
-  // Split wording only once there is something to tell apart. "2 active
-  // threads" is the whole truth on an unfederated instance, and qualifying it
-  // with "on this machine" would raise a question the operator does not have.
-  const activeLines = remoteActiveThreadCount === undefined
-    ? [formatActiveThreadCount(props.activeThreadCount)]
-    : [
-      `${formatLocalActiveThreadCount(props.activeThreadCount)} — blocks quit`,
-      `${formatRemoteActiveThreadCount(remoteActiveThreadCount)} — does not block quit`,
-    ];
-  const tooltipText = remoteActiveThreadCount === undefined
-    ? [
-      browseModeTooltips.attention,
-      `${activeLines[0]} · ${formatReviewThreadCount(props.reviewThreadCount)}`,
-    ].join("\n")
-    : [
-      browseModeTooltips.attention,
-      ...activeLines,
-      formatReviewThreadCount(props.reviewThreadCount),
-    ].join("\n");
+  const card = (
+    <>
+      <div className="attention-card__eyebrow">{browseModeLabels.attention}</div>
+      <div className="attention-card__caption">
+        Threads in progress or waiting to be reviewed
+      </div>
+      <div className="attention-card__section">
+        <AttentionCardRow
+          count={props.activeThreadCount}
+          indicator="turn"
+          // Only qualify the row once there is something to tell it apart
+          // from. "In progress" is the whole truth on an unfederated
+          // instance, and naming the machine would raise a question the
+          // operator does not have.
+          label={
+            remoteActiveThreadCount === undefined
+              ? "In progress"
+              : "In progress here"
+          }
+          note={
+            remoteActiveThreadCount === undefined
+              ? undefined
+              : "Quitting interrupts these"
+          }
+        />
+        {remoteActiveThreadCount === undefined ? null : (
+          <AttentionCardRow
+            count={remoteActiveThreadCount}
+            indicator="remote-turn"
+            label="In progress elsewhere"
+            note="Quitting leaves these running"
+          />
+        )}
+        <AttentionCardRow
+          count={props.reviewThreadCount}
+          indicator="review"
+          label="To review"
+        />
+      </div>
+    </>
+  );
   const accessibleName = [
     browseModeLabels.attention,
     ...(remoteActiveThreadCount === undefined
@@ -2933,6 +2962,11 @@ function AttentionLensTab(props: {
       <button
         role="tab"
         aria-label={accessibleName}
+        // The card's consequence lines ("Quitting interrupts these") exist
+        // nowhere else — without this they are sighted-only, since the portal
+        // sits outside this button's subtree. Gated on `visible`: naming an
+        // absent element is a dangling reference.
+        aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
         aria-selected={props.active}
         className={`lens-switch__button lens-switch__button--attention${
           props.active ? " is-active" : ""
@@ -2943,8 +2977,8 @@ function AttentionLensTab(props: {
           tooltip.hide();
           props.onSelect();
         }}
-        onFocus={(event) => tooltip.show(event.currentTarget, tooltipText)}
-        onMouseEnter={(event) => tooltip.show(event.currentTarget, tooltipText)}
+        onFocus={(event) => tooltip.show(event.currentTarget, card)}
+        onMouseEnter={(event) => tooltip.show(event.currentTarget, card)}
         onMouseLeave={tooltip.hide}
       >
         {/* One column so the second readout stacks under the first instead of
@@ -3008,6 +3042,52 @@ function AttentionTurnScanner(props: { count: number }) {
     <span className="lens-switch__dormant-scanner" />
   ) : (
     <ThinkingScanner compact />
+  );
+}
+
+/**
+ * One line of the Attention hover card: the tab's own indicator, what it
+ * counts, and the count. Repeating the indicator is what ties a row to the
+ * readout the operator just hovered — a card of bare labels would make them
+ * re-derive which number is which.
+ */
+function AttentionCardRow(props: {
+  count: number;
+  indicator: "turn" | "remote-turn" | "review";
+  label: string;
+  /** What quitting does to this row's work. Omitted when nothing is at stake. */
+  note?: string;
+}) {
+  return (
+    <div
+      className="attention-card__row"
+      data-zero={props.count === 0 ? "true" : undefined}
+    >
+      <span
+        aria-hidden="true"
+        className={`lens-switch__signal lens-switch__signal--${
+          props.indicator === "review"
+            ? "review"
+            : props.indicator === "remote-turn"
+              ? "remote-active"
+              : "active"
+        }`}
+        data-zero={props.count === 0 ? "true" : undefined}
+      >
+        {props.indicator === "review" ? (
+          <span className="thread-row__status-cookie" />
+        ) : (
+          <AttentionTurnScanner count={props.count} />
+        )}
+      </span>
+      <span className="attention-card__row-text">
+        <span className="attention-card__row-label">{props.label}</span>
+        {props.note ? (
+          <span className="attention-card__row-note">{props.note}</span>
+        ) : null}
+      </span>
+      <span className="attention-card__row-value">{props.count}</span>
+    </div>
   );
 }
 

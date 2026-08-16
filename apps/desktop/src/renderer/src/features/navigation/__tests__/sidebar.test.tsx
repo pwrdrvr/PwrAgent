@@ -2915,14 +2915,62 @@ describe("Sidebar", () => {
       ).toBeInTheDocument();
     });
 
-    it("explains the lens in its tooltip, including the live counts", async () => {
+    it("explains the lens in a hover card, including the live counts", async () => {
       renderAttention();
 
       const tab = screen.getByRole("tab", { name: /^Attention,/ });
       fireEvent.mouseEnter(tab);
-      expect((await screen.findByRole("tooltip")).textContent).toBe(
-        "Attention — threads in progress or waiting to be reviewed"
-          + "\n1 active thread · 1 thread to review",
+      const card = await screen.findByRole("tooltip");
+      // A card rather than `.viewport-tooltip`: this tab reports counts, and
+      // running text made the reader parse em-dashes to find them.
+      expect(card).toHaveClass("attention-card");
+      expect(card).toHaveTextContent(
+        /AttentionThreads in progress or waiting to be reviewedIn progress1To review1/,
+      );
+      // Unfederated: no machine named, because there is nothing to tell apart.
+      expect(card.textContent).not.toContain("Quitting");
+      // The consequence lines exist nowhere else, so the card has to be
+      // reachable to a screen reader rather than sighted-only.
+      expect(tab).toHaveAttribute("aria-describedby", card.id);
+    });
+
+    it("names the machines and what quitting does once a peer is running work", async () => {
+      const remoteActive = {
+        ...activeThread,
+        id: "thread-remote-card",
+        federation: {
+          instanceLabel: "studio",
+          ref: {
+            backend: "codex" as const,
+            target: { scope: "remote" as const, instanceId: "peer-1" },
+            threadId: "thread-remote-card",
+          },
+        },
+      };
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="inbox"
+          createThreadError={undefined}
+          directories={directories}
+          inboxThreads={[activeThread, remoteActive, unreadThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={[activeThread, remoteActive, unreadThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      fireEvent.mouseEnter(screen.getByRole("tab", { name: /^Attention,/ }));
+      const card = await screen.findByRole("tooltip");
+      expect(card).toHaveTextContent(/In progress here.*Quitting interrupts these/);
+      expect(card).toHaveTextContent(
+        /In progress elsewhere.*Quitting leaves these running/,
       );
     });
   });

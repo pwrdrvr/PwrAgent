@@ -154,4 +154,48 @@ describe("useViewportTooltip", () => {
       expect(screen.getByRole("tooltip")).toHaveStyle({ top: "118px" });
     });
   });
+
+  it("keeps clear of the macOS stoplight strip, which the app shell does not fence off", async () => {
+    // `titleBarStyle: "hiddenInset"` reserves the traffic lights INSIDE the
+    // renderer, so `.app-shell` starts at 0 and the shell-boundary clamp lets a
+    // tooltip park on top of the close/minimize/zoom buttons and the wordmark
+    // beside them. `.sidebar__masthead` is the drag strip that holds them (its
+    // 80px left padding IS their room), so its bottom is the real floor.
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function getBoundingClientRect(this: HTMLElement) {
+        if (this.classList.contains("app-shell")) {
+          return rectangle({ top: 0, width: 1200, height: 800 });
+        }
+        if (this.classList.contains("sidebar__masthead")) {
+          return rectangle({ top: 0, width: 320, height: 46 });
+        }
+        if (this.getAttribute("role") === "tooltip") {
+          return rectangle({ width: 236, height: 120 });
+        }
+        if (this.tagName === "BUTTON") {
+          return rectangle({ left: 20, top: 96, width: 72, height: 26 });
+        }
+        return rectangle({});
+      },
+    );
+
+    vi.stubGlobal("innerWidth", 1200);
+    vi.stubGlobal("innerHeight", 800);
+
+    render(
+      <div className="app-shell">
+        <header className="sidebar__masthead" />
+        <TooltipFixture />
+      </div>,
+    );
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+
+    await waitFor(() => {
+      // Above needs 96 − 120 − 10 = −34, which is over the stoplights. Below
+      // the 26px-tall target fits, so it flips there rather than being clamped
+      // onto the strip.
+      expect(screen.getByRole("tooltip")).toHaveStyle({ top: "132px" });
+    });
+  });
 });
