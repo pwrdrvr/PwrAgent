@@ -1059,6 +1059,8 @@ describe("app server ipc", () => {
     getThreadOverlayStates.mockResolvedValue({});
     setThreadPullRequests.mockClear();
     addThreadPullRequestReference.mockClear();
+    getPrAutoDispatchCandidateWinner.mockReset();
+    getPrAutoDispatchCandidateWinner.mockResolvedValue(undefined);
     readPrStatusCache.mockReset();
     readPrStatusCache.mockResolvedValue({});
     writePrStatusCacheEntries.mockClear();
@@ -1475,6 +1477,97 @@ describe("app server ipc", () => {
         autoFixActive: false,
         guidance: expect.stringContaining("no GitHub primary workspace"),
       });
+    });
+  });
+
+  it("tells an active Auto-fix turn that it owns the repair", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const primaryPr = githubPr({
+      number: 1695,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "failing",
+      title: "Grok 4.6 pricing mismatch",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1695",
+    });
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Grok 4.6 pricing mismatch",
+        titleSource: "explicit",
+        source: "codex",
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+        linkedDirectories: [],
+        prs: [primaryPr],
+        updatedAt: 2_000,
+      },
+    ] as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [primaryPr],
+      prAutoDispatchEnabled: true,
+    });
+    getPrAutoDispatchCandidateWinner.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+    } as never);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+    await vi.waitFor(async () => {
+      const status = await autoDispatchHandlers?.inspect(
+        {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      );
+      expect(status).toMatchObject({
+        autoFixActive: true,
+        guidance: expect.stringContaining(
+          "Reading this status did not start or convert the current turn into a repair turn",
+        ),
+      });
+      expect(status?.guidance).toContain(
+        "current turn is a repair turn only if PwrAgent started it with an Auto-fix PR event",
+      );
+      expect(status?.guidance).toContain(
+        "investigate and fix only the reported failure",
+      );
+      expect(status?.guidance).toContain(
+        "validate, commit, and push the fix to the PR branch",
+      );
+      expect(status?.guidance).toContain(
+        "review findings the user did not ask this turn to address",
+      );
+    });
+    await vi.waitFor(async () => {
+      const status = await autoDispatchHandlers?.inspect(
+        {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        {
+          backend: "codex",
+          threadId: "other-thread",
+        },
+      );
+      expect(status).toMatchObject({
+        autoFixActive: true,
+        guidance: expect.stringContaining(
+          "never authorizes the current turn to repair that thread's PR",
+        ),
+      });
+      expect(status?.guidance).toContain(
+        "Reading this status did not start or convert the current turn into a repair turn",
+      );
     });
   });
 

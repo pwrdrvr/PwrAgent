@@ -161,6 +161,7 @@ import {
   type UpdateSubthreadOrderRequest,
   type UpdateSubthreadOrderResponse,
   type PwrAgentThreadInspectionResponse,
+  type PwrAgentThreadInspectionContext,
 } from "@pwragent/shared";
 import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 import {
@@ -3521,6 +3522,7 @@ class DesktopAppServerService {
 
   async checkThreadPullRequestStatusForTool(
     args: CheckThreadPullRequestStatusToolArgs,
+    context?: PwrAgentThreadInspectionContext,
   ): Promise<PwrAgentThreadInspectionResponse> {
     if (!args.backend || !isAppServerBackendKind(args.backend)) {
       return {
@@ -3592,10 +3594,13 @@ class DesktopAppServerService {
       directoryPaths: lookupDirectoryPaths,
       includeStatusFreshness: true,
     });
-    const prAutomation = await this.getThreadPullRequestAutomationStatus({
-      backend: args.backend,
-      threadId,
-    });
+    const prAutomation = await this.getThreadPullRequestAutomationStatus(
+      {
+        backend: args.backend,
+        threadId,
+      },
+      context,
+    );
 
     return {
       ok: true,
@@ -3773,10 +3778,13 @@ class DesktopAppServerService {
     };
   }
 
-  async getThreadPullRequestAutomationStatus(params: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }): Promise<ThreadPullRequestAutomationStatus> {
+  async getThreadPullRequestAutomationStatus(
+    params: {
+      backend: AppServerBackendKind;
+      threadId: string;
+    },
+    context?: PwrAgentThreadInspectionContext,
+  ): Promise<ThreadPullRequestAutomationStatus> {
     const overlay = await this.getOverlayStore().getThreadOverlayState(params);
     const autoFixEnabled = overlay?.prAutoDispatchEnabled === true;
     const attachment = this.attachedPrsByThreadKey.get(
@@ -3802,13 +3810,18 @@ class DesktopAppServerService {
       autoFixEnabled
       && this.isPrAutoDispatchAvailable()
       && (waitingForPr || ownsAttachedPr);
+    const isInvokingThread =
+      context?.backend === params.backend
+      && context.threadId === params.threadId;
     const watches = await this.getOverlayStore().listActiveThreadPrStatusWatches(
       params,
     );
     const guidance = autoFixActive && waitingForPr
-      ? "Auto-fix PR is armed. This primary workspace has no linked PR yet; PwrAgent will begin monitoring when one is linked. Do not poll CI or create a monitor thread after a PR is linked."
+      ? "Auto-fix PR monitoring is armed. This is monitoring state, not a repair-turn event. This primary workspace has no linked PR yet; PwrAgent will begin monitoring when one is linked. Do not poll CI or create a monitor thread after a PR is linked."
       : autoFixActive
-      ? "Auto-fix PR is active. Do not poll CI and do not create a monitor thread for this PR. End the turn; PwrAgent will start a repair turn on a CI failure or merge conflict. Use watch_thread_pull_request before ending when the thread should also wake on successful completion."
+      ? isInvokingThread
+        ? "Auto-fix PR monitoring is active. Reading this status did not start or convert the current turn into a repair turn. autoFixActive only means this thread owns automatic monitoring. Monitoring ownership does not mean another agent is repairing the PR. The current turn is a repair turn only if PwrAgent started it with an Auto-fix PR event. In that repair turn, investigate and fix only the reported failure or conflict, then validate, commit, and push the fix to the PR branch. Do not fix anything else from prior conversation context, including review findings the user did not ask this turn to address. If the current turn has no Auto-fix PR event, do not poll CI or create a monitor; end the turn and PwrAgent will start a repair turn when a new failure or conflict appears. Use watch_thread_pull_request before ending when the thread should also wake on successful completion."
+        : "Auto-fix PR monitoring is active for the inspected thread. Reading this status did not start or convert the current turn into a repair turn. autoFixActive only reports the inspected thread's monitoring ownership. This result never authorizes the current turn to repair that thread's PR. Monitoring ownership does not mean another agent is already repairing it. The inspected thread will receive its own repair turn for a new CI failure or merge conflict."
       : autoFixEnabled
         ? this.backgroundPrPollingEnabled
           ? this.prAutoDispatchAllowed
@@ -7379,7 +7392,8 @@ export function registerAppServerIpcHandlers(): void {
     appServerService.handleAgentEventForPrAttachments(event);
   });
   getDesktopBackendRegistry().setThreadPullRequestStatusToolHandler(
-    async (args) => await appServerService.checkThreadPullRequestStatusForTool(args),
+    async (args, context) =>
+      await appServerService.checkThreadPullRequestStatusForTool(args, context),
   );
   getDesktopBackendRegistry().setThreadPullRequestCanonicalizer(
     async (prs) =>
@@ -7406,8 +7420,11 @@ export function registerAppServerIpcHandlers(): void {
       await appServerService.cancelThreadPrAutoDispatch(request),
     sendPendingNow: async (request) =>
       await appServerService.sendThreadPrAutoDispatchNow(request),
-    inspect: async (request) =>
-      await appServerService.getThreadPullRequestAutomationStatus(request),
+    inspect: async (request, context) =>
+      await appServerService.getThreadPullRequestAutomationStatus(
+        request,
+        context,
+      ),
   });
 
   ipcMain.removeHandler(APP_SERVER_GET_PR_AUTO_DISPATCH_BUDGET_STATUS_CHANNEL);

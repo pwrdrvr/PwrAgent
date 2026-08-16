@@ -1725,6 +1725,7 @@ type ThreadTitleService = Pick<ThreadTitleGenerationService, "generateTitle"> & 
 
 type ThreadPullRequestStatusToolHandler = (
   args: CheckThreadPullRequestStatusToolArgs,
+  context: PwrAgentThreadInspectionRequest["context"],
 ) => PwrAgentThreadInspectionResponse | Promise<PwrAgentThreadInspectionResponse>;
 
 type ThreadPullRequestCanonicalizer = (
@@ -1757,10 +1758,13 @@ type ThreadPrAutoDispatchHandler = {
   sendPendingNow: (
     request: SendThreadPrAutoDispatchNowRequest,
   ) => Promise<boolean>;
-  inspect?: (request: {
-    backend: AppServerBackendKind;
-    threadId: string;
-  }) => Promise<ThreadPullRequestAutomationStatus>;
+  inspect?: (
+    request: {
+      backend: AppServerBackendKind;
+      threadId: string;
+    },
+    context?: PwrAgentThreadInspectionRequest["context"],
+  ) => Promise<ThreadPullRequestAutomationStatus>;
 };
 
 type ThreadTitleGenerationLogStatus =
@@ -28874,11 +28878,14 @@ export class DesktopBackendRegistry {
     }
 
     if (request.operation === "get_thread_status") {
-      return await this.handleGetThreadStatusInspectionRequest({
-        ...request.args,
-        backend: request.args.backend ?? request.context.backend,
-        threadId: request.args.threadId ?? request.context.threadId,
-      });
+      return await this.handleGetThreadStatusInspectionRequest(
+        {
+          ...request.args,
+          backend: request.args.backend ?? request.context.backend,
+          threadId: request.args.threadId ?? request.context.threadId,
+        },
+        request.context,
+      );
     }
 
     if (request.operation === "read_thread") {
@@ -28903,11 +28910,14 @@ export class DesktopBackendRegistry {
           },
         };
       }
-      return await this.threadPullRequestStatusToolHandler({
-        ...request.args,
-        backend: request.args.backend ?? request.context.backend,
-        threadId: request.args.threadId ?? request.context.threadId,
-      });
+      return await this.threadPullRequestStatusToolHandler(
+        {
+          ...request.args,
+          backend: request.args.backend ?? request.context.backend,
+          threadId: request.args.threadId ?? request.context.threadId,
+        },
+        request.context,
+      );
     }
 
     if (request.operation === "watch_thread_pull_request") {
@@ -29065,6 +29075,7 @@ export class DesktopBackendRegistry {
       backend: AppServerBackendKind;
       threadId: string;
     },
+    context: PwrAgentThreadInspectionRequest["context"],
   ): Promise<PwrAgentThreadInspectionResponse> {
     if (!isAppServerBackendKind(args.backend)) {
       return threadInspectionFailure(
@@ -29137,10 +29148,13 @@ export class DesktopBackendRegistry {
               sourceThreadId: threadId,
             });
           const prAutomation =
-            await this.threadPrAutoDispatchHandler?.inspect?.({
-              backend: args.backend,
-              threadId,
-            });
+            await this.threadPrAutoDispatchHandler?.inspect?.(
+              {
+                backend: args.backend,
+                threadId,
+              },
+              context,
+            );
           return {
             ok: true,
             data: {
