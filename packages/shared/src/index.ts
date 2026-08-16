@@ -48,5 +48,6 @@ export * from "./thread-jump-match";
 export * from "./thread-pins";
 export * from "./thread-terminal";
 export * from "./thread-titles";
+export * from "./tool-activity-burst";
 export * from "./token-usage-pricing";
 export * from "./worktree-paths";

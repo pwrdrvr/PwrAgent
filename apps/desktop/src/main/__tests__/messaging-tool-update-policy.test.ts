@@ -62,6 +62,35 @@ describe("MessagingToolUpdatePolicy", () => {
     ]);
   });
 
+  it("sends one timely noisy batch, then retains later work for the terminal flush", () => {
+    const timers: Array<() => void> = [];
+    const onBatchReady = vi.fn();
+    const policy = new MessagingToolUpdatePolicy({
+      now: () => 1000,
+      onBatchReady,
+      setTimer: (callback) => {
+        timers.push(callback);
+        return setTimeout(() => undefined, 1);
+      },
+    });
+
+    processTitles(policy, "show_less", ["first"]);
+    timers.shift()?.();
+    expect(onBatchReady).toHaveBeenCalledWith(expect.objectContaining({
+      activities: [expect.objectContaining({ title: "first" })],
+      kind: "batch",
+    }));
+
+    processTitles(policy, "show_less", ["second"]);
+    expect(timers).toEqual([]);
+    expect(policy.flush()).toEqual([
+      expect.objectContaining({
+        activities: [expect.objectContaining({ title: "second" })],
+        kind: "batch",
+      }),
+    ]);
+  });
+
   it("delivers every Show All update immediately", () => {
     const policy = new MessagingToolUpdatePolicy({ now: () => 1000 });
 

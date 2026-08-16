@@ -1,4 +1,7 @@
-import type { AppServerNotification } from "@pwragent/shared";
+import {
+  TOOL_DETAILS_UNAVAILABLE_LABEL,
+  type AppServerNotification,
+} from "@pwragent/shared";
 import { readAcpContentText, readAcpTopicTitle } from "./acp-session-normalizer";
 import {
   isGenericShellToolTitle,
@@ -16,6 +19,106 @@ import {
   type AcpTokenUsage,
   type AcpUsageEnvelope,
 } from "./acp-usage.js";
+
+/**
+ * ACP frequently sends the useful title/input in `tool_call`, then reports
+ * completion as a sparse `tool_call_update` containing only the id and status.
+ * Keep that provider-shaped lifecycle at the ACP boundary so every downstream
+ * consumer receives one normalized item with the best metadata seen so far.
+ *
+ * This is presentation state only. Raw ACP updates still go to the replay
+ * normalizer/rollout store unchanged, which keeps the transcript inspectable.
+ */
+export class AcpLiveToolUpdateResolver {
+  private readonly activeUpdates = new Map<string, Record<string, unknown>>();
+  private anonymousToolSequence = 0;
+  private readonly terminalUpdateKeys = new Set<string>();
+
+  resolve(params: {
+    backendId: string;
+    threadId: string;
+    turnId?: string;
+    update: Record<string, unknown>;
+  }): Record<string, unknown> | undefined {
+    const kind = readKind(params.update);
+    if (kind !== "tool_call" && kind !== "tool_call_update") {
+      return params.update;
+    }
+
+    const toolCallId = readAcpToolCallId(params.update);
+    if (!toolCallId) {
+      // A provider omitted the only stable lifecycle key. Preserve each live
+      // observation rather than collapsing different malformed calls onto the
+      // same "tool" row; the durable raw update remains the inspectable source
+      // of truth after this process exits.
+      this.anonymousToolSequence += 1;
+      return {
+        ...params.update,
+        itemId: `pwragent:anonymous-acp-tool:${this.anonymousToolSequence}`,
+      };
+    }
+
+    const key = [
+      params.backendId,
+      params.threadId,
+      params.turnId ?? "no-turn",
+      toolCallId,
+    ].join("\0");
+    if (this.terminalUpdateKeys.has(key)) {
+      // Terminal events win over a delayed start. We still retain the raw
+      // update, but never resurrect a completed tool as an in-progress row.
+      return undefined;
+    }
+
+    const resolved = mergeAcpLiveToolUpdates(
+      this.activeUpdates.get(key),
+      params.update,
+    );
+    if (isTerminalToolStatus(resolved.status)) {
+      this.activeUpdates.delete(key);
+      this.rememberTerminalUpdateKey(key);
+    } else {
+      this.activeUpdates.set(key, resolved);
+    }
+    return resolved;
+  }
+
+  clearTurn(params: {
+    backendId: string;
+    threadId: string;
+    turnId: string;
+  }): void {
+    const prefix = [params.backendId, params.threadId, params.turnId].join("\0");
+    for (const key of this.activeUpdates.keys()) {
+      if (key.startsWith(`${prefix}\0`)) {
+        this.activeUpdates.delete(key);
+      }
+    }
+    for (const key of this.terminalUpdateKeys) {
+      if (key.startsWith(`${prefix}\0`)) {
+        this.terminalUpdateKeys.delete(key);
+      }
+    }
+  }
+
+  clear(): void {
+    this.activeUpdates.clear();
+    this.terminalUpdateKeys.clear();
+  }
+
+  private rememberTerminalUpdateKey(key: string): void {
+    this.terminalUpdateKeys.add(key);
+    // A terminal event normally clears at turn completion. Keep a bounded
+    // tombstone set as a defensive fallback for a provider that omits it.
+    while (this.terminalUpdateKeys.size > 512) {
+      const oldest = this.terminalUpdateKeys.values().next().value;
+      if (oldest === undefined) {
+        return;
+      }
+      this.terminalUpdateKeys.delete(oldest);
+    }
+  }
+}
 
 export function acpToolUpdateNotifications(params: {
   threadId: string;
@@ -136,12 +239,14 @@ function liveItemForAcpToolUpdate(
     readString(update, "command") ??
     readString(update, "name") ??
     readFirstLocationPath(update) ??
-    toolKind;
+    (isGenericAcpToolKind(toolKind)
+      ? TOOL_DETAILS_UNAVAILABLE_LABEL
+      : toolKind);
   if (!id && !title) {
     return undefined;
   }
 
-  const path = readString(update, "path") ?? readFirstLocationPath(update);
+  const path = readAcpToolPath(update);
   const status = normalizeAcpToolStatus(readString(update, "status"));
   const output = readAcpToolOutput(update);
   const webSearch = readAcpWebSearch(update);
@@ -228,12 +333,17 @@ function acpCommandActions(params: {
 }
 
 function normalizeAcpToolStatus(status: string | undefined): string {
-  return status === "completed" ||
-    status === "failed" ||
-    status === "cancelled" ||
-    status === "in_progress"
-    ? status
+  const normalized = status?.toLowerCase();
+  return normalized === "completed" ||
+    normalized === "failed" ||
+    normalized === "cancelled" ||
+    normalized === "in_progress"
+    ? normalized
     : "in_progress";
+}
+
+function isGenericAcpToolKind(value: string): boolean {
+  return /^(?:other|tool|unknown)$/i.test(value.trim());
 }
 
 function isTerminalToolStatus(status: unknown): boolean {
@@ -261,12 +371,63 @@ function readKind(update: Record<string, unknown>): string {
   );
 }
 
+function readAcpToolCallId(
+  update: Record<string, unknown>,
+): string | undefined {
+  return (
+    readString(update, "toolCallId") ??
+    readString(update, "tool_call_id") ??
+    readString(update, "id") ??
+    readString(update, "itemId") ??
+    readString(update, "item_id")
+  );
+}
+
+function readAcpToolPath(
+  update: Record<string, unknown>,
+): string | undefined {
+  const rawInput = readRecord(update.rawInput);
+  return (
+    readString(update, "path") ??
+    readString(rawInput ?? {}, "path") ??
+    readString(rawInput ?? {}, "file") ??
+    readString(rawInput ?? {}, "filePath") ??
+    readString(rawInput ?? {}, "file_path") ??
+    readFirstLocationPath(update)
+  );
+}
+
+function mergeAcpLiveToolUpdates(
+  previous: Record<string, unknown> | undefined,
+  update: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!previous) {
+    return update;
+  }
+
+  const merged = { ...previous, ...update };
+  for (const key of ["_meta", "rawInput", "rawOutput"] as const) {
+    const previousRecord = readRecord(previous[key]);
+    const updateRecord = readRecord(update[key]);
+    if (previousRecord && updateRecord) {
+      merged[key] = { ...previousRecord, ...updateRecord };
+    }
+  }
+  return merged;
+}
+
 function readString(
   record: Record<string, unknown>,
   key: string,
 ): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function readFirstLocationPath(record: Record<string, unknown>): string | undefined {
