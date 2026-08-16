@@ -26,6 +26,7 @@ import type {
   DesktopSettingsConfigPatch,
   DesktopTextSize,
   DesktopUpdateChannel,
+  DesktopUpdateTrain,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
@@ -36,7 +37,6 @@ import {
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_FEDERATION_MODE_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
-  DESKTOP_UPDATE_CHANNEL_DEFAULT,
   isDesktopAppearanceDensity,
   isDesktopAppearanceTheme,
   isDesktopTextSize,
@@ -49,6 +49,7 @@ import {
   isDesktopOnboardingCompletedSource,
   isDesktopWorktreeStorageLocation,
   isDesktopUpdateChannel,
+  isDesktopUpdateTrain,
   sanitizeMessagingContactHandle,
   sanitizeMessagingContactLabel,
 } from "@pwragent/shared";
@@ -132,6 +133,7 @@ export type DesktopSettingsConfig = {
   };
   updates?: {
     channel?: DesktopUpdateChannel;
+    train?: DesktopUpdateTrain;
   };
   integratedTerminal?: {
     windowsShell?: DesktopIntegratedTerminalWindowsShell;
@@ -826,14 +828,14 @@ export function desktopSettingsPatchToEdits(
   }
 
   if (patch.updates?.channel !== undefined) {
-    if (patch.updates.channel === DESKTOP_UPDATE_CHANNEL_DEFAULT) {
-      edits.push({
-        op: "delete",
-        path: ["updates", "channel"],
-      });
-    } else {
-      set(["updates", "channel"], patch.updates.channel);
-    }
+    // Persist Latest/Stable too. A Beta/alpha binary infers those keys when
+    // they are absent, so deleting the default would put the operator back
+    // on the downloaded train after they chose Stable.
+    set(["updates", "channel"], patch.updates.channel);
+  }
+
+  if (patch.updates?.train !== undefined) {
+    set(["updates", "train"], patch.updates.train);
   }
 
   if (patch.integratedTerminal?.windowsShell !== undefined) {
@@ -1654,6 +1656,7 @@ function normalizeDesktopConfig(
     },
     updates: {
       channel: readUpdateChannel(updates?.channel),
+      train: readUpdateTrain(updates?.train),
     },
     integratedTerminal: {
       windowsShell: readIntegratedTerminalWindowsShell(
@@ -2230,6 +2233,14 @@ function readUpdateChannel(
   value: TomlScalar | undefined,
 ): DesktopUpdateChannel | undefined {
   return typeof value === "string" && isDesktopUpdateChannel(value)
+    ? value
+    : undefined;
+}
+
+function readUpdateTrain(
+  value: TomlScalar | undefined,
+): DesktopUpdateTrain | undefined {
+  return typeof value === "string" && isDesktopUpdateTrain(value)
     ? value
     : undefined;
 }

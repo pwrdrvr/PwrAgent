@@ -7,6 +7,7 @@ import type {
   DesktopSettingsSnapshot,
   DesktopMessagingImageProfile,
   DesktopUpdateChannel,
+  DesktopUpdateTrain,
   MessagingChannelKind,
 } from "@pwragent/shared";
 import type { AppearanceController } from "../../lib/useAppearance";
@@ -395,6 +396,11 @@ function SettingsSectionBody(props: {
         onUpdateChannelChange={async (channel: DesktopUpdateChannel) => {
           await props.settings.writeConfig({
             updates: { channel },
+          });
+        }}
+        onUpdateTrainChange={async (train: DesktopUpdateTrain) => {
+          await props.settings.writeConfig({
+            updates: { train },
           });
         }}
         onPastedImageMaxPatchesChange={async (pastedImageMaxPatches) => {
