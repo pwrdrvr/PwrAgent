@@ -1532,17 +1532,17 @@ describe("app server ipc", () => {
       expect(status).toMatchObject({
         autoFixActive: true,
         guidance: expect.stringContaining(
-          "this does not mean another agent is repairing the PR",
+          "Reading this status did not start or convert the current turn into a repair turn",
         ),
       });
       expect(status?.guidance).toContain(
-        "you are the repair turn: investigate and fix only the reported failure",
+        "current turn is a repair turn only if PwrAgent started it with an Auto-fix PR event",
+      );
+      expect(status?.guidance).toContain(
+        "investigate and fix only the reported failure",
       );
       expect(status?.guidance).toContain(
         "validate, commit, and push the fix to the PR branch",
-      );
-      expect(status?.guidance).toContain(
-        "Do not stop merely because autoFixActive is true",
       );
       expect(status?.guidance).toContain(
         "review findings the user did not ask this turn to address",
@@ -1562,10 +1562,12 @@ describe("app server ipc", () => {
       expect(status).toMatchObject({
         autoFixActive: true,
         guidance: expect.stringContaining(
-          "does not authorize the current turn to repair that thread's PR",
+          "never authorizes the current turn to repair that thread's PR",
         ),
       });
-      expect(status?.guidance).not.toContain("you are the repair turn");
+      expect(status?.guidance).toContain(
+        "Reading this status did not start or convert the current turn into a repair turn",
+      );
     });
   });
 

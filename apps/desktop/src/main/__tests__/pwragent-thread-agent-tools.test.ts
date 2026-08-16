@@ -49,10 +49,13 @@ describe("PwrAgent thread agent tools", () => {
       (tool) => tool.name === "get_thread_status",
     );
     expect(getThreadStatus?.description).toContain(
-      "not that another agent is repairing it",
+      "Reading this status does not start or convert an Auto-fix repair turn",
     );
     expect(getThreadStatus?.description).toContain(
-      "If Auto-fix started this thread's current turn, continue only the reported repair",
+      "autoFixActive only reports whether the inspected thread owns automatic monitoring",
+    );
+    expect(getThreadStatus?.description).toContain(
+      "The current turn is a repair turn only when PwrAgent started it with an Auto-fix PR event",
     );
     expect(getThreadStatus?.description).toContain(
       "When it is false, do not assume PwrAgent will dispatch a repair turn",
@@ -61,10 +64,13 @@ describe("PwrAgent thread agent tools", () => {
       (tool) => tool.name === "check_thread_pull_request_status",
     );
     expect(checkPullRequestStatus?.description).toContain(
-      "not that another agent is repairing it",
+      "Calling this tool does not start or convert an Auto-fix repair turn",
     );
     expect(checkPullRequestStatus?.description).toContain(
-      "Ignore unrelated prior context unless the user explicitly added it to this turn",
+      "Monitoring ownership does not mean another agent is repairing the PR",
+    );
+    expect(checkPullRequestStatus?.description).toContain(
+      "During such a turn, continue only the reported repair and ignore unrelated prior context",
     );
     expect(checkPullRequestStatus?.description).toContain(
       "When it is false, do not assume PwrAgent will dispatch a repair turn",
