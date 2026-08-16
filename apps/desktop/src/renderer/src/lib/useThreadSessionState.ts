@@ -1252,7 +1252,8 @@ function getThreadHydrationVersion(
 function pruneOptimisticEntries(
   optimisticEntries: AppServerThreadEntry[],
   response: AppServerReadThreadResponse | undefined,
-  reconciledLaunchpadMessageId?: string
+  reconciledLaunchpadMessageId?: string,
+  launchpadMessageCandidate?: LaunchpadMessageCandidate,
 ): AppServerThreadEntry[] {
   if (!response) {
     return optimisticEntries;
@@ -1262,6 +1263,19 @@ function pruneOptimisticEntries(
   const latestResponseCreatedAt = latestTranscriptCreatedAt(response.replay.entries);
   return optimisticEntries.filter((entry) => {
     if (entry.type === "message") {
+      const isLaunchpadPlaceholder =
+        entry.id === launchpadMessageCandidate?.entry.id;
+      if (isLaunchpadPlaceholder && launchpadMessageCandidate) {
+        return !response.replay.entries.some(
+          (candidate) =>
+            candidate.type === "message"
+            && candidate.id !== reconciledLaunchpadMessageId
+            && matchesAuthoritativeLaunchpadMessage(
+              candidate,
+              launchpadMessageCandidate,
+            )
+        );
+      }
       return !response.replay.messages.some((message) =>
         message.id !== reconciledLaunchpadMessageId
         && messageMatchesOptimisticEntry(message, entry, {
@@ -4561,6 +4575,9 @@ export function useThreadSessionState(params: {
               current.optimisticEntries,
               responseWithRetainedTail,
               reconciledLaunchpadMessageIdsRef.current[targetThreadKey],
+              launchpadMessageCandidateRef.current?.threadKey === targetThreadKey
+                ? launchpadMessageCandidateRef.current.candidate
+                : undefined,
             ),
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
@@ -5390,14 +5407,37 @@ export function useThreadSessionState(params: {
             event.notification.params
           );
           if (userMessageEntry) {
+            const launchpadMessageCandidate =
+              launchpadMessageCandidateRef.current?.threadKey === targetThreadKey
+                ? launchpadMessageCandidateRef.current.candidate
+                : undefined;
+            const unreconciledLaunchpadMessageCandidate =
+              reconciledLaunchpadMessageIdsRef.current[targetThreadKey]
+                === undefined
+                ? launchpadMessageCandidate
+                : undefined;
+            const reconcilesLaunchpadMessage = Boolean(
+              unreconciledLaunchpadMessageCandidate
+              && matchesAuthoritativeLaunchpadMessage(
+                userMessageEntry,
+                unreconciledLaunchpadMessageCandidate,
+              )
+            );
             const completedUserMessageEntry =
               mergeCompletedUserMessageWithPromotedOptimisticEntry(
                 mergeCompletedUserMessageWithOptimisticEntry(
                   userMessageEntry,
-                  current.optimisticEntries
+                  reconcilesLaunchpadMessage
+                    && unreconciledLaunchpadMessageCandidate
+                    ? [unreconciledLaunchpadMessageCandidate.entry]
+                    : current.optimisticEntries
                 ),
                 current.response
               );
+            if (reconcilesLaunchpadMessage) {
+              reconciledLaunchpadMessageIdsRef.current[targetThreadKey] =
+                completedUserMessageEntry.id;
+            }
             const nextResponse = appendMessageEntries(
               removePromotedOptimisticUserMessage(
                 current.response,
@@ -5415,11 +5455,22 @@ export function useThreadSessionState(params: {
               expectOwnUpdate: true,
               interacted: true,
               lastTouchedAt: nextLastTouchedAt,
-              optimisticEntries: current.optimisticEntries.filter(
-                (entry) =>
-                  entry.type !== "message" ||
-                  !messageTextMatchesOptimisticEntry(completedUserMessageEntry, entry)
-              ),
+              optimisticEntries:
+                reconcilesLaunchpadMessage
+                  && unreconciledLaunchpadMessageCandidate
+                  ? current.optimisticEntries.filter(
+                      (entry) =>
+                        entry.id !== unreconciledLaunchpadMessageCandidate.entry.id
+                    )
+                  : current.optimisticEntries.filter(
+                      (entry) =>
+                        entry.id === unreconciledLaunchpadMessageCandidate?.entry.id
+                        || entry.type !== "message"
+                        || !messageTextMatchesOptimisticEntry(
+                          completedUserMessageEntry,
+                          entry,
+                        )
+                    ),
               response: nextResponse,
             };
           }
@@ -6356,71 +6407,24 @@ export function useThreadSessionState(params: {
         return;
       }
 
-      const launchpadMessageCandidate =
-        launchpadMessageCandidateRef.current?.threadKey === threadKey
-          ? launchpadMessageCandidateRef.current.candidate
-          : undefined;
-      let matchingLaunchpadMessageCandidate: LaunchpadMessageCandidate | undefined;
-      let retainedEntry = entry;
-      if (
-        entry.type === "message"
-        && entry.role === "user"
-        && launchpadMessageCandidate !== undefined
-        && reconciledLaunchpadMessageIdsRef.current[threadKey] === undefined
-        && matchesAuthoritativeLaunchpadMessage(
-          entry,
-          launchpadMessageCandidate,
-        )
-      ) {
-        matchingLaunchpadMessageCandidate = launchpadMessageCandidate;
-        retainedEntry = mergeCompletedUserMessageWithOptimisticEntry(
-          entry,
-          [launchpadMessageCandidate.entry],
-        );
-      }
-      if (matchingLaunchpadMessageCandidate) {
-        reconciledLaunchpadMessageIdsRef.current[threadKey] = retainedEntry.id;
-      }
-
       const retainedLiveEntryStore =
         retainedLiveEntriesRef.current[threadKey]
         ?? new Map<string, AppServerThreadEntry>();
       retainedLiveEntriesRef.current[threadKey] = retainedLiveEntryStore;
-      const entryId = retainedEntry.id;
-      const retainedEntryUnchanged =
-        retainedLiveEntryStore.get(entryId) === retainedEntry;
-      if (retainedEntryUnchanged && !matchingLaunchpadMessageCandidate) {
+      const entryId = entry.id;
+      if (retainedLiveEntryStore.get(entryId) === entry) {
         return;
       }
-      if (!retainedEntryUnchanged) {
-        retainedLiveEntryStore.set(entryId, retainedEntry);
-      }
+      retainedLiveEntryStore.set(entryId, entry);
 
-      updateSession(threadKey, (current) => {
-        const optimisticEntries = matchingLaunchpadMessageCandidate
-          ? current.optimisticEntries.filter(
-              (optimisticEntry) =>
-                optimisticEntry.id !== matchingLaunchpadMessageCandidate.entry.id
-            )
-          : current.optimisticEntries;
-        if (
-          retainedEntryUnchanged
-          && optimisticEntries === current.optimisticEntries
-        ) {
-          return current;
-        }
-        return {
-          ...current,
-          expectOwnUpdate: true,
-          interacted: true,
-          lastTouchedAt: Date.now(),
-          optimisticEntries,
-          retainedLiveEntryCount: retainedLiveEntryStore.size,
-          retainedLiveEntryVersion:
-            current.retainedLiveEntryVersion
-            + (retainedEntryUnchanged ? 0 : 1),
-        };
-      });
+      updateSession(threadKey, (current) => ({
+        ...current,
+        expectOwnUpdate: true,
+        interacted: true,
+        lastTouchedAt: Date.now(),
+        retainedLiveEntryCount: retainedLiveEntryStore.size,
+        retainedLiveEntryVersion: current.retainedLiveEntryVersion + 1,
+      }));
     },
     [threadKey, updateSession]
   );
@@ -6663,8 +6667,14 @@ export function useThreadSessionState(params: {
       threadKey
         ? reconciledLaunchpadMessageIdsRef.current[threadKey]
         : undefined,
+      launchpadMessageCandidate,
     ),
-    [selectedSession?.optimisticEntries, selectedSession?.response, threadKey],
+    [
+      launchpadMessageCandidate,
+      selectedSession?.optimisticEntries,
+      selectedSession?.response,
+      threadKey,
+    ],
   );
   const visibleOptimisticEntries = useMemo(
     () => selectedRetainedLiveEntries.length > 0
