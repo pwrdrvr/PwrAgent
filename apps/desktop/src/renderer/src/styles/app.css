@@ -15413,13 +15413,26 @@ a.transcript-message__messaging-origin:focus-visible {
   border-right: 0;
 }
 
+/* Hover is a neutral wash: it must not look like selection, or the selected
+   column appears to vanish the moment the pointer leaves it. */
+.incident-explorer__timeline-turn:hover {
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+/* Selection has to survive at rest and be findable among hundreds of 1px
+   columns, so it carries an accent ring and a real tint rather than the 12%
+   wash that was invisible on black. The minimum width keeps a selected column
+   clickable and locatable when the thread is long enough to compress every
+   column to a hairline. */
+.incident-explorer__timeline-turn[aria-pressed="true"] {
+  min-width: 3px;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
 .incident-explorer__timeline-turn:hover .incident-explorer__timeline-tokens i,
 .incident-explorer__timeline-turn[aria-pressed="true"] .incident-explorer__timeline-tokens i {
   background: var(--accent-strong);
-}
-
-.incident-explorer__timeline-turn[aria-pressed="true"] {
-  background: var(--accent-soft);
 }
 
 .incident-explorer__timeline-tokens {

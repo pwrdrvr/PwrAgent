@@ -547,3 +547,32 @@ describe("ToolOutputIncidentExplorerWindow federation", () => {
     );
   });
 });
+
+describe("turn selection is shared across both turn controls", () => {
+  it("marks the spark column selected when a strip row selects the turn", async () => {
+    /* The two controls were bound to one filter but only the strip rendered
+       it: clicking a spark column toggled the strip's selection while the
+       column itself stayed unmarked, so it read as a dead control. */
+    installApi({ readThread: async () => buildMultiTurnResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const turns = await screen.findByLabelText("Cost by turn");
+    const timeline = screen.getByRole("group", {
+      name: "Tool cost per turn, in order",
+    });
+    const sparkColumns = within(timeline).getAllByRole("button");
+    expect(sparkColumns.every((column) =>
+      column.getAttribute("aria-pressed") === "false")).toBe(true);
+
+    fireEvent.click(within(turns).getByRole("button", { name: /Turn 2/ }));
+
+    await waitFor(() => expect(
+      within(timeline).getAllByRole("button", { name: /Turn 2/ })[0],
+    ).toHaveAttribute("aria-pressed", "true"));
+    /* And only that one. */
+    expect(within(timeline).getAllByRole("button")
+      .filter((column) => column.getAttribute("aria-pressed") === "true"))
+      .toHaveLength(1);
+  });
+});

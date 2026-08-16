@@ -699,8 +699,12 @@ function DesktopAppShell(props: {
           threadId: params.threadId,
         });
         /* Persisted disposition wins over anything this session inferred: it
-           may predate this renderer entirely. */
-        if (params.incidentNotice) {
+           may predate this renderer entirely. Only for a local thread, though:
+           the notification is filled from the overlay of whichever instance
+           owns the thread, and a peer's dismissal is the peer operator's
+           preference, not this viewer's. Adopting it would silently stop
+           warning a viewer who never asked to stop being warned. */
+        if (params.incidentNotice && !event.federationTarget) {
           toolIncidentStateRef.current.set(noticeId, {
             ...toolIncidentStateRef.current.get(noticeId),
             ...params.incidentNotice,

@@ -267,6 +267,11 @@ export function ToolOutputIncidentExplorerWindow() {
       if (canSteerSelected && selected.turnId) {
         await desktopApi?.steerTurn?.({
           backend: route.backend,
+          /* Steering a peer's turn has to reach the peer, the same way this
+             window's reads do. */
+          ...(route.federationTarget
+            ? { federationTarget: route.federationTarget }
+            : {}),
           expectedTurnId: selected.turnId,
           input: [{ type: "text", text: prompt.trim() }],
           requestId: `tool-output-incident:${selected.invocationId}:${Date.now()}`,
@@ -277,6 +282,9 @@ export function ToolOutputIncidentExplorerWindow() {
       } else if (canSendAsNewTurn) {
         await desktopApi?.startTurn?.({
           backend: route.backend,
+          ...(route.federationTarget
+            ? { federationTarget: route.federationTarget }
+            : {}),
           input: [{ type: "text", text: prompt.trim() }],
           threadId: route.threadId,
         });
@@ -318,6 +326,9 @@ export function ToolOutputIncidentExplorerWindow() {
               title: route.title,
             }}
             onOpen={() => {
+              /* No federation target: `WindowShowThreadRequest` has none, and
+                 the main-process handler routes to this window's own owner.
+                 Passing one would be silently dropped by the spread. */
               void desktopApi?.showThreadFromToolOutputIncidentExplorer?.({
                 backend: route.backend,
                 threadId: route.threadId,
