@@ -290,6 +290,43 @@ describe("sqlite write budgets", () => {
     }
   });
 
+  it("repairs a thread pricing history in one transaction", async () => {
+    for (let index = 0; index < 25; index += 1) {
+      await store.upsertThreadUsageLine({
+        line: buildUnpricedGrokUsageLine(index),
+      });
+    }
+    stateDb.raw
+      .prepare(
+        `UPDATE thread_usage_lines
+         SET model = 'grok-4.6-build'
+         WHERE thread_id = 'thread-pricing-repair'`,
+      )
+      .run();
+
+    const { writes } = await meter.measure(async () => {
+      const pricing = await store.readThreadPricing({
+        backend: "acp:grok",
+        threadId: "thread-pricing-repair",
+      });
+      expect(pricing.lines).toHaveLength(25);
+      expect(
+        pricing.lines.every((line) => line.priceStatus === "priced"),
+      ).toBe(true);
+      await store.readThreadPricing({
+        backend: "acp:grok",
+        threadId: "thread-pricing-repair",
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note:
+        "one thread load lazily reprices 25 usage rows in ten-row progress batches; a second load is read-only",
+      scenario: "thread-pricing-lazy-repair",
+      writes,
+    });
+  });
+
   it("requeues a failed usage batch without overwriting a newer snapshot", async () => {
     vi.useFakeTimers();
     const firstWriteStarted = createDeferred();
@@ -579,6 +616,39 @@ function buildHydratedUsageReplay(params: {
       hasPreviousPage: false,
       supportsPagination: false,
     },
+  };
+}
+
+function buildUnpricedGrokUsageLine(index: number): ThreadUsageLineRecord {
+  const createdAt = Date.UTC(2026, 7, 15) + index;
+  return {
+    backend: "acp:grok",
+    cachedInputCostMicros: 0,
+    cachedInputTokens: 315_776,
+    createdAt,
+    currency: "USD",
+    inputTokens: 316_222,
+    model: "unknown-grok-model",
+    outputCostMicros: 0,
+    outputTokens: 121,
+    priceStatus: "unpriced",
+    priceUnavailableReason: "missing-rate",
+    provider: "openai",
+    reasoningEffort: "high",
+    reasoningOutputTokens: 50,
+    scope: "turn",
+    settingsConfidence: "exact",
+    settingsSource: "turn-context",
+    source: "hydration",
+    sourceItemId: `item-pricing-repair-${index}`,
+    status: "finalized",
+    threadId: "thread-pricing-repair",
+    totalCostMicros: 0,
+    totalTokens: 316_343,
+    turnId: `turn-pricing-repair-${index}`,
+    uncachedInputCostMicros: 0,
+    uncachedInputTokens: 446,
+    usageLineId: `line-pricing-repair-${index}`,
   };
 }
 

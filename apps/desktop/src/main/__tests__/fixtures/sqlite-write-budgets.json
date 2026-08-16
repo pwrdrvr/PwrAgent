@@ -26,5 +26,12 @@
     "observedWalBytes": 37080,
     "rowsChanged": 2,
     "statements": 2
+  },
+  "thread-pricing-lazy-repair": {
+    "commits": 1,
+    "note": "one thread load lazily reprices 25 usage rows in ten-row progress batches; a second load is read-only",
+    "observedWalBytes": 49440,
+    "rowsChanged": 27,
+    "statements": 27
   }
 }

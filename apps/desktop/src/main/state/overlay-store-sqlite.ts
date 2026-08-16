@@ -52,6 +52,8 @@ import {
 } from "@pwragent/shared";
 import type { StateDb } from "./state-db.js";
 
+const THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE = 10;
+
 export type DirectoryGitStatusCacheEntry = {
   directoryKey: string;
   directoryPath?: string;
@@ -1227,6 +1229,48 @@ export class SqliteOverlayStore {
         params.threadId,
         params.threadId,
       ) as ThreadUsageLineRow[];
+
+    // Pricing catalogs can gain rates without changing sqlite's schema. When
+    // the newest card is unpriced, lazily retry this thread in ten-row groups.
+    // A group with no repairs stops the scan, so permanently unknown histories
+    // cost one bounded read rather than a full-ledger walk on every load.
+    if (lineRows[0]?.price_status === "unpriced") {
+      const repairs: Array<{
+        existing: ThreadUsageLineRow;
+        repaired: ThreadUsageLineRecord;
+      }> = [];
+      for (
+        let offset = 0;
+        offset < lineRows.length;
+        offset += THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE
+      ) {
+        const batch = lineRows.slice(
+          offset,
+          offset + THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE,
+        );
+        let repairedInBatch = 0;
+        for (const row of batch) {
+          if (row.price_status === "priced") {
+            continue;
+          }
+          const repaired = repriceTokenUsageLine(threadUsageLineFromRow(row));
+          if (repaired.priceStatus !== "priced") {
+            continue;
+          }
+          repairs.push({ existing: row, repaired });
+          repairedInBatch += 1;
+        }
+        if (repairedInBatch === 0) {
+          break;
+        }
+      }
+
+      if (repairs.length > 0) {
+        this.persistThreadUsagePricingRepairsSync(repairs);
+        return this.readThreadPricing(params);
+      }
+    }
+
     const summaryRows = this.stateDb.raw
       .prepare(
         `SELECT * FROM thread_pricing_summaries
@@ -1242,6 +1286,98 @@ export class SqliteOverlayStore {
       lines,
       summaries: summaryRows.map(threadPricingSummaryFromRow),
     };
+  }
+
+  private persistThreadUsagePricingRepairsSync(
+    repairs: Array<{
+      existing: ThreadUsageLineRow;
+      repaired: ThreadUsageLineRecord;
+    }>,
+  ): void {
+    const now = Date.now();
+    const updateLine = this.stateDb.raw.prepare(
+      `UPDATE thread_usage_lines
+       SET
+         price_status = @priceStatus,
+         price_unavailable_reason = @priceUnavailableReason,
+         currency = @currency,
+         pricing_catalog_id = @pricingCatalogId,
+         pricing_catalog_version = @pricingCatalogVersion,
+         pricing_rate_id = @pricingRateId,
+         uncached_input_cost_micros = @uncachedInputCostMicros,
+         cached_input_cost_micros = @cachedInputCostMicros,
+         output_cost_micros = @outputCostMicros,
+         provider = @provider,
+         total_cost_micros = @totalCostMicros,
+         updated_at = @updatedAt
+       WHERE usage_line_id = @usageLineId
+         AND price_status != 'priced'`,
+    );
+    const summaryTargets = new Map<
+      string,
+      {
+        backend: string;
+        currency: string;
+        provider: string;
+        threadId: string;
+        updatedAt: number;
+      }
+    >();
+    const queueSummary = (target: {
+      backend: string;
+      currency: string;
+      provider: string;
+      threadId: string;
+      updatedAt: number;
+    }): void => {
+      summaryTargets.set(
+        JSON.stringify([
+          target.provider,
+          target.backend,
+          target.threadId,
+          target.currency,
+        ]),
+        target,
+      );
+    };
+
+    this.stateDb.raw.transaction(() => {
+      for (const { existing, repaired } of repairs) {
+        updateLine.run({
+          cachedInputCostMicros: repaired.cachedInputCostMicros,
+          currency: repaired.currency,
+          outputCostMicros: repaired.outputCostMicros,
+          priceStatus: repaired.priceStatus,
+          priceUnavailableReason: repaired.priceUnavailableReason ?? null,
+          pricingCatalogId: repaired.pricingCatalogId ?? null,
+          pricingCatalogVersion: repaired.pricingCatalogVersion ?? null,
+          pricingRateId: repaired.pricingRateId ?? null,
+          provider: repaired.provider,
+          totalCostMicros: repaired.totalCostMicros,
+          uncachedInputCostMicros: repaired.uncachedInputCostMicros,
+          updatedAt: now,
+          usageLineId: repaired.usageLineId,
+        });
+        const threadId = repaired.parentThreadId ?? repaired.threadId;
+        queueSummary({
+          backend: existing.backend,
+          currency: existing.currency,
+          provider: existing.provider,
+          threadId: existing.parent_thread_id ?? existing.thread_id,
+          updatedAt: now,
+        });
+        queueSummary({
+          backend: repaired.backend,
+          currency: repaired.currency,
+          provider: repaired.provider,
+          threadId,
+          updatedAt: now,
+        });
+      }
+      for (const target of summaryTargets.values()) {
+        this.recomputeThreadPricingSummarySync(target);
+      }
+    })();
   }
 
   async upsertThreadToolInvocation(params: {

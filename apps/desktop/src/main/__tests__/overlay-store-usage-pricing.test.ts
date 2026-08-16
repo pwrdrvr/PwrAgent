@@ -876,8 +876,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       priceStatus: "priced",
       pricingCatalogId: "xai-api",
       pricingCatalogVersion: "2026-08-12",
-      pricingRateId:
-        "xai:2026-08-12:grok-4.6:standard:input-lt-200k",
+      pricingRateId: "xai:2026-08-12:grok-4.6:standard",
       provider: "xai",
       totalCostMicros: 312_322,
     });
@@ -890,7 +889,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
-  it("leaves ambiguous Grok 4.6 long-context turn aggregates unpriced", async () => {
+  it("prices Grok 4.6 build turn aggregates above 200K at the account rate", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
         backend: "acp:grok",
@@ -898,7 +897,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
         completedAt: Date.UTC(2026, 7, 15),
         createdAt: Date.UTC(2026, 7, 15),
         inputTokens: 255_459,
-        model: "grok-4.6",
+        model: "grok-4.6-build",
         outputTokens: 266,
         priceStatus: "unpriced",
         priceUnavailableReason: "missing-rate",
@@ -920,20 +919,88 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
 
     expect(pricing.lines[0]).toMatchObject({
-      priceStatus: "unpriced",
-      priceUnavailableReason: "missing-rate",
+      priceStatus: "priced",
+      pricingCatalogId: "xai-api",
+      pricingCatalogVersion: "2026-08-12",
+      pricingRateId: "xai:2026-08-12:grok-4.6:standard",
       provider: "xai",
-      totalCostMicros: 0,
+      totalCostMicros: 512_322,
     });
-    expect(pricing.lines[0]?.pricingCatalogId).toBeUndefined();
-    expect(pricing.lines[0]?.pricingCatalogVersion).toBeUndefined();
-    expect(pricing.lines[0]?.pricingRateId).toBeUndefined();
+    expect(pricing.lines[0]?.priceUnavailableReason).toBeUndefined();
     expect(pricing.summaries[0]).toMatchObject({
-      pricedUsageLineCount: 0,
+      pricedUsageLineCount: 1,
       provider: "xai",
-      totalCostMicros: 0,
-      unpricedUsageLineCount: 1,
+      totalCostMicros: 512_322,
+      unpricedUsageLineCount: 0,
     });
+  });
+
+  it("lazily reprices older rows in groups of ten while each group makes progress", async () => {
+    await seedUnpricedGrokUsageLines({ count: 25, idPrefix: "lazy" });
+    stateDb.raw
+      .prepare(
+        `UPDATE thread_usage_lines
+         SET model = 'grok-4.6-build'
+         WHERE thread_id = 'thread-1'`,
+      )
+      .run();
+
+    const pricing = await store.readThreadPricing({
+      backend: "acp:grok",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines).toHaveLength(25);
+    expect(
+      pricing.lines.every((line) => line.priceStatus === "priced"),
+    ).toBe(true);
+    expect(
+      pricing.lines.every(
+        (line) =>
+          line.pricingRateId === "xai:2026-08-12:grok-4.6:standard",
+      ),
+    ).toBe(true);
+    expect(pricing.summaries).toEqual([
+      expect.objectContaining({
+        pricedUsageLineCount: 25,
+        provider: "xai",
+        totalCostMicros: 3_987_650,
+        unpricedUsageLineCount: 0,
+      }),
+    ]);
+  });
+
+  it("stops lazy repricing after ten consecutive rows make no progress", async () => {
+    await seedUnpricedGrokUsageLines({ count: 20, idPrefix: "stop" });
+    stateDb.raw
+      .prepare(
+        `UPDATE thread_usage_lines
+         SET model = 'grok-4.6-build'
+         WHERE usage_line_id IN (
+           SELECT usage_line_id
+           FROM thread_usage_lines
+           ORDER BY created_at ASC
+           LIMIT 10
+         )`,
+      )
+      .run();
+
+    const pricing = await store.readThreadPricing({
+      backend: "acp:grok",
+      threadId: "thread-1",
+    });
+
+    expect(
+      pricing.lines
+        .filter((line) => line.model === "grok-4.6-build")
+        .every((line) => line.priceStatus === "unpriced"),
+    ).toBe(true);
+    expect(pricing.summaries).toEqual([
+      expect.objectContaining({
+        pricedUsageLineCount: 0,
+        unpricedUsageLineCount: 20,
+      }),
+    ]);
   });
 
   it("reprices persisted Qwen ACP usage under the Qwen provider", async () => {
@@ -1258,4 +1325,39 @@ function buildUsageLine(
     usageLineId: "line-1",
     ...overrides,
   };
+}
+
+async function seedUnpricedGrokUsageLines(params: {
+  count: number;
+  idPrefix: string;
+}): Promise<void> {
+  const createdAt = Date.UTC(2026, 7, 15);
+  for (let index = 0; index < params.count; index += 1) {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        backend: "acp:grok",
+        cachedInputCostMicros: 0,
+        cachedInputTokens: 315_776,
+        createdAt: createdAt + index,
+        inputTokens: 316_222,
+        model: "unknown-grok-model",
+        outputCostMicros: 0,
+        outputTokens: 121,
+        priceStatus: "unpriced",
+        priceUnavailableReason: "missing-rate",
+        pricingCatalogId: undefined,
+        pricingCatalogVersion: undefined,
+        pricingRateId: undefined,
+        provider: "openai",
+        reasoningOutputTokens: 50,
+        sourceItemId: `item-${params.idPrefix}-${index}`,
+        totalCostMicros: 0,
+        totalTokens: 316_343,
+        turnId: `turn-${params.idPrefix}-${index}`,
+        uncachedInputCostMicros: 0,
+        uncachedInputTokens: 446,
+        usageLineId: `line-${params.idPrefix}-${index}`,
+      }),
+    });
+  }
 }

@@ -290,7 +290,6 @@ describe("token usage pricing", () => {
     const cost = estimateTokenUsageCost({
       at: Date.UTC(2026, 7, 15),
       cachedInputTokens: 128,
-      inputTokensAreSingleRequest: true,
       model: "grok-4.6",
       outputTokens: 266,
       reasoningOutputTokens: 130,
@@ -298,22 +297,22 @@ describe("token usage pricing", () => {
     });
 
     expect(cost).toMatchObject({
-      cachedInputCostMicros: 128,
-      cachedInputUsdPerMillion: 1,
+      cachedInputCostMicros: 64,
+      cachedInputUsdPerMillion: 0.5,
       catalogId: "xai-api",
       catalogVersion: "2026-08-12",
-      displayName: "Grok 4.6 Standard (>=200K input)",
-      inputUsdPerMillion: 4,
+      displayName: "Grok 4.6 Standard",
+      inputUsdPerMillion: 2,
       model: "grok-4.6",
-      outputCostMicros: 3_192,
+      outputCostMicros: 1_596,
       outputTokensIncludeReasoning: true,
-      outputUsdPerMillion: 12,
+      outputUsdPerMillion: 6,
       provider: "xai",
-      rateId: "xai:2026-08-12:grok-4.6:standard:input-gte-200k",
+      rateId: "xai:2026-08-12:grok-4.6:standard",
       serviceTier: "standard",
-      totalCostMicros: 1_024_644,
-      totalUsd: 1.024644,
-      uncachedInputCostMicros: 1_021_324,
+      totalCostMicros: 512_322,
+      totalUsd: 0.512322,
+      uncachedInputCostMicros: 510_662,
     });
   });
 
@@ -330,33 +329,32 @@ describe("token usage pricing", () => {
       cachedInputUsdPerMillion: 0.5,
       inputUsdPerMillion: 2,
       outputUsdPerMillion: 6,
-      rateId: "xai:2026-08-12:grok-4.6:standard:input-lt-200k",
+      rateId: "xai:2026-08-12:grok-4.6:standard",
       totalCostMicros: 725_000,
     });
   });
 
-  it("requires single-request evidence for Grok 4.6 long-context pricing", () => {
-    const estimateAtInputTokens = (
-      inputTokens: number,
-      inputTokensAreSingleRequest?: boolean,
-    ) =>
+  it("prices the Grok 4.6 ACP build alias above 200K at the account usage rate", () => {
+    expect(
       estimateTokenUsageCost({
         at: Date.UTC(2026, 7, 15),
-        cachedInputTokens: 0,
-        inputTokensAreSingleRequest,
-        model: "grok-4.6",
-        outputTokens: 0,
-        uncachedInputTokens: inputTokens,
-      });
-
-    expect(estimateAtInputTokens(199_999)).toMatchObject({
+        cachedInputTokens: 315_776,
+        model: "grok-4.6-build",
+        outputTokens: 121,
+        reasoningOutputTokens: 50,
+        uncachedInputTokens: 446,
+      }),
+    ).toMatchObject({
+      cachedInputCostMicros: 157_888,
+      cachedInputUsdPerMillion: 0.5,
       inputUsdPerMillion: 2,
-      rateId: "xai:2026-08-12:grok-4.6:standard:input-lt-200k",
-    });
-    expect(estimateAtInputTokens(200_000)).toBeUndefined();
-    expect(estimateAtInputTokens(200_000, true)).toMatchObject({
-      inputUsdPerMillion: 4,
-      rateId: "xai:2026-08-12:grok-4.6:standard:input-gte-200k",
+      model: "grok-4.6-build",
+      outputCostMicros: 726,
+      outputTokensIncludeReasoning: true,
+      outputUsdPerMillion: 6,
+      rateId: "xai:2026-08-12:grok-4.6:standard",
+      totalCostMicros: 159_506,
+      uncachedInputCostMicros: 892,
     });
   });
 
@@ -494,27 +492,17 @@ describe("token usage pricing", () => {
         cachedInputUsdPerMillion: 0.5,
         catalogId: "xai-api",
         catalogVersion: "2026-08-12",
-        displayName: "Grok 4.6 Standard (<200K input)",
+        displayName: "Grok 4.6 Standard",
         inputUsdPerMillion: 2,
         model: "grok-4.6",
         outputUsdPerMillion: 6,
         provider: "xai",
-        rateId: "xai:2026-08-12:grok-4.6:standard:input-lt-200k",
+        rateId: "xai:2026-08-12:grok-4.6:standard",
       }),
     );
-    expect(listTokenUsagePricingRates()).toContainEqual(
-      expect.objectContaining({
-        cachedInputUsdPerMillion: 1,
-        catalogId: "xai-api",
-        catalogVersion: "2026-08-12",
-        displayName: "Grok 4.6 Standard (>=200K input)",
-        inputUsdPerMillion: 4,
-        model: "grok-4.6",
-        outputUsdPerMillion: 12,
-        provider: "xai",
-        rateId: "xai:2026-08-12:grok-4.6:standard:input-gte-200k",
-      }),
-    );
+    expect(
+      listTokenUsagePricingRates().filter((rate) => rate.model === "grok-4.6"),
+    ).toHaveLength(1);
     expect(listTokenUsagePricingRates()).toContainEqual(
       expect.objectContaining({
         cachedInputUsdPerMillion: 0.3,
