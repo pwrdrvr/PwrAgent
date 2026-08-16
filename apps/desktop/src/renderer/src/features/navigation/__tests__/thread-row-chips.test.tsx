@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -59,6 +62,88 @@ afterEach(() => {
   endNativeDragInteraction();
   vi.restoreAllMocks();
 });
+
+// ---------------------------------------------------------------------------
+// Chip scale
+//
+// Chips in the row's flow run one step smaller than the shared `.chip` pill
+// primitive (20px against 24px), because 24px pills under the 13px titles read
+// as the bulkiest thing on the card. That step is applied by a selector list
+// in app.css, so a chip that reaches the flow through a class the list does
+// not name keeps the full-size primitive and stands taller than every
+// neighbour. `.pr-chip` needed its own line for exactly that reason; the
+// federation instance chip (`.chip.chip--instance`, shared with the ⌘K
+// palette and the Star Map) is the same shape of miss.
+//
+// jsdom applies no stylesheet to a rendered tree, so the height is resolved
+// here out of app.css against each chip's REAL class list — which is what
+// makes this a test of the row rather than a restatement of the CSS. It stays
+// true if a component switches primitives, and it covers chips added later
+// without naming them.
+// ---------------------------------------------------------------------------
+const appCss = readFileSync(
+  path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../../styles/app.css",
+  ),
+  "utf8",
+);
+
+type ChipHeightRule = { classes: string[]; height: string; scoped: boolean };
+
+/**
+ * Top-level rules that set a `height` and whose selector is a plain class
+ * chain, optionally scoped under `.thread-row__chips`. That is the whole
+ * shape of the chip-size cascade; anything more exotic (`:hover`, attribute
+ * scopes, at-rules) is deliberately out of scope rather than half-modelled.
+ */
+function parseChipHeightRules(css: string): ChipHeightRule[] {
+  const source = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  const rules: ChipHeightRule[] = [];
+
+  for (const match of source.matchAll(/(?:^|\n)(\.[^{}]*?)\{([^{}]*)\}/g)) {
+    const height = match[2]!.match(/(?:^|[\s;])height:\s*([^;]+);/)?.[1]?.trim();
+    if (!height) {
+      continue;
+    }
+
+    for (const selector of match[1]!.split(",")) {
+      const trimmed = selector.trim();
+      const scoped = trimmed.startsWith(".thread-row__chips ");
+      const target = scoped
+        ? trimmed.slice(".thread-row__chips ".length).trim()
+        : trimmed;
+      if (!/^(?:\.[A-Za-z0-9_-]+)+$/.test(target)) {
+        continue;
+      }
+      rules.push({ classes: target.split(".").filter(Boolean), height, scoped });
+    }
+  }
+
+  return rules;
+}
+
+const CHIP_HEIGHT_RULES = parseChipHeightRules(appCss);
+
+/** Height app.css lands on for a chip inside `.thread-row__chips`. */
+function resolvedChipHeight(element: Element): string | undefined {
+  const classes = new Set(element.classList);
+  let winner: { height: string; rank: number } | undefined;
+
+  for (const rule of CHIP_HEIGHT_RULES) {
+    if (!rule.classes.every((name) => classes.has(name))) {
+      continue;
+    }
+    // Specificity is a class count; `>=` lets a later rule win a tie, which
+    // is the cascade order app.css relies on.
+    const rank = rule.classes.length + (rule.scoped ? 1 : 0);
+    if (!winner || rank >= winner.rank) {
+      winner = { height: rule.height, rank };
+    }
+  }
+
+  return winner?.height;
+}
 
 describe("ThreadRow chip flow", () => {
   function renderRow(
@@ -1317,6 +1402,49 @@ describe("ThreadRow chip flow", () => {
 
     expect(screen.getByLabelText("Runs on Laptop")).toBeInTheDocument();
     expect(container.querySelector(".thread-row.is-remote-offline")).toBeNull();
+  });
+
+  it("sizes the instance chip like the rest of the row's chips", () => {
+    const { container } = renderRow({
+      thread: { ...baseThread, federation: remoteFederation("connected") },
+    });
+
+    const instanceChip = screen.getByLabelText("Runs on Laptop");
+    const backendChip = container.querySelector(".thread-row__chip--backend");
+    expect(backendChip).not.toBeNull();
+
+    // The instance chip is the row's only piece of remote identity. Rendered
+    // a size up from its neighbours it reads as a different KIND of chip —
+    // and pushes the row taller than every local row beside it.
+    expect(resolvedChipHeight(instanceChip)).toBe(
+      resolvedChipHeight(backendChip!),
+    );
+  });
+
+  it("gives every chip in the flow one height", () => {
+    const { container } = renderRow({
+      thread: {
+        ...baseThread,
+        federation: remoteFederation("connected"),
+        messagingBindings: [telegramBinding],
+        reactions: ["🙂"],
+      },
+    });
+
+    const flow = container.querySelector(".thread-row__chips");
+    expect(flow).not.toBeNull();
+
+    const chips = Array.from(
+      flow!.querySelectorAll(".chip, .thread-row__chip, .pr-chip"),
+    );
+    expect(chips.length).toBeGreaterThan(1);
+
+    // Reported as class → height so a failure names the offending chip
+    // instead of just proving the set has two members.
+    const heights = Object.fromEntries(
+      chips.map((chip) => [chip.className, resolvedChipHeight(chip)]),
+    );
+    expect(new Set(Object.values(heights))).toEqual(new Set(["20px"]));
   });
 
   it("dims a remote-pinned row while its owner is unreachable", () => {
