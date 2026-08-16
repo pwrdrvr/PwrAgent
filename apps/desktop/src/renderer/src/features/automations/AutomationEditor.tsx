@@ -384,15 +384,15 @@ export function AutomationEditor(props: AutomationEditorProps) {
   }, [props.desktopApi]);
 
   useEffect(() => {
-    const readSettings = props.desktopApi?.readSettings;
-    if (!readSettings) {
+    const desktopApi = props.desktopApi;
+    if (!desktopApi?.readSettings) {
       setEnabledProviders(DEFAULT_INBOUND_PROVIDERS);
       return;
     }
     let cancelled = false;
     void (async () => {
       try {
-        const response = await readDesktopSettingsCoalesced(props.desktopApi);
+        const response = await readDesktopSettingsCoalesced(desktopApi);
         if (cancelled) return;
         setEnabledProviders(readEnabledProviders(response.snapshot));
         setProviderGroups(readProviderGroups(response.snapshot));
