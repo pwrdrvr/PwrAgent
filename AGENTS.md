@@ -2,87 +2,139 @@
 
 ## Source of Truth
 
-- Product requirements live in `docs/brainstorms/`
-- Implementation plans live in `docs/plans/`
-- UI theme tokens and visual language live in [docs/UI-THEME.md](docs/UI-THEME.md)
-- Desktop UI direction lives in [docs/design/desktop-style-guide.md](docs/design/desktop-style-guide.md)
-- The PwrAgent v2 design source bundle (HTML/CSS/JSX prototypes + chat transcripts) lives in [docs/design/pwragent-v2/](docs/design/pwragent-v2/) — see [docs/design/pwragent-v2/SOURCE.md](docs/design/pwragent-v2/SOURCE.md) for provenance and the "reference, not copy verbatim" policy
-- The operator-facing site at <https://docs.pwragent.ai> lives in its own repo at [pwrdrvr/docs.pwragent.ai](https://github.com/pwrdrvr/docs.pwragent.ai) (split out from this repo on 2026-05-25). Edit there for per-platform setup walkthroughs, streaming/webhook explainers, and Settings → Messaging reference content. Contributor-facing messaging docs stay in [docs/messaging-*.md](docs/).
+- Product requirements are in `docs/brainstorms/`.
+- Implementation plans are in `docs/plans/`.
+- UI theme tokens and visual rules are in [docs/UI-THEME.md](docs/UI-THEME.md).
+- Desktop UI direction is in [docs/design/desktop-style-guide.md](docs/design/desktop-style-guide.md).
+- PwrAgent v2 design references are in [docs/design/pwragent-v2/](docs/design/pwragent-v2/).
+  - The bundle contains HTML, CSS, and JSX prototypes.
+  - [SOURCE.md](docs/design/pwragent-v2/SOURCE.md) gives the source history and usage policy.
+  - Use the bundle as a reference. Do not copy it exactly.
+- Operator documentation is in [pwrdrvr/docs.pwragent.ai](https://github.com/pwrdrvr/docs.pwragent.ai).
+  - Put platform setup, streaming, webhook, and Settings reference content there.
+  - Keep contributor messaging documentation in [this repository](docs/).
 
 ## Workflow
 
-- Treat plan documents as decision artifacts, not implementation scripts.
-- Keep changes aligned with the current active plan unless the user explicitly changes scope.
-- Do not delete or "clean up" files in `docs/brainstorms/`, `docs/plans/`, or future `docs/solutions/` directories. **Don't rewrite plan / brainstorm / solution files that weren't created on your current branch either** — they are point-in-time decision artifacts, a historical record of what was decided when. The one exception: the plan file your current branch is executing is fair game for in-flight updates (progress checkboxes, deferred-to-implementation answers resolved as you work). The root [`.rgignore`](.rgignore) skips all three directories from default `rg` searches; override per-search with `rg --no-ignore` (or `rg -u`) when you actually want to grep them. Full rules in [`docs/plans/AGENTS.md`](docs/plans/AGENTS.md).
-- GitHub Actions labels that intentionally trigger workflow behavior are
-  documented in [.github/workflows/README.md](.github/workflows/README.md).
-  Check that list before adding or using a CI-triggering PR label.
-- Exclude `apps/desktop/.local/protocol-captures/` from broad searches by default. Only search it when the task is specifically about captured E2E protocol snippets.
-- **Keep model-visible command output bounded.** Tool output is part of the
-  thread context and can be replayed on later turns, so do not use a broad,
-  context-heavy search as a first read. For discovery, start with
-  `rg -l`/`rg --count-matches` (and exclude `__tests__` unless tests are in
-  scope); then inspect only the named files and line ranges needed for the
-  next decision. Use `rg -n -C` only for a selected file or small file set,
-  with the minimum useful context. `sed` has no ignore-file setting: it reads
-  only the explicit path and range, so keep those operands specific.
-- Do not chain content-producing reads/searches with `&&`: their combined
-  stdout is sent as one tool result. For a deliberately broad scan, redirect
-  full stdout/stderr to an ignored `.local/` log and return only the exact
-  command, exit state, matching-file/count summary, failures or warnings, and
-  a bounded tail or targeted fields needed for the next decision. Truncation
-  is not a safe output budget.
-- Never read Codex-owned storage files directly from PwrAgent code. Treat
-  Codex session JSONL files, rollout files, and Codex sqlite databases as
-  private implementation details; use the Codex App Server protocol instead.
-  PwrAgent-owned files under `~/.pwragent/` and repo-local test fixtures are
-  fine when the feature explicitly owns them. CI enforces common cases with
-  `pnpm lint:codex-storage`; do not bypass that check by renaming variables or
-  shelling out. The sole exception is
-  `apps/desktop/src/main/codex-app-server/invalid-response-message-id-recovery.ts`,
-  which PwrDrvr LLC explicitly authorizes to repair only protocol-identified
-  rollouts after the exact Responses API invalid message-ID-prefix failure.
-  That module must remain backup-first, atomic, thread-validated, and limited
-  to removing invalid `id` fields from response items whose type is `message`.
-- Use the project-local [desktop E2E fixture seeding skill](.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) when seeding or refreshing desktop replay fixtures from live captured sessions.
-- For reliable desktop E2E runs, prefer `pnpm test:desktop-e2e` from the repo root. The package-level `pnpm --filter @pwragent/desktop test:e2e` path is also safe now because it builds `apps/desktop/out/` before launching Playwright.
-- **An operator may have a lab available for off-desktop Windows or macOS E2E
-  testing.** Ask the operator for a pointer to the appropriate lab repository
-  or skill before running headed desktop E2E.
-- Before changing Windows Git/Bash process launch or shutdown, Vitest process
-  isolation, queue/composer lifecycle tests, or lazy-renderer readiness, read
-  [Windows Vitest stability: process ownership and lifecycle truth](docs/solutions/2026-08-06-windows-vitest-process-isolation.md).
-  Git-for-Windows launcher handoffs, non-atomic descendant cleanup, and
-  optimistic renderer synchronization have all caused expensive Windows-only
-  flakes; retries, wider timeouts, fewer workers, and serial lanes are not
-  substitutes for evidence-backed ownership and readiness fixes.
-- The macOS CI lane uses the selected-repository **PwrDrvr macOS**
-  organization runner group, shared only with PwrSnap. Do not add a
-  repository-scoped runner or widen access to the rest of the organization.
-- For manual screenshots of the branch-drift dialog, run `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`; it opens a replay-backed Electron fixture and waits until you close the app.
-- To regenerate the README screenshots under `docs/assets/screenshots/`, run `pnpm --filter @pwragent/desktop screenshot:readme`. The full walkthrough (spec, fixtures, state-seeding helpers, native capture utilities) lives in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md) under "Capturing README Screenshots". macOS Screen Recording permission is required for whichever terminal/IDE runs the spec.
-- When focusing root Vitest runs through `pnpm test`, pass file paths or filters directly, for example `pnpm test apps/desktop/src/main/__tests__/backend-registry.test.ts`. Do not insert a standalone `--` before the focus args; `pnpm test -- apps/...` makes Vitest run the full workspace suite.
-- **Any new sqlite write that fires per command, per turn, per item, per
-  streamed event, or on a timer must be measured before it ships, and pinned
-  by a checked-in write budget** that fails the suite when it moves. Do the arithmetic out loud: writes/second × commit
-  cost × how long a real session runs → MB/day. Sqlite commits are the unit,
-  not statements — each implicit transaction flushes its dirty pages plus every
-  index the row moved (~4 KB/page, and a timestamp column in an index moves on
-  every write). Two calibration points: tool accounting once wrote per streamed
-  8 KiB chunk, costing 3,693 commits and 58 MB of WAL for one `find /`
-  (PR #1406); the former 10-second runtime lease heartbeats cost 720 commits
-  and 2.7 MB/hour per running instance, about 65 MB/day. PID-owned runtime
-  leases now cost zero sqlite commits while idle. **If the projection looks excessive, say so to the
-  user rather than shipping it quietly — the right answer is often that the
-  design constraint has to change** (batch into one transaction, debounce
-  behind a flush window, accumulate in memory and persist on a boundary, or
-  not persist at all), and that is their call to make. Budgets live in
-  `apps/desktop/src/main/__tests__/fixtures/sqlite-write-budgets.json`; wrap the
-  feature (not its setup) in `measureSqliteWrites` and record with
-  `UPDATE_SQLITE_WRITE_BUDGETS=1`, so a write-cost change lands as a reviewable
-  line in the diff instead of never surfacing. Survey a whole run with
-  `pnpm test:sqlite-writes`. See "Sqlite Write-Volume Instrumentation" in
-  [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
+- Treat plans as decision records. Do not use them as implementation scripts.
+- Follow the active plan unless the user changes the scope.
+- Treat brainstorms, plans, and solutions as historical records.
+  - Do not delete or rewrite a record without explicit user authorization.
+  - You may update the plan that the current branch implements.
+  - Limit updates to progress, dependencies, and resolved implementation questions.
+  - Read [the historical-document rules](docs/plans/AGENTS.md) before you change these files.
+- Default `rg` searches exclude brainstorms, plans, and solutions through [`.rgignore`](.rgignore).
+  - Use `rg --no-ignore` or `rg -u` only when you need these records.
+- Read the [workflow label list](.github/workflows/README.md) before you use a CI-triggering label.
+- Exclude `apps/desktop/.local/protocol-captures/` from broad searches.
+  - Search that directory only for captured E2E protocol work.
+
+### Command output
+
+- Keep model-visible command output bounded.
+- Tool output becomes thread context. Later turns can replay that output.
+- For broad discovery, start with `rg -l` or `rg --count-matches`.
+- Exclude tests from discovery unless tests are in scope.
+- After discovery, inspect only the files and line ranges that you need.
+- Use `rg -n -C` only with a selected file or a small file set.
+- Use the minimum context that supports the next decision.
+- Give `sed` an explicit file and line range. `sed` does not use an ignore file.
+- Do not combine content-producing reads and searches with `&&`.
+- The shell sends their combined standard output as one tool result.
+- For an intentionally broad scan:
+  1. Redirect all output to an ignored `.local/` log.
+  2. Report the exact command and its exit state.
+  3. Report matching file counts and result counts.
+  4. Report failures and warnings.
+  5. Return only a bounded tail or the fields needed for the next decision.
+- Do not use tool-result truncation as an output budget.
+
+### Codex data boundary
+
+- PwrAgent code must not read Codex-owned storage files.
+- Treat Codex session JSONL, rollout files, and SQLite databases as private implementation details.
+- Use the Codex App Server protocol for Codex data.
+- A feature may read PwrAgent-owned files under `~/.pwragent/`.
+- A test may read repository-local fixtures that the test owns.
+- CI enforces common violations with `pnpm lint:codex-storage`.
+- Do not bypass this check through variable renames or shell commands.
+- One module has explicit PwrDrvr LLC authorization for a narrow repair:
+  `apps/desktop/src/main/codex-app-server/invalid-response-message-id-recovery.ts`.
+  - Repair only rollouts identified by the protocol.
+  - Repair only the Responses API invalid message-ID-prefix failure.
+  - Create a backup before the repair.
+  - Make the repair atomic.
+  - Validate the thread before the repair.
+  - Remove only invalid `id` fields from response items with type `message`.
+
+### Desktop test operations
+
+- Use the [desktop E2E fixture seeding skill](.agents/skills/desktop-e2e-fixture-seeding/SKILL.md) for live captured sessions.
+- Run desktop E2E from the repository root with `pnpm test:desktop-e2e`.
+- The package command `pnpm --filter @pwragent/desktop test:e2e` is also safe.
+- Both commands build `apps/desktop/out/` before Playwright starts.
+- Before headed desktop E2E, ask the operator whether an off-desktop lab is available.
+- If a lab is available, ask for its repository or skill.
+- Read the [Windows Vitest stability guidance](docs/solutions/2026-08-06-windows-vitest-process-isolation.md) before you change:
+  - Windows Git or Bash process launch and shutdown.
+  - Vitest process isolation.
+  - Queue or composer lifecycle tests.
+  - Lazy renderer readiness.
+- Git-for-Windows launcher handoffs have caused expensive Windows-only failures.
+- Non-atomic descendant cleanup has caused expensive Windows-only failures.
+- Optimistic renderer synchronization has caused expensive Windows-only failures.
+- Do not substitute retries, longer timeouts, fewer workers, or serial lanes for an ownership fix.
+- Do not substitute those workarounds for an evidence-based readiness fix.
+- The macOS CI lane uses the selected-repository **PwrDrvr macOS** runner group.
+- Only PwrAgent and PwrSnap share this group.
+- Do not add a repository-scoped runner.
+- Do not give the full organization access to this group.
+- For branch-drift dialog screenshots, run `pnpm --filter @pwragent/desktop inspect:e2e:branch-drift`.
+- This command opens a replay-backed Electron fixture.
+- Close the application to end the command.
+- For README screenshots, run `pnpm --filter @pwragent/desktop screenshot:readme`.
+- The README screenshot command writes files under `docs/assets/screenshots/`.
+- Read "Capturing README Screenshots" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md) for the complete procedure.
+- That procedure identifies the specification, fixtures, state helpers, and native capture tools.
+- The terminal or IDE that runs the screenshot test needs macOS Screen Recording permission.
+- To focus root Vitest, pass file paths or filters directly to `pnpm test`.
+- For example, run `pnpm test apps/desktop/src/main/__tests__/backend-registry.test.ts`.
+- Do not put a standalone `--` before the focus arguments.
+- The command `pnpm test -- apps/...` runs the full workspace suite.
+
+### SQLite write budgets
+
+- Measure a new SQLite write if it runs at any of these frequencies:
+  - Per command.
+  - Per turn.
+  - Per item.
+  - Per streamed event.
+  - On a timer.
+- Add a checked-in write budget that fails when the write count changes.
+- Calculate the write cost as writes per second × commit cost × session duration.
+- Report the projected cost in MB per day.
+- Count SQLite commits, not statements.
+- Each implicit transaction flushes dirty pages and all changed index pages.
+- A SQLite page is approximately 4 KB.
+- An indexed timestamp can move one index entry during each write.
+- Use these calibration results:
+  - PR #1406 wrote once for each streamed 8 KiB chunk.
+  - One `find /` caused 3,693 commits and 58 MB of WAL.
+  - Former 10-second runtime lease heartbeats caused 720 commits each hour.
+  - Those heartbeats wrote 2.7 MB each hour for each running instance.
+  - That rate was approximately 65 MB each day.
+  - PID-owned runtime leases now make no SQLite commits while idle.
+- If the projection is excessive, report it to the user.
+- Do not quietly ship an excessive projection.
+- Ask the user to select a different design constraint.
+- Possible designs include one transaction, a flush window, or boundary-based persistence.
+- The correct design can also be no persistence.
+- Write budgets are in `apps/desktop/src/main/__tests__/fixtures/sqlite-write-budgets.json`.
+- Wrap the feature, not its setup, with `measureSqliteWrites`.
+- Record a budget with `UPDATE_SQLITE_WRITE_BUDGETS=1`.
+- Keep each write-cost change visible as one reviewable diff line.
+- Survey a full run with `pnpm test:sqlite-writes`.
+- Read "Sqlite Write-Volume Instrumentation" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
 
 ## Code Formatting & Linting
 
