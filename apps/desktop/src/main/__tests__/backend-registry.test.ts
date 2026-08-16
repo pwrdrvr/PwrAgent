@@ -19090,6 +19090,14 @@ command = "pnpm dev"
     const parentThreadId = "grok-parent-with-codex-review";
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [
+        {
+          id: "gpt-5.5",
+          label: "GPT-5.5",
+          current: true,
+          supportsReasoning: true,
+        },
+      ],
       startThreadResult: { threadId: "codex-review-child" },
     });
     const overlayStore = createOverlayStoreMock({
@@ -19129,6 +19137,8 @@ command = "pnpm dev"
       threadId: parentThreadId,
       target: { type: "baseBranch", branch: "origin/main" },
       delivery: "inline",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
     });
     expect(response).toMatchObject({
       backend: acpBackendId,
@@ -19179,6 +19189,36 @@ command = "pnpm dev"
     });
     await expect(approvalResponse).resolves.toEqual({ decision: "accept" });
 
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: response.reviewThreadId,
+        turnId: response.turnId,
+        model: "gpt-5.5",
+        tokenUsage: {
+          total: {
+            inputTokens: 1_000,
+            cachedInputTokens: 200,
+            outputTokens: 50,
+            reasoningOutputTokens: 10,
+          },
+        },
+      },
+    });
+    const pricing = await overlayStore.readThreadPricing({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+    });
+    expect(pricing.lines).toEqual([
+      expect.objectContaining({
+        backend: acpBackendId,
+        model: "gpt-5.5",
+        parentThreadId,
+        reasoningEffort: "high",
+        scope: "monitor",
+      }),
+    ]);
+
     const reviewOutput = JSON.stringify({
       findings: [],
       overall_correctness: "patch is correct",
@@ -19207,6 +19247,8 @@ command = "pnpm dev"
         backend: "codex",
         monitorThreadId: response.reviewThreadId,
         monitorTurnId: response.turnId,
+        preferredModel: "gpt-5.5",
+        preferredReasoningEffort: "high",
         outcome: "success",
         status: "success",
       }),
@@ -19214,9 +19256,19 @@ command = "pnpm dev"
     expect(overlay?.managedReviewEntries).toEqual([
       expect.objectContaining({
         id: `managed-review:${response.turnId}:started`,
+        reviewer: {
+          backend: "codex",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+        },
       }),
       expect.objectContaining({
         id: `managed-review:${response.turnId}:result`,
+        reviewer: {
+          backend: "codex",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+        },
         output: expect.objectContaining({
           overall_correctness: "patch is correct",
         }),
@@ -19226,6 +19278,25 @@ command = "pnpm dev"
         }),
       }),
     ]);
+    expect(
+      events.find((event) =>
+        isCompletedItemType(event, "exitedReviewMode")
+      ),
+    ).toMatchObject({
+      notification: {
+        params: {
+          item: {
+            data: {
+              reviewer: {
+                backend: "codex",
+                model: "gpt-5.5",
+                reasoningEffort: "high",
+              },
+            },
+          },
+        },
+      },
+    });
 
     await registry.close();
   });
@@ -20348,6 +20419,98 @@ command = "pnpm dev"
       threadId: "thread-parent",
       input: [{ type: "text", text: "Continue after review" }],
     })).resolves.toMatchObject({ threadId: "thread-parent" });
+
+    await registry.close();
+  });
+
+  it("enriches default-model managed review cards from durable usage", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      startThreadResult: { threadId: "managed-review-child" },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-parent": {
+          backend: "codex",
+          threadId: "thread-parent",
+        } as ThreadOverlayState,
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      resolveManagedReviewEnabled: () => true,
+    });
+
+    const response = await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+    expect(codexClient.lastStartThreadParams?.model).toBeUndefined();
+
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: response.reviewThreadId,
+        turnId: response.turnId,
+        model: "gpt-5.5",
+        tokenUsage: {
+          total: {
+            inputTokens: 1_000,
+            cachedInputTokens: 200,
+            outputTokens: 50,
+            reasoningOutputTokens: 10,
+          },
+        },
+      },
+    });
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: response.reviewThreadId,
+        turnId: response.turnId,
+        turn: {
+          id: response.turnId,
+          status: "completed",
+          output: [{
+            type: "text",
+            text: JSON.stringify({
+              findings: [],
+              overall_correctness: "patch is correct",
+              overall_explanation: "No blocking findings.",
+              overall_confidence_score: 0.98,
+            }),
+          }],
+        },
+      },
+    });
+
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(overlay?.subAgents?.[0]?.monitorUsage?.model).toBe("gpt-5.5");
+    expect(
+      overlay?.managedReviewEntries?.map((entry) => entry.reviewer),
+    ).toEqual([
+      { backend: "codex" },
+      { backend: "codex" },
+    ]);
+
+    const hydrated = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(
+      hydrated.replay.entries
+        .filter((entry) => entry.type === "review")
+        .map((entry) => entry.reviewer),
+    ).toEqual([
+      { backend: "codex", model: "gpt-5.5" },
+      { backend: "codex", model: "gpt-5.5" },
+    ]);
 
     await registry.close();
   });

@@ -3339,6 +3339,123 @@ describe("ThreadContextPanel", () => {
     expect(children[2]?.textContent).toBe("b6f2bd748");
   });
 
+  it("keeps mixed-provider review usage attributed to its reviewer", () => {
+    const createdAt = 1_800_000_000_000;
+    const summaries: ThreadPricingSummary[] = [
+      {
+        backend: "acp:grok",
+        cachedInputTokens: 200,
+        currency: "USD",
+        inputTokens: 1_000,
+        outputTokens: 50,
+        pricedUsageLineCount: 1,
+        provider: "openai",
+        reasoningOutputTokens: 10,
+        threadId: "thread-1",
+        totalCostMicros: 1_000_000,
+        totalTokens: 1_050,
+        uncachedInputTokens: 800,
+        unpricedUsageLineCount: 0,
+        updatedAt: createdAt,
+        usageLineCount: 1,
+      },
+      {
+        backend: "acp:grok",
+        cachedInputTokens: 400,
+        currency: "USD",
+        inputTokens: 1_500,
+        outputTokens: 100,
+        pricedUsageLineCount: 1,
+        provider: "xai",
+        reasoningOutputTokens: 20,
+        threadId: "thread-1",
+        totalCostMicros: 2_000_000,
+        totalTokens: 1_600,
+        uncachedInputTokens: 1_100,
+        unpricedUsageLineCount: 0,
+        updatedAt: createdAt,
+        usageLineCount: 1,
+      },
+    ];
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        source: "acp:grok",
+        subAgents: [
+          {
+            monitorId: "review:turn-review-1",
+            task: "Review changes against main",
+            status: "success",
+            createdAt,
+            updatedAt: createdAt,
+            backend: "codex",
+            preferredModel: "gpt-5.6-sol",
+            preferredReasoningEffort: "high",
+          },
+        ],
+      },
+      pricing: {
+        lines: [
+          buildMonitorLine({
+            backend: "acp:grok",
+            createdAt,
+            model: undefined,
+            parentThreadId: "thread-1",
+            provider: "openai",
+            reasoningEffort: undefined,
+            sourceItemId: "review:turn-review-1",
+            totalCostMicros: 1_000_000,
+            usageLineId: "openai-review-usage",
+          }),
+          buildMonitorLine({
+            backend: "acp:grok",
+            createdAt: createdAt - 1,
+            parentThreadId: "thread-1",
+            provider: "xai",
+            sourceItemId: "turn-grok-1",
+            totalCostMicros: 2_000_000,
+            usageLineId: "grok-turn-usage",
+          }),
+        ],
+        summaries,
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const summaryCard = screen.getByText("Pricing summary").closest(
+      ".pricing-summary-card",
+    );
+    expect(summaryCard).not.toBeNull();
+    expect(within(summaryCard as HTMLElement).getByText("By provider")).toBeInTheDocument();
+    expect(within(summaryCard as HTMLElement).getByText("OpenAI")).toBeInTheDocument();
+    expect(within(summaryCard as HTMLElement).getByText("xAI")).toBeInTheDocument();
+    expect(
+      within(summaryCard as HTMLElement).getByText("$1.00 · 1 row"),
+    ).toBeInTheDocument();
+    expect(
+      within(summaryCard as HTMLElement).getByText("$2.00 · 1 row"),
+    ).toBeInTheDocument();
+    const providerDetail = screen.getByText("openai · USD").closest(
+      ".pricing-provider-row",
+    );
+    expect(providerDetail).not.toBeNull();
+    expect(
+      within(providerDetail as HTMLElement).getByText("$1.00 list price · 1 row"),
+    ).toBeInTheDocument();
+
+    const reviewUsage = screen.getByText("Review usage").closest(
+      ".pricing-usage-row",
+    );
+    expect(reviewUsage).not.toBeNull();
+    expect(within(reviewUsage as HTMLElement).getByText("OpenAI")).toBeInTheDocument();
+    expect(
+      within(reviewUsage as HTMLElement).getByText("gpt-5.6-sol · high"),
+    ).toBeInTheDocument();
+    expect(within(reviewUsage as HTMLElement).queryByText("Grok")).not.toBeInTheDocument();
+  });
+
   it("renders accumulated edit groups on the Edits tab and toggles the dock", () => {
     const groups = collectEditedFileGroups({
       entries: [

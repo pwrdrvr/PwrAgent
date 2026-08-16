@@ -149,6 +149,23 @@ export function PricingPanel(props: PricingPanelProps) {
                 />
               ) : null}
             </div>
+            {displaySummaries.length > 1 ? (
+              <div className="rail-summary-card__section">
+                <span className="rail-summary-card__section-title">By provider</span>
+                {displaySummaries.map((providerSummary) => (
+                  <RailSummaryRow
+                    key={`${providerSummary.provider}:${providerSummary.currency}`}
+                    label={formatPricingProviderLabel(providerSummary.provider)}
+                    value={`${formatMoney(
+                      providerSummary.totalCostMicros,
+                      providerSummary.currency,
+                    )} · ${providerSummary.usageLineCount.toLocaleString()} row${
+                      providerSummary.usageLineCount === 1 ? "" : "s"
+                    }`}
+                  />
+                ))}
+              </div>
+            ) : null}
           </div>
           {summary.unpricedUsageLineCount > 0 ? (
             <p className="context-empty context-empty--warning">
@@ -215,6 +232,12 @@ export function PricingPanel(props: PricingPanelProps) {
               ?? (isActive && line.scope !== "monitor"
                 ? props.threadReasoningEffort
                 : undefined);
+            const runtimeLabel = formatUsageLineRuntimeLabel(line, subAgent);
+            const runtimeModel =
+              line.model
+              ?? subAgent?.preferredModel
+              ?? subAgent?.monitorUsage?.model
+              ?? subAgent?.monitorUsage?.cost?.model;
 
             return (
               <li
@@ -230,10 +253,10 @@ export function PricingPanel(props: PricingPanelProps) {
                     ) : null}
                     <p className="rail-card__runtime">
                       <span className="rail-card__provider-chip">
-                        {formatBackendLabel(line.backend as AppServerBackendKind)}
+                        {runtimeLabel}
                       </span>
                       <span className="rail-card__model">
-                        {line.model ?? "Unknown model"}
+                        {runtimeModel ?? "Unknown model"}
                         {reasoningEffort ? ` · ${reasoningEffort}` : ""}
                         {formatServiceTierLabel(line)}
                       </span>
@@ -988,8 +1011,11 @@ function formatUsageLineTitle(
   subAgent?: ThreadSubAgentSummary,
 ): string {
   if (line.scope === "monitor") {
-    return subAgent
-      ? subAgentPricingUsageTitle(subAgent)
+    if (subAgent) {
+      return subAgentPricingUsageTitle(subAgent);
+    }
+    return line.sourceItemId?.startsWith("review:")
+      ? "Review usage"
       : "Sub-agent usage";
   }
   if (isForkBaselineLine(line)) {
@@ -1005,6 +1031,34 @@ function formatUsageLineTitle(
     return "Latest request usage";
   }
   return "Turn usage";
+}
+
+function formatUsageLineRuntimeLabel(
+  line: PricingUsageLine,
+  subAgent?: ThreadSubAgentSummary,
+): string {
+  if (subAgent?.backend) {
+    return formatBackendLabel(subAgent.backend);
+  }
+  // Monitor rows are stored under their parent thread backend so its ledger
+  // can aggregate them. Without a loaded sub-agent summary, the pricing
+  // provider is the truthful runtime identity.
+  return line.scope === "monitor"
+    ? formatPricingProviderLabel(line.provider)
+    : formatBackendLabel(line.backend as AppServerBackendKind);
+}
+
+function formatPricingProviderLabel(provider: string): string {
+  switch (provider.toLocaleLowerCase()) {
+    case "openai":
+      return "OpenAI";
+    case "qwen":
+      return "Qwen";
+    case "xai":
+      return "xAI";
+    default:
+      return provider;
+  }
 }
 
 function formatUsageLineCostSuffix(line: PricingUsageLine): string {

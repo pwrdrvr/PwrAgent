@@ -17,6 +17,11 @@ describe("TranscriptReview", () => {
           id: "review-1",
           review: "The patch has one review issue.",
           displayText: "Review changes against main",
+          reviewer: {
+            backend: "codex",
+            model: "gpt-5.6-sol",
+            reasoningEffort: "high",
+          },
           output: {
             findings: [
               {
@@ -47,6 +52,10 @@ describe("TranscriptReview", () => {
     expect(screen.getByText("Patch needs work")).toBeInTheDocument();
     expect(screen.getByText("1 finding")).toBeInTheDocument();
     expect(screen.getByText("87% confidence")).toBeInTheDocument();
+    const runtime = screen.getByLabelText("Review runtime");
+    expect(runtime).toHaveTextContent("OpenAI");
+    expect(runtime).toHaveTextContent("gpt-5.6-sol");
+    expect(runtime).toHaveTextContent("high");
     expect(screen.getByText("P1")).toBeInTheDocument();
     expect(screen.getByText("P1")).toHaveClass("transcript-review__priority--p1");
     expect(screen.getByText("Hydrate review transcript items")).toBeInTheDocument();

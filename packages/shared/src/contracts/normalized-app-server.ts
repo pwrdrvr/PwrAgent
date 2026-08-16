@@ -664,6 +664,16 @@ export type AppServerThreadReviewEntry = {
   status?: AppServerThreadActivityStatus;
   review: string;
   displayText?: string;
+  /**
+   * The provider runtime that produced this review. Reviews may run on a
+   * different provider than their parent thread, so this belongs to the
+   * review artifact rather than to the thread's ambient settings.
+   */
+  reviewer?: {
+    backend: AppServerBackendKind;
+    model?: string;
+    reasoningEffort?: string;
+  };
   output?: AppServerReviewOutput;
   turn?: AppServerThreadTurnMetadata;
 };

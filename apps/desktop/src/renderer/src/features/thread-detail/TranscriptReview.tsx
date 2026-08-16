@@ -7,6 +7,7 @@ import type {
 import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import { useCallback, useMemo, type MouseEvent } from "react";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
+import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../lib/thread-links";
 import { ThreadMarkdown } from "./ThreadMarkdown";
@@ -170,6 +171,7 @@ export function TranscriptReview(props: TranscriptReviewProps) {
       : output?.overall_correctness === "patch is incorrect"
         ? "Patch needs work"
         : undefined;
+  const reviewer = props.entry.reviewer;
 
   return (
     <aside className="transcript-review" role="group" aria-label="Code review">
@@ -216,6 +218,22 @@ export function TranscriptReview(props: TranscriptReviewProps) {
           </span>
           {confidence ? (
             <span className="transcript-review__badge">{confidence}</span>
+          ) : null}
+        </div>
+      ) : null}
+
+      {reviewer ? (
+        <div className="transcript-review__meta" aria-label="Review runtime">
+          <span className="transcript-review__badge">
+            {formatBackendLabel(reviewer.backend)}
+          </span>
+          {reviewer.model ? (
+            <span className="transcript-review__badge">{reviewer.model}</span>
+          ) : null}
+          {reviewer.reasoningEffort ? (
+            <span className="transcript-review__badge">
+              {reviewer.reasoningEffort}
+            </span>
           ) : null}
         </div>
       ) : null}
