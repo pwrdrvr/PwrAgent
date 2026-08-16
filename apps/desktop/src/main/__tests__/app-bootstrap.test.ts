@@ -164,6 +164,10 @@ vi.mock("electron", () => ({
   Menu: {
     buildFromTemplate: buildFromTemplateMock
   },
+  nativeTheme: {
+    shouldUseDarkColors: true,
+    on: vi.fn()
+  },
   shell: {
     openExternal: shellOpenExternalMock
   },
