@@ -1,0 +1,6 @@
+extends: existence
+message: "Review this possible passive construction and name the actor when useful: '%s'."
+level: suggestion
+ignorecase: true
+tokens:
+  - "\\b(?:am|is|are|was|were|be|been|being)\\s+(?:[A-Za-z]+ed|done|made|sent|built|kept|held|written|shown|given|taken|found|known)\\b"

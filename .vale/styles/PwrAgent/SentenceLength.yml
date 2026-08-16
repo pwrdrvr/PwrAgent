@@ -1,0 +1,6 @@
+extends: occurrence
+message: "Keep this sentence to 35 words or fewer."
+level: warning
+scope: sentence
+max: 35
+token: "\\b[A-Za-z0-9][A-Za-z0-9'/-]*\\b"

@@ -1,0 +1,8 @@
+extends: existence
+message: "Avoid contractions in technical documentation: '%s'."
+level: warning
+ignorecase: true
+tokens:
+  - "\\b(?:[A-Za-z]+n['’]t|[A-Za-z]+['’](?:re|ve|ll|m))\\b"
+  - "\\b(?:I|you|he|she|we|they|it|who|that|there|what|where|let)['’]d\\b"
+  - "\\b(?:it|that|there|what|who|let)['’]s\\b"

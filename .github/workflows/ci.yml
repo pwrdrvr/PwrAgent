@@ -185,6 +185,29 @@ jobs:
         run: |
           pnpm exec depcruise-fmt -T markdown cruise-result.json >> "$GITHUB_STEP_SUMMARY"
 
+  prose:
+    name: Prose lint
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.result == 'success'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        timeout-minutes: 10
+
+      - name: Install Vale
+        timeout-minutes: 10
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/vale.tar.gz" \
+            https://github.com/vale-cli/vale/releases/download/v3.14.2/vale_3.14.2_Linux_64-bit.tar.gz
+          mkdir -p "$RUNNER_TEMP/vale"
+          tar -xzf "$RUNNER_TEMP/vale.tar.gz" -C "$RUNNER_TEMP/vale"
+          echo "$RUNNER_TEMP/vale" >> "$GITHUB_PATH"
+
+      - name: Vale prose lint
+        timeout-minutes: 10
+        run: pnpm lint:prose -- --github-annotations
+
   build:
     name: Build
     runs-on: ubuntu-latest

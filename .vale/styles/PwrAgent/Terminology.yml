@@ -1,0 +1,17 @@
+extends: substitution
+message: "Prefer '%s' over '%s' in technical documentation."
+level: warning
+ignorecase: true
+swap:
+  utilize: use
+  utilizes: uses
+  utilized: used
+  utilizing: using
+  leverage: use
+  leverages: uses
+  leveraged: used
+  leveraging: using
+  facilitate: help
+  facilitates: helps
+  facilitated: helped
+  facilitating: helping
