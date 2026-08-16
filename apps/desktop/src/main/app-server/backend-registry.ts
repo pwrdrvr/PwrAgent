@@ -521,6 +521,8 @@ const REPLAY_THREAD_TITLE_ENV = "PWRAGENT_REPLAY_THREAD_TITLE";
 const THREAD_LIST_REUSE_WINDOW_MS = 5 * 60_000;
 const ACTIVE_TURN_HANDOFF_ERROR =
   "Worktree/local migration is not available while a turn is in progress. Resubmit when the turn completes.";
+const CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING =
+  "Codex workspace CWD synchronization is pending and will retry automatically.";
 /**
  * Number of consecutive queued-execution-mode flush failures tolerated
  * before the queue is auto-cancelled and an explanatory `cancelled`
@@ -780,9 +782,9 @@ type BackendRegistryForkThreadRequest = ForkThreadRequest & {
  * Resolve the live workspace CWD for thread-scoped commands.
  *
  * Worktree threads must run from LinkedDirectorySummary.worktreePath; Local
- * threads run from LinkedDirectorySummary.path. A handoff overlay projects an
- * acknowledged workspace change immediately; source reconciliation replaces it
- * when Codex later reports a different usable workspace.
+ * threads run from LinkedDirectorySummary.path. A handoff overlay projects the
+ * committed workspace change immediately and remains authoritative until Codex
+ * reports that same workspace, acknowledging the provider-side synchronization.
  */
 function resolveThreadWorkspaceCwd(
   thread: AppServerThreadSummary | undefined,
@@ -1191,12 +1193,30 @@ function shouldRepairCachedDirectoryRelationship(params: {
   directory: LinkedDirectorySummary;
   overlay: ThreadOverlayState | undefined;
 }): boolean {
-  if (hasEquivalentLinkedDirectory(params.overlay, params.directory)) {
+  const handoffDirectory = params.overlay?.extraLinkedDirectories.find(
+    isHandoffDirectory,
+  );
+  if (
+    handoffDirectory
+    && linkedDirectoriesHaveSameWorkspaceIdentity(
+      handoffDirectory,
+      params.directory,
+    )
+  ) {
+    // Matching provider metadata acknowledges the CWD synchronization. Replace
+    // the temporary handoff identity with Codex's normal directory identity.
+    return true;
+  }
+
+  // The handoff overlay is also the durable retry marker. Older PwrAgent
+  // versions can leave one paired with the pre-handoff Codex CWD, so preserve
+  // it until provider metadata explicitly acknowledges the target workspace.
+  if (overlayHasHandoffWorkspace(params.overlay)) {
     return false;
   }
 
-  if (overlayHasHandoffWorkspace(params.overlay)) {
-    return true;
+  if (hasEquivalentLinkedDirectory(params.overlay, params.directory)) {
+    return false;
   }
 
   if (params.directory.kind === "worktree") {
@@ -6786,6 +6806,13 @@ export class DesktopBackendRegistry {
   private readonly attemptedTitleGenerations = new Set<string>();
   private readonly repairedDirectoryThreadKeys = new Set<string>();
   private readonly failedDirectoryRelationshipLogKeys = new Set<string>();
+  private readonly pendingCodexWorkspaceCwdSyncs = new Map<
+    string,
+    {
+      cwd: string;
+      promise: Promise<void>;
+    }
+  >();
   private fullDirectoryReconcileDispatched = false;
   private titleGenerationSequence = 0;
   /**
@@ -9889,11 +9916,26 @@ export class DesktopBackendRegistry {
       directory: result.linkedDirectory,
       gitBranch: resultBranch,
     });
-    await this.updateThreadWorkspaceCwd({
-      backend: request.backend,
-      threadId: request.threadId,
-      cwd: result.linkedDirectory.worktreePath ?? result.targetPath,
-    });
+    const workspaceCwd =
+      result.linkedDirectory.worktreePath ?? result.targetPath;
+    let workspaceCwdSyncPending = false;
+    try {
+      await this.updateThreadWorkspaceCwd({
+        backend: request.backend,
+        threadId: request.threadId,
+        cwd: workspaceCwd,
+      });
+    } catch (error) {
+      workspaceCwdSyncPending = true;
+      backendRegistryLog.warn(
+        "Codex workspace CWD synchronization failed after committed handoff; will retry",
+        {
+          error: error instanceof Error ? error.message : String(error),
+          threadId: request.threadId,
+          workspaceCwd,
+        },
+      );
+    }
     if (request.backend === "codex") {
       this.invalidateThreadListCache("codex");
     }
@@ -9924,7 +9966,15 @@ export class DesktopBackendRegistry {
       });
     }
 
-    return result;
+    return workspaceCwdSyncPending
+      ? {
+          ...result,
+          warnings: [
+            ...result.warnings,
+            CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING,
+          ],
+        }
+      : result;
   }
 
   private async assertAcpWorkspaceHandoffAllowed(params: {
@@ -18857,6 +18907,10 @@ export class DesktopBackendRegistry {
         backend: "codex",
         threadId: params.threadId,
       });
+      this.schedulePendingCodexWorkspaceCwdSyncs({
+        overlaysByThreadId: { [params.threadId]: overlay },
+        threads: [enrichedThread],
+      });
       if (!shouldRepairCachedDirectoryRelationship({ directory, overlay })) {
         return;
       }
@@ -18911,6 +18965,10 @@ export class DesktopBackendRegistry {
     const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
       backend: "codex",
       threadIds: threads.map((thread) => thread.id),
+    });
+    this.schedulePendingCodexWorkspaceCwdSyncs({
+      overlaysByThreadId,
+      threads,
     });
     const updatedOverlaysByThreadId =
       await this.backfillMissingCodexDirectoryRelationships({
@@ -19407,6 +19465,10 @@ export class DesktopBackendRegistry {
     const visibleThreads = threadsWithPending.filter(
       (thread) => overlaysByThreadId[thread.id]?.archiveTombstonedAt === undefined,
     );
+    this.schedulePendingCodexWorkspaceCwdSyncs({
+      overlaysByThreadId,
+      threads: visibleThreads,
+    });
     const reconciledOverlaysByThreadId =
       await this.reconcileCodexDirectoryRelationshipsFromSource({
         diagnostics,
@@ -19583,6 +19645,11 @@ export class DesktopBackendRegistry {
               },
             );
           }
+          continue;
+        }
+
+        const overlay = params.overlaysByThreadId[thread.id];
+        if (!shouldRepairCachedDirectoryRelationship({ directory, overlay })) {
           continue;
         }
 
@@ -22757,6 +22824,79 @@ export class DesktopBackendRegistry {
         threadId: params.threadId,
         cwd,
       });
+    });
+  }
+
+  private schedulePendingCodexWorkspaceCwdSyncs(params: {
+    overlaysByThreadId: Record<string, ThreadOverlayState | undefined>;
+    threads: AppServerThreadSummary[];
+  }): void {
+    for (const thread of params.threads) {
+      const handoffDirectory = params.overlaysByThreadId[
+        thread.id
+      ]?.extraLinkedDirectories.find(isHandoffDirectory);
+      if (!handoffDirectory) {
+        continue;
+      }
+
+      const workspaceCwd =
+        handoffDirectory.worktreePath ?? handoffDirectory.path;
+      const providerCwd =
+        thread.projectKey?.trim() || resolveThreadWorkspaceCwd(thread);
+      if (
+        normalizeLinkedDirectoryIdentityPath(providerCwd)
+        === normalizeLinkedDirectoryIdentityPath(workspaceCwd)
+      ) {
+        continue;
+      }
+
+      this.scheduleCodexWorkspaceCwdSync({
+        threadId: thread.id,
+        cwd: workspaceCwd,
+      });
+    }
+  }
+
+  private scheduleCodexWorkspaceCwdSync(params: {
+    cwd: string;
+    threadId: string;
+  }): void {
+    const pending = this.pendingCodexWorkspaceCwdSyncs.get(params.threadId);
+    if (
+      pending
+      && normalizeLinkedDirectoryIdentityPath(pending.cwd)
+        === normalizeLinkedDirectoryIdentityPath(params.cwd)
+    ) {
+      return;
+    }
+
+    const promise: Promise<void> = this.updateThreadWorkspaceCwd({
+      backend: "codex",
+      threadId: params.threadId,
+      cwd: params.cwd,
+    })
+      .then(() => {
+        this.invalidateThreadListCache("codex");
+      })
+      .catch((error) => {
+        backendRegistryLog.warn(
+          "pending Codex workspace CWD synchronization failed; will retry",
+          {
+            error: error instanceof Error ? error.message : String(error),
+            threadId: params.threadId,
+            workspaceCwd: params.cwd,
+          },
+        );
+      })
+      .finally(() => {
+        const current = this.pendingCodexWorkspaceCwdSyncs.get(params.threadId);
+        if (current?.promise === promise) {
+          this.pendingCodexWorkspaceCwdSyncs.delete(params.threadId);
+        }
+      });
+    this.pendingCodexWorkspaceCwdSyncs.set(params.threadId, {
+      cwd: params.cwd,
+      promise,
     });
   }
 
