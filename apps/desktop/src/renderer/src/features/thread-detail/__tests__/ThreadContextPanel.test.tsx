@@ -3437,6 +3437,13 @@ describe("ThreadContextPanel", () => {
     expect(
       within(summaryCard as HTMLElement).getByText("$2.00 · 1 row"),
     ).toBeInTheDocument();
+    const providerDetail = screen.getByText("openai · USD").closest(
+      ".pricing-provider-row",
+    );
+    expect(providerDetail).not.toBeNull();
+    expect(
+      within(providerDetail as HTMLElement).getByText("$1.00 list price · 1 row"),
+    ).toBeInTheDocument();
 
     const reviewUsage = screen.getByText("Review usage").closest(
       ".pricing-usage-row",

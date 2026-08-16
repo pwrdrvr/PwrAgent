@@ -173,6 +173,28 @@ export function PricingPanel(props: PricingPanelProps) {
               {summary.unpricedUsageLineCount === 1 ? "" : "s"} could not be priced.
             </p>
           ) : null}
+          {displaySummaries.length > 1 ? (
+            <ul className="context-list context-list--cards pricing-provider-list">
+              {displaySummaries.map((providerSummary) => (
+                <li
+                  key={`${providerSummary.provider}:${providerSummary.currency}`}
+                  className="rail-card pricing-provider-row"
+                >
+                  <p className="rail-card__title">
+                    {providerSummary.provider} · {providerSummary.currency}
+                  </p>
+                  <p className="rail-card__usage">
+                    {formatMoney(
+                      providerSummary.totalCostMicros,
+                      providerSummary.currency,
+                    )}{" "}
+                    list price · {providerSummary.usageLineCount.toLocaleString()} row
+                    {providerSummary.usageLineCount === 1 ? "" : "s"}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          ) : null}
         </>
       ) : displayLines.length === 0 ? (
         <p className="context-empty">No usage pricing recorded yet.</p>
