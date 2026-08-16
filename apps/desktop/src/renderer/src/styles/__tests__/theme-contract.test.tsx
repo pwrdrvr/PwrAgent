@@ -322,6 +322,13 @@ describe("Tangerine Terminal theme contract", () => {
     const localTokens = new Set([
       "thinking-scanner-beam-width",
       "thinking-scanner-travel",
+      // Scanner tint indirection — defined on `.thinking-scanner`, not
+      // `:root`. Every value they resolve to IS a theme token; the locals
+      // exist so a variant (the Attention tab's remote-turn readout) can
+      // retarget the colour without restating the beam gradient.
+      "thinking-scanner-tint",
+      "thinking-scanner-tint-bright",
+      "thinking-scanner-track",
       // Sidebar rail/lane inset system — defined on `.sidebar`, not `:root`.
       "sidebar-rail-inset",
       "sidebar-lane-inset",

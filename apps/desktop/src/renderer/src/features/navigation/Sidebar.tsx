@@ -75,9 +75,12 @@ import { DirectoriesList } from "./DirectoriesList";
 import { RecentsList } from "./RecentsList";
 import {
   formatActiveThreadCount,
+  formatLocalActiveThreadCount,
+  formatRemoteActiveThreadCount,
   formatReviewThreadCount,
   isThreadActive,
   isThreadNeedingAttention,
+  isThreadRemoteWork,
 } from "./ThreadRowStatus";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 
@@ -495,25 +498,39 @@ export function Sidebar(props: SidebarProps) {
           ? props.recentThreads ?? props.threads
           : updatedOrderThreads;
   /**
-   * The two numbers on the Attention tab. Counted over the very rows the lens
+   * The numbers on the Attention tab. Counted over the very rows the lens
    * renders, not over `props.threads`, so the tab and the list cannot report
-   * different populations — `active + review` is the queue's length by
+   * different populations — the counts sum to the queue's length by
    * construction. A live turn wins over "to review" so one thread is never
    * counted twice; membership already guarantees a row that is not active is
    * awaiting review, which is the same split the directory headers use.
+   *
+   * Live turns split again by where they run. Only this instance's turns hold
+   * shutdown open, so "can I quit now?" is answerable from the tab alone —
+   * which it is not while one number mixes work on two machines.
    */
+  const federationWindowTarget = useMemo(
+    () => readRendererFederationTarget(),
+    [],
+  );
   const attentionCounts = useMemo(() => {
-    let active = 0;
+    let activeLocal = 0;
+    let activeRemote = 0;
     let review = 0;
     for (const thread of attentionThreads) {
-      if (isThreadActive(thread, props.thinkingThreadKeys)) {
-        active += 1;
-      } else {
+      if (!isThreadActive(thread, props.thinkingThreadKeys)) {
         review += 1;
+      } else if (isThreadRemoteWork(thread, federationWindowTarget)) {
+        activeRemote += 1;
+      } else {
+        activeLocal += 1;
       }
     }
-    return { active, review };
-  }, [attentionThreads, props.thinkingThreadKeys]);
+    return { activeLocal, activeRemote, review };
+  }, [attentionThreads, federationWindowTarget, props.thinkingThreadKeys]);
+  const remoteSignalVisible = useLingeringRemoteActiveSignal(
+    attentionCounts.activeRemote,
+  );
   const revealSelectedThreadRequest = props.revealSelectedThreadRequest;
   const selectedItemKey = props.selectedItemKey;
   const navigationThreads = props.threads;
@@ -1827,7 +1844,10 @@ export function Sidebar(props: SidebarProps) {
               <AttentionLensTab
                 key={mode}
                 active={props.browseMode === mode}
-                activeThreadCount={attentionCounts.active}
+                activeThreadCount={attentionCounts.activeLocal}
+                remoteActiveThreadCount={
+                  remoteSignalVisible ? attentionCounts.activeRemote : undefined
+                }
                 reviewThreadCount={attentionCounts.review}
                 onSelect={() => props.onBrowseModeChange(mode)}
               />
@@ -2810,10 +2830,52 @@ function ProfileIdentityButton(props: {
 }
 
 /**
+ * How long the remote-turn readout stays up after the last peer turn ends.
+ *
+ * The row is not a permanent fixture — an operator with no federation, or none
+ * of a peer's work running, gets exactly the tab they had before. But dropping
+ * it the instant the count hits zero would take the answer away at the moment
+ * it becomes interesting: "the peer just finished" is worth half a minute of
+ * a visible 0, and a row that vanishes mid-glance reads as a glitch.
+ */
+const REMOTE_ACTIVE_SIGNAL_LINGER_MS = 30_000;
+
+/**
+ * Whether the Attention tab shows its remote-turn readout: any peer turn
+ * running, or one that ended inside the linger window.
+ */
+function useLingeringRemoteActiveSignal(count: number): boolean {
+  const [visible, setVisible] = useState(count > 0);
+  useEffect(() => {
+    if (count > 0) {
+      setVisible(true);
+      return;
+    }
+    if (!visible) {
+      return;
+    }
+    const timer = setTimeout(
+      () => setVisible(false),
+      REMOTE_ACTIVE_SIGNAL_LINGER_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [count, visible]);
+  return visible;
+}
+
+/**
  * The Attention tab. Where the other three lenses show a static icon, this one
- * shows the two numbers it exists for: threads with a live turn, and threads
+ * shows the numbers it exists for: threads with a live turn, and threads
  * waiting to be reviewed. Each pairs the same indicator its thread rows use —
  * the scanner and the orange cookie.
+ *
+ * Live turns split in two once a peer is running work this window can see. The
+ * accent scanner counts turns on this machine, the neutral one below it counts
+ * turns on other instances, and the difference is the one that matters at
+ * quitting time: a local turn holds shutdown open and a peer's does not (see
+ * `isThreadRemoteWork`). Colour carries it because the question is asked at a
+ * glance — an operator should not have to open a tooltip to learn whether the
+ * app is safe to close.
  *
  * A zero count stays on the tab and goes grey rather than disappearing. That
  * is the point of the tab: "nothing running, nothing unread" has to be legible
@@ -2825,22 +2887,52 @@ function ProfileIdentityButton(props: {
 function AttentionLensTab(props: {
   active: boolean;
   activeThreadCount: number;
+  /**
+   * Peer turns this window can see. `undefined` means the readout is not on —
+   * no federated work has run recently — and the tab reads exactly as it does
+   * on an instance that has never federated.
+   */
+  remoteActiveThreadCount?: number;
   reviewThreadCount: number;
   onSelect: () => void;
 }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const tooltipText = [
-    browseModeTooltips.attention,
-    `${formatActiveThreadCount(props.activeThreadCount)} · ${formatReviewThreadCount(props.reviewThreadCount)}`,
-  ].join("\n");
+  const remoteActiveThreadCount = props.remoteActiveThreadCount;
+  // Split wording only once there is something to tell apart. "2 active
+  // threads" is the whole truth on an unfederated instance, and qualifying it
+  // with "on this machine" would raise a question the operator does not have.
+  const activeLines = remoteActiveThreadCount === undefined
+    ? [formatActiveThreadCount(props.activeThreadCount)]
+    : [
+      `${formatLocalActiveThreadCount(props.activeThreadCount)} — blocks quit`,
+      `${formatRemoteActiveThreadCount(remoteActiveThreadCount)} — does not block quit`,
+    ];
+  const tooltipText = remoteActiveThreadCount === undefined
+    ? [
+      browseModeTooltips.attention,
+      `${activeLines[0]} · ${formatReviewThreadCount(props.reviewThreadCount)}`,
+    ].join("\n")
+    : [
+      browseModeTooltips.attention,
+      ...activeLines,
+      formatReviewThreadCount(props.reviewThreadCount),
+    ].join("\n");
+  const accessibleName = [
+    browseModeLabels.attention,
+    ...(remoteActiveThreadCount === undefined
+      ? [formatActiveThreadCount(props.activeThreadCount)]
+      : [
+        formatLocalActiveThreadCount(props.activeThreadCount),
+        formatRemoteActiveThreadCount(remoteActiveThreadCount),
+      ]),
+    formatReviewThreadCount(props.reviewThreadCount),
+  ].join(", ");
 
   return (
     <>
       <button
         role="tab"
-        aria-label={`${browseModeLabels.attention}, ${formatActiveThreadCount(
-          props.activeThreadCount,
-        )}, ${formatReviewThreadCount(props.reviewThreadCount)}`}
+        aria-label={accessibleName}
         aria-selected={props.active}
         className={`lens-switch__button lens-switch__button--attention${
           props.active ? " is-active" : ""
@@ -2855,27 +2947,29 @@ function AttentionLensTab(props: {
         onMouseEnter={(event) => tooltip.show(event.currentTarget, tooltipText)}
         onMouseLeave={tooltip.hide}
       >
-        <span
-          aria-hidden="true"
-          className="lens-switch__signal lens-switch__signal--active"
-          data-attention-active-count={props.activeThreadCount}
-          data-zero={props.activeThreadCount === 0 ? "true" : undefined}
-        >
-          {props.activeThreadCount === 0 ? (
-            // A static stand-in, NOT a greyed-out `ThinkingScanner`. Killing
-            // the sweep with CSS on a mounted scanner is a desync trap:
-            // `data-zero` lives on this span, so React keeps the same scanner
-            // element across the flip, its ref never re-runs, and the restarted
-            // animation is never re-pinned to the shared epoch — leaving this
-            // tab drifting against every other scanner on screen. Swapping the
-            // element type guarantees a mount, so
-            // `syncThinkingScannerAnimation` runs and the beam comes back in
-            // phase. See ThinkingScanner.tsx and PR #1187.
-            <span className="lens-switch__dormant-scanner" />
-          ) : (
-            <ThinkingScanner compact />
+        {/* One column so the second readout stacks under the first instead of
+            widening the tab. The Attention tab already floors the switch's
+            narrowest track (see `.lens-switch`), and a third readout laid out
+            across would take that room from the four icon tabs. */}
+        <span aria-hidden="true" className="lens-switch__turns">
+          <span
+            className="lens-switch__signal lens-switch__signal--active"
+            data-attention-active-count={props.activeThreadCount}
+            data-zero={props.activeThreadCount === 0 ? "true" : undefined}
+          >
+            <AttentionTurnScanner count={props.activeThreadCount} />
+            <span>{props.activeThreadCount}</span>
+          </span>
+          {remoteActiveThreadCount === undefined ? null : (
+            <span
+              className="lens-switch__signal lens-switch__signal--remote-active"
+              data-attention-remote-active-count={remoteActiveThreadCount}
+              data-zero={remoteActiveThreadCount === 0 ? "true" : undefined}
+            >
+              <AttentionTurnScanner count={remoteActiveThreadCount} />
+              <span>{remoteActiveThreadCount}</span>
+            </span>
           )}
-          <span>{props.activeThreadCount}</span>
         </span>
         <span
           aria-hidden="true"
@@ -2889,6 +2983,31 @@ function AttentionLensTab(props: {
       </button>
       {tooltip.tooltipNode}
     </>
+  );
+}
+
+/**
+ * The sweeping bar next to one of the Attention tab's turn counts, or its idle
+ * stand-in.
+ *
+ * At zero this is a static element, NOT a greyed-out `ThinkingScanner`.
+ * Killing the sweep with CSS on a mounted scanner is a desync trap: `data-zero`
+ * lives on the parent span, so React would keep the same scanner element across
+ * the flip, its ref would never re-run, and the restarted animation would never
+ * be re-pinned to the shared epoch — leaving this tab drifting against every
+ * other scanner on screen. Swapping the element type guarantees a mount, so
+ * `syncThinkingScannerAnimation` runs and the beam comes back in phase. See
+ * ThinkingScanner.tsx and PR #1187.
+ *
+ * The remote readout's beam is neutral rather than accent, but it is the same
+ * untouched component tinted by its parent's tokens — a peer's turn is running
+ * for real, so it sweeps for real, on the same epoch as the rest.
+ */
+function AttentionTurnScanner(props: { count: number }) {
+  return props.count === 0 ? (
+    <span className="lens-switch__dormant-scanner" />
+  ) : (
+    <ThinkingScanner compact />
   );
 }
 

@@ -2711,6 +2711,150 @@ describe("Sidebar", () => {
       }
     });
 
+    describe("remote turn readout", () => {
+      const remoteActiveThread = {
+        ...activeThread,
+        id: "thread-remote-active",
+        title: "Remote active thread",
+        federation: {
+          instanceLabel: "studio",
+          ref: {
+            backend: "codex" as const,
+            target: { scope: "remote" as const, instanceId: "peer-1" },
+            threadId: "thread-remote-active",
+          },
+        },
+      };
+      const remoteSidebarProps = (threads: typeof allThreads) => ({
+        backends,
+        browseMode: "inbox" as const,
+        createThreadError: undefined,
+        directories,
+        inboxThreads: threads,
+        launchpadError: undefined,
+        loading: false,
+        creatingThread: undefined,
+        selectedItemKey: undefined,
+        threads,
+        onBrowseModeChange: () => undefined,
+        onCreateThread: async () => undefined,
+        onOpenLaunchpad: async () => undefined,
+        onSelectThread: () => undefined,
+      });
+
+      it("stays off the tab entirely when no peer work has run", () => {
+        // The whole point of the second readout is that an operator who never
+        // federates sees the tab they always had. A permanent "0" would put a
+        // federation concept on every instance's sidebar.
+        render(<Sidebar {...remoteSidebarProps([activeThread, unreadThread])} />);
+
+        const tab = screen.getByRole("tab", {
+          name: "Attention, 1 active thread, 1 thread to review",
+        });
+        expect(
+          tab.querySelector("[data-attention-remote-active-count]"),
+        ).toBeNull();
+      });
+
+      it("splits local from peer turns, and says which blocks quitting", () => {
+        render(
+          <Sidebar
+            {...remoteSidebarProps([activeThread, remoteActiveThread, unreadThread])}
+          />,
+        );
+
+        const tab = screen.getByRole("tab", {
+          name:
+            "Attention, 1 active thread on this machine, "
+            + "1 active thread on other instances, 1 thread to review",
+        });
+        expect(
+          tab.querySelector("[data-attention-active-count]"),
+        ).toHaveAttribute("data-attention-active-count", "1");
+        expect(
+          tab.querySelector("[data-attention-remote-active-count]"),
+        ).toHaveAttribute("data-attention-remote-active-count", "1");
+        // Live work, so it sweeps — both readouts mount a real scanner. The
+        // remote one is neutral by token, not by being switched off.
+        expect(tab.querySelectorAll(".thinking-scanner")).toHaveLength(2);
+      });
+
+      it("holds a zeroed peer readout for the linger window, then drops it", () => {
+        vi.useFakeTimers();
+        try {
+          const view = render(
+            <Sidebar {...remoteSidebarProps([activeThread, remoteActiveThread])} />,
+          );
+
+          const settled = [
+            activeThread,
+            { ...remoteActiveThread, threadStatus: "idle" as const },
+          ];
+          view.rerender(<Sidebar {...remoteSidebarProps(settled)} />);
+
+          // A row that vanishes the instant the peer finishes takes the answer
+          // away exactly when it becomes interesting.
+          const lingering = screen.getByRole("tab", { name: /^Attention,/ });
+          const remote = lingering.querySelector(
+            "[data-attention-remote-active-count]",
+          );
+          expect(remote).toHaveAttribute(
+            "data-attention-remote-active-count",
+            "0",
+          );
+          expect(remote).toHaveAttribute("data-zero", "true");
+
+          act(() => {
+            vi.advanceTimersByTime(30_000);
+          });
+
+          expect(
+            screen
+              .getByRole("tab", { name: /^Attention,/ })
+              .querySelector("[data-attention-remote-active-count]"),
+          ).toBeNull();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("keeps the readout up when a peer starts again mid-linger", () => {
+        vi.useFakeTimers();
+        try {
+          const idleRemote = {
+            ...remoteActiveThread,
+            threadStatus: "idle" as const,
+          };
+          const view = render(
+            <Sidebar {...remoteSidebarProps([activeThread, remoteActiveThread])} />,
+          );
+          view.rerender(
+            <Sidebar {...remoteSidebarProps([activeThread, idleRemote])} />,
+          );
+          act(() => {
+            vi.advanceTimersByTime(20_000);
+          });
+          view.rerender(
+            <Sidebar {...remoteSidebarProps([activeThread, remoteActiveThread])} />,
+          );
+
+          // The linger timer has to be cancelled, not merely outrun: firing it
+          // would blank a readout showing live peer work.
+          act(() => {
+            vi.advanceTimersByTime(30_000);
+          });
+
+          expect(
+            screen
+              .getByRole("tab", { name: /^Attention,/ })
+              .querySelector("[data-attention-remote-active-count]"),
+          ).toHaveAttribute("data-attention-remote-active-count", "1");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+
     it("counts a live turn once, as active rather than to-review", () => {
       // A thread can be both running and unread. The tab must not report it
       // twice — same split the directory headers use.

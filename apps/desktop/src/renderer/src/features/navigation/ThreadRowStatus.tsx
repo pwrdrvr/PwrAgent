@@ -1,4 +1,7 @@
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  FederationRemoteTarget,
+  NavigationThreadSummary,
+} from "@pwragent/shared";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 
@@ -23,6 +26,39 @@ export function isThreadActive(
 
 export function formatActiveThreadCount(count: number): string {
   return `${count} active thread${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * Which machine a row's work actually runs on.
+ *
+ * Two things make a row remote, and only checking one of them gets it wrong on
+ * a surface that matters. A federation-stamped row is a peer's thread carried
+ * into an unscoped window by a pin or a mounted parent. A window that fronts a
+ * peer is the other case: its snapshot comes from that peer, so every row in it
+ * is the peer's work and none of them carry a stamp — from the owner's side
+ * they are local, and the stamp is only added on the way into someone else's
+ * window.
+ *
+ * The distinction is load-bearing for the Attention tab: turns are driven by
+ * the registry of the instance that owns them (see `buildQuitBlockerSnapshot`
+ * in the main process), so only local work can hold this app's shutdown open.
+ */
+export function isThreadRemoteWork(
+  thread: NavigationThreadSummary,
+  federationWindowTarget?: FederationRemoteTarget,
+): boolean {
+  return (
+    federationWindowTarget !== undefined
+    || thread.federation?.ref.target.scope === "remote"
+  );
+}
+
+export function formatLocalActiveThreadCount(count: number): string {
+  return `${formatActiveThreadCount(count)} on this machine`;
+}
+
+export function formatRemoteActiveThreadCount(count: number): string {
+  return `${formatActiveThreadCount(count)} on other instances`;
 }
 
 /**
