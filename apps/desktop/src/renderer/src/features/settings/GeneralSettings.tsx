@@ -4,6 +4,7 @@ import type {
   DesktopHotCpuProfileTriggerMode,
   DesktopSettingsSnapshot,
   DesktopUpdateChannel,
+  DesktopUpdateTrain,
 } from "@pwragent/shared";
 import type {
   AppMetadata,
@@ -136,6 +137,14 @@ const PASTED_IMAGE_PATCH_OPTIONS: Array<{
   },
 ];
 
+const UPDATE_TRAIN_OPTIONS: Array<{
+  label: string;
+  value: DesktopUpdateTrain;
+}> = [
+  { label: "Stable", value: "stable" },
+  { label: "Beta", value: "beta" },
+];
+
 const UPDATE_CHANNEL_OPTIONS: Array<{
   label: string;
   value: DesktopUpdateChannel;
@@ -194,7 +203,12 @@ function releaseHelpText(
   if (!releases) {
     return "Release versions are loading.";
   }
-  return `Latest: ${releaseVersionText(releases.latest)}. Prerelease: ${releaseVersionText(releases.prerelease)}.`;
+  return [
+    `Stable latest: ${releaseVersionText(releases.stable.latest)}`,
+    `Stable prerelease: ${releaseVersionText(releases.stable.prerelease)}`,
+    `Beta latest: ${releaseVersionText(releases.beta.latest)}`,
+    `Beta prerelease: ${releaseVersionText(releases.beta.prerelease)}`,
+  ].join(". ");
 }
 
 function updateResultText(result: AppUpdateCheckResult): string {
@@ -238,6 +252,7 @@ export function GeneralSettings(props: {
   onConfirmQuitWithInProgressThreadsChange: (value: boolean) => Promise<void>;
   onPastedImageMaxPatchesChange: (value: number) => Promise<void>;
   onUpdateChannelChange: (value: DesktopUpdateChannel) => Promise<void>;
+  onUpdateTrainChange: (value: DesktopUpdateTrain) => Promise<void>;
   onNotificationsEnabledChange: (value: boolean) => Promise<void>;
   onClearMessagingAcknowledgment: () => Promise<void>;
 }) {
@@ -285,6 +300,7 @@ export function GeneralSettings(props: {
     props.snapshot.general.hotCpuProfilingHeapSnapshotLimit;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
   const updateChannel = props.snapshot.updates.channel;
+  const updateTrain = props.snapshot.updates.train;
   const messagingAcknowledgment =
     props.snapshot.general.messagingAcknowledgment;
   const activeOption = PASTED_IMAGE_PATCH_OPTIONS.find(
@@ -613,33 +629,68 @@ export function GeneralSettings(props: {
       <SettingsSection
         eyebrow="General"
         title="Updates"
-        chip={sourceBadge(updateChannel)}
+        chip={
+          updateTrain.source === "config"
+            ? sourceBadge(updateTrain)
+            : sourceBadge(updateChannel)
+        }
       >
         <div className="settings-fields">
           <SettingsField
-            label="Update channel"
-            sub="Choose which GitHub release stream the updater follows."
-            help={
-              <>
-                {releaseHelpText(releaseVersions)}
-                {updateResult ? (
-                  <>
-                    {" "}
-                    <span
-                      className={
-                        updateResult.status === "error"
-                          ? "settings-update-channel__result settings-update-channel__result--error"
-                          : "settings-update-channel__result"
-                      }
-                      role={
-                        updateResult.status === "error" ? "alert" : undefined
-                      }
-                    >
-                      {updateResultText(updateResult)}
+            label="Release channel"
+            sub="Stable is the smoke-checked train. Beta follows main and stays selectable even when its versions are still Unavailable."
+            help={releaseHelpText(releaseVersions)}
+            error={updateTrain.error}
+            source={sourceBadge(updateTrain)}
+            control={
+              <div
+                className="settings-segmented"
+                role="radiogroup"
+                aria-label="Release channel"
+              >
+                {UPDATE_TRAIN_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    aria-checked={updateTrain.value === option.value}
+                    className={`settings-segmented__button settings-segmented__button--stacked${
+                      updateTrain.value === option.value ? " is-active" : ""
+                    }`}
+                    disabled={props.saving}
+                    role="radio"
+                    type="button"
+                    onClick={() => {
+                      void props.onUpdateTrainChange(option.value);
+                    }}
+                  >
+                    <span>{option.label}</span>
+                    <span className="settings-segmented__meta">
+                      {releaseVersionText(
+                        releaseVersions?.[option.value]?.latest,
+                      )}
                     </span>
-                  </>
-                ) : null}
-              </>
+                  </button>
+                ))}
+              </div>
+            }
+          />
+          <SettingsField
+            label="Update track"
+            sub="Latest is smoke-checked. Prerelease is newer and may not install."
+            help={
+              updateResult ? (
+                <span
+                  className={
+                    updateResult.status === "error"
+                      ? "settings-update-channel__result settings-update-channel__result--error"
+                      : "settings-update-channel__result"
+                  }
+                  role={
+                    updateResult.status === "error" ? "alert" : undefined
+                  }
+                >
+                  {updateResultText(updateResult)}
+                </span>
+              ) : undefined
             }
             error={updateChannel.error}
             source={sourceBadge(updateChannel)}
@@ -648,7 +699,7 @@ export function GeneralSettings(props: {
                 <div
                   className="settings-segmented"
                   role="radiogroup"
-                  aria-label="Update channel"
+                  aria-label="Update track"
                 >
                   {UPDATE_CHANNEL_OPTIONS.map((option) => (
                     <button
@@ -666,7 +717,9 @@ export function GeneralSettings(props: {
                     >
                       <span>{option.label}</span>
                       <span className="settings-segmented__meta">
-                        {releaseVersionText(releaseVersions?.[option.value])}
+                        {releaseVersionText(
+                          releaseVersions?.[updateTrain.value]?.[option.value],
+                        )}
                       </span>
                     </button>
                   ))}

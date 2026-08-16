@@ -36,6 +36,22 @@ Read these files before changing release metadata:
 - Always use a leading-`v` tag such as `v1.0.0-alpha.5`.
 - The tag version, `apps/desktop/package.json` version, and
   `CHANGELOG.md` release heading must match.
+- Desktop Settings expose two axes: **channel** (Stable or Beta) and
+  **track** (Latest or Prerelease). Encode those slots in the tag suffix
+  so GitHub `/releases/latest` stays on the Stable Latest train:
+  - Stable Latest: `v1.0.5` (no suffix; GitHub Latest)
+  - Stable Prerelease: `v1.0.6-prerelease.1` (GitHub Pre-release)
+  - Beta Latest: `v1.1.0-beta.3` (GitHub Pre-release; smoke-checked `main`)
+  - Beta Prerelease: `v1.1.0-alpha.7` (GitHub Pre-release; may not install)
+- Keep `-prerelease.N` for Stable RCs. Do not reuse `-beta` for 1.0 RCs;
+  `-beta` is the Beta Latest identifier.
+- `main` tags with a prerelease suffix must stay GitHub Pre-release so they
+  never steal `/releases/latest` from the Stable train.
+- To promote a smoked alpha to beta, bump `apps/desktop/package.json` and
+  add a CHANGELOG heading from `X.Y.Z-alpha.N` to `X.Y.Z-beta.M`, commit,
+  and tag that commit. The tree can otherwise match the alpha. Do not add
+  a second tag to the alpha SHA: the metadata gate and the baked app
+  version both come from `package.json`.
 - Before moving `main` to a new major/minor train, verify that the prior train's
   maintenance branch exists. For example, before preparing `1.1.0-beta.1` from a
   current `1.0.*` `main`, check for `origin/releases/1.0`. If it is missing,

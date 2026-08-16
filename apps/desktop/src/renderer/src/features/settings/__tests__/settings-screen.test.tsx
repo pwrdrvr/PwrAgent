@@ -180,6 +180,7 @@ function createSnapshot(
     },
     updates: {
       channel: { value: "latest", source: "default" },
+      train: { value: "stable", source: "default" },
     },
     integratedTerminal: {
       windowsShell: { value: "auto", source: "default" },
@@ -612,8 +613,14 @@ describe("SettingsScreen", () => {
       })),
       readAppUpdateReleaseVersions: vi.fn(async () => ({
         fetchedAt: 1,
-        latest: { version: "v1.0.0" },
-        prerelease: { version: "v1.0.0-beta.7" },
+        stable: {
+          latest: { version: "v1.0.0" },
+          prerelease: { version: "v1.0.0-beta.7" },
+        },
+        beta: {
+          latest: { version: "v1.1.0-beta.2" },
+          prerelease: { version: "v1.1.0-alpha.7" },
+        },
       })),
     };
     render(
@@ -716,6 +723,18 @@ describe("SettingsScreen", () => {
     });
 
     expect(await screen.findByText("v1.0.0-beta.7")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Stable/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /Beta/ }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        updates: {
+          train: "beta",
+        },
+      });
+    });
     fireEvent.click(screen.getByRole("radio", { name: /Prerelease/ }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
@@ -3906,6 +3925,7 @@ describe("SettingsScreen", () => {
       createSnapshot({
         updates: {
           channel: { value: "prerelease", source: "config" },
+          train: { value: "stable", source: "default" },
         },
       }),
     );
@@ -3916,8 +3936,14 @@ describe("SettingsScreen", () => {
       })),
       readAppUpdateReleaseVersions: vi.fn(async () => ({
         fetchedAt: 1,
-        latest: { version: "v1.0.0" },
-        prerelease: { version: "v1.0.0-beta.7" },
+        stable: {
+          latest: { version: "v1.0.0" },
+          prerelease: { version: "v1.0.0-beta.7" },
+        },
+        beta: {
+          latest: { version: "v1.1.0-beta.2" },
+          prerelease: { version: "v1.1.0-alpha.7" },
+        },
       })),
       readAppUpdateStatus: vi.fn(async () => ({
         status: "downloaded" as const,

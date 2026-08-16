@@ -17,6 +17,7 @@ export function getDesktopSettingsService(): DesktopSettingsService {
     const bootstrap = getAppStateMode() === "bootstrap";
     desktopSettingsService = new DesktopSettingsService({
       defaultDeveloperMode: app.isPackaged === true ? false : true,
+      resolveAppVersion: () => app.getVersion(),
       secretStore: new DbBackedSafeStorageSecretStore(safeStorage, getAppStateDb()),
       ...(bootstrap
         ? { configPath: resolveBootstrapProfilePath("config.toml") }

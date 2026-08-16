@@ -26,6 +26,7 @@ import type {
   DesktopSettingsSnapshot,
   DesktopSettingsValue,
   DesktopUpdateChannel,
+  DesktopUpdateTrain,
   DesktopWorktreeStorageLocation,
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
@@ -42,6 +43,8 @@ import {
   DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
   DESKTOP_UPDATE_CHANNEL_DEFAULT,
+  DESKTOP_UPDATE_TRAIN_DEFAULT,
+  inferDesktopUpdateSelection,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
 } from "@pwragent/shared";
 import {
@@ -209,6 +212,8 @@ type DesktopSettingsServiceOptions = {
   resolveCodexShellEnv?: (
     env: NodeJS.ProcessEnv
   ) => NodeJS.ProcessEnv | undefined;
+  appVersion?: string;
+  resolveAppVersion?: () => string;
   /**
    * Side-effect hook invoked from `writeConfigPatch` whenever a write
    * touched `[general.appearance]`. The production wiring routes this
@@ -667,9 +672,7 @@ export class DesktopSettingsService {
           config.imageUploads?.pastedImageMaxPatches,
         ),
       },
-      updates: {
-        channel: this.resolveUpdateChannelValue(config.updates?.channel),
-      },
+      updates: this.resolveUpdateSelection(config.updates),
       integratedTerminal: {
         windowsShell: this.resolveIntegratedTerminalWindowsShellValue(
           config.integratedTerminal?.windowsShell,
@@ -1071,7 +1074,12 @@ export class DesktopSettingsService {
   }
 
   resolveUpdateChannel(): DesktopUpdateChannel {
-    return this.resolveUpdateChannelValue(this.readConfig().config.updates?.channel)
+    return this.resolveUpdateSelection(this.readConfig().config.updates).channel
+      .value;
+  }
+
+  resolveUpdateTrain(): DesktopUpdateTrain {
+    return this.resolveUpdateSelection(this.readConfig().config.updates).train
       .value;
   }
 
@@ -1670,12 +1678,39 @@ export class DesktopSettingsService {
     };
   }
 
-  private resolveUpdateChannelValue(
-    configValue: DesktopUpdateChannel | undefined,
-  ): DesktopSettingsValue<DesktopUpdateChannel> {
+  private currentAppVersion(): string {
+    return this.options.appVersion
+      ?? this.options.resolveAppVersion?.()
+      ?? "";
+  }
+
+  private resolveUpdateSelection(updates?: {
+    channel?: DesktopUpdateChannel;
+    train?: DesktopUpdateTrain;
+  }): {
+    channel: DesktopSettingsValue<DesktopUpdateChannel>;
+    train: DesktopSettingsValue<DesktopUpdateTrain>;
+  } {
+    // Infer the version-derived pair only when neither key exists. A
+    // pre-train config with only `channel = "prerelease"` must stay on
+    // Stable so installing a 1.1.0-beta binary does not silently move
+    // that operator onto Beta Prerelease / alphas.
+    if (updates?.channel === undefined && updates?.train === undefined) {
+      const inferred = inferDesktopUpdateSelection(this.currentAppVersion());
+      return {
+        channel: { value: inferred.channel, source: "default" },
+        train: { value: inferred.train, source: "default" },
+      };
+    }
     return {
-      value: configValue ?? DESKTOP_UPDATE_CHANNEL_DEFAULT,
-      source: configValue === undefined ? "default" : "config",
+      channel: {
+        value: updates.channel ?? DESKTOP_UPDATE_CHANNEL_DEFAULT,
+        source: updates.channel === undefined ? "default" : "config",
+      },
+      train: {
+        value: updates.train ?? DESKTOP_UPDATE_TRAIN_DEFAULT,
+        source: updates.train === undefined ? "default" : "config",
+      },
     };
   }
 
