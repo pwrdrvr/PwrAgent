@@ -441,6 +441,95 @@ describe("App", () => {
     })).not.toBeInTheDocument();
   });
 
+  it("does not offer the current remote window as a new-thread target", async () => {
+    (window as typeof window & {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = {
+      scope: "remote",
+      instanceId: "m4",
+    };
+    const windowFocusListeners = new Set<() => void>();
+    const readFederationHealth = vi.fn(async () => ({
+      health: {
+        enabled: true,
+        role: "gateway" as const,
+        status: "connected" as const,
+        instanceId: "local-instance",
+        peers: [
+          {
+            id: "m4",
+            label: "Harold-Mac-Mini-M4",
+            role: "client" as const,
+            status: "connected" as const,
+            capabilities: [
+              "remote_window",
+              "thread_navigation",
+              "environment_actions",
+            ] as const,
+          },
+          {
+            id: "laptop",
+            label: "Harold-MBP-M2-Max",
+            role: "client" as const,
+            status: "connected" as const,
+            capabilities: [
+              "remote_window",
+              "thread_navigation",
+              "environment_actions",
+            ] as const,
+          },
+        ],
+      },
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: (listener: () => void) => {
+          windowFocusListeners.add(listener);
+          return () => {
+            windowFocusListeners.delete(listener);
+          };
+        },
+        openFederationWindow: vi.fn(),
+        readFederationHealth,
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(windowFocusListeners.size).toBeGreaterThan(0));
+    act(() => {
+      for (const listener of windowFocusListeners) {
+        listener();
+      }
+    });
+    await waitFor(() => expect(readFederationHealth).toHaveBeenCalled());
+
+    const button = screen.getByRole("button", { name: "New thread" });
+    await waitFor(() => expect(button).toHaveAttribute("aria-haspopup", "menu"));
+    fireEvent.mouseEnter(button.parentElement as HTMLElement);
+
+    expect(await screen.findByRole("menuitem", {
+      name: "Harold-MBP-M2-Max",
+    })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", {
+      name: "Harold-Mac-Mini-M4",
+    })).not.toBeInTheDocument();
+  });
+
   it("surfaces GitHub organization SAML enforcement as a sticky error toast", async () => {
     let samlListener:
       | ((event: {

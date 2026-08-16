@@ -375,7 +375,10 @@ function DesktopAppShell(props: {
   const newThreadFederationTargets = useMemo(
     () =>
       desktopApi?.openFederationWindow
-        ? buildFederationThreadTargets(liveFederationHealth)
+        ? buildFederationThreadTargets(
+            liveFederationHealth,
+            readRendererFederationTarget()?.instanceId,
+          )
         : [],
     [desktopApi?.openFederationWindow, liveFederationHealth],
   );
