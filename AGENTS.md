@@ -221,38 +221,86 @@
 - Do not change the first-party license without an explicit PwrDrvr LLC policy change.
 - Do not remove license disclosures without an explicit PwrDrvr LLC policy change.
 
-## Runtime Config
+## Runtime Configuration
 
-- All desktop config and state lives under `~/.pwragent/` (the "PwrAgent root").
-- Override the root with `PWRAGENT_HOME=/path/to/root` for isolated E2E or dev-profile use.
-- Select a named profile with `PWRAGENT_PROFILE=<name>` (defaults to `default`).
-- Per-profile layout: `~/.pwragent/profiles/<name>/config.toml` (settings), `~/.pwragent/profiles/<name>/state/state.db` (sqlite).
-- Before making a backwards-incompatible TOML config shape change, read [docs/config-file-evolution.md](docs/config-file-evolution.md) and follow its read-fallback, lazy-conversion, legacy-comment, and dual-write rules.
-- Removed env vars (no longer honored): `PWRAGNT_STATE_ROOT`, `PWRAGNT_CONFIG_PATH`.
-- Multiple instances can share the same profile DB safely (sqlite WAL mode); no lockfile needed.
+- Store all desktop configuration and state under `~/.pwragent/`.
+- This directory is the **PwrAgent root**.
+- For isolated E2E or development work, override the root with `PWRAGENT_HOME=/path/to/root`.
+- Select a named profile with `PWRAGENT_PROFILE=<name>`.
+- If the variable is not set, use the `default` profile.
+- Store profile settings in `~/.pwragent/profiles/<name>/config.toml`.
+- Store profile state in `~/.pwragent/profiles/<name>/state/state.db`.
+- Before an incompatible TOML shape change, read [config-file-evolution.md](docs/config-file-evolution.md).
+- Apply all of these configuration evolution rules:
+  - Read fallback.
+  - Lazy conversion.
+  - Legacy comment.
+  - Dual write.
+- Do not use `PWRAGNT_STATE_ROOT` or `PWRAGNT_CONFIG_PATH`.
+- The application does not read those removed variables.
+- Multiple instances can safely share one profile database through SQLite WAL mode.
+- Do not add a lock file for this database.
 
 ### Dev-only env vars
 
-These are **dev-only escape hatches**. They are silently ignored in packaged production builds (`app.isPackaged === true`); production operators MUST NOT set them. Each is rejected at startup with a `mainLog.error` line if it appears alongside a packaged build, then treated as unset.
+These variables are for development only.
 
-- `PWRAGENT_PROFILE_AUTO_CREATE=1` — Bypass the onboarding wizard's "set up profile" prompt for missing-named-profile boots. Used by E2E fixtures and replay harnesses that need a profile dir materialized without operator interaction. Production launches MUST go through the wizard so an operator never gets a silently-created profile mapped to a Codex auth profile they didn't ask for (see issue #524).
-- `PWRAGENT_DEV_DISABLE_SECRET_STORAGE=1` — Skip `safeStorage` operations entirely. Wizard typed secrets are SILENTLY DROPPED; settings-screen secret pills report "unavailable." Workaround for unsigned dev Electron builds on macOS that surface a confusing "Keychain Not Found" dialog because the binary lacks a stable code-signed identity (signed release builds don't have this problem). Operator re-enters secrets in Settings → Models on a real build afterwards.
-- `PWRAGENT_DEV_SQLITE_WRITE_METRICS=1` — Count sqlite write volume (commits, write statements, rows, WAL growth, per table) for the process. Wraps the database in `StateDb.open` after schema setup. Paired with `PWRAGENT_DEV_SQLITE_WRITE_METRICS_FILE=<path>`, which appends one JSON line of totals per source. See "Sqlite Write-Volume Instrumentation" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
+- Production operators must not set these variables.
+- A packaged build ignores each variable.
+- If a packaged build finds one, startup writes a `mainLog.error` entry.
+- The packaged build then treats the variable as unset.
+
+`PWRAGENT_PROFILE_AUTO_CREATE=1`
+
+- Skip the onboarding prompt when a named profile does not exist.
+- Use this variable for E2E fixtures and replay harnesses that need a profile directory.
+- Production launches must use the onboarding wizard.
+- The wizard prevents an unrequested mapping to a Codex authentication profile.
+- Issue #524 explains this requirement.
+
+`PWRAGENT_DEV_DISABLE_SECRET_STORAGE=1`
+
+- Skip all `safeStorage` operations.
+- The wizard silently discards secrets that the operator enters.
+- Secret indicators on the Settings screen report `unavailable`.
+- Use this workaround only for unsigned development builds on macOS.
+- Those builds can show a `Keychain Not Found` dialog because they have no stable signing identity.
+- Signed release builds do not have this problem.
+- After development, enter the secrets again in **Settings → Models** on a signed build.
+
+`PWRAGENT_DEV_SQLITE_WRITE_METRICS=1`
+
+- Count process-level SQLite commits, statements, rows, WAL growth, and table activity.
+- `StateDb.open` installs the metrics wrapper after schema setup.
+- Set `PWRAGENT_DEV_SQLITE_WRITE_METRICS_FILE=<path>` to select an output file.
+- The metrics file gets one JSON line of totals for each source.
+- Read "Sqlite Write-Volume Instrumentation" in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
 
 ## Frontend and Desktop UI
 
-- For renderer UI work, follow the desktop style guide before inventing local styling.
-- For colors, tokens, and visual theme decisions, follow the UI theme guide before adding local CSS.
-- Favor thread-first information hierarchy over generic dashboard layout.
-- Do not ship scaffold narration or placeholder implementation copy in user-facing UI.
+- Before renderer UI work, read the [desktop style guide](docs/design/desktop-style-guide.md).
+- Before color or theme work, read the [UI theme guide](docs/UI-THEME.md).
+- Use existing theme tokens before you add local CSS.
+- Prefer a thread-first information hierarchy to a generic dashboard layout.
+- Do not put scaffold narration in the user interface.
+- Do not put placeholder implementation text in the user interface.
 
 ### Reuse existing chrome — copy tokens, don't pick new ones
 
-When you build new chrome (a title bar strip, a brand mark, a breadcrumb,
-an eyebrow, a path/app row), open `apps/desktop/src/renderer/src/styles/app.css`
-and copy the token references from the existing primitive that solves the
-same problem. Don't pick a new token because it "looks similar" — the brand
-across windows must read identically.
+Before you build new window chrome, open `apps/desktop/src/renderer/src/styles/app.css`.
+
+- Find the existing primitive that has the same function.
+- Copy its token references.
+- Do not select a different token because it looks similar.
+- Keep brand presentation identical in all windows.
+
+This rule applies to these elements:
+
+- Title-bar strips.
+- Brand marks.
+- Breadcrumbs.
+- Eyebrows.
+- Path or application rows.
 
 Canonical primitives and the tokens they read:
 
@@ -263,13 +311,12 @@ Canonical primitives and the tokens they read:
 | `.settings-titlebar__*` (Settings right-pane) | n/a | n/a | `--accent` | `--text-muted` | `--text-primary` |
 | `.activity-titlebar__*` (Activity window) | `--text-primary` | `--accent` | `--accent` | `--text-muted` | `--text-primary` |
 
-`apps/desktop/src/renderer/src/styles/__tests__/theme-contract.test.tsx`
-locks the brand-accent + breadcrumb token contract across these primitives.
-A test fails if anyone (you, a future PR) picks a different accent token
-for a brand mark or drifts the Activity titlebar breadcrumb away from the
-Settings titlebar. **If you need to deliberately change a chrome token,
-change the test in the same commit** so the intent is reviewed, not
-accidental.
+`apps/desktop/src/renderer/src/styles/__tests__/theme-contract.test.tsx` enforces this token contract.
+
+- The test compares brand accent tokens across the listed primitives.
+- The test also compares Activity and Settings breadcrumb tokens.
+- If you intentionally change a chrome token, change the test in the same commit.
+- This paired change makes the design decision visible during review.
 
 ## Current Product Direction
 
