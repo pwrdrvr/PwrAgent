@@ -3342,6 +3342,254 @@ describe("useThreadSessionState", () => {
     );
   });
 
+  it("replaces a launchpad placeholder when its user-message item completes", async () => {
+    const launchpadText =
+      "https://github.com/pwrdrvr/PwrSnap/pull/407 - Update the TanStack Virtual lockfile.";
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 2_000 }),
+          optimisticUserMessage: {
+            text: launchpadText,
+            createdAt: 1_000,
+          },
+          optimisticActiveTurn: {
+            id: "turn-1",
+            statusText: "Thinking",
+            startedAt: 2_000,
+          },
+        },
+      })
+    );
+
+    await waitForThreadHydration(result);
+    await waitFor(() => {
+      expect(result.current.entries).toEqual([
+        expect.objectContaining({
+          id: "optimistic-launchpad-codex:thread-1",
+          role: "user",
+          text: launchpadText,
+        }),
+      ]);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "item-1",
+              type: "userMessage",
+              text: launchpadText,
+            },
+          },
+        },
+      });
+    });
+
+    expect(result.current.entries).toEqual([
+      expect.objectContaining({
+        id: "item-1",
+        role: "user",
+        text: launchpadText,
+        turn: expect.objectContaining({ id: "turn-1" }),
+      }),
+    ]);
+  });
+
+  it("keeps a duplicate optimistic user message when the launch item completes", async () => {
+    const messageText = "Please update the TanStack Virtual lockfile.";
+    let authoritativeEntries: AppServerThreadEntry[] = [];
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async () => readThreadResponse({
+        entries: authoritativeEntries,
+        hasPreviousPage: false,
+        supportsPagination: false,
+      }),
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: {
+            ...buildThread({ id: "thread-1", updatedAt }),
+            optimisticUserMessage: {
+              text: messageText,
+              createdAt: 1_000,
+            },
+            optimisticActiveTurn: {
+              id: "turn-1",
+              statusText: "Thinking",
+              startedAt: 2_000,
+            },
+          },
+        }),
+      { initialProps: { updatedAt: 2_000 } },
+    );
+
+    await waitForThreadHydration(result);
+    let duplicateOptimisticId = "";
+    act(() => {
+      duplicateOptimisticId = result.current.addOptimisticUserMessage(messageText);
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "item-1",
+              type: "userMessage",
+              text: messageText,
+            },
+          },
+        },
+      });
+    });
+
+    const userEntries = result.current.entries.filter(
+      (entry): entry is AppServerThreadMessageEntry =>
+        entry.type === "message" && entry.role === "user"
+    );
+    expect(userEntries).toHaveLength(2);
+    expect(userEntries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "item-1",
+          text: messageText,
+          turn: expect.objectContaining({ id: "turn-1" }),
+        }),
+        expect.objectContaining({
+          id: duplicateOptimisticId,
+          text: messageText,
+        }),
+      ])
+    );
+
+    authoritativeEntries = [
+      userEntries.find((entry) => entry.id === "item-1")!,
+    ];
+    rerender({ updatedAt: 3_000 });
+
+    await waitFor(() => {
+      const hydratedUserEntryIds = result.current.entries
+        .filter((entry) => entry.type === "message" && entry.role === "user")
+        .map((entry) => entry.id);
+      expect(hydratedUserEntryIds).toHaveLength(2);
+      expect(hydratedUserEntryIds).toEqual(
+        expect.arrayContaining(["item-1", duplicateOptimisticId])
+      );
+    });
+  });
+
+  it("does not reconcile a launchpad placeholder with another turn's identical user message", async () => {
+    const messageText = "Please update the TanStack Virtual lockfile.";
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 2_000 }),
+          optimisticUserMessage: {
+            text: messageText,
+            createdAt: 1_000,
+          },
+          optimisticActiveTurn: {
+            id: "turn-1",
+            statusText: "Thinking",
+            startedAt: 1_000,
+          },
+        },
+      })
+    );
+
+    await waitForThreadHydration(result);
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+            item: {
+              id: "item-turn-2",
+              type: "userMessage",
+              text: messageText,
+            },
+          },
+        },
+      });
+    });
+
+    const userEntryIds = result.current.entries
+      .filter((entry) => entry.type === "message" && entry.role === "user")
+      .map((entry) => entry.id);
+    expect(userEntryIds).toHaveLength(2);
+    expect(userEntryIds).toEqual(
+      expect.arrayContaining([
+        "optimistic-launchpad-codex:thread-1",
+        "item-turn-2",
+      ])
+    );
+  });
+
   it("keeps an optimistic image user message ahead of a hydrated assistant final", async () => {
     const readThread = vi.fn(
       async ({
