@@ -1,7 +1,4 @@
-import type {
-  FederationRemoteTarget,
-  NavigationThreadSummary,
-} from "@pwragent/shared";
+import type { NavigationThreadSummary } from "@pwragent/shared";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 
@@ -29,28 +26,21 @@ export function formatActiveThreadCount(count: number): string {
 }
 
 /**
- * Which machine a row's work actually runs on.
- *
- * Two things make a row remote, and only checking one of them gets it wrong on
- * a surface that matters. A federation-stamped row is a peer's thread carried
- * into an unscoped window by a pin or a mounted parent. A window that fronts a
- * peer is the other case: its snapshot comes from that peer, so every row in it
- * is the peer's work and none of them carry a stamp — from the owner's side
- * they are local, and the stamp is only added on the way into someone else's
- * window.
+ * Whether a row is a peer's thread carried into this window by a pin or a
+ * mounted parent, rather than one this instance owns.
  *
  * The distinction is load-bearing for the Attention tab: turns are driven by
  * the registry of the instance that owns them (see `buildQuitBlockerSnapshot`
  * in the main process), so only local work can hold this app's shutdown open.
+ *
+ * Only meaningful in a window that can hold both kinds. Rows in a window
+ * fronting a peer carry no stamp at all — from the owner's side they are
+ * local, and the stamp is only added on the way into someone else's window —
+ * so a viewer must decide "is any of this mine?" from its own scope rather
+ * than from this predicate. `Sidebar` does exactly that before it splits.
  */
-export function isThreadRemoteWork(
-  thread: NavigationThreadSummary,
-  federationWindowTarget?: FederationRemoteTarget,
-): boolean {
-  return (
-    federationWindowTarget !== undefined
-    || thread.federation?.ref.target.scope === "remote"
-  );
+export function isThreadRemoteWork(thread: NavigationThreadSummary): boolean {
+  return thread.federation?.ref.target.scope === "remote";
 }
 
 export function formatLocalActiveThreadCount(count: number): string {

@@ -507,12 +507,20 @@ export function Sidebar(props: SidebarProps) {
    * counted twice; membership already guarantees a row that is not active is
    * awaiting review, which is the same split the directory headers use.
    *
-   * Live turns split again by where they run. Only this instance's turns hold
-   * shutdown open, so "can I quit now?" is answerable from the tab alone —
-   * which it is not while one number mixes work on two machines.
+   * Live turns split again by where they run, but only in a window that can
+   * see both kinds. Only this instance's turns hold shutdown open, so "can I
+   * quit now?" is answerable from the tab alone — which it is not while one
+   * number mixes work on two machines.
+   *
+   * A window fronting a peer is exactly the window where that question has no
+   * content. Every row in it is that peer's work, so a "here" count would sit
+   * at zero forever, and closing the viewer interrupts none of it — telling
+   * the operator what quitting would do to work they cannot interrupt is worse
+   * than saying nothing. So a viewer keeps the plain single readout, counting
+   * the peer's turns the way an unfederated instance counts its own.
    */
-  const federationWindowTarget = useMemo(
-    () => readRendererFederationTarget(),
+  const splitTurnsByMachine = useMemo(
+    () => readRendererFederationTarget() === undefined,
     [],
   );
   const attentionCounts = useMemo(() => {
@@ -522,14 +530,14 @@ export function Sidebar(props: SidebarProps) {
     for (const thread of attentionThreads) {
       if (!isThreadActive(thread, props.thinkingThreadKeys)) {
         review += 1;
-      } else if (isThreadRemoteWork(thread, federationWindowTarget)) {
+      } else if (splitTurnsByMachine && isThreadRemoteWork(thread)) {
         activeRemote += 1;
       } else {
         activeLocal += 1;
       }
     }
     return { activeLocal, activeRemote, review };
-  }, [attentionThreads, federationWindowTarget, props.thinkingThreadKeys]);
+  }, [attentionThreads, props.thinkingThreadKeys, splitTurnsByMachine]);
   const remoteSignalVisible = useLingeringRemoteActiveSignal(
     attentionCounts.activeRemote,
   );
