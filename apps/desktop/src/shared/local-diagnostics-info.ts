@@ -31,19 +31,34 @@ function processIdLines(metadata: AppMetadata): string[] {
   ];
 }
 
+function viewerSupportLines(metadata: AppMetadata): string[] {
+  return [
+    `Viewer PwrAgent profile: ${metadata.activeProfileName}`,
+    `Viewer main process PID: ${metadata.mainProcessId}`,
+    ...(metadata.rendererProcessId === undefined
+      ? []
+      : [`Viewer renderer process PID: ${metadata.rendererProcessId}`]),
+    `Viewer PwrAgent log path: ${available(metadata.logFilePath)}`,
+  ];
+}
+
+function hasRemoteThreadContext(
+  context: LocalThreadDiagnosticsContext,
+): boolean {
+  const target = context.federation?.ref.target;
+  return Boolean(
+    context.federationWindowTarget
+    || (target && isRemoteFederationTarget(target)),
+  );
+}
+
 function federationLines(
   context: LocalThreadDiagnosticsContext,
-  metadata: AppMetadata,
 ): string[] {
   const federation = context.federation;
   const target = federation?.ref.target;
   const remoteTarget = target && isRemoteFederationTarget(target)
     ? target
-    : undefined;
-  const owner = remoteTarget
-    ? context.federationHealth?.peers.find(
-        (peer) => peer.id === remoteTarget.instanceId,
-      )
     : undefined;
   const remoteViewerTarget = context.federationWindowTarget;
   const remoteViewer = remoteViewerTarget
@@ -51,6 +66,14 @@ function federationLines(
         (peer) => peer.id === remoteViewerTarget.instanceId,
       )
     : undefined;
+  const owner = remoteTarget
+    ? context.federationHealth?.peers.find(
+        (peer) => peer.id === remoteTarget.instanceId,
+      )
+    : remoteViewer;
+  if (!remoteTarget && !remoteViewerTarget) {
+    return [];
+  }
   const classification = remoteViewerTarget
     ? remoteTarget && remoteTarget.instanceId !== remoteViewerTarget.instanceId
       ? "Remote² Thread in Remote Viewer"
@@ -58,59 +81,43 @@ function federationLines(
     : remoteTarget
       ? "Remote Thread Mounted in Local Viewer"
       : "Local Thread in Local Viewer";
-  const localThreadOwner = !remoteTarget;
+  const ownerInstanceId = remoteTarget?.instanceId
+    ?? remoteViewerTarget?.instanceId;
+
+  const optionalLine = (
+    label: string,
+    value: string | undefined,
+  ): string[] => value?.trim() ? [`${label}: ${value}`] : [];
 
   return [
     `Thread/view classification: ${classification}`,
-    `Federation mount provenance: ${
-      remoteTarget
-        ? federation?.derivedFromMountedParent
-          ? "Derived from mounted parent"
-          : "Direct"
-        : "Not mounted"
-    }`,
-    `Local viewer federation instance ID: ${available(context.federationHealth?.instanceId)}`,
-    `Remote viewer target instance ID: ${available(remoteViewerTarget?.instanceId)}`,
-    `Remote viewer target label: ${available(
+    "Owner-local diagnostics: Not available from this viewer; request them from the thread-owning machine if needed",
+    ...(remoteTarget
+      ? [`Federation mount provenance: ${
+          federation?.derivedFromMountedParent
+            ? "Derived from mounted parent"
+            : "Direct"
+        }`]
+      : []),
+    ...(remoteViewerTarget
+      ? [`Remote viewer target instance ID: ${remoteViewerTarget.instanceId}`]
+      : []),
+    ...optionalLine(
+      "Remote viewer target label",
       context.federationWindowLabel ?? remoteViewer?.label,
-    )}`,
-    `Remote viewer target hostname: ${available(remoteViewer?.host?.hostname)}`,
-    `Remote viewer target machine ID: ${available(remoteViewer?.host?.machineId)}`,
-    `Remote viewer target profile: ${available(remoteViewer?.profileName)}`,
-    `Remote viewer target status: ${available(remoteViewer?.status)}`,
-    `Thread owner federation instance ID: ${available(
-      remoteTarget?.instanceId
-      ?? (localThreadOwner ? context.federationHealth?.instanceId : undefined),
-    )}`,
-    `Thread owner label: ${available(
-      remoteTarget
-        ? federation?.instanceLabel ?? owner?.label
-        : context.federationHealth?.localLabel,
-    )}`,
-    `Thread owner hostname: ${available(
-      remoteTarget ? owner?.host?.hostname : metadata.hostname,
-    )}`,
-    `Thread owner machine ID: ${available(owner?.host?.machineId)}`,
-    `Thread owner platform: ${available(
-      remoteTarget ? owner?.host?.platform : metadata.platform,
-    )}`,
-    `Thread owner OS version: ${available(
-      remoteTarget ? owner?.host?.osVersion : metadata.osVersion,
-    )}`,
-    `Thread owner architecture: ${available(
-      remoteTarget ? owner?.host?.arch : metadata.architecture,
-    )}`,
-    `Thread owner profile: ${available(
-      remoteTarget ? owner?.profileName : metadata.activeProfileName,
-    )}`,
-    `Thread owner status: ${available(
-      remoteTarget
-        ? federation?.peerStatus ?? owner?.status
-        : context.federationHealth?.status,
-    )}`,
-    `Federation routing target: ${
-      remoteTarget ? `remote:${remoteTarget.instanceId}` : "local"
-    }`,
+    ),
+    `Thread owner federation instance ID: ${available(ownerInstanceId)}`,
+    ...optionalLine(
+      "Thread owner label",
+      federation?.instanceLabel ?? owner?.label,
+    ),
+    ...optionalLine("Thread owner hostname", owner?.host?.hostname),
+    ...optionalLine("Thread owner profile", owner?.profileName),
+    ...optionalLine(
+      "Thread owner status",
+      federation?.peerStatus ?? owner?.status,
+    ),
+    `Federation routing target: remote:${available(ownerInstanceId)}`,
     `Federation source backend: ${available(federation?.ref.backend ?? context.backend)}`,
     `Federation source thread ID: ${available(federation?.ref.threadId ?? context.threadId)}`,
   ];
@@ -130,26 +137,20 @@ export function buildLocalThreadDiagnosticsInfo(
   context: LocalThreadDiagnosticsContext,
   metadata: AppMetadata,
 ): string {
+  const remoteThreadContext = hasRemoteThreadContext(context);
   return [
     `Thread ID: ${available(context.threadId)}`,
     `Project directory/worktree path: ${available(context.projectPath)}`,
     `Provider/backend: ${available(context.backend)}`,
     `Thread title: ${available(context.title)}`,
-    ...federationLines(context, metadata),
-    `Viewer machine hostname: ${available(metadata.hostname)}`,
-    `Viewer platform: ${available(metadata.platform)}`,
-    `Viewer OS version: ${available(metadata.osVersion)}`,
-    `Viewer architecture: ${available(metadata.architecture)}`,
-    `Viewer PwrAgent version: ${available(metadata.applicationVersion)}`,
-    `Viewer Electron version: ${available(metadata.electronVersion)}`,
-    `Viewer Chrome version: ${available(metadata.chromeVersion)}`,
-    `Viewer Node version: ${available(metadata.nodeVersion)}`,
-    `Viewer PwrAgent profile: ${metadata.activeProfileName}`,
-    `Viewer main process PID: ${metadata.mainProcessId}`,
-    ...(metadata.rendererProcessId === undefined
-      ? []
-      : [`Viewer renderer process PID: ${metadata.rendererProcessId}`]),
-    `Viewer PwrAgent log path: ${available(metadata.logFilePath)}`,
-    `Viewer Codex profile path: ${available(metadata.codexProfilePath)}`,
+    ...federationLines(context),
+    ...(remoteThreadContext
+      ? viewerSupportLines(metadata)
+      : [
+          `PwrAgent profile: ${metadata.activeProfileName}`,
+          ...processIdLines(metadata),
+          `PwrAgent log path: ${available(metadata.logFilePath)}`,
+          `Codex profile path: ${available(metadata.codexProfilePath)}`,
+        ]),
   ].join("\n");
 }
