@@ -64,6 +64,45 @@ describe("tool-update renderer prose handling", () => {
     );
   });
 
+  it("groups repeated tool activity into compact named counts", () => {
+    const intent = buildToolUpdateBatchMessageIntent({
+      activities: [
+        tool("t1", "Read config.toml"),
+        tool("t2", "Read config.toml"),
+        tool("t3", "Searched messaging"),
+        tool("t4", "Read config.toml"),
+      ],
+      bindingId: "b1",
+      createdAt: 1,
+      id: "compact-burst",
+    });
+
+    const part = intent.parts[0];
+    expect("text" in part ? part.text : "").toBe(
+      "Tool updates: ran 4 tools\n- 3 × Read config.toml\n- Searched messaging",
+    );
+  });
+
+  it("bounds heterogeneous bursts and calls out sparse provider metadata", () => {
+    const intent = buildToolUpdateBatchMessageIntent({
+      activities: [
+        tool("t1", "tool"),
+        ...["one", "two", "three", "four", "five", "six"].map((title, index) =>
+          tool(`t${index + 2}`, title)
+        ),
+      ],
+      bindingId: "b1",
+      createdAt: 1,
+      id: "heterogeneous-burst",
+    });
+
+    const part = intent.parts[0];
+    const text = "text" in part ? part.text : "";
+    expect(text).toContain("Tool details unavailable");
+    expect(text).toContain("- 2 other tool updates");
+    expect(text).not.toContain("\n- tool");
+  });
+
   it("renders a mixed prose+tool batch as assistant with prose above the tool summary", () => {
     const intent = buildToolUpdateBatchMessageIntent({
       activities: [

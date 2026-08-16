@@ -479,7 +479,10 @@ export function useQueuedTurnRelease(params: {
         if (
           typeof notification.threadId === "string" &&
           typeof notification.queueEntryId === "string" &&
-          notification.status !== "queued"
+          (notification.status === "started"
+            || notification.status === "failed"
+            || notification.status === "cancelled"
+            || notification.status === "terminal")
         ) {
           const scopeKey = `thread:${event.backend}:${notification.threadId}`;
           const queued = current.composerDraftStore.getQueuedTurns(scopeKey);

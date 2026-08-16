@@ -38,9 +38,31 @@ describe("summarizeIncidents", () => {
   it("reports a zero share rather than dividing by zero on an empty thread", () => {
     expect(summarizeIncidents([]).share).toBe(0);
   });
+
+  it("uses the configured output threshold for historical rows", () => {
+    const records = [invocation({ noisy: false, outputChars: 24_000 })];
+
+    expect(summarizeIncidents(records, {
+      largeOutputThresholdChars: 30_000,
+    }).caseCount).toBe(0);
+    expect(summarizeIncidents(records, {
+      largeOutputThresholdChars: 10_000,
+    }).caseCount).toBe(1);
+  });
 });
 
 describe("buildTurnCostStrip", () => {
+  it("uses the configured output threshold for flagged turn scope", () => {
+    const records = [invocation({ noisy: false, outputChars: 24_000 })];
+
+    expect(buildTurnCostStrip(records, {
+      largeOutputThresholdChars: 30_000,
+    }).rows).toHaveLength(0);
+    expect(buildTurnCostStrip(records, {
+      largeOutputThresholdChars: 10_000,
+    }).rows).toHaveLength(1);
+  });
+
   it("counts every call in a turn, not only the flagged ones", () => {
     /* The round-trip driver: a turn of quiet calls still replays the whole
        accumulated context once per call, so a strip built from flagged rows

@@ -219,13 +219,13 @@ describe("tool invocation accounting", () => {
     {
       label: "structured object result",
       result: {
-        tabs: [{ title: "x".repeat(4_100) }],
+        tabs: [{ title: "x".repeat(20_100) }],
       },
     },
     {
       label: "MCP content array",
       result: {
-        content: [{ type: "text", text: "x".repeat(4_100) }],
+        content: [{ type: "text", text: "x".repeat(20_100) }],
       },
     },
   ])("accounts a large $label", ({ result }) => {
@@ -426,10 +426,10 @@ describe("tool invocation accounting", () => {
     });
   });
 
-  it("warns at ten percent of the observed output cap and escalates at the cap", () => {
+  it("detects output at half of the observed cap and escalates at the cap", () => {
     const warning = detectLargeToolOutput({
-      current: buildOutputInvocation(4_000),
-      previousOutputChars: 3_999,
+      current: buildOutputInvocation(20_000),
+      previousOutputChars: 19_999,
     });
     const critical = detectLargeToolOutput({
       current: buildOutputInvocation(40_000),
@@ -439,13 +439,79 @@ describe("tool invocation accounting", () => {
     expect(warning?.alert).toMatchObject({
       kind: "large-output",
       severity: "warning",
-      totalOutputChars: 4_000,
+      totalOutputChars: 20_000,
     });
     expect(critical?.alert).toMatchObject({
       kind: "large-output",
       severity: "critical",
       totalOutputChars: 40_000,
     });
+  });
+
+  it("uses the configured percentage of the output cap", () => {
+    const policy = {
+      outputCapHitsEnabled: true,
+      repeatedLargeOutputsEnabled: true,
+      repeatedLargeOutputMinimumCalls: 3,
+      repeatedLargeOutputMinimumPercent: 75,
+      repeatedQueuedChecksEnabled: true,
+    };
+
+    expect(detectLargeToolOutput({
+      current: buildOutputInvocation(29_999),
+      policy,
+    })).toBeUndefined();
+    expect(detectLargeToolOutput({
+      current: buildOutputInvocation(30_000),
+      policy,
+    })?.alert).toMatchObject({
+      severity: "warning",
+      totalOutputChars: 30_000,
+    });
+  });
+
+  it("waits for five large outputs before notifying", () => {
+    let aggregate: ReturnType<typeof mergeLargeToolOutputIncident>["aggregate"]
+      | undefined;
+    for (let index = 0; index < 5; index += 1) {
+      const detection = detectLargeToolOutput({
+        current: {
+          ...buildOutputInvocation(20_000),
+          invocationId: `command-${index + 1}`,
+          itemId: `command-${index + 1}`,
+        },
+      })!;
+      const incident = mergeLargeToolOutputIncident({
+        current: aggregate,
+        detection,
+        minimumWarningInvocationCount: 5,
+      });
+      expect(incident.shouldNotify).toBe(index === 4);
+      aggregate = incident.aggregate;
+    }
+  });
+
+  it("lets operators disable cap-hit and repeated-output alerts independently", () => {
+    expect(detectLargeToolOutput({
+      current: buildOutputInvocation(40_000),
+      policy: {
+        outputCapHitsEnabled: false,
+        repeatedLargeOutputsEnabled: false,
+        repeatedLargeOutputMinimumCalls: 5,
+        repeatedLargeOutputMinimumPercent: 50,
+        repeatedQueuedChecksEnabled: true,
+      },
+    })).toBeUndefined();
+    expect(detectLargeToolOutput({
+      current: buildOutputInvocation(40_000),
+      policy: {
+        outputCapHitsEnabled: false,
+        repeatedLargeOutputsEnabled: true,
+        repeatedLargeOutputMinimumCalls: 5,
+        repeatedLargeOutputMinimumPercent: 50,
+        repeatedQueuedChecksEnabled: true,
+      },
+    })?.alert.severity).toBe("warning");
   });
 
   it("does not flag non-empty stdin writes as polling", () => {
@@ -466,13 +532,13 @@ describe("tool invocation accounting", () => {
 
   it("aggregates cases by turn and keeps a stable worst-case summary", () => {
     const first = detectLargeToolOutput({
-      current: buildOutputInvocation(8_000),
+      current: buildOutputInvocation(20_000),
       previousOutputChars: 0,
     })!;
     const firstIncident = mergeLargeToolOutputIncident({ detection: first });
     const second = detectLargeToolOutput({
       current: {
-        ...buildOutputInvocation(12_000),
+        ...buildOutputInvocation(24_000),
         invocationId: "command-2",
         itemId: "command-2",
       },
@@ -486,20 +552,20 @@ describe("tool invocation accounting", () => {
     expect(secondIncident.shouldNotify).toBe(true);
     expect(secondIncident.aggregate.alert).toMatchObject({
       invocationCount: 2,
-      totalOutputChars: 20_000,
+      totalOutputChars: 44_000,
       worstInvocationId: "command-2",
-      worstOutputChars: 12_000,
+      worstOutputChars: 24_000,
     });
   });
 
   it("does not rewrite a live warning at terminal completion", () => {
     const live = detectLargeToolOutput({
-      current: buildOutputInvocation(4_000),
+      current: buildOutputInvocation(20_000),
       previousOutputChars: 0,
     })!;
     const incident = mergeLargeToolOutputIncident({ detection: live });
     const terminal = detectLargeToolOutput({
-      current: { ...buildOutputInvocation(4_000), status: "completed" },
+      current: { ...buildOutputInvocation(20_000), status: "completed" },
     })!;
     const completed = mergeLargeToolOutputIncident({
       current: incident.aggregate,
@@ -550,7 +616,7 @@ describe("tool invocation accounting", () => {
   it("reopens a case only when it escalates to critical", () => {
     const warning = mergeLargeToolOutputIncident({
       detection: detectLargeToolOutput({
-        current: buildOutputInvocation(4_000),
+        current: buildOutputInvocation(20_000),
         previousOutputChars: 0,
       })!,
     });
@@ -558,7 +624,7 @@ describe("tool invocation accounting", () => {
       current: warning.aggregate,
       detection: detectLargeToolOutput({
         current: buildOutputInvocation(40_000),
-        previousOutputChars: 4_000,
+        previousOutputChars: 20_000,
       })!,
     });
 

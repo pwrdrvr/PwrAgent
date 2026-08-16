@@ -279,8 +279,11 @@ export function repeatCountFor(
 
 export function summarizeIncidents(
   invocations: ThreadToolInvocationRecord[],
+  options?: { largeOutputThresholdChars?: number },
 ): IncidentSummary {
-  const flagged = invocations.filter(isFlaggedToolInvocation);
+  const flagged = invocations.filter((invocation) =>
+    isFlaggedToolInvocation(invocation, options?.largeOutputThresholdChars)
+  );
   const turnKeys = new Set(flagged.map((invocation) => invocation.turnId ?? ""));
   const totalTokens = sumTokens(invocations);
   const incidentTokens = sumTokens(flagged);
@@ -303,6 +306,7 @@ export function summarizeIncidents(
 export function buildTurnCostStrip(
   invocations: ThreadToolInvocationRecord[],
   options?: {
+    largeOutputThresholdChars?: number;
     limit?: number;
     scope?: TurnStripScope;
     usageLines?: readonly ThreadUsageLineRecord[];
@@ -337,7 +341,14 @@ export function buildTurnCostStrip(
     row.callCount += 1;
     row.estimatedOutputTokens += invocation.estimatedOutputTokens;
     row.firstObservedAt = Math.min(row.firstObservedAt, invocation.observedAt);
-    if (isFlaggedToolInvocation(invocation)) row.flaggedCallCount += 1;
+    if (
+      isFlaggedToolInvocation(
+        invocation,
+        options?.largeOutputThresholdChars,
+      )
+    ) {
+      row.flaggedCallCount += 1;
+    }
     if (isOverOutputCap(invocation.outputChars)) row.overCapCount += 1;
     groups.set(key, row);
   }

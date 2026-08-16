@@ -2756,6 +2756,46 @@ describe("Sidebar", () => {
         ).toBeNull();
       });
 
+      it("does not split in a window fronting a peer, where nothing is ours to interrupt", async () => {
+        // Every row in a viewer is that peer's work, so a "here" count would
+        // sit at zero forever and "Quitting interrupts these" would describe
+        // work this window cannot interrupt at all — closing it stops nothing.
+        // The viewer counts the peer's turns the way an unfederated instance
+        // counts its own.
+        const windowWithTarget = window as typeof window & {
+          __pwragentFederationTarget?: unknown;
+        };
+        windowWithTarget.__pwragentFederationTarget = {
+          instanceId: "peer-1",
+          scope: "remote",
+        };
+        try {
+          render(
+            <Sidebar {...remoteSidebarProps([remoteActiveThread, unreadThread])} />,
+          );
+
+          // The peer's live turn lands in the ordinary readout, not a
+          // permanently-zero "here" plus a grey "elsewhere".
+          const tab = screen.getByRole("tab", {
+            name: "Attention, 1 active thread, 1 thread to review",
+          });
+          expect(
+            tab.querySelector("[data-attention-active-count]"),
+          ).toHaveAttribute("data-attention-active-count", "1");
+          expect(
+            tab.querySelector("[data-attention-remote-active-count]"),
+          ).toBeNull();
+
+          fireEvent.mouseEnter(tab);
+          const card = await screen.findByRole("tooltip");
+          expect(card).toHaveTextContent(/In progress1/);
+          expect(card.textContent).not.toContain("Quitting");
+          expect(card.textContent).not.toContain("elsewhere");
+        } finally {
+          delete windowWithTarget.__pwragentFederationTarget;
+        }
+      });
+
       it("splits local from peer turns, and says which blocks quitting", () => {
         render(
           <Sidebar

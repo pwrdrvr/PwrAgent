@@ -780,14 +780,23 @@ describe("AcpBackendAdapter", () => {
     transport.emitSessionUpdate(session.sessionId, {
       session_update: "tool_call_update",
       tool_call_id: "turn-1:tool-1",
-      title: "pnpm build",
       status: "completed",
       content: { type: "text", text: "Build succeeded" },
     });
 
-    expect(
-      events.filter((event) => event.notification.method === "item/completed"),
-    ).toHaveLength(1);
+    const completedToolEvents = events.filter(
+      (event) => event.notification.method === "item/completed",
+    );
+    expect(completedToolEvents).toHaveLength(1);
+    expect(completedToolEvents[0]).toMatchObject({
+      notification: {
+        params: {
+          item: {
+            command: "pnpm build",
+          },
+        },
+      },
+    });
 
     transport.emitSessionUpdate(session.sessionId, {
       sessionUpdate: "turn_completed",

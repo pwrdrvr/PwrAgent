@@ -1,10 +1,297 @@
 import { describe, expect, it } from "vitest";
 import {
+  AcpLiveToolUpdateResolver,
   acpToolUpdateNotifications,
   acpTurnCompletedUsageNotification,
 } from "../acp/acp-live-notifications";
 
 describe("acpToolUpdateNotifications", () => {
+  it("uses an explicit diagnostic when an ACP terminal update lacks tool metadata", () => {
+    const notifications = acpToolUpdateNotifications({
+      threadId: "session-1",
+      turnId: "turn-1",
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "sparse-tool-1",
+        status: "completed",
+      },
+    });
+
+    expect(notifications[0]).toMatchObject({
+      method: "item/completed",
+      params: {
+        item: {
+          command: "Tool details unavailable",
+          status: "completed",
+        },
+      },
+    });
+  });
+
+  it("retains a Grok-shaped call's metadata for its sparse terminal update", () => {
+    const resolver = new AcpLiveToolUpdateResolver();
+    const context = {
+      backendId: "acp:grok",
+      threadId: "session-1",
+      turnId: "turn-1",
+    };
+    const started = resolver.resolve({
+      ...context,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "call-grok-read-1",
+        kind: "read",
+        title: "read_file",
+        rawInput: { path: "/repo/docs/working-updates.md" },
+        status: "in_progress",
+      },
+    });
+    const completed = resolver.resolve({
+      ...context,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "call-grok-read-1",
+        status: "Completed",
+      },
+    });
+
+    expect(started).toBeDefined();
+    expect(completed).toEqual(expect.objectContaining({
+      kind: "read",
+      status: "Completed",
+      title: "read_file",
+    }));
+    expect(acpToolUpdateNotifications({
+      threadId: context.threadId,
+      turnId: context.turnId,
+      update: completed!,
+    })).toEqual([
+      expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            commandActions: [
+              {
+                type: "read",
+                path: "/repo/docs/working-updates.md",
+                name: "read_file",
+              },
+            ],
+            status: "completed",
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("enriches an ACP terminal tool when its start arrives late without resurrecting it", () => {
+    const resolver = new AcpLiveToolUpdateResolver();
+    const context = {
+      backendId: "acp:grok",
+      threadId: "session-1",
+      turnId: "turn-1",
+    };
+
+    expect(resolver.resolve({
+      ...context,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "out-of-order-1",
+        status: "completed",
+      },
+    })).toBeUndefined();
+    const enrichedTerminal = resolver.resolve({
+      ...context,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "out-of-order-1",
+        kind: "read",
+        title: "Read config.toml",
+        rawInput: { path: "/repo/config.toml" },
+        status: "in_progress",
+      },
+    });
+    expect(enrichedTerminal).toMatchObject({
+      kind: "read",
+      status: "completed",
+      title: "Read config.toml",
+    });
+    expect(acpToolUpdateNotifications({
+      threadId: context.threadId,
+      turnId: context.turnId,
+      update: enrichedTerminal!,
+    })).toEqual([
+      expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "out-of-order-1",
+            status: "completed",
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("keeps ACP terminal metadata and output for follow-up terminal updates", () => {
+    const resolver = new AcpLiveToolUpdateResolver();
+    const context = {
+      backendId: "acp:grok",
+      threadId: "session-1",
+      turnId: "turn-1",
+    };
+
+    expect(resolver.resolve({
+      ...context,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "grok-read-1",
+        kind: "read",
+        title: "Read config.toml",
+        rawInput: { path: "/repo/config.toml" },
+        status: "in_progress",
+      },
+    })).toBeDefined();
+    expect(resolver.resolve({
+      ...context,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "grok-read-1",
+        kind: "tool",
+        title: "tool",
+        status: "completed",
+      },
+    })).toMatchObject({
+      kind: "read",
+      title: "Read config.toml",
+      status: "completed",
+    });
+
+    const enrichedCompletion = resolver.resolve({
+      ...context,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "grok-read-1",
+        status: "completed",
+        content: { type: "text", text: "Read 42 lines" },
+      },
+    });
+    expect(enrichedCompletion).toMatchObject({
+      kind: "read",
+      title: "Read config.toml",
+      status: "completed",
+      content: { type: "text", text: "Read 42 lines" },
+    });
+    expect(acpToolUpdateNotifications({
+      threadId: context.threadId,
+      turnId: context.turnId,
+      update: enrichedCompletion!,
+    })).toEqual([
+      expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            command: "Read config.toml",
+            data: { output: "Read 42 lines" },
+            status: "completed",
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("holds an uncorrelated sparse ACP terminal only until its turn completes", () => {
+    const resolver = new AcpLiveToolUpdateResolver();
+    const context = {
+      backendId: "acp:grok",
+      threadId: "session-1",
+      turnId: "turn-1",
+    };
+
+    expect(resolver.resolve({
+      ...context,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "sparse-terminal-1",
+        status: "Completed",
+      },
+    })).toBeUndefined();
+    expect(resolver.drainDeferredTerminalUpdates(context)).toEqual([
+      expect.objectContaining({
+        toolCallId: "sparse-terminal-1",
+        status: "Completed",
+      }),
+    ]);
+    expect(resolver.drainDeferredTerminalUpdates(context)).toEqual([]);
+  });
+
+  it("emits a rich Grok web-search terminal without waiting for turn completion", () => {
+    const resolver = new AcpLiveToolUpdateResolver();
+    const context = {
+      backendId: "acp:grok",
+      threadId: "session-1",
+      turnId: "turn-1",
+    };
+    const resolved = resolver.resolve({
+      ...context,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "ws_grok-search-1",
+        status: "completed",
+        title: "Web search:",
+        rawOutput: {
+          action: {
+            type: "search",
+            query: "Grok ACP tool completion",
+            sources: [
+              { type: "url", url: "https://docs.x.ai/developers" },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(resolved).toBeDefined();
+    expect(resolver.drainDeferredTerminalUpdates(context)).toEqual([]);
+    expect(acpToolUpdateNotifications({
+      threadId: context.threadId,
+      turnId: context.turnId,
+      update: resolved!,
+    })).toEqual([
+      expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "ws_grok-search-1",
+            type: "webSearch",
+            status: "completed",
+            arguments: { query: "Grok ACP tool completion" },
+          }),
+        }),
+      }),
+    ]);
+  });
+
+  it("keeps malformed ACP calls distinct when the provider omits an item id", () => {
+    const resolver = new AcpLiveToolUpdateResolver();
+    const context = {
+      backendId: "acp:grok",
+      threadId: "session-1",
+      turnId: "turn-1",
+    };
+    const first = resolver.resolve({
+      ...context,
+      update: { sessionUpdate: "tool_call_update", status: "completed" },
+    });
+    const second = resolver.resolve({
+      ...context,
+      update: { sessionUpdate: "tool_call_update", status: "completed" },
+    });
+
+    expect(first?.itemId).toBe("pwragent:anonymous-acp-tool:1");
+    expect(second?.itemId).toBe("pwragent:anonymous-acp-tool:2");
+  });
+
   it("maps ACP tool calls to live item notifications", () => {
     const notifications = acpToolUpdateNotifications({
       threadId: "session-1",

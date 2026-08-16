@@ -45,8 +45,39 @@ describe("PwrAgent thread agent tools", () => {
       throw new Error("Expected PwrAgent namespace tool spec.");
     }
     const tools = namespace.tools;
-    expect(tools.find((tool) => tool.name === "check_thread_pull_request_status")
-      ?.description).toContain("do not poll CI");
+    const getThreadStatus = tools.find(
+      (tool) => tool.name === "get_thread_status",
+    );
+    expect(getThreadStatus?.description).toContain(
+      "Reading this status does not start or convert an Auto-fix repair turn",
+    );
+    expect(getThreadStatus?.description).toContain(
+      "autoFixActive only reports whether the inspected thread owns automatic monitoring",
+    );
+    expect(getThreadStatus?.description).toContain(
+      "The current turn is a repair turn only when PwrAgent started it with an Auto-fix PR event",
+    );
+    expect(getThreadStatus?.description).toContain(
+      "When it is false, do not assume PwrAgent will dispatch a repair turn",
+    );
+    const checkPullRequestStatus = tools.find(
+      (tool) => tool.name === "check_thread_pull_request_status",
+    );
+    expect(checkPullRequestStatus?.description).toContain(
+      "Calling this tool does not start or convert an Auto-fix repair turn",
+    );
+    expect(checkPullRequestStatus?.description).toContain(
+      "Monitoring ownership does not mean another agent is repairing the PR",
+    );
+    expect(checkPullRequestStatus?.description).toContain(
+      "During such a turn, continue only the reported repair and ignore unrelated prior context",
+    );
+    expect(checkPullRequestStatus?.description).toContain(
+      "When it is false, do not assume PwrAgent will dispatch a repair turn",
+    );
+    expect(checkPullRequestStatus?.description).not.toContain(
+      "In any other turn",
+    );
     expect(tools.find((tool) => tool.name === "watch_thread_pull_request"))
       .toMatchObject({
         name: "watch_thread_pull_request",

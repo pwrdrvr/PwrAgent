@@ -2447,7 +2447,7 @@ async function callRegistryMcpTool(params: {
     taskMonitorHandler: async (request) =>
       await internal.handleAgentTaskMonitorRequest(request),
     threadOrchestrationHandler: internal.threadOrchestrationHandler,
-  });
+  }, { taskMonitorRole: "all" });
   const router = catalogs
     .map((catalog) => catalog.router)
     .find((candidate) =>
@@ -16419,6 +16419,49 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("retains submissions queued behind a rejected in-flight Codex start", async () => {
+    const startTurnDelay = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnDelay: startTurnDelay.promise,
+      startTurnErrors: [new Error("first start failed"), undefined],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const first = registry.submitTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "first" }],
+    });
+    await waitForCondition(() => codexClient.startTurnCallCount === 1);
+    await expect(
+      registry.submitTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "second" }],
+      }),
+    ).resolves.toMatchObject({ status: "queued", position: 1 });
+
+    startTurnDelay.resolve();
+
+    await expect(first).rejects.toThrow("first start failed");
+    await Promise.resolve();
+    expect(codexClient.startTurnCallCount).toBe(1);
+    expect(registry.getQueuedTurnsSnapshot()).toEqual({
+      [buildThreadIdentityKey("codex", "thread-1")]: [
+        expect.objectContaining({
+          displayText: "second",
+          position: 0,
+        }),
+      ],
+    });
+
+    await registry.close();
+  });
+
   it("does not generate a Codex title when startTurn fails before lifecycle confirmation", async () => {
     const titleService = {
       generateTitle: vi.fn(async () => ({
@@ -19440,6 +19483,187 @@ command = "pnpm dev"
     });
   });
 
+  it("emits configured spend alerts once per threshold", async () => {
+    const activeLine: ThreadUsageLineRecord = {
+      backend: "codex",
+      cachedInputCostMicros: 0,
+      cachedInputTokens: 0,
+      createdAt: 1_800_000_000_000,
+      currency: "USD",
+      inputTokens: 0,
+      outputCostMicros: 0,
+      outputTokens: 0,
+      priceStatus: "priced",
+      provider: "openai",
+      reasoningOutputTokens: 0,
+      scope: "turn",
+      source: "live",
+      status: "pending",
+      threadId: "thread-1",
+      totalCostMicros: 5_250_000,
+      totalTokens: 0,
+      turnId: "turn-2",
+      turnUsageAttributed: true,
+      uncachedInputCostMicros: 0,
+      uncachedInputTokens: 0,
+      usageLineId: "usage-turn-2",
+    };
+    const pricing = {
+      lines: [activeLine],
+      summaries: [{
+        backend: "codex",
+        cachedInputTokens: 0,
+        currency: "USD",
+        inputTokens: 0,
+        outputTokens: 0,
+        pricedUsageLineCount: 1,
+        provider: "openai",
+        reasoningOutputTokens: 0,
+        threadId: "thread-1",
+        totalCostMicros: 30_000_000,
+        totalTokens: 0,
+        uncachedInputTokens: 0,
+        unpricedUsageLineCount: 0,
+        updatedAt: 1_800_000_000_000,
+        usageLineCount: 1,
+      }],
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: {
+        ...createOverlayStoreMock(),
+        readThreadPricing: vi.fn(async () => pricing),
+      } as never,
+      resolveSpendAlertPolicy: () => ({
+        activeTurnSpendEnabled: true,
+        activeTurnSpendThresholdUsd: 5,
+        threadSpendEnabled: true,
+        threadSpendThresholdUsd: 25,
+      }),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    const emitPricing = (registry as unknown as {
+      emitThreadPricingUpdated(params: {
+        activeTurnIds?: readonly string[];
+        backend: AppServerBackendKind;
+        threadId: string;
+      }): Promise<void>;
+    }).emitThreadPricingUpdated.bind(registry);
+
+    await emitPricing({
+      activeTurnIds: ["turn-2"],
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    await emitPricing({
+      activeTurnIds: ["turn-2"],
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    const pricingEvents = events.filter(
+      (event) => event.notification.method === "thread/pricing/updated",
+    );
+    expect(pricingEvents[0]?.notification.params).toMatchObject({
+      triggeredSpendAlerts: [
+        { kind: "active-turn-spend", spendMicros: 5_250_000 },
+        { kind: "thread-spend", spendMicros: 30_000_000 },
+      ],
+    });
+    expect(pricingEvents[1]?.notification.params).not.toHaveProperty(
+      "triggeredSpendAlerts",
+    );
+
+    await registry.close();
+  });
+
+  it("preserves every active turn while coalescing pricing updates", async () => {
+    const lines: ThreadUsageLineRecord[] = ["turn-a", "turn-b"].map(
+      (turnId, index) => ({
+        backend: "codex",
+        cachedInputCostMicros: 0,
+        cachedInputTokens: 0,
+        createdAt: 1_800_000_000_000 + index,
+        currency: "USD",
+        inputTokens: 0,
+        outputCostMicros: 0,
+        outputTokens: 0,
+        priceStatus: "priced",
+        provider: "openai",
+        reasoningOutputTokens: 0,
+        scope: "turn",
+        source: "live",
+        status: "pending",
+        threadId: "thread-1",
+        totalCostMicros: 6_000_000 + index * 1_000_000,
+        totalTokens: 0,
+        turnId,
+        turnUsageAttributed: true,
+        uncachedInputCostMicros: 0,
+        uncachedInputTokens: 0,
+        usageLineId: `usage-${turnId}`,
+      }),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadPricing: vi.fn(async () => ({
+        lines,
+        summaries: [],
+      })),
+      upsertThreadUsageLines: vi.fn(async () => ({
+        lines,
+        summaries: [],
+      })),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      resolveSpendAlertPolicy: () => ({
+        activeTurnSpendEnabled: true,
+        activeTurnSpendThresholdUsd: 5,
+        threadSpendEnabled: false,
+        threadSpendThresholdUsd: 25,
+      }),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    const usageBatch = registry as unknown as {
+      bufferLiveThreadUsageLine(params: {
+        backend: AppServerBackendKind;
+        line: ThreadUsageLineRecord;
+        observationSequence: number;
+      }): void;
+      writePendingLiveThreadUsageLines(): Promise<void>;
+    };
+    lines.forEach((line, index) => {
+      usageBatch.bufferLiveThreadUsageLine({
+        backend: "codex",
+        line,
+        observationSequence: index + 1,
+      });
+    });
+
+    await usageBatch.writePendingLiveThreadUsageLines();
+
+    const pricingEvents = events.filter(
+      (event) => event.notification.method === "thread/pricing/updated",
+    );
+    expect(pricingEvents).toHaveLength(1);
+    expect(pricingEvents[0]?.notification.params).toMatchObject({
+      triggeredSpendAlerts: [
+        { kind: "active-turn-spend", turnId: "turn-a" },
+        { kind: "active-turn-spend", turnId: "turn-b" },
+      ],
+    });
+
+    await registry.close();
+  });
+
   it("coalesces streamed command output into one accounting write", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
@@ -19533,6 +19757,13 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: overlayStore as never,
+      resolveToolOutputAlertPolicy: () => ({
+        outputCapHitsEnabled: true,
+        repeatedLargeOutputsEnabled: true,
+        repeatedLargeOutputMinimumCalls: 3,
+        repeatedLargeOutputMinimumPercent: 25,
+        repeatedQueuedChecksEnabled: true,
+      }),
     });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
@@ -19561,14 +19792,18 @@ command = "pnpm dev"
         } as AgentEvent);
       };
 
-      await stream("x".repeat(2_000));
+      await stream("x".repeat(5_000));
       await vi.advanceTimersByTimeAsync(250);
       expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
 
       // The warning total spans sqlite flush windows. A detector tied to the
-      // 250ms pending-write buffer would see two harmless 2,000-char chunks
-      // and never report that the command reached 4,000.
-      await stream("x".repeat(2_000));
+      // 250ms pending-write buffer would see two harmless 5,000-char chunks
+      // and never count that the command reached the configured 25% threshold.
+      await stream("x".repeat(5_000));
+      await stream("x".repeat(10_000), "cmd-2");
+      expect(persistThreadToolInvocationBoundary).not.toHaveBeenCalled();
+
+      await stream("x".repeat(10_000), "cmd-3");
       const alertEvent = events.find(
         (event) =>
           event.notification.method === "thread/toolAccounting/updated",
@@ -19577,9 +19812,10 @@ command = "pnpm dev"
         threadId: "thread-1",
         triggeredAlerts: [
           {
+            invocationCount: 3,
             kind: "large-output",
             severity: "warning",
-            totalOutputChars: 4_000,
+            totalOutputChars: 30_000,
             turnId: "turn-1",
           },
         ],
@@ -19590,14 +19826,15 @@ command = "pnpm dev"
           expect.objectContaining({
             kind: "large-output",
             severity: "warning",
-            totalOutputChars: 4_000,
+            invocationCount: 3,
+            totalOutputChars: 30_000,
           }),
         ],
         invocation: expect.objectContaining({
-          invocationId: "tool:codex:thread-1:turn-1:cmd-1",
+          invocationId: "tool:codex:thread-1:turn-1:cmd-3",
           noisy: true,
           noisyReason: "large-output",
-          outputChars: 2_000,
+          outputChars: 10_000,
           outputState: "available",
           source: "live",
           status: "in_progress",
@@ -19605,30 +19842,8 @@ command = "pnpm dev"
         }),
       });
 
-      await stream("x".repeat(4_000), "cmd-2");
-      expect(persistThreadToolInvocationBoundary).toHaveBeenCalledTimes(2);
-      expect(persistThreadToolInvocationBoundary.mock.calls[1]?.[0]).toMatchObject({
-        alerts: [
-          {
-            invocationCount: 2,
-            invocationIds: [
-              "tool:codex:thread-1:turn-1:cmd-1",
-              "tool:codex:thread-1:turn-1:cmd-2",
-            ],
-            totalOutputChars: 8_000,
-            worstOutputChars: 4_000,
-          },
-        ],
-        invocation: {
-          invocationId: "tool:codex:thread-1:turn-1:cmd-2",
-          outputChars: 4_000,
-          outputState: "available",
-          source: "live",
-        },
-      });
-
       await registry.close();
-      expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
+      expect(upsertThreadToolInvocation.mock.calls.length).toBeGreaterThan(1);
     } finally {
       vi.useRealTimers();
     }
@@ -26412,7 +26627,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("keeps failed workspace move state when failure continuation cannot start", async () => {
+  it("keeps failed workspace move state and queued work when failure continuation cannot start", async () => {
     const thread: AppServerThreadSummary = {
       id: "ordinary-thread",
       title: "Parent Thread",
@@ -26500,10 +26715,18 @@ script = "printf setup"
     expect(registry.canStartThreadTurnImmediately({
       backend: "codex",
       threadId: "ordinary-thread",
-    })).toBe(true);
+    })).toBe(false);
+    expect(registry.getQueuedTurnsSnapshot()).toEqual({
+      [buildThreadIdentityKey("codex", "ordinary-thread")]: [
+        expect.objectContaining({
+          displayText: "queued normal turn",
+          position: 0,
+        }),
+      ],
+    });
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
-      count: 0,
-      threadIds: [],
+      count: 1,
+      threadIds: [buildThreadIdentityKey("codex", "ordinary-thread")],
     });
 
     await registry.publishLocalEvent({
@@ -26551,7 +26774,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("releases queued turns when success continuation cannot start", async () => {
+  it("retains queued turns when success continuation cannot start", async () => {
     const thread: AppServerThreadSummary = {
       id: "ordinary-thread",
       title: "Parent Thread",
@@ -26655,10 +26878,18 @@ script = "printf setup"
     expect(registry.canStartThreadTurnImmediately({
       backend: "codex",
       threadId: "ordinary-thread",
-    })).toBe(true);
+    })).toBe(false);
+    expect(registry.getQueuedTurnsSnapshot()).toEqual({
+      [buildThreadIdentityKey("codex", "ordinary-thread")]: [
+        expect.objectContaining({
+          displayText: "queued normal turn",
+          position: 0,
+        }),
+      ],
+    });
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
-      count: 0,
-      threadIds: [],
+      count: 1,
+      threadIds: [buildThreadIdentityKey("codex", "ordinary-thread")],
     });
 
     await registry.publishLocalEvent({
@@ -31852,17 +32083,18 @@ script = "printf setup"
         },
       }),
     });
+    const inspectPrAutomation = vi.fn(async () => ({
+      backgroundPollingEnabled: true,
+      autoFixAllowed: true,
+      autoFixEnabled: true,
+      autoFixActive: true,
+      guidance: "End the turn and let PwrAgent watch CI.",
+    }));
     registry.setThreadPrAutoDispatchHandler({
       preferenceChanged: vi.fn(async () => undefined),
       cancelPending: vi.fn(async () => false),
       sendPendingNow: vi.fn(async () => false),
-      inspect: vi.fn(async () => ({
-        backgroundPollingEnabled: true,
-        autoFixAllowed: true,
-        autoFixEnabled: true,
-        autoFixActive: true,
-        guidance: "End the turn and let PwrAgent watch CI.",
-      })),
+      inspect: inspectPrAutomation,
     });
     await registry.publishLocalEvent({
       backend: "codex",
@@ -31924,6 +32156,16 @@ script = "printf setup"
         repositoryPath: "/repo/pwragent",
       }),
     ]);
+    expect(inspectPrAutomation).toHaveBeenCalledWith(
+      {
+        backend: "codex",
+        threadId: "agent-thread",
+      },
+      {
+        backend: "codex",
+        threadId: "agent-thread",
+      },
+    );
 
     await registry.close();
   });
@@ -33121,8 +33363,8 @@ script = "printf setup"
         },
       }),
     });
-    registry.setThreadPullRequestStatusToolHandler(async (args) => ({
-      ok: true,
+    const handler = vi.fn(async (args) => ({
+      ok: true as const,
       data: {
         pullRequestStatus: {
           backend: args.backend ?? "codex",
@@ -33146,6 +33388,7 @@ script = "printf setup"
         },
       },
     }));
+    registry.setThreadPullRequestStatusToolHandler(handler);
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -33193,6 +33436,18 @@ script = "printf setup"
         directoryPaths: ["/repo"],
       },
     });
+    expect(handler).toHaveBeenCalledWith(
+      {
+        backend: "codex",
+        threadId: "target-thread",
+        branch: "feature/pr",
+        directoryPaths: ["/repo"],
+      },
+      {
+        backend: "codex",
+        threadId: "agent-thread",
+      },
+    );
 
     await registry.close();
   });
@@ -33260,11 +33515,17 @@ script = "printf setup"
       },
     } as AppServerPendingRequestNotification);
 
-    expect(handler).toHaveBeenCalledWith({
-      backend: "codex",
-      threadId: "agent-thread",
-      branch: "feature/pr",
-    });
+    expect(handler).toHaveBeenCalledWith(
+      {
+        backend: "codex",
+        threadId: "agent-thread",
+        branch: "feature/pr",
+      },
+      {
+        backend: "codex",
+        threadId: "agent-thread",
+      },
+    );
     expect(response).toMatchObject({ success: true });
     const payload = JSON.parse(
       (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,
@@ -34567,6 +34828,9 @@ script = "printf setup"
       heartbeatIntervalSeconds: 30,
       startupTimeoutSeconds: 45,
       startedByPwrAgent: true,
+      startupConfirmed: true,
+      parentShouldPoll: false,
+      completionWakesParentByDefault: true,
       monitorThreadId: "monitor-thread",
       monitorTurnId: "turn-1",
     });
@@ -34582,7 +34846,15 @@ script = "printf setup"
     expect(String(payload.parentAgentGuidance)).toContain("local verification commands");
     expect(String(payload.parentAgentGuidance)).toContain("long-running command");
     expect(String(payload.parentAgentGuidance)).toContain("remain idle");
-    expect(String(payload.parentAgentGuidance)).toContain("only event that should wake");
+    expect(String(payload.parentAgentGuidance)).toContain(
+      "complete_monitoring is the only event that wakes",
+    );
+    expect(String(payload.parentAgentGuidance)).toContain(
+      "triggerParentTurn=false",
+    );
+    expect(String(payload.parentAgentGuidance)).toContain("Do not call read_thread");
+    expect(String(payload.parentAgentGuidance)).toContain("Do not sleep");
+    expect(String(payload.parentAgentGuidance)).not.toContain("make at most one startup observation");
     expect(codexClient.lastStartThreadParams).toMatchObject({
       ephemeral: true,
       model: "gpt-5.6-luna",
@@ -35094,7 +35366,6 @@ script = "printf setup"
     ).resolves.toMatchObject({
       subAgents: [
         {
-          lastMessage: "lint is running",
           monitorId,
           monitorUsage: {
             cost: {
@@ -41691,11 +41962,7 @@ script = "printf setup"
       sessionId: params.sessionId,
       turnId: params.turnId ?? `turn:${params.sessionId}`,
     }));
-    const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["thread/start", "turn/start"] },
-      models: TEST_TASK_MONITOR_MODELS,
-      startThreadResult: { threadId: "monitor-thread" },
-    });
+    const codexClient = new MockBackendClient({ threads: [] });
     const overlayStore = createOverlayStoreMock({
       overlays: {
         [`${acpBackendId}:${parentThreadId}`]: {
@@ -41713,6 +41980,32 @@ script = "printf setup"
       startPrompt,
       codexClient,
       overlayStore,
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        discoveredAt: 1000,
+        checkedAt: 1000,
+        source: "initialize",
+        agentCapabilities: {
+          mcp: { http: true },
+        },
+        models: {
+          currentModelId: "kimi-k2",
+          availableModels: [
+            {
+              id: "kimi-k2",
+              current: true,
+              supportsReasoning: true,
+              reasoningEfforts: ["medium", "high"],
+            },
+            {
+              id: "kimi-lite",
+              supportsReasoning: true,
+              reasoningEfforts: ["low", "medium"],
+            },
+          ],
+        },
+      },
     });
     await registry.publishLocalEvent({
       backend: acpBackendId,
@@ -41737,15 +42030,26 @@ script = "printf setup"
       },
     });
     const monitorId = String(response.structuredContent?.monitorId);
+    const monitorThreadId = String(
+      response.structuredContent?.monitorThreadId,
+    );
+    const monitorTurnId = String(response.structuredContent?.monitorTurnId);
 
     expect(response).toMatchObject({
       structuredContent: {
         parentThreadId,
-        monitorThreadId: "monitor-thread",
+        monitorThreadId,
+        preferredModel: "kimi-lite",
+        preferredReasoningEffort: "low",
         startedByPwrAgent: true,
+        startupConfirmed: true,
+        parentShouldPoll: false,
+        completionWakesParentByDefault: true,
       },
     });
     expect(monitorId).toMatch(/^monitor-/u);
+    expect(monitorThreadId).not.toBe(parentThreadId);
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
     await expect(
       overlayStore.getThreadOverlayState({
         backend: acpBackendId,
@@ -41754,9 +42058,11 @@ script = "printf setup"
     ).resolves.toMatchObject({
       subAgents: [
         expect.objectContaining({
-          backend: "codex",
+          backend: acpBackendId,
           monitorId,
-          monitorThreadId: "monitor-thread",
+          monitorThreadId,
+          preferredModel: "kimi-lite",
+          preferredReasoningEffort: "low",
           status: "running",
         }),
       ],
@@ -41777,22 +42083,91 @@ script = "printf setup"
         },
       },
     });
-    await codexClient.emitRequest({
-      method: "item/tool/call",
-      params: {
-        threadId: "monitor-thread",
-        turnId: "turn-1",
-        callId: "complete-monitor",
-        requestId: "complete-monitor",
-        namespace: "pwragent",
-        tool: "complete_monitoring",
-        arguments: {
-          monitorId,
-          outcome: "success",
-          summary: "Deployment completed.",
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: monitorThreadId,
+          turnId: monitorTurnId,
+          model: "kimi-lite",
+          tokenUsage: {
+            total: {
+              inputTokens: 500,
+              cachedInputTokens: 100,
+              outputTokens: 25,
+              reasoningOutputTokens: 5,
+            },
+          },
         },
       },
-    } as AppServerPendingRequestNotification);
+    });
+    const progress = await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId: monitorThreadId,
+      turnId: monitorTurnId,
+      tool: "inject_progress",
+      args: {
+        monitorId,
+        message: "Deployment is still running.",
+        status: "running",
+      },
+    });
+    expect(progress).toMatchObject({
+      structuredContent: {
+        monitorId,
+        injected: true,
+        monitorUsage: {
+          model: "kimi-lite",
+          tokenUsage: {
+            inputTokens: 500,
+            cachedInputTokens: 100,
+            outputTokens: 25,
+            reasoningOutputTokens: 5,
+          },
+        },
+      },
+    });
+    expect(startPrompt).toHaveBeenCalledTimes(1);
+
+    await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId: monitorThreadId,
+      turnId: monitorTurnId,
+      tool: "complete_monitoring",
+      args: {
+        monitorId,
+        outcome: "success",
+        summary: "Deployment completed.",
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: monitorThreadId,
+          turnId: monitorTurnId,
+          model: "kimi-lite",
+          tokenUsage: {
+            last_token_usage: {
+              input_tokens: 650,
+              cached_input_tokens: 150,
+              output_tokens: 40,
+              reasoning_output_tokens: 8,
+            },
+          },
+        },
+      },
+    });
+    await emitCompletedTurn(
+      registry,
+      acpBackendId,
+      monitorThreadId,
+      monitorTurnId,
+    );
 
     await vi.waitFor(() => {
       expect(startPrompt).toHaveBeenCalledWith(
@@ -41813,6 +42188,15 @@ script = "printf setup"
           monitorId,
           outcome: "success",
           status: "success",
+          monitorUsage: expect.objectContaining({
+            model: "kimi-lite",
+            tokenUsage: expect.objectContaining({
+              inputTokens: 650,
+              cachedInputTokens: 150,
+              outputTokens: 40,
+              reasoningOutputTokens: 8,
+            }),
+          }),
         }),
       ],
     });
@@ -41873,18 +42257,12 @@ script = "printf setup"
       sessionId: params.sessionId,
       turnId: params.turnId ?? `turn:${params.sessionId}`,
     }));
-    const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["thread/start", "turn/start"] },
-      models: TEST_TASK_MONITOR_MODELS,
-      startThreadResult: { threadId: "monitor-thread" },
-    });
     const { registry } = createKimiAcpRegistry({
       acpBackendId,
       acpRolloutStore,
       sessions,
       sessionId: "unused-child",
       startPrompt,
-      codexClient,
       replay: providerReplay,
       runtimeCapabilities: {
         schemaVersion: 1,
@@ -41922,6 +42300,10 @@ script = "printf setup"
         },
       });
       const monitorId = String(response.structuredContent?.monitorId);
+      const monitorThreadId = String(
+        response.structuredContent?.monitorThreadId,
+      );
+      const monitorTurnId = String(response.structuredContent?.monitorTurnId);
       await emitCompletedTurn(
         registry,
         acpBackendId,
@@ -41929,25 +42311,24 @@ script = "printf setup"
         "parent-turn",
       );
 
-      await codexClient.emitRequest({
-        method: "item/tool/call",
-        params: {
-          threadId: "monitor-thread",
-          turnId: "turn-1",
-          callId: "complete-monitor",
-          requestId: "complete-monitor",
-          namespace: "pwragent",
-          tool: "complete_monitoring",
-          arguments: {
-            monitorId,
-            outcome: "success",
-            summary: "Deployment completed.",
-            triggerParentTurn: false,
-          },
+      await callRegistryMcpTool({
+        registry,
+        backend: acpBackendId,
+        threadId: monitorThreadId,
+        turnId: monitorTurnId,
+        tool: "complete_monitoring",
+        args: {
+          monitorId,
+          outcome: "success",
+          summary: "Deployment completed.",
+          triggerParentTurn: false,
         },
-      } as AppServerPendingRequestNotification);
+      });
 
-      expect(startPrompt).not.toHaveBeenCalled();
+      expect(startPrompt).toHaveBeenCalledTimes(1);
+      expect(startPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: monitorThreadId }),
+      );
       const diskReplay = new AcpRolloutStore(rolloutRoot).readReplay({
         backendId: acpBackendId,
         sessionId: parentThreadId,
@@ -41985,7 +42366,7 @@ script = "printf setup"
     }
   });
 
-  it("returns a structured ACP MCP error when no Codex monitor model is available", async () => {
+  it("uses the ACP provider default when no monitor model catalog is available", async () => {
     const acpBackendId = "acp:kimi" as AcpBackendId;
     const parentThreadId = "acp-parent";
     const codexClient = new MockBackendClient({
@@ -42032,15 +42413,135 @@ script = "printf setup"
     });
 
     expect(response).toMatchObject({
-      isError: true,
       structuredContent: {
-        code: "internal_error",
-        message: expect.stringContaining(
-          "requires an available Codex model",
-        ),
+        parentThreadId,
+        preferredModel: "kimi-default",
+        preferredReasoningEffort: "provider-default",
+        startedByPwrAgent: true,
       },
     });
     expect(codexClient.lastStartThreadParams).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("recovers an ACP monitor once before a fallback wakes its parent", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "acp-parent";
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: parentThreadId,
+        title: "ACP Parent",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? `turn:${params.sessionId}`,
+    }));
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        [`${acpBackendId}:${parentThreadId}`]: {
+          backend: acpBackendId,
+          threadId: parentThreadId,
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessions,
+      sessionId: "acp-monitor",
+      startPrompt,
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      turnId: "parent-turn",
+      tool: "create_monitor_delegation",
+      args: { task: "Watch the deployment until it finishes." },
+    });
+    const monitorId = String(response.structuredContent?.monitorId);
+    const monitorThreadId = String(
+      response.structuredContent?.monitorThreadId,
+    );
+    const firstMonitorTurnId = String(
+      response.structuredContent?.monitorTurnId,
+    );
+    await emitCompletedTurn(
+      registry,
+      acpBackendId,
+      parentThreadId,
+      "parent-turn",
+    );
+
+    await emitCompletedTurn(
+      registry,
+      acpBackendId,
+      monitorThreadId,
+      firstMonitorTurnId,
+    );
+    expect(startPrompt).toHaveBeenCalledTimes(2);
+    const recoveryTurnId = String(startPrompt.mock.calls[1]?.[0].turnId);
+    expect(startPrompt.mock.calls[1]?.[0]).toMatchObject({
+      sessionId: monitorThreadId,
+      prompt: expect.stringContaining("monitor recovery instruction"),
+    });
+
+    await emitCompletedTurn(
+      registry,
+      acpBackendId,
+      monitorThreadId,
+      recoveryTurnId,
+    );
+    expect(startPrompt).toHaveBeenCalledTimes(3);
+    expect(startPrompt.mock.calls[2]?.[0]).toMatchObject({
+      sessionId: parentThreadId,
+      prompt: expect.stringContaining(
+        "Monitor subagent stopped without reporting a final result",
+      ),
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: parentThreadId,
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          backend: acpBackendId,
+          monitorId,
+          outcome: "failure",
+          completionSource: expect.objectContaining({
+            type: "pwragent_fallback",
+            recoveryAttempted: true,
+          }),
+        }),
+      ],
+    });
 
     await registry.close();
   });

@@ -10,6 +10,7 @@ export type MessagingToolUpdatePolicyDelivery = {
 };
 
 type PolicyState = {
+  batchDeliveryCount: number;
   bindingId: string;
   individualCount: number;
   mode: MessagingToolUpdateMode;
@@ -176,6 +177,7 @@ export class MessagingToolUpdatePolicy {
     let state = this.states.get(key);
     if (!state) {
       state = {
+        batchDeliveryCount: 0,
         bindingId: params.bindingId,
         individualCount: 0,
         mode: params.mode,
@@ -205,7 +207,13 @@ export class MessagingToolUpdatePolicy {
   }
 
   private scheduleFlush(state: PolicyState, policy: ModePolicy): void {
-    if (!policy.windowMs || state.timer) {
+    // The delivery window is a progress signal, not a periodic transcript
+    // mirror. Once a noisy turn has received one timely batch, retain later
+    // activity for the terminal flush. This keeps long-running ACP/Codex
+    // bursts from producing a fresh card or message every window while still
+    // honoring Show All's explicit per-event behavior and preserving the full
+    // trace in the desktop transcript.
+    if (!policy.windowMs || state.timer || state.batchDeliveryCount > 0) {
       return;
     }
 
@@ -244,6 +252,8 @@ export class MessagingToolUpdatePolicy {
     if (activities.length === 0) {
       return undefined;
     }
+
+    state.batchDeliveryCount += 1;
 
     return {
       activities,

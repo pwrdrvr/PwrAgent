@@ -75,6 +75,30 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
+  it("labels a dense collapsed work phase with compact tool groups", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const activities: AppServerThreadActivityEntry[] = [
+      "Read config.toml",
+      "Read config.toml",
+      "Searched messaging",
+    ].map((summary, index) => ({
+      type: "activity",
+      id: `tool-${index}`,
+      summary,
+      details: [],
+      turn,
+    }));
+
+    expect(buildTranscriptRenderItems({ entries: activities })).toEqual([
+      expect.objectContaining({
+        type: "workPhaseGroup",
+        entries: activities,
+        label:
+          "Worked for 1m 10s · 3 tool updates: 2 × Read config.toml, Searched messaging",
+      }),
+    ]);
+  });
+
   it("uses completed turn metadata when live entries have mixed turn status", () => {
     const inProgressTurn = {
       id: "turn-1",

@@ -591,8 +591,56 @@ describe("AcpAgentsSettings", () => {
     expect(screen.getByText("Not installed.")).toBeInTheDocument();
   });
 
+  it("surfaces a detected CLI that failed ACP verification", async () => {
+    const rejectedPath = "/usr/local/bin/qwen";
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({
+        fetchedAt: 1000,
+        entries: [
+          {
+            backendId: "acp:qwen",
+            registryId: "qwen",
+            name: "Qwen Code",
+            authors: [],
+            distributionKind: "local",
+            distributionSource: `${rejectedPath} (ACP verification failed)`,
+            installable: false,
+            installed: false,
+            installStatus: "unavailable",
+            authStatus: "not-required",
+            verificationStatus: "not-applicable",
+            lastError: `${rejectedPath} was found, but PwrAgent could not verify ACP support.`,
+            instances: [],
+            rejectedInstances: [
+              {
+                command: rejectedPath,
+                version: "0.21.0",
+                source: "path",
+                reason: "acp-probe-failed",
+              },
+            ],
+          } satisfies AcpAgentSettingsEntry,
+        ],
+      })),
+    } as unknown as DesktopApi;
+
+    render(<AcpAgentsSettings desktopApi={desktopApi} />);
+
+    expect(await screen.findByText("Qwen Code")).toBeInTheDocument();
+    expect(screen.getByText("Detected · unavailable")).toBeInTheDocument();
+    expect(screen.getByText(rejectedPath)).toBeInTheDocument();
+    expect(screen.getByText("ACP check failed")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        `${rejectedPath} was found, but PwrAgent could not verify ACP support.`,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Not installed.")).not.toBeInTheDocument();
+  });
+
   it("renders a durable remediation card for legacy Python kimi-cli", async () => {
     const legacyPath = "/Users/me/.local/bin/kimi";
+    const rejectedPath = "/Users/me/bin/not-kimi";
     const desktopApi = {
       listAcpAgents: vi.fn(async () => ({
         fetchedAt: 1000,
@@ -614,6 +662,13 @@ describe("AcpAgentsSettings", () => {
             incompatibleInstances: [
               { command: legacyPath, version: "1.46.0", source: "path" },
             ],
+            rejectedInstances: [
+              {
+                command: rejectedPath,
+                source: "override",
+                reason: "acp-probe-failed",
+              },
+            ],
           } satisfies AcpAgentSettingsEntry,
         ],
       })),
@@ -627,6 +682,8 @@ describe("AcpAgentsSettings", () => {
     expect(screen.getByText("Action required")).toBeInTheDocument();
     expect(screen.getByText(legacyPath)).toBeInTheDocument();
     expect(screen.getByText("legacy Python")).toBeInTheDocument();
+    expect(screen.getByText(rejectedPath)).toBeInTheDocument();
+    expect(screen.getByText("ACP check failed")).toBeInTheDocument();
     expect(
       screen.getByText(
         "curl -fsSL https://code.kimi.com/kimi-code/install.sh | bash",

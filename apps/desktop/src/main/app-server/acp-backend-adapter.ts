@@ -55,6 +55,7 @@ import {
   readDesktopSettingsConfigSafe,
 } from "../settings/desktop-config";
 import {
+  AcpLiveToolUpdateResolver,
   acpToolUpdateNotifications,
   acpUsageNotification,
 } from "../acp/acp-live-notifications";
@@ -963,6 +964,7 @@ export class AcpBackendAdapter {
     AcpBackendId,
     Promise<AcpRuntimeClient>
   >();
+  private readonly liveToolUpdateResolver = new AcpLiveToolUpdateResolver();
   private readonly liveNotificationFingerprints = new Map<string, string>();
   private readonly providerStatuses = new Map<AcpBackendId, AcpProviderStatus>();
   private readonly providerStatusRefreshAttempts = new Map<AcpBackendId, number>();
@@ -1963,6 +1965,7 @@ export class AcpBackendAdapter {
     this.acpClients.clear();
     this.retainedAcpClients.clear();
     this.acpClientResolutions.clear();
+    this.liveToolUpdateResolver.clear();
     this.liveNotificationFingerprints.clear();
     this.providerStatuses.clear();
     this.providerStatusRefreshAttempts.clear();
@@ -2205,15 +2208,42 @@ export class AcpBackendAdapter {
           updateKind === "agent_message_chunk"
             ? readAcpUpdateText(update)
             : undefined;
-        const toolNotifications = fromSessionLoad
-          ? []
-          : acpToolUpdateNotifications({
+        const resolvedToolUpdate = fromSessionLoad
+          ? undefined
+          : this.liveToolUpdateResolver.resolve({
+              backendId: agent.backendId,
               threadId: sessionId,
               turnId,
               update,
+            });
+        const toolNotifications = resolvedToolUpdate
+          ? acpToolUpdateNotifications({
+              threadId: sessionId,
+              turnId,
+              update: resolvedToolUpdate,
             }).filter((notification) =>
               this.shouldEmitLiveToolNotification(agent.backendId, notification),
-            );
+            )
+          : [];
+        const deferredTerminalToolNotifications =
+          updateKind === "turn_finished" && turnId && !fromSessionLoad
+            ? this.liveToolUpdateResolver
+                .drainDeferredTerminalUpdates({
+                  backendId: agent.backendId,
+                  threadId: sessionId,
+                  turnId,
+                })
+                .flatMap((deferredUpdate) =>
+                  acpToolUpdateNotifications({
+                    threadId: sessionId,
+                    turnId,
+                    update: deferredUpdate,
+                  }),
+                )
+                .filter((notification) =>
+                  this.shouldEmitLiveToolNotification(agent.backendId, notification),
+                )
+            : [];
         if (title) {
           await this.emit({
             backend: agent.backendId,
@@ -2301,7 +2331,10 @@ export class AcpBackendAdapter {
             });
           }
         }
-        for (const notification of toolNotifications) {
+        for (const notification of [
+          ...toolNotifications,
+          ...deferredTerminalToolNotifications,
+        ]) {
           await this.emit({
             backend: agent.backendId,
             notification,
@@ -2319,6 +2352,11 @@ export class AcpBackendAdapter {
           );
           this.clearLiveToolNotificationFingerprints({
             backend: agent.backendId,
+            threadId: sessionId,
+            turnId,
+          });
+          this.liveToolUpdateResolver.clearTurn({
+            backendId: agent.backendId,
             threadId: sessionId,
             turnId,
           });
@@ -2357,6 +2395,11 @@ export class AcpBackendAdapter {
         this.liveTurnUsage.delete(
           [agent.backendId, sessionId, turnId].join(":"),
         );
+        this.liveToolUpdateResolver.clearTurn({
+          backendId: agent.backendId,
+          threadId: sessionId,
+          turnId,
+        });
         await this.emit({
           backend: agent.backendId,
           notification: {

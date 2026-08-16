@@ -256,6 +256,7 @@ export type ThreadPullRequestAutomationStatus = {
   /** Global Git setting that permits automatic PR repair turns. */
   autoFixAllowed: boolean;
   autoFixEnabled: boolean;
+  /** Monitoring ownership for this thread. This does not identify the current turn as an Auto-fix repair turn. */
   autoFixActive: boolean;
   autoFixPending?: ThreadPrAutoDispatchPending;
   watches?: ThreadPullRequestWatchSummary[];

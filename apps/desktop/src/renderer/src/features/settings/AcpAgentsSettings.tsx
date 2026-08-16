@@ -295,6 +295,7 @@ function AcpAgentSection(props: {
 }) {
   const { entry, enabled } = props;
   const instances = entry.instances ?? [];
+  const rejectedInstances = entry.rejectedInstances ?? [];
   const savedPath = props.cliPathSnapshot?.value ?? "";
   const [draft, setDraft] = useState(savedPath);
   const [pathUpdating, setPathUpdating] = useState(false);
@@ -422,56 +423,81 @@ function AcpAgentSection(props: {
         ) : null}
 
         <SettingsField
-          label="Installed paths"
+          label="Detected paths"
           sub={
             enabled
               ? "Binaries detected on this machine. The active one runs new threads — click Use to pick another."
               : "Previously detected binaries. Enable this provider and Refresh before launching new threads."
           }
-          source={`${instances.length} found`}
+          source={`${instances.length + rejectedInstances.length} found`}
           error={detail}
           control={
             <div className="settings-paths" aria-label={`${entry.name} installs`}>
-              {instances.length === 0 ? (
+              {instances.length === 0 && rejectedInstances.length === 0 ? (
                 <p className="settings-empty">Not installed.</p>
               ) : (
-                instances.map((instance) => {
-                  const active =
-                    enabled && instance.command === entry.activeCommand;
-                  const chips: SettingsPathRowChip[] = [
-                    {
-                      label: instance.source,
-                      tone: "muted",
-                    },
-                    {
-                      label: instance.version
-                        ? `v${instance.version}`
-                        : "version unknown",
-                      tone: "muted",
-                    },
-                  ];
-                  if (!active) {
-                    chips.push({ label: "available", tone: "muted" });
-                  }
-                  return (
+                <>
+                  {instances.map((instance) => {
+                    const active =
+                      enabled && instance.command === entry.activeCommand;
+                    const chips: SettingsPathRowChip[] = [
+                      {
+                        label: instance.source === "override" ? "override" : "path",
+                        tone: "muted",
+                      },
+                      {
+                        label: instance.version
+                          ? `v${instance.version}`
+                          : "version unknown",
+                        tone: "muted",
+                      },
+                    ];
+                    if (!active) {
+                      chips.push({ label: "available", tone: "muted" });
+                    }
+                    return (
+                      <SettingsPathRow
+                        key={instance.command}
+                        path={instance.command}
+                        chips={chips}
+                        selected={active}
+                        selectedLabel="Using"
+                        useLabel="Use"
+                        disabled={pathControlsDisabled}
+                        onUse={
+                          props.onCliPathChange
+                            ? () => {
+                                void commitPath(instance.command);
+                              }
+                            : undefined
+                        }
+                      />
+                    );
+                  })}
+                  {rejectedInstances.map((instance) => (
                     <SettingsPathRow
                       key={instance.command}
                       path={instance.command}
-                      chips={chips}
-                      selected={active}
-                      selectedLabel="Using"
-                      useLabel="Use"
-                      disabled={pathControlsDisabled}
-                      onUse={
-                        props.onCliPathChange
-                          ? () => {
-                              void commitPath(instance.command);
-                            }
-                          : undefined
-                      }
+                      chips={[
+                        {
+                          label: instance.source === "override" ? "override" : "path",
+                          tone: "muted",
+                        },
+                        {
+                          label: instance.version
+                            ? `v${instance.version}`
+                            : "version unknown",
+                          tone: "muted",
+                        },
+                        {
+                          label: rejectedAcpInstanceLabel(instance.reason),
+                          tone: "muted",
+                        },
+                      ]}
+                      selected={false}
                     />
-                  );
-                })
+                  ))}
+                </>
               )}
             </div>
           }
@@ -553,4 +579,17 @@ function AcpAgentSection(props: {
       </div>
     </SettingsSection>
   );
+}
+
+function rejectedAcpInstanceLabel(
+  reason: NonNullable<AcpAgentSettingsEntry["rejectedInstances"]>[number]["reason"],
+): string {
+  switch (reason) {
+    case "version-probe-failed":
+      return "version check failed";
+    case "acp-help-mismatch":
+      return "not recognized as ACP";
+    default:
+      return "ACP check failed";
+  }
 }

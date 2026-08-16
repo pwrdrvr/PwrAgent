@@ -7,7 +7,7 @@ describe("isFlaggedToolInvocation", () => {
        row. Trusting the flag alone showed an empty explorer next to a fully
        populated turn strip — 575 oversized calls in one real thread, none of
        them listed. */
-    expect(isFlaggedToolInvocation({ noisy: false, outputChars: 17_771 }))
+    expect(isFlaggedToolInvocation({ noisy: false, outputChars: 20_000 }))
       .toBe(true);
   });
 
@@ -19,7 +19,14 @@ describe("isFlaggedToolInvocation", () => {
   });
 
   it("leaves an ordinary small result alone", () => {
-    expect(isFlaggedToolInvocation({ noisy: false, outputChars: 3_999 }))
+    expect(isFlaggedToolInvocation({ noisy: false, outputChars: 19_999 }))
       .toBe(false);
+  });
+
+  it("uses the operator's effective large-output threshold", () => {
+    const invocation = { noisy: false, outputChars: 24_000 };
+
+    expect(isFlaggedToolInvocation(invocation, 30_000)).toBe(false);
+    expect(isFlaggedToolInvocation(invocation, 10_000)).toBe(true);
   });
 });

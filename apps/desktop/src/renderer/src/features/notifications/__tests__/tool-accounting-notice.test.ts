@@ -110,6 +110,25 @@ describe("buildThreadIncidentSummary", () => {
       threadId: "thread-1",
     })).toBeUndefined();
   });
+
+  it("folds incidents using the configured large-output threshold", () => {
+    const records = accounting([
+      invocation({ noisy: false, outputChars: 24_000 }),
+    ]);
+
+    expect(buildThreadIncidentSummary({
+      accounting: records,
+      backend: "codex",
+      largeOutputThresholdChars: 30_000,
+      threadId: "thread-1",
+    })).toBeUndefined();
+    expect(buildThreadIncidentSummary({
+      accounting: records,
+      backend: "codex",
+      largeOutputThresholdChars: 10_000,
+      threadId: "thread-1",
+    })?.flaggedInvocationCount).toBe(1);
+  });
 });
 
 describe("resolveToolIncidentVisibility", () => {

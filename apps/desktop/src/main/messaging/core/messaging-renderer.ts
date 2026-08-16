@@ -2,6 +2,7 @@ import type {
   AppServerToolRequestUserInputNotification,
   NavigationSnapshot,
 } from "@pwragent/shared";
+import { coalesceToolActivityBurst } from "@pwragent/shared";
 import type {
   MessagingActivityIntent,
   MessagingConfirmationIntent,
@@ -147,10 +148,26 @@ export function buildToolUpdateBatchMessageIntent(params: {
   const segments: string[] = proseActivities.map((activity) => activity.title);
   if (toolActivities.length > 0) {
     const count = toolActivities.length;
+    const groupedActivities = coalesceToolActivityBurst(
+      toolActivities.map((activity) => ({
+        activity,
+        label: formatToolActivityLine(activity),
+        status: activity.status,
+      })),
+    );
+    const visibleGroups = groupedActivities.slice(0, 5);
+    const omittedToolCount = groupedActivities
+      .slice(5)
+      .reduce((total, group) => total + group.count, 0);
     segments.push(
       [
         `Tool updates: ran ${count} tool${count === 1 ? "" : "s"}`,
-        ...toolActivities.map((activity) => `- ${formatToolActivityLine(activity)}`),
+        ...visibleGroups.map((group) =>
+          `- ${group.count === 1 ? group.label : `${group.count} × ${group.label}`}`
+        ),
+        ...(omittedToolCount > 0
+          ? [`- ${omittedToolCount} other tool update${omittedToolCount === 1 ? "" : "s"}`]
+          : []),
       ].join("\n"),
     );
   }

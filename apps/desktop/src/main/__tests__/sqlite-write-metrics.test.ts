@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   AgentEvent,
   AppServerThreadReplay,
+  TaskMonitorUsageSnapshot,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import { buildFederatedThreadRef } from "@pwragent/shared";
@@ -260,22 +261,24 @@ describe("sqlite write metrics", () => {
     }).emit.bind(registry);
 
     const { writes } = await measureSqliteWrites(async () => {
-      await emit({
-        backend: "codex",
-        notification: {
-          method: "item/commandExecution/outputDelta",
-          params: {
-            threadId: "thread-streaming-alert",
-            turnId: "turn-1",
-            itemId: "cmd-1",
-            delta: "x".repeat(4_100),
+      for (let index = 0; index < 5; index += 1) {
+        await emit({
+          backend: "codex",
+          notification: {
+            method: "item/commandExecution/outputDelta",
+            params: {
+              threadId: "thread-streaming-alert",
+              turnId: "turn-1",
+              itemId: `cmd-${index + 1}`,
+              delta: "x".repeat(20_100),
+            },
           },
-        },
-      } as AgentEvent);
+        } as AgentEvent);
+      }
     });
 
     expectSqliteWriteBudget({
-      note: "one threshold-crossing streamed output window and its alert",
+      note: "five large streamed outputs and their first repeated-output alert",
       scenario: "streamed-large-output-alert-boundary",
       writes,
     });
@@ -287,14 +290,15 @@ describe("sqlite write metrics", () => {
     expect(accounting.alerts).toEqual([
       expect.objectContaining({
         kind: "large-output",
-        totalOutputChars: 4_100,
+        invocationCount: 5,
+        totalOutputChars: 100_500,
       }),
     ]);
     expect(accounting.invocations).toEqual([
       expect.objectContaining({
         noisy: true,
         noisyReason: "large-output",
-        outputChars: 4_100,
+        outputChars: 20_100,
         status: "in_progress",
       }),
     ]);
@@ -351,7 +355,7 @@ describe("sqlite write metrics", () => {
     }
   });
 
-  it("holds one large structured MCP result and its alert to one commit", async () => {
+  it("holds one capped structured MCP result and its alert to one commit", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
@@ -376,7 +380,7 @@ describe("sqlite write metrics", () => {
               status: "completed",
               arguments: { action: "list" },
               result: {
-                content: [{ type: "text", text: "x".repeat(4_100) }],
+                content: [{ type: "text", text: "x".repeat(40_100) }],
               },
             },
           },
@@ -385,7 +389,7 @@ describe("sqlite write metrics", () => {
     });
 
     expectSqliteWriteBudget({
-      note: "one large structured MCP result and its alert in one boundary",
+      note: "one capped structured MCP result and its alert in one boundary",
       scenario: "structured-mcp-output-alert",
       writes,
     });
@@ -446,6 +450,190 @@ describe("sqlite write metrics", () => {
       await registry.close();
       vi.useRealTimers();
     }
+  });
+
+  it("bounds one ACP monitor lifecycle independently of heartbeat count", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const monitorRecord: {
+      activeCommandCount: number;
+      backend: "acp:kimi";
+      createdAt: number;
+      heartbeatIntervalSeconds: number;
+      lastActivityAt: number;
+      latestUsage?: TaskMonitorUsageSnapshot;
+      monitorId: string;
+      monitorThreadId: string;
+      monitorTurnId: string;
+      parentBackend: "acp:kimi";
+      parentThreadId: string;
+      persistedStatus?: string;
+      pollIntervalSeconds: number;
+      preferredModel: string;
+      preferredReasoningEffort: string;
+      startupTimeoutSeconds: number;
+      task: string;
+    } = {
+      activeCommandCount: 0,
+      backend: "acp:kimi",
+      createdAt: 1_800_000_000_000,
+      heartbeatIntervalSeconds: 30,
+      lastActivityAt: 1_800_000_000_000,
+      monitorId: "monitor-write-budget",
+      monitorThreadId: "monitor-thread",
+      monitorTurnId: "monitor-turn",
+      parentBackend: "acp:kimi",
+      parentThreadId: "parent-thread",
+      pollIntervalSeconds: 30,
+      preferredModel: "kimi-lite",
+      preferredReasoningEffort: "low",
+      startupTimeoutSeconds: 45,
+      task: "Wait for one bounded external operation.",
+    };
+    const internal = registry as unknown as {
+      completedTaskMonitorsByThread: Map<string, typeof monitorRecord>;
+      injectTaskMonitorProgress(
+        caller: {
+          backend: "acp:kimi";
+          threadId: string;
+          turnId: string;
+        },
+        args: {
+          monitorId: string;
+          message: string;
+          status: "running";
+        },
+      ): Promise<unknown>;
+      persistTaskMonitorSubAgent(
+        record: typeof monitorRecord,
+        patch: Record<string, unknown>,
+      ): Promise<void>;
+      taskMonitorDelegations: Map<string, typeof monitorRecord>;
+    };
+    internal.taskMonitorDelegations.set(monitorRecord.monitorId, monitorRecord);
+
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await internal.persistTaskMonitorSubAgent(monitorRecord, {
+          status: "running",
+        });
+        // Four polls per minute for 30 minutes used to mean 120 sqlite
+        // commits. Routine same-status heartbeats now stay transient.
+        for (let index = 0; index < 120; index += 1) {
+          await internal.injectTaskMonitorProgress(
+            {
+              backend: "acp:kimi",
+              threadId: monitorRecord.monitorThreadId,
+              turnId: monitorRecord.monitorTurnId,
+            },
+            {
+              monitorId: monitorRecord.monitorId,
+              message: `Still waiting (${index + 1}).`,
+              status: "running",
+            },
+          );
+        }
+        await internal.persistTaskMonitorSubAgent(monitorRecord, {
+          completedAt: 1_800_001_800_000,
+          lastMessage: "External operation completed.",
+          outcome: "success",
+          status: "success",
+        });
+        internal.taskMonitorDelegations.delete(monitorRecord.monitorId);
+        internal.completedTaskMonitorsByThread.set(
+          "acp:kimi:monitor-thread",
+          monitorRecord,
+        );
+        await registry.publishLocalEvent({
+          backend: "acp:kimi",
+          notification: {
+            method: "thread/tokenUsage/updated",
+            params: {
+              threadId: monitorRecord.monitorThreadId,
+              turnId: monitorRecord.monitorTurnId,
+              model: monitorRecord.preferredModel,
+              tokenUsage: {
+                last_token_usage: {
+                  input_tokens: 650,
+                  cached_input_tokens: 150,
+                  output_tokens: 40,
+                  reasoning_output_tokens: 8,
+                },
+              },
+            },
+          },
+        });
+        await registry.publishLocalEvent({
+          backend: "acp:kimi",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: monitorRecord.monitorThreadId,
+              turnId: monitorRecord.monitorTurnId,
+              turn: {
+                id: monitorRecord.monitorTurnId,
+                status: "completed",
+                completedAt: 1_800_001_800_000,
+                output: [],
+              },
+            },
+          },
+        });
+      });
+
+      expectSqliteWriteBudget({
+        // Measured at four commits per completed monitor, independent of the
+        // 120 heartbeats. At 100 monitors/day that is 400 commits/day; this
+        // calibration observed about 115 KB per lifecycle, or about 11 MB/day.
+        note:
+          "one ACP monitor start, 120 transient heartbeats, completion, and final usage attribution",
+        scenario: "acp-task-monitor-lifecycle",
+        writes,
+      });
+      expect(internal.completedTaskMonitorsByThread.size).toBe(0);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("repairs a thread pricing history in one transaction", async () => {
+    for (let index = 0; index < 25; index += 1) {
+      await store.upsertThreadUsageLine({
+        line: buildUnpricedGrokUsageLine(index),
+      });
+    }
+    stateDb.raw
+      .prepare(
+        `UPDATE thread_usage_lines
+         SET model = 'grok-4.6-build'
+         WHERE thread_id = 'thread-pricing-repair'`,
+      )
+      .run();
+    resetSqliteWriteMetrics();
+
+    const { writes } = await measureSqliteWrites(async () => {
+      const pricing = await store.readThreadPricing({
+        backend: "acp:grok",
+        threadId: "thread-pricing-repair",
+      });
+      expect(pricing.lines).toHaveLength(25);
+      expect(
+        pricing.lines.every((line) => line.priceStatus === "priced"),
+      ).toBe(true);
+      await store.readThreadPricing({
+        backend: "acp:grok",
+        threadId: "thread-pricing-repair",
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note:
+        "one thread load lazily reprices 25 usage rows in ten-row progress batches; a second load is read-only",
+      scenario: "thread-pricing-lazy-repair",
+      writes,
+    });
   });
 
   it("holds a burst of automation pricing snapshots to one run-usage write", async () => {
@@ -1379,6 +1567,39 @@ function buildInvocation(invocationId: string) {
     toolName: "commandExecution",
     updatedAt: 1_800_000_000_000,
     warningLines: 0,
+  };
+}
+
+function buildUnpricedGrokUsageLine(index: number): ThreadUsageLineRecord {
+  const createdAt = Date.UTC(2026, 7, 15) + index;
+  return {
+    backend: "acp:grok",
+    cachedInputCostMicros: 0,
+    cachedInputTokens: 315_776,
+    createdAt,
+    currency: "USD",
+    inputTokens: 316_222,
+    model: "unknown-grok-model",
+    outputCostMicros: 0,
+    outputTokens: 121,
+    priceStatus: "unpriced",
+    priceUnavailableReason: "missing-rate",
+    provider: "openai",
+    reasoningEffort: "high",
+    reasoningOutputTokens: 50,
+    scope: "turn",
+    settingsConfidence: "exact",
+    settingsSource: "turn-context",
+    source: "hydration",
+    sourceItemId: `item-pricing-repair-${index}`,
+    status: "finalized",
+    threadId: "thread-pricing-repair",
+    totalCostMicros: 0,
+    totalTokens: 316_343,
+    turnId: `turn-pricing-repair-${index}`,
+    uncachedInputCostMicros: 0,
+    uncachedInputTokens: 446,
+    usageLineId: `line-pricing-repair-${index}`,
   };
 }
 

@@ -1,5 +1,9 @@
 import type { MessagingToolUpdateMode } from "./messaging";
 import type { FederationTarget } from "./federation";
+import {
+  TOOL_OUTPUT_WARNING_INVOCATIONS,
+  TOOL_OUTPUT_WARNING_PERCENT,
+} from "./tool-output-incidents";
 
 export const DESKTOP_CHAT_REPLY_COMPOSERS = [
   "tiptap-wysiwyg-markdown-chips",
@@ -151,6 +155,50 @@ export const DESKTOP_TEXT_SIZES = [
 ] as const;
 export type DesktopTextSize = (typeof DESKTOP_TEXT_SIZES)[number];
 export const DESKTOP_TEXT_SIZE_DEFAULT: DesktopTextSize = "md";
+
+export type DesktopToolOutputAlertPolicy = {
+  outputCapHitsEnabled: boolean;
+  repeatedLargeOutputsEnabled: boolean;
+  repeatedLargeOutputMinimumCalls: number;
+  repeatedLargeOutputMinimumPercent: number;
+  repeatedQueuedChecksEnabled: boolean;
+};
+
+export const MIN_REPEATED_LARGE_OUTPUT_CALLS = 2;
+export const MAX_REPEATED_LARGE_OUTPUT_CALLS = 100;
+export const MIN_REPEATED_LARGE_OUTPUT_PERCENT = 1;
+export const MAX_REPEATED_LARGE_OUTPUT_PERCENT = 100;
+
+/**
+ * Tool-output alerts stay on by default, but the large-output warning is
+ * deliberately a repeated-pattern signal rather than a one-call tripwire.
+ * Operators can independently select the qualifying output size and how many
+ * calls in one turn must reach it before the warning interrupts them.
+ */
+export const DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT: DesktopToolOutputAlertPolicy = {
+  outputCapHitsEnabled: true,
+  repeatedLargeOutputsEnabled: true,
+  repeatedLargeOutputMinimumCalls: TOOL_OUTPUT_WARNING_INVOCATIONS,
+  repeatedLargeOutputMinimumPercent: TOOL_OUTPUT_WARNING_PERCENT,
+  repeatedQueuedChecksEnabled: true,
+};
+
+export type DesktopSpendAlertPolicy = {
+  activeTurnSpendEnabled: boolean;
+  activeTurnSpendThresholdUsd: number;
+  threadSpendEnabled: boolean;
+  threadSpendThresholdUsd: number;
+};
+
+export const MIN_SPEND_ALERT_THRESHOLD_USD = 0.01;
+export const MAX_SPEND_ALERT_THRESHOLD_USD = 10_000;
+
+export const DESKTOP_SPEND_ALERT_POLICY_DEFAULT: DesktopSpendAlertPolicy = {
+  activeTurnSpendEnabled: true,
+  activeTurnSpendThresholdUsd: 5,
+  threadSpendEnabled: true,
+  threadSpendThresholdUsd: 25,
+};
 
 export const DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELLS = [
   "auto",
@@ -474,6 +522,19 @@ export type DesktopGeneralSettingsSnapshot = {
   hotCpuProfilingCaptureHeapSnapshot: DesktopSettingsValue<boolean>;
   hotCpuProfilingHeapSnapshotLimit: DesktopSettingsValue<number>;
   notificationsEnabled: DesktopSettingsValue<boolean>;
+  toolOutputAlerts: {
+    outputCapHitsEnabled: DesktopSettingsValue<boolean>;
+    repeatedLargeOutputsEnabled: DesktopSettingsValue<boolean>;
+    repeatedLargeOutputMinimumCalls: DesktopSettingsValue<number>;
+    repeatedLargeOutputMinimumPercent: DesktopSettingsValue<number>;
+    repeatedQueuedChecksEnabled: DesktopSettingsValue<boolean>;
+  };
+  spendAlerts: {
+    activeTurnSpendEnabled: DesktopSettingsValue<boolean>;
+    activeTurnSpendThresholdUsd: DesktopSettingsValue<number>;
+    threadSpendEnabled: DesktopSettingsValue<boolean>;
+    threadSpendThresholdUsd: DesktopSettingsValue<number>;
+  };
   appearance: DesktopAppearanceSnapshot;
   codexProfileModel: DesktopSettingsValue<DesktopCodexProfileModel>;
   messagingAcknowledgment: DesktopSettingsValue<DesktopMessagingAcknowledgment | null>;
@@ -991,6 +1052,8 @@ export type DesktopSettingsConfigPatch = {
     hotCpuProfilingCaptureHeapSnapshot?: boolean;
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
+    toolOutputAlerts?: Partial<DesktopToolOutputAlertPolicy>;
+    spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;

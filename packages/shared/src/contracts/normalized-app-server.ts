@@ -16,7 +16,11 @@ import type {
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
 } from "./navigation";
-import type { ThreadPricingSummary, ThreadUsageLineRecord } from "../token-usage-pricing";
+import type {
+  ThreadPricingSummary,
+  ThreadSpendAlert,
+  ThreadUsageLineRecord,
+} from "../token-usage-pricing";
 import type { ThreadToolIncidentNoticeState } from "./tool-output-incidents";
 
 export type AppServerBuiltinBackendKind = "codex";
@@ -1374,6 +1378,7 @@ export type AppServerNotification =
           lines: ThreadUsageLineRecord[];
           summaries: ThreadPricingSummary[];
         };
+        triggeredSpendAlerts?: ThreadSpendAlert[];
       };
     }
   | {
@@ -1680,7 +1685,13 @@ export type AppServerNotification =
         /** Owner-clock creation time for ordering against navigation snapshots. */
         queueEntryCreatedAt?: number;
         origin: "manual" | "automation" | "messaging" | "scheduled";
-        status: "queued" | "started" | "failed" | "cancelled" | "terminal";
+        status:
+          | "queued"
+          | "started"
+          | "blocked"
+          | "failed"
+          | "cancelled"
+          | "terminal";
         /**
          * Truncated first text of the queued input on "queued" events, so
          * windows that did not submit the entry can mirror a chip without

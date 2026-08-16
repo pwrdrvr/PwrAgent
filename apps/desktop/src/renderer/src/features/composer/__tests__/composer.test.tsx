@@ -1643,7 +1643,9 @@ describe("Composer", () => {
     });
     const autocomplete = screen.getByRole("listbox", { name: "Directories" });
     for (const name of ["+ Add directory…", "+ Add file…"]) {
-      const action = within(autocomplete).getByRole("button", { name });
+      const action = screen.getByRole("button", { name });
+      expect(within(autocomplete).queryByRole("button", { name }))
+        .not.toBeInTheDocument();
       expect(action).toBeDisabled();
       expect(action).toHaveAttribute("title", REMOTE_NATIVE_PICKER_TOOLTIP);
     }
@@ -2388,7 +2390,7 @@ describe("Composer", () => {
       name: "Threads and pull requests",
     });
     expect(
-      within(listbox).getByRole("button", { name: /#Bob's Best Thread 3000/ }),
+      within(listbox).getByRole("option", { name: /#Bob's Best Thread 3000/ }),
     ).toBeInTheDocument();
   });
 
@@ -2545,7 +2547,7 @@ describe("Composer", () => {
       name: "Threads and pull requests",
     });
     expect(
-      within(listbox).getByRole("button", { name: /#Bob's Best Thread 3000/ }),
+      within(listbox).getByRole("option", { name: /#Bob's Best Thread 3000/ }),
     ).toBeInTheDocument();
   });
 
@@ -2587,7 +2589,7 @@ describe("Composer", () => {
       name: "Threads and pull requests",
     });
     expect(
-      within(listbox).getByRole("button", { name: /#Bob's Best Thread 3000/ }),
+      within(listbox).getByRole("option", { name: /#Bob's Best Thread 3000/ }),
     ).toBeInTheDocument();
   });
 
@@ -2634,7 +2636,7 @@ describe("Composer", () => {
       name: "Threads and pull requests",
     });
     expect(
-      within(listbox).getByRole("button", {
+      within(listbox).getByRole("option", {
         name: /#Bob's Best Thread 3000/,
       }),
     ).toBeInTheDocument();
@@ -2715,10 +2717,10 @@ describe("Composer", () => {
     // Referencing the thread you are writing in is never useful, and on a
     // bare `#` it would otherwise sort first as the most recent thread.
     expect(
-      within(listbox).queryByRole("button", { name: /#Current thread/ }),
+      within(listbox).queryByRole("option", { name: /#Current thread/ }),
     ).not.toBeInTheDocument();
 
-    const options = within(listbox).getAllByRole("button");
+    const options = within(listbox).getAllByRole("option");
     expect(options).toHaveLength(1);
     const label = options[0]!.querySelector(".composer__autocomplete-label");
     expect(label).toHaveTextContent(
@@ -2781,7 +2783,7 @@ describe("Composer", () => {
     const listbox = await screen.findByRole("listbox", {
       name: "Threads and pull requests",
     });
-    const option = within(listbox).getByRole("button", {
+    const option = within(listbox).getByRole("option", {
       name: /#Implement hash references/,
     });
     expect(option.querySelector(".composer__autocomplete-match"))
@@ -2822,7 +2824,7 @@ describe("Composer", () => {
       name: "Threads and pull requests",
     });
 
-    const option = within(listbox).getAllByRole("button")[0]!;
+    const option = within(listbox).getAllByRole("option")[0]!;
     // The id is the label when there is no title; the meta row's own id
     // fallback would only repeat it.
     expect(option.querySelector(".composer__autocomplete-title"))
@@ -2965,7 +2967,7 @@ describe("Composer", () => {
     const listbox = await screen.findByRole("listbox", {
       name: "Threads and pull requests",
     });
-    const threadOption = within(listbox).getByRole("button", {
+    const threadOption = within(listbox).getByRole("option", {
       name: /#Implement hash references/,
     });
     expect(threadOption.querySelector(".composer__autocomplete-meta"))
@@ -2975,7 +2977,7 @@ describe("Composer", () => {
 
     // The PR row's subject is clamped to one line like every other row,
     // with the full text on the row for hover.
-    const pullRequestOption = within(listbox).getByRole("button", {
+    const pullRequestOption = within(listbox).getByRole("option", {
       name: /pwrdrvr\/PwrAgent#123/,
     });
     expect(pullRequestOption).toHaveAttribute("title", pullRequest.title);
@@ -3123,7 +3125,7 @@ describe("Composer", () => {
     const listbox = await screen.findByRole("listbox", {
       name: "Threads and pull requests",
     });
-    const remoteOption = await within(listbox).findByRole("button", {
+    const remoteOption = await within(listbox).findByRole("option", {
       name: /#Remote fix/,
     });
     expect(jumpSearchRemoteThreads).toHaveBeenCalledWith({
@@ -11922,7 +11924,7 @@ describe("Composer", () => {
     expect(screen.getByRole("listbox", { name: "Commands" })).toHaveClass(
       "composer__autocomplete"
     );
-    fireEvent.click(screen.getByRole("button", { name: /\/review/i }));
+    fireEvent.click(screen.getByRole("option", { name: /\/review/i }));
 
     expect(screen.queryByRole("listbox", { name: "Commands" })).not.toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
@@ -11962,7 +11964,7 @@ describe("Composer", () => {
 
     const commands = screen.getByRole("listbox", { name: "Commands" });
     expect(commands).toBeInTheDocument();
-    expect(within(commands).getByRole("button", { name: /\/review/i })).toBeInTheDocument();
+    expect(within(commands).getByRole("option", { name: /\/review/i })).toBeInTheDocument();
   });
 
   it("keeps slash review autocomplete visible while editing the prefix", async () => {
@@ -11996,7 +11998,7 @@ describe("Composer", () => {
 
       const commands = screen.getByRole("listbox", { name: "Commands" });
       expect(commands).toBeInTheDocument();
-      expect(within(commands).getByRole("button", { name: /\/review/i })).toBeInTheDocument();
+      expect(within(commands).getByRole("option", { name: /\/review/i })).toBeInTheDocument();
     }
   });
 
@@ -12035,7 +12037,7 @@ describe("Composer", () => {
 
     fireEvent.change(textarea, { target: { value: "/re" } });
     const commands = screen.getByRole("listbox", { name: "Commands" });
-    expect(within(commands).getByRole("button", { name: /\/review/i })).toBeInTheDocument();
+    expect(within(commands).getByRole("option", { name: /\/review/i })).toBeInTheDocument();
   });
 
   it.each([
@@ -12084,7 +12086,7 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "/r" } });
 
     const commands = screen.getByRole("listbox", { name: "Commands" });
-    expect(within(commands).getAllByRole("button", { name: /\/review/i })).toHaveLength(2);
+    expect(within(commands).getAllByRole("option", { name: /\/review/i })).toHaveLength(2);
     expect(within(commands).getByText("PwrAgent")).toBeInTheDocument();
     expect(within(commands).getByText(providerLabel)).toBeInTheDocument();
   });
@@ -12264,15 +12266,15 @@ describe("Composer", () => {
     fireEvent.change(textarea, { target: { value: "/r" } });
     expect(
       within(screen.getByRole("listbox", { name: "Commands" })).getByRole(
-        "button",
+        "option",
         { name: /\/review/i },
       ),
     ).toHaveAttribute("aria-selected", "true");
 
     fireEvent.change(textarea, { target: { value: "/co" } });
     const commands = screen.getByRole("listbox", { name: "Commands" });
-    expect(within(commands).queryByRole("button", { name: /\/review/i })).not.toBeInTheDocument();
-    expect(within(commands).getByRole("button", { name: /\/compact/i })).toHaveAttribute(
+    expect(within(commands).queryByRole("option", { name: /\/review/i })).not.toBeInTheDocument();
+    expect(within(commands).getByRole("option", { name: /\/compact/i })).toHaveAttribute(
       "aria-selected",
       "true",
     );
@@ -12338,7 +12340,7 @@ describe("Composer", () => {
 
     const commands = screen.getByRole("listbox", { name: "Commands" });
     fireEvent.click(
-      within(commands).getByRole("button", { name: /\/skill:frontend-design/i }),
+      within(commands).getByRole("option", { name: /\/skill:frontend-design/i }),
     );
 
     await waitFor(() => {
@@ -14784,9 +14786,9 @@ describe("Composer", () => {
       });
 
       const listbox = screen.getByRole("listbox", { name: "Directories" });
-      expect(listbox).toHaveClass("composer__autocomplete--directories");
+      expect(listbox.parentElement).toHaveClass("composer__autocomplete--directories");
       fireEvent.click(
-        within(listbox).getByRole("button", { name: /catalog-portal/ })
+        within(listbox).getByRole("option", { name: /catalog-portal/ })
       );
 
       // The commit mints a zero-width chip: the plain draft keeps only
@@ -15029,13 +15031,15 @@ describe("Composer", () => {
       });
 
       const listbox = screen.getByRole("listbox", { name: "Directories" });
+      expect(within(listbox).getAllByRole("option")).toHaveLength(1);
+      expect(within(listbox).queryByRole("button")).not.toBeInTheDocument();
       // Only the file action renders — this composer has no
       // onPickDirectoryForReference, so the directory action is hidden.
       expect(
-        within(listbox).queryByRole("button", { name: "+ Add directory…" })
+        screen.queryByRole("button", { name: "+ Add directory…" })
       ).not.toBeInTheDocument();
       expect(
-        within(listbox).getByRole("button", { name: "+ Add file…" })
+        screen.getByRole("button", { name: "+ Add file…" })
       ).toBeInTheDocument();
       await clickButton("+ Add file…");
 
@@ -15485,7 +15489,7 @@ describe("Composer", () => {
     fireEvent.change(input, { target: { value: "/deploy" } });
     expect(
       within(screen.getByRole("listbox", { name: "Commands" })).getByRole(
-        "button",
+        "option",
         { name: /\/deployaudit/i },
       ),
     ).toHaveAttribute("aria-selected", "true");
@@ -16070,7 +16074,7 @@ describe("Composer", () => {
     });
 
     const options = within(screen.getByRole("listbox", { name: "Skills" }))
-      .getAllByRole("button")
+      .getAllByRole("option")
       .map((option) => option.textContent ?? "");
 
     expect(options[0]).toContain("$ce:plan");
@@ -16093,7 +16097,7 @@ describe("Composer", () => {
     });
 
     let options = within(screen.getByRole("listbox", { name: "Skills" }))
-      .getAllByRole("button")
+      .getAllByRole("option")
       .map((option) => option.textContent ?? "");
 
     expect(options.some((option) => option.includes("$ce:plan"))).toBe(true);
@@ -16103,7 +16107,7 @@ describe("Composer", () => {
     });
 
     options = within(screen.getByRole("listbox", { name: "Skills" }))
-      .getAllByRole("button")
+      .getAllByRole("option")
       .map((option) => option.textContent ?? "");
 
     expect(options[0]).toContain("$ce:plan");
@@ -19166,7 +19170,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "$ce:pl" } });
 
-    const option = screen.getByRole("button", { name: /\$ce:plan/i });
+    const option = screen.getByRole("option", { name: /\$ce:plan/i });
     option.focus();
     fireEvent.keyDown(option, { key: "Enter" });
 
@@ -19213,7 +19217,7 @@ describe("Composer", () => {
     const listbox = screen.getByRole("listbox", { name: "Skills" });
     const getActiveOptionIndex = (): number =>
       within(listbox)
-        .getAllByRole("button")
+        .getAllByRole("option")
         .findIndex((option) => option.getAttribute("aria-selected") === "true");
 
     expect(getActiveOptionIndex()).toBe(0);
@@ -19267,7 +19271,7 @@ describe("Composer", () => {
     const textarea = screen.getByLabelText("Reply");
     fireEvent.change(textarea, { target: { value: "$ce:pl" } });
 
-    const option = screen.getByRole("button", { name: /\$ce:plan/i });
+    const option = screen.getByRole("option", { name: /\$ce:plan/i });
     option.focus();
     fireEvent.keyDown(option, { key: "Escape" });
 

@@ -503,6 +503,16 @@ function SettingsSectionBody(props: {
             experimental: { threadPricingDisplayCodexCredits: enabled },
           });
         }}
+        onToolOutputAlertsChange={async (toolOutputAlerts) => {
+          await props.settings.writeConfig({
+            general: { toolOutputAlerts },
+          });
+        }}
+        onSpendAlertsChange={async (spendAlerts) => {
+          await props.settings.writeConfig({
+            general: { spendAlerts },
+          });
+        }}
       />
     );
   }

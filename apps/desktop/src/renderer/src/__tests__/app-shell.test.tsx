@@ -1235,6 +1235,19 @@ describe("App", () => {
           value: false,
           source: "default",
         },
+        toolOutputAlerts: {
+          outputCapHitsEnabled: { value: true, source: "default" },
+          repeatedLargeOutputsEnabled: { value: true, source: "default" },
+          repeatedLargeOutputMinimumCalls: { value: 5, source: "default" },
+          repeatedLargeOutputMinimumPercent: { value: 50, source: "default" },
+          repeatedQueuedChecksEnabled: { value: true, source: "default" },
+        },
+        spendAlerts: {
+          activeTurnSpendEnabled: { value: true, source: "default" },
+          activeTurnSpendThresholdUsd: { value: 5, source: "default" },
+          threadSpendEnabled: { value: true, source: "default" },
+          threadSpendThresholdUsd: { value: 25, source: "default" },
+        },
         appearance: {
           theme: { value: "system", source: "default" },
           density: { value: "mission-control", source: "default" },
@@ -2109,7 +2122,7 @@ describe("App", () => {
     });
 
     expect(
-      await screen.findByRole("button", { name: /\$frontend-design/i }, { timeout: 5_000 })
+      await screen.findByRole("option", { name: /\$frontend-design/i }, { timeout: 5_000 })
     ).toBeInTheDocument();
   }, 10_000);
 
@@ -2658,10 +2671,6 @@ describe("App", () => {
           electronVersion: "41.2.1",
           chromeVersion: "142.0.0.0",
           nodeVersion: "24.0.0",
-          hostname: "viewer-mac.local",
-          platform: "darwin",
-          osVersion: "25.0.0",
-          architecture: "arm64",
           mainProcessId: 4100,
           rendererProcessId: 4101,
           activeProfileName: "sstk",
@@ -2698,40 +2707,11 @@ describe("App", () => {
         "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
         "Provider/backend: codex",
         "Thread title: Fix handoff project paths and diagnostics",
-        "Thread/view classification: Local Thread in Local Viewer",
-        "Federation mount provenance: Not mounted",
-        "Local viewer federation instance ID: Unavailable",
-        "Remote viewer target instance ID: Unavailable",
-        "Remote viewer target label: Unavailable",
-        "Remote viewer target hostname: Unavailable",
-        "Remote viewer target machine ID: Unavailable",
-        "Remote viewer target profile: Unavailable",
-        "Remote viewer target status: Unavailable",
-        "Thread owner federation instance ID: Unavailable",
-        "Thread owner label: Unavailable",
-        "Thread owner hostname: viewer-mac.local",
-        "Thread owner machine ID: Unavailable",
-        "Thread owner platform: darwin",
-        "Thread owner OS version: 25.0.0",
-        "Thread owner architecture: arm64",
-        "Thread owner profile: sstk",
-        "Thread owner status: Unavailable",
-        "Federation routing target: local",
-        "Federation source backend: codex",
-        "Federation source thread ID: thread-1",
-        "Viewer machine hostname: viewer-mac.local",
-        "Viewer platform: darwin",
-        "Viewer OS version: 25.0.0",
-        "Viewer architecture: arm64",
-        "Viewer PwrAgent version: 1.2.3",
-        "Viewer Electron version: 41.2.1",
-        "Viewer Chrome version: 142.0.0.0",
-        "Viewer Node version: 24.0.0",
-        "Viewer PwrAgent profile: sstk",
-        "Viewer main process PID: 4100",
-        "Viewer renderer process PID: 4101",
-        "Viewer PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
-        "Viewer Codex profile path: /Users/operator/.codex/profiles/sstk",
+        "PwrAgent profile: sstk",
+        "Main process PID: 4100",
+        "Renderer process PID: 4101",
+        "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
+        "Codex profile path: /Users/operator/.codex/profiles/sstk",
       ].join("\n"));
     });
   });

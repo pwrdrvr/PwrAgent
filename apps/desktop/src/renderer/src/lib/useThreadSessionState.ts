@@ -164,6 +164,10 @@ type ThreadSessionEntry = {
   loadingMore: boolean;
   needsHydrationAfterCompletion: boolean;
   nextLiveEntrySequence: number;
+  // ThreadView's completed live aggregates live in a keyed ref store. State
+  // keeps only its observable revision/count so one append stays O(1).
+  retainedLiveEntryCount: number;
+  retainedLiveEntryVersion: number;
   optimisticEntries: AppServerThreadEntry[];
   pendingAssistantMessage?: AppServerThreadMessageEntry;
   pendingUsageActivityEntry?: AppServerThreadActivityEntry;
@@ -215,6 +219,8 @@ function createEmptyThreadSessionEntry(): ThreadSessionEntry {
     loadingMore: false,
     needsHydrationAfterCompletion: false,
     nextLiveEntrySequence: 1,
+    retainedLiveEntryCount: 0,
+    retainedLiveEntryVersion: 0,
     optimisticEntries: [],
     settledTransientMessages: [],
   };
@@ -431,11 +437,117 @@ function mergeTranscriptEntries(
       );
     }
   );
+  let mergedEntryIndexById = new Map<string, number>();
+  let greatestCreatedAt: number | undefined;
+  let greatestCreatedAtByTurn = new Map<string, number>();
+  let greatestSequenceByTurn = new Map<string, number>();
+  let terminalTurnIds = new Set<string>();
+  const rebuildAppendIndexes = (): void => {
+    mergedEntryIndexById = new Map();
+    greatestCreatedAt = undefined;
+    greatestCreatedAtByTurn = new Map();
+    greatestSequenceByTurn = new Map();
+    terminalTurnIds = new Set();
+    merged.forEach((entry, index) => {
+      mergedEntryIndexById.set(entry.id, index);
+      const createdAt = typeof entry.createdAt === "number"
+        ? entry.createdAt
+        : undefined;
+      if (createdAt !== undefined) {
+        greatestCreatedAt = Math.max(greatestCreatedAt ?? createdAt, createdAt);
+        if (entry.turn?.id) {
+          greatestCreatedAtByTurn.set(
+            entry.turn.id,
+            Math.max(
+              greatestCreatedAtByTurn.get(entry.turn.id) ?? createdAt,
+              createdAt,
+            ),
+          );
+        }
+      }
+      if (entry.turn?.id && isTerminalTurnEntry(entry)) {
+        terminalTurnIds.add(entry.turn.id);
+      }
+      const sequence = readRendererSequence(entry);
+      if (entry.turn?.id && typeof sequence === "number") {
+        greatestSequenceByTurn.set(
+          entry.turn.id,
+          Math.max(
+            greatestSequenceByTurn.get(entry.turn.id) ?? sequence,
+            sequence,
+          ),
+        );
+      }
+    });
+  };
+  const appendIndexedEntry = (entry: AppServerThreadEntry): void => {
+    mergedEntryIndexById.set(entry.id, merged.length);
+    merged.push(entry);
+    if (typeof entry.createdAt === "number") {
+      greatestCreatedAt = Math.max(
+        greatestCreatedAt ?? entry.createdAt,
+        entry.createdAt,
+      );
+      if (entry.turn?.id) {
+        greatestCreatedAtByTurn.set(
+          entry.turn.id,
+          Math.max(
+            greatestCreatedAtByTurn.get(entry.turn.id) ?? entry.createdAt,
+            entry.createdAt,
+          ),
+        );
+      }
+    }
+    if (entry.turn?.id && isTerminalTurnEntry(entry)) {
+      terminalTurnIds.add(entry.turn.id);
+    }
+    const sequence = readRendererSequence(entry);
+    if (entry.turn?.id && typeof sequence === "number") {
+      greatestSequenceByTurn.set(
+        entry.turn.id,
+        Math.max(greatestSequenceByTurn.get(entry.turn.id) ?? sequence, sequence),
+      );
+    }
+  };
+  rebuildAppendIndexes();
 
   for (const optimisticEntry of optimisticEntries) {
-    const existingIndex = merged.findIndex((entry) => entry.id === optimisticEntry.id);
+    const existingIndex = mergedEntryIndexById.get(optimisticEntry.id) ?? -1;
     if (existingIndex !== -1) {
       merged[existingIndex] = optimisticEntry;
+      if (typeof optimisticEntry.createdAt === "number") {
+        greatestCreatedAt = Math.max(
+          greatestCreatedAt ?? optimisticEntry.createdAt,
+          optimisticEntry.createdAt,
+        );
+        if (optimisticEntry.turn?.id) {
+          greatestCreatedAtByTurn.set(
+            optimisticEntry.turn.id,
+            Math.max(
+              greatestCreatedAtByTurn.get(optimisticEntry.turn.id)
+                ?? optimisticEntry.createdAt,
+              optimisticEntry.createdAt,
+            ),
+          );
+        }
+      }
+      if (optimisticEntry.turn?.id && isTerminalTurnEntry(optimisticEntry)) {
+        terminalTurnIds.add(optimisticEntry.turn.id);
+      }
+      const replacementSequence = readRendererSequence(optimisticEntry);
+      if (
+        optimisticEntry.turn?.id
+        && typeof replacementSequence === "number"
+      ) {
+        greatestSequenceByTurn.set(
+          optimisticEntry.turn.id,
+          Math.max(
+            greatestSequenceByTurn.get(optimisticEntry.turn.id)
+              ?? replacementSequence,
+            replacementSequence,
+          ),
+        );
+      }
       continue;
     }
 
@@ -447,6 +559,7 @@ function mergeTranscriptEntries(
       );
       if (matchingReviewIndex !== -1) {
         merged[matchingReviewIndex] = optimisticEntry;
+        rebuildAppendIndexes();
         continue;
       }
     }
@@ -457,12 +570,37 @@ function mergeTranscriptEntries(
         ? optimisticEntry.createdAt
         : undefined;
     const optimisticSequence = readRendererSequence(optimisticEntry);
+    const canAppendInKnownOrder =
+      !isTokenUsageActivityEntry(optimisticEntry)
+      && !isMonitorUsageActivityEntry(optimisticEntry)
+      && (optimisticTurnId
+        ? (
+            optimisticCreatedAt === undefined
+            || (greatestCreatedAtByTurn.get(optimisticTurnId) ?? -Infinity)
+              <= optimisticCreatedAt
+          )
+          && (
+            optimisticSequence === undefined
+            || (greatestSequenceByTurn.get(optimisticTurnId) ?? -Infinity)
+              <= optimisticSequence
+          )
+          && (
+            isTerminalTurnEntry(optimisticEntry)
+            || !terminalTurnIds.has(optimisticTurnId)
+          )
+        : optimisticCreatedAt === undefined
+          || (greatestCreatedAt ?? -Infinity) <= optimisticCreatedAt);
+    if (canAppendInKnownOrder) {
+      appendIndexedEntry(optimisticEntry);
+      continue;
+    }
     if (isTokenUsageActivityEntry(optimisticEntry) && optimisticTurnId) {
       const sameTurnIndex = merged.findLastIndex(
         (entry) => entry.turn?.id === optimisticTurnId
       );
       if (sameTurnIndex !== -1) {
         merged.splice(sameTurnIndex + 1, 0, optimisticEntry);
+        rebuildAppendIndexes();
         continue;
       }
 
@@ -479,6 +617,7 @@ function mergeTranscriptEntries(
           : -1;
       if (usageTimedIndex !== -1) {
         merged.splice(usageTimedIndex, 0, optimisticEntry);
+        rebuildAppendIndexes();
         continue;
       }
     }
@@ -497,6 +636,7 @@ function mergeTranscriptEntries(
           : -1;
       if (usageTimedIndex !== -1) {
         merged.splice(usageTimedIndex, 0, optimisticEntry);
+        rebuildAppendIndexes();
         continue;
       }
     }
@@ -535,6 +675,7 @@ function mergeTranscriptEntries(
 
     if (timedIndex !== -1) {
       merged.splice(timedIndex, 0, optimisticEntry);
+      rebuildAppendIndexes();
       continue;
     }
 
@@ -551,6 +692,7 @@ function mergeTranscriptEntries(
         : -1;
     if (globalTimedIndex !== -1) {
       merged.splice(globalTimedIndex, 0, optimisticEntry);
+      rebuildAppendIndexes();
       continue;
     }
 
@@ -574,10 +716,11 @@ function mergeTranscriptEntries(
 
     if (terminalIndex !== -1) {
       merged.splice(terminalIndex, 0, optimisticEntry);
+      rebuildAppendIndexes();
       continue;
     }
 
-    merged.push(optimisticEntry);
+    appendIndexedEntry(optimisticEntry);
   }
 
   return merged;
@@ -588,11 +731,27 @@ function mergeTranscriptMessages(
   optimisticMessages: AppServerThreadMessage[]
 ): AppServerThreadMessage[] {
   const merged = [...responseMessages];
+  const mergedMessageIndexById = new Map(
+    merged.map((message, index) => [message.id, index] as const)
+  );
+  let greatestCreatedAt = merged.reduce<number | undefined>(
+    (greatest, message) => typeof message.createdAt === "number"
+      ? Math.max(greatest ?? message.createdAt, message.createdAt)
+      : greatest,
+    undefined,
+  );
 
   for (const optimisticMessage of optimisticMessages) {
-    const existingIndex = merged.findIndex((message) => message.id === optimisticMessage.id);
+    const existingIndex =
+      mergedMessageIndexById.get(optimisticMessage.id) ?? -1;
     if (existingIndex !== -1) {
       merged[existingIndex] = optimisticMessage;
+      if (typeof optimisticMessage.createdAt === "number") {
+        greatestCreatedAt = Math.max(
+          greatestCreatedAt ?? optimisticMessage.createdAt,
+          optimisticMessage.createdAt,
+        );
+      }
       continue;
     }
 
@@ -600,6 +759,20 @@ function mergeTranscriptMessages(
       typeof optimisticMessage.createdAt === "number"
         ? optimisticMessage.createdAt
         : undefined;
+    if (
+      optimisticCreatedAt === undefined
+      || (greatestCreatedAt ?? -Infinity) <= optimisticCreatedAt
+    ) {
+      mergedMessageIndexById.set(optimisticMessage.id, merged.length);
+      merged.push(optimisticMessage);
+      if (optimisticCreatedAt !== undefined) {
+        greatestCreatedAt = Math.max(
+          greatestCreatedAt ?? optimisticCreatedAt,
+          optimisticCreatedAt,
+        );
+      }
+      continue;
+    }
     const timedIndex =
       typeof optimisticCreatedAt === "number"
         ? merged.findIndex((message) => {
@@ -613,9 +786,13 @@ function mergeTranscriptMessages(
         : -1;
     if (timedIndex !== -1) {
       merged.splice(timedIndex, 0, optimisticMessage);
+      for (let index = timedIndex; index < merged.length; index += 1) {
+        mergedMessageIndexById.set(merged[index]!.id, index);
+      }
       continue;
     }
 
+    mergedMessageIndexById.set(optimisticMessage.id, merged.length);
     merged.push(optimisticMessage);
   }
 
@@ -652,6 +829,9 @@ function preserveRetainedTranscriptTail(
       retainedEntriesById.set(retainedEntryId, [retainedEntry]);
     }
   }
+  const retainedLogicalMatchIndex = createLogicalTranscriptMatchIndex(
+    retainedResponse.replay.entries,
+  );
   const freshEntryByRetainedEntry = new Map<
     AppServerThreadEntry,
     AppServerThreadEntry
@@ -669,9 +849,8 @@ function preserveRetainedTranscriptTail(
     }
     retainedMatch ??= findUniqueLogicalTranscriptRefreshMatch(
       freshEntry,
-      retainedResponse.replay.entries.filter(
-        (entry) => !matchedRetainedEntries.has(entry)
-      ),
+      retainedLogicalMatchIndex,
+      matchedRetainedEntries,
     );
     if (retainedMatch) {
       matchedRetainedEntries.add(retainedMatch);
@@ -804,30 +983,35 @@ function transcriptRefreshOrderTimestamp(
 
 function findUniqueLogicalTranscriptRefreshMatch(
   freshEntry: AppServerThreadEntry,
-  retainedEntries: AppServerThreadEntry[]
+  retainedMatchIndex: LogicalTranscriptMatchIndex,
+  matchedRetainedEntries: ReadonlySet<AppServerThreadEntry>,
 ): AppServerThreadEntry | undefined {
-  const logicalMatches = retainedEntries.filter((retainedEntry) => {
-    if (
-      freshEntry.turn?.id &&
-      retainedEntry.turn?.id &&
-      freshEntry.turn.id !== retainedEntry.turn.id
-    ) {
-      return false;
-    }
-    if (
-      freshEntry.type === "message" &&
-      retainedEntry.type === "message" &&
-      freshEntry.phase &&
-      retainedEntry.phase &&
-      freshEntry.phase !== retainedEntry.phase
-    ) {
-      return false;
-    }
+  return findOnlyTranscriptMatch(
+    logicalTranscriptMatchCandidates(freshEntry, retainedMatchIndex),
+    (retainedEntry) => {
+      if (matchedRetainedEntries.has(retainedEntry)) {
+        return false;
+      }
+      if (
+        freshEntry.turn?.id &&
+        retainedEntry.turn?.id &&
+        freshEntry.turn.id !== retainedEntry.turn.id
+      ) {
+        return false;
+      }
+      if (
+        freshEntry.type === "message" &&
+        retainedEntry.type === "message" &&
+        freshEntry.phase &&
+        retainedEntry.phase &&
+        freshEntry.phase !== retainedEntry.phase
+      ) {
+        return false;
+      }
 
-    return transcriptEntriesMatch(freshEntry, retainedEntry);
-  });
-
-  return logicalMatches.length === 1 ? logicalMatches[0] : undefined;
+      return transcriptEntriesMatch(freshEntry, retainedEntry);
+    },
+  );
 }
 
 function isCodexImageBoundaryText(value: string): boolean {
@@ -1230,24 +1414,121 @@ function transcriptEntriesMatch(
   return false;
 }
 
+type LogicalTranscriptMatchIndex = ReadonlyMap<
+  string,
+  AppServerThreadEntry[]
+>;
+
+function logicalTranscriptMatchKeys(
+  entry: AppServerThreadEntry,
+): string[] {
+  if (entry.type === "message") {
+    return [JSON.stringify([
+      "message",
+      entry.role,
+      normalizeComposerFileReferenceText(entry.text),
+    ])];
+  }
+
+  if (entry.type === "activity") {
+    const tokenUsage = isTokenUsageActivityEntry(entry);
+    const keys = new Set<string>();
+    for (const detail of entry.details) {
+      keys.add(JSON.stringify(["activity-detail-id", detail.id]));
+      if (tokenUsage) {
+        keys.add(JSON.stringify(["activity-detail-label", detail.label]));
+      }
+      if (detail.command?.displayCommand) {
+        keys.add(JSON.stringify([
+          "activity-command",
+          detail.command.displayCommand,
+        ]));
+      }
+      if (detail.fileDiff?.diff) {
+        keys.add(JSON.stringify(["activity-diff", detail.fileDiff.diff]));
+      }
+    }
+    return [...keys];
+  }
+
+  if (entry.type === "review") {
+    const isStart = isReviewStartEntry(entry);
+    const keys = reviewEntryLabels(entry).map((label) =>
+      JSON.stringify(["review", isStart, label])
+    );
+    if (isStart && entry.turn?.id) {
+      keys.push(JSON.stringify(["review-start-turn", entry.turn.id]));
+    }
+    return keys;
+  }
+
+  return [];
+}
+
+function createLogicalTranscriptMatchIndex(
+  entries: AppServerThreadEntry[],
+): LogicalTranscriptMatchIndex {
+  const index = new Map<string, AppServerThreadEntry[]>();
+  for (const entry of entries) {
+    for (const key of logicalTranscriptMatchKeys(entry)) {
+      const candidates = index.get(key);
+      if (candidates) {
+        candidates.push(entry);
+      } else {
+        index.set(key, [entry]);
+      }
+    }
+  }
+  return index;
+}
+
+function logicalTranscriptMatchCandidates(
+  entry: AppServerThreadEntry,
+  index: LogicalTranscriptMatchIndex,
+): AppServerThreadEntry[] {
+  const candidates = new Set<AppServerThreadEntry>();
+  for (const key of logicalTranscriptMatchKeys(entry)) {
+    for (const candidate of index.get(key) ?? []) {
+      candidates.add(candidate);
+    }
+  }
+  return [...candidates];
+}
+
+function findOnlyTranscriptMatch(
+  candidates: AppServerThreadEntry[],
+  matches: (candidate: AppServerThreadEntry) => boolean,
+): AppServerThreadEntry | undefined {
+  let match: AppServerThreadEntry | undefined;
+  for (const candidate of candidates) {
+    if (!matches(candidate)) {
+      continue;
+    }
+    if (match) {
+      return undefined;
+    }
+    match = candidate;
+  }
+  return match;
+}
+
 function findUniqueTranscriptOrderSource(
   entry: AppServerThreadEntry,
-  sources: AppServerThreadEntry[],
   exactSourcesById: ReadonlyMap<string, AppServerThreadEntry>,
+  logicalSourceIndex: LogicalTranscriptMatchIndex,
 ): AppServerThreadEntry | undefined {
   const exactMatch = exactSourcesById.get(entry.id);
   if (exactMatch) {
     return exactMatch;
   }
 
-  const logicalMatches = sources.filter(
+  return findOnlyTranscriptMatch(
+    logicalTranscriptMatchCandidates(entry, logicalSourceIndex),
     (source) =>
       typeof source.createdAt === "number" &&
       source.id !== entry.id &&
-      transcriptEntriesMatch(entry, source)
+      transcriptEntriesMatch(entry, source),
   );
-
-  return logicalMatches.length === 1 ? logicalMatches[0] : undefined;
 }
 
 type HydratedEntryOrderMatch = {
@@ -1331,15 +1612,17 @@ function carryForwardTranscriptEntryOrder(
   }
 
   const exactSourcesById = new Map<string, AppServerThreadEntry>();
+  const logicalSources: AppServerThreadEntry[] = [];
   for (const source of sources) {
     const sourceId = source.id;
-    if (
-      typeof source.createdAt === "number"
-      && !exactSourcesById.has(sourceId)
-    ) {
-      exactSourcesById.set(sourceId, source);
+    if (typeof source.createdAt === "number") {
+      logicalSources.push(source);
+      if (!exactSourcesById.has(sourceId)) {
+        exactSourcesById.set(sourceId, source);
+      }
     }
   }
+  const logicalSourceIndex = createLogicalTranscriptMatchIndex(logicalSources);
   const sourceByHydratedEntry = new Map<
     AppServerThreadEntry,
     AppServerThreadEntry
@@ -1348,8 +1631,8 @@ function carryForwardTranscriptEntryOrder(
   let entries = response.replay.entries.map((entry) => {
     const source = findUniqueTranscriptOrderSource(
       entry,
-      sources,
       exactSourcesById,
+      logicalSourceIndex,
     );
     if (!source) {
       return entry;
@@ -1569,6 +1852,7 @@ function hasHydratedTranscriptContent(session: ThreadSessionEntry): boolean {
   return Boolean(
     session.response?.replay.entries.length ||
       session.optimisticEntries.length ||
+      session.retainedLiveEntryCount ||
       session.pendingAssistantMessage ||
       session.pendingMcpInteraction ||
       session.pendingRequest ||
@@ -3814,6 +4098,11 @@ export function useThreadSessionState(params: {
   const consumedOptimisticActiveTurnKeysRef = useRef<Set<string>>(new Set());
   const lastLiveActivitySignatureRef = useRef<Record<string, string>>({});
   const loadedHistoryIndexesRef = useRef<Record<string, TranscriptHistoryIndex>>({});
+  // Avoid copying and rescanning every previously retained live aggregate on
+  // each ThreadView callback. Map insertion order preserves same-id upserts.
+  const retainedLiveEntriesRef = useRef<
+    Record<string, Map<string, AppServerThreadEntry>>
+  >({});
   const requestVersionsRef = useRef<Record<string, number>>({});
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
   const threadStatusSummarySeedRef = useRef<Record<string, string>>({});
@@ -3826,6 +4115,11 @@ export function useThreadSessionState(params: {
     for (const indexedThreadKey of Object.keys(loadedHistoryIndexesRef.current)) {
       if (!retainedThreadKeys.has(indexedThreadKey)) {
         delete loadedHistoryIndexesRef.current[indexedThreadKey];
+      }
+    }
+    for (const retainedThreadKey of Object.keys(retainedLiveEntriesRef.current)) {
+      if (!retainedThreadKeys.has(retainedThreadKey)) {
+        delete retainedLiveEntriesRef.current[retainedThreadKey];
       }
     }
   }, [sessions]);
@@ -3988,8 +4282,14 @@ export function useThreadSessionState(params: {
         }
 
         updateSession(targetThreadKey, (current) => {
+          const retainedLiveEntryStore =
+            retainedLiveEntriesRef.current[targetThreadKey];
+          const retainedLiveEntries = retainedLiveEntryStore
+            ? [...retainedLiveEntryStore.values()]
+            : [];
           const liveTranscriptSources = [
             ...current.optimisticEntries,
+            ...retainedLiveEntries,
             ...(current.pendingAssistantMessage ? [current.pendingAssistantMessage] : []),
           ];
           const transcriptOrderSources = mergeTranscriptEntries(
@@ -4107,6 +4407,22 @@ export function useThreadSessionState(params: {
           const shouldAdoptHydratedTurn =
             trailingInProgressTurn !== undefined
             && shouldAdoptStartedTurn(current, trailingInProgressTurn.id);
+          const nextRetainedLiveEntries = pruneOptimisticEntries(
+            retainedLiveEntries,
+            responseWithRetainedTail,
+          );
+          const didPruneRetainedLiveEntries =
+            nextRetainedLiveEntries.length !== retainedLiveEntries.length;
+          if (didPruneRetainedLiveEntries && retainedLiveEntryStore) {
+            if (nextRetainedLiveEntries.length === 0) {
+              delete retainedLiveEntriesRef.current[targetThreadKey];
+            } else {
+              retainedLiveEntryStore.clear();
+              for (const entry of nextRetainedLiveEntries) {
+                retainedLiveEntryStore.set(entry.id, entry);
+              }
+            }
+          }
 
           return {
             ...currentAfterStaleThinking,
@@ -4147,6 +4463,10 @@ export function useThreadSessionState(params: {
             loading: false,
             completionHydrationRetries,
             needsHydrationAfterCompletion,
+            retainedLiveEntryCount: nextRetainedLiveEntries.length,
+            retainedLiveEntryVersion:
+              current.retainedLiveEntryVersion
+              + (didPruneRetainedLiveEntries ? 1 : 0),
             optimisticEntries: pruneOptimisticEntries(
               current.optimisticEntries,
               responseWithRetainedTail
@@ -5339,6 +5659,33 @@ export function useThreadSessionState(params: {
                 ? { ...entry, turn: completedTurn }
                 : entry
             );
+          const retainedLiveEntryStore =
+            retainedLiveEntriesRef.current[targetThreadKey];
+          let didCompleteRetainedLiveEntry = false;
+          if (completedTurn && retainedLiveEntryStore) {
+            for (const [entryId, entry] of retainedLiveEntryStore) {
+              if (entry.turn?.id !== completedTurn.id) {
+                continue;
+              }
+              const completedEntry = entry.type === "message"
+                ? withCompletedAssistantTimestamp(
+                    withTurnMetadataAndPhase(
+                      entry,
+                      completedTurn,
+                      unphasedAssistantCompletionPhase,
+                    ),
+                    {
+                      completedAt:
+                        completedTurn.completedAt ?? nextLastTouchedAt,
+                      phase:
+                        unphasedAssistantCompletionPhase ?? entry.phase,
+                    },
+                  )
+                : { ...entry, turn: completedTurn };
+              retainedLiveEntryStore.set(entryId, completedEntry);
+              didCompleteRetainedLiveEntry = true;
+            }
+          }
           const completedUsageActivity =
             current.pendingUsageActivityEntry &&
             completedTurn &&
@@ -5386,6 +5733,9 @@ export function useThreadSessionState(params: {
               shouldAppendFinalMessage && completedText
                 ? current.nextLiveEntrySequence + 1
                 : current.nextLiveEntrySequence,
+            retainedLiveEntryVersion:
+              current.retainedLiveEntryVersion
+              + (didCompleteRetainedLiveEntry ? 1 : 0),
             optimisticEntries:
               completedTurnMatchesActive && completedUsageActivity
                 ? mergeFinalizedUsageEntry(
@@ -5910,12 +6260,23 @@ export function useThreadSessionState(params: {
         return;
       }
 
+      const retainedLiveEntryStore =
+        retainedLiveEntriesRef.current[threadKey]
+        ?? new Map<string, AppServerThreadEntry>();
+      retainedLiveEntriesRef.current[threadKey] = retainedLiveEntryStore;
+      const entryId = entry.id;
+      if (retainedLiveEntryStore.get(entryId) === entry) {
+        return;
+      }
+      retainedLiveEntryStore.set(entryId, entry);
+
       updateSession(threadKey, (current) => ({
         ...current,
         expectOwnUpdate: true,
         interacted: true,
         lastTouchedAt: Date.now(),
-        optimisticEntries: mergeItems(current.optimisticEntries, [entry]),
+        retainedLiveEntryCount: retainedLiveEntryStore.size,
+        retainedLiveEntryVersion: current.retainedLiveEntryVersion + 1,
       }));
     },
     [threadKey, updateSession]
@@ -6144,13 +6505,29 @@ export function useThreadSessionState(params: {
     [threadKey, updateSession]
   );
 
+  const selectedRetainedLiveEntryVersion =
+    selectedSession?.retainedLiveEntryVersion;
+  const selectedRetainedLiveEntries = useMemo(() => {
+    if (!threadKey || selectedRetainedLiveEntryVersion === undefined) {
+      return [];
+    }
+    return [...(retainedLiveEntriesRef.current[threadKey]?.values() ?? [])];
+  }, [selectedRetainedLiveEntryVersion, threadKey]);
   const visibleOptimisticEntries = useMemo(
-    () =>
-      pruneOptimisticEntries(
-        selectedSession?.optimisticEntries ?? [],
-        selectedSession?.response
-      ),
-    [selectedSession?.optimisticEntries, selectedSession?.response]
+    () => {
+      const optimisticEntries = selectedSession?.optimisticEntries ?? [];
+      return pruneOptimisticEntries(
+        selectedRetainedLiveEntries.length > 0
+          ? [...optimisticEntries, ...selectedRetainedLiveEntries]
+          : optimisticEntries,
+        selectedSession?.response,
+      );
+    },
+    [
+      selectedRetainedLiveEntries,
+      selectedSession?.optimisticEntries,
+      selectedSession?.response,
+    ],
   );
 
   const selectedHistoryIndex = threadKey

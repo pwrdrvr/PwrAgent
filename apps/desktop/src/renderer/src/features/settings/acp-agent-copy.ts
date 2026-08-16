@@ -13,5 +13,8 @@ export function acpStatusLabel(entry: AcpAgentSettingsEntry): string {
   if (entry.installStatus === "not-installed") {
     return "Not installed";
   }
+  if (entry.rejectedInstances?.length) {
+    return "Detected · unavailable";
+  }
   return "Unavailable";
 }

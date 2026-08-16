@@ -14,10 +14,6 @@ const metadata: AppMetadata = {
   electronVersion: "41.2.1",
   chromeVersion: "142.0.0.0",
   nodeVersion: "24.0.0",
-  hostname: "viewer-mac.local",
-  platform: "darwin",
-  osVersion: "25.0.0",
-  architecture: "arm64",
   mainProcessId: 4100,
   rendererProcessId: 4101,
   activeProfileName: "sstk",
@@ -26,7 +22,7 @@ const metadata: AppMetadata = {
 };
 
 describe("local diagnostics info", () => {
-  it("formats the current thread and local runtime as one copyable payload", () => {
+  it("keeps local thread diagnostics focused on the thread and support paths", () => {
     expect(
       buildLocalThreadDiagnosticsInfo(
         {
@@ -42,113 +38,87 @@ describe("local diagnostics info", () => {
       "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
       "Provider/backend: codex",
       "Thread title: Fix handoff project paths and diagnostics",
-      "Thread/view classification: Local Thread in Local Viewer",
-      "Federation mount provenance: Not mounted",
-      "Local viewer federation instance ID: Unavailable",
-      "Remote viewer target instance ID: Unavailable",
-      "Remote viewer target label: Unavailable",
-      "Remote viewer target hostname: Unavailable",
-      "Remote viewer target machine ID: Unavailable",
-      "Remote viewer target profile: Unavailable",
-      "Remote viewer target status: Unavailable",
-      "Thread owner federation instance ID: Unavailable",
-      "Thread owner label: Unavailable",
-      "Thread owner hostname: viewer-mac.local",
-      "Thread owner machine ID: Unavailable",
-      "Thread owner platform: darwin",
-      "Thread owner OS version: 25.0.0",
-      "Thread owner architecture: arm64",
-      "Thread owner profile: sstk",
-      "Thread owner status: Unavailable",
-      "Federation routing target: local",
-      "Federation source backend: codex",
-      "Federation source thread ID: 019ffc54-058f-7691-9325-c8805903b37b",
-      "Viewer machine hostname: viewer-mac.local",
-      "Viewer platform: darwin",
-      "Viewer OS version: 25.0.0",
-      "Viewer architecture: arm64",
-      "Viewer PwrAgent version: 1.2.3",
-      "Viewer Electron version: 41.2.1",
-      "Viewer Chrome version: 142.0.0.0",
-      "Viewer Node version: 24.0.0",
-      "Viewer PwrAgent profile: sstk",
-      "Viewer main process PID: 4100",
-      "Viewer renderer process PID: 4101",
-      "Viewer PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
-      "Viewer Codex profile path: /Users/operator/.codex/profiles/sstk",
+      "PwrAgent profile: sstk",
+      "Main process PID: 4100",
+      "Renderer process PID: 4101",
+      "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
+      "Codex profile path: /Users/operator/.codex/profiles/sstk",
     ].join("\n"));
   });
 
   it("identifies a remotely mounted thread and its federation owner", () => {
-    expect(
-      buildLocalThreadDiagnosticsInfo(
-        {
-          backend: "codex",
-          federation: {
-            ref: {
-              backend: "codex",
-              target: {
-                scope: "remote",
-                instanceId: "owner-instance",
-              },
-              threadId: "remote-thread",
+    const output = buildLocalThreadDiagnosticsInfo(
+      {
+        backend: "codex",
+        federation: {
+          ref: {
+            backend: "codex",
+            target: {
+              scope: "remote",
+              instanceId: "owner-instance",
             },
-            instanceLabel: "Harold-MBP-M5-Max / default",
-            peerStatus: "connected",
+            threadId: "remote-thread",
           },
-          federationHealth: {
-            enabled: true,
-            role: "gateway",
-            status: "connected",
-            instanceId: "viewer-instance",
-            peers: [{
-              id: "owner-instance",
-              label: "Harold-MBP-M5-Max",
-              role: "client",
-              status: "connected",
-              capabilities: ["thread_navigation", "thread_detail"],
-              profileName: "default",
-              host: {
-                hostname: "Harold-MBP-M5-Max.local",
-                machineId: "machine-m5-max",
-                platform: "darwin",
-                osVersion: "25.0.0",
-                arch: "arm64",
-              },
-            }],
-          },
-          projectPath: "/Users/operator/.codex/worktrees/remote/PwrAgent",
-          threadId: "remote-thread",
-          title: "Screenshot Drift on pwrlab-m4",
+          instanceLabel: "Harold-MBP-M5-Max / default",
+          peerStatus: "connected",
         },
-        metadata,
-      ),
-    ).toContain([
+        federationHealth: {
+          enabled: true,
+          role: "gateway",
+          status: "connected",
+          instanceId: "viewer-instance",
+          peers: [{
+            id: "owner-instance",
+            label: "Harold-MBP-M5-Max",
+            role: "client",
+            status: "connected",
+            capabilities: ["thread_navigation", "thread_detail"],
+            profileName: "default",
+            host: {
+              hostname: "Harold-MBP-M5-Max.local",
+              machineId: "machine-m5-max",
+              platform: "darwin",
+              osVersion: "25.0.0",
+              arch: "arm64",
+            },
+          }],
+        },
+        projectPath: "/Users/operator/.codex/worktrees/remote/PwrAgent",
+        threadId: "remote-thread",
+        title: "Screenshot Drift on pwrlab-m4",
+      },
+      metadata,
+    );
+
+    expect(output).toContain("Thread ID: remote-thread");
+    expect(output).toContain(
+      "Project directory/worktree path: /Users/operator/.codex/worktrees/remote/PwrAgent",
+    );
+    expect(output).toContain([
       "Thread/view classification: Remote Thread Mounted in Local Viewer",
+      "Owner-local diagnostics: Not available from this viewer; request them from the thread-owning machine if needed",
       "Federation mount provenance: Direct",
-      "Local viewer federation instance ID: viewer-instance",
-      "Remote viewer target instance ID: Unavailable",
-      "Remote viewer target label: Unavailable",
-      "Remote viewer target hostname: Unavailable",
-      "Remote viewer target machine ID: Unavailable",
-      "Remote viewer target profile: Unavailable",
-      "Remote viewer target status: Unavailable",
       "Thread owner federation instance ID: owner-instance",
       "Thread owner label: Harold-MBP-M5-Max / default",
       "Thread owner hostname: Harold-MBP-M5-Max.local",
-      "Thread owner machine ID: machine-m5-max",
-      "Thread owner platform: darwin",
-      "Thread owner OS version: 25.0.0",
-      "Thread owner architecture: arm64",
       "Thread owner profile: default",
       "Thread owner status: connected",
       "Federation routing target: remote:owner-instance",
       "Federation source backend: codex",
       "Federation source thread ID: remote-thread",
+      "Viewer PwrAgent profile: sstk",
+      "Viewer main process PID: 4100",
+      "Viewer renderer process PID: 4101",
+      "Viewer PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
     ].join("\n"));
+    expect(output).not.toContain("machine ID");
+    expect(output).not.toContain("OS version");
+    expect(output).not.toContain("architecture");
+    expect(output).not.toContain("Node version");
+    expect(output).not.toContain("Unavailable");
   });
 
-  it("labels unavailable remote owner details honestly", () => {
+  it("omits remote owner details that were not advertised", () => {
     expect(
       buildLocalThreadDiagnosticsInfo(
         {
@@ -176,23 +146,73 @@ describe("local diagnostics info", () => {
       ),
     ).toContain([
       "Thread/view classification: Remote Thread in Remote Viewer",
+      "Owner-local diagnostics: Not available from this viewer; request them from the thread-owning machine if needed",
       "Federation mount provenance: Derived from mounted parent",
-      "Local viewer federation instance ID: Unavailable",
       "Remote viewer target instance ID: owner-instance",
-      "Remote viewer target label: Unavailable",
-      "Remote viewer target hostname: Unavailable",
-      "Remote viewer target machine ID: Unavailable",
-      "Remote viewer target profile: Unavailable",
-      "Remote viewer target status: Unavailable",
       "Thread owner federation instance ID: owner-instance",
       "Thread owner label: Remote Mac",
-      "Thread owner hostname: Unavailable",
-      "Thread owner machine ID: Unavailable",
-      "Thread owner platform: Unavailable",
-      "Thread owner OS version: Unavailable",
-      "Thread owner architecture: Unavailable",
-      "Thread owner profile: Unavailable",
-      "Thread owner status: Unavailable",
+      "Federation routing target: remote:owner-instance",
+      "Federation source backend: codex",
+      "Federation source thread ID: remote-thread",
+    ].join("\n"));
+  });
+
+  it("uses the remote viewer as owner for an unstamped direct thread", () => {
+    const output = buildLocalThreadDiagnosticsInfo(
+      {
+        backend: "codex",
+        federationHealth: {
+          enabled: true,
+          role: "gateway",
+          status: "connected",
+          instanceId: "local-viewer-instance",
+          peers: [{
+            id: "remote-viewer-instance",
+            label: "Remote Viewer Mac",
+            role: "client",
+            status: "connected",
+            capabilities: ["thread_navigation", "thread_detail"],
+            profileName: "work",
+            host: {
+              hostname: "remote-viewer.local",
+              platform: "darwin",
+              osVersion: "25.0.0",
+              arch: "arm64",
+            },
+          }],
+        },
+        federationWindowTarget: {
+          scope: "remote",
+          instanceId: "remote-viewer-instance",
+        },
+        projectPath: "/Users/remote/.codex/worktrees/direct/PwrAgent",
+        threadId: "direct-remote-thread",
+        title: "Direct remote thread",
+      },
+      metadata,
+    );
+
+    expect(output).toContain("Thread ID: direct-remote-thread");
+    expect(output).toContain(
+      "Project directory/worktree path: /Users/remote/.codex/worktrees/direct/PwrAgent",
+    );
+    expect(output).toContain([
+      "Thread/view classification: Remote Thread in Remote Viewer",
+      "Owner-local diagnostics: Not available from this viewer; request them from the thread-owning machine if needed",
+      "Remote viewer target instance ID: remote-viewer-instance",
+      "Remote viewer target label: Remote Viewer Mac",
+      "Thread owner federation instance ID: remote-viewer-instance",
+      "Thread owner label: Remote Viewer Mac",
+      "Thread owner hostname: remote-viewer.local",
+      "Thread owner profile: work",
+      "Thread owner status: connected",
+      "Federation routing target: remote:remote-viewer-instance",
+      "Federation source backend: codex",
+      "Federation source thread ID: direct-remote-thread",
+      "Viewer PwrAgent profile: sstk",
+      "Viewer main process PID: 4100",
+      "Viewer renderer process PID: 4101",
+      "Viewer PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
     ].join("\n"));
   });
 
@@ -227,6 +247,9 @@ describe("local diagnostics info", () => {
       "Thread/view classification: Remote² Thread in Remote Viewer",
     );
     expect(output).toContain(
+      "Owner-local diagnostics: Not available from this viewer; request them from the thread-owning machine if needed",
+    );
+    expect(output).toContain(
       "Remote viewer target instance ID: remote-viewer-instance",
     );
     expect(output).toContain(
@@ -235,6 +258,8 @@ describe("local diagnostics info", () => {
     expect(output).toContain(
       "Thread owner federation instance ID: thread-owner-instance",
     );
+    expect(output).toContain("Viewer PwrAgent profile: sstk");
+    expect(output).toContain("Viewer main process PID: 4100");
   });
 
   it("formats the Troubleshooting payload with profile, PIDs, and log path", () => {
@@ -262,9 +287,9 @@ describe("local diagnostics info", () => {
         },
       ),
     ).toContain([
-      "Viewer main process PID: 4100",
-      "Viewer PwrAgent log path: Unavailable",
-      "Viewer Codex profile path: Unavailable",
+      "Main process PID: 4100",
+      "PwrAgent log path: Unavailable",
+      "Codex profile path: Unavailable",
     ].join("\n"));
   });
 });
