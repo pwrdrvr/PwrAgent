@@ -76,8 +76,8 @@ divergences the user has set as policy:
   the top of every screen) is **NOT** what we're shipping. The main app
   screen keeps its existing `Sidebar` + `ThreadView` chrome; the title-bar
   visual treatment is applied **only inside the Settings overlay** as a
-  per-pane header. See plan
-  [docs/plans/2026-05-05-004-feat-settings-overlay-titlebar-plan.md](../../plans/2026-05-05-004-feat-settings-overlay-titlebar-plan.md).
+  per-pane header. The current Settings implementation and theme contract
+  enforce this split.
 - For broader desktop product direction, see
   [docs/design/desktop-style-guide.md](../desktop-style-guide.md).
 - For visual tokens (colors, typography, accent rules), see

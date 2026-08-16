@@ -61,8 +61,8 @@ function spawnableShell(posixShell: string): string {
  * cold start (first PowerShell host + per-launch C# helper compile) is allowed
  * up to `WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS` (28s) by design — hosted CI has
  * taken 16.7s to enter the wrapper and 7.1s to compile its helper while still
- * making journaled forward progress (see
- * docs/solutions/2026-08-06-windows-vitest-process-isolation.md). These tests'
+ * making journaled forward progress. The root AGENTS.md records the ownership
+ * and readiness constraints behind this allowance. These tests'
  * explicit 15s timeouts predate the wrapper: they widened POSIX's 5s default,
  * but on Windows they silently narrowed the workspace's 30s test contract to
  * half the documented startup allowance, so whichever detach test launched

@@ -398,7 +398,8 @@ Implement `downloadAttachment(request)`:
 
 When `intent.parts` contains a `MessagingFilePart`, render it as a platform attachment. Most platforms use a two-step upload (`POST /files` → `POST /posts` with file ids). Cap against `outboundAttachments.maxUploadBytes`. If the platform supports remote-URL image previews (`outboundAttachments.supportsRemoteImageUrl`), use that for `MessagingImagePart` with a URL.
 
-The forthcoming Plan/Review attachment delivery work ([issue #193](https://github.com/pwrdrvr/PwrAgent/issues/193) / [plan 2026-05-05-002](plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md)) is the first producer that emits `MessagingFilePart` — wire the path now even if no producer is shipping one yet, so the adapter is feature-complete.
+Plan and review artifact delivery emits `MessagingFilePart`. Wire this path so
+the adapter supports the current producer.
 
 ## Step 7.5 — Slash commands (when the platform supports them)
 
@@ -768,7 +769,9 @@ After your evaluation, append a short **Lessons from \<your platform\>** entry b
 
 ### Lessons from Mattermost
 
-Captured at the end of Phase 10 of [plan 2026-05-06-001](plans/2026-05-06-001-feat-messaging-mattermost-adapter-and-provider-guide-plan.md). The guide skeleton was written *before* the implementation; this list is everything that was missing, wrong, or confusing in the skeleton vs the actual experience of building Mattermost.
+Captured after the Mattermost implementation. The guide skeleton was written
+before the implementation; this list records what was missing, wrong, or
+confusing compared with the actual build experience.
 
 **What the guide got right (kept):**
 

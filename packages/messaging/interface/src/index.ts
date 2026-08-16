@@ -1830,8 +1830,6 @@ export type MessagingAttachmentCapabilities = {
  * the agent artifact can ride out as a Markdown file attachment with a
  * truncated inline preview when the provider supports upload, or as an
  * inline-only fallback for text-only providers and oversized artifacts.
- *
- * Tracked in: docs/plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md
  */
 export type MessagingOutboundAttachmentCapabilities = {
   maxUploadBytes?: number;

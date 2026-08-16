@@ -550,6 +550,3 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 - [`docs/messaging-platform-integration.md`](messaging-platform-integration.md) — operator setup, command surface, button layout policy, Cloudflare-Tunnel / Tailscale-Funnel deployment for HTTP-callback providers
 - [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md) — the formal contract for new platform adapters
 - [`packages/messaging/AGENTS.md`](../packages/messaging/AGENTS.md) — package boundary rules and enforcement
-- [`docs/plans/2026-05-04-002-feat-messaging-capability-discovery-plan.md`](plans/2026-05-04-002-feat-messaging-capability-discovery-plan.md) — the design plan that introduced the capability profile system
-- [`docs/plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md`](plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md) — decision artifact for `outboundAttachments` consumption by plan/review surface delivery
-- [`docs/plans/2026-05-06-001-feat-messaging-mattermost-adapter-and-provider-guide-plan.md`](plans/2026-05-06-001-feat-messaging-mattermost-adapter-and-provider-guide-plan.md) — the Mattermost adapter implementation plan

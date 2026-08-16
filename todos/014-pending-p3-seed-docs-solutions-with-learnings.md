@@ -8,7 +8,7 @@ dependencies: []
 
 # Seed `docs/solutions/` with three high-value learnings from PR #198
 
-`docs/solutions/` doesn't exist yet in the repo. The thread-branch-drift plan called this out (line 790: "this is a strong candidate for the first solutions doc"). PR #198 is itself an excellent seed for at least three independent solutions.
+`docs/solutions/` does not exist in the repo. PR #198 is an excellent seed for at least three independent solutions.
 
 ## Problem Statement
 
@@ -46,7 +46,7 @@ Each should include: the problem encountered, the option chosen, why it was chos
 
 - **PR:** #198
 - **Reviewer:** learnings-researcher
-- **Cited past plan:** `docs/plans/2026-05-04-002-fix-thread-branch-drift-detection-plan.md` line 790
+- **Current guidance:** `apps/desktop/AGENTS.md` — Branch-Drift Dialog
 
 ## Acceptance Criteria
 

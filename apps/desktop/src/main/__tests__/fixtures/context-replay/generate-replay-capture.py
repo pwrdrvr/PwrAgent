@@ -3,10 +3,10 @@
 the real `thread/tokenUsage/updated` shape, with entirely fabricated
 ids/tokens and NO PII.
 
-Provenance: hand-authored from the observed shape of a real live capture
-(see docs/plans/2026-07-04-001-feat-observed-context-replay-counting-plan.md).
+Provenance: hand-authored from the observed shape of a real live capture.
 The real capture could not be committed because it contained PII; this
-generator produces an equivalent, fully synthetic stand-in.
+generator produces an equivalent, fully synthetic stand-in. See the fixture
+README for the durable storage boundary.
 
 Unlike the two trivial single-request turns in the real capture, this fixture
 includes:
