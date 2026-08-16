@@ -440,6 +440,61 @@ describe("buildApplicationMenuTemplate", () => {
       expect(openFederationWindow).toHaveBeenCalledWith(peer(2));
     });
 
+    it("sorts peers by label so a rebuild cannot swap rows under the pointer", () => {
+      // connectedPeerTargets() walks the gateway directory, then stored
+      // peers, then connection-only peers — an order that changes across a
+      // directory re-announcement or a federation restart, both of which
+      // rebuild this menu.
+      const items = submenuItems(
+        buildTemplate(false, {
+          federationPeers: [
+            { instanceId: "pwr_c", label: "Studio-Mac-3 / dev" },
+            { instanceId: "pwr_a", label: "Studio-Mac-1 / default" },
+            { instanceId: "pwr_b2", label: "Studio-Mac-2 / default" },
+            { instanceId: "pwr_b1", label: "Studio-Mac-2 / default" },
+          ],
+          openFederationWindow: vi.fn(),
+        }),
+        "Profiles",
+      );
+      const headingIndex = items.findIndex(
+        (item) => item.label === "Remote Instances",
+      );
+
+      expect(
+        items.slice(headingIndex + 1, headingIndex + 5).map((item) => item.label),
+      ).toEqual([
+        "Studio-Mac-1 / default",
+        "Studio-Mac-2 / default",
+        "Studio-Mac-2 / default",
+        "Studio-Mac-3 / dev",
+      ]);
+    });
+
+    it("breaks label ties by instance id so duplicate labels hold still", () => {
+      const openFederationWindow = vi.fn();
+      const items = submenuItems(
+        buildTemplate(false, {
+          federationPeers: [
+            { instanceId: "pwr_b2", label: "Studio-Mac / default" },
+            { instanceId: "pwr_b1", label: "Studio-Mac / default" },
+          ],
+          openFederationWindow,
+        }),
+        "Profiles",
+      );
+      const headingIndex = items.findIndex(
+        (item) => item.label === "Remote Instances",
+      );
+
+      (items[headingIndex + 1]?.click as (() => void) | undefined)?.();
+
+      expect(openFederationWindow).toHaveBeenCalledWith({
+        instanceId: "pwr_b1",
+        label: "Studio-Mac / default",
+      });
+    });
+
     it("keeps five peers inline", () => {
       const items = submenuItems(
         buildTemplate(false, { federationPeers: peers(5) }),

@@ -215,14 +215,14 @@ function buildFederationPeerItems(
     return [];
   }
 
-  const peerItems: MenuItemConstructorOptions[] = options.federationPeers.map(
-    (peer) => ({
-      label: peer.label,
-      click: () => {
-        options.actions.openFederationWindow(peer);
-      },
-    }),
-  );
+  const peerItems: MenuItemConstructorOptions[] = orderPeersForMenu(
+    options.federationPeers,
+  ).map((peer) => ({
+    label: peer.label,
+    click: () => {
+      options.actions.openFederationWindow(peer);
+    },
+  }));
 
   return [
     { type: "separator" },
@@ -264,6 +264,27 @@ function buildWindowMenu(options: ApplicationMenuOptions): MenuItemConstructorOp
       ...windowItems,
     ],
   };
+}
+
+/**
+ * Peers arrive in `connectedPeerTargets()` order, which is a Map walk over
+ * the gateway directory, the stored peers, then connection-only peers —
+ * an order that survives neither a directory re-announcement nor a
+ * federation restart. The menu rebuilds on every peer status change, so
+ * leaving that order alone would let rows swap under the pointer and turn
+ * a muscle-memory click into the wrong machine's remote window. Sort by
+ * label, matching the local profiles these rows now sit beside, with the
+ * instance id breaking ties so two identically labelled peers hold still
+ * too.
+ */
+function orderPeersForMenu(
+  peers: ApplicationMenuFederationPeer[],
+): ApplicationMenuFederationPeer[] {
+  return [...peers].sort(
+    (left, right) =>
+      left.label.localeCompare(right.label)
+      || left.instanceId.localeCompare(right.instanceId),
+  );
 }
 
 function orderProfilesForMenu(
