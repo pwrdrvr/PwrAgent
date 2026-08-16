@@ -461,6 +461,42 @@ function buildInvocation(): ThreadToolInvocationRecord {
   };
 }
 
+describe("analysis coverage reporting", () => {
+  it("reconciles what the scan reached with what the thread already knows", async () => {
+    /* Measured on a real 236-turn thread: the scan reads 202 calls still in
+       replay while the store holds 2,225, because the rest were recorded live
+       and their transcript entries were compacted away. Reporting only the
+       scan's own count read as a contradiction beside a longer case list. */
+    const analyzed = buildMultiTurnResponse();
+    const analyzeThreadToolHistory = vi.fn(async () => ({
+      accounting: analyzed.toolAccounting!,
+      coverage: {
+        analyzedAt: 1,
+        analyzerVersion: "1",
+        completeness: "complete" as const,
+        entryCount: 1_704,
+        invocationCount: 1,
+        missingOutputCount: 0,
+        pageCount: 1,
+      },
+    }));
+    installApi({
+      analyzeThreadToolHistory,
+      readThread: async () => buildMultiTurnResponse(),
+    });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Analyze history/ }));
+
+    expect(await screen.findByText(/Scanned 1 tool call still in replay/))
+      .toBeInTheDocument();
+    /* The fixture holds 4 invocations; 3 predate what replay retained. */
+    expect(screen.getByText(/3 older calls recorded earlier remain accounted/))
+      .toBeInTheDocument();
+  });
+});
+
 describe("ToolOutputIncidentExplorerWindow federation", () => {
   it("reads and analyzes a peer's thread on the instance that owns it", async () => {
     /* Without the target every read runs against the local registry, which

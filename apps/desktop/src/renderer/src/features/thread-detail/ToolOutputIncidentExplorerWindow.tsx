@@ -6,6 +6,7 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadActivityDetail,
   ThreadToolAccounting,
+  ThreadToolAnalysisCoverage,
   ThreadToolInvocationRecord,
 } from "@pwragent/shared";
 import {
@@ -246,7 +247,10 @@ export function ToolOutputIncidentExplorerWindow() {
       setStatusTone(response.coverage.completeness === "complete" ? "info" : "error");
       setStatus(
         response.coverage.completeness === "complete"
-          ? `Analyzed ${response.coverage.invocationCount.toLocaleString()} tool calls across ${response.coverage.pageCount.toLocaleString()} page${response.coverage.pageCount === 1 ? "" : "s"}.`
+          ? describeAnalysisCoverage({
+              coverage: response.coverage,
+              knownInvocationCount: response.accounting.invocations.length,
+            })
           : response.coverage.explanation ?? "Analysis is incomplete.",
       );
     } catch (error) {
@@ -927,6 +931,29 @@ function Fact(props: {
  * output must paint nothing — a floored bar there would read as low activity
  * instead of none, blurring the contrast the polling band depends on.
  */
+/**
+ * What the scan reached, measured against what the thread already knows.
+ *
+ * "Complete" means the scan read the whole retained replay — not that it saw
+ * the whole thread. On a long thread most tool calls were recorded live and
+ * their transcript entries have since been compacted away, so the scan
+ * legitimately finds a fraction of them. Reporting only its own count reads
+ * as a contradiction next to a case list holding several times more: one real
+ * thread scanned 202 calls and listed 575 cases on the same screen.
+ */
+function describeAnalysisCoverage(params: {
+  coverage: ThreadToolAnalysisCoverage;
+  knownInvocationCount: number;
+}): string {
+  const scanned = params.coverage.invocationCount;
+  const pages = params.coverage.pageCount;
+  const scannedText = `Scanned ${scanned.toLocaleString()} tool call${scanned === 1 ? "" : "s"} still in replay across ${pages.toLocaleString()} page${pages === 1 ? "" : "s"}.`;
+  const older = params.knownInvocationCount - scanned;
+  return older > 0
+    ? `${scannedText} ${older.toLocaleString()} older call${older === 1 ? "" : "s"} recorded earlier remain accounted, but their output is no longer in the transcript.`
+    : scannedText;
+}
+
 function scaleWidth(value: number, max: number, floor = 2): number {
   if (max <= 0) return 0;
   if (value <= 0) return floor === 0 ? 0 : floor;
