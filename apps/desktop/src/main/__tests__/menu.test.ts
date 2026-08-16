@@ -8,6 +8,11 @@ function buildTemplate(
   options?: {
     isMac?: boolean;
     copyLocalDiagnosticsInfo?: () => void;
+    federationPeers?: Array<{ instanceId: string; label: string }>;
+    openFederationWindow?: (peer: {
+      instanceId: string;
+      label: string;
+    }) => void;
     openNewThread?: () => void;
     openProfile?: (profile: string) => void;
     openProfilesSettings?: () => void;
@@ -24,7 +29,7 @@ function buildTemplate(
     appName: "PwrAgent",
     developerMode,
     isMac: options?.isMac ?? true,
-    federationPeers: [],
+    federationPeers: options?.federationPeers ?? [],
     profiles: options?.profiles ?? [
       profile("work"),
       profile("default", { active: true, default: true }),
@@ -39,7 +44,7 @@ function buildTemplate(
       copyLocalDiagnosticsInfo: options?.copyLocalDiagnosticsInfo ?? vi.fn(),
       focusWindow: vi.fn(),
       openDocumentation: vi.fn(),
-      openFederationWindow: vi.fn(),
+      openFederationWindow: options?.openFederationWindow ?? vi.fn(),
       openIssueReporter: vi.fn(),
       openNewThread: options?.openNewThread ?? vi.fn(),
       openProfile: options?.openProfile ?? vi.fn(),
@@ -370,59 +375,120 @@ describe("buildApplicationMenuTemplate", () => {
   });
 
   describe("federation remote instances", () => {
-    it("hides the Remote Instances item when no peers are connected", () => {
-      const fileItems = submenuItems(buildTemplate(false), "File");
-      expect(
-        fileItems.some((item) => item.label === "Remote Instances"),
-      ).toBe(false);
+    function peer(index: number): { instanceId: string; label: string } {
+      return {
+        instanceId: `pwr_peer_${index}`,
+        label: `Studio-Mac-${index} / default`,
+      };
+    }
+
+    function peers(count: number): Array<{ instanceId: string; label: string }> {
+      return Array.from({ length: count }, (_unused, index) => peer(index + 1));
+    }
+
+    it("shows no Remote Instances section when no peers are connected", () => {
+      const items = submenuItems(buildTemplate(false), "Profiles");
+
+      expect(items.some((item) => item.label === "Remote Instances")).toBe(false);
     });
 
-    it("lists connected peers and routes clicks to openFederationWindow", () => {
-      const openFederationWindow = vi.fn();
-      const template = buildApplicationMenuTemplate({
-        appName: "PwrAgent",
-        developerMode: false,
-        isMac: true,
-        federationPeers: [
-          { instanceId: "pwr_gateway", label: "Studio Mac" },
-        ],
-        profiles: [],
-        windows: [],
-        actions: {
-          checkForUpdates: vi.fn(),
-          copyLocalDiagnosticsInfo: vi.fn(),
-          focusWindow: vi.fn(),
-          openDocumentation: vi.fn(),
-          openFederationWindow,
-          openIssueReporter: vi.fn(),
-          openNewThread: vi.fn(),
-          openProfile: vi.fn(),
-          openProfilesSettings: vi.fn(),
-          openSettings: vi.fn(),
-          openWebsite: vi.fn(),
-          quit: vi.fn(),
-          replayOnboarding: vi.fn(),
-          showAboutPanel: vi.fn(),
-          showChangelogWindow: vi.fn(),
-          showLicenseWindow: vi.fn(),
-          showLogsWindow: vi.fn(),
-          showThirdPartyNoticesWindow: vi.fn(),
-        },
-      });
+    it("keeps the File menu free of federation entries", () => {
+      const items = submenuItems(
+        buildTemplate(false, { federationPeers: peers(1) }),
+        "File",
+      );
 
-      const remoteInstances = submenuItems(template, "File").find(
+      expect(items.map((item) => item.label ?? item.role ?? item.type)).toEqual([
+        "New Thread",
+        "separator",
+        "close",
+      ]);
+    });
+
+    it("lists peers under the local profiles and routes clicks to openFederationWindow", () => {
+      const openFederationWindow = vi.fn();
+      const items = submenuItems(
+        buildTemplate(false, {
+          federationPeers: peers(2),
+          openFederationWindow,
+        }),
+        "Profiles",
+      );
+
+      expect(items.map((item) => item.label ?? item.type)).toEqual([
+        "default",
+        "personal",
+        "work",
+        "separator",
+        "Remote Instances",
+        "Studio-Mac-1 / default",
+        "Studio-Mac-2 / default",
+        "separator",
+        "New Profile…",
+        "Manage Profiles…",
+      ]);
+      // The heading is a label, not a target: it must not be clickable and
+      // must not carry the peers as a submenu at this count.
+      const heading = items.find((item) => item.label === "Remote Instances");
+      expect(heading?.enabled).toBe(false);
+      expect(heading?.submenu).toBeUndefined();
+
+      (items.find((item) => item.label === "Studio-Mac-2 / default")?.click as
+        | (() => void)
+        | undefined)?.();
+
+      expect(openFederationWindow).toHaveBeenCalledWith(peer(2));
+    });
+
+    it("keeps five peers inline", () => {
+      const items = submenuItems(
+        buildTemplate(false, { federationPeers: peers(5) }),
+        "Profiles",
+      );
+      const headingIndex = items.findIndex(
         (item) => item.label === "Remote Instances",
       );
-      expect(remoteInstances).toBeDefined();
+
+      expect(items[headingIndex]?.enabled).toBe(false);
+      expect(
+        items.slice(headingIndex + 1, headingIndex + 6).map((item) => item.label),
+      ).toEqual(peers(5).map((entry) => entry.label));
+    });
+
+    it("collapses past five peers into a Remote Instances submenu", () => {
+      const openFederationWindow = vi.fn();
+      const items = submenuItems(
+        buildTemplate(false, {
+          federationPeers: peers(6),
+          openFederationWindow,
+        }),
+        "Profiles",
+      );
+
+      expect(items.map((item) => item.label ?? item.type)).toEqual([
+        "default",
+        "personal",
+        "work",
+        "separator",
+        "Remote Instances",
+        "separator",
+        "New Profile…",
+        "Manage Profiles…",
+      ]);
+      const remoteInstances = items.find(
+        (item) => item.label === "Remote Instances",
+      );
+      expect(remoteInstances?.enabled).toBeUndefined();
       const peerItems = Array.isArray(remoteInstances?.submenu)
         ? remoteInstances.submenu
         : [];
-      expect(peerItems.map((item) => item.label)).toEqual(["Studio Mac"]);
-      (peerItems[0]?.click as () => void | undefined)?.();
-      expect(openFederationWindow).toHaveBeenCalledWith({
-        instanceId: "pwr_gateway",
-        label: "Studio Mac",
-      });
+      expect(peerItems.map((item) => item.label)).toEqual(
+        peers(6).map((entry) => entry.label),
+      );
+
+      (peerItems.at(-1)?.click as (() => void) | undefined)?.();
+
+      expect(openFederationWindow).toHaveBeenCalledWith(peer(6));
     });
   });
 });

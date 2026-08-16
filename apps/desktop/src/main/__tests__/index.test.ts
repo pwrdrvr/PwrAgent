@@ -1284,7 +1284,7 @@ describe("bootstrapApp", () => {
     expect(requestOpenNewThreadMock).toHaveBeenCalledOnce();
   });
 
-  it("keeps a File -> Remote Instances window subscribed to live transcript events", async () => {
+  it("keeps a Profiles -> Remote Instances window subscribed to live transcript events", async () => {
     startupProfilerInstance.start.mockResolvedValue();
     const peer = {
       target: { scope: "remote" as const, instanceId: "owner_one" },
@@ -1342,11 +1342,10 @@ describe("bootstrapApp", () => {
     const template = buildFromTemplateMock.mock.calls[0]?.[0] as
       | TestMenuItem[]
       | undefined;
-    const fileMenu = template?.find((item) => item.label === "File");
-    const remoteInstances = fileMenu?.submenu?.find(
-      (item) => item.label === "Remote Instances",
-    );
-    const owner = remoteInstances?.submenu?.find(
+    // One connected peer stays inline under the "Remote Instances" heading
+    // in the Profiles menu rather than collapsing into a submenu.
+    const profilesMenu = template?.find((item) => item.label === "Profiles");
+    const owner = profilesMenu?.submenu?.find(
       (item) => item.label === peer.label,
     );
 

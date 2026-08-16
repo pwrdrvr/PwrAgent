@@ -6,6 +6,20 @@ export type ApplicationMenuFederationPeer = {
   label: string;
 };
 
+/**
+ * Heading the connected federation peers sit under inside the Profiles
+ * menu, and the label of the submenu they collapse into once there are
+ * more of them than `MAX_INLINE_FEDERATION_PEERS`.
+ */
+const REMOTE_INSTANCES_LABEL = "Remote Instances";
+
+/**
+ * How many peers stay listed inline before collapsing into a submenu.
+ * Five keeps the Profiles menu scannable in the common case (a laptop, a
+ * desktop, a couple of build machines) without a second level of clicks.
+ */
+const MAX_INLINE_FEDERATION_PEERS = 5;
+
 export type ApplicationMenuActions = {
   checkForUpdates: () => void;
   copyLocalDiagnosticsInfo: () => void;
@@ -37,7 +51,7 @@ export type ApplicationMenuOptions = {
   appName: string;
   developerMode: boolean;
   isMac: boolean;
-  /** Connected federation peers; empty hides the Remote Instances menu. */
+  /** Connected federation peers; empty hides the Remote Instances section. */
   federationPeers: ApplicationMenuFederationPeer[];
   profiles: DesktopPwrAgentProfileSummary[];
   windows: ApplicationMenuWindow[];
@@ -108,23 +122,6 @@ function buildFileMenu(options: ApplicationMenuOptions): MenuItemConstructorOpti
         accelerator: "CmdOrCtrl+N",
         click: options.actions.openNewThread,
       },
-      // Federation's browse entry point outside Settings: each connected
-      // peer opens its remote-threads window. Hidden entirely when no
-      // peer is connected so non-federation users never see the item.
-      ...(options.federationPeers.length > 0
-        ? [
-            { type: "separator" as const },
-            {
-              label: "Remote Instances",
-              submenu: options.federationPeers.map((peer) => ({
-                label: peer.label,
-                click: () => {
-                  options.actions.openFederationWindow(peer);
-                },
-              })),
-            },
-          ]
-        : []),
       { type: "separator" },
       { role: "close" },
       ...(options.isMac
@@ -187,6 +184,7 @@ function buildProfilesMenu(options: ApplicationMenuOptions): MenuItemConstructor
     label: "Profiles",
     submenu: [
       ...profileItems,
+      ...buildFederationPeerItems(options),
       { type: "separator" },
       {
         label: "New Profile…",
@@ -198,6 +196,44 @@ function buildProfilesMenu(options: ApplicationMenuOptions): MenuItemConstructor
       },
     ],
   };
+}
+
+/**
+ * Connected peers live with the local profiles because that is what a
+ * peer is to an operator: another place their work runs, addressed the
+ * same "<machine> / <profile>" way. They open a remote window instead of
+ * switching this window's profile, so they sit under their own heading
+ * rather than merging into the checkbox list above.
+ *
+ * Returns nothing when no peer is connected, so an operator who has never
+ * paired an instance never sees the heading.
+ */
+function buildFederationPeerItems(
+  options: ApplicationMenuOptions,
+): MenuItemConstructorOptions[] {
+  if (options.federationPeers.length === 0) {
+    return [];
+  }
+
+  const peerItems: MenuItemConstructorOptions[] = options.federationPeers.map(
+    (peer) => ({
+      label: peer.label,
+      click: () => {
+        options.actions.openFederationWindow(peer);
+      },
+    }),
+  );
+
+  return [
+    { type: "separator" },
+    // Past the inline budget the flat list crowds out the local profiles
+    // it sits under, so the same heading becomes the submenu that holds
+    // them. The heading label stays put either way — an operator hunting
+    // for a peer looks in the same place at three peers and at thirty.
+    ...(peerItems.length > MAX_INLINE_FEDERATION_PEERS
+      ? [{ label: REMOTE_INSTANCES_LABEL, submenu: peerItems }]
+      : [{ label: REMOTE_INSTANCES_LABEL, enabled: false }, ...peerItems]),
+  ];
 }
 
 function buildWindowMenu(options: ApplicationMenuOptions): MenuItemConstructorOptions {
