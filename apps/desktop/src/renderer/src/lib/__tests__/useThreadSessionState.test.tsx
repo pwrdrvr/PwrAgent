@@ -1033,6 +1033,108 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("keeps latest-page refresh work linear in retained tail entries", async () => {
+    const tailEntryCount = 100;
+    const turn = {
+      id: "large-live-turn",
+      status: "completed" as const,
+      startedAt: 1_000,
+      completedAt: 2_000,
+    };
+    let retainedTailIdReads = 0;
+    const retainedTail = Array.from(
+      { length: tailEntryCount },
+      (_value, index): AppServerThreadEntry =>
+        new Proxy(
+          {
+            ...messageEntry({
+              id: `tail-${index}`,
+              text: `Tail ${index}`,
+              createdAt: 1_000 + index,
+            }),
+            turn,
+          },
+          {
+            get(target, property, receiver) {
+              if (property === "id") {
+                retainedTailIdReads += 1;
+              }
+              return Reflect.get(target, property, receiver);
+            },
+          },
+        ),
+    );
+    const refreshedTail = [
+      ...Array.from({ length: tailEntryCount - 1 }, (_value, index) => ({
+        ...messageEntry({
+          id: `tail-${index + 1}`,
+          text: `Tail ${index + 1}`,
+          createdAt: 1_001 + index,
+        }),
+        turn,
+      })),
+      {
+        ...messageEntry({
+          id: "tail-new",
+          text: "Newest tail entry",
+          createdAt: 2_000,
+        }),
+        turn,
+      },
+    ];
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: retainedTail,
+        hasPreviousPage: true,
+        previousCursor: "older",
+      }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [messageEntry({
+          id: "older-history",
+          text: "Older history",
+          createdAt: 500,
+        })],
+        hasPreviousPage: false,
+      }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: refreshedTail,
+        hasPreviousPage: true,
+        previousCursor: "tail-1",
+      }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+    retainedTailIdReads = 0;
+    rerender({ updatedAt: 2_000 });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+    });
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries.at(-1)?.id).toBe("tail-new");
+    });
+    // Before the indexed refresh match, this harness read retained IDs 20,607
+    // times. Keep enough slack for React's async observation without allowing
+    // the prior tail² scan back into the append path.
+    expect(retainedTailIdReads).toBeLessThanOrEqual(tailEntryCount * 8);
+  });
+
   it("coalesces reviews and suppresses duplicates across page-tail boundaries", async () => {
     const fullReview = [
       "Full review comments:",
