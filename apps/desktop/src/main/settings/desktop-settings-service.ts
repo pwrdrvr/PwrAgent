@@ -227,6 +227,7 @@ type DesktopSettingsServiceOptions = {
   >;
   configPath?: string;
   defaultDeveloperMode?: boolean;
+  defaultManagedGrokBuilds?: boolean;
   env?: NodeJS.ProcessEnv;
   argv?: readonly string[];
   secretStore: DesktopSecretStore;
@@ -1105,6 +1106,10 @@ export class DesktopSettingsService {
             ACP_AGENTS_GROK_CLI_PATH_ENV,
           ),
           enabled: config.acpAgents?.grok?.enabled ?? true,
+          managedBuilds:
+            config.acpAgents?.grok?.managedBuilds
+            ?? this.options.defaultManagedGrokBuilds
+            ?? true,
         },
         kimi: {
           cliPath: this.resolveString(

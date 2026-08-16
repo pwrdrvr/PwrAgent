@@ -1572,6 +1572,37 @@ describe("DesktopSettingsService", () => {
     expect(snapshot.acpAgents.gemini.enabled).toBe(true);
   });
 
+  it("defaults managed Grok builds on and round-trips the opt-out", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).acpAgents.grok.managedBuilds).toBe(true);
+
+    const packagedDefault = new DesktopSettingsService({
+      configPath: path.join(root, "packaged-config.toml"),
+      defaultManagedGrokBuilds: false,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    expect(
+      (await packagedDefault.readSettings()).acpAgents.grok.managedBuilds,
+    ).toBe(false);
+
+    await service.writeConfigPatch({
+      acpAgents: { grok: { managedBuilds: false } },
+    });
+
+    const tomlOnDisk = fs.readFileSync(configPath, "utf8");
+    expect(tomlOnDisk).toContain("[acp_agents.grok]");
+    expect(tomlOnDisk).toContain("managed_builds = false");
+    expect((await service.readSettings()).acpAgents.grok.managedBuilds).toBe(false);
+  });
+
   it("sets CODEX_HOME for the selected Codex auth profile", () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

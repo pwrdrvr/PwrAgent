@@ -261,6 +261,7 @@ export type DesktopSettingsConfig = {
     grok?: {
       cliPath?: string;
       enabled?: boolean;
+      managedBuilds?: boolean;
     };
     kimi?: {
       cliPath?: string;
@@ -432,6 +433,14 @@ export function acpAgentEnabledFor(
     | Record<string, { enabled?: boolean } | undefined>
     | undefined;
   return agents?.[registryId]?.enabled !== false;
+}
+
+/** Whether PwrAgent should download and prefer its verified Grok fork build. */
+export function managedGrokBuildsEnabledFor(
+  config: DesktopSettingsConfig,
+  defaultEnabled = true,
+): boolean {
+  return config.acpAgents?.grok?.managedBuilds ?? defaultEnabled;
 }
 
 /**
@@ -1447,6 +1456,12 @@ export function desktopSettingsPatchToEdits(
   if (patch.acpAgents?.grok?.enabled !== undefined) {
     set(["acp_agents", "grok", "enabled"], patch.acpAgents.grok.enabled);
   }
+  if (patch.acpAgents?.grok?.managedBuilds !== undefined) {
+    set(
+      ["acp_agents", "grok", "managed_builds"],
+      patch.acpAgents.grok.managedBuilds,
+    );
+  }
   if (patch.acpAgents?.kimi?.cliPath !== undefined) {
     set(["acp_agents", "kimi", "cli_path"], patch.acpAgents.kimi.cliPath);
   }
@@ -1861,6 +1876,7 @@ function normalizeDesktopConfig(
       grok: {
         cliPath: readString(acpAgentsGrok?.cli_path),
         enabled: readBoolean(acpAgentsGrok?.enabled),
+        managedBuilds: readBoolean(acpAgentsGrok?.managed_builds),
       },
       kimi: {
         cliPath: readString(acpAgentsKimi?.cli_path),

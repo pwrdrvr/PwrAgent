@@ -216,6 +216,44 @@ describe("discoverAcpAgentInstances", () => {
       ],
     });
   });
+
+  it("prefers a managed Grok build after an explicit override and before PATH", async () => {
+    const managed = "/pwragent/agents/grok/versions/latest/grok";
+    const discover = vi.fn(async () => [
+      group("grok", [
+        instance("/custom/grok", "override", "3.0.0"),
+        instance("/usr/local/bin/grok", "path", "1.0.0"),
+      ]),
+    ]);
+
+    const result = await discoverAcpAgentInstances({
+      discover,
+      managedGrok: { enabled: true, checkMode: "once-per-process" },
+      resolveManagedGrokCommand: async () => managed,
+      readVersionOutput: async (command) =>
+        command === managed ? "grok 2.0.0-pwragent.1" : undefined,
+    });
+
+    expect(result.get("grok")?.instances.map((entry) => entry.command)).toEqual([
+      "/custom/grok",
+      managed,
+      "/usr/local/bin/grok",
+    ]);
+    expect(result.get("grok")?.activeCommand).toBe("/custom/grok");
+  });
+
+  it("does not resolve a managed Grok build when Grok is disabled", async () => {
+    const resolveManagedGrokCommand = vi.fn(async () => "/managed/grok");
+
+    await discoverAcpAgentInstances({
+      discover: async () => [],
+      enabledRegistryIds: ["qwen"],
+      managedGrok: { enabled: true },
+      resolveManagedGrokCommand,
+    });
+
+    expect(resolveManagedGrokCommand).not.toHaveBeenCalled();
+  });
 });
 
 describe("discoverLocalAcpAgentRecords", () => {
@@ -410,6 +448,28 @@ describe("discoverLocalAcpAgentRecords", () => {
 
     expect(record?.activeCommand).toBe("/custom/grok");
     expect(record?.launchDescriptor?.env).toEqual({ NO_COLOR: "1" });
+  });
+
+  it("marks managed Grok launches as PwrAgent-installed", async () => {
+    const managedGrokCommand = "/pwragent/agents/grok/versions/latest/grok";
+    const [record] = await discoverLocalAcpAgentRecords({
+      discover: async () => [
+        group("grok", [instance("/usr/local/bin/grok", "path", "1.0.0")]),
+      ],
+      enabledRegistryIds: ["grok"],
+      managedGrok: { enabled: true },
+      resolveManagedGrokCommand: async () => managedGrokCommand,
+      readVersionOutput: async () => "grok 2.0.0-pwragent.1",
+    });
+
+    expect(record).toMatchObject({
+      activeCommand: managedGrokCommand,
+      version: "2.0.0-pwragent.1",
+      launchDescriptor: {
+        command: managedGrokCommand,
+        env: { GROK_INSTALLER: "pwragent", NO_COLOR: "1" },
+      },
+    });
   });
 });
 

@@ -889,6 +889,11 @@ function SettingsSectionBody(props: {
           >,
         });
       }}
+      onManagedGrokBuildsChange={async (managedBuilds) => {
+        return await props.settings.writeConfig({
+          acpAgents: { grok: { managedBuilds } },
+        });
+      }}
     />
   );
 }

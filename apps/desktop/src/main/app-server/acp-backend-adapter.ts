@@ -1,4 +1,5 @@
 import path from "node:path";
+import { app } from "electron";
 import {
   type AcpBackendId,
   type AcpThreadRewindPoint,
@@ -50,6 +51,7 @@ import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import {
   acpAgentEnabledFor,
   acpCliPathOverrideFor,
+  managedGrokBuildsEnabledFor,
   readDesktopSettingsConfigSafe,
 } from "../settings/desktop-config";
 import {
@@ -1030,6 +1032,16 @@ export class AcpBackendAdapter {
         const env = await options.resolveLocalAcpDiscoveryEnv?.();
         const records = await discoverLocalAcpAgentRecords({
           enabledRegistryIds,
+          managedGrok: {
+            enabled:
+              acpAgentEnabledFor(config, "grok")
+              && managedGrokBuildsEnabledFor(
+                config,
+                app?.isPackaged !== true,
+              ),
+            checkMode: app?.isPackaged === true ? "ttl" : "once-per-process",
+            requirePlatformSignature: app?.isPackaged === true,
+          },
           ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
           ...(env ? { env } : {}),
         });
@@ -1073,6 +1085,12 @@ export class AcpBackendAdapter {
   private refreshGrokUpdateStatusInBackground(
     agent: AcpInstalledAgentRecord,
   ): void {
+    if (agent.launchDescriptor?.env?.GROK_INSTALLER === "pwragent") {
+      // Managed and bundled PwrAgent builds follow the verified GitHub release
+      // feed. The vendor updater follows a different channel and must not
+      // decorate these runtimes with an unrelated update notice.
+      return;
+    }
     const checker = this.grokUpdateChecker;
     const command = agent.activeCommand ?? agent.launchDescriptor?.command;
     const previous =

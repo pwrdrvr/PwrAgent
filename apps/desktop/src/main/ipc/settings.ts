@@ -1,4 +1,4 @@
-import { BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type {
@@ -61,6 +61,7 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 import {
   acpAgentEnabledFor,
   acpCliPathOverrideFor,
+  managedGrokBuildsEnabledFor,
   readDesktopSettingsConfigSafe,
 } from "../settings/desktop-config";
 import {
@@ -434,6 +435,20 @@ async function listInstalledAndLocalAcpAgents(
       }
       discovered = await discoverLocalAcpAgentRecords({
         enabledRegistryIds: discoveryRegistryIds,
+        managedGrok: {
+          enabled:
+            acpAgentEnabledFor(config, "grok")
+            && managedGrokBuildsEnabledFor(
+              config,
+              app?.isPackaged !== true,
+            ),
+          checkMode: options.force
+            ? "force"
+            : app?.isPackaged === true
+              ? "ttl"
+              : "once-per-process",
+          requirePlatformSignature: app?.isPackaged === true,
+        },
         ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
         ...(options?.env ? { env: options.env } : {}),
       });
@@ -452,13 +467,17 @@ async function listInstalledAndLocalAcpAgents(
           current?.version !== undefined
           && record.version !== undefined
           && current.version !== record.version;
+        const pwrAgentOwnedGrok =
+          record.launchDescriptor?.env?.GROK_INSTALLER === "pwragent";
         const nextRecord = {
           ...record,
           runtimeCapabilities: runtimeVersionChanged
             ? undefined
             : current?.runtimeCapabilities,
-          update: current?.update,
-          updateCommand: current?.updateCommand,
+          update: pwrAgentOwnedGrok ? undefined : current?.update,
+          updateCommand: pwrAgentOwnedGrok
+            ? undefined
+            : current?.updateCommand,
           lastDiscoveredAt: runtimeVersionChanged
             ? undefined
             : current?.lastDiscoveredAt,

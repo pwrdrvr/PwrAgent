@@ -2442,6 +2442,43 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("does not run the vendor updater for a PwrAgent-owned Grok runtime", async () => {
+    const stored: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId: "acp:grok",
+      registryId: "grok",
+      name: "Grok",
+      activeCommand: "/pwragent/agents/grok/versions/latest/grok",
+      launchDescriptor: {
+        backendId: "acp:grok",
+        registryId: "grok",
+        distributionKind: "local",
+        command: "/pwragent/agents/grok/versions/latest/grok",
+        args: ["agent", "stdio"],
+        env: { GROK_INSTALLER: "pwragent" },
+      },
+    };
+    const updateCheck = vi.fn();
+    const adapter = new AcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => stored,
+        listInstalledAgents: () => [stored],
+        upsertInstalledAgent: vi.fn(),
+      },
+      captureStores: [],
+      checkGrokCliUpdate: updateCheck,
+      discoverLocalAcpAgents: async () => [],
+      emit: async () => undefined,
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => true,
+    });
+
+    await adapter.describeInstalledBackends();
+
+    expect(updateCheck).not.toHaveBeenCalled();
+    await adapter.close();
+  });
+
   it.each([
     {
       change: "selected command",
