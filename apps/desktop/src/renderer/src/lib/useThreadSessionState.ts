@@ -1254,7 +1254,7 @@ type MessageMatchCandidate = Pick<
   "parts" | "role" | "text"
 >;
 
-type MessageMatchIndex = ReadonlyMap<string, ReadonlySet<number>>;
+type MessageMatchIndex = Map<string, Map<number, number>>;
 
 function messageMatchKey(message: MessageMatchCandidate): string {
   return JSON.stringify([
@@ -1271,12 +1271,13 @@ function createMessageMatchIndex(params: {
   additionalEntries: AppServerThreadEntry[];
   response?: AppServerReadThreadResponse;
 }): MessageMatchIndex {
-  const imageCountsByMessageKey = new Map<string, Set<number>>();
+  const availableMessageCountsByKey = new Map<string, Map<number, number>>();
   const addMessage = (message: MessageMatchCandidate): void => {
     const key = messageMatchKey(message);
-    const imageCounts = imageCountsByMessageKey.get(key) ?? new Set<number>();
-    imageCounts.add(messageImageCount(message));
-    imageCountsByMessageKey.set(key, imageCounts);
+    const imageCount = messageImageCount(message);
+    const imageCounts = availableMessageCountsByKey.get(key) ?? new Map<number, number>();
+    imageCounts.set(imageCount, (imageCounts.get(imageCount) ?? 0) + 1);
+    availableMessageCountsByKey.set(key, imageCounts);
   };
 
   for (const message of params.response?.replay.messages ?? []) {
@@ -1288,20 +1289,41 @@ function createMessageMatchIndex(params: {
     }
   }
 
-  return imageCountsByMessageKey;
+  return availableMessageCountsByKey;
 }
 
-function hasMatchingMessage(
+function consumeMatchingMessage(
   message: AppServerThreadMessageEntry,
   messageMatchIndex: MessageMatchIndex
 ): boolean {
-  const imageCounts = messageMatchIndex.get(messageMatchKey(message));
+  const key = messageMatchKey(message);
+  const imageCounts = messageMatchIndex.get(key);
   if (!imageCounts) {
     return false;
   }
 
   const imageCount = messageImageCount(message);
-  return imageCount === 0 || imageCounts.has(imageCount);
+  const matchingImageCount = imageCount === 0
+    ? (imageCounts.has(0) ? 0 : imageCounts.keys().next().value)
+    : imageCount;
+  if (matchingImageCount === undefined) {
+    return false;
+  }
+
+  const availableCount = imageCounts.get(matchingImageCount) ?? 0;
+  if (availableCount === 0) {
+    return false;
+  }
+
+  if (availableCount === 1) {
+    imageCounts.delete(matchingImageCount);
+    if (imageCounts.size === 0) {
+      messageMatchIndex.delete(key);
+    }
+  } else {
+    imageCounts.set(matchingImageCount, availableCount - 1);
+  }
+  return true;
 }
 
 function pruneOptimisticEntries(
@@ -1330,7 +1352,7 @@ function pruneOptimisticEntries(
     : undefined;
   return optimisticEntries.filter((entry) => {
     if (entry.type === "message") {
-      return !hasMatchingMessage(entry, messageMatchIndex!);
+      return !consumeMatchingMessage(entry, messageMatchIndex!);
     }
 
     if (entry.type === "review") {

@@ -3404,6 +3404,72 @@ describe("useThreadSessionState", () => {
     expect(result.current.entries).toEqual([officialEntry]);
   });
 
+  it("keeps a duplicate optimistic user message when one retained live entry arrives", async () => {
+    const messageText = "Please update the TanStack Virtual lockfile.";
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+    const officialEntry: AppServerThreadMessageEntry = {
+      type: "message",
+      id: "item-1",
+      role: "user",
+      text: messageText,
+      createdAt: 2_000,
+      turn: {
+        id: "turn-1",
+        status: "in_progress",
+        startedAt: 2_000,
+      },
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 2_000 }),
+          optimisticUserMessage: {
+            text: messageText,
+            createdAt: 1_000,
+          },
+        },
+      })
+    );
+
+    await waitForThreadHydration(result);
+    let duplicateOptimisticId = "";
+    act(() => {
+      duplicateOptimisticId = result.current.addOptimisticUserMessage(messageText);
+      result.current.upsertLiveTranscriptEntry(officialEntry);
+    });
+
+    const userEntries = result.current.entries.filter(
+      (entry): entry is AppServerThreadMessageEntry =>
+        entry.type === "message" && entry.role === "user"
+    );
+    expect(userEntries).toHaveLength(2);
+    expect(userEntries).toEqual(
+      expect.arrayContaining([
+        officialEntry,
+        expect.objectContaining({
+          id: duplicateOptimisticId,
+          text: messageText,
+        }),
+      ])
+    );
+  });
+
   it("keeps an optimistic image user message ahead of a hydrated assistant final", async () => {
     const readThread = vi.fn(
       async ({
