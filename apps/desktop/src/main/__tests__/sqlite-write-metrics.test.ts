@@ -448,6 +448,44 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it("repairs a thread pricing history in one transaction", async () => {
+    for (let index = 0; index < 25; index += 1) {
+      await store.upsertThreadUsageLine({
+        line: buildUnpricedGrokUsageLine(index),
+      });
+    }
+    stateDb.raw
+      .prepare(
+        `UPDATE thread_usage_lines
+         SET model = 'grok-4.6-build'
+         WHERE thread_id = 'thread-pricing-repair'`,
+      )
+      .run();
+    resetSqliteWriteMetrics();
+
+    const { writes } = await measureSqliteWrites(async () => {
+      const pricing = await store.readThreadPricing({
+        backend: "acp:grok",
+        threadId: "thread-pricing-repair",
+      });
+      expect(pricing.lines).toHaveLength(25);
+      expect(
+        pricing.lines.every((line) => line.priceStatus === "priced"),
+      ).toBe(true);
+      await store.readThreadPricing({
+        backend: "acp:grok",
+        threadId: "thread-pricing-repair",
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note:
+        "one thread load lazily reprices 25 usage rows in ten-row progress batches; a second load is read-only",
+      scenario: "thread-pricing-lazy-repair",
+      writes,
+    });
+  });
+
   it("holds a burst of automation pricing snapshots to one run-usage write", async () => {
     vi.useFakeTimers();
     const automationStore = new AutomationStore(stateDb);
@@ -1379,6 +1417,39 @@ function buildInvocation(invocationId: string) {
     toolName: "commandExecution",
     updatedAt: 1_800_000_000_000,
     warningLines: 0,
+  };
+}
+
+function buildUnpricedGrokUsageLine(index: number): ThreadUsageLineRecord {
+  const createdAt = Date.UTC(2026, 7, 15) + index;
+  return {
+    backend: "acp:grok",
+    cachedInputCostMicros: 0,
+    cachedInputTokens: 315_776,
+    createdAt,
+    currency: "USD",
+    inputTokens: 316_222,
+    model: "unknown-grok-model",
+    outputCostMicros: 0,
+    outputTokens: 121,
+    priceStatus: "unpriced",
+    priceUnavailableReason: "missing-rate",
+    provider: "openai",
+    reasoningEffort: "high",
+    reasoningOutputTokens: 50,
+    scope: "turn",
+    settingsConfidence: "exact",
+    settingsSource: "turn-context",
+    source: "hydration",
+    sourceItemId: `item-pricing-repair-${index}`,
+    status: "finalized",
+    threadId: "thread-pricing-repair",
+    totalCostMicros: 0,
+    totalTokens: 316_343,
+    turnId: `turn-pricing-repair-${index}`,
+    uncachedInputCostMicros: 0,
+    uncachedInputTokens: 446,
+    usageLineId: `line-pricing-repair-${index}`,
   };
 }
 
