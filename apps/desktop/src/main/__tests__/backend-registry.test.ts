@@ -35370,6 +35370,7 @@ script = "printf setup"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
+      resolveTaskMonitorFollowupSafetyEnabled: () => false,
     });
     await registry.publishLocalEvent({
       backend: "codex",
@@ -35479,6 +35480,157 @@ script = "printf setup"
     await registry.close();
   });
 
+  async function createSafetyTestMonitor(
+    registry: DesktopBackendRegistry,
+    codexClient: MockBackendClient,
+  ): Promise<string> {
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+    const response = await codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "parent-turn",
+        callId: "call-create-monitor",
+        requestId: "call-create-monitor",
+        namespace: "pwragent_task_monitors",
+        tool: "create_monitor_delegation",
+        arguments: { task: "Watch an asynchronous task until it finishes." },
+      },
+    } as AppServerPendingRequestNotification);
+    const payload = JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]
+        ?.text ?? "{}",
+    ) as { monitorId?: string };
+    if (!payload.monitorId) {
+      throw new Error("Expected monitor creation to return a monitor id.");
+    }
+    return payload.monitorId;
+  }
+
+  async function completeSafetyTestMonitor(params: {
+    codexClient: MockBackendClient;
+    monitorId: string;
+  }): Promise<Record<string, unknown>> {
+    const response = await params.codexClient.emitRequest({
+      method: "item/tool/call",
+      params: {
+        threadId: "monitor-thread",
+        turnId: "monitor-turn",
+        callId: "call-complete-monitor",
+        requestId: "call-complete-monitor",
+        namespace: "pwragent_task_monitors",
+        tool: "complete_monitoring",
+        arguments: {
+          monitorId: params.monitorId,
+          outcome: "success",
+          summary: "The monitored task completed.",
+        },
+      },
+    } as AppServerPendingRequestNotification);
+    expect(response).toMatchObject({ success: true });
+    return JSON.parse(
+      (response as { contentItems: Array<{ text: string }> }).contentItems[0]
+        ?.text ?? "{}",
+    ) as Record<string, unknown>;
+  }
+
+  it.each([
+    ["newer turn", "turn"],
+    ["accepted review", "review"],
+    ["rejected review start", "rejected-review"],
+  ] as const)(
+    "keeps monitor follow-up safe after a %s",
+    async (_label, nextAction) => {
+      const codexClient = new MockBackendClient({
+        initializeResult: { methods: ["turn/start", "review/start"] },
+        models: TEST_TASK_MONITOR_MODELS,
+        startThreadResult: { threadId: "monitor-thread" },
+        startTurnResults:
+          nextAction === "turn"
+            ? [
+                { threadId: "monitor-thread", turnId: "monitor-turn" },
+                { threadId: "thread-1", turnId: "newer-turn" },
+              ]
+            : nextAction === "rejected-review"
+              ? [
+                  { threadId: "monitor-thread", turnId: "monitor-turn" },
+                  { threadId: "thread-1", turnId: "monitor-follow-up" },
+                ]
+              : [{ threadId: "monitor-thread", turnId: "monitor-turn" }],
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock(),
+        resolveTaskMonitorFollowupSafetyEnabled: () => true,
+      });
+      const monitorId = await createSafetyTestMonitor(registry, codexClient);
+      const completeParentTurn = async (turnId: string): Promise<void> => {
+        await registry.publishLocalEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turnId,
+              turn: { id: turnId, status: "completed", output: [] },
+            },
+          },
+        });
+      };
+
+      if (nextAction === "rejected-review") {
+        await expect(
+          registry.startReview({
+            backend: "codex",
+            threadId: "thread-1",
+            target: { type: "uncommittedChanges" },
+          }),
+        ).rejects.toThrow("Thread already has an active turn in progress: thread-1");
+        await completeParentTurn("parent-turn");
+      } else {
+        await completeParentTurn("parent-turn");
+        if (nextAction === "turn") {
+          await registry.startTurn({
+            backend: "codex",
+            threadId: "thread-1",
+            input: [{ type: "text", text: "Start newer work." }],
+          });
+          await completeParentTurn("newer-turn");
+        } else {
+          await registry.startReview({
+            backend: "codex",
+            threadId: "thread-1",
+            target: { type: "uncommittedChanges" },
+          });
+          await completeParentTurn("turn-review-1");
+        }
+      }
+
+      const completion = await completeSafetyTestMonitor({ codexClient, monitorId });
+      if (nextAction === "rejected-review") {
+        expect(completion).toMatchObject({ parentTurn: { status: "started" } });
+        expect(codexClient.startTurnCallCount).toBe(2);
+      } else {
+        expect(completion).not.toHaveProperty("parentTurn");
+        expect(codexClient.startTurnCallCount).toBe(
+          nextAction === "turn" ? 2 : 1,
+        );
+        expect(codexClient.injectedThreadItems).toHaveLength(1);
+      }
+
+      await registry.close();
+    },
+  );
   it("lets only the active parent cancel a managed monitor without waking another turn", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },

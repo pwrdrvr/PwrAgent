@@ -547,6 +547,11 @@ function SettingsSectionBody(props: {
             experimental: { managedReview: enabled },
           });
         }}
+        onTaskMonitorFollowupSafetyChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { taskMonitorFollowupSafety: enabled },
+          });
+        }}
       />
     );
   }

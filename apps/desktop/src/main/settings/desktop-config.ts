@@ -124,6 +124,8 @@ export type DesktopSettingsConfig = {
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     managedReview?: boolean;
+    taskMonitorFollowupSafety?: boolean;
+    taskMonitorFollowupWarningDismissed?: boolean;
     diffCondensation?: {
       enabled?: boolean;
     };
@@ -706,6 +708,18 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "managed_review"],
       patch.experimental.managedReview,
+    );
+  }
+  if (patch.experimental?.taskMonitorFollowupSafety !== undefined) {
+    set(
+      ["experimental", "task_monitor_followup_safety"],
+      patch.experimental.taskMonitorFollowupSafety,
+    );
+  }
+  if (patch.experimental?.taskMonitorFollowupWarningDismissed !== undefined) {
+    set(
+      ["experimental", "task_monitor_followup_warning_dismissed"],
+      patch.experimental.taskMonitorFollowupWarningDismissed,
     );
   }
   if (patch.general?.appearance?.theme !== undefined) {
@@ -1645,6 +1659,12 @@ function normalizeDesktopConfig(
         experimental?.codex_default_mode_request_user_input,
       ),
       managedReview: readBoolean(experimental?.managed_review),
+      taskMonitorFollowupSafety: readBoolean(
+        experimental?.task_monitor_followup_safety,
+      ),
+      taskMonitorFollowupWarningDismissed: readBoolean(
+        experimental?.task_monitor_followup_warning_dismissed,
+      ),
       diffCondensation: {
         enabled: readBoolean(diffCondensation?.enabled),
       },

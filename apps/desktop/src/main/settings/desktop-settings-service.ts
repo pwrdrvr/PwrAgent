@@ -715,6 +715,14 @@ export class DesktopSettingsService {
           config.experimental?.managedReview,
           false,
         ),
+        taskMonitorFollowupSafety: this.resolveConfigBoolean(
+          config.experimental?.taskMonitorFollowupSafety,
+          false,
+        ),
+        taskMonitorFollowupWarningDismissed: this.resolveConfigBoolean(
+          config.experimental?.taskMonitorFollowupWarningDismissed,
+          false,
+        ),
         diffCondensation: {
           enabled: this.resolveDiffCondensationEnabled(
             config.experimental?.diffCondensation?.enabled,
@@ -1294,6 +1302,13 @@ export class DesktopSettingsService {
   resolveManagedReviewEnabled(): boolean {
     return this.resolveConfigBoolean(
       this.readConfig().config.experimental?.managedReview,
+      false,
+    ).value;
+  }
+
+  resolveTaskMonitorFollowupSafetyEnabled(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.experimental?.taskMonitorFollowupSafety,
       false,
     ).value;
   }

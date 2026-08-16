@@ -12768,6 +12768,71 @@ describe("Composer", () => {
     });
   });
 
+  it("warns before a review and can remember the choice", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: request.threadId,
+      turnId: "turn-review-1",
+    }));
+    const onDismissTaskMonitorOverlapWarning = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        desktopApi={{ onAgentEvent: () => () => undefined, startReview }}
+        disabled={false}
+        onDismissTaskMonitorOverlapWarning={onDismissTaskMonitorOverlapWarning}
+        skills={[]}
+        taskMonitorFollowupSafetyEnabled
+        thread={{
+          id: "thread-1",
+          title: "Monitor overlap",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          subAgents: [
+            {
+              monitorId: "monitor-1",
+              task: "Watch CI",
+              status: "running",
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review main" },
+    });
+    await clickButton("Send");
+
+    const dialog = screen.getByRole("dialog", {
+      name: "Keep the monitor report-only?",
+    });
+    expect(startReview).not.toHaveBeenCalled();
+    fireEvent.click(
+      within(dialog).getByLabelText(
+        "Do not show this warning again on this desktop.",
+      ),
+    );
+    await clickButton("Start review");
+
+    await waitFor(() => {
+      expect(onDismissTaskMonitorOverlapWarning).toHaveBeenCalledTimes(1);
+      expect(startReview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "thread-1",
+          target: { type: "baseBranch", branch: "main" },
+        }),
+      );
+    });
+  });
+
   it("disables existing thread workspace handoff while a turn is active", () => {
     const onHandoffThreadWorkspace = vi.fn(async () => undefined);
     const thread = {

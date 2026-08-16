@@ -1018,6 +1018,17 @@ describe("SettingsScreen", () => {
       });
     });
 
+    const monitorFollowupSafetySwitch = screen.getByRole("switch", {
+      name: "Protect monitor follow-up",
+    });
+    expect(monitorFollowupSafetySwitch).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(monitorFollowupSafetySwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { taskMonitorFollowupSafety: true },
+      });
+    });
+
     fireEvent.click(within(sections).getByRole("button", { name: "Messaging" }));
     expect(screen.getByRole("heading", { name: "General" })).toBeInTheDocument();
     const imageProfile = screen.getByRole("radiogroup", {

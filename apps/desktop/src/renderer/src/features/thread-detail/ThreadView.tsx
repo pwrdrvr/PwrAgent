@@ -928,6 +928,8 @@ export type ThreadViewProps = {
   pendingForkEnvironmentSetup?: PendingForkEnvironmentSetup;
   suppressBranchDriftDialog?: boolean;
   fullAccessRiskWarningDismissed?: boolean;
+  taskMonitorFollowupSafetyEnabled?: boolean;
+  taskMonitorOverlapWarningDismissed?: boolean;
   backgroundPrPollingEnabled?: boolean;
   prAutoDispatchAllowed?: boolean;
   /**
@@ -976,6 +978,7 @@ export type ThreadViewProps = {
   onActiveTurnIdChange?: (turnId?: string) => void;
   onEnsureSkillsLoaded?: () => void | Promise<void>;
   onDismissFullAccessRiskWarning?: () => Promise<void>;
+  onDismissTaskMonitorOverlapWarning?: () => Promise<void>;
   /** Forwarded to ThreadHeader -> MessagingStatusBar - opens Messaging Activity. */
   onOpenAutomations?: () => void;
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
@@ -3296,9 +3299,18 @@ export function ThreadView(props: ThreadViewProps) {
                   fullAccessRiskWarningDismissed={
                     props.fullAccessRiskWarningDismissed
                   }
+                  taskMonitorFollowupSafetyEnabled={
+                    props.taskMonitorFollowupSafetyEnabled
+                  }
+                  taskMonitorOverlapWarningDismissed={
+                    props.taskMonitorOverlapWarningDismissed
+                  }
                   onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
                   onDismissFullAccessRiskWarning={
                     props.onDismissFullAccessRiskWarning
+                  }
+                  onDismissTaskMonitorOverlapWarning={
+                    props.onDismissTaskMonitorOverlapWarning
                   }
                   onMaterializeLaunchpad={handleMaterializeLaunchpad}
                   onCancelLaunchpad={props.onCancelLaunchpad}
@@ -3604,9 +3616,18 @@ export function ThreadView(props: ThreadViewProps) {
             fullAccessRiskWarningDismissed={
               props.fullAccessRiskWarningDismissed
             }
+            taskMonitorFollowupSafetyEnabled={
+              props.taskMonitorFollowupSafetyEnabled
+            }
+            taskMonitorOverlapWarningDismissed={
+              props.taskMonitorOverlapWarningDismissed
+            }
             onActiveTurnIdChange={props.onActiveTurnIdChange}
             onDismissFullAccessRiskWarning={
               props.onDismissFullAccessRiskWarning
+            }
+            onDismissTaskMonitorOverlapWarning={
+              props.onDismissTaskMonitorOverlapWarning
             }
             onEnsureSkillsLoaded={props.onEnsureSkillsLoaded}
             onPendingStatusChange={props.onPendingStatusChange}
