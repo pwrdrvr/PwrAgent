@@ -63,6 +63,8 @@ export type TurnCostRow = {
   label: string;
   /** Calls that reached the harness's output cap, where output is truncated. */
   overCapCount: number;
+  /** Owning thread for the ledger join; never infer it from a turn id alone. */
+  threadId: string;
   turnId?: string;
 };
 
@@ -314,16 +316,20 @@ export function buildTurnCostStrip(
 ): TurnCostStrip {
   const limit = options?.limit ?? DEFAULT_TURN_ROW_LIMIT;
   const scope = options?.scope ?? "flagged";
-  /* Billed cost per turn, joined by turn id. The ledger is the authority on
-     money; the token bar is an estimate from character counts, so the two are
-     reported side by side rather than one derived from the other. */
-  const costByTurn = new Map<string, number>();
+  /* Billed cost per thread and turn. The ledger is the authority on money;
+     the token bar is an estimate from character counts, so the two are
+     reported side by side rather than one derived from the other. A turn id
+     alone is not a safe join key: child threads and other backends can emit
+     short, repeated ids such as "turn-1". */
+  const costByThread = new Map<string, Map<string, number>>();
   for (const line of options?.usageLines ?? []) {
     if (!line.turnId) continue;
-    costByTurn.set(
+    const byTurn = costByThread.get(line.threadId) ?? new Map<string, number>();
+    byTurn.set(
       line.turnId,
-      (costByTurn.get(line.turnId) ?? 0) + line.totalCostMicros,
+      (byTurn.get(line.turnId) ?? 0) + line.totalCostMicros,
     );
+    costByThread.set(line.threadId, byTurn);
   }
   const groups = new Map<string, TurnCostRow>();
   for (const invocation of invocations) {
@@ -336,6 +342,7 @@ export function buildTurnCostStrip(
       key,
       label: "",
       overCapCount: 0,
+      threadId: invocation.threadId,
       ...(invocation.turnId ? { turnId: invocation.turnId } : {}),
     };
     row.callCount += 1;
@@ -354,7 +361,9 @@ export function buildTurnCostStrip(
   }
 
   for (const row of groups.values()) {
-    const cost = row.turnId ? costByTurn.get(row.turnId) : undefined;
+    const cost = row.turnId
+      ? costByThread.get(row.threadId)?.get(row.turnId)
+      : undefined;
     if (cost !== undefined) row.costMicros = cost;
   }
 

@@ -21149,6 +21149,100 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("attributes a late Codex usage snapshot from the preceding cumulative total", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+          serviceTier: "standard",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+    });
+
+    // Codex can emit the previous turn's final cumulative snapshot only when
+    // the thread is resumed. Preserve it as the next turn's opening balance.
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        tokenUsage: {
+          last: {
+            inputTokens: 171_318,
+            cachedInputTokens: 169_728,
+            outputTokens: 100,
+            reasoningOutputTokens: 0,
+            totalTokens: 171_418,
+          },
+          total: {
+            inputTokens: 49_575_456,
+            cachedInputTokens: 47_800_576,
+            outputTokens: 118_122,
+            reasoningOutputTokens: 46_342,
+            totalTokens: 49_693_578,
+          },
+        },
+      },
+    });
+
+    // Only one snapshot arrives for turn 2. `last` is merely its final
+    // cache-hot model request; total - turn 1 is the complete turn usage.
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-2",
+        tokenUsage: {
+          last: {
+            inputTokens: 228_834,
+            cachedInputTokens: 227_840,
+            outputTokens: 141,
+            reasoningOutputTokens: 0,
+            totalTokens: 228_975,
+          },
+          total: {
+            inputTokens: 59_830_359,
+            cachedInputTokens: 57_795_328,
+            outputTokens: 128_478,
+            reasoningOutputTokens: 49_365,
+            totalTokens: 59_958_837,
+          },
+        },
+      },
+    });
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const turn2 = pricing.lines.find((line) => line.turnId === "turn-2");
+
+    expect(turn2).toMatchObject({
+      cachedInputTokens: 9_994_752,
+      inputTokens: 10_254_903,
+      outputTokens: 10_356,
+      reasoningOutputTokens: 3_023,
+      totalCostMicros: 6_699_501,
+      totalTokens: 10_265_259,
+      turnUsageAttributed: true,
+      uncachedInputTokens: 260_151,
+    });
+
+    await registry.close();
+  });
+
   it("persists Qwen turn usage as an unpriced card when no catalog rate exists", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },

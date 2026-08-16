@@ -1173,6 +1173,129 @@ describe("StateDb", () => {
     });
   });
 
+  it("repairs a late Codex turn snapshot from its fresh cumulative opening balance", () => {
+    const dbPath = path.join(tempDir, "codex-turn-usage-repair-state.db");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+    const insert = stateDb.raw.prepare(
+      `INSERT INTO thread_usage_lines (
+         usage_line_id, provider, backend, thread_id, turn_id, source,
+         source_item_id, scope, status, created_at, completed_at, model,
+         reasoning_effort, service_tier, fast_mode, turn_usage_attributed,
+         settings_source, settings_confidence, input_tokens, cached_input_tokens,
+         uncached_input_tokens, output_tokens, reasoning_output_tokens,
+         total_tokens, cumulative_input_tokens, cumulative_cached_input_tokens,
+         cumulative_uncached_input_tokens, cumulative_output_tokens,
+         cumulative_reasoning_output_tokens, cumulative_total_tokens,
+         price_status, currency, pricing_catalog_id, pricing_catalog_version,
+         pricing_rate_id, uncached_input_cost_micros,
+         cached_input_cost_micros, output_cost_micros, total_cost_micros,
+         updated_at
+       ) VALUES (
+         @usageLineId, 'openai', 'codex', 'thread-1', @turnId, 'live',
+         'thread-token-usage', 'turn', 'pending', @createdAt, @completedAt,
+         'gpt-5.6-sol', 'high', 'standard', 0, 1, 'thread-overlay',
+         'fallback', @inputTokens, @cachedInputTokens, @uncachedInputTokens,
+         @outputTokens, @reasoningOutputTokens, @totalTokens,
+         @cumulativeInputTokens, @cumulativeCachedInputTokens,
+         @cumulativeUncachedInputTokens, @cumulativeOutputTokens,
+         @cumulativeReasoningOutputTokens, @cumulativeTotalTokens, 'priced',
+         'USD', 'openai-api', '2026-07-09',
+         'openai:2026-07-09:gpt-5.6-sol:standard',
+         @uncachedInputCostMicros, @cachedInputCostMicros,
+         @outputCostMicros, @totalCostMicros, @updatedAt
+       )`,
+    );
+    const turn2StartedAt = Date.UTC(2026, 7, 8, 18, 18, 22);
+    insert.run({
+      cachedInputCostMicros: 84_864,
+      cachedInputTokens: 169_728,
+      completedAt: Date.UTC(2026, 6, 27, 2, 53, 2),
+      createdAt: Date.UTC(2026, 6, 27, 2, 48, 53),
+      cumulativeCachedInputTokens: 47_800_576,
+      cumulativeInputTokens: 49_575_456,
+      cumulativeOutputTokens: 118_122,
+      cumulativeReasoningOutputTokens: 46_342,
+      cumulativeTotalTokens: 49_693_578,
+      cumulativeUncachedInputTokens: 1_774_880,
+      inputTokens: 171_318,
+      outputCostMicros: 3_000,
+      outputTokens: 100,
+      reasoningOutputTokens: 0,
+      totalCostMicros: 95_814,
+      totalTokens: 171_418,
+      turnId: "turn-1",
+      uncachedInputCostMicros: 7_950,
+      uncachedInputTokens: 1_590,
+      updatedAt: turn2StartedAt - 19_000,
+      usageLineId: "line-turn-1",
+    });
+    insert.run({
+      cachedInputCostMicros: 113_920,
+      cachedInputTokens: 227_840,
+      completedAt: Date.UTC(2026, 7, 8, 18, 24, 28),
+      createdAt: turn2StartedAt,
+      cumulativeCachedInputTokens: 57_795_328,
+      cumulativeInputTokens: 59_830_359,
+      cumulativeOutputTokens: 128_478,
+      cumulativeReasoningOutputTokens: 49_365,
+      cumulativeTotalTokens: 59_958_837,
+      cumulativeUncachedInputTokens: 2_035_031,
+      inputTokens: 228_834,
+      outputCostMicros: 4_230,
+      outputTokens: 141,
+      reasoningOutputTokens: 0,
+      totalCostMicros: 123_120,
+      totalTokens: 228_975,
+      turnId: "turn-2",
+      uncachedInputCostMicros: 4_970,
+      uncachedInputTokens: 994,
+      updatedAt: Date.UTC(2026, 7, 8, 20, 52, 27),
+      usageLineId: "line-turn-2",
+    });
+
+    stateDb.raw.pragma("user_version = 51");
+    stateDb.close();
+    stateDb = StateDb.open(dbPath);
+
+    expect(
+      stateDb.raw
+        .prepare(
+          `SELECT
+             input_tokens,
+             cached_input_tokens,
+             uncached_input_tokens,
+             output_tokens,
+             reasoning_output_tokens,
+             total_tokens,
+             total_cost_micros
+           FROM thread_usage_lines
+           WHERE usage_line_id = 'line-turn-2'`,
+        )
+        .get(),
+    ).toEqual({
+      cached_input_tokens: 9_994_752,
+      input_tokens: 10_254_903,
+      output_tokens: 10_356,
+      reasoning_output_tokens: 3_023,
+      total_cost_micros: 6_699_501,
+      total_tokens: 10_265_259,
+      uncached_input_tokens: 260_151,
+    });
+    expect(
+      stateDb.raw
+        .prepare(
+          `SELECT input_tokens, total_cost_micros
+           FROM thread_pricing_summaries
+           WHERE backend = 'codex' AND thread_id = 'thread-1'`,
+        )
+        .get(),
+    ).toEqual({
+      input_tokens: 10_426_221,
+      total_cost_micros: 6_795_315,
+    });
+  });
+
   it("migrates legacy Grok pricing without billing fork baselines", () => {
     stateDb.close();
 

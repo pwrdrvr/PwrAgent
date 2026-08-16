@@ -3765,6 +3765,37 @@ function subtractTaskMonitorTokenUsage(
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function canSubtractTaskMonitorTokenUsage(
+  total: TaskMonitorTokenUsageBreakdown,
+  baseline: TaskMonitorTokenUsageBreakdown,
+): boolean {
+  let compared = false;
+  for (const key of [
+    "cachedInputTokens",
+    "inputTokens",
+    "uncachedInputTokens",
+    "outputTokens",
+    "reasoningOutputTokens",
+    "totalTokens",
+  ] as const) {
+    const totalValue = total[key];
+    const baselineValue = baseline[key];
+    if (
+      typeof totalValue !== "number"
+      || !Number.isFinite(totalValue)
+      || typeof baselineValue !== "number"
+      || !Number.isFinite(baselineValue)
+    ) {
+      continue;
+    }
+    compared = true;
+    if (totalValue < baselineValue) {
+      return false;
+    }
+  }
+  return compared;
+}
+
 function normalizeTaskMonitorPricingTokens(
   tokens: TaskMonitorTokenUsageBreakdown,
 ): Required<TaskMonitorTokenUsageBreakdown> {
@@ -6675,6 +6706,18 @@ export class DesktopBackendRegistry {
   private readonly liveThreadUsageBaselines = new Map<
     string,
     TaskMonitorTokenUsageBreakdown
+  >();
+  // Codex `total` usage is cumulative for the thread, while `last` is only the
+  // latest upstream model request. Keep the preceding turn's cumulative high-
+  // water mark so a snapshot first observed after a long multi-request turn
+  // is attributed as `total - preceding total`, not mistaken for `last`.
+  private readonly liveCodexThreadCumulativeUsage = new Map<
+    string,
+    {
+      observationSequence: number;
+      turnId: string;
+      usage: TaskMonitorTokenUsageBreakdown;
+    }
   >();
   // Per-turn tally of observed context replays (key: backend:threadId:turnId).
   private readonly liveThreadReplayObservations = new Map<
@@ -20452,6 +20495,7 @@ export class DesktopBackendRegistry {
 
   private deriveLiveThreadTokenUsage(params: {
     backend: AppServerBackendKind;
+    observationSequence?: number;
     threadId: string;
     tokenUsage: unknown;
     turnId?: string;
@@ -20495,6 +20539,26 @@ export class DesktopBackendRegistry {
     ].join(":");
     let baseline = this.liveThreadUsageBaselines.get(key);
     let seededBaselineTokenUsage: TaskMonitorTokenUsageBreakdown | undefined;
+    const cumulativeKey = [params.backend, params.threadId].join(":");
+    const observationSequence = params.observationSequence;
+    const priorCumulative =
+      params.backend === "codex" && observationSequence !== undefined
+        ? this.liveCodexThreadCumulativeUsage.get(cumulativeKey)
+        : undefined;
+    if (
+      !baseline
+      && priorCumulative
+      && priorCumulative.turnId !== params.turnId
+      && observationSequence !== undefined
+      && priorCumulative.observationSequence < observationSequence
+      && canSubtractTaskMonitorTokenUsage(
+        records.totalUsage,
+        priorCumulative.usage,
+      )
+    ) {
+      baseline = priorCumulative.usage;
+      this.liveThreadUsageBaselines.set(key, baseline);
+    }
     if (!baseline && records.latestUsage) {
       baseline = subtractTaskMonitorTokenUsage(
         records.totalUsage,
@@ -20504,6 +20568,22 @@ export class DesktopBackendRegistry {
         this.liveThreadUsageBaselines.set(key, baseline);
         seededBaselineTokenUsage = baseline;
       }
+    }
+
+    if (
+      params.backend === "codex"
+      && params.turnId
+      && observationSequence !== undefined
+      && (
+        !priorCumulative
+        || observationSequence > priorCumulative.observationSequence
+      )
+    ) {
+      this.liveCodexThreadCumulativeUsage.set(cumulativeKey, {
+        observationSequence,
+        turnId: params.turnId,
+        usage: records.totalUsage,
+      });
     }
 
     const turnTokenUsage = baseline
@@ -20804,6 +20884,7 @@ export class DesktopBackendRegistry {
       overlay?.reasoningEffort;
     const derivedUsage = this.deriveLiveThreadTokenUsage({
       backend: event.backend,
+      observationSequence,
       threadId,
       tokenUsage,
       turnId: notification.params.turnId ?? undefined,

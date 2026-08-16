@@ -736,7 +736,7 @@ function TurnStrip(props: {
             ? strip.rankedBy === "billed"
               ? "Costliest turns · by billed cost"
               : "Costliest turns · by output × round trips"
-            : "Cost by turn"}
+            : "Tool-output estimate · billed cost"}
         </p>
         <div
           aria-label="Turn scope"
@@ -759,7 +759,7 @@ function TurnStrip(props: {
           </button>
         </div>
         <p className="incident-explorer__turns-legend">
-          <span className="incident-explorer__turns-key" data-kind="tokens" /> output tokens
+          <span className="incident-explorer__turns-key" data-kind="tokens" /> estimated tool-output tokens
           {" · "}
           <span className="incident-explorer__turns-key" data-kind="trips" /> round trips
         </p>
@@ -785,8 +785,11 @@ function TurnStrip(props: {
               style={{ width: `${scaleWidth(row.estimatedOutputTokens, props.strip.maxTokens)}%` }}
             />
           </span>
-          <span className="incident-explorer__turn-number">
-            {formatCompactTokens(row.estimatedOutputTokens)} tok
+          <span
+            className="incident-explorer__turn-number"
+            title={`${formatCompactTokens(row.estimatedOutputTokens)} estimated tool-output tokens; this is not provider-billed usage`}
+          >
+            {formatCompactTokens(row.estimatedOutputTokens)} est.
           </span>
           <span aria-hidden="true" className="incident-explorer__turn-trips">
             <i style={{ width: `${scaleWidth(row.callCount, props.strip.maxCallCount)}%` }} />
@@ -795,7 +798,12 @@ function TurnStrip(props: {
             {row.callCount.toLocaleString()} {row.callCount === 1 ? "call" : "calls"}
           </span>
           {props.showCost ? (
-            <span className="incident-explorer__turn-cost">
+            <span
+              className="incident-explorer__turn-cost"
+              title={row.costMicros !== undefined
+                ? `Billed cost from provider-reported usage: ${formatMicrosCurrency(row.costMicros, props.currency)}`
+                : undefined}
+            >
               {row.costMicros !== undefined
                 ? formatMicrosCurrency(row.costMicros, props.currency)
                 : "—"}
@@ -851,10 +859,10 @@ function TurnTimeline(props: {
           const description = [
             row.label,
             formatTurnWhen(row.firstObservedAt, props.now),
-            `${formatCompactTokens(row.estimatedOutputTokens)} tok`,
+            `${formatCompactTokens(row.estimatedOutputTokens)} estimated tool-output tokens`,
             `${row.callCount.toLocaleString()} ${row.callCount === 1 ? "call" : "calls"}`,
             ...(row.costMicros !== undefined
-              ? [formatMicrosCurrency(row.costMicros, props.currency)]
+              ? [`billed cost ${formatMicrosCurrency(row.costMicros, props.currency)}`]
               : []),
           ].join(" · ");
           return (
