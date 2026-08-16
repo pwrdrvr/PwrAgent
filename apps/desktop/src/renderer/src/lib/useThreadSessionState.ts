@@ -1249,27 +1249,92 @@ function getThreadHydrationVersion(
   return typeof thread.updatedAt === "number" ? thread.updatedAt : "unknown";
 }
 
+type MessageMatchCandidate = Pick<
+  AppServerThreadMessage,
+  "parts" | "role" | "text"
+>;
+
+type MessageMatchIndex = ReadonlyMap<string, ReadonlySet<number>>;
+
+function messageMatchKey(message: MessageMatchCandidate): string {
+  return JSON.stringify([
+    message.role,
+    normalizeComposerFileReferenceText(message.text),
+  ]);
+}
+
+function messageImageCount(message: MessageMatchCandidate): number {
+  return (message.parts ?? []).filter((part) => part.type === "image").length;
+}
+
+function createMessageMatchIndex(params: {
+  additionalEntries: AppServerThreadEntry[];
+  response?: AppServerReadThreadResponse;
+}): MessageMatchIndex {
+  const imageCountsByMessageKey = new Map<string, Set<number>>();
+  const addMessage = (message: MessageMatchCandidate): void => {
+    const key = messageMatchKey(message);
+    const imageCounts = imageCountsByMessageKey.get(key) ?? new Set<number>();
+    imageCounts.add(messageImageCount(message));
+    imageCountsByMessageKey.set(key, imageCounts);
+  };
+
+  for (const message of params.response?.replay.messages ?? []) {
+    addMessage(message);
+  }
+  for (const entry of params.additionalEntries) {
+    if (entry.type === "message") {
+      addMessage(entry);
+    }
+  }
+
+  return imageCountsByMessageKey;
+}
+
+function hasMatchingMessage(
+  message: AppServerThreadMessageEntry,
+  messageMatchIndex: MessageMatchIndex
+): boolean {
+  const imageCounts = messageMatchIndex.get(messageMatchKey(message));
+  if (!imageCounts) {
+    return false;
+  }
+
+  const imageCount = messageImageCount(message);
+  return imageCount === 0 || imageCounts.has(imageCount);
+}
+
 function pruneOptimisticEntries(
   optimisticEntries: AppServerThreadEntry[],
-  response: AppServerReadThreadResponse | undefined
+  response: AppServerReadThreadResponse | undefined,
+  additionalAuthoritativeEntries: AppServerThreadEntry[] = []
 ): AppServerThreadEntry[] {
-  if (!response) {
+  if (
+    optimisticEntries.length === 0 ||
+    (!response && additionalAuthoritativeEntries.length === 0)
+  ) {
     return optimisticEntries;
   }
 
-  const latestResponseTurnId = latestTranscriptTurnId(response.replay.entries);
-  const latestResponseCreatedAt = latestTranscriptCreatedAt(response.replay.entries);
+  const responseEntries = response?.replay.entries ?? [];
+  const latestResponseTurnId = latestTranscriptTurnId(responseEntries);
+  const latestResponseCreatedAt = latestTranscriptCreatedAt(responseEntries);
+  const hasOptimisticMessages = optimisticEntries.some(
+    (entry) => entry.type === "message"
+  );
+  const messageMatchIndex = hasOptimisticMessages
+    ? createMessageMatchIndex({
+        additionalEntries: additionalAuthoritativeEntries,
+        response,
+      })
+    : undefined;
   return optimisticEntries.filter((entry) => {
     if (entry.type === "message") {
-      return !response.replay.messages.some((message) =>
-        messageMatchesOptimisticEntry(message, entry, {
-          allowImageUrlMismatch: true,
-        })
-      );
+      return !hasMatchingMessage(entry, messageMatchIndex!);
     }
 
     if (entry.type === "review") {
-      return !response.replay.entries.some(
+      return !responseEntries.some(
         (candidate) =>
           candidate.type === "review" &&
           reviewEntriesMatch(candidate, entry)
@@ -1286,14 +1351,14 @@ function pruneOptimisticEntries(
         return false;
       }
 
-      return !response.replay.entries.some(
+      return !responseEntries.some(
         (candidate) =>
           candidate.type === "activity" &&
           activityEntriesMatch(candidate, entry)
       );
     }
 
-    return !response.replay.entries.some((candidate) => candidate.id === entry.id);
+    return !responseEntries.some((candidate) => candidate.id === entry.id);
   });
 }
 
@@ -6516,12 +6581,18 @@ export function useThreadSessionState(params: {
   const visibleOptimisticEntries = useMemo(
     () => {
       const optimisticEntries = selectedSession?.optimisticEntries ?? [];
-      return pruneOptimisticEntries(
-        selectedRetainedLiveEntries.length > 0
-          ? [...optimisticEntries, ...selectedRetainedLiveEntries]
-          : optimisticEntries,
+      const retainedLiveEntries = pruneOptimisticEntries(
+        selectedRetainedLiveEntries,
         selectedSession?.response,
       );
+      const localOptimisticEntries = pruneOptimisticEntries(
+        optimisticEntries,
+        selectedSession?.response,
+        retainedLiveEntries,
+      );
+      return retainedLiveEntries.length > 0
+        ? [...localOptimisticEntries, ...retainedLiveEntries]
+        : localOptimisticEntries;
     },
     [
       selectedRetainedLiveEntries,

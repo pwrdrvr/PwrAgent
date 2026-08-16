@@ -3342,6 +3342,68 @@ describe("useThreadSessionState", () => {
     );
   });
 
+  it("replaces a launchpad placeholder with its authoritative retained live user entry", async () => {
+    const launchpadText =
+      "https://github.com/pwrdrvr/PwrSnap/pull/407 - Update the TanStack Virtual lockfile.";
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+    const officialEntry: AppServerThreadMessageEntry = {
+      type: "message",
+      id: "item-1",
+      role: "user",
+      text: launchpadText,
+      createdAt: 2_000,
+      turn: {
+        id: "turn-1",
+        status: "in_progress",
+        startedAt: 2_000,
+      },
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: {
+          ...buildThread({ id: "thread-1", updatedAt: 2_000 }),
+          optimisticUserMessage: {
+            text: launchpadText,
+            createdAt: 1_000,
+          },
+        },
+      })
+    );
+
+    await waitForThreadHydration(result);
+    await waitFor(() => {
+      expect(result.current.entries).toEqual([
+        expect.objectContaining({
+          id: "optimistic-launchpad-codex:thread-1",
+          role: "user",
+          text: launchpadText,
+        }),
+      ]);
+    });
+
+    act(() => {
+      result.current.upsertLiveTranscriptEntry(officialEntry);
+    });
+
+    expect(result.current.entries).toEqual([officialEntry]);
+  });
+
   it("keeps an optimistic image user message ahead of a hydrated assistant final", async () => {
     const readThread = vi.fn(
       async ({
