@@ -88,6 +88,16 @@ export type ThreadTurnQueueLifecycleEvent =
       error: Error;
     }
   | {
+      /**
+       * A queued entry could not start and remains at the front of its FIFO.
+       * A later terminal/idle signal may retry it; this is not a terminal
+       * failure of the queued request.
+       */
+      type: "blocked";
+      entry: ThreadTurnQueueEntry;
+      error: Error;
+    }
+  | {
       type: "cancelled";
       entry: ThreadTurnQueueEntry;
       reason?: string;
@@ -119,6 +129,8 @@ type AdmittedEntry = {
   turnId?: string;
 };
 
+type StartNextResult = "none" | "started" | "blocked";
+
 const RECENT_ADMITTED_ENTRY_LIMIT = 1_000;
 
 export class ThreadTurnQueue {
@@ -127,6 +139,7 @@ export class ThreadTurnQueue {
   private readonly runningEntries = new Map<string, RunningEntry>();
   private readonly recentlyAdmittedEntries = new Map<string, AdmittedEntry>();
   private readonly releasingKeys = new Set<string>();
+  private readonly pendingReleaseKeys = new Set<string>();
 
   constructor(private readonly options: ThreadTurnQueueOptions) {}
 
@@ -273,8 +286,20 @@ export class ThreadTurnQueue {
     status?: string;
   }): Promise<void> {
     const key = this.keyFor(params);
-    if (this.releasingKeys.has(key)) return;
+    if (this.releasingKeys.has(key)) {
+      // Codex commonly follows a terminal event with a status→idle event.
+      // Keep only that no-turn-id release if it lands while we are awaiting a
+      // queued start. A rejected start emits its own synthetic terminal event
+      // with a turn id; coalescing that would retry forever. Replay the idle
+      // release only if the queued start rejects. Replaying it after a
+      // successful start would let stale idle state terminate the new turn.
+      if (params.turnId === undefined) {
+        this.pendingReleaseKeys.add(key);
+      }
+      return;
+    }
     this.releasingKeys.add(key);
+    let startResult: StartNextResult = "none";
     try {
       const running = this.runningEntries.get(key);
       if (
@@ -292,29 +317,51 @@ export class ThreadTurnQueue {
         });
       }
       if (!(this.options.isThreadActive?.(params) ?? false)) {
-        await this.startNext(key);
+        startResult = await this.startNext(key);
       }
     } finally {
       this.releasingKeys.delete(key);
+      if (
+        this.pendingReleaseKeys.delete(key)
+        && startResult === "blocked"
+      ) {
+        void this.releaseThread({
+          backend: params.backend,
+          threadId: params.threadId,
+        });
+      }
     }
   }
 
-  private async startNext(key: string): Promise<void> {
-    if (this.startingKeys.has(key) || this.runningEntries.has(key)) return;
+  private async startNext(key: string): Promise<StartNextResult> {
+    if (this.startingKeys.has(key) || this.runningEntries.has(key)) return "none";
     const queue = this.queueFor(key);
     const next = queue.shift();
-    if (!next) return;
+    if (!next) return "none";
     if (queue.length === 0) {
       this.queuedEntries.delete(key);
     }
     try {
-      await this.startEntry(next);
-    } catch {
-      await this.startNext(key);
+      await this.startEntry(next, { deferFailureEvent: true });
+      return "started";
+    } catch (error) {
+      // A rejected start says nothing about whether this thread can safely
+      // accept a different queued request. Keep this entry at the FIFO head
+      // and wait for a later terminal/idle signal before another attempt.
+      this.queueFor(key).unshift(next);
+      await this.emit({
+        type: "blocked",
+        entry: next,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+      return "blocked";
     }
   }
 
-  private async startEntry(entry: ThreadTurnQueueEntry): Promise<ThreadTurnQueueStartResult> {
+  private async startEntry(
+    entry: ThreadTurnQueueEntry,
+    options?: { deferFailureEvent?: boolean },
+  ): Promise<ThreadTurnQueueStartResult> {
     const key = this.keyFor(entry);
     this.startingKeys.add(key);
     this.rememberAdmittedEntry({ entryId: entry.id });
@@ -334,7 +381,9 @@ export class ThreadTurnQueue {
     } catch (error) {
       this.recentlyAdmittedEntries.delete(entry.id);
       const normalized = error instanceof Error ? error : new Error(String(error));
-      await this.emit({ type: "failed", entry, error: normalized });
+      if (!options?.deferFailureEvent) {
+        await this.emit({ type: "failed", entry, error: normalized });
+      }
       throw normalized;
     } finally {
       this.startingKeys.delete(key);

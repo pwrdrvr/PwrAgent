@@ -8002,6 +8002,12 @@ export class DesktopBackendRegistry {
                     status: "failed",
                     errorMessage: event.error.message,
                   }
+                : event.type === "blocked"
+                  ? {
+                      ...baseParams,
+                      status: "blocked",
+                      errorMessage: event.error.message,
+                    }
                 : event.type === "cancelled"
                   ? {
                       ...baseParams,

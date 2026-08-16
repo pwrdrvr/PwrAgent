@@ -190,6 +190,60 @@ describe("useQueuedTurnRelease", () => {
     ).toBeUndefined();
   });
 
+  it("keeps a backend-owned queued message when its start is blocked", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const composerDraftStore = createComposerDraftStore();
+    composerDraftStore.setQueuedTurn("thread:codex:thread-a", {
+      id: "queued-ui-1",
+      queueEntryId: "backend-queue-1",
+      text: "Backend-owned reply",
+      imageAttachments: [],
+      fileAttachments: [],
+      input: [{ type: "text", text: "Backend-owned reply" }],
+    });
+
+    renderHook(() =>
+      useQueuedTurnRelease({
+        backends: [backendSummary()],
+        composerDraftStore,
+        desktopApi: {
+          onAgentEvent: (listener) => {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          },
+          startTurn: vi.fn(),
+        },
+        selectedThread: thread("thread-b"),
+        threads: [thread("thread-a"), thread("thread-b")],
+      }),
+    );
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: {
+              threadId: "thread-a",
+              queueEntryId: "backend-queue-1",
+              origin: "manual",
+              status: "blocked",
+              errorMessage: "Thread is not ready.",
+            },
+          },
+        });
+      }
+    });
+
+    expect(
+      composerDraftStore.getQueuedTurn("thread:codex:thread-a"),
+    ).toMatchObject({
+      id: "queued-ui-1",
+      queueEntryId: "backend-queue-1",
+    });
+  });
+
   it("releases the oldest queued message for a non-focused thread when its turn completes", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const startTurn = vi.fn(async () => ({
