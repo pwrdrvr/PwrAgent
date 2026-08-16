@@ -58,6 +58,7 @@ import type {
   ThreadExecutionMode,
   ThreadOverlayState,
   ThreadToolAccounting,
+  ThreadToolInvocationAlert,
   ThreadUsageLineRecord,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
@@ -19735,6 +19736,78 @@ command = "pnpm dev"
       invocation: { itemId: "cmd-1", status: "completed" },
     });
 
+    await registry.close();
+  });
+
+  it("does not emit an incident notification for ephemeral sub-agent accounting", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    (registry as unknown as {
+      taskMonitorDelegations: Map<string, {
+        backend: "codex";
+        monitorThreadId: string;
+        parentBackend: "codex";
+        parentThreadId: string;
+      }>;
+    }).taskMonitorDelegations.set("monitor-1", {
+      backend: "codex",
+      monitorThreadId: "ephemeral-child",
+      parentBackend: "codex",
+      parentThreadId: "parent-thread",
+    });
+
+    await (registry as unknown as {
+      emitThreadToolAccountingUpdated: (params: {
+        backend: "codex";
+        threadId: string;
+        triggeredAlerts: ThreadToolInvocationAlert[];
+      }) => Promise<void>;
+    }).emitThreadToolAccountingUpdated({
+      backend: "codex",
+      threadId: "ephemeral-child",
+      triggeredAlerts: [{
+        alertId: "large-output:codex:ephemeral-child:child-turn",
+        backend: "codex",
+        createdAt: 1,
+        estimatedOutputTokens: 2_000,
+        firstObservedAt: 1,
+        invocationCount: 1,
+        kind: "large-output",
+        lastObservedAt: 1,
+        message: "The sub-agent returned too much output.",
+        severity: "warning",
+        suggestedPrompt: "Use a bounded command.",
+        threadId: "ephemeral-child",
+        toolName: "commandExecution",
+        totalOutputChars: 8_000,
+        turnId: "child-turn",
+        updatedAt: 1,
+      }],
+    });
+
+    const accountingEvent = events.find(
+      (event) => event.notification.method === "thread/toolAccounting/updated",
+    );
+    expect(accountingEvent).toEqual(expect.objectContaining({
+      backend: "codex",
+      notification: expect.objectContaining({
+        method: "thread/toolAccounting/updated",
+        params: expect.objectContaining({
+          threadId: "ephemeral-child",
+          toolAccounting: expect.any(Object),
+        }),
+      }),
+    }));
+    expect(accountingEvent?.notification.params).not.toHaveProperty("triggeredAlerts");
     await registry.close();
   });
 

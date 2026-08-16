@@ -7583,6 +7583,10 @@ describe("Composer", () => {
           };
         }) => void)
       | undefined;
+    const onAgentEvent = vi.fn((callback: (event: AgentEvent) => void) => {
+      agentEventHandler = callback as typeof agentEventHandler;
+      return () => undefined;
+    });
     const steerTurn = vi.fn(async () => ({
       backend: "acp:grok" as const,
       threadId: "grok-thread",
@@ -7612,10 +7616,7 @@ describe("Composer", () => {
           },
         ]}
         desktopApi={{
-          onAgentEvent: (callback) => {
-            agentEventHandler = callback as typeof agentEventHandler;
-            return () => undefined;
-          },
+          onAgentEvent,
           steerTurn,
         }}
         disabled={false}
@@ -7631,6 +7632,7 @@ describe("Composer", () => {
         }}
       />
     );
+    const initialOnAgentEventCalls = onAgentEvent.mock.calls.length;
 
     fireEvent.change(screen.getByLabelText("Reply"), {
       target: { value: "Mention blueberries" },
@@ -7642,6 +7644,12 @@ describe("Composer", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Queued by Grok")).toBeInTheDocument();
+    });
+    // The terminal event must reach the subscription whose closure includes
+    // the queued steer. The rendered chip commits before that effect refreshes
+    // on Windows, so DOM presence alone is not a lifecycle-ready signal.
+    await waitFor(() => {
+      expect(onAgentEvent.mock.calls.length).toBeGreaterThan(initialOnAgentEventCalls);
     });
     await act(async () => {
       agentEventHandler?.({

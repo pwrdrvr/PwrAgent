@@ -11067,6 +11067,14 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
     });
+    const subAgentOwner = this.resolveSubAgentThreadOwner(params);
+    /* A child is expected to spend its own turn budget. Keep the raw
+       accounting record for diagnostics, but do not turn that expected cost
+       into an operator-facing incident. */
+    const triggeredAlerts =
+      params.backend === "codex" && subAgentOwner.isSubAgent
+        ? undefined
+        : params.triggeredAlerts;
     await this.emit({
       backend: params.backend,
       notification: {
@@ -11077,8 +11085,8 @@ export class DesktopBackendRegistry {
           ...(overlay?.toolIncidentNotice
             ? { incidentNotice: overlay.toolIncidentNotice }
             : {}),
-          ...(params.triggeredAlerts?.length
-            ? { triggeredAlerts: params.triggeredAlerts }
+          ...(triggeredAlerts?.length
+            ? { triggeredAlerts }
             : {}),
         },
       },
@@ -12191,7 +12199,7 @@ export class DesktopBackendRegistry {
       }
     }
     const addThread = (backend: AppServerBackendKind, threadId: string): void => {
-      const owner = this.resolveQuitThreadOwner({ backend, threadId });
+      const owner = this.resolveSubAgentThreadOwner({ backend, threadId });
       const threadKey = formatQuitThreadKey(owner.backend, owner.threadId);
       if (!automationExecutionThreadKeys.has(threadKey)) {
         threadKeys.add(threadKey);
@@ -12256,11 +12264,11 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Collapse a worker thread onto the ordinary thread that owns it. Quit is a
-   * thread-level decision: the worker id is intentionally ephemeral and is not
-   * present in PwrAgent's navigation or title index.
+   * Collapse a worker thread onto the durable thread that owns it. Worker IDs
+   * are intentionally absent from PwrAgent's navigation and title indexes, so
+   * quit and alert-policy surfaces must resolve this relationship first.
    */
-  private resolveQuitThreadOwner(params: {
+  private resolveSubAgentThreadOwner(params: {
     backend: AppServerBackendKind;
     threadId: string;
   }): {
