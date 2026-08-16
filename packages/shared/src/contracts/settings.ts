@@ -84,9 +84,9 @@ function parseDesktopUpdateVersion(
 
 /**
  * Map a desktop app version onto the Settings update train/track.
- * Used when `updates.train` / `updates.channel` are unset so a GitHub or
- * website download of Beta/Prerelease follows that feed instead of Stable
- * Latest.
+ * Used only when both `updates.train` and `updates.channel` are unset so a
+ * GitHub or website download of Beta/Prerelease follows that feed. A
+ * pre-train config that only set `channel` stays on Stable.
  */
 export function inferDesktopUpdateSelection(version: string): {
   channel: DesktopUpdateChannel;

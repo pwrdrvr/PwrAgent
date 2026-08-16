@@ -49,6 +49,8 @@ import {
   DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
   DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
+  DESKTOP_UPDATE_CHANNEL_DEFAULT,
+  DESKTOP_UPDATE_TRAIN_DEFAULT,
   inferDesktopUpdateSelection,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
   MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
@@ -724,10 +726,7 @@ export class DesktopSettingsService {
           config.imageUploads?.pastedImageMaxPatches,
         ),
       },
-      updates: {
-        channel: this.resolveUpdateChannelValue(config.updates?.channel),
-        train: this.resolveUpdateTrainValue(config.updates?.train),
-      },
+      updates: this.resolveUpdateSelection(config.updates),
       integratedTerminal: {
         windowsShell: this.resolveIntegratedTerminalWindowsShellValue(
           config.integratedTerminal?.windowsShell,
@@ -1204,12 +1203,12 @@ export class DesktopSettingsService {
   }
 
   resolveUpdateChannel(): DesktopUpdateChannel {
-    return this.resolveUpdateChannelValue(this.readConfig().config.updates?.channel)
+    return this.resolveUpdateSelection(this.readConfig().config.updates).channel
       .value;
   }
 
   resolveUpdateTrain(): DesktopUpdateTrain {
-    return this.resolveUpdateTrainValue(this.readConfig().config.updates?.train)
+    return this.resolveUpdateSelection(this.readConfig().config.updates).train
       .value;
   }
 
@@ -1964,40 +1963,33 @@ export class DesktopSettingsService {
       ?? "";
   }
 
-  private inferredUpdateSelection(): {
-    channel: DesktopUpdateChannel;
-    train: DesktopUpdateTrain;
+  private resolveUpdateSelection(updates?: {
+    channel?: DesktopUpdateChannel;
+    train?: DesktopUpdateTrain;
+  }): {
+    channel: DesktopSettingsValue<DesktopUpdateChannel>;
+    train: DesktopSettingsValue<DesktopUpdateTrain>;
   } {
-    return inferDesktopUpdateSelection(this.currentAppVersion());
-  }
-
-  private resolveUpdateChannelValue(
-    configValue: DesktopUpdateChannel | undefined,
-  ): DesktopSettingsValue<DesktopUpdateChannel> {
-    if (configValue !== undefined) {
+    // Infer the version-derived pair only when neither key exists. A
+    // pre-train config with only `channel = "prerelease"` must stay on
+    // Stable so installing a 1.1.0-beta binary does not silently move
+    // that operator onto Beta Prerelease / alphas.
+    if (updates?.channel === undefined && updates?.train === undefined) {
+      const inferred = inferDesktopUpdateSelection(this.currentAppVersion());
       return {
-        value: configValue,
-        source: "config",
+        channel: { value: inferred.channel, source: "default" },
+        train: { value: inferred.train, source: "default" },
       };
     }
     return {
-      value: this.inferredUpdateSelection().channel,
-      source: "default",
-    };
-  }
-
-  private resolveUpdateTrainValue(
-    configValue: DesktopUpdateTrain | undefined,
-  ): DesktopSettingsValue<DesktopUpdateTrain> {
-    if (configValue !== undefined) {
-      return {
-        value: configValue,
-        source: "config",
-      };
-    }
-    return {
-      value: this.inferredUpdateSelection().train,
-      source: "default",
+      channel: {
+        value: updates.channel ?? DESKTOP_UPDATE_CHANNEL_DEFAULT,
+        source: updates.channel === undefined ? "default" : "config",
+      },
+      train: {
+        value: updates.train ?? DESKTOP_UPDATE_TRAIN_DEFAULT,
+        source: updates.train === undefined ? "default" : "config",
+      },
     };
   }
 

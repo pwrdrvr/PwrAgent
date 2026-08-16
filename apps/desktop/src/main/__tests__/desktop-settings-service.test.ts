@@ -392,6 +392,33 @@ describe("DesktopSettingsService", () => {
     expect(service.resolveUpdateChannel()).toBe("prerelease");
   });
 
+  it("keeps a legacy prerelease config on the Stable train", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      ["[updates]", 'channel = "prerelease"', ""].join("\n"),
+    );
+    const service = new DesktopSettingsService({
+      appVersion: "1.1.0-beta.2",
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.updates.channel).toEqual({
+      value: "prerelease",
+      source: "config",
+    });
+    expect(snapshot.updates.train).toEqual({
+      value: "stable",
+      source: "default",
+    });
+    expect(service.resolveUpdateTrain()).toBe("stable");
+    expect(service.resolveUpdateChannel()).toBe("prerelease");
+  });
+
   it("keeps an explicit Stable choice on a Beta binary", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
