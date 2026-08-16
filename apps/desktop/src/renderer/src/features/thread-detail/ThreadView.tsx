@@ -2516,6 +2516,25 @@ export function ThreadView(props: ThreadViewProps) {
       selectedThreadKey,
     ],
   );
+  const handleOpenToolOutputIncidentExplorer = useCallback(() => {
+    if (!selectedThread) return;
+    const projectLabel =
+      props.selectedDirectory?.label
+      ?? selectedThread.linkedDirectories[0]?.label;
+    void desktopApi?.openToolOutputIncidentExplorerWindow?.({
+      backend: selectedThread.source,
+      ...(projectLabel ? { projectLabel } : {}),
+      threadId: selectedThread.id,
+      title: selectedThread.title,
+    });
+  }, [desktopApi, props.selectedDirectory?.label, selectedThread]);
+  const handleAnalyzeToolHistory = useCallback(() => {
+    if (!selectedThread) return;
+    void desktopApi?.analyzeThreadToolHistory?.({
+      backend: selectedThread.source,
+      threadId: selectedThread.id,
+    });
+  }, [desktopApi, selectedThread]);
 
   const moveEditedFilesToSidebar = useCallback(() => {
     onEditedFilesDockChange("sidebar");
@@ -3703,6 +3722,8 @@ export function ThreadView(props: ThreadViewProps) {
               : undefined
           }
           onRequestToolCallDetails={handleRequestToolCallDetails}
+          onAnalyzeToolHistory={handleAnalyzeToolHistory}
+          onOpenToolOutputIncidentExplorer={handleOpenToolOutputIncidentExplorer}
           pricingDisplayOptions={props.pricingDisplayOptions}
           threadPricingSummaryEnabled={threadPricingSummaryEnabled}
           threadToolAccountingEnabled={threadToolAccountingEnabled}

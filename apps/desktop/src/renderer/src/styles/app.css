@@ -15123,6 +15123,270 @@ a.transcript-message__messaging-origin:focus-visible {
   outline-offset: 2px;
 }
 
+.incident-explorer {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-app);
+  color: var(--text-primary);
+}
+
+.incident-explorer .activity-titlebar__breadcrumb {
+  flex: 0 1 auto;
+  max-width: min(62vw, 720px);
+}
+
+.incident-explorer .activity-titlebar__crumb {
+  max-width: min(20vw, 220px);
+}
+
+.incident-explorer .thread-chip-group {
+  flex: 0 1 auto;
+}
+
+.incident-explorer__section-heading h2,
+.incident-explorer__evidence h2,
+.incident-explorer__prompt h2,
+.incident-explorer__output h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.incident-explorer__prompt p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.incident-explorer__actions,
+.incident-explorer__section-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.incident-explorer__section-heading {
+  justify-content: space-between;
+}
+
+.incident-explorer button,
+.incident-explorer input,
+.incident-explorer select,
+.incident-explorer textarea {
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.incident-explorer button {
+  min-height: 30px;
+  padding: 5px 10px;
+  cursor: pointer;
+}
+
+.incident-explorer button:hover:not(:disabled),
+.incident-explorer button:focus-visible,
+.incident-explorer input:focus-visible,
+.incident-explorer select:focus-visible,
+.incident-explorer textarea:focus-visible {
+  border-color: var(--accent-border);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.incident-explorer button:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.incident-explorer__metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.incident-explorer__metrics > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 18px;
+  border-right: 1px solid var(--border-subtle);
+}
+
+.incident-explorer__metrics span {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.incident-explorer__metrics strong {
+  font-size: 14px;
+}
+
+.incident-explorer__coverage,
+.incident-explorer__status,
+.incident-explorer__error {
+  margin: 0;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--status-warning);
+  font-size: 12px;
+}
+
+.incident-explorer__body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(280px, 32%) minmax(0, 1fr);
+  min-height: 0;
+}
+
+.incident-explorer__list {
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-sidebar);
+}
+
+.incident-explorer__filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.incident-explorer__filters input,
+.incident-explorer__filters select,
+.incident-explorer__section-heading input {
+  min-width: 0;
+  padding: 7px 9px;
+}
+
+.incident-explorer__group h2 {
+  margin: 0;
+  padding: 12px 12px 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.incident-explorer .incident-explorer__case {
+  display: flex;
+  align-items: stretch;
+  flex-direction: column;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  text-align: left;
+}
+
+.incident-explorer .incident-explorer__case[data-selected="true"] {
+  border-left-color: var(--accent);
+  background: var(--bg-row-active);
+}
+
+.incident-explorer__case span {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.incident-explorer__case small {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.incident-explorer__detail {
+  min-height: 0;
+  overflow: auto;
+  padding: 18px;
+}
+
+.incident-explorer__evidence,
+.incident-explorer__prompt,
+.incident-explorer__output {
+  margin-bottom: 18px;
+}
+
+.incident-explorer__evidence dl {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 7px 12px;
+  margin: 12px 0 0;
+  font-size: 12px;
+}
+
+.incident-explorer__evidence dt {
+  color: var(--text-muted);
+}
+
+.incident-explorer__evidence dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.incident-explorer__evidence code,
+.incident-explorer__output-lines code {
+  font-family: var(--font-mono);
+}
+
+.incident-explorer__prompt textarea {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 10px 0 8px;
+  padding: 10px;
+  resize: vertical;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.incident-explorer .incident-explorer__primary {
+  border-color: var(--accent-border);
+  background: var(--accent);
+  color: var(--button-text);
+  font-weight: 650;
+}
+
+.incident-explorer__output-lines {
+  max-height: 440px;
+  margin: 10px 0 0;
+  padding: 10px 10px 10px 52px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--terminal-bg);
+  color: var(--terminal-fg);
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.incident-explorer__output-lines li::marker {
+  color: var(--text-muted);
+}
+
+.incident-explorer__empty {
+  margin: 0;
+  padding: 14px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .transcript-message__image-button {
   box-sizing: border-box;
   display: flex;
@@ -20380,6 +20644,17 @@ a.transcript-message__messaging-origin:focus-visible {
 .tool-call-instance--noisy {
   border-color: color-mix(in srgb, var(--status-warning) 45%, var(--border-subtle));
   box-shadow: inset 2px 0 0 0 var(--status-warning);
+}
+
+.tool-calls-panel__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tool-calls-panel__heading h3 {
+  margin: 0;
 }
 
 .tool-call-alert .rail-card__title {

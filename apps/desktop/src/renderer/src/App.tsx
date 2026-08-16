@@ -24,6 +24,7 @@ import {
   type FederationInstanceId,
   type FederationTarget,
   type MessagingChannelKind,
+  type NavigationDirectorySummary,
   type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
   type ThreadToolInvocationAlert,
@@ -104,7 +105,11 @@ import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNo
 import { GrokCliUpdateNotice } from "./features/notifications/GrokCliUpdateNotice";
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
-import { buildToolAccountingNotice } from "./features/notifications/tool-accounting-notice";
+import {
+  buildToolAccountingNotice,
+  resolveDismissedToolIncident,
+  toolAccountingNoticeId,
+} from "./features/notifications/tool-accounting-notice";
 import {
   buildHeapSnapshotHandoffMessage,
   describeHeapSnapshotResult,
@@ -328,11 +333,16 @@ function DesktopAppShell(props: {
     useState<GithubPrSamlEnforcementEvent[]>([]);
   const [githubPrAuthenticationFailure, setGithubPrAuthenticationFailure] =
     useState<GithubPrAuthenticationFailureEvent>();
-  // Latest thread list, mirrored into a ref so the backend-error toast
-  // subscription can resolve a thread's title without re-subscribing on
-  // every navigation change. Kept fresh by an effect below, once
-  // `navigation` is defined.
+  // Latest navigation identity, mirrored into refs so the backend-error toast
+  // subscription can resolve a thread's title and configured project label
+  // without re-subscribing on every navigation change. Kept fresh by an
+  // effect below, once `navigation` is defined.
   const backendErrorThreadsRef = useRef<NavigationThreadSummary[]>([]);
+  const backendErrorDirectoriesRef = useRef<NavigationDirectorySummary[]>([]);
+  const dismissedToolIncidentSeverityRef = useRef(new Map<
+    string,
+    ThreadToolInvocationAlert["severity"]
+  >());
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
@@ -653,12 +663,20 @@ function DesktopAppShell(props: {
           triggeredAlerts?: ThreadToolInvocationAlert[];
         };
         for (const alert of params.triggeredAlerts ?? []) {
-          const noticeId = [
-            "tool-accounting",
-            alert.backend,
-            alert.threadId,
-            alert.kind,
-          ].join(":");
+          const noticeId = toolAccountingNoticeId(alert);
+          const dismissedSeverity = dismissedToolIncidentSeverityRef.current.get(
+            noticeId,
+          );
+          const dismissalResolution = resolveDismissedToolIncident({
+            dismissedSeverity,
+            incomingSeverity: alert.severity,
+          });
+          if (dismissalResolution === "suppress") {
+            continue;
+          }
+          if (dismissalResolution === "escalate") {
+            dismissedToolIncidentSeverityRef.current.delete(noticeId);
+          }
           const matchingThread = backendErrorThreadsRef.current.find(
             (thread) =>
               thread.source === event.backend
@@ -681,41 +699,51 @@ function DesktopAppShell(props: {
               }
             : undefined;
           const dismiss = (): void => {
+            dismissedToolIncidentSeverityRef.current.set(
+              noticeId,
+              alert.severity,
+            );
             dispatchAppNotice({ type: "dismiss", id: noticeId });
           };
-          let steer: (() => void) | undefined;
-          const showNotice = (detail?: string): void => {
+          const examine = (): void => {
+            const threadKey = buildThreadIdentityKey(
+              event.backend,
+              params.threadId,
+            );
+            const matchingDirectory =
+              backendErrorDirectoriesRef.current.find(
+                (directory) =>
+                  directory.kind === "directory"
+                  && directory.threadKeys.includes(threadKey),
+              )
+              ?? backendErrorDirectoriesRef.current.find((directory) =>
+                directory.threadKeys.includes(threadKey)
+              );
+            const projectLabel =
+              matchingDirectory?.label
+              ?? matchingThread?.linkedDirectories[0]?.label;
+            void desktopApi?.openToolOutputIncidentExplorerWindow?.({
+              backend: event.backend,
+              ...(projectLabel ? { projectLabel } : {}),
+              threadId: params.threadId,
+              title: matchingThread?.title ?? labelForThread(
+                event.backend,
+                params.threadId,
+              ),
+            });
+          };
+          const showNotice = (): void => {
             const notice = buildToolAccountingNotice({
               alert,
+              onExamine: examine,
               onDismiss: dismiss,
-              onSteer: steer,
               threadLink,
             });
             dispatchAppNotice({
               type: "show",
-              notice: detail ? { ...notice, detail } : notice,
+              notice,
             });
           };
-          if (alert.turnId && desktopApi.steerTurn) {
-            steer = (): void => {
-              void desktopApi.steerTurn?.({
-                backend: event.backend,
-                federationTarget: event.federationTarget,
-                threadId: params.threadId,
-                expectedTurnId: alert.turnId!,
-                input: [{ type: "text", text: alert.suggestedPrompt }],
-                requestId: [
-                  "tool-accounting",
-                  alert.alertId,
-                  alert.updatedAt,
-                ].join(":"),
-              }).then(dismiss).catch((error) => {
-                showNotice(
-                  `Steering failed: ${error instanceof Error ? error.message : String(error)}`,
-                );
-              });
-            };
-          }
           showNotice();
         }
         return;
@@ -1020,7 +1048,8 @@ function DesktopAppShell(props: {
   // toast subscription depend on (and re-subscribe to) the thread list.
   useEffect(() => {
     backendErrorThreadsRef.current = navigation.threads;
-  }, [navigation.threads]);
+    backendErrorDirectoriesRef.current = navigation.directories;
+  }, [navigation.directories, navigation.threads]);
   const backendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
     federationTarget: activeFederationTarget,

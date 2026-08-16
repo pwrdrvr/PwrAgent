@@ -45,6 +45,8 @@ import {
   type PersistThreadUsageActivityResponse,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
+  type AnalyzeThreadToolHistoryRequest,
+  type AnalyzeThreadToolHistoryResponse,
   type GetThreadFileDiffRequest,
   type GetThreadFileDiffResponse,
   type EnsureDirectoryLaunchpadRequest,
@@ -214,6 +216,7 @@ import {
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
+  APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL,
   APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCES_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL,
@@ -1720,7 +1723,10 @@ class DesktopAppServerService {
           backend: request.backend,
           threadId: request.threadId,
           before: request.before,
+          includeAllToolInvocations: request.includeAllToolInvocations,
+          includeTurns: request.includeTurns,
           limit: request.limit,
+          viewOnly: request.viewOnly,
         });
     }
     const backend = request.backend ?? "codex";
@@ -1728,6 +1734,7 @@ class DesktopAppServerService {
     const response = await registry.readThread({
       backend,
       threadId: request.threadId,
+      includeAllToolInvocations: request.includeAllToolInvocations,
       includeTurns: request.includeTurns,
       before: request.before,
       limit: request.limit,
@@ -1761,6 +1768,12 @@ class DesktopAppServerService {
     return sanitizeRendererPayload(
       shapeReadThreadFileDiffsForRenderer(materialized),
     );
+  }
+
+  async analyzeThreadToolHistory(
+    request: AnalyzeThreadToolHistoryRequest,
+  ): Promise<AnalyzeThreadToolHistoryResponse> {
+    return await getDesktopBackendRegistry().analyzeThreadToolHistory(request);
   }
 
   async persistThreadUsageActivity(
@@ -7415,6 +7428,15 @@ export function registerAppServerIpcHandlers(): void {
       });
     }
   );
+  ipcMain.removeHandler(APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL,
+    async (
+      _event,
+      request: AnalyzeThreadToolHistoryRequest,
+    ): Promise<AnalyzeThreadToolHistoryResponse> =>
+      await appServerService.analyzeThreadToolHistory(request),
+  );
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL);
   ipcMain.handle(
     APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
@@ -8196,6 +8218,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_THREAD_CHANNEL);

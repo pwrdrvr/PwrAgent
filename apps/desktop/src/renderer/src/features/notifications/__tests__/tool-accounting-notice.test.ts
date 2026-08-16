@@ -1,30 +1,34 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ThreadToolInvocationAlert } from "@pwragent/shared";
-import { buildToolAccountingNotice } from "../tool-accounting-notice";
+import {
+  buildToolAccountingNotice,
+  resolveDismissedToolIncident,
+  toolAccountingNoticeId,
+} from "../tool-accounting-notice";
 
 describe("buildToolAccountingNotice", () => {
-  it("builds one sticky monitor action for repeated queued checks", () => {
+  it("makes the explorer the primary action for an aggregated incident", () => {
     const onDismiss = vi.fn();
-    const onSteer = vi.fn();
+    const onExamine = vi.fn();
     const notice = buildToolAccountingNotice({
       alert: buildAlert({ kind: "noisy-polling" }),
       onDismiss,
-      onSteer,
+      onExamine,
     });
 
     expect(notice).toMatchObject({
       autoDismiss: false,
-      id: "tool-accounting:codex:thread-1:noisy-polling",
+      id: "tool-accounting:codex:thread-1:turn-1:noisy-polling",
       title: "Repeated queued checks",
       tone: "warning",
     });
     expect(notice.actions?.map((action) => action.label)).toEqual([
-      "Use monitor job",
+      "Examine 5 cases",
       "Dismiss",
     ]);
     notice.actions?.[0]?.onClick();
     notice.actions?.[1]?.onClick();
-    expect(onSteer).toHaveBeenCalledOnce();
+    expect(onExamine).toHaveBeenCalledOnce();
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 
@@ -32,15 +36,35 @@ describe("buildToolAccountingNotice", () => {
     const notice = buildToolAccountingNotice({
       alert: buildAlert({ kind: "large-output", severity: "critical" }),
       onDismiss: vi.fn(),
-      onSteer: vi.fn(),
+      onExamine: vi.fn(),
     });
 
     expect(notice).toMatchObject({
-      id: "tool-accounting:codex:thread-1:large-output",
+      id: "tool-accounting:codex:thread-1:turn-1:large-output",
       title: "Large tool output",
       tone: "error",
     });
-    expect(notice.actions?.[0]?.label).toBe("Steer safer output");
+    expect(notice.actions?.[0]?.label).toBe("Examine 5 cases");
+  });
+
+  it("suppresses rewrites after dismissal until a critical escalation", () => {
+    expect(resolveDismissedToolIncident({
+      dismissedSeverity: "warning",
+      incomingSeverity: "warning",
+    })).toBe("suppress");
+    expect(resolveDismissedToolIncident({
+      dismissedSeverity: "warning",
+      incomingSeverity: "critical",
+    })).toBe("escalate");
+    expect(resolveDismissedToolIncident({
+      dismissedSeverity: "critical",
+      incomingSeverity: "critical",
+    })).toBe("suppress");
+  });
+
+  it("uses a new toast identity for a new turn", () => {
+    expect(toolAccountingNoticeId(buildAlert({ turnId: "turn-1" })))
+      .not.toBe(toolAccountingNoticeId(buildAlert({ turnId: "turn-2" })));
   });
 });
 
@@ -60,6 +84,7 @@ function buildAlert(
     severity: "warning",
     suggestedPrompt: "Use a monitor.",
     threadId: "thread-1",
+    turnId: "turn-1",
     toolName: "wait",
     totalOutputChars: 0,
     updatedAt: 2,

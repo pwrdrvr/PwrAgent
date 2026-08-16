@@ -19413,7 +19413,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("persists a live large-output alert at the warning threshold without completion", async () => {
+  it("persists and aggregates live large-output alerts without completion", async () => {
     vi.useFakeTimers();
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
@@ -19442,7 +19442,10 @@ command = "pnpm dev"
       const emit = (registry as unknown as {
         emit(event: AgentEvent): Promise<void>;
       }).emit.bind(registry);
-      const stream = async (delta: string): Promise<void> => {
+      const stream = async (
+        delta: string,
+        itemId = "cmd-1",
+      ): Promise<void> => {
         await emit({
           backend: "codex",
           notification: {
@@ -19450,7 +19453,7 @@ command = "pnpm dev"
             params: {
               threadId: "thread-1",
               turnId: "turn-1",
-              itemId: "cmd-1",
+              itemId,
               delta,
             },
           },
@@ -19494,8 +19497,33 @@ command = "pnpm dev"
           noisy: true,
           noisyReason: "large-output",
           outputChars: 2_000,
+          outputState: "available",
+          source: "live",
           status: "in_progress",
+          suggestedPrompt: expect.stringContaining("commandExecution"),
         }),
+      });
+
+      await stream("x".repeat(4_000), "cmd-2");
+      expect(persistThreadToolInvocationBoundary).toHaveBeenCalledTimes(2);
+      expect(persistThreadToolInvocationBoundary.mock.calls[1]?.[0]).toMatchObject({
+        alerts: [
+          {
+            invocationCount: 2,
+            invocationIds: [
+              "tool:codex:thread-1:turn-1:cmd-1",
+              "tool:codex:thread-1:turn-1:cmd-2",
+            ],
+            totalOutputChars: 8_000,
+            worstOutputChars: 4_000,
+          },
+        ],
+        invocation: {
+          invocationId: "tool:codex:thread-1:turn-1:cmd-2",
+          outputChars: 4_000,
+          outputState: "available",
+          source: "live",
+        },
       });
 
       await registry.close();

@@ -646,12 +646,10 @@ describe("App", () => {
     expect(screen.getByText("3 of 3")).toBeInTheDocument();
   });
 
-  it("surfaces replay-risk alerts as durable one-click steering notices", async () => {
+  it("opens the incident explorer from a replay-risk notice", async () => {
     const agentEventListeners = new Set<(event: AgentEvent) => void>();
-    const steerTurn = vi.fn(async () => ({
-      backend: "codex" as const,
-      threadId: "thread-1",
-      turnId: "turn-1",
+    const openToolOutputIncidentExplorerWindow = vi.fn(async () => ({
+      opened: true as const,
     }));
     Object.defineProperty(window, "pwragent", {
       configurable: true,
@@ -679,7 +677,7 @@ describe("App", () => {
           await new Promise<never>(() => {
             // Keep the shell mounted without needing a full settings fixture.
           }),
-        steerTurn,
+        openToolOutputIncidentExplorerWindow,
       },
     });
 
@@ -722,15 +720,14 @@ describe("App", () => {
 
     expect(screen.getByText("Repeated queued checks")).toBeInTheDocument();
     expect(screen.getByText(/Five queued checks/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Use monitor job" }));
+    fireEvent.click(screen.getByRole("button", { name: "Examine 5 cases" }));
 
     await waitFor(() => {
-      expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+      expect(openToolOutputIncidentExplorerWindow).toHaveBeenCalledWith({
         backend: "codex",
-        expectedTurnId: "turn-1",
         threadId: "thread-1",
-        input: [{ type: "text", text: "Stop polling and use a monitor job." }],
-      }));
+        title: "Codex thread",
+      });
     });
   });
 

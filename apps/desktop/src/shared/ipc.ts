@@ -44,6 +44,8 @@ export const STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL =
 export const STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL =
   "star-map:focus-main-window";
 export const APP_SERVER_READ_THREAD_CHANNEL = "app-server:read-thread";
+export const APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL =
+  "app-server:analyze-thread-tool-history";
 export const APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL =
   "app-server:get-thread-file-diff";
 export const APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL =
@@ -475,6 +477,12 @@ export const MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL =
   "markdown-file-viewer:snapshot-changed";
 export const SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL =
   "sub-agent-transcript:open-window";
+export const TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL =
+  "tool-output-incident-explorer:open-window";
+export const TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL =
+  "tool-output-incident-explorer:refresh";
+export const TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL =
+  "tool-output-incident-explorer:show-thread";
 export const INTEGRATED_TERMINAL_CREATE_CHANNEL =
   "integrated-terminal:create";
 export const INTEGRATED_TERMINAL_WRITE_CHANNEL = "integrated-terminal:write";

@@ -18,6 +18,8 @@ import {
 type ToolCallsPanelProps = {
   entries?: AppServerThreadEntry[];
   loadingDetailItemId?: string;
+  onAnalyzeHistory?: () => void;
+  onOpenIncidentExplorer?: () => void;
   onRequestInvocationDetails?: (invocation: ThreadToolInvocationRecord) => void;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   toolAccounting?: ThreadToolAccounting;
@@ -48,7 +50,16 @@ export function ToolCallsPanel(props: ToolCallsPanelProps) {
 
   return (
     <section className="context-panel__section tool-calls-panel">
-      <h3>Tool calls</h3>
+      <div className="tool-calls-panel__heading">
+        <h3>Tool calls</h3>
+        <button
+          className="button button--ghost"
+          onClick={props.onOpenIncidentExplorer}
+          type="button"
+        >
+          Explore
+        </button>
+      </div>
       {totals ? (
         <div className="rail-summary-card tool-call-summary-card">
           <div className="rail-summary-card__header">
@@ -89,7 +100,16 @@ export function ToolCallsPanel(props: ToolCallsPanelProps) {
           </div>
         </div>
       ) : (
-        <p className="context-empty">No tool calls recorded yet.</p>
+        <div className="context-empty">
+          <p>No tool calls recorded yet.</p>
+          <button
+            className="button button--ghost"
+            onClick={props.onAnalyzeHistory}
+            type="button"
+          >
+            Analyze history
+          </button>
+        </div>
       )}
 
       {accounting?.alerts.length ? (

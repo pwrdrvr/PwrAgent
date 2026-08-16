@@ -65,6 +65,8 @@ import type {
   ForkThreadResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  AnalyzeThreadToolHistoryRequest,
+  AnalyzeThreadToolHistoryResponse,
   GetThreadFileDiffRequest,
   GetThreadFileDiffResponse,
   PersistThreadUsageActivityRequest,
@@ -360,6 +362,8 @@ import type {
   OpenMarkdownFileViewerResponse,
   OpenSubAgentTranscriptWindowRequest,
   OpenSubAgentTranscriptWindowResponse,
+  OpenToolOutputIncidentExplorerWindowRequest,
+  OpenToolOutputIncidentExplorerWindowResponse,
   OpenPathRequest,
   OpenPathResponse,
   ReadMarkdownFileRequest,
@@ -616,6 +620,9 @@ export type DesktopApi = {
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;
+  analyzeThreadToolHistory?: (
+    request: AnalyzeThreadToolHistoryRequest,
+  ) => Promise<AnalyzeThreadToolHistoryResponse>;
   getThreadFileDiff?: (
     request: GetThreadFileDiffRequest,
   ) => Promise<GetThreadFileDiffResponse>;
@@ -847,6 +854,15 @@ export type DesktopApi = {
   openSubAgentTranscriptWindow?: (
     request: OpenSubAgentTranscriptWindowRequest
   ) => Promise<OpenSubAgentTranscriptWindowResponse>;
+  openToolOutputIncidentExplorerWindow?: (
+    request: OpenToolOutputIncidentExplorerWindowRequest
+  ) => Promise<OpenToolOutputIncidentExplorerWindowResponse>;
+  onToolOutputIncidentExplorerRefresh?: (
+    callback: (request?: OpenToolOutputIncidentExplorerWindowRequest) => void
+  ) => () => void;
+  showThreadFromToolOutputIncidentExplorer?: (
+    request: WindowShowThreadRequest
+  ) => Promise<void>;
   createIntegratedTerminal?: (
     request: IntegratedTerminalCreateRequest,
   ) => Promise<IntegratedTerminalCreateResponse>;
