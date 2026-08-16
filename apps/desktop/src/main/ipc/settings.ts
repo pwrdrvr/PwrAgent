@@ -130,6 +130,9 @@ async function refreshModelBackendsIfNeeded(params: {
   const acpCliPathChanged = Object.values(
     params.patch?.acpAgents ?? {},
   ).some((agent) => agent?.cliPath !== undefined);
+  if (params.patch?.acpAgents !== undefined) {
+    recentAcpRefreshes.clear();
+  }
   if (
     params.patch?.models?.codex?.path !== undefined
     || acpCliPathChanged
@@ -148,12 +151,12 @@ async function refreshModelBackendsIfNeeded(params: {
 // so without this two passes would launch the same agents in parallel. Pure
 // cache reads (refresh === false) never launch and are not coalesced.
 //
-// We track force strength and provider scope so narrower requests can ride a
-// stronger in-flight superset. When a broader request arrives second, it waits
-// for overlapping providers and refreshes only the remainder. This preserves
-// force semantics without launching the same interactive runtime twice.
+// We track provider scope so narrower requests can ride an in-flight superset.
+// Force bypasses old durable capability freshness; it never justifies launching
+// a second copy of an agent that main is already probing. When a broader
+// request arrives second, it waits for overlapping providers and refreshes only
+// the remainder. A matching late arrival also reuses a result for five seconds.
 type InFlightAcpRefresh = {
-  forced: boolean;
   probeCapabilities: boolean;
   registryIds: ReadonlySet<string>;
   promise: Promise<ListAcpAgentSettingsResponse>;
@@ -161,6 +164,13 @@ type InFlightAcpRefresh = {
 
 const LOCAL_ACP_REGISTRY_IDS = ["gemini", "grok", "kimi", "qwen"] as const;
 const inFlightAcpRefreshes = new Set<InFlightAcpRefresh>();
+const recentAcpRefreshes = new Set<
+  InFlightAcpRefresh & {
+    completedAt: number;
+    response: ListAcpAgentSettingsResponse;
+  }
+>();
+const ACP_REFRESH_REUSE_TTL_MS = 5_000;
 const USER_INITIATED_ACP_PROBE_TIMEOUT_MS = 10 * 60_000;
 
 function acpRefreshRegistryIds(
@@ -190,6 +200,16 @@ function setsOverlap(
   return [...left].some((registryId) => right.has(registryId));
 }
 
+function invalidateRecentAcpRefreshes(
+  registryIds: ReadonlySet<string>,
+): void {
+  for (const recent of recentAcpRefreshes) {
+    if (setsOverlap(recent.registryIds, registryIds)) {
+      recentAcpRefreshes.delete(recent);
+    }
+  }
+}
+
 async function listAcpAgentSettings(
   request: ListAcpAgentSettingsRequest = {},
   service?: DesktopSettingsService,
@@ -197,13 +217,10 @@ async function listAcpAgentSettings(
   if (request.refresh === false) {
     return await listAcpAgentSettingsImpl(request, service);
   }
-  const wantsForce = request.force === true;
   const probeCapabilities = request.probeCapabilities !== false;
   const registryIds = acpRefreshRegistryIds(request);
   const compatible = [...inFlightAcpRefreshes].filter(
-    (active) =>
-      active.probeCapabilities === probeCapabilities
-      && (!wantsForce || active.forced),
+    (active) => active.probeCapabilities === probeCapabilities,
   );
   const superset = compatible.find((active) =>
     setContainsAll(active.registryIds, registryIds),
@@ -215,6 +232,23 @@ async function listAcpAgentSettings(
   const overlapping = compatible.filter((active) =>
     setsOverlap(active.registryIds, registryIds),
   );
+  if (overlapping.length === 0) {
+    const now = Date.now();
+    for (const recent of recentAcpRefreshes) {
+      if (now - recent.completedAt >= ACP_REFRESH_REUSE_TTL_MS) {
+        recentAcpRefreshes.delete(recent);
+      }
+    }
+    const recentMatch = [...recentAcpRefreshes].find(
+      (recent) =>
+        recent.probeCapabilities === probeCapabilities
+        && setContainsAll(recent.registryIds, registryIds)
+        && setContainsAll(registryIds, recent.registryIds),
+    );
+    if (recentMatch) {
+      return recentMatch.response;
+    }
+  }
   const coveredRegistryIds = new Set(
     overlapping.flatMap((active) => [...active.registryIds]),
   );
@@ -231,22 +265,27 @@ async function listAcpAgentSettings(
         service,
       );
     }
-    return await listAcpAgentSettingsImpl(
+    const nextRequest =
       request.registryIds || remainingRegistryIds.length !== registryIds.size
         ? { ...request, registryIds: remainingRegistryIds }
-        : request,
-      service,
-    );
+        : request;
+    invalidateRecentAcpRefreshes(acpRefreshRegistryIds(nextRequest));
+    return await listAcpAgentSettingsImpl(nextRequest, service);
   })();
   const active: InFlightAcpRefresh = {
-    forced: wantsForce,
     probeCapabilities,
     registryIds,
     promise: run,
   };
   inFlightAcpRefreshes.add(active);
   try {
-    return await run;
+    const response = await run;
+    recentAcpRefreshes.add({
+      ...active,
+      completedAt: Date.now(),
+      response,
+    });
+    return response;
   } finally {
     inFlightAcpRefreshes.delete(active);
   }
@@ -1067,6 +1106,7 @@ export function registerSettingsIpcHandlers(
     ) => void | Promise<void>;
   },
 ): void {
+  recentAcpRefreshes.clear();
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
   ipcMain.handle(
     ACP_AGENTS_LIST_CHANNEL,
@@ -1387,6 +1427,7 @@ export function registerSettingsIpcHandlers(
 
 export function disposeSettingsIpcHandlers(): void {
   codexLoginManager.dispose();
+  recentAcpRefreshes.clear();
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
   ipcMain.removeHandler(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);

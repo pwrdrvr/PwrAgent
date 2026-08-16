@@ -19,6 +19,7 @@ import { useFederationPeerConnectivity } from "../../lib/useFederationPeerConnec
 import { SettingsIcon } from "../../icons/SettingsIcon";
 import { useMessagingPlatformStatuses } from "./useMessagingPlatformStatuses";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { readDesktopSettingsCoalesced } from "../../lib/settings-read-coordinator";
 
 const HEALTH_LABEL: Record<MessagingPlatformHealth, string> = {
   enabled: "Enabled",
@@ -168,7 +169,7 @@ export function MessagingStatusBar(props: {
       return;
     }
     let cancelled = false;
-    void desktopApi.readSettings({}).then((response) => {
+    void readDesktopSettingsCoalesced(desktopApi).then((response) => {
       if (!cancelled) setSettingsSnapshot(response.snapshot);
     }).catch(() => {
       // Settings screen owns user-facing errors; keep this controller quiet.
@@ -187,7 +188,7 @@ export function MessagingStatusBar(props: {
       return;
     }
     let cancelled = false;
-    void desktopApi.readSettings({}).then((response) => {
+    void readDesktopSettingsCoalesced(desktopApi).then((response) => {
       if (!cancelled) setSettingsSnapshot(response.snapshot);
     }).catch(() => {
       // Settings screen owns user-facing errors; keep this controller quiet.

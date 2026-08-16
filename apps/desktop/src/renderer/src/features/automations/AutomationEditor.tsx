@@ -36,6 +36,7 @@ import {
   validateAutomationScheduleDefinition,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { readDesktopSettingsCoalesced } from "../../lib/settings-read-coordinator";
 import {
   CODEX_AGENT_THREAD_CREATION_NOTE,
   canChangeExistingThreadAgentDesignation,
@@ -391,7 +392,7 @@ export function AutomationEditor(props: AutomationEditorProps) {
     let cancelled = false;
     void (async () => {
       try {
-        const response = await readSettings();
+        const response = await readDesktopSettingsCoalesced(props.desktopApi);
         if (cancelled) return;
         setEnabledProviders(readEnabledProviders(response.snapshot));
         setProviderGroups(readProviderGroups(response.snapshot));

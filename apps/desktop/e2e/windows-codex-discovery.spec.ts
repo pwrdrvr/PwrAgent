@@ -88,8 +88,13 @@ test("PATH discovery launches one version probe and starts a real thread", async
       const log = await readFakeCodexProtocolLog(protocolLogPath);
       return findFakeCodexRequests(log, "thread/start").length;
     }).toBeGreaterThanOrEqual(1);
-    await expect.poll(async () => await readInvocationArgs(invocationLogPath))
-      .toEqual(["--version", "app-server"]);
+    await expect.poll(async () => {
+      const invocations = await readInvocationArgs(invocationLogPath);
+      return {
+        appServer: invocations.filter((args) => args.includes("app-server")).length,
+        version: invocations.filter((args) => args.includes("--version")).length,
+      };
+    }).toEqual({ appServer: 1, version: 1 });
   } finally {
     await app.close();
   }
