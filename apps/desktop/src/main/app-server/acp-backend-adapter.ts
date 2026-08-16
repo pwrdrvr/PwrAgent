@@ -51,7 +51,7 @@ import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import {
   acpAgentEnabledFor,
   acpCliPathOverrideFor,
-  managedGrokBuildsEnabledFor,
+  managedGrokBuildsEnabledForRuntime,
   readDesktopSettingsConfigSafe,
 } from "../settings/desktop-config";
 import {
@@ -1035,9 +1035,12 @@ export class AcpBackendAdapter {
           managedGrok: {
             enabled:
               acpAgentEnabledFor(config, "grok")
-              && managedGrokBuildsEnabledFor(
+              && managedGrokBuildsEnabledForRuntime(
                 config,
-                app?.isPackaged !== true,
+                {
+                  env: env ?? process.env,
+                  isPackaged: app?.isPackaged === true,
+                },
               ),
             checkMode: app?.isPackaged === true ? "ttl" : "once-per-process",
             requirePlatformSignature: app?.isPackaged === true,

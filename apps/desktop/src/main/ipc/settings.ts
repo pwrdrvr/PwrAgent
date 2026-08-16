@@ -61,7 +61,7 @@ import { getDesktopSettingsService } from "../settings/desktop-settings-singleto
 import {
   acpAgentEnabledFor,
   acpCliPathOverrideFor,
-  managedGrokBuildsEnabledFor,
+  managedGrokBuildsEnabledForRuntime,
   readDesktopSettingsConfigSafe,
 } from "../settings/desktop-config";
 import {
@@ -438,9 +438,12 @@ async function listInstalledAndLocalAcpAgents(
         managedGrok: {
           enabled:
             acpAgentEnabledFor(config, "grok")
-            && managedGrokBuildsEnabledFor(
+            && managedGrokBuildsEnabledForRuntime(
               config,
-              app?.isPackaged !== true,
+              {
+                env: options?.env ?? process.env,
+                isPackaged: app?.isPackaged === true,
+              },
             ),
           checkMode: options.force
             ? "force"

@@ -444,6 +444,28 @@ export function managedGrokBuildsEnabledFor(
 }
 
 /**
+ * Apply runtime-only guards to the managed Grok preference. Replay-backed E2E
+ * launches use an unpackaged Electron build but must remain offline and honor
+ * their fake CLI fixtures. Packaged builds ignore the E2E-only environment
+ * marker, matching the other dev-only escape hatches.
+ */
+export function managedGrokBuildsEnabledForRuntime(
+  config: DesktopSettingsConfig,
+  options: {
+    env?: NodeJS.ProcessEnv;
+    isPackaged: boolean;
+  },
+): boolean {
+  if (
+    !options.isPackaged
+    && (options.env ?? process.env).PWRAGENT_E2E === "1"
+  ) {
+    return false;
+  }
+  return managedGrokBuildsEnabledFor(config, !options.isPackaged);
+}
+
+/**
  * Resolve the active override path for any ACP agent's CLI executable
  * (`registryId` = gemini | grok | kimi | qwen), used by the ACP discovery
  * probe. Order: env var > on-disk config (`acpAgents.<id>.cliPath`) >
