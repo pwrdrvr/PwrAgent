@@ -216,6 +216,149 @@ describe("sqlite write metrics", () => {
     await registry.close();
   });
 
+  it("persists a streamed large-output alert boundary in one commit", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await emit({
+        backend: "codex",
+        notification: {
+          method: "item/commandExecution/outputDelta",
+          params: {
+            threadId: "thread-streaming-alert",
+            turnId: "turn-1",
+            itemId: "cmd-1",
+            delta: "x".repeat(4_100),
+          },
+        },
+      } as AgentEvent);
+    });
+
+    expectSqliteWriteBudget({
+      note: "one threshold-crossing streamed output window and its alert",
+      scenario: "streamed-large-output-alert-boundary",
+      writes,
+    });
+
+    const accounting = await store.readThreadToolAccounting({
+      backend: "codex",
+      threadId: "thread-streaming-alert",
+    });
+    expect(accounting.alerts).toEqual([
+      expect.objectContaining({
+        kind: "large-output",
+        totalOutputChars: 4_100,
+      }),
+    ]);
+    expect(accounting.invocations).toEqual([
+      expect.objectContaining({
+        noisy: true,
+        noisyReason: "large-output",
+        outputChars: 4_100,
+        status: "in_progress",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("holds five deferred checks and their first alert to one commit", async () => {
+    vi.useFakeTimers();
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 5; index += 1) {
+          vi.setSystemTime(1_800_000_000_000 + index * 30_000);
+          await emit({
+            backend: "codex",
+            notification: {
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  id: `wait-${index + 1}`,
+                  type: "functionCall",
+                  name: "wait",
+                  status: "completed",
+                  arguments: {
+                    cell_id: `cell-${index + 1}`,
+                    yield_time_ms: 30_000,
+                  },
+                  functionCallOutput: "still running",
+                },
+              },
+            },
+          } as AgentEvent);
+        }
+      });
+
+      expectSqliteWriteBudget({
+        note: "five in-memory 30-second deferred checks and one persisted alert boundary",
+        scenario: "deferred-check-alert",
+        writes,
+      });
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds one large structured MCP result and its alert to one commit", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await emit({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "mcp-1",
+              type: "mcpToolCall",
+              server: "playwright",
+              tool: "browser_tabs",
+              status: "completed",
+              arguments: { action: "list" },
+              result: {
+                content: [{ type: "text", text: "x".repeat(4_100) }],
+              },
+            },
+          },
+        },
+      } as AgentEvent);
+    });
+
+    expectSqliteWriteBudget({
+      note: "one large structured MCP result and its alert in one boundary",
+      scenario: "structured-mcp-output-alert",
+      writes,
+    });
+
+    await registry.close();
+  });
+
   it("holds a burst of live token usage to one commit", async () => {
     vi.useFakeTimers();
     const registry = new DesktopBackendRegistry({

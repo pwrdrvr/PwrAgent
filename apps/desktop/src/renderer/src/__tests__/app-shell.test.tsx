@@ -646,6 +646,94 @@ describe("App", () => {
     expect(screen.getByText("3 of 3")).toBeInTheDocument();
   });
 
+  it("surfaces replay-risk alerts as durable one-click steering notices", async () => {
+    const agentEventListeners = new Set<(event: AgentEvent) => void>();
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        onAgentEvent: (listener: (event: AgentEvent) => void) => {
+          agentEventListeners.add(listener);
+          return () => {
+            agentEventListeners.delete(listener);
+          };
+        },
+        readSettings: async () =>
+          await new Promise<never>(() => {
+            // Keep the shell mounted without needing a full settings fixture.
+          }),
+        steerTurn,
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
+
+    act(() => {
+      const event = {
+        backend: "codex",
+        notification: {
+          method: "thread/toolAccounting/updated",
+          params: {
+            threadId: "thread-1",
+            toolAccounting: { alerts: [], invocations: [], summaries: [] },
+            triggeredAlerts: [{
+              alertId: "noisy-polling:codex:thread-1:wait:turn-1",
+              backend: "codex",
+              createdAt: 1,
+              estimatedOutputTokens: 0,
+              firstObservedAt: 1,
+              invocationCount: 5,
+              kind: "noisy-polling",
+              lastObservedAt: 2,
+              message: "Five queued checks keep replaying the turn context.",
+              severity: "warning",
+              suggestedPrompt: "Stop polling and use a monitor job.",
+              threadId: "thread-1",
+              toolName: "wait",
+              totalOutputChars: 0,
+              turnId: "turn-1",
+              updatedAt: 2,
+            }],
+          },
+        },
+      } as AgentEvent;
+      for (const listener of agentEventListeners) {
+        listener(event);
+      }
+    });
+
+    expect(screen.getByText("Repeated queued checks")).toBeInTheDocument();
+    expect(screen.getByText(/Five queued checks/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Use monitor job" }));
+
+    await waitFor(() => {
+      expect(steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+        backend: "codex",
+        expectedTurnId: "turn-1",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "Stop polling and use a monitor job." }],
+      }));
+    });
+  });
+
   it("reveals the sidebar when adding a project from the hidden-sidebar masthead", async () => {
     const pickDirectoryFromDisk = vi.fn(async () => ({
       canceled: false as const,

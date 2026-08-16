@@ -19413,6 +19413,98 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("persists a live large-output alert at the warning threshold without completion", async () => {
+    vi.useFakeTimers();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const upsertThreadToolInvocation = vi.fn(
+      async (params: { invocation: unknown }) => params.invocation,
+    );
+    const persistThreadToolInvocationBoundary = vi.fn(
+      async (params: { invocation: unknown }) => params.invocation,
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      persistThreadToolInvocationBoundary,
+      upsertThreadToolInvocation,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: overlayStore as never,
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    try {
+      const emit = (registry as unknown as {
+        emit(event: AgentEvent): Promise<void>;
+      }).emit.bind(registry);
+      const stream = async (delta: string): Promise<void> => {
+        await emit({
+          backend: "codex",
+          notification: {
+            method: "item/commandExecution/outputDelta",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              itemId: "cmd-1",
+              delta,
+            },
+          },
+        } as AgentEvent);
+      };
+
+      await stream("x".repeat(2_000));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
+
+      // The warning total spans sqlite flush windows. A detector tied to the
+      // 250ms pending-write buffer would see two harmless 2,000-char chunks
+      // and never report that the command reached 4,000.
+      await stream("x".repeat(2_000));
+      const alertEvent = events.find(
+        (event) =>
+          event.notification.method === "thread/toolAccounting/updated",
+      );
+      expect(alertEvent?.notification.params).toMatchObject({
+        threadId: "thread-1",
+        triggeredAlerts: [
+          {
+            kind: "large-output",
+            severity: "warning",
+            totalOutputChars: 4_000,
+            turnId: "turn-1",
+          },
+        ],
+      });
+      expect(persistThreadToolInvocationBoundary).toHaveBeenCalledTimes(1);
+      expect(persistThreadToolInvocationBoundary).toHaveBeenCalledWith({
+        alerts: [
+          expect.objectContaining({
+            kind: "large-output",
+            severity: "warning",
+            totalOutputChars: 4_000,
+          }),
+        ],
+        invocation: expect.objectContaining({
+          invocationId: "tool:codex:thread-1:turn-1:cmd-1",
+          noisy: true,
+          noisyReason: "large-output",
+          outputChars: 2_000,
+          status: "in_progress",
+        }),
+      });
+
+      await registry.close();
+      expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("flushes buffered command output on the timer, without a lifecycle event", async () => {
     // A command can stream for minutes before it completes. Nothing else in
     // this suite exercises the timer — every other case flushes through

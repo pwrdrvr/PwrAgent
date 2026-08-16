@@ -26,6 +26,7 @@ import {
   type MessagingChannelKind,
   type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
+  type ThreadToolInvocationAlert,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { useThreadJump } from "./features/navigation/useThreadJump";
@@ -103,6 +104,7 @@ import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNo
 import { GrokCliUpdateNotice } from "./features/notifications/GrokCliUpdateNotice";
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
+import { buildToolAccountingNotice } from "./features/notifications/tool-accounting-notice";
 import {
   buildHeapSnapshotHandoffMessage,
   describeHeapSnapshotResult,
@@ -645,6 +647,79 @@ function DesktopAppShell(props: {
       const instanceId = event.federationTarget?.scope === "remote"
         ? event.federationTarget.instanceId
         : undefined;
+      if (event.notification.method === "thread/toolAccounting/updated") {
+        const params = event.notification.params as {
+          threadId: string;
+          triggeredAlerts?: ThreadToolInvocationAlert[];
+        };
+        for (const alert of params.triggeredAlerts ?? []) {
+          const noticeId = [
+            "tool-accounting",
+            alert.backend,
+            alert.threadId,
+            alert.kind,
+          ].join(":");
+          const matchingThread = backendErrorThreadsRef.current.find(
+            (thread) =>
+              thread.source === event.backend
+              && thread.id === params.threadId
+              && federationTargetsEqual(
+                thread.federation?.ref.target,
+                event.federationTarget,
+              ),
+          );
+          const threadLink = matchingThread
+            ? {
+                backend: matchingThread.source,
+                inThreadList: true,
+                ...(instanceId ? { instanceId } : {}),
+                threadId: matchingThread.id,
+                title: matchingThread.title,
+                titleSource: matchingThread.titleSource,
+                gitBranch: matchingThread.gitBranch,
+                linkedDirectories: matchingThread.linkedDirectories,
+              }
+            : undefined;
+          const dismiss = (): void => {
+            dispatchAppNotice({ type: "dismiss", id: noticeId });
+          };
+          let steer: (() => void) | undefined;
+          const showNotice = (detail?: string): void => {
+            const notice = buildToolAccountingNotice({
+              alert,
+              onDismiss: dismiss,
+              onSteer: steer,
+              threadLink,
+            });
+            dispatchAppNotice({
+              type: "show",
+              notice: detail ? { ...notice, detail } : notice,
+            });
+          };
+          if (alert.turnId && desktopApi.steerTurn) {
+            steer = (): void => {
+              void desktopApi.steerTurn?.({
+                backend: event.backend,
+                federationTarget: event.federationTarget,
+                threadId: params.threadId,
+                expectedTurnId: alert.turnId!,
+                input: [{ type: "text", text: alert.suggestedPrompt }],
+                requestId: [
+                  "tool-accounting",
+                  alert.alertId,
+                  alert.updatedAt,
+                ].join(":"),
+              }).then(dismiss).catch((error) => {
+                showNotice(
+                  `Steering failed: ${error instanceof Error ? error.message : String(error)}`,
+                );
+              });
+            };
+          }
+          showNotice();
+        }
+        return;
+      }
       // Params are cast explicitly: the AppServerNotification union is too
       // wide for the discriminant to narrow `params` reliably here.
       if (event.notification.method === "turn/failed") {

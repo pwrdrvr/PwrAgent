@@ -962,8 +962,9 @@ export type ThreadToolInvocationAlert = {
   alertId: string;
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
-  kind: "noisy-polling";
-  severity: "warning";
+  turnId?: string;
+  kind: "large-output" | "noisy-polling";
+  severity: "warning" | "critical";
   toolName: string;
   sessionId?: string;
   processId?: string;
@@ -1343,6 +1344,7 @@ export type AppServerNotification =
       params: {
         threadId: string;
         toolAccounting: ThreadToolAccounting;
+        triggeredAlerts?: ThreadToolInvocationAlert[];
       };
     }
   | {

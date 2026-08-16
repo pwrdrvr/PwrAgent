@@ -96,7 +96,11 @@ export function ToolCallsPanel(props: ToolCallsPanelProps) {
         <ul className="context-list context-list--cards tool-call-alert-list">
           {accounting.alerts.map((alert) => (
             <li key={alert.alertId} className="rail-card tool-call-alert">
-              <p className="rail-card__title">Noisy polling detected</p>
+              <p className="rail-card__title">
+                {alert.kind === "noisy-polling"
+                  ? "Repeated queued checks"
+                  : "Large tool output"}
+              </p>
               <p className="rail-card__usage">{alert.message}</p>
               <p className="rail-card__usage">
                 Suggested steering: {alert.suggestedPrompt}
