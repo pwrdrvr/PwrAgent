@@ -15621,7 +15621,7 @@ a.transcript-message__messaging-origin:focus-visible {
   background: color-mix(in srgb, var(--text-secondary) 66%, transparent);
 }
 
-/* Cost by turn. The solid bar is output volume; the tick rail is round trips.
+/* Tool output and billed cost by turn. The solid bar is output volume; the tick rail is round trips.
    They are deliberately different marks because they are different problems:
    a turn heavy on ticks and light on bar is a polling loop, and the fix for
    it has nothing to do with filtering output. */

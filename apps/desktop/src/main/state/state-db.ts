@@ -14,7 +14,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 51;
+export const CURRENT_STATE_DB_USER_VERSION = 52;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -1494,6 +1494,12 @@ LEFT JOIN federation_peers
     if ((db.pragma("user_version", { simple: true }) as number) < 51) {
       db.transaction(() => {
         ensureThreadToolIncidentExplorerSchema(db);
+        db.pragma("user_version = 51");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 52) {
+      db.transaction(() => {
+        repairCodexTurnUsageFromCumulativeSnapshots(db);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -2670,6 +2676,212 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
   }
 
   rebuildThreadPricingSummaries(db, now);
+}
+
+const CODEX_OPENING_USAGE_SNAPSHOT_MAX_AGE_MS = 5 * 60 * 1000;
+
+/**
+ * Repair the late-snapshot failure that priced only Codex `last` usage as a
+ * whole turn. A preceding row is authoritative only when its cumulative total
+ * was refreshed immediately before the next turn began; older snapshots may
+ * hide unobserved turns and are deliberately left alone.
+ */
+function repairCodexTurnUsageFromCumulativeSnapshots(
+  db: BetterSqlite3.Database,
+): void {
+  if (
+    !tableExists(db, "thread_usage_lines")
+    || !tableExists(db, "thread_pricing_summaries")
+    || !tableColumnExists(
+      db,
+      "thread_usage_lines",
+      "cumulative_input_tokens",
+    )
+  ) {
+    return;
+  }
+
+  type CumulativeUsageRow = {
+    cached_input_tokens: number;
+    created_at: number;
+    cumulative_cached_input_tokens: number | null;
+    cumulative_input_tokens: number | null;
+    cumulative_output_tokens: number | null;
+    cumulative_reasoning_output_tokens: number | null;
+    cumulative_total_tokens: number | null;
+    currency: string;
+    fast_mode: number | null;
+    input_tokens: number;
+    model: string | null;
+    output_tokens: number;
+    reasoning_output_tokens: number;
+    service_tier: string | null;
+    thread_id: string;
+    total_tokens: number;
+    updated_at: number;
+    usage_line_id: string;
+  };
+  const rows = db
+    .prepare(
+      `SELECT
+         usage_line_id,
+         thread_id,
+         created_at,
+         updated_at,
+         model,
+         service_tier,
+         fast_mode,
+         currency,
+         input_tokens,
+         cached_input_tokens,
+         output_tokens,
+         reasoning_output_tokens,
+         total_tokens,
+         cumulative_input_tokens,
+         cumulative_cached_input_tokens,
+         cumulative_output_tokens,
+         cumulative_reasoning_output_tokens,
+         cumulative_total_tokens
+       FROM thread_usage_lines
+       WHERE backend = 'codex'
+         AND provider = 'openai'
+         AND source = 'live'
+         AND scope = 'turn'
+         AND status != 'superseded'
+         AND cumulative_input_tokens IS NOT NULL
+       ORDER BY thread_id ASC, created_at ASC, usage_line_id ASC`,
+    )
+    .all() as CumulativeUsageRow[];
+  const updateLine = db.prepare(
+    `UPDATE thread_usage_lines
+     SET
+       input_tokens = @inputTokens,
+       cached_input_tokens = @cachedInputTokens,
+       uncached_input_tokens = @uncachedInputTokens,
+       output_tokens = @outputTokens,
+       reasoning_output_tokens = @reasoningOutputTokens,
+       total_tokens = @totalTokens,
+       price_status = @priceStatus,
+       price_unavailable_reason = @priceUnavailableReason,
+       currency = @currency,
+       pricing_catalog_id = @pricingCatalogId,
+       pricing_catalog_version = @pricingCatalogVersion,
+       pricing_rate_id = @pricingRateId,
+       uncached_input_cost_micros = @uncachedInputCostMicros,
+       cached_input_cost_micros = @cachedInputCostMicros,
+       output_cost_micros = @outputCostMicros,
+       total_cost_micros = @totalCostMicros,
+       updated_at = @updatedAt
+     WHERE usage_line_id = @usageLineId`,
+  );
+
+  let prior: CumulativeUsageRow | undefined;
+  let repairedCount = 0;
+  const now = Date.now();
+  for (const row of rows) {
+    if (prior?.thread_id !== row.thread_id) {
+      prior = row;
+      continue;
+    }
+
+    const openingSnapshotAge = row.created_at - prior.updated_at;
+    const cumulativePairs = [
+      [row.cumulative_input_tokens, prior.cumulative_input_tokens],
+      [row.cumulative_cached_input_tokens, prior.cumulative_cached_input_tokens],
+      [row.cumulative_output_tokens, prior.cumulative_output_tokens],
+      [
+        row.cumulative_reasoning_output_tokens,
+        prior.cumulative_reasoning_output_tokens,
+      ],
+      [row.cumulative_total_tokens, prior.cumulative_total_tokens],
+    ] as const;
+    const hasExactOpeningSnapshot =
+      openingSnapshotAge >= 0
+      && openingSnapshotAge <= CODEX_OPENING_USAGE_SNAPSHOT_MAX_AGE_MS
+      && cumulativePairs.every(
+        ([current, previous]) =>
+          current !== null
+          && previous !== null
+          && current >= previous,
+      );
+    if (!hasExactOpeningSnapshot) {
+      prior = row;
+      continue;
+    }
+
+    const inputTokens =
+      row.cumulative_input_tokens! - prior.cumulative_input_tokens!;
+    const cachedInputTokens =
+      row.cumulative_cached_input_tokens!
+      - prior.cumulative_cached_input_tokens!;
+    const outputTokens =
+      row.cumulative_output_tokens! - prior.cumulative_output_tokens!;
+    const reasoningOutputTokens =
+      row.cumulative_reasoning_output_tokens!
+      - prior.cumulative_reasoning_output_tokens!;
+    const totalTokens =
+      row.cumulative_total_tokens! - prior.cumulative_total_tokens!;
+    const wasUndercounted =
+      inputTokens > row.input_tokens
+      || cachedInputTokens > row.cached_input_tokens
+      || outputTokens > row.output_tokens
+      || reasoningOutputTokens > row.reasoning_output_tokens
+      || totalTokens > row.total_tokens;
+    if (!wasUndercounted) {
+      prior = row;
+      continue;
+    }
+
+    const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+    const cost = estimateTokenUsageCost({
+      at: row.created_at,
+      cachedInputTokens,
+      fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
+      model: row.model ?? undefined,
+      outputTokens,
+      reasoningOutputTokens,
+      serviceTier: row.service_tier ?? undefined,
+      uncachedInputTokens,
+    });
+    const pricingServiceTier = resolveOpenAiPricingServiceTier({
+      fastMode: row.fast_mode === null ? undefined : Boolean(row.fast_mode),
+      serviceTier: row.service_tier ?? undefined,
+    });
+    const priceUnavailableReason: ThreadUsageLineRecord["priceUnavailableReason"] | null =
+      cost
+        ? null
+        : !row.model
+          ? "missing-model"
+          : pricingServiceTier === undefined
+            ? "unsupported-service-tier"
+            : "missing-rate";
+    updateLine.run({
+      cachedInputCostMicros: cost?.cachedInputCostMicros ?? 0,
+      cachedInputTokens,
+      currency: cost?.currency ?? row.currency,
+      inputTokens,
+      outputCostMicros: cost?.outputCostMicros ?? 0,
+      outputTokens,
+      priceStatus: cost ? "priced" : "unpriced",
+      priceUnavailableReason,
+      pricingCatalogId: cost?.catalogId ?? null,
+      pricingCatalogVersion: cost?.catalogVersion ?? null,
+      pricingRateId: cost?.rateId ?? null,
+      reasoningOutputTokens,
+      totalCostMicros: cost?.totalCostMicros ?? 0,
+      totalTokens,
+      uncachedInputCostMicros: cost?.uncachedInputCostMicros ?? 0,
+      uncachedInputTokens,
+      updatedAt: now,
+      usageLineId: row.usage_line_id,
+    });
+    repairedCount += 1;
+    prior = row;
+  }
+
+  if (repairedCount > 0) {
+    rebuildThreadPricingSummaries(db, now);
+  }
 }
 
 function rebuildThreadPricingSummaries(db: BetterSqlite3.Database, updatedAt: number): void {

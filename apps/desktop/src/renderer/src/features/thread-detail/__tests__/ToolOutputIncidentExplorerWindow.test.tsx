@@ -213,6 +213,36 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       .toHaveTextContent("3 calls");
     expect(within(turns).getByRole("button", { name: /Turn 2/ }))
       .toHaveTextContent("1 call");
+    expect(within(turns).getByTitle(
+      "5.1k estimated tool-output tokens; this is not provider-billed usage",
+    )).toHaveTextContent("5.1k est.");
+  });
+
+  it("labels the hover price as billed rather than treating tool output as usage", async () => {
+    const response = buildMultiTurnResponse();
+    response.pricing = {
+      lines: [{
+        createdAt: 1,
+        currency: "USD",
+        threadId: "thread-1",
+        totalCostMicros: 123_120,
+        turnId: "turn-1",
+      }] as never,
+      summaries: [],
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const timeline = await screen.findByRole("group", {
+      name: "Tool cost per turn, in order",
+    });
+    expect(within(timeline).getAllByRole("button")[0]).toHaveAttribute(
+      "title",
+      expect.stringContaining("5.1k estimated tool-output tokens · 3 calls · billed cost $0.12"),
+    );
+    expect(screen.getByTitle("Billed cost from provider-reported usage: $0.12"))
+      .toHaveTextContent("$0.12");
   });
 
   it("widens the turn strip from flagged turns to every turn with tool calls", async () => {
@@ -253,7 +283,10 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     const columns = within(timeline).getAllByRole("button");
     expect(columns).toHaveLength(2);
     /* Hover text carries the numbers the bars encode. */
-    expect(columns[0]).toHaveAttribute("title", expect.stringMatching(/Turn 1 .*3 calls/));
+    expect(columns[0]).toHaveAttribute(
+      "title",
+      expect.stringMatching(/Turn 1 .*estimated tool-output tokens.*3 calls/),
+    );
 
     fireEvent.click(columns[1]!);
     const cases = screen.getByLabelText("Incident cases");
