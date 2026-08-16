@@ -138,32 +138,47 @@
 
 ## Code Formatting & Linting
 
-**There is a linter (ESLint) but no autoformatter — and that split is
-deliberate. Run ESLint; hand-format; never run Prettier.**
+- Use ESLint only as a correctness linter.
+- Run `pnpm lint:eslint`.
+- The CI `Lint` job also runs these checks:
+  - `lint:sql`.
+  - `lint:codex-storage`.
+  - `lint:colors`.
+  - `licenses:check`.
+  - `typecheck`.
+  - `lint:boundaries`.
+- [`eslint.config.mjs`](eslint.config.mjs) enables the recommended TypeScript ESLint rules.
+- The renderer also uses the classic React Hooks rules.
+- The ESLint configuration has no style rules.
+- Fix all ESLint errors.
+- Existing `no-explicit-any`, `exhaustive-deps`, and intentional patterns can produce warnings.
+- CI blocks errors. CI does not block warnings.
+- Do not add style or whitespace rules to ESLint.
+- Do not use `eslint --fix` to format code.
 
-- **ESLint is adopted — as a correctness linter, not a formatter.** Run
-  `pnpm lint:eslint` (CI's `Lint` job runs it too, alongside `lint:sql`,
-  `lint:codex-storage`, `lint:colors`, `licenses:check`, `typecheck`, and
-  `lint:boundaries`). The config is [`eslint.config.mjs`](eslint.config.mjs):
-  typescript-eslint recommended + classic react-hooks (scoped to the renderer),
-  **no stylistic rules**. Fix the errors it reports. A block of pre-existing
-  findings (`no-explicit-any`, `exhaustive-deps`, and intentional patterns) is
-  set to `warn` as a burn-down baseline — CI blocks on errors, not warnings.
-  Do NOT add stylistic/whitespace rules and do NOT run `eslint --fix` to
-  reformat code: formatting is not ESLint's job here.
-- **Prettier is deliberately absent.** No dependency, no `.prettierrc`, no
-  `format` script, no CI formatting step. **Never run `npx prettier` or
-  `prettier --write` on repo files.** Because no config is committed, `npx`
-  downloads Prettier and applies its built-in defaults, which fight this repo's
-  hand-maintained house style and reformat large spans of untouched code. On
-  PR #934 a single `npx prettier --write` on one file rewrote ~90 unrelated
-  lines around a 3-line change, bloating the diff and muddying `git blame`. A
-  full-tree Prettier reformat was evaluated (it touched ~77% of files) and
-  declined; don't reintroduce it ad hoc.
-- **Match the surrounding code by hand.** The house style (verify against
-  neighbors, don't assume): double quotes, 2-space indent, semicolons, trailing
-  commas on multi-line literals, and **leading binary operators** on wrapped
-  expressions — the operator starts the continuation line:
+### Formatting
+
+- The repository intentionally has no automatic formatter.
+- Format code by hand.
+- Prettier is not a dependency.
+- The repository has no `.prettierrc`, `format` script, or CI formatting step.
+- Never run `npx prettier` or `prettier --write` on repository files.
+- Without a local dependency, `npx` downloads Prettier and uses its default configuration.
+- Those defaults conflict with the hand-maintained repository style.
+- The defaults also reformat unchanged code.
+- In PR #934, Prettier changed approximately 90 unrelated lines around a three-line change.
+- Those changes made the diff larger and reduced the value of `git blame`.
+- A full repository test changed approximately 77% of files.
+- The project rejected that full repository reformat.
+- Do not introduce an isolated Prettier reformat.
+- Inspect adjacent code before you format new code.
+- Use these local style rules:
+  - Double quotes.
+  - Two-space indentation.
+  - Semicolons.
+  - Trailing commas in multiline literals.
+  - Leading binary operators in wrapped expressions.
+- Put a wrapped binary operator at the start of the continuation line:
 
   ```ts
   const ok =
@@ -172,38 +187,39 @@ deliberate. Run ESLint; hand-format; never run Prettier.**
     || isDigit(char);
   ```
 
-  Prettier's default flips these to trailing operators; there are 500+ leading-
-  operator lines in the tree, so a default run is pure churn. Format new code to
-  look like its neighbors.
-- Keep diffs scoped to your actual change. If a file is already inconsistent,
-  leave the untouched lines alone rather than "tidying" them.
+- Prettier puts these operators at the end of the prior line.
+- The repository contains more than 500 leading-operator lines.
+- Make new code match adjacent code.
+- Keep each diff limited to the requested change.
+- If a file has unrelated inconsistencies, do not change those lines.
 
 ## Agent Instruction Files
 
-- Keep a sibling `CLAUDE.md` symlink next to every `AGENTS.md`, pointing at that `AGENTS.md`, so Codex and Claude read the same local guidance.
+- Put a `CLAUDE.md` symlink next to each `AGENTS.md` file.
+- Point each symlink to its sibling `AGENTS.md` file.
+- This structure gives Codex and Claude the same local guidance.
 
 ## Pull Requests
 
 - Use Conventional Commit-style PR titles: `type(scope): short description`.
-- Prefer scopes that match the project area being changed:
-  - `messaging` for Telegram, Discord, adapters, and messaging integrations.
-  - `desktop` for the desktop app itself.
-  - `agent-core` for coding-agent backend and ACP integration changes.
-  - `release` for packaging, signing, notarization, distribution, and auto-update pipeline.
-  - `docs` for documentation changes.
-  - `tests` for test coverage, fixtures, and test infrastructure.
+- Select the scope that matches the changed area:
+  - Use `messaging` for adapters and messaging integrations.
+  - Use `desktop` for the desktop application.
+  - Use `agent-core` for coding-agent backends and ACP integration.
+  - Use `release` for packaging, signing, notarization, distribution, and automatic updates.
+  - Use `docs` for documentation.
+  - Use `tests` for test coverage, fixtures, and test infrastructure.
 
 ## Release / Distribution
 
-- The desktop release pipeline (Mac, signing, notarization, auto-update) is
-  documented in [docs/desktop-release-runbook.md](docs/desktop-release-runbook.md).
-- The Phase 1 → Phase 2 distribution channel migration runbook lives at
-  [docs/desktop-distribution-phase-2-runbook.md](docs/desktop-distribution-phase-2-runbook.md).
-- PwrAgent is MIT-licensed, owned by PwrDrvr LLC. Treat the repo-root
-  `LICENSE`, package `license: "MIT"` declarations, and third-party license
-  aggregation as load-bearing release metadata. Do not introduce a different
-  first-party license or remove license disclosures without an explicit policy
-  change from PwrDrvr LLC.
+- Read the [desktop release runbook](docs/desktop-release-runbook.md) for release procedures.
+- The runbook covers packaging, signing, notarization, publishing, and automatic updates.
+- PwrAgent uses the MIT license. PwrDrvr LLC owns the project.
+- Preserve the repository `LICENSE` file.
+- Preserve each package `license: "MIT"` declaration.
+- Preserve the third-party license report.
+- Do not change the first-party license without an explicit PwrDrvr LLC policy change.
+- Do not remove license disclosures without an explicit PwrDrvr LLC policy change.
 
 ## Runtime Config
 
