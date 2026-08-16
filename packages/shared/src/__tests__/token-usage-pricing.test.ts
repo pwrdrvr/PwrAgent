@@ -286,6 +286,92 @@ describe("token usage pricing", () => {
     });
   });
 
+  it("prices Grok 4.6 usage with the xAI list rate", () => {
+    const cost = estimateTokenUsageCost({
+      at: Date.UTC(2026, 7, 15),
+      cachedInputTokens: 128,
+      inputTokensAreSingleRequest: true,
+      model: "grok-4.6",
+      outputTokens: 266,
+      reasoningOutputTokens: 130,
+      uncachedInputTokens: 255_331,
+    });
+
+    expect(cost).toMatchObject({
+      cachedInputCostMicros: 128,
+      cachedInputUsdPerMillion: 1,
+      catalogId: "xai-api",
+      catalogVersion: "2026-08-12",
+      displayName: "Grok 4.6 Standard (>=200K input)",
+      inputUsdPerMillion: 4,
+      model: "grok-4.6",
+      outputCostMicros: 3_192,
+      outputTokensIncludeReasoning: true,
+      outputUsdPerMillion: 12,
+      provider: "xai",
+      rateId: "xai:2026-08-12:grok-4.6:standard:input-gte-200k",
+      serviceTier: "standard",
+      totalCostMicros: 1_024_644,
+      totalUsd: 1.024644,
+      uncachedInputCostMicros: 1_021_324,
+    });
+  });
+
+  it("prices the Grok 4.6 latest alias", () => {
+    expect(
+      estimateTokenUsageCost({
+        at: Date.UTC(2026, 7, 15),
+        cachedInputTokens: 50_000,
+        model: "grok-4.6-latest",
+        outputTokens: 100_000,
+        uncachedInputTokens: 50_000,
+      }),
+    ).toMatchObject({
+      cachedInputUsdPerMillion: 0.5,
+      inputUsdPerMillion: 2,
+      outputUsdPerMillion: 6,
+      rateId: "xai:2026-08-12:grok-4.6:standard:input-lt-200k",
+      totalCostMicros: 725_000,
+    });
+  });
+
+  it("requires single-request evidence for Grok 4.6 long-context pricing", () => {
+    const estimateAtInputTokens = (
+      inputTokens: number,
+      inputTokensAreSingleRequest?: boolean,
+    ) =>
+      estimateTokenUsageCost({
+        at: Date.UTC(2026, 7, 15),
+        cachedInputTokens: 0,
+        inputTokensAreSingleRequest,
+        model: "grok-4.6",
+        outputTokens: 0,
+        uncachedInputTokens: inputTokens,
+      });
+
+    expect(estimateAtInputTokens(199_999)).toMatchObject({
+      inputUsdPerMillion: 2,
+      rateId: "xai:2026-08-12:grok-4.6:standard:input-lt-200k",
+    });
+    expect(estimateAtInputTokens(200_000)).toBeUndefined();
+    expect(estimateAtInputTokens(200_000, true)).toMatchObject({
+      inputUsdPerMillion: 4,
+      rateId: "xai:2026-08-12:grok-4.6:standard:input-gte-200k",
+    });
+  });
+
+  it("does not price Grok 4.6 usage before its launch date", () => {
+    expect(
+      estimateTokenUsageCost({
+        at: Date.UTC(2026, 7, 11, 23, 59, 59),
+        cachedInputTokens: 0,
+        model: "grok-4.6",
+        outputTokens: 100,
+        uncachedInputTokens: 100,
+      }),
+    ).toBeUndefined();
+  });
+
   it("prices Qwen ACP ModelStudio usage with the International list rate", () => {
     const cost = estimateTokenUsageCost({
       at: Date.UTC(2026, 6, 28),
@@ -401,6 +487,32 @@ describe("token usage pricing", () => {
         provider: "openai",
         rateId: "openai:2026-07-30:gpt-5.6-luna:priority",
         serviceTier: "priority",
+      }),
+    );
+    expect(listTokenUsagePricingRates()).toContainEqual(
+      expect.objectContaining({
+        cachedInputUsdPerMillion: 0.5,
+        catalogId: "xai-api",
+        catalogVersion: "2026-08-12",
+        displayName: "Grok 4.6 Standard (<200K input)",
+        inputUsdPerMillion: 2,
+        model: "grok-4.6",
+        outputUsdPerMillion: 6,
+        provider: "xai",
+        rateId: "xai:2026-08-12:grok-4.6:standard:input-lt-200k",
+      }),
+    );
+    expect(listTokenUsagePricingRates()).toContainEqual(
+      expect.objectContaining({
+        cachedInputUsdPerMillion: 1,
+        catalogId: "xai-api",
+        catalogVersion: "2026-08-12",
+        displayName: "Grok 4.6 Standard (>=200K input)",
+        inputUsdPerMillion: 4,
+        model: "grok-4.6",
+        outputUsdPerMillion: 12,
+        provider: "xai",
+        rateId: "xai:2026-08-12:grok-4.6:standard:input-gte-200k",
       }),
     );
     expect(listTokenUsagePricingRates()).toContainEqual(
