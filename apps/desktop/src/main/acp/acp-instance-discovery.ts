@@ -27,6 +27,10 @@ import type {
 import { resolveActiveAcpInstance } from "./acp-instance-resolver.js";
 import { acpAgentCapabilitiesForRegistryId } from "./acp-agent-capabilities.js";
 import { resolveBundledGrokCommand } from "./acp-bundled-agent.js";
+import {
+  ensureManagedGrokRuntime,
+  type ManagedGrokCheckMode,
+} from "./grok-managed-runtime.js";
 import { normalizeAcpLaunchDescriptor } from "./acp-launch-descriptor.js";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env.js";
 import type {
@@ -91,6 +95,20 @@ export type DiscoverAcpAgentInstancesOptions = {
    * Electron resources; `null` disables it (primarily for tests).
    */
   bundledGrokCommand?: string | null;
+  /**
+   * Downloaded, checksummed PwrAgent Grok runtime. Callers opt in only when
+   * Grok itself and the managed-build preference are both enabled.
+   */
+  managedGrok?: {
+    checkMode?: ManagedGrokCheckMode;
+    enabled: boolean;
+    requirePlatformSignature?: boolean;
+  };
+  /** Injectable managed-runtime resolver (tests). */
+  resolveManagedGrokCommand?: (
+    checkMode: ManagedGrokCheckMode,
+    requirePlatformSignature: boolean,
+  ) => Promise<string | undefined>;
 };
 
 /**
@@ -115,16 +133,20 @@ export async function discoverAcpAgentInstances(
   }
 
   const discover = options?.discover ?? discoverLocalAcpAgentInstances;
-  const discoveredGroups = await discover({
-    ...(strategies !== undefined ? { strategies } : {}),
-    ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
-    ...(options?.env ? { env: options.env } : {}),
-    ...(options?.now ? { now: options.now } : {}),
-    includeRejectedCandidates: true,
-  });
-  const groups = await withBundledGrok(
+  const [discoveredGroups, managedGrokCommand] = await Promise.all([
+    discover({
+      ...(strategies !== undefined ? { strategies } : {}),
+      ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
+      ...(options?.env ? { env: options.env } : {}),
+      ...(options?.now ? { now: options.now } : {}),
+      includeRejectedCandidates: true,
+    }),
+    resolveManagedGrokCommand(options, strategies),
+  ]);
+  const groups = await withPwrAgentGrok(
     discoveredGroups,
     strategies,
+    managedGrokCommand,
     options?.bundledGrokCommand === undefined
       ? resolveBundledGrokCommand()
       : options.bundledGrokCommand,
@@ -182,21 +204,25 @@ export async function discoverLocalAcpAgentRecords(
   }
 
   const discover = options?.discover ?? discoverLocalAcpAgentInstances;
-  const discoveredGroups = await discover({
-    ...(strategies !== undefined ? { strategies } : {}),
-    ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
-    ...(options?.env ? { env: options.env } : {}),
-    ...(options?.now ? { now: options.now } : {}),
-    includeRejectedCandidates: true,
-  });
+  const [discoveredGroups, managedGrokCommand] = await Promise.all([
+    discover({
+      ...(strategies !== undefined ? { strategies } : {}),
+      ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
+      ...(options?.env ? { env: options.env } : {}),
+      ...(options?.now ? { now: options.now } : {}),
+      includeRejectedCandidates: true,
+    }),
+    resolveManagedGrokCommand(options, strategies),
+  ]);
   const now = options?.now?.() ?? Date.now();
   const bundledGrokCommand =
     options?.bundledGrokCommand === undefined
       ? resolveBundledGrokCommand()
       : options.bundledGrokCommand;
-  const groups = await withBundledGrok(
+  const groups = await withPwrAgentGrok(
     discoveredGroups,
     strategies,
+    managedGrokCommand,
     bundledGrokCommand,
     now,
     options,
@@ -252,7 +278,10 @@ export async function discoverLocalAcpAgentRecords(
       env: {
         ...group.env,
         ...(group.strategyId === "grok"
-          && active.command === bundledGrokCommand
+          && (
+            active.command === managedGrokCommand
+            || active.command === bundledGrokCommand
+          )
           ? { GROK_INSTALLER: "pwragent" }
           : {}),
       },
@@ -504,9 +533,36 @@ function strategiesForEnabledRegistryIds(
   return ACP_DISCOVERY_STRATEGIES.filter((strategy) => enabled.has(strategy.id));
 }
 
-async function withBundledGrok(
+async function resolveManagedGrokCommand(
+  options: DiscoverAcpAgentInstancesOptions | undefined,
+  enabledStrategies: readonly AcpAgentStrategy[] | undefined,
+): Promise<string | undefined> {
+  if (
+    options?.managedGrok?.enabled !== true
+    || !(enabledStrategies ?? ACP_DISCOVERY_STRATEGIES).some(
+      (strategy) => strategy.id === "grok",
+    )
+  ) {
+    return undefined;
+  }
+  const checkMode = options.managedGrok.checkMode ?? "ttl";
+  if (options.resolveManagedGrokCommand) {
+    return await options.resolveManagedGrokCommand(
+      checkMode,
+      options.managedGrok.requirePlatformSignature === true,
+    );
+  }
+  return (await ensureManagedGrokRuntime({
+    checkMode,
+    requirePlatformSignature:
+      options.managedGrok.requirePlatformSignature === true,
+  }))?.command;
+}
+
+async function withPwrAgentGrok(
   discoveredGroups: readonly DiscoveredAcpAgentGroup[],
   enabledStrategies: readonly AcpAgentStrategy[] | undefined,
+  managedGrokCommand: string | undefined,
   bundledGrokCommand: string | null | undefined,
   discoveredAt: number,
   options: DiscoverAcpAgentInstancesOptions | undefined,
@@ -515,7 +571,7 @@ async function withBundledGrok(
     ...group,
     instances: [...group.instances],
   }));
-  if (!bundledGrokCommand) {
+  if (!managedGrokCommand && !bundledGrokCommand) {
     return groups;
   }
 
@@ -527,20 +583,33 @@ async function withBundledGrok(
   }
 
   const grokGroup = groups.find((group) => group.strategyId === "grok");
-  if (grokGroup) {
-    if (grokGroup.instances.some(
+  const managedInstance = managedGrokCommand
+    && !grokGroup?.instances.some(
+      (instance) => instance.command === managedGrokCommand,
+    )
+      ? await probePwrAgentGrokInstance(managedGrokCommand, options)
+      : undefined;
+  const bundledInstance = bundledGrokCommand
+    && bundledGrokCommand !== managedGrokCommand
+    && !grokGroup?.instances.some(
       (instance) => instance.command === bundledGrokCommand,
-    )) {
-      return groups;
-    }
-  }
-
-  const bundledInstance = await probeBundledGrokInstance(
-    bundledGrokCommand,
-    options,
-  );
+    )
+      ? await probePwrAgentGrokInstance(bundledGrokCommand, options)
+      : undefined;
   if (grokGroup) {
-    grokGroup.instances.push(bundledInstance);
+    if (managedInstance) {
+      const firstNonOverride = grokGroup.instances.findIndex(
+        (instance) => instance.source !== "override",
+      );
+      grokGroup.instances.splice(
+        firstNonOverride === -1 ? grokGroup.instances.length : firstNonOverride,
+        0,
+        managedInstance,
+      );
+    }
+    if (bundledInstance) {
+      grokGroup.instances.push(bundledInstance);
+    }
     return groups;
   }
 
@@ -550,13 +619,15 @@ async function withBundledGrok(
     name: grokStrategy.displayName,
     args: [...grokStrategy.spawn.args],
     env: { ...grokStrategy.spawn.env },
-    instances: [bundledInstance],
+    instances: [managedInstance, bundledInstance].filter(
+      (instance): instance is AcpAgentInstance => instance !== undefined,
+    ),
     discoveredAt,
   });
   return groups;
 }
 
-async function probeBundledGrokInstance(
+async function probePwrAgentGrokInstance(
   command: string,
   options: DiscoverAcpAgentInstancesOptions | undefined,
 ): Promise<AcpAgentInstance> {

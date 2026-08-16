@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveStartupCodexHome = vi.hoisted(() => vi.fn());
+const resolveDefaultCodexHome = vi.hoisted(() =>
+  vi.fn(() => "/Users/operator/.codex"),
+);
+
+vi.mock("@pwrdrvr/codex-discovery", () => ({ resolveDefaultCodexHome }));
 
 vi.mock("electron", () => ({
   app: {
@@ -61,6 +66,7 @@ describe("app metadata", () => {
 
     const metadata = resolveAppMetadata(4101);
 
+    expect(resolveDefaultCodexHome).not.toHaveBeenCalled();
     expect(resolveStartupCodexHome).toHaveBeenCalledOnce();
     expect(metadata).toMatchObject({
       activeProfileName: "sstk",
@@ -69,5 +75,15 @@ describe("app metadata", () => {
         "/Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
       rendererProcessId: 4101,
     });
+  });
+
+  it("reports the system-default Codex home when no named profile is pinned", async () => {
+    resolveStartupCodexHome.mockReturnValue(undefined);
+    const { resolveAppMetadata } = await import("../ipc/app-metadata");
+
+    const metadata = resolveAppMetadata(4101);
+
+    expect(resolveDefaultCodexHome).toHaveBeenCalledOnce();
+    expect(metadata.codexProfilePath).toBe("/Users/operator/.codex");
   });
 });

@@ -490,8 +490,20 @@ describe("turn cost", () => {
       ],
       {
         usageLines: [
-          { createdAt: 1, currency: "USD", totalCostMicros: 1_500_000, turnId: "turn-a" },
-          { createdAt: 2, currency: "USD", totalCostMicros: 900_000, turnId: "turn-a" },
+          {
+            createdAt: 1,
+            currency: "USD",
+            threadId: "thread-1",
+            totalCostMicros: 1_500_000,
+            turnId: "turn-a",
+          },
+          {
+            createdAt: 2,
+            currency: "USD",
+            threadId: "thread-1",
+            totalCostMicros: 900_000,
+            turnId: "turn-a",
+          },
         ] as never,
       },
     );
@@ -501,6 +513,42 @@ describe("turn cost", () => {
     /* A turn the ledger has not priced reports nothing rather than zero. */
     expect(strip.rows.find((row) => row.key === "turn-b")?.costMicros)
       .toBeUndefined();
+  });
+
+  it("does not add a child thread's matching turn id to the parent cost", () => {
+    /* A tool row is scoped to its own thread. Turn ids are normally UUIDs,
+       but the join must not rely on that implementation detail: a child or
+       another backend can reuse a short turn id such as "turn-1". */
+    const strip = buildTurnCostStrip(
+      [
+        invocation({
+          estimatedOutputTokens: 170_730,
+          threadId: "parent-thread",
+          turnId: "turn-1",
+        }),
+      ],
+      {
+        usageLines: [
+          {
+            createdAt: 1,
+            currency: "USD",
+            threadId: "parent-thread",
+            totalCostMicros: 123_120,
+            turnId: "turn-1",
+          },
+          {
+            createdAt: 2,
+            currency: "USD",
+            parentThreadId: "parent-thread",
+            threadId: "sub-agent-thread",
+            totalCostMicros: 500_000,
+            turnId: "turn-1",
+          },
+        ] as never,
+      },
+    );
+
+    expect(strip.rows[0]?.costMicros).toBe(123_120);
   });
 
   it("formats money to a fixed two places so the column aligns", () => {
@@ -565,9 +613,27 @@ describe("turn strip scope and ranking", () => {
       {
         limit: 2,
         usageLines: [
-          { createdAt: 1, currency: "USD", totalCostMicros: 900_000, turnId: "turn-tokens" },
-          { createdAt: 2, currency: "USD", totalCostMicros: 5_000_000, turnId: "turn-dollars" },
-          { createdAt: 3, currency: "USD", totalCostMicros: 100_000, turnId: "turn-cheap" },
+          {
+            createdAt: 1,
+            currency: "USD",
+            threadId: "thread-1",
+            totalCostMicros: 900_000,
+            turnId: "turn-tokens",
+          },
+          {
+            createdAt: 2,
+            currency: "USD",
+            threadId: "thread-1",
+            totalCostMicros: 5_000_000,
+            turnId: "turn-dollars",
+          },
+          {
+            createdAt: 3,
+            currency: "USD",
+            threadId: "thread-1",
+            totalCostMicros: 100_000,
+            turnId: "turn-cheap",
+          },
         ] as never,
       },
     );

@@ -980,6 +980,8 @@ export type DesktopSettingsSnapshot = {
        * chat-launch discovery path.
        */
       enabled: boolean;
+      /** Download and prefer PwrAgent's verified Grok fork build. */
+      managedBuilds?: boolean;
     };
     kimi: {
       /**
@@ -1214,6 +1216,7 @@ export type DesktopSettingsConfigPatch = {
     grok?: {
       cliPath?: string;
       enabled?: boolean;
+      managedBuilds?: boolean;
     };
     kimi?: {
       cliPath?: string;

@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { resolveDefaultCodexHome } from "@pwrdrvr/codex-discovery";
 import { app, BrowserWindow, ipcMain } from "electron";
 import {
   APP_CHANGELOG_DOCUMENT_READ_CHANNEL,
@@ -53,7 +54,9 @@ export function resolveAppMetadata(
 ): AppMetadata {
   const activeProfileName = resolveActiveProfileName();
   const logFilePath = getMainLogFilePath();
-  const codexProfilePath = getDesktopSettingsService().resolveStartupCodexHome();
+  const codexProfilePath =
+    getDesktopSettingsService().resolveStartupCodexHome()
+    ?? resolveDefaultCodexHome();
   return {
     applicationName: app.getName(),
     applicationVersion: resolveApplicationVersion(app.getVersion()),
@@ -67,7 +70,7 @@ export function resolveAppMetadata(
     ...(rendererProcessId === undefined ? {} : { rendererProcessId }),
     activeProfileName,
     ...(logFilePath ? { logFilePath } : {}),
-    ...(codexProfilePath ? { codexProfilePath } : {}),
+    codexProfilePath,
   };
 }
 

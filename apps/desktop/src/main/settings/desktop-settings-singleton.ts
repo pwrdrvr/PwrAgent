@@ -27,6 +27,10 @@ export function getDesktopSettingsService(): DesktopSettingsService {
       : new DbBackedSafeStorageSecretStore(safeStorage, getAppStateDb());
     desktopSettingsService = new DesktopSettingsService({
       defaultDeveloperMode: app.isPackaged === true ? false : true,
+      // Dev follows the newest downstream build automatically. Packaged apps
+      // keep managed downloads opt-in until the downstream signing lane is
+      // configured and publishing signed Apple/Windows assets.
+      defaultManagedGrokBuilds: app.isPackaged !== true,
       resolveAppVersion: () => app.getVersion(),
       secretStore,
       ...(bootstrap
