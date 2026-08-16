@@ -637,27 +637,51 @@ function preserveRetainedTranscriptTail(
 
   // A refresh can lag the live stream. Replace only exact or uniquely
   // equivalent retained entries; keep anything the refresh omitted.
-  // This reconciliation remains a fresh-tail × retained-tail logical scan.
-  // Both inputs are the bounded newest-page tail now; loaded history pages do
-  // not participate, so pagination depth cannot amplify it.
+  // Stable IDs take the indexed linear path; only entries whose server IDs
+  // changed need the bounded logical-match fallback. Loaded history pages do
+  // not participate, so pagination depth cannot amplify either path.
   const matchedRetainedEntries = new Set<AppServerThreadEntry>();
+  const retainedEntriesById = new Map<string, AppServerThreadEntry[]>();
+  const retainedEntryIndexById = new Map<string, number>();
+  for (const retainedEntry of retainedResponse.replay.entries) {
+    const retainedEntryId = retainedEntry.id;
+    const entriesForId = retainedEntriesById.get(retainedEntryId);
+    if (entriesForId) {
+      entriesForId.push(retainedEntry);
+    } else {
+      retainedEntriesById.set(retainedEntryId, [retainedEntry]);
+    }
+  }
+  const freshEntryByRetainedEntry = new Map<
+    AppServerThreadEntry,
+    AppServerThreadEntry
+  >();
   for (const freshEntry of response.replay.entries) {
-    const retainedMatch = findUniqueTranscriptRefreshMatch(
+    const exactCandidates = retainedEntriesById.get(freshEntry.id);
+    let exactCandidateIndex = retainedEntryIndexById.get(freshEntry.id) ?? 0;
+    let retainedMatch = exactCandidates?.[exactCandidateIndex];
+    while (retainedMatch && matchedRetainedEntries.has(retainedMatch)) {
+      exactCandidateIndex += 1;
+      retainedMatch = exactCandidates?.[exactCandidateIndex];
+    }
+    if (retainedMatch) {
+      retainedEntryIndexById.set(freshEntry.id, exactCandidateIndex + 1);
+    }
+    retainedMatch ??= findUniqueLogicalTranscriptRefreshMatch(
       freshEntry,
       retainedResponse.replay.entries.filter(
         (entry) => !matchedRetainedEntries.has(entry)
-      )
+      ),
     );
     if (retainedMatch) {
       matchedRetainedEntries.add(retainedMatch);
+      freshEntryByRetainedEntry.set(retainedMatch, freshEntry);
     }
   }
-  const retainedTailRemainder = retainedResponse.replay.entries.filter(
-    (entry) => !matchedRetainedEntries.has(entry)
-  );
-  const entries = mergeTranscriptEntries(
+  const entries = reconcileRetainedTranscriptTail(
     response.replay.entries,
-    retainedTailRemainder,
+    retainedResponse.replay.entries,
+    freshEntryByRetainedEntry,
   );
 
   return {
@@ -674,17 +698,114 @@ function preserveRetainedTranscriptTail(
   };
 }
 
-function findUniqueTranscriptRefreshMatch(
+function reconcileRetainedTranscriptTail(
+  freshEntries: AppServerThreadEntry[],
+  retainedEntries: AppServerThreadEntry[],
+  freshEntryByRetainedEntry: ReadonlyMap<
+    AppServerThreadEntry,
+    AppServerThreadEntry
+  >,
+): AppServerThreadEntry[] {
+  const retainedEntriesBeforeFresh = new Map<
+    AppServerThreadEntry,
+    AppServerThreadEntry[]
+  >();
+  let pendingRetainedEntries: AppServerThreadEntry[] = [];
+  let lastMatchedFreshEntry: AppServerThreadEntry | undefined;
+
+  for (const retainedEntry of retainedEntries) {
+    const freshEntry = freshEntryByRetainedEntry.get(retainedEntry);
+    if (!freshEntry) {
+      pendingRetainedEntries.push(retainedEntry);
+      continue;
+    }
+
+    if (pendingRetainedEntries.length > 0) {
+      retainedEntriesBeforeFresh.set(freshEntry, pendingRetainedEntries);
+      pendingRetainedEntries = [];
+    }
+    lastMatchedFreshEntry = freshEntry;
+  }
+
+  const entries: AppServerThreadEntry[] = [];
+  let trailingInsertionFloor = 0;
+  for (const freshEntry of freshEntries) {
+    entries.push(...(retainedEntriesBeforeFresh.get(freshEntry) ?? []));
+    entries.push(freshEntry);
+    if (freshEntry === lastMatchedFreshEntry) {
+      trailingInsertionFloor = entries.length;
+    }
+  }
+
+  if (pendingRetainedEntries.length === 0) {
+    return entries;
+  }
+
+  // A bounded newest-page refresh advances naturally as later turns arrive.
+  // Entries that fell off its front are older history, not missing live tail,
+  // and must remain ahead of the newer page. Entries after the last retained
+  // anchor can still be genuinely newer live work omitted by a lagging read.
+  // Merge the two ordered suffixes in one forward pass; an unknown retained
+  // timestamp conservatively keeps that entry and the remainder at the end.
+  const mergedSuffix: AppServerThreadEntry[] = [];
+  const freshSuffix = entries.slice(trailingInsertionFloor);
+  let freshIndex = 0;
+  let retainedIndex = 0;
+  while (retainedIndex < pendingRetainedEntries.length) {
+    const retainedEntry = pendingRetainedEntries[retainedIndex]!;
+    const retainedTimestamp = transcriptRefreshOrderTimestamp(retainedEntry);
+    if (typeof retainedTimestamp !== "number") {
+      mergedSuffix.push(
+        ...freshSuffix.slice(freshIndex),
+        ...pendingRetainedEntries.slice(retainedIndex),
+      );
+      return [
+        ...entries.slice(0, trailingInsertionFloor),
+        ...mergedSuffix,
+      ];
+    }
+
+    while (freshIndex < freshSuffix.length) {
+      const freshEntry = freshSuffix[freshIndex]!;
+      const freshTimestamp = transcriptRefreshOrderTimestamp(freshEntry);
+      if (
+        typeof freshTimestamp === "number"
+        && freshTimestamp > retainedTimestamp
+      ) {
+        break;
+      }
+      mergedSuffix.push(freshEntry);
+      freshIndex += 1;
+    }
+    mergedSuffix.push(retainedEntry);
+    retainedIndex += 1;
+  }
+  mergedSuffix.push(...freshSuffix.slice(freshIndex));
+
+  return [
+    ...entries.slice(0, trailingInsertionFloor),
+    ...mergedSuffix,
+  ];
+}
+
+function transcriptRefreshOrderTimestamp(
+  entry: AppServerThreadEntry,
+): number | undefined {
+  if (typeof entry.createdAt === "number") {
+    return entry.createdAt;
+  }
+  if (typeof entry.turn?.startedAt === "number") {
+    return entry.turn.startedAt;
+  }
+  return typeof entry.turn?.completedAt === "number"
+    ? entry.turn.completedAt
+    : undefined;
+}
+
+function findUniqueLogicalTranscriptRefreshMatch(
   freshEntry: AppServerThreadEntry,
   retainedEntries: AppServerThreadEntry[]
 ): AppServerThreadEntry | undefined {
-  const exactMatch = retainedEntries.find(
-    (retainedEntry) => retainedEntry.id === freshEntry.id
-  );
-  if (exactMatch) {
-    return exactMatch;
-  }
-
   const logicalMatches = retainedEntries.filter((retainedEntry) => {
     if (
       freshEntry.turn?.id &&
@@ -1111,13 +1232,12 @@ function transcriptEntriesMatch(
 
 function findUniqueTranscriptOrderSource(
   entry: AppServerThreadEntry,
-  sources: AppServerThreadEntry[]
+  sources: AppServerThreadEntry[],
+  exactSourcesById: ReadonlyMap<string, AppServerThreadEntry>,
 ): AppServerThreadEntry | undefined {
-  const exactMatches = sources.filter(
-    (source) => source.id === entry.id && typeof source.createdAt === "number"
-  );
-  if (exactMatches.length > 0) {
-    return exactMatches[0];
+  const exactMatch = exactSourcesById.get(entry.id);
+  if (exactMatch) {
+    return exactMatch;
   }
 
   const logicalMatches = sources.filter(
@@ -1142,7 +1262,11 @@ type MatchedHydratedEntry = HydratedEntryOrderMatch & {
 
 function reorderHydratedEntriesByKnownOrder(
   entries: AppServerThreadEntry[],
-  sources: AppServerThreadEntry[]
+  sources: AppServerThreadEntry[],
+  sourceByHydratedEntry: ReadonlyMap<
+    AppServerThreadEntry,
+    AppServerThreadEntry
+  >,
 ): AppServerThreadEntry[] {
   if (entries.length < 2 || sources.length === 0) {
     return entries;
@@ -1154,7 +1278,7 @@ function reorderHydratedEntriesByKnownOrder(
   });
   const hydratedEntries: HydratedEntryOrderMatch[] = entries.map(
     (entry, hydrationIndex) => {
-      const source = findUniqueTranscriptOrderSource(entry, sources);
+      const source = sourceByHydratedEntry.get(entry);
       const sourceIndex = source ? sourceIndexes.get(source) : undefined;
       return {
         entry,
@@ -1206,9 +1330,27 @@ function carryForwardTranscriptEntryOrder(
     return response;
   }
 
+  const exactSourcesById = new Map<string, AppServerThreadEntry>();
+  for (const source of sources) {
+    const sourceId = source.id;
+    if (
+      typeof source.createdAt === "number"
+      && !exactSourcesById.has(sourceId)
+    ) {
+      exactSourcesById.set(sourceId, source);
+    }
+  }
+  const sourceByHydratedEntry = new Map<
+    AppServerThreadEntry,
+    AppServerThreadEntry
+  >();
   let changed = false;
   let entries = response.replay.entries.map((entry) => {
-    const source = findUniqueTranscriptOrderSource(entry, sources);
+    const source = findUniqueTranscriptOrderSource(
+      entry,
+      sources,
+      exactSourcesById,
+    );
     if (!source) {
       return entry;
     }
@@ -1228,18 +1370,25 @@ function carryForwardTranscriptEntryOrder(
       ? source.createdAt
       : undefined;
     if (!origin && !turn && createdAt === undefined) {
+      sourceByHydratedEntry.set(entry, source);
       return entry;
     }
 
     changed = true;
-    return {
+    const hydratedEntry = {
       ...entry,
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(turn ? { turn } : {}),
       ...(origin ? { origin } : {}),
     };
+    sourceByHydratedEntry.set(hydratedEntry, source);
+    return hydratedEntry;
   });
-  const reorderedEntries = reorderHydratedEntriesByKnownOrder(entries, sources);
+  const reorderedEntries = reorderHydratedEntriesByKnownOrder(
+    entries,
+    sources,
+    sourceByHydratedEntry,
+  );
   if (reorderedEntries !== entries) {
     changed = true;
     entries = reorderedEntries;
