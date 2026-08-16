@@ -174,6 +174,7 @@ import {
 } from "./auxiliary-window-chrome";
 import {
   assertUnreachableProfileBootDecision,
+  buildDockProfileSnapshot,
   cleanupBootstrapProfile,
   PWRAGENT_PROFILE_AUTO_CREATE_ENV,
   resolveActiveProfileName,
@@ -919,17 +920,15 @@ function openProfileFromMenu(profile: string): Promise<void> {
 
 function installDockMenu(): void {
   if (!isMac) return;
-  const { defaultProfile, profiles } = listDesktopPwrAgentProfiles();
+  const snapshot = buildDockProfileSnapshot();
+  const materializedProfiles = new Set(
+    snapshot.profiles.map((profile) => profile.name),
+  );
+  const profiles = listDesktopPwrAgentProfiles().profiles
+    .filter((profile) => materializedProfiles.has(profile.name));
   // Refresh this on every macOS run so an upgraded installation gets a Dock
   // menu even when its existing profiles registry did not otherwise change.
-  writeDockProfileSnapshot({
-    schemaVersion: 1,
-    defaultProfile,
-    profiles: profiles.map((profile) => ({
-      name: profile.name,
-      ...(profile.displayName ? { displayName: profile.displayName } : {}),
-    })),
-  });
+  writeDockProfileSnapshot(snapshot);
   const template = buildDockProfileMenuTemplate(
     profiles,
     openProfileFromMenu,

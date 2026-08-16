@@ -41,9 +41,31 @@ describe("macOS Dock tile plug-in packaging", () => {
       "native/dock-tile-plugin/PwrAgentDockTilePlugin.m",
     );
 
-    expect(source).toContain(".pwragent/dock-profiles.json");
+    expect(source).toContain("NSCachesDirectory");
+    expect(source).toContain("com.pwrdrvr.pwragent");
     expect(source).toContain("@[@\"--profile\", profile]");
+    expect(source).toContain("@\"PWRAGENT_HOME\"");
+    expect(source).toContain("configuration.environment");
     expect(source).toContain("openApplicationAtURL:applicationURL");
     expect(source).not.toMatch(/NSTask|\/bin\/sh|sqlite/i);
+  });
+
+  it("imports CSC_LINK before the afterPack signing hook runs", async () => {
+    const releaseScript = await readDesktopFile("scripts/release.mjs");
+    const decodeIndex = releaseScript.indexOf("maybeDecodeCscLink();");
+    const keychainIndex = releaseScript.indexOf(
+      "maybePrepareCodesignKeychain();",
+    );
+    const builderIndex = releaseScript.indexOf(
+      "runChecked(\"node\", [electronBuilderCli(), ...cleanedArgs]",
+    );
+
+    expect(decodeIndex).toBeGreaterThan(0);
+    expect(keychainIndex).toBeGreaterThan(decodeIndex);
+    expect(builderIndex).toBeGreaterThan(keychainIndex);
+    expect(releaseScript).toContain(
+      "process.env.PWRAGENT_DOCK_PLUGIN_SIGN_IDENTITY ??= identity",
+    );
+    expect(releaseScript).toContain("process.env.CSC_KEYCHAIN = keychainPath");
   });
 });

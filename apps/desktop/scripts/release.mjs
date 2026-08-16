@@ -45,7 +45,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -54,6 +54,7 @@ const __dirname = dirname(__filename);
 const desktopRoot = resolve(__dirname, "..");
 const repoRoot = resolve(desktopRoot, "..", "..");
 const stageDir = join(desktopRoot, "release-stage");
+let codesignKeychainCleanup = null;
 const MAC_CANVAS_BINDINGS = [
   {
     binding: "skia.darwin-arm64.node",
@@ -116,6 +117,75 @@ function runChecked(file, args, opts = {}) {
   }
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
+  }
+}
+
+function runQuiet(file, args) {
+  const result = spawnSync(file, args, {
+    cwd: desktopRoot,
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (result.status !== 0) {
+    const detail = [result.stdout, result.stderr].filter(Boolean).join("\n");
+    throw new Error(
+      `${file} ${args.join(" ")} failed with exit ${result.status}`
+        + (detail ? `:\n${detail}` : ""),
+    );
+  }
+  return result.stdout ?? "";
+}
+
+function parseSecurityKeychains(output) {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^"|"$/g, ""));
+}
+
+function cscLinkFilePath() {
+  const link = process.env.CSC_LINK;
+  if (!link) return null;
+  if (link.startsWith("file://")) {
+    return fileURLToPath(link);
+  }
+  if (link.startsWith("~/")) {
+    return join(process.env.HOME ?? "", link.slice(2));
+  }
+  if (existsSync(link)) {
+    return link;
+  }
+  return null;
+}
+
+function findDeveloperIdIdentity(keychainPath) {
+  const args = ["find-identity", "-v", "-p", "codesigning"];
+  if (keychainPath) args.push(keychainPath);
+  const output = runQuiet("security", args);
+  return output.match(/"(Developer ID Application: [^"]+)"/)?.[1] ?? null;
+}
+
+function stripDeveloperIdApplicationPrefix(identity) {
+  return identity.replace(/^Developer ID Application:\s*/, "");
+}
+
+function restoreCodesignKeychains(originalKeychains, keychainPath) {
+  try {
+    runQuiet("security", [
+      "list-keychains",
+      "-d",
+      "user",
+      "-s",
+      ...originalKeychains,
+    ]);
+  } catch {
+    // Exit cleanup must not mask the original packaging result.
+  }
+  try {
+    runQuiet("security", ["delete-keychain", keychainPath]);
+  } catch {
+    // Best effort only; GitHub-hosted runners are disposable.
   }
 }
 
@@ -515,6 +585,136 @@ function maybeDecodeAppleApiKey() {
   console.log("  decoded APPLE_API_KEY_BASE64 -> temporary App Store Connect key file");
 }
 
+// Decode CI's base64 certificate before importing it for the afterPack hook.
+// electron-builder can decode CSC_LINK itself, but it does so only after
+// afterPack, which is too late for nested Dock plug-in signing.
+function maybeDecodeCscLink() {
+  const link = process.env.CSC_LINK;
+  if (!link) return;
+  if (
+    link.startsWith("http://")
+    || link.startsWith("https://")
+    || link.startsWith("file://")
+    || link.startsWith("/")
+    || link.startsWith("~/")
+    || existsSync(link)
+  ) {
+    return;
+  }
+  if (!/^[A-Za-z0-9+/=\r\n]+$/.test(link)) {
+    return;
+  }
+  const target = join(tmpdir(), "PwrAgent_Developer_ID_Application.p12");
+  writeFileSync(target, Buffer.from(link, "base64"));
+  chmodSync(target, 0o600);
+  process.env.CSC_LINK = target;
+  console.log("  decoded CSC_LINK -> temporary Developer ID certificate file");
+}
+
+// afterPack runs before electron-builder lazily imports CSC_LINK. Preload the
+// certificate into a temporary keychain so the nested plug-in and parent app
+// use the same Developer ID identity on clean release runners.
+function maybePrepareCodesignKeychain() {
+  if (process.platform !== "darwin" || !process.env.CSC_LINK) return;
+  if (!process.env.CSC_KEY_PASSWORD) {
+    throw new Error("CSC_LINK is set but CSC_KEY_PASSWORD is missing");
+  }
+  const certificatePath = cscLinkFilePath();
+  if (certificatePath === null) {
+    return;
+  }
+
+  const existingIdentity = findDeveloperIdIdentity(null);
+  if (existingIdentity !== null) {
+    process.env.PWRAGENT_DOCK_PLUGIN_SIGN_IDENTITY ??= existingIdentity;
+    process.env.CSC_NAME ??=
+      stripDeveloperIdApplicationPrefix(existingIdentity);
+    return;
+  }
+
+  const keychainPath = join(
+    tmpdir(),
+    `pwragent-codesign-${process.pid}-${Date.now()}.keychain-db`,
+  );
+  const keychainPassword = `pwragent-${process.pid}-${Date.now()}`;
+  const originalKeychains = parseSecurityKeychains(
+    runQuiet("security", ["list-keychains", "-d", "user"]),
+  );
+
+  runQuiet("security", [
+    "create-keychain",
+    "-p",
+    keychainPassword,
+    keychainPath,
+  ]);
+  runQuiet("security", [
+    "set-keychain-settings",
+    "-lut",
+    "21600",
+    keychainPath,
+  ]);
+  runQuiet("security", [
+    "unlock-keychain",
+    "-p",
+    keychainPassword,
+    keychainPath,
+  ]);
+  runQuiet("security", [
+    "import",
+    certificatePath,
+    "-k",
+    keychainPath,
+    "-P",
+    process.env.CSC_KEY_PASSWORD,
+    "-T",
+    "/usr/bin/codesign",
+    "-T",
+    "/usr/bin/security",
+    "-T",
+    "/usr/bin/productbuild",
+  ]);
+  runQuiet("security", [
+    "set-key-partition-list",
+    "-S",
+    "apple-tool:,apple:,codesign:",
+    "-s",
+    "-k",
+    keychainPassword,
+    keychainPath,
+  ]);
+  runQuiet("security", [
+    "list-keychains",
+    "-d",
+    "user",
+    "-s",
+    keychainPath,
+    ...originalKeychains,
+  ]);
+
+  const identity = findDeveloperIdIdentity(keychainPath);
+  if (identity === null) {
+    restoreCodesignKeychains(originalKeychains, keychainPath);
+    throw new Error(
+      `imported ${pathToFileURL(certificatePath).href} into ${keychainPath}, `
+        + "but no Developer ID Application identity was found",
+    );
+  }
+
+  process.env.CSC_KEYCHAIN = keychainPath;
+  process.env.PWRAGENT_DOCK_PLUGIN_SIGN_IDENTITY ??= identity;
+  process.env.CSC_NAME ??= stripDeveloperIdApplicationPrefix(identity);
+  codesignKeychainCleanup = () => {
+    restoreCodesignKeychains(originalKeychains, keychainPath);
+  };
+  process.once("exit", () => {
+    if (codesignKeychainCleanup !== null) {
+      codesignKeychainCleanup();
+      codesignKeychainCleanup = null;
+    }
+  });
+  console.log(`  imported CSC_LINK into temporary keychain for ${identity}`);
+}
+
 if (!signStageOnly) {
   // 2. Build (electron-vite -> apps/desktop/out/).
   step("license notices check");
@@ -637,6 +837,8 @@ if (win) {
 } else {
   step(`electron-builder --mac --universal (${publish ? "publish" : "no publish"}, ${dryrun ? "ad-hoc signed" : "signed"})`);
   maybeDecodeAppleApiKey();
+  maybeDecodeCscLink();
+  maybePrepareCodesignKeychain();
   builderArgs.push("--mac", "--universal");
   if (dryrun) {
     // Use ad-hoc signing (identity=-) instead of no signing (identity=null).
@@ -657,6 +859,10 @@ if (win) {
 }
 const cleanedArgs = builderArgs.filter((arg) => arg !== "");
 runChecked("node", [electronBuilderCli(), ...cleanedArgs], { cwd: stageDir });
+if (codesignKeychainCleanup !== null) {
+  codesignKeychainCleanup();
+  codesignKeychainCleanup = null;
+}
 
 // 6. Post-build asar contents check — fails if forbidden files (TS sources,
 //    tests, third-party docs, design docs, screenshots, etc.) leaked into the

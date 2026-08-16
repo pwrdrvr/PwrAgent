@@ -6,6 +6,7 @@ import {
   PWRAGENT_HOME_ENV,
   PWRAGENT_PROFILE_AUTO_CREATE_ENV,
   PWRAGENT_PROFILE_ENV,
+  buildDockProfileSnapshot,
   bootstrapProfileExists,
   cleanupBootstrapProfile,
   deleteProfile,
@@ -25,6 +26,7 @@ import {
   setDefaultProfileName,
   startProfileFocusRequestWatcher,
   startProfileRuntimeHeartbeat,
+  writeDockProfileSnapshot,
   normalizeProfileName,
 } from "../profile";
 
@@ -84,22 +86,49 @@ describe("PwrAgent profiles", () => {
     expect(resolveActiveProfileName()).toBe("dev");
   });
 
-  it("writes the profile-only snapshot consumed by the macOS Dock plug-in", () => {
-    const { env } = createRoot();
+  it("writes a Dock snapshot that preserves an overridden PWRAGENT_HOME", () => {
+    const { env, root } = createRoot();
+    const dockHome = fs.mkdtempSync(path.join(os.tmpdir(), "pwragent-dock-home-"));
+    roots.push(dockHome);
     ensureNamedProfileExists("personal", { env });
     ensureNamedProfileExists("work", { env });
     setDefaultProfileName("work", { env });
 
-    const snapshot = JSON.parse(
-      fs.readFileSync(resolveDockProfileSnapshotPath({ env }), "utf8"),
+    const builtSnapshot = buildDockProfileSnapshot({ env });
+    writeDockProfileSnapshot(builtSnapshot, { homeDir: dockHome });
+    const snapshotPath = resolveDockProfileSnapshotPath({ homeDir: dockHome });
+
+    const parsedSnapshot = JSON.parse(
+      fs.readFileSync(snapshotPath, "utf8"),
     );
-    expect(snapshot).toEqual({
-      schemaVersion: 1,
+    expect(parsedSnapshot).toEqual({
+      schemaVersion: 2,
+      pwragentHome: root,
       defaultProfile: "work",
       profiles: [
         { name: "personal" },
         { name: "work" },
       ],
+    });
+    expect(snapshotPath).toBe(path.join(
+      dockHome,
+      "Library",
+      "Caches",
+      "com.pwrdrvr.pwragent",
+      "dock-profiles.json",
+    ));
+    expect(fs.existsSync(path.join(root, "dock-profiles.json"))).toBe(false);
+  });
+
+  it("excludes the synthetic default profile during bootstrap", () => {
+    const { env, root } = createRoot();
+    ensureBootstrapProfileDir({ env });
+
+    expect(buildDockProfileSnapshot({ env })).toEqual({
+      schemaVersion: 2,
+      pwragentHome: root,
+      defaultProfile: "default",
+      profiles: [],
     });
   });
 

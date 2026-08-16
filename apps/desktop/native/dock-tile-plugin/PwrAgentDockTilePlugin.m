@@ -15,7 +15,10 @@
 
 - (NSMenu *)dockMenu {
   NSDictionary *snapshot = [self loadProfileSnapshot];
-  NSArray<NSDictionary *> *profiles = [self sortedProfilesFromSnapshot:snapshot];
+  NSString *pwragentHome = [self pwragentHomeFromSnapshot:snapshot];
+  NSArray<NSDictionary *> *profiles = pwragentHome == nil
+    ? @[]
+    : [self sortedProfilesFromSnapshot:snapshot];
 
   NSMenu *menu = [[NSMenu alloc] initWithTitle:@""];
   menu.autoenablesItems = NO;
@@ -45,7 +48,10 @@
         action:@selector(openProfile:)
         keyEquivalent:@""];
       item.target = self;
-      item.representedObject = name;
+      item.representedObject = @{
+        @"profile": name,
+        @"pwragentHome": pwragentHome,
+      };
       item.enabled = YES;
       if ([name isEqualToString:defaultProfile]) {
         item.state = NSControlStateValueOn;
@@ -65,8 +71,18 @@
 }
 
 - (void)openProfile:(NSMenuItem *)sender {
-  NSString *profile = sender.representedObject;
+  NSDictionary *launch = sender.representedObject;
+  if (![launch isKindOfClass:[NSDictionary class]]) {
+    return;
+  }
+  NSString *profile = launch[@"profile"];
+  NSString *pwragentHome = launch[@"pwragentHome"];
   if (![profile isKindOfClass:[NSString class]] || profile.length == 0) {
+    return;
+  }
+  if (![pwragentHome isKindOfClass:[NSString class]]
+      || !pwragentHome.isAbsolutePath
+      || pwragentHome.length > 4096) {
     return;
   }
 
@@ -78,6 +94,9 @@
   NSWorkspaceOpenConfiguration *configuration =
     [NSWorkspaceOpenConfiguration configuration];
   configuration.arguments = @[@"--profile", profile];
+  configuration.environment = @{
+    @"PWRAGENT_HOME": [pwragentHome stringByStandardizingPath],
+  };
   configuration.activates = YES;
   configuration.createsNewApplicationInstance = YES;
 
@@ -92,8 +111,16 @@
 }
 
 - (NSDictionary *)loadProfileSnapshot {
-  NSURL *snapshotURL = [[NSURL fileURLWithPath:NSHomeDirectory()]
-    URLByAppendingPathComponent:@".pwragent/dock-profiles.json"];
+  NSURL *cachesURL = [[[NSFileManager defaultManager]
+    URLsForDirectory:NSCachesDirectory
+    inDomains:NSUserDomainMask] firstObject];
+  if (cachesURL == nil) {
+    return @{};
+  }
+  NSURL *snapshotURL = [[cachesURL
+    URLByAppendingPathComponent:@"com.pwrdrvr.pwragent"
+    isDirectory:YES]
+    URLByAppendingPathComponent:@"dock-profiles.json"];
   NSData *data = [NSData dataWithContentsOfURL:snapshotURL];
   if (data == nil) {
     return @{};
@@ -105,10 +132,21 @@
     return @{};
   }
   NSDictionary *snapshot = value;
-  if (![snapshot[@"schemaVersion"] isEqual:@1]) {
+  if (![snapshot[@"schemaVersion"] isEqual:@2]) {
     return @{};
   }
   return snapshot;
+}
+
+- (NSString *)pwragentHomeFromSnapshot:(NSDictionary *)snapshot {
+  NSString *pwragentHome = snapshot[@"pwragentHome"];
+  if (![pwragentHome isKindOfClass:[NSString class]]
+      || !pwragentHome.isAbsolutePath
+      || pwragentHome.length == 0
+      || pwragentHome.length > 4096) {
+    return nil;
+  }
+  return [pwragentHome stringByStandardizingPath];
 }
 
 - (NSArray<NSDictionary *> *)sortedProfilesFromSnapshot:(NSDictionary *)snapshot {

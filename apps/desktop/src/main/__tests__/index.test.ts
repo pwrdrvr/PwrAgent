@@ -212,6 +212,12 @@ const resolveProfileBootDecisionMock = vi.fn<() => BootDecisionLike>(() => ({
   source: "migration",
 }));
 const cleanupBootstrapProfileMock = vi.fn();
+const buildDockProfileSnapshotMock = vi.fn(() => ({
+  schemaVersion: 2 as const,
+  pwragentHome: "/tmp/pwragent",
+  defaultProfile: "default",
+  profiles: [{ name: "default" }],
+}));
 const writeDockProfileSnapshotMock = vi.fn();
 
 vi.mock("electron", () => ({
@@ -485,6 +491,7 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 }));
 
 vi.mock("../profile", () => ({
+  buildDockProfileSnapshot: buildDockProfileSnapshotMock,
   resolveActiveProfileName: resolveActiveProfileNameMock,
   startProfileFocusRequestWatcher: startProfileFocusRequestWatcherMock,
   resolveProfileBootDecision: resolveProfileBootDecisionMock,
@@ -767,6 +774,13 @@ describe("bootstrapApp", () => {
       source: "migration",
     });
     cleanupBootstrapProfileMock.mockReset();
+    buildDockProfileSnapshotMock.mockReset();
+    buildDockProfileSnapshotMock.mockReturnValue({
+      schemaVersion: 2,
+      pwragentHome: "/tmp/pwragent",
+      defaultProfile: "default",
+      profiles: [{ name: "default" }],
+    });
     writeDockProfileSnapshotMock.mockReset();
     initializeAppStateMock.mockReset();
     startProfileFocusRequestWatcherMock.mockClear();
@@ -1805,6 +1819,12 @@ describe("bootstrapApp", () => {
 
   it("initializes app state in bootstrap mode when boot decision is no-profile-configured", async () => {
     resolveProfileBootDecisionMock.mockReturnValue({ kind: "no-profile-configured" });
+    buildDockProfileSnapshotMock.mockReturnValue({
+      schemaVersion: 2,
+      pwragentHome: "/tmp/pwragent",
+      defaultProfile: "default",
+      profiles: [],
+    });
     startupProfilerInstance.start.mockResolvedValue();
 
     await import("../index");
@@ -1818,6 +1838,25 @@ describe("bootstrapApp", () => {
     // own that dir; cleanup happens at graduation in Task E.
     expect(initializeAppStateMock).toHaveBeenCalledWith("bootstrap");
     expect(cleanupBootstrapProfileMock).not.toHaveBeenCalled();
+    expect(writeDockProfileSnapshotMock).toHaveBeenCalledWith({
+      schemaVersion: 2,
+      pwragentHome: "/tmp/pwragent",
+      defaultProfile: "default",
+      profiles: [],
+    });
+    const dockTemplate = buildFromTemplateMock.mock.calls.at(-1)?.[0] as
+      Array<{ submenu?: Array<{ enabled?: boolean; label?: string }> }>;
+    expect(dockTemplate).toEqual([
+      {
+        label: "Open Profile",
+        submenu: [
+          {
+            enabled: false,
+            label: "No Profiles Found",
+          },
+        ],
+      },
+    ]);
   });
 
   it("initializes app state in bootstrap mode when env names a missing profile", async () => {
