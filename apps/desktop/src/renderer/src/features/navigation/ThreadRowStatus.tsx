@@ -33,11 +33,13 @@ export function formatActiveThreadCount(count: number): string {
  * the registry of the instance that owns them (see `buildQuitBlockerSnapshot`
  * in the main process), so only local work can hold this app's shutdown open.
  *
- * Only meaningful in a window that can hold both kinds. Rows in a window
- * fronting a peer carry no stamp at all — from the owner's side they are
- * local, and the stamp is only added on the way into someone else's window —
- * so a viewer must decide "is any of this mine?" from its own scope rather
- * than from this predicate. `Sidebar` does exactly that before it splits.
+ * Only meaningful in a window that can hold both kinds. A window fronting a
+ * peer reads its whole navigation snapshot through that peer, and
+ * `stampRemoteNavigationSnapshot` stamps EVERY row it returns — so this
+ * predicate answers "yes" for all of them and a local-vs-remote split there
+ * degenerates to "0 here, everything elsewhere". A viewer has to decide "is
+ * any of this mine?" from its own scope instead, which is why `Sidebar` gates
+ * on the window target before it consults this at all.
  */
 export function isThreadRemoteWork(thread: NavigationThreadSummary): boolean {
   return thread.federation?.ref.target.scope === "remote";

@@ -513,11 +513,18 @@ export function Sidebar(props: SidebarProps) {
    * number mixes work on two machines.
    *
    * A window fronting a peer is exactly the window where that question has no
-   * content. Every row in it is that peer's work, so a "here" count would sit
-   * at zero forever, and closing the viewer interrupts none of it — telling
-   * the operator what quitting would do to work they cannot interrupt is worse
-   * than saying nothing. So a viewer keeps the plain single readout, counting
-   * the peer's turns the way an unfederated instance counts its own.
+   * content. Every row in it is that peer's work, and closing the viewer
+   * interrupts none of it — telling the operator what quitting would do to
+   * work they cannot interrupt is worse than saying nothing. So a viewer keeps
+   * the plain single readout, counting the peer's turns the way an unfederated
+   * instance counts its own.
+   *
+   * The gate has to be here rather than inside the predicate. A viewer reads
+   * its whole snapshot through the peer, and the main process stamps every row
+   * it returns as remote (`stampRemoteNavigationSnapshot`), so left to itself
+   * the split would report "0 here, everything elsewhere" — permanently, by
+   * construction rather than by state. Only the window knows it has no stake
+   * in any of it.
    */
   const splitTurnsByMachine = useMemo(
     () => readRendererFederationTarget() === undefined,
