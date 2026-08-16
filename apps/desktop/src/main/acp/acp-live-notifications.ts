@@ -397,6 +397,9 @@ function isTerminalToolStatus(status: unknown): boolean {
 
 function hasMeaningfulAcpToolMetadata(update: Record<string, unknown>): boolean {
   const item = liveItemForAcpToolUpdate(update);
+  if (readString(item ?? {}, "type") === "webSearch") {
+    return true;
+  }
   const command = item ? readString(item, "command") : undefined;
   return Boolean(command && !isGenericAcpToolMetadata(command));
 }

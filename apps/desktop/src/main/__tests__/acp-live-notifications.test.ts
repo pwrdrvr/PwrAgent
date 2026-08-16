@@ -225,6 +225,53 @@ describe("acpToolUpdateNotifications", () => {
     expect(resolver.drainDeferredTerminalUpdates(context)).toEqual([]);
   });
 
+  it("emits a rich Grok web-search terminal without waiting for turn completion", () => {
+    const resolver = new AcpLiveToolUpdateResolver();
+    const context = {
+      backendId: "acp:grok",
+      threadId: "session-1",
+      turnId: "turn-1",
+    };
+    const resolved = resolver.resolve({
+      ...context,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "ws_grok-search-1",
+        status: "completed",
+        title: "Web search:",
+        rawOutput: {
+          action: {
+            type: "search",
+            query: "Grok ACP tool completion",
+            sources: [
+              { type: "url", url: "https://docs.x.ai/developers" },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(resolved).toBeDefined();
+    expect(resolver.drainDeferredTerminalUpdates(context)).toEqual([]);
+    expect(acpToolUpdateNotifications({
+      threadId: context.threadId,
+      turnId: context.turnId,
+      update: resolved!,
+    })).toEqual([
+      expect.objectContaining({
+        method: "item/completed",
+        params: expect.objectContaining({
+          item: expect.objectContaining({
+            id: "ws_grok-search-1",
+            type: "webSearch",
+            status: "completed",
+            arguments: { query: "Grok ACP tool completion" },
+          }),
+        }),
+      }),
+    ]);
+  });
+
   it("keeps malformed ACP calls distinct when the provider omits an item id", () => {
     const resolver = new AcpLiveToolUpdateResolver();
     const context = {
