@@ -2711,6 +2711,150 @@ describe("Sidebar", () => {
       }
     });
 
+    describe("remote turn readout", () => {
+      const remoteActiveThread = {
+        ...activeThread,
+        id: "thread-remote-active",
+        title: "Remote active thread",
+        federation: {
+          instanceLabel: "studio",
+          ref: {
+            backend: "codex" as const,
+            target: { scope: "remote" as const, instanceId: "peer-1" },
+            threadId: "thread-remote-active",
+          },
+        },
+      };
+      const remoteSidebarProps = (threads: typeof allThreads) => ({
+        backends,
+        browseMode: "inbox" as const,
+        createThreadError: undefined,
+        directories,
+        inboxThreads: threads,
+        launchpadError: undefined,
+        loading: false,
+        creatingThread: undefined,
+        selectedItemKey: undefined,
+        threads,
+        onBrowseModeChange: () => undefined,
+        onCreateThread: async () => undefined,
+        onOpenLaunchpad: async () => undefined,
+        onSelectThread: () => undefined,
+      });
+
+      it("stays off the tab entirely when no peer work has run", () => {
+        // The whole point of the second readout is that an operator who never
+        // federates sees the tab they always had. A permanent "0" would put a
+        // federation concept on every instance's sidebar.
+        render(<Sidebar {...remoteSidebarProps([activeThread, unreadThread])} />);
+
+        const tab = screen.getByRole("tab", {
+          name: "Attention, 1 active thread, 1 thread to review",
+        });
+        expect(
+          tab.querySelector("[data-attention-remote-active-count]"),
+        ).toBeNull();
+      });
+
+      it("splits local from peer turns, and says which blocks quitting", () => {
+        render(
+          <Sidebar
+            {...remoteSidebarProps([activeThread, remoteActiveThread, unreadThread])}
+          />,
+        );
+
+        const tab = screen.getByRole("tab", {
+          name:
+            "Attention, 1 active thread on this machine, "
+            + "1 active thread on other instances, 1 thread to review",
+        });
+        expect(
+          tab.querySelector("[data-attention-active-count]"),
+        ).toHaveAttribute("data-attention-active-count", "1");
+        expect(
+          tab.querySelector("[data-attention-remote-active-count]"),
+        ).toHaveAttribute("data-attention-remote-active-count", "1");
+        // Live work, so it sweeps — both readouts mount a real scanner. The
+        // remote one is neutral by token, not by being switched off.
+        expect(tab.querySelectorAll(".thinking-scanner")).toHaveLength(2);
+      });
+
+      it("holds a zeroed peer readout for the linger window, then drops it", () => {
+        vi.useFakeTimers();
+        try {
+          const view = render(
+            <Sidebar {...remoteSidebarProps([activeThread, remoteActiveThread])} />,
+          );
+
+          const settled = [
+            activeThread,
+            { ...remoteActiveThread, threadStatus: "idle" as const },
+          ];
+          view.rerender(<Sidebar {...remoteSidebarProps(settled)} />);
+
+          // A row that vanishes the instant the peer finishes takes the answer
+          // away exactly when it becomes interesting.
+          const lingering = screen.getByRole("tab", { name: /^Attention,/ });
+          const remote = lingering.querySelector(
+            "[data-attention-remote-active-count]",
+          );
+          expect(remote).toHaveAttribute(
+            "data-attention-remote-active-count",
+            "0",
+          );
+          expect(remote).toHaveAttribute("data-zero", "true");
+
+          act(() => {
+            vi.advanceTimersByTime(30_000);
+          });
+
+          expect(
+            screen
+              .getByRole("tab", { name: /^Attention,/ })
+              .querySelector("[data-attention-remote-active-count]"),
+          ).toBeNull();
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+
+      it("keeps the readout up when a peer starts again mid-linger", () => {
+        vi.useFakeTimers();
+        try {
+          const idleRemote = {
+            ...remoteActiveThread,
+            threadStatus: "idle" as const,
+          };
+          const view = render(
+            <Sidebar {...remoteSidebarProps([activeThread, remoteActiveThread])} />,
+          );
+          view.rerender(
+            <Sidebar {...remoteSidebarProps([activeThread, idleRemote])} />,
+          );
+          act(() => {
+            vi.advanceTimersByTime(20_000);
+          });
+          view.rerender(
+            <Sidebar {...remoteSidebarProps([activeThread, remoteActiveThread])} />,
+          );
+
+          // The linger timer has to be cancelled, not merely outrun: firing it
+          // would blank a readout showing live peer work.
+          act(() => {
+            vi.advanceTimersByTime(30_000);
+          });
+
+          expect(
+            screen
+              .getByRole("tab", { name: /^Attention,/ })
+              .querySelector("[data-attention-remote-active-count]"),
+          ).toHaveAttribute("data-attention-remote-active-count", "1");
+        } finally {
+          vi.useRealTimers();
+        }
+      });
+    });
+
     it("counts a live turn once, as active rather than to-review", () => {
       // A thread can be both running and unread. The tab must not report it
       // twice — same split the directory headers use.
@@ -2771,14 +2915,112 @@ describe("Sidebar", () => {
       ).toBeInTheDocument();
     });
 
-    it("explains the lens in its tooltip, including the live counts", async () => {
+    it("explains the lens in a hover card, including the live counts", async () => {
       renderAttention();
 
       const tab = screen.getByRole("tab", { name: /^Attention,/ });
       fireEvent.mouseEnter(tab);
-      expect((await screen.findByRole("tooltip")).textContent).toBe(
-        "Attention — threads in progress or waiting to be reviewed"
-          + "\n1 active thread · 1 thread to review",
+      const card = await screen.findByRole("tooltip");
+      // A card rather than `.viewport-tooltip`: this tab reports counts, and
+      // running text made the reader parse em-dashes to find them.
+      expect(card).toHaveClass("attention-card");
+      expect(card).toHaveTextContent(
+        /AttentionThreads in progress or waiting to be reviewedIn progress1To review1/,
+      );
+      // Unfederated: no machine named, because there is nothing to tell apart.
+      expect(card.textContent).not.toContain("Quitting");
+      // The consequence lines exist nowhere else, so the card has to be
+      // reachable to a screen reader rather than sighted-only.
+      expect(tab).toHaveAttribute("aria-describedby", card.id);
+    });
+
+    it("pushes fresh counts into a card the pointer is still resting on", async () => {
+      // Turns start and end while the pointer sits on the tab, and this card
+      // is where "can I quit now?" gets answered. Frozen at hover-time values
+      // it would disagree with the readout directly under it, and would keep
+      // claiming there is no peer work after a peer starts a turn.
+      const remoteActive = {
+        ...activeThread,
+        id: "thread-remote-live",
+        federation: {
+          instanceLabel: "studio",
+          ref: {
+            backend: "codex" as const,
+            target: { scope: "remote" as const, instanceId: "peer-1" },
+            threadId: "thread-remote-live",
+          },
+        },
+      };
+      const props = (threads: typeof allThreads) => ({
+        backends,
+        browseMode: "inbox" as const,
+        createThreadError: undefined,
+        directories,
+        inboxThreads: threads,
+        launchpadError: undefined,
+        loading: false,
+        creatingThread: undefined,
+        selectedItemKey: undefined,
+        threads,
+        onBrowseModeChange: () => undefined,
+        onCreateThread: async () => undefined,
+        onOpenLaunchpad: async () => undefined,
+        onSelectThread: () => undefined,
+      });
+
+      const view = render(<Sidebar {...props([activeThread, unreadThread])} />);
+      fireEvent.mouseEnter(screen.getByRole("tab", { name: /^Attention,/ }));
+      expect(await screen.findByRole("tooltip")).toHaveTextContent(
+        /In progress1/,
+      );
+
+      // A peer starts a turn without the pointer ever leaving the tab.
+      view.rerender(
+        <Sidebar {...props([activeThread, remoteActive, unreadThread])} />,
+      );
+
+      const card = await screen.findByRole("tooltip");
+      expect(card).toHaveTextContent(/In progress elsewhere/);
+      expect(card).toHaveTextContent(/Quitting leaves these running/);
+    });
+
+    it("names the machines and what quitting does once a peer is running work", async () => {
+      const remoteActive = {
+        ...activeThread,
+        id: "thread-remote-card",
+        federation: {
+          instanceLabel: "studio",
+          ref: {
+            backend: "codex" as const,
+            target: { scope: "remote" as const, instanceId: "peer-1" },
+            threadId: "thread-remote-card",
+          },
+        },
+      };
+      render(
+        <Sidebar
+          backends={backends}
+          browseMode="inbox"
+          createThreadError={undefined}
+          directories={directories}
+          inboxThreads={[activeThread, remoteActive, unreadThread]}
+          launchpadError={undefined}
+          loading={false}
+          creatingThread={undefined}
+          selectedItemKey={undefined}
+          threads={[activeThread, remoteActive, unreadThread]}
+          onBrowseModeChange={() => undefined}
+          onCreateThread={async () => undefined}
+          onOpenLaunchpad={async () => undefined}
+          onSelectThread={() => undefined}
+        />,
+      );
+
+      fireEvent.mouseEnter(screen.getByRole("tab", { name: /^Attention,/ }));
+      const card = await screen.findByRole("tooltip");
+      expect(card).toHaveTextContent(/In progress here.*Quitting interrupts these/);
+      expect(card).toHaveTextContent(
+        /In progress elsewhere.*Quitting leaves these running/,
       );
     });
   });

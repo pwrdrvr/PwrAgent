@@ -22,6 +22,28 @@ const TOOLTIP_GAP = 10;
  */
 export const TOOLTIP_HOVER_DELAY_MS = 250;
 
+/**
+ * The strips that reserve room for the macOS traffic lights — their
+ * `padding-left: 80px` IS the buttons' room. Which one is on screen depends on
+ * the layout: the sidebar's masthead normally, the thread header's relocated
+ * cluster when the sidebar is hidden (`.sidebar` goes `display: none` and the
+ * cluster takes over the reservation), the nav masthead in Settings.
+ *
+ * Deliberately not every drag region. `.thread-header` and
+ * `.settings-titlebar` drag too, but they sit to the RIGHT of the stoplights
+ * and are content strips — flooring tooltips below them would push half the
+ * sidebar's tooltips down the window to protect nothing.
+ *
+ * `.app-titlebar` is absent for a different reason: the Windows strip sits
+ * ABOVE `.app-shell` (which carries `margin-top: var(--win-titlebar-h)`), so
+ * the shell-boundary clamp below already clears it.
+ */
+const STOPLIGHT_GUTTER_SELECTORS = [
+  ".sidebar__masthead",
+  ".thread-header__masthead",
+  ".settings-nav__masthead",
+];
+
 function tooltipViewportTop(): number {
   // On Windows the fixed custom title bar occupies the top of the renderer,
   // while `.app-shell` begins immediately below it. Portal tooltips live on
@@ -30,7 +52,43 @@ function tooltipViewportTop(): number {
   // without the custom strip, preserving the ordinary viewport behavior.
   const appShell = document.querySelector<HTMLElement>(".app-shell");
   const appShellTop = appShell?.getBoundingClientRect().top ?? 0;
-  return Math.max(VIEWPORT_PADDING, appShellTop + VIEWPORT_PADDING);
+  const viewportTop = Math.max(
+    VIEWPORT_PADDING,
+    appShellTop + VIEWPORT_PADDING,
+  );
+  // macOS reserves its traffic lights INSIDE the renderer (`titleBarStyle:
+  // "hiddenInset"`), so `.app-shell` starts at 0 and the clamp above happily
+  // parks a tooltip on top of the close/minimize/zoom buttons and the wordmark
+  // beside them. Nothing about that region is hoverable content — it is native
+  // window chrome that a tooltip must never cover.
+  //
+  // Only there, though. No other platform puts window buttons inside the
+  // renderer, and macOS fullscreen hides them — which is why app.css drops the
+  // 80px reservation under `[data-fullscreen="true"]`. Flooring anyway would
+  // push tooltips below a gutter that is not on screen, flipping ones that had
+  // room above onto the content they point at.
+  const root = document.documentElement;
+  if (
+    root.dataset.platform !== "darwin"
+    || root.dataset.fullscreen === "true"
+  ) {
+    return viewportTop;
+  }
+  let gutterFloor = viewportTop;
+  for (const selector of STOPLIGHT_GUTTER_SELECTORS) {
+    const gutter = document.querySelector<HTMLElement>(selector);
+    if (!gutter) {
+      continue;
+    }
+    const rect = gutter.getBoundingClientRect();
+    // Only a strip actually anchored to the top of the window is a floor. One
+    // scrolled or laid out further down is ordinary content, and a hidden one
+    // (the sidebar collapsed) measures zero and reserves nothing.
+    if (rect.height > 0 && rect.top <= appShellTop + VIEWPORT_PADDING) {
+      gutterFloor = Math.max(gutterFloor, rect.bottom);
+    }
+  }
+  return gutterFloor;
 }
 
 type TooltipState = {
