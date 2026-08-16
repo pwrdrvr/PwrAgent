@@ -336,6 +336,15 @@ If the producer respected the profile, the slices are no-ops. If the producer so
 
 These rules exist to make adding the next ten messaging platforms a quiet, mechanical exercise. Every line of platform-branching code in the desktop or interface layer is a future bug; every direct DB import inside a provider is a future migration mess. Treat them as non-negotiable.
 
+### Thread state ownership
+
+- Messaging bindings store routing identity, authorization, surfaces,
+  callbacks, pending intents, deliveries, and preferences.
+- Messaging status resolves current thread facts from the desktop navigation
+  snapshot and runtime activity state.
+- Provider adapters receive semantic intents and never import desktop
+  thread-state modules.
+
 ### Single platform-agnostic detach pipeline
 
 The detach flow — retire the channel's status surface, revoke the binding in the store, deliver a "Thread detached" confirmation — has exactly one implementation: `MessagingController.runDetachPipeline`. Every detach origin (Discord `/detach`, Telegram `/detach`, the desktop right-click "Unbind" chip, future archive-on-delete flows, future "Unbind all") routes through it.
@@ -395,6 +404,34 @@ binding stores the backend as immutable thread identity. After that,
 there is no Provider button; the bound-thread status card only reports
 which backend owns the thread.
 
+### ACP runtime modes
+
+- Messaging renders ACP runtime modes as a distinct action family, separate
+  from permission controls.
+- Runtime-mode choices come from advertised ACP modes or configuration options
+  categorized as `mode`.
+- Privileged ACP runtime selections use the existing Full Access warning before
+  they are applied.
+
+### Managed conversation lifecycle
+
+- Channel monitoring subscriptions remain separate from thread-topic fanout.
+- Managed conversation operations use normalized channel references and opaque
+  routing state.
+- Desktop messaging owns topic registries, thread-topic links, cleanup
+  proposals, and approvals.
+- Cleanup begins as a dry-run proposal and executes only explicitly approved
+  items.
+- Telegram topic management covers known or adopted topics because the Bot API
+  cannot enumerate every historical topic.
+- Telegram topic inventory is local and includes only owned, observed, linked,
+  or explicitly adopted topics.
+- Bots cannot list every historical forum topic through the Telegram Bot API.
+- Deleting a topic requires approval for that specific proposal because
+  Telegram deletes its messages.
+- Monitor fanout is explicit and reuses one topic per thread within each
+  supergroup.
+
 ### Permission-mode queue audit messages
 
 When a user toggles a thread's permission mode (Default Access ↔ Full Access) while a turn is running, the registry queues the change at the resume boundary instead of applying it immediately. The messaging controller surfaces this lifecycle in the bound conversation as audit chat messages, so users on Telegram and Discord see the same story the desktop transcript tells:
@@ -443,7 +480,7 @@ The channel-neutral command surface — `resume`, `new`, `status`, `detach`, `mo
 
 Four things consume the catalog:
 
-1. **The controller's `handleCommand` dispatch.** `matchMessagingCommandVerb` resolves an inbound `MessagingInboundCommandEvent.command` to a known verb (or `undefined` for unrecognized commands). Verbs in the catalog dispatch to typed handlers; everything else falls through to the help surface.
+1. **The controller's `handleCommand` dispatch.** `matchMessagingCommandVerb` resolves an inbound `MessagingInboundCommandEvent.command` to a known verb (or `undefined` for unrecognized commands). Verbs in the catalog dispatch to typed handlers. Unknown slash text in a bound conversation routes to the bound thread.
 2. **The user-facing `/help` body.** `formatMessagingCommandHelpBody` derives the plain-text command list from the catalog so adding or renaming a verb in one place updates the help text everywhere it's rendered. The body avoids Markdown markers because confirmation surfaces render as plain text on some providers.
 3. **The `/help` action row.** `paginateHelpCatalog` + `buildHelpActions` render one `command:<verb>` button per catalog entry on the current page, with generic two-column row hints for providers that support compact button rows. Pages overflow with capability-aware Prev/Next/Cancel navigation when the catalog grows past the profile's action budget; for today's small catalog every button fits on one page and no nav row is rendered. The `Resume` button is styled primary to match the previous single-button shape; `New` jumps directly to the existing backend-aware new-thread browser mode; everything else is neutral. Pagination is **stateless** — the next/previous page index travels in `action.value.pageIndex` and comes back through `MessagingInboundCallbackEvent.value`, so the controller can re-render without persistent session state (unlike the resume browser which uses a `MessagingBrowseSessionRecord`).
 4. **Provider adapters that register native slash commands.** Today each adapter maintains its own list (`packages/messaging/providers/discord/src/discord-commands.ts`, `packages/messaging/providers/mattermost/src/mattermost-commands.ts`). A future refactor can collapse those onto the shared catalog so a new verb only requires touching one file. Until then, adapter-side lists must stay in sync with the catalog by convention.
@@ -456,6 +493,19 @@ To add a new canonical verb:
 4. For each provider adapter that registers native slash commands, add the verb to its own canonical-bases array (Discord's `DISCORD_APPLICATION_COMMANDS`, Mattermost's `CANONICAL_COMMAND_BASES`, etc.).
 
 The help surface and unknown-command fallback automatically pick up the new verb from the catalog — no string-list to update separately.
+
+### Review command and tool routing
+
+- Messaging owns only explicit control commands; unknown slash text routes to
+  the bound thread.
+- Bare `/review` opens a target picker instead of selecting a review target
+  implicitly.
+- The picker supports current changes, base branch, commit, and custom
+  instruction targets.
+- A review request queues behind an active turn and starts only after successful
+  completion.
+- `start_review` uses the shared Agent-tool catalog and rejects duplicate
+  requests by call identity.
 
 ## How to add a provider
 
@@ -500,6 +550,3 @@ The full hands-on walkthrough — including a capability-profile workshop, the i
 - [`docs/messaging-platform-integration.md`](messaging-platform-integration.md) — operator setup, command surface, button layout policy, Cloudflare-Tunnel / Tailscale-Funnel deployment for HTTP-callback providers
 - [`docs/messaging-adapter-contract.md`](messaging-adapter-contract.md) — the formal contract for new platform adapters
 - [`packages/messaging/AGENTS.md`](../packages/messaging/AGENTS.md) — package boundary rules and enforcement
-- [`docs/plans/2026-05-04-002-feat-messaging-capability-discovery-plan.md`](plans/2026-05-04-002-feat-messaging-capability-discovery-plan.md) — the design plan that introduced the capability profile system
-- [`docs/plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md`](plans/2026-05-05-002-feat-messaging-plan-review-attachment-delivery-plan.md) — decision artifact for `outboundAttachments` consumption by plan/review surface delivery
-- [`docs/plans/2026-05-06-001-feat-messaging-mattermost-adapter-and-provider-guide-plan.md`](plans/2026-05-06-001-feat-messaging-mattermost-adapter-and-provider-guide-plan.md) — the Mattermost adapter implementation plan

@@ -97,8 +97,8 @@ type FederationAgentThreadStore = RemoteThreadTargetStore & {
  * (`thread_navigation`, `environment_actions`, `federated_search`), so
  * agent-originated control is authorized exactly like operator-originated
  * control: enrollment is the trust boundary, per the PR #1202 capability
- * model. No agent-specific capability or allowlist exists by design — see
- * docs/plans/2026-08-05-003-feat-federation-agent-tools-plan.md.
+ * model. No agent-specific capability or allowlist exists by design. See the
+ * agent tool catalog in docs/federation.md.
  */
 export function createFederationAgentToolsHandler(
   options: {

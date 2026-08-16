@@ -62,6 +62,36 @@ summary.
 - Keep radius at `8px` or below.
 - Favor one accent color and neutral surfaces.
 
+### Worktree Archive and Migration Safety
+
+- Archive only non-primary worktrees after creating their snapshots.
+- Validate migrated destination history before archiving the source thread.
+
+### Branch-Drift Dialog
+
+- Use `isBranchDrifted` for sidebar and dialog decisions so both surfaces share
+  one predicate.
+- Defer branch-drift dialogs during active turns and recheck the selected thread
+  after the turn settles.
+
+### Native Notifications
+
+- Keep native notification eligibility and deduplication in the main process.
+- Emit notifications only for opted-in inactive windows and clear waiting keys
+  after user action or terminal completion.
+
+### Markdown and External Links
+
+- Treat bare domains and local paths as text; only explicit links may open
+  externally.
+- Validate external URLs in the main process with an allowlist after renderer
+  filtering.
+
+### Star Map Interactions
+
+- Interactive Star Map children must guard canvas pan, wheel, and keyboard
+  handlers before shipping.
+
 ## Codex Data Boundary
 
 Desktop code must not inspect Codex-owned storage directly. Do not open, parse,
@@ -77,6 +107,13 @@ protocol. The one PwrDrvr LLC-authorized exception is
 rewrite only the protocol-identified rollout for the exact Responses API
 invalid message-ID-prefix recovery, after stopping the Codex writer, creating
 a durable backup, and validating the session belongs to the requested thread.
+
+## Codex Runtime Safety
+
+- Keep Windows sandbox setup explicit, active-profile scoped, and delegated to
+  Codex.
+- Never elevate the Electron process or claim readiness before restart and
+  fresh readiness evidence.
 
 ## Running the App for Development
 

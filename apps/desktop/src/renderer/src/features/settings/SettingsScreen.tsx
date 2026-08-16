@@ -203,8 +203,7 @@ export function SettingsScreen(props: {
           screen's `.sidebar` pattern. Brand sits in `__masthead`
           at the very top with the 80px stoplight gutter (macOS
           hiddenInset draws stoplights over it). Below: Exit
-          Settings, GENERAL group label, section list.
-          See plan: docs/plans/2026-05-05-004-feat-settings-overlay-titlebar-plan.md */}
+          Settings, GENERAL group label, section list. */}
       <nav className="settings-nav" aria-label="Settings sections">
         <header className="settings-nav__masthead">
           <p className="settings-nav__brand">

@@ -1,8 +1,6 @@
 # Desktop Release Runbook
 
 > MIT-licensed desktop release pipeline.
->
-> Origin: [docs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md](plans/2026-05-02-004-feat-desktop-release-packaging-plan.md)
 
 This runbook covers cutting v1.x desktop releases. macOS releases ship as
 universal Apple Silicon + Intel binaries; distribution is outside the Mac App
@@ -420,11 +418,3 @@ Most-common Electron failures:
   installs stop launching after their staple expires).
 - **Never** commit `.p12`, `.p8`, `.envrc.release`, or any `AuthKey_*.p8` to
   the repo. The `.gitignore` blocks these by default.
-
----
-
-## Plan / brainstorm references
-
-- Plan: [docs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md](plans/2026-05-02-004-feat-desktop-release-packaging-plan.md)
-- Brainstorm: [docs/brainstorms/2026-05-02-desktop-release-packaging-requirements.md](brainstorms/2026-05-02-desktop-release-packaging-requirements.md)
-- Phase 2 distribution migration: [docs/desktop-distribution-phase-2-runbook.md](desktop-distribution-phase-2-runbook.md)

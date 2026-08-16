@@ -7701,7 +7701,6 @@ textarea,
    the masthead + titlebar get `-webkit-app-region: drag`; interactive
    elements opt back to `no-drag`. macOS stoplights overlay the
    nav masthead's 80px gutter via `titleBarStyle: "hiddenInset"`.
-   See plan: docs/plans/2026-05-05-004-feat-settings-overlay-titlebar-plan.md
    ---------------------------------------------------------------- */
 
 .settings-main {
@@ -8022,7 +8021,6 @@ textarea,
 
 /* ============================================================
    SETTINGS PANES — design alignment (PwrAgent v2)
-   See: docs/plans/2026-05-06-001-feat-settings-screens-design-alignment-plan.md
    ============================================================ */
 
 .settings-stack {
@@ -22458,8 +22456,7 @@ a.transcript-message__messaging-origin:focus-visible {
 /* Quiet at rest. An action row is a one-line status readout, not a unit of
    interaction, so it does not earn card chrome just for existing — N parallel
    runs used to stack N identical elevated cards above the reply box. Chrome
-   arrives when the row is running, hovered, focused, or open. See
-   docs/brainstorms/2026-08-10-live-run-strip-above-composer-requirements.md */
+   arrives when the row is running, hovered, focused, or open. */
 .composer__queued--env-action {
   display: block;
   padding: 0;
@@ -22753,8 +22750,7 @@ a.transcript-message__messaging-origin:focus-visible {
    LiveWorkRail, the env-action rows, and the steer/permissions rows, and four
    surfaces sharing one elevated-card treatment is what makes that band read as
    a wall. Geometry, chevron, and label idiom are copied from the existing
-   primitives rather than re-picked — see
-   docs/brainstorms/2026-08-10-live-run-strip-above-composer-requirements.md
+   primitives rather than re-picked.
    ============================================================ */
 .live-strip {
   /* Row height is a variable because the list caps at exactly four of them. */

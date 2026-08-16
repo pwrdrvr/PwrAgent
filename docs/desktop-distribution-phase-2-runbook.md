@@ -1,8 +1,6 @@
 # Desktop Distribution Phase 2 Runbook
 
 > MIT-licensed desktop distribution planning.
->
-> Origin: [docs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md](plans/2026-05-02-004-feat-desktop-release-packaging-plan.md)
 
 This runbook covers migrating the desktop auto-update channel from Phase 1
 (solo dogfooding through the existing private `pwrdrvr/PwrAgent` GitHub repo,
@@ -153,8 +151,6 @@ turn out to be needed. Not implemented in v1.0; flag as defer-if-busy.
 
 ---
 
-## Plan / brainstorm references
+## Related Runbook
 
-- Plan: [docs/plans/2026-05-02-004-feat-desktop-release-packaging-plan.md](plans/2026-05-02-004-feat-desktop-release-packaging-plan.md)
-- Brainstorm: [docs/brainstorms/2026-05-02-desktop-release-packaging-requirements.md](brainstorms/2026-05-02-desktop-release-packaging-requirements.md)
 - Phase 1 release runbook: [docs/desktop-release-runbook.md](desktop-release-runbook.md)

@@ -30,6 +30,13 @@ older clients can keep reading existing configs.
 - If a future provider needs a feature the interface cannot express, extend the generic interface first, then implement the extension in providers that can support it.
 - Prefer restart-safe behavior. Callback/action mappings that can be encoded generically or persisted should not rely only on provider process memory.
 
+## Provider Replay Tests
+
+- Provider replay tests must capture the provider boundary through SDK seams,
+  not an external chat client.
+- Keep raw captures outside the repository and commit only sanitized, curated
+  fixtures.
+
 ## Thread-State Update Bus
 
 When the desktop user, a Telegram callback, or a Discord callback changes

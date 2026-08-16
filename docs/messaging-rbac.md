@@ -238,6 +238,15 @@ near-root-equivalent control of the host. Any role granting it:
 - carries the danger badge in the Access Control pane, and
 - double-gates at enforcement time behind the global full-access toggle.
 
+Additional workflow rules:
+
+- Inherited Full Access launchpad defaults do not trigger dismissable warnings
+  during new-thread startup.
+- Explicit messaging escalation and the Always policy still require the Full
+  Access warning.
+- Full Access warning actions remain valid beyond the browse picker lifetime or
+  report a Full Access-specific expiry.
+
 ## Audit
 
 Audit rows land in the messaging activity log (Messaging Activity screen,

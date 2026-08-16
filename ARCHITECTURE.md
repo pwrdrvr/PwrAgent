@@ -43,6 +43,62 @@ conversation storage remain owned by the installed CLI. PwrAgent persists the
 session metadata and desktop overlay state needed to locate and present those
 threads without duplicating full provider transcripts in sqlite.
 
+## Thread state and lifecycle
+
+### Runtime and refresh
+
+- Navigation snapshots own thread summaries, ordering, unread state, and
+  selection metadata.
+- Selected-thread session state owns transcript history, active-turn state,
+  approvals, and lazy skill state.
+- Active selected threads consume thread events incrementally instead of
+  rereading complete transcripts after each event.
+- Cached inactive threads use summary freshness before full transcript
+  hydration.
+- Electron main normalizes provider events into stable transcript contracts
+  before the renderer consumes them.
+- Plan updates are first-class transcript entries rendered inline in
+  conversation chronology.
+- Questionnaire requests keep separate renderer state and return
+  protocol-shaped answer maps.
+- Thread history archival and worktree snapshot archival use distinct APIs and
+  provider-specific restore paths.
+
+### Configuration and identity
+
+- New chats remain launchpad state until first send, so provider selection
+  stays editable before thread creation.
+- After creation, backend identity is fixed to the thread.
+- Model, reasoning, service-tier, and fast-mode defaults are persisted per
+  thread for later turns.
+- Composer controls render only capabilities advertised by the selected
+  backend and model.
+- Thread identity is the backend plus thread identifier.
+- Thread titles expose explicit, derived, and fallback sources as distinct
+  states.
+- Explicit names prevent generated titles from replacing operator intent.
+
+### Transcript invariants
+
+- Transcript order is canonical before grouping, collapsing, hydration, or
+  role presentation.
+- Observed live sequence outranks coarse hydrated timestamps when transcript
+  entries merge.
+- Grouping may contain only adjacent entries and may not cross intervening
+  transcript content.
+- When entry identity is ambiguous, preserve order before deduplicating.
+
+### Thread search
+
+- Thread search runs through a bounded main-process service rather than the
+  sidebar filter.
+- SQLite stores compact PwrAgent-owned thread projections, not provider
+  transcripts.
+- Provider content search uses supported capabilities and reports unavailable
+  scopes explicitly.
+- Semantic search remains disabled by default and limited to approved
+  projections or excerpts.
+
 ## Storage layers
 
 Persistent state is split across three categories. Each has its own
@@ -82,6 +138,17 @@ and persists only the ciphertext blob. On macOS, Electron backs
 the blob requires the same OS/user/app Keychain context. The app refuses
 to write secrets when Electron reports an unsafe or unavailable
 `safeStorage` backend.
+
+### Usage and pricing ledger
+
+- Usage facts and priced line items live in profile SQLite, separate from
+  transcript activity rendering.
+- Each usage line records the turn-scoped settings and pricing catalog version
+  used for its cost.
+- The main process normalizes live, hydrated, and monitor usage before writing
+  ledger records.
+- Pricing backfill uses app-server protocol data and never reads Codex-owned
+  storage.
 
 ### Protocol captures (dev-only)
 
@@ -210,6 +277,19 @@ Codex App Server protocol bindings are consumed from
 workspace. Workspace packages remain marked `private: true` for publishing control,
 but the source in this repository is MIT-licensed.
 
+## Background PR status and Star Map
+
+- The main process polls tracked pull requests with focused, warm, and cold
+  cadences under a shared request-token budget.
+- The transition seam persists changed statuses and publishes renderer deltas,
+  while branch discovery attaches PRs through thread branches.
+- The Star Map uses federation health, navigation snapshots, and per-card
+  session state for local and remote thread surfaces.
+- Star Map arrangements and celestial assignments persist in `state.db` and
+  converge through gateway-mediated last-writer-wins synchronization.
+- Star Map filters remain operator-local preferences and do not participate in
+  federation synchronization.
+
 ## UI direction
 
 For renderer UI work, follow the desktop style guide and UI theme
@@ -229,8 +309,6 @@ auto-update) is documented in:
 
 - [docs/desktop-release-runbook.md](docs/desktop-release-runbook.md) —
   how to cut a release.
-- [docs/desktop-distribution-phase-2-runbook.md](docs/desktop-distribution-phase-2-runbook.md)
-  — Phase 1 → Phase 2 distribution channel migration.
 
 PwrAgent is MIT-licensed, owned by PwrDrvr LLC. The repo-root `LICENSE`,
 package `license: "MIT"` declarations, and third-party license

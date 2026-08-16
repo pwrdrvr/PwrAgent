@@ -76,5 +76,5 @@ requiring PwrAgent workflow changes.
 
 ## Related design context
 
-- [Messaging requirements](brainstorms/2026-04-30-messaging-platform-integration-requirements.md)
-- [Implementation plan](plans/2026-04-30-001-feat-messaging-platform-integration-plan.md)
+- [Messaging architecture](messaging-architecture.md)
+- [Messaging adapter contract](messaging-adapter-contract.md)

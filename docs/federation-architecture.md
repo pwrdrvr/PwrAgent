@@ -74,6 +74,19 @@ The scheduled-action RPC surface is part of federation protocol v1 while the
 protocol remains under development. Peers must authorize `scheduled_actions`
 explicitly; `turn_control` does not imply scheduler access.
 
+### Remote PTY
+
+- Remote PTY control uses a dedicated `remote_pty` capability and never falls
+  through to local spawning.
+- The owner resolves the shell and working directory from its thread state, not
+  from viewer input.
+- The owner pauses output at the high-water mark until acknowledgements reduce
+  queued bytes.
+- Remote PTY sessions reap after a bounded disconnect or closure grace period,
+  while owner shutdown reaps them immediately.
+- Every remote PTY open and close records the requesting instance in owner
+  audit activity.
+
 Navigation snapshot transfer is negotiated independently from navigation
 access. A peer that advertises `navigation_snapshot_deltas` may receive a full
 baseline followed by revision-based sparse deltas or unchanged responses from
@@ -134,6 +147,17 @@ software on the producing side (and on a relaying gateway, when present).
 Peer-directory and celestial-icon LWW snapshots remain federation control-plane
 state. They exchange when a connection or assignment changes, then settle; they
 do not enable or carry the backend-event stream described above.
+
+## On-Demand Load And Transfer Diagnostics
+
+- Load is sampled on demand by the owning instance and is not gossiped through
+  peer-directory state.
+- The `thread_navigation` capability authorizes read-only load queries.
+- Timeouts and RPC errors omit `load` instead of failing instance discovery.
+- Consumers deduplicate instances sharing `machineId` before aggregating
+  capacity.
+- Wire-transfer counters are process-local diagnostics for directly connected
+  peers and reset on application restart.
 
 ## Diagnostics
 

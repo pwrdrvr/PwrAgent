@@ -12,7 +12,7 @@ dependencies: []
 
 ## Problem Statement
 
-`apps/desktop/src/renderer/src/features/settings/SettingsLayout.tsx:131-156` exports `SettingsRow`, intended as a legacy primitive for transcript/questionnaire/mcp consumers. The original plan called for keeping it specifically because of those callsites (see `docs/plans/2026-05-06-001-feat-settings-screens-design-alignment-plan.md` "Key Decisions" — "Split `.settings-field` from `.settings-row`").
+`apps/desktop/src/renderer/src/features/settings/SettingsLayout.tsx:131-156` exports `SettingsRow`, intended as a legacy primitive for transcript/questionnaire/mcp consumers. The original implementation kept it specifically for those callsites and split `.settings-field` from `.settings-row`.
 
 But: a search for `settings-row` className or `SettingsRow` import outside `features/settings/` finds zero hits. The plan's premise was wrong.
 

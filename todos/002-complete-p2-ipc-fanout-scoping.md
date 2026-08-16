@@ -83,7 +83,7 @@ dependencies: []
 
 - **PR:** #198
 - **Reviewer:** architecture-strategist — C1
-- **Past plan to align with:** `docs/plans/2026-05-05-001-feat-thread-state-update-bus-plan.md`
+- **Current guidance:** `apps/desktop/AGENTS.md` — Thread-State Update Bus
 
 ## Acceptance Criteria
 

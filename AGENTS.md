@@ -2,8 +2,8 @@
 
 ## Source of Truth
 
-- Product requirements are in `docs/brainstorms/`.
-- Implementation plans are in `docs/plans/`.
+- Put new product requirements in `docs/brainstorms/`.
+- Put new implementation plans in `docs/plans/`.
 - UI theme tokens and visual rules are in [docs/UI-THEME.md](docs/UI-THEME.md).
 - Desktop UI direction is in [docs/design/desktop-style-guide.md](docs/design/desktop-style-guide.md).
 - PwrAgent v2 design references are in [docs/design/pwragent-v2/](docs/design/pwragent-v2/).
@@ -23,7 +23,8 @@
   - Do not delete or rewrite a record without explicit user authorization.
   - You may update the plan that the current branch implements.
   - Limit updates to progress, dependencies, and resolved implementation questions.
-  - Read [the historical-document rules](docs/plans/AGENTS.md) before you change these files.
+  - Read a record only for a specific provenance question or an explicit document reference.
+  - Use current code, `ARCHITECTURE.md`, and package guidance for current behavior and API shape.
 - Default `rg` searches exclude brainstorms, plans, and solutions through [`.rgignore`](.rgignore).
   - Use `rg --no-ignore` or `rg -u` only when you need these records.
 - Read the [workflow label list](.github/workflows/README.md) before you use a CI-triggering label.
@@ -76,7 +77,7 @@
 - Both commands build `apps/desktop/out/` before Playwright starts.
 - Before headed desktop E2E, ask the operator whether an off-desktop lab is available.
 - If a lab is available, ask for its repository or skill.
-- Read the [Windows Vitest stability guidance](docs/solutions/2026-08-06-windows-vitest-process-isolation.md) before you change:
+- Review the current ownership and readiness constraints before you change:
   - Windows Git or Bash process launch and shutdown.
   - Vitest process isolation.
   - Queue or composer lifecycle tests.

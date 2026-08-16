@@ -1,8 +1,8 @@
 # context-replay test fixtures
 
-Synthetic Codex protocol-capture data for the observed context-replay counting
-work (plan:
-[`docs/plans/2026-07-04-001-feat-observed-context-replay-counting-plan.md`](../../../../../../../docs/plans/2026-07-04-001-feat-observed-context-replay-counting-plan.md)).
+Synthetic Codex protocol-capture data for observed context-replay counting.
+The durable storage boundary is in
+[`ARCHITECTURE.md`](../../../../../../../ARCHITECTURE.md#usage-and-pricing-ledger).
 
 ## Files
 
