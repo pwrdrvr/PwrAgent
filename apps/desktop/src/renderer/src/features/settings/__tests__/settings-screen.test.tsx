@@ -132,6 +132,8 @@ function createSnapshot(
       toolOutputAlerts: {
         outputCapHitsEnabled: { value: true, source: "default" },
         repeatedLargeOutputsEnabled: { value: true, source: "default" },
+        repeatedLargeOutputMinimumCalls: { value: 5, source: "default" },
+        repeatedLargeOutputMinimumPercent: { value: 50, source: "default" },
         repeatedQueuedChecksEnabled: { value: true, source: "default" },
       },
       appearance: {
@@ -941,6 +943,35 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("switch", { name: "Repeated large tool outputs" }),
     ).toHaveAttribute("aria-checked", "true");
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Calls per turn" }), {
+      target: { value: "7" },
+    });
+    fireEvent.blur(screen.getByRole("spinbutton", { name: "Calls per turn" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          toolOutputAlerts: {
+            repeatedLargeOutputMinimumCalls: 7,
+          },
+        },
+      });
+    });
+    fireEvent.change(
+      screen.getByRole("spinbutton", { name: "Output size threshold" }),
+      { target: { value: "65" } },
+    );
+    fireEvent.blur(
+      screen.getByRole("spinbutton", { name: "Output size threshold" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          toolOutputAlerts: {
+            repeatedLargeOutputMinimumPercent: 65,
+          },
+        },
+      });
+    });
     fireEvent.click(
       screen.getByRole("switch", { name: "Repeated large tool outputs" }),
     );

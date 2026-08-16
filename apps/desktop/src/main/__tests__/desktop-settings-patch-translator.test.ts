@@ -122,6 +122,8 @@ describe("desktopSettingsPatchToEdits — general", () => {
         toolOutputAlerts: {
           outputCapHitsEnabled: false,
           repeatedLargeOutputsEnabled: true,
+          repeatedLargeOutputMinimumCalls: 7,
+          repeatedLargeOutputMinimumPercent: 65,
           repeatedQueuedChecksEnabled: false,
         },
       },
@@ -141,6 +143,24 @@ describe("desktopSettingsPatchToEdits — general", () => {
           "repeated_large_outputs_enabled",
         ],
         value: true,
+      },
+      {
+        op: "set",
+        path: [
+          "general",
+          "tool_output_alerts",
+          "repeated_large_output_minimum_calls",
+        ],
+        value: 7,
+      },
+      {
+        op: "set",
+        path: [
+          "general",
+          "tool_output_alerts",
+          "repeated_large_output_minimum_percent",
+        ],
+        value: 65,
       },
       {
         op: "set",

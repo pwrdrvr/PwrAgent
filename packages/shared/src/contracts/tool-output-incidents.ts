@@ -26,10 +26,18 @@ export const TOOL_OUTPUT_TOKEN_CHAR_RATIO = 4;
 export const TOOL_OUTPUT_CAP_CHARS = 40_000;
 
 /** A large-output case starts at half of the observed model-visible cap. */
-export const TOOL_OUTPUT_WARNING_CHARS = TOOL_OUTPUT_CAP_CHARS / 2;
+export const TOOL_OUTPUT_WARNING_PERCENT = 50;
+export const TOOL_OUTPUT_WARNING_CHARS = toolOutputWarningChars(
+  TOOL_OUTPUT_WARNING_PERCENT,
+);
 
 /** Repeated large output becomes alert-worthy at this many calls in one turn. */
 export const TOOL_OUTPUT_WARNING_INVOCATIONS = 5;
+
+/** Translate an operator-facing percentage into the detector's character cap. */
+export function toolOutputWarningChars(percent: number): number {
+  return Math.ceil(TOOL_OUTPUT_CAP_CHARS * percent / 100);
+}
 
 /** Fraction of the observed output cap this invocation consumed. Uncapped. */
 export function toolOutputCapShare(outputChars: number): number {

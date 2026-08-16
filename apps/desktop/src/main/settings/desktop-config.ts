@@ -658,6 +658,22 @@ export function desktopSettingsPatchToEdits(
     );
   }
   if (
+    patch.general?.toolOutputAlerts?.repeatedLargeOutputMinimumCalls !== undefined
+  ) {
+    set(
+      ["general", "tool_output_alerts", "repeated_large_output_minimum_calls"],
+      patch.general.toolOutputAlerts.repeatedLargeOutputMinimumCalls,
+    );
+  }
+  if (
+    patch.general?.toolOutputAlerts?.repeatedLargeOutputMinimumPercent !== undefined
+  ) {
+    set(
+      ["general", "tool_output_alerts", "repeated_large_output_minimum_percent"],
+      patch.general.toolOutputAlerts.repeatedLargeOutputMinimumPercent,
+    );
+  }
+  if (
     patch.general?.toolOutputAlerts?.repeatedQueuedChecksEnabled !== undefined
   ) {
     set(
@@ -1629,6 +1645,12 @@ function normalizeDesktopConfig(
         ),
         repeatedLargeOutputsEnabled: readBoolean(
           generalToolOutputAlerts?.repeated_large_outputs_enabled,
+        ),
+        repeatedLargeOutputMinimumCalls: readNumber(
+          generalToolOutputAlerts?.repeated_large_output_minimum_calls,
+        ),
+        repeatedLargeOutputMinimumPercent: readNumber(
+          generalToolOutputAlerts?.repeated_large_output_minimum_percent,
         ),
         repeatedQueuedChecksEnabled: readBoolean(
           generalToolOutputAlerts?.repeated_queued_checks_enabled,

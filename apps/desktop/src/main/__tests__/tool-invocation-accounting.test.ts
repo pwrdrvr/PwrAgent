@@ -448,6 +448,28 @@ describe("tool invocation accounting", () => {
     });
   });
 
+  it("uses the configured percentage of the output cap", () => {
+    const policy = {
+      outputCapHitsEnabled: true,
+      repeatedLargeOutputsEnabled: true,
+      repeatedLargeOutputMinimumCalls: 3,
+      repeatedLargeOutputMinimumPercent: 75,
+      repeatedQueuedChecksEnabled: true,
+    };
+
+    expect(detectLargeToolOutput({
+      current: buildOutputInvocation(29_999),
+      policy,
+    })).toBeUndefined();
+    expect(detectLargeToolOutput({
+      current: buildOutputInvocation(30_000),
+      policy,
+    })?.alert).toMatchObject({
+      severity: "warning",
+      totalOutputChars: 30_000,
+    });
+  });
+
   it("waits for five large outputs before notifying", () => {
     let aggregate: ReturnType<typeof mergeLargeToolOutputIncident>["aggregate"]
       | undefined;
@@ -475,6 +497,8 @@ describe("tool invocation accounting", () => {
       policy: {
         outputCapHitsEnabled: false,
         repeatedLargeOutputsEnabled: false,
+        repeatedLargeOutputMinimumCalls: 5,
+        repeatedLargeOutputMinimumPercent: 50,
         repeatedQueuedChecksEnabled: true,
       },
     })).toBeUndefined();
@@ -483,6 +507,8 @@ describe("tool invocation accounting", () => {
       policy: {
         outputCapHitsEnabled: false,
         repeatedLargeOutputsEnabled: true,
+        repeatedLargeOutputMinimumCalls: 5,
+        repeatedLargeOutputMinimumPercent: 50,
         repeatedQueuedChecksEnabled: true,
       },
     })?.alert.severity).toBe("warning");

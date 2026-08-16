@@ -1,5 +1,9 @@
 import type { MessagingToolUpdateMode } from "./messaging";
 import type { FederationTarget } from "./federation";
+import {
+  TOOL_OUTPUT_WARNING_INVOCATIONS,
+  TOOL_OUTPUT_WARNING_PERCENT,
+} from "./tool-output-incidents";
 
 export const DESKTOP_CHAT_REPLY_COMPOSERS = [
   "tiptap-wysiwyg-markdown-chips",
@@ -155,18 +159,27 @@ export const DESKTOP_TEXT_SIZE_DEFAULT: DesktopTextSize = "md";
 export type DesktopToolOutputAlertPolicy = {
   outputCapHitsEnabled: boolean;
   repeatedLargeOutputsEnabled: boolean;
+  repeatedLargeOutputMinimumCalls: number;
+  repeatedLargeOutputMinimumPercent: number;
   repeatedQueuedChecksEnabled: boolean;
 };
+
+export const MIN_REPEATED_LARGE_OUTPUT_CALLS = 2;
+export const MAX_REPEATED_LARGE_OUTPUT_CALLS = 100;
+export const MIN_REPEATED_LARGE_OUTPUT_PERCENT = 1;
+export const MAX_REPEATED_LARGE_OUTPUT_PERCENT = 100;
 
 /**
  * Tool-output alerts stay on by default, but the large-output warning is
  * deliberately a repeated-pattern signal rather than a one-call tripwire.
- * The detector owns that threshold; these flags let operators choose which
- * classes of signal should interrupt them.
+ * Operators can independently select the qualifying output size and how many
+ * calls in one turn must reach it before the warning interrupts them.
  */
 export const DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT: DesktopToolOutputAlertPolicy = {
   outputCapHitsEnabled: true,
   repeatedLargeOutputsEnabled: true,
+  repeatedLargeOutputMinimumCalls: TOOL_OUTPUT_WARNING_INVOCATIONS,
+  repeatedLargeOutputMinimumPercent: TOOL_OUTPUT_WARNING_PERCENT,
   repeatedQueuedChecksEnabled: true,
 };
 
@@ -495,6 +508,8 @@ export type DesktopGeneralSettingsSnapshot = {
   toolOutputAlerts: {
     outputCapHitsEnabled: DesktopSettingsValue<boolean>;
     repeatedLargeOutputsEnabled: DesktopSettingsValue<boolean>;
+    repeatedLargeOutputMinimumCalls: DesktopSettingsValue<number>;
+    repeatedLargeOutputMinimumPercent: DesktopSettingsValue<number>;
     repeatedQueuedChecksEnabled: DesktopSettingsValue<boolean>;
   };
   appearance: DesktopAppearanceSnapshot;

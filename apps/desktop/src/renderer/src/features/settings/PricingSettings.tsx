@@ -3,6 +3,13 @@ import type {
   DesktopToolOutputAlertPolicy,
 } from "@pwragent/shared";
 import {
+  MAX_REPEATED_LARGE_OUTPUT_CALLS,
+  MAX_REPEATED_LARGE_OUTPUT_PERCENT,
+  MIN_REPEATED_LARGE_OUTPUT_CALLS,
+  MIN_REPEATED_LARGE_OUTPUT_PERCENT,
+} from "@pwragent/shared";
+import { useEffect, useState } from "react";
+import {
   SettingsField,
   SettingsPanelHead,
   SettingsSection,
@@ -47,6 +54,8 @@ export function PricingSettings(props: {
     DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS;
   const toolOutputAlerts = props.snapshot.general.toolOutputAlerts;
   const displayControlsDisabled = props.saving || !threadPricingSummary.value;
+  const repeatedLargeOutputDescription =
+    `Alert after ${toolOutputAlerts.repeatedLargeOutputMinimumCalls.value.toLocaleString()} tool calls in one turn each produce at least ${toolOutputAlerts.repeatedLargeOutputMinimumPercent.value.toLocaleString()}% of the model-visible output cap.`;
 
   return (
     <SettingsSectionStack paneId="pricing" aria-label="Usage and pricing settings">
@@ -152,7 +161,7 @@ export function PricingSettings(props: {
           />
           <SettingsField
             label="Repeated large tool outputs"
-            sub="Alert after five tool calls in one turn each produce at least 50% of the model-visible output cap."
+            sub={repeatedLargeOutputDescription}
             source={sourceBadge(toolOutputAlerts.repeatedLargeOutputsEnabled)}
             control={
               <SettingsSwitch
@@ -166,6 +175,46 @@ export function PricingSettings(props: {
                 }}
               />
             }
+          />
+          <AlertNumberField
+            disabled={
+              props.saving
+              || !toolOutputAlerts.repeatedLargeOutputsEnabled.value
+            }
+            label="Calls per turn"
+            max={MAX_REPEATED_LARGE_OUTPUT_CALLS}
+            min={MIN_REPEATED_LARGE_OUTPUT_CALLS}
+            source={sourceBadge(
+              toolOutputAlerts.repeatedLargeOutputMinimumCalls,
+            )}
+            sub="Number of qualifying tool calls required before the alert is raised."
+            suffix="calls"
+            value={toolOutputAlerts.repeatedLargeOutputMinimumCalls.value}
+            onSave={(next) => {
+              void props.onToolOutputAlertsChange({
+                repeatedLargeOutputMinimumCalls: next,
+              });
+            }}
+          />
+          <AlertNumberField
+            disabled={
+              props.saving
+              || !toolOutputAlerts.repeatedLargeOutputsEnabled.value
+            }
+            label="Output size threshold"
+            max={MAX_REPEATED_LARGE_OUTPUT_PERCENT}
+            min={MIN_REPEATED_LARGE_OUTPUT_PERCENT}
+            source={sourceBadge(
+              toolOutputAlerts.repeatedLargeOutputMinimumPercent,
+            )}
+            sub="Each qualifying call must produce at least this share of the model-visible output cap."
+            suffix="% of cap"
+            value={toolOutputAlerts.repeatedLargeOutputMinimumPercent.value}
+            onSave={(next) => {
+              void props.onToolOutputAlertsChange({
+                repeatedLargeOutputMinimumPercent: next,
+              });
+            }}
           />
           <SettingsField
             label="Repeated queued checks"
@@ -187,5 +236,61 @@ export function PricingSettings(props: {
         </div>
       </SettingsSection>
     </SettingsSectionStack>
+  );
+}
+
+function AlertNumberField(props: {
+  disabled?: boolean;
+  label: string;
+  max: number;
+  min: number;
+  source: string;
+  sub: string;
+  suffix: string;
+  value: number;
+  onSave: (value: number) => void;
+}) {
+  const [value, setValue] = useState(String(props.value));
+
+  useEffect(() => {
+    setValue(String(props.value));
+  }, [props.value]);
+
+  return (
+    <SettingsField
+      label={props.label}
+      sub={props.sub}
+      source={props.source}
+      control={
+        <span className="settings-number">
+          <input
+            aria-label={props.label}
+            className="settings-input settings-input--inline"
+            disabled={props.disabled}
+            max={props.max}
+            min={props.min}
+            type="number"
+            value={value}
+            onBlur={() => {
+              const parsed = Number(value);
+              if (!Number.isFinite(parsed)) {
+                setValue(String(props.value));
+                return;
+              }
+              const clamped = Math.min(
+                Math.max(Math.trunc(parsed), props.min),
+                props.max,
+              );
+              setValue(String(clamped));
+              if (clamped !== props.value) {
+                props.onSave(clamped);
+              }
+            }}
+            onChange={(event) => setValue(event.currentTarget.value)}
+          />
+          <span className="settings-source">{props.suffix}</span>
+        </span>
+      }
+    />
   );
 }

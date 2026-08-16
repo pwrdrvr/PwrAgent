@@ -63,6 +63,36 @@ describe("normalized tool-output replay analyzer", () => {
     ]);
   });
 
+  it("uses the configured large-output threshold for replay findings", () => {
+    const replay = replayWithDetail({
+      displayCommand: "sed -n '1,5000p' build.log",
+      output: "x".repeat(12_000),
+      source: "shell",
+    });
+
+    const defaultAnalysis = analyzeNormalizedToolReplay({
+      analyzedAt: 1_800_000_000_000,
+      backend: "codex",
+      complete: true,
+      pages: [replay],
+      threadId: "thread-default-threshold",
+    });
+    const tunedAnalysis = analyzeNormalizedToolReplay({
+      analyzedAt: 1_800_000_000_000,
+      backend: "codex",
+      complete: true,
+      largeOutputThresholdChars: 10_000,
+      pages: [replay],
+      threadId: "thread-tuned-threshold",
+    });
+
+    expect(defaultAnalysis.invocations[0]?.noisy).toBe(false);
+    expect(tunedAnalysis.invocations[0]).toMatchObject({
+      noisy: true,
+      noisyReason: "broad-file-read",
+    });
+  });
+
   it("attributes inherited normalized replay to a fork with idempotent IDs", () => {
     const inheritedReplay = replayWithDetail({
       displayCommand: "cat inherited-build.log",

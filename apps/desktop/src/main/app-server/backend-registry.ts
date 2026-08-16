@@ -298,8 +298,7 @@ import {
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
   TOOL_OUTPUT_CAP_CHARS,
-  TOOL_OUTPUT_WARNING_CHARS,
-  TOOL_OUTPUT_WARNING_INVOCATIONS,
+  toolOutputWarningChars,
   type CancelMonitorDelegationToolArgs,
   type CompleteMonitoringToolArgs,
   type CreateMonitorDelegationToolArgs,
@@ -6884,6 +6883,7 @@ export class DesktopBackendRegistry {
   private readonly resolveCodexFastAllowedFn: () => boolean;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
+  private toolOutputAlertPolicy = DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
   private readonly localFilePrivateStorageRoots: readonly string[];
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
   private readonly pdfToolMcpServer?: AgentToolMcpServerLike;
@@ -7093,6 +7093,14 @@ export class DesktopBackendRegistry {
           return DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
         }
       });
+    this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
+    if (typeof settingsService?.onConfigWritten === "function") {
+      this.unsubscribers.push(
+        settingsService.onConfigWritten(() => {
+          this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
+        }),
+      );
+    }
     const codexCommand = settingsService?.resolveCodexCommandPreference();
     const codexEnv =
       typeof settingsService?.resolveCodexSpawnEnv === "function"
@@ -10753,6 +10761,9 @@ export class DesktopBackendRegistry {
     const analysis = analyzeNormalizedToolReplay({
       backend: request.backend,
       complete,
+      largeOutputThresholdChars: toolOutputWarningChars(
+        this.toolOutputAlertPolicy.repeatedLargeOutputMinimumPercent,
+      ),
       pages,
       threadId: request.threadId,
     });
@@ -22163,8 +22174,13 @@ export class DesktopBackendRegistry {
       return;
     }
     const now = Date.now();
+    const toolOutputAlertPolicy = this.toolOutputAlertPolicy;
+    const largeOutputThresholdChars = toolOutputWarningChars(
+      toolOutputAlertPolicy.repeatedLargeOutputMinimumPercent,
+    );
     const invocation = toolInvocationFromNotification({
       backend: event.backend,
+      largeOutputThresholdChars,
       notification: event.notification,
       now,
     });
@@ -22180,8 +22196,8 @@ export class DesktopBackendRegistry {
       const buffered = this.bufferStreamedToolInvocationDelta(invocation);
       const crossedLargeOutputBoundary =
         (
-          buffered.previousOutputChars < TOOL_OUTPUT_WARNING_CHARS
-          && buffered.current.outputChars >= TOOL_OUTPUT_WARNING_CHARS
+          buffered.previousOutputChars < largeOutputThresholdChars
+          && buffered.current.outputChars >= largeOutputThresholdChars
         )
         || (
           buffered.previousOutputChars < TOOL_OUTPUT_CAP_CHARS
@@ -22191,7 +22207,7 @@ export class DesktopBackendRegistry {
         ? detectLargeToolOutput({
             current: buffered.current,
             now,
-            policy: this.resolveToolOutputAlertPolicyFn(),
+            policy: toolOutputAlertPolicy,
             previousOutputChars: buffered.previousOutputChars,
           })
         : undefined;
@@ -22199,7 +22215,8 @@ export class DesktopBackendRegistry {
         const incident = mergeLargeToolOutputIncident({
           current: this.liveToolOutputIncidents.get(detection.alert.alertId),
           detection,
-          minimumWarningInvocationCount: TOOL_OUTPUT_WARNING_INVOCATIONS,
+          minimumWarningInvocationCount:
+            toolOutputAlertPolicy.repeatedLargeOutputMinimumCalls,
         });
         this.liveToolOutputIncidents.set(
           incident.aggregate.alert.alertId,
@@ -22231,11 +22248,6 @@ export class DesktopBackendRegistry {
     }
     let shouldNotify = event.notification.method === "item/completed";
     const triggeredAlerts: ThreadToolInvocationAlert[] = [];
-    const toolOutputAlertPolicy =
-      invocationWithStreamedOutput.outputChars >= TOOL_OUTPUT_WARNING_CHARS
-      || invocationWithStreamedOutput.category === "polling"
-        ? this.resolveToolOutputAlertPolicyFn()
-        : DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
     const rawLargeOutputDetection = detectLargeToolOutput({
       current: invocationWithStreamedOutput,
       now,
@@ -22247,7 +22259,8 @@ export class DesktopBackendRegistry {
             rawLargeOutputDetection.alert.alertId,
           ),
           detection: rawLargeOutputDetection,
-          minimumWarningInvocationCount: TOOL_OUTPUT_WARNING_INVOCATIONS,
+          minimumWarningInvocationCount:
+            toolOutputAlertPolicy.repeatedLargeOutputMinimumCalls,
         })
       : undefined;
     if (largeOutputIncident) {

@@ -735,6 +735,8 @@ describe("DesktopSettingsService", () => {
     expect((await service.readSettings()).general.toolOutputAlerts).toEqual({
       outputCapHitsEnabled: { value: true, source: "default" },
       repeatedLargeOutputsEnabled: { value: true, source: "default" },
+      repeatedLargeOutputMinimumCalls: { value: 5, source: "default" },
+      repeatedLargeOutputMinimumPercent: { value: 50, source: "default" },
       repeatedQueuedChecksEnabled: { value: true, source: "default" },
     });
 
@@ -742,6 +744,8 @@ describe("DesktopSettingsService", () => {
       general: {
         toolOutputAlerts: {
           repeatedLargeOutputsEnabled: false,
+          repeatedLargeOutputMinimumCalls: 7,
+          repeatedLargeOutputMinimumPercent: 65,
         },
       },
     });
@@ -749,9 +753,17 @@ describe("DesktopSettingsService", () => {
     expect(fs.readFileSync(configPath, "utf8")).toContain(
       "repeated_large_outputs_enabled = false",
     );
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "repeated_large_output_minimum_calls = 7",
+    );
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "repeated_large_output_minimum_percent = 65",
+    );
     expect(service.resolveToolOutputAlertPolicy()).toEqual({
       outputCapHitsEnabled: true,
       repeatedLargeOutputsEnabled: false,
+      repeatedLargeOutputMinimumCalls: 7,
+      repeatedLargeOutputMinimumPercent: 65,
       repeatedQueuedChecksEnabled: true,
     });
   });

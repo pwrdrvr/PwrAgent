@@ -57,8 +57,12 @@ import {
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
   MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+  MAX_REPEATED_LARGE_OUTPUT_CALLS,
+  MAX_REPEATED_LARGE_OUTPUT_PERCENT,
   MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+  MIN_REPEATED_LARGE_OUTPUT_CALLS,
+  MIN_REPEATED_LARGE_OUTPUT_PERCENT,
 } from "@pwragent/shared";
 import {
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
@@ -655,6 +659,18 @@ export class DesktopSettingsService {
           repeatedLargeOutputsEnabled: this.resolveConfigBoolean(
             config.general?.toolOutputAlerts?.repeatedLargeOutputsEnabled,
             DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputsEnabled,
+          ),
+          repeatedLargeOutputMinimumCalls: this.resolveBoundedConfigInteger(
+            config.general?.toolOutputAlerts?.repeatedLargeOutputMinimumCalls,
+            DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputMinimumCalls,
+            MIN_REPEATED_LARGE_OUTPUT_CALLS,
+            MAX_REPEATED_LARGE_OUTPUT_CALLS,
+          ),
+          repeatedLargeOutputMinimumPercent: this.resolveBoundedConfigInteger(
+            config.general?.toolOutputAlerts?.repeatedLargeOutputMinimumPercent,
+            DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputMinimumPercent,
+            MIN_REPEATED_LARGE_OUTPUT_PERCENT,
+            MAX_REPEATED_LARGE_OUTPUT_PERCENT,
           ),
           repeatedQueuedChecksEnabled: this.resolveConfigBoolean(
             config.general?.toolOutputAlerts?.repeatedQueuedChecksEnabled,
@@ -1310,6 +1326,18 @@ export class DesktopSettingsService {
       repeatedLargeOutputsEnabled: this.resolveConfigBoolean(
         config?.repeatedLargeOutputsEnabled,
         DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputsEnabled,
+      ).value,
+      repeatedLargeOutputMinimumCalls: this.resolveBoundedConfigInteger(
+        config?.repeatedLargeOutputMinimumCalls,
+        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputMinimumCalls,
+        MIN_REPEATED_LARGE_OUTPUT_CALLS,
+        MAX_REPEATED_LARGE_OUTPUT_CALLS,
+      ).value,
+      repeatedLargeOutputMinimumPercent: this.resolveBoundedConfigInteger(
+        config?.repeatedLargeOutputMinimumPercent,
+        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputMinimumPercent,
+        MIN_REPEATED_LARGE_OUTPUT_PERCENT,
+        MAX_REPEATED_LARGE_OUTPUT_PERCENT,
       ).value,
       repeatedQueuedChecksEnabled: this.resolveConfigBoolean(
         config?.repeatedQueuedChecksEnabled,
@@ -2400,6 +2428,22 @@ export class DesktopSettingsService {
     return {
       value: configValue ?? defaultValue,
       source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveBoundedConfigInteger(
+    configValue: number | undefined,
+    defaultValue: number,
+    minValue: number,
+    maxValue: number,
+  ): DesktopSettingsValue<number> {
+    const normalized =
+      configValue !== undefined && Number.isFinite(configValue)
+        ? Math.min(maxValue, Math.max(minValue, Math.round(configValue)))
+        : undefined;
+    return {
+      value: normalized ?? defaultValue,
+      source: normalized === undefined ? "default" : "config",
     };
   }
 

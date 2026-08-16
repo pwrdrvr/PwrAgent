@@ -1238,6 +1238,8 @@ describe("App", () => {
         toolOutputAlerts: {
           outputCapHitsEnabled: { value: true, source: "default" },
           repeatedLargeOutputsEnabled: { value: true, source: "default" },
+          repeatedLargeOutputMinimumCalls: { value: 5, source: "default" },
+          repeatedLargeOutputMinimumPercent: { value: 50, source: "default" },
           repeatedQueuedChecksEnabled: { value: true, source: "default" },
         },
         appearance: {

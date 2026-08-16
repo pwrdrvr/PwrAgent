@@ -19533,6 +19533,13 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: overlayStore as never,
+      resolveToolOutputAlertPolicy: () => ({
+        outputCapHitsEnabled: true,
+        repeatedLargeOutputsEnabled: true,
+        repeatedLargeOutputMinimumCalls: 3,
+        repeatedLargeOutputMinimumPercent: 25,
+        repeatedQueuedChecksEnabled: true,
+      }),
     });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
@@ -19561,20 +19568,18 @@ command = "pnpm dev"
         } as AgentEvent);
       };
 
-      await stream("x".repeat(10_000));
+      await stream("x".repeat(5_000));
       await vi.advanceTimersByTimeAsync(250);
       expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
 
       // The warning total spans sqlite flush windows. A detector tied to the
-      // 250ms pending-write buffer would see two harmless 10,000-char chunks
-      // and never count that the command reached half of the output cap.
-      await stream("x".repeat(10_000));
-      await stream("x".repeat(20_000), "cmd-2");
-      await stream("x".repeat(20_000), "cmd-3");
-      await stream("x".repeat(20_000), "cmd-4");
+      // 250ms pending-write buffer would see two harmless 5,000-char chunks
+      // and never count that the command reached the configured 25% threshold.
+      await stream("x".repeat(5_000));
+      await stream("x".repeat(10_000), "cmd-2");
       expect(persistThreadToolInvocationBoundary).not.toHaveBeenCalled();
 
-      await stream("x".repeat(20_000), "cmd-5");
+      await stream("x".repeat(10_000), "cmd-3");
       const alertEvent = events.find(
         (event) =>
           event.notification.method === "thread/toolAccounting/updated",
@@ -19583,10 +19588,10 @@ command = "pnpm dev"
         threadId: "thread-1",
         triggeredAlerts: [
           {
-            invocationCount: 5,
+            invocationCount: 3,
             kind: "large-output",
             severity: "warning",
-            totalOutputChars: 100_000,
+            totalOutputChars: 30_000,
             turnId: "turn-1",
           },
         ],
@@ -19597,15 +19602,15 @@ command = "pnpm dev"
           expect.objectContaining({
             kind: "large-output",
             severity: "warning",
-            invocationCount: 5,
-            totalOutputChars: 100_000,
+            invocationCount: 3,
+            totalOutputChars: 30_000,
           }),
         ],
         invocation: expect.objectContaining({
-          invocationId: "tool:codex:thread-1:turn-1:cmd-5",
+          invocationId: "tool:codex:thread-1:turn-1:cmd-3",
           noisy: true,
           noisyReason: "large-output",
-          outputChars: 20_000,
+          outputChars: 10_000,
           outputState: "available",
           source: "live",
           status: "in_progress",
