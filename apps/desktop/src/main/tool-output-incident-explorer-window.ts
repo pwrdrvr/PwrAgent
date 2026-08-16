@@ -109,13 +109,13 @@ export function showToolOutputIncidentExplorerWindow(
     encodeURIComponent(threadId),
     encodeURIComponent(title.slice(0, TITLE_MAX_LENGTH)),
     encodeURIComponent(request.projectLabel?.trim() ?? ""),
-    /* The owning instance. A viewer's explorer must read the peer's thread,
-       not a local thread that happens to share the id. */
-    encodeURIComponent(
-      request.federationTarget?.scope === "remote"
-        ? request.federationTarget.instanceId
-        : "",
-    ),
+    /* The owning instance, appended only for a peer's thread: a viewer's
+       explorer must read the peer's thread, not a local thread that happens
+       to share the id. Emitting an empty segment for local threads would add
+       a trailing slash to every ordinary route for nothing. */
+    ...(request.federationTarget?.scope === "remote"
+      ? [encodeURIComponent(request.federationTarget.instanceId)]
+      : []),
   ].join("/");
   const rendererEntry = getRendererEntry();
   if (rendererEntry.kind === "url") {
