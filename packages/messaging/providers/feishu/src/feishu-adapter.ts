@@ -494,6 +494,17 @@ export class FeishuAdapter implements FeishuProviderAdapter {
 
     const rawText = textForFeishuIntent(intent);
     const uploadedImages = await this.uploadOutboundImages(intent);
+    if (
+      intent.delivery?.requireAttachments === true
+      && expectedFeishuImageUploads(intent) > uploadedImages.length
+    ) {
+      return {
+        outcome: "failed",
+        channel: this.channel,
+        deliveredAt,
+        errorMessage: "Feishu could not upload the requested image.",
+      };
+    }
     const actions = actionsForFeishuIntent(intent);
     const callbackBuilder = this.buildCallbackValueBuilder({
       allowedActorIds: callbackAllowedActorIds(intent, this.authorizedActorIds[0] ?? ""),
@@ -2238,6 +2249,13 @@ function shouldSendFeishuCard(
     && part.markdown === "markdown"
     && containsMarkdownTable(part.text || text)
   );
+}
+
+function expectedFeishuImageUploads(intent: MessagingSurfaceIntent): number {
+  if (intent.kind !== "message") {
+    return 0;
+  }
+  return intent.parts.filter((part) => part.type === "image").length;
 }
 
 function parseFeishuDataImageUrl(

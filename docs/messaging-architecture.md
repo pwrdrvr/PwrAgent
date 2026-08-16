@@ -159,7 +159,9 @@ refuses Codex/PwrAgent private storage, and only reads from the bound thread's
 workspace or a PwrAgent generated-output (scratch project) directory. It then
 size/type-checks the loaded bytes against the provider's `outboundAttachments`
 profile and delivers a `MessagingFilePart` or `MessagingImagePart` only to the
-active messaging origin. `private=true` reuses the private-conversation resolver
+active messaging origin. Delivery sets `requireAttachments` so an adapter that
+would otherwise post leftover text after a failed upload must fail the tool
+call instead. `private=true` reuses the private-conversation resolver
 but does not suppress the source reply.
 
 Because Codex fixes a thread's dynamic-tool catalog at thread creation, the

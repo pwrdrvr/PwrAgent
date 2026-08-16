@@ -51,8 +51,8 @@ export async function resolveMessagingOutboundFile(
   capabilities: MessagingOutboundFileCapabilities,
   access: MessagingOutboundFileAccess,
 ): Promise<MessagingOutboundFile> {
-  const rawPath = typeof request.path === "string" ? request.path.trim() : "";
-  if (!rawPath || rawPath.includes("\0") || !path.isAbsolute(rawPath)) {
+  const rawPath = typeof request.path === "string" ? request.path : "";
+  if (!rawPath.trim() || rawPath.includes("\0") || !path.isAbsolute(rawPath)) {
     return {
       ok: false,
       code: "invalid_arguments",

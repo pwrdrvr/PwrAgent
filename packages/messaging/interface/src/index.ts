@@ -798,6 +798,12 @@ export type MessagingSurfaceDeliveryPolicy = {
   broadcastThreadReply?: boolean;
   unpin?: boolean;
   fallback?: "present_new" | "fail";
+  /**
+   * When true, adapters must fail the delivery if a file or image part could
+   * not be uploaded. Ordinary replies may still post leftover text after a
+   * best-effort upload miss.
+   */
+  requireAttachments?: boolean;
 };
 
 export type MessagingActionLayoutPolicy = {

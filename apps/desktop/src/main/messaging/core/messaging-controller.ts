@@ -6556,16 +6556,12 @@ export class MessagingController {
     // Text and image ownership are independent. Another completion event may
     // have posted these images while this path awaited resolution, even though
     // this path already owns the backend item/text delivery.
-    const messageImages =
-      images.length > 0
-      && this.claimAssistantMessageContentDelivery(
-        event,
-        binding,
-        assistantImageDeliverySignature(images),
-        identity,
-      )
-        ? images
-        : [];
+    const messageImages = this.takeUndeliveredAssistantImages(
+      images,
+      event,
+      binding,
+      identity,
+    );
     this.logger.debug?.(
       `messaging assistant deliver thread=${binding.threadId} binding=${binding.id} chars=${text.length} images=${messageImages.length} preview="${compactLogPreview(text)}"`,
     );
@@ -6597,30 +6593,18 @@ export class MessagingController {
     event: AgentEvent,
     binding: MessagingBindingRecord,
     identity?: AssistantMessageDeliveryIdentity,
-    deliveryClaimed = false,
+    _deliveryClaimed = false,
   ): Promise<void> {
     if (images.length === 0) {
       return;
     }
-    if (!deliveryClaimed) {
-      if (
-        !this.markAssistantMessageDelivered(
-          event,
-          binding,
-          assistantImageDeliverySignature(images),
-          identity,
-        )
-      ) {
-        return;
-      }
-    } else if (
-      !this.claimAssistantMessageContentDelivery(
-        event,
-        binding,
-        assistantImageDeliverySignature(images),
-        identity,
-      )
-    ) {
+    const pendingImages = this.takeUndeliveredAssistantImages(
+      images,
+      event,
+      binding,
+      identity,
+    );
+    if (pendingImages.length === 0) {
       return;
     }
     const attribution = await this.responseAttributionForBinding(binding);
@@ -6632,9 +6616,25 @@ export class MessagingController {
         createdAt: this.now(),
         role: "assistant",
         attribution,
-        parts: images,
+        parts: pendingImages,
       },
       binding,
+    );
+  }
+
+  private takeUndeliveredAssistantImages(
+    images: MessagingImagePart[],
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+    identity?: AssistantMessageDeliveryIdentity,
+  ): MessagingImagePart[] {
+    return images.filter((image) =>
+      this.claimAssistantMessageContentDelivery(
+        event,
+        binding,
+        assistantImageDeliverySignature([image]),
+        identity,
+      )
     );
   }
 
@@ -16740,6 +16740,25 @@ export class MessagingController {
         },
       };
     }
+    const permission = this.checkDynamicToolPermission({
+      backend: request.context.backend,
+      threadId: request.context.threadId,
+      turnId: request.context.turnId,
+      category: "messaging_context",
+      tool: "send_messaging_file",
+    });
+    if (permission.owns && !permission.allowed) {
+      return {
+        ok: false,
+        error: {
+          code: "forbidden",
+          message:
+            `The messaging user who started this turn lacks permission for this tool (${
+              permission.permission ?? "message.reply"
+            }).`,
+        },
+      };
+    }
     const sendPrivately = request.args?.private === true;
     if (sendPrivately && !request.context.turnId) {
       return {
@@ -16849,7 +16868,6 @@ export class MessagingController {
           data: outbound.data,
           mimeType: outbound.mimeType,
           sizeBytes: outbound.sizeBytes,
-          description: caption || undefined,
         };
     const result = await this.deliver(
       {
@@ -16857,6 +16875,9 @@ export class MessagingController {
         kind: "message",
         bindingId: sourceBinding?.id,
         createdAt: this.now(),
+        delivery: {
+          requireAttachments: true,
+        },
         role: "assistant",
         parts: [
           ...(caption

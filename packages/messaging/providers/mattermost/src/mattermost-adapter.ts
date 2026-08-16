@@ -2445,7 +2445,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (fileParts.length === 0) {
       return [];
     }
-    const requiresAllFiles = isArtifactFileDelivery(params.intent);
+    const requiresAllFiles = requiresOutboundAttachments(params.intent);
     const maxBytes =
       this.capabilityProfile.outboundAttachments?.maxUploadBytes ?? Infinity;
     const ids: string[] = [];
@@ -2762,6 +2762,10 @@ function isArtifactFileDelivery(intent: MessagingSurfaceIntent): boolean {
     "artifactDelivery" in intent &&
     intent.parts.some((part) => part.type === "file")
   );
+}
+
+function requiresOutboundAttachments(intent: MessagingSurfaceIntent): boolean {
+  return intent.delivery?.requireAttachments === true || isArtifactFileDelivery(intent);
 }
 
 function parseEmbeddedPost(

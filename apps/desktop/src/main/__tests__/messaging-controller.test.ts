@@ -22547,6 +22547,7 @@ describe("send_messaging_file agent tool", () => {
       expect.objectContaining({
         kind: "message",
         role: "assistant",
+        delivery: { requireAttachments: true },
         parts: [
           expect.objectContaining({
             type: "text",
@@ -22561,6 +22562,14 @@ describe("send_messaging_file agent tool", () => {
         ],
       }),
     ]);
+    const filePart = harness.delivered.find((intent) => intent.kind === "message")
+      && "parts" in (harness.delivered.find((intent) => intent.kind === "message") ?? {})
+      ? (harness.delivered.find((intent) => intent.kind === "message") as {
+          parts: Array<{ type: string; description?: string }>;
+        }).parts.find((part) => part.type === "file")
+      : undefined;
+    expect(filePart).toBeDefined();
+    expect(filePart).not.toHaveProperty("description");
   });
 
   it("delivers a PNG as an image part", async () => {
@@ -22660,6 +22669,80 @@ describe("send_messaging_file agent tool", () => {
           expect.objectContaining({
             type: "text",
             text: "Here is the screenshot.",
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("keeps other final-message images when only one was sent by the tool", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-send-image-multi-"));
+    tempDirs.push(tempDir);
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const filePath = path.join(tempDir, "shot.png");
+    await writeFile(filePath, pngBytes);
+    const sentUrl = `data:image/png;base64,${pngBytes.toString("base64")}`;
+    const harness = await createHarness({
+      outboundFileAccess: { allowedRoots: [tempDir] },
+      resolveAssistantMessageImages: async () => [
+        {
+          type: "image" as const,
+          url: sentUrl,
+          alt: "shot.png",
+          source: "assistant" as const,
+          sourceUrl: filePath,
+        },
+        {
+          type: "image" as const,
+          url: "https://example.com/other.png",
+          alt: "other",
+          source: "assistant" as const,
+        },
+      ],
+    });
+    await startMessagingTurn(harness);
+
+    await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_messaging_file",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: { path: filePath },
+    });
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-message-1",
+            type: "agentMessage",
+            phase: "final",
+            text: "Two images.",
+          },
+        },
+      },
+    });
+
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        parts: [
+          expect.objectContaining({
+            type: "text",
+            text: "Two images.",
+          }),
+          expect.objectContaining({
+            type: "image",
+            url: "https://example.com/other.png",
           }),
         ],
       }),
@@ -22787,6 +22870,23 @@ describe("send_messaging_file agent tool", () => {
       owns: true,
       allowed: false,
       permission: "message.reply",
+    });
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "send_messaging_file",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: { path: "/tmp/resume.pdf" },
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: "forbidden",
+        message: expect.stringContaining("message.reply"),
+      },
     });
   });
 });

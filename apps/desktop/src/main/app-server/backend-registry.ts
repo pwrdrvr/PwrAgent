@@ -305,6 +305,7 @@ import {
   type CompleteMonitoringToolArgs,
   type CreateMonitorDelegationToolArgs,
   type InjectMonitorProgressToolArgs,
+  type AgentToolCatalogId,
   type MessagingDynamicToolCategory,
   type TaskMonitorCompletionSource,
   type TaskMonitorRequest,
@@ -7552,6 +7553,8 @@ export class DesktopBackendRegistry {
                 threadInspectionHandler: this.threadInspectionHandler,
                 threadOrchestrationHandler: this.threadOrchestrationHandler,
               }, { taskMonitorRole: "all" }),
+            authorizeToolCall: (params) =>
+              this.authorizeAgentToolMcpCall(params),
           });
     this.pdfToolMcpServer =
       options?.pdfToolMcpServer === null
@@ -25438,6 +25441,26 @@ export class DesktopBackendRegistry {
     return result.permission ?? "required capability";
   }
 
+  private authorizeAgentToolMcpCall(params: {
+    backend: AppServerBackendKind;
+    catalogId?: AgentToolCatalogId;
+    threadId: string;
+    tool: string;
+    turnId: string;
+    arguments?: unknown;
+  }): string | null {
+    const category = messagingDynamicToolCategoryForCatalog(params.catalogId);
+    if (!category) {
+      return null;
+    }
+    return this.dynamicToolPermissionDenied(params.backend, category, {
+      threadId: params.threadId,
+      turnId: params.turnId,
+      tool: params.tool,
+      arguments: params.arguments,
+    });
+  }
+
   private async handleThreadOrchestrationRequest(
     request: PwrAgentThreadOrchestrationRequest,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
@@ -32836,4 +32859,19 @@ function queuedTurnDisplayText(input: AppServerTurnInputItem[]): string {
     .join("\n")
     .trim();
   return text.length > 200 ? `${text.slice(0, 200)}\u2026` : text;
+}
+
+function messagingDynamicToolCategoryForCatalog(
+  catalogId: AgentToolCatalogId | undefined,
+): MessagingDynamicToolCategory | undefined {
+  switch (catalogId) {
+    case "automation_inspection":
+    case "app_management":
+    case "thread_inspection":
+    case "thread_orchestration":
+    case "messaging_context":
+      return catalogId;
+    default:
+      return undefined;
+  }
 }

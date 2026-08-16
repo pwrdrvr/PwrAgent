@@ -48,6 +48,32 @@ describe("resolveMessagingOutboundFile", () => {
     });
   });
 
+  it("preserves a trailing space in the requested filename", async () => {
+    const tempDir = await createTempDir();
+    const spacedPath = path.join(tempDir, "resume.pdf ");
+    await writeFile(spacedPath, Buffer.from("%PDF-1.4 spaced"));
+    await expect(
+      resolveOutbound({
+        path: spacedPath,
+      }, { supportsFileUpload: true }, {
+        allowedRoots: [tempDir],
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      path: expect.stringMatching(/resume\.pdf $/u),
+    });
+    await expect(
+      resolveOutbound({
+        path: path.join(tempDir, "resume.pdf"),
+      }, { supportsFileUpload: true }, {
+        allowedRoots: [tempDir],
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "not_found",
+    });
+  });
+
   it("rejects a relative path", async () => {
     await expect(
       resolveOutbound({

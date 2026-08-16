@@ -66,7 +66,18 @@ export type AgentToolMcpServerLike = {
   close(): Promise<void>;
 };
 
-export type AgentToolMcpCatalog = Pick<ResolvedAgentToolCatalog, "router">;
+export type AgentToolMcpCatalog = Pick<ResolvedAgentToolCatalog, "router"> & {
+  id?: ResolvedAgentToolCatalog["id"];
+};
+
+export type AgentToolMcpAuthorization = {
+  backend: AppServerBackendKind;
+  catalogId?: ResolvedAgentToolCatalog["id"];
+  threadId: string;
+  tool: string;
+  turnId: string;
+  arguments?: unknown;
+};
 
 export type AgentToolMcpServerOptions = {
   resolveCatalogs: () => AgentToolMcpCatalog[];
@@ -76,6 +87,9 @@ export type AgentToolMcpServerOptions = {
     | ResolvedAgentToolMcpCallContext
     | Promise<ResolvedAgentToolMcpCallContext | undefined>
     | undefined;
+  authorizeToolCall?: (
+    params: AgentToolMcpAuthorization,
+  ) => string | null | undefined;
 };
 
 export class AgentToolMcpServer implements AgentToolMcpServerLike {
@@ -270,15 +284,14 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
             "PwrAgent MCP tools are callable only during an active turn on the registered thread.",
           );
         }
-        const router = this.options
+        const catalog = this.options
           .resolveCatalogs()
-          .map((catalog) => catalog.router)
           .find((candidate) =>
-            candidate.acceptsMcpToolCall({
+            candidate.router.acceptsMcpToolCall({
               tool: request.params.name,
             }),
           );
-        if (!router) {
+        if (!catalog) {
           return toMcpToolResponse(
             agentToolFailure({
               code: "unsupported_operation",
@@ -286,7 +299,24 @@ export class AgentToolMcpServer implements AgentToolMcpServerLike {
             }),
           );
         }
-        return await router.handleMcpToolCall({
+        const deniedPermission = this.options.authorizeToolCall?.({
+          backend: callContext.backend,
+          catalogId: catalog.id,
+          threadId: callContext.threadId,
+          tool: request.params.name,
+          turnId: callContext.turnId,
+          arguments: request.params.arguments,
+        });
+        if (deniedPermission) {
+          return toMcpToolResponse(
+            agentToolFailure({
+              code: "forbidden",
+              message:
+                `The messaging user who started this turn lacks permission for this tool (${deniedPermission}).`,
+            }),
+          );
+        }
+        return await catalog.router.handleMcpToolCall({
           backend: callContext.backend,
           threadId: callContext.threadId,
           turnId: callContext.turnId,
