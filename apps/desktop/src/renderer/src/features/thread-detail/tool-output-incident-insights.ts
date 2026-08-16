@@ -543,15 +543,23 @@ export function formatCapShare(
     : `${percentage.toLocaleString()}% of the output cap`;
 }
 
+/**
+ * Money, always to the penny.
+ *
+ * This renders a column, and a column of "$3.5" over "$8.38" puts the decimal
+ * point in a different place on every row — the eye cannot compare magnitudes
+ * without re-reading each number. Fixed two places keeps the point in one
+ * column, which is why spreadsheets do it. Sub-cent amounts round to $0.00
+ * rather than growing a third place and breaking the same alignment.
+ */
 export function formatMicrosCurrency(
   micros: number,
   currency: string | undefined,
 ): string {
-  const units = micros / 1_000_000;
-  const rounded = units >= 100
-    ? Math.round(units)
-    : Number(units.toFixed(units >= 1 ? 2 : 3));
-  const value = rounded.toLocaleString();
+  const value = (micros / 1_000_000).toLocaleString(undefined, {
+    maximumFractionDigits: 2,
+    minimumFractionDigits: 2,
+  });
   if (!currency || currency === "USD") return `$${value}`;
   if (currency.toLowerCase().includes("credit")) return `${value} cr`;
   return `${value} ${currency}`;

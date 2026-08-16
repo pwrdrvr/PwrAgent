@@ -1,4 +1,6 @@
 import type {
+  AnalyzeThreadToolHistoryRequest,
+  AnalyzeThreadToolHistoryResponse,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
@@ -265,6 +267,7 @@ export const FEDERATION_BACKEND_METHODS = {
   listThreads: "backend.listThreads",
   resolveThread: "backend.resolveThread",
   readThread: "backend.readThread",
+  analyzeThreadToolHistory: "backend.analyzeThreadToolHistory",
   readTranscriptImage: "backend.readTranscriptImage",
   listSkills: "backend.listSkills",
   listBackends: "backend.listBackends",
@@ -358,6 +361,8 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.listThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThread]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
+  /* Reads the thread's own transcript history; same data class as reading it. */
+  [FEDERATION_BACKEND_METHODS.analyzeThreadToolHistory]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.readTranscriptImage]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listSkills]: "thread_detail",
   [FEDERATION_BACKEND_METHODS.listBackends]: "thread_detail",
@@ -464,6 +469,9 @@ export type FederationBackendOperations = {
   readThread(
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse>;
+  analyzeThreadToolHistory(
+    request: AnalyzeThreadToolHistoryRequest,
+  ): Promise<AnalyzeThreadToolHistoryResponse>;
   readTranscriptImage(
     request: FederationReadTranscriptImageRequest,
   ): Promise<FederatedTranscriptImageResponse>;
@@ -711,6 +719,13 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.resolveThread(
         envelope.params as ResolveThreadRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.analyzeThreadToolHistory,
+    async (envelope) =>
+      await params.backend.analyzeThreadToolHistory(
+        envelope.params as AnalyzeThreadToolHistoryRequest,
       ),
   );
   params.router.registerHandler(
@@ -1327,6 +1342,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
       params: request,
     });
     return await this.transformReadThreadResponse(response);
+  }
+
+  async analyzeThreadToolHistory(
+    request: AnalyzeThreadToolHistoryRequest,
+  ): Promise<AnalyzeThreadToolHistoryResponse> {
+    return await this.rpc.request<AnalyzeThreadToolHistoryResponse>({
+      method: FEDERATION_BACKEND_METHODS.analyzeThreadToolHistory,
+      params: request,
+    });
   }
 
   async readTranscriptImage(

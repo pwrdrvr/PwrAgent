@@ -93,8 +93,14 @@ export function buildThreadIncidentSummary(params: {
   const overCapCount = flagged.filter(
     (entry) => entry.outputChars >= TOOL_OUTPUT_CAP_CHARS,
   ).length;
+  /* Later-trip counts for every call in one pass, rather than an indexOf plus
+     a filter per flagged call. The per-call form was O(flagged × n) with a
+     linear scan inside it — safe only because the notification payload is
+     capped at 200 rows, which is not a property this fold should depend on. */
+  const laterTripsByInvocation = countLaterTripsByInvocation(invocations);
   const replayedTokens = flagged.reduce(
-    (sum, entry) => sum + entry.estimatedOutputTokens * countLaterTrips(invocations, entry),
+    (sum, entry) =>
+      sum + entry.estimatedOutputTokens * (laterTripsByInvocation.get(entry) ?? 0),
     0,
   );
   const usageLines = params.usageLines ?? [];
@@ -127,21 +133,36 @@ export function buildThreadIncidentSummary(params: {
 }
 
 /**
- * Every call in the same turn observed after this one. Each is a round trip
- * that carried this output through the model again.
+ * How many calls follow each one inside its own turn. Every one of those is a
+ * round trip that carried the earlier output through the model again.
+ *
+ * Computed for all calls at once: group by turn, order within the turn, then
+ * read each position's distance from the end. Ties on `observedAt` — which a
+ * full-history analyze pass produces in bulk — fall back to persisted order so
+ * no trip is dropped.
  */
-function countLaterTrips(
+function countLaterTripsByInvocation(
   invocations: readonly ThreadToolInvocationRecord[],
-  invocation: ThreadToolInvocationRecord,
-): number {
-  const index = invocations.indexOf(invocation);
-  return invocations.filter((entry, entryIndex) =>
-    (entry.turnId ?? "") === (invocation.turnId ?? "")
-    && (
-      entry.observedAt > invocation.observedAt
-      || (entry.observedAt === invocation.observedAt && entryIndex > index)
-    )
-  ).length;
+): Map<ThreadToolInvocationRecord, number> {
+  const byTurn = new Map<string, ThreadToolInvocationRecord[]>();
+  const orderIndex = new Map<ThreadToolInvocationRecord, number>();
+  invocations.forEach((invocation, index) => {
+    orderIndex.set(invocation, index);
+    const key = invocation.turnId ?? "";
+    const bucket = byTurn.get(key);
+    if (bucket) bucket.push(invocation);
+    else byTurn.set(key, [invocation]);
+  });
+  const laterTrips = new Map<ThreadToolInvocationRecord, number>();
+  for (const bucket of byTurn.values()) {
+    const ordered = [...bucket].sort((left, right) =>
+      left.observedAt - right.observedAt
+      || (orderIndex.get(left) ?? 0) - (orderIndex.get(right) ?? 0));
+    ordered.forEach((invocation, position) => {
+      laterTrips.set(invocation, ordered.length - 1 - position);
+    });
+  }
+  return laterTrips;
 }
 
 function sumSpendSince(

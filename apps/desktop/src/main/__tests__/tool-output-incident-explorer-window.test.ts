@@ -121,6 +121,29 @@ describe("tool-output incident explorer window", () => {
     );
   });
 
+  it("names the owning instance in the route only for a peer's thread", async () => {
+    /* A local thread's route must stay exactly as it was — an always-emitted
+       segment appended a trailing slash to every ordinary route. */
+    const { showToolOutputIncidentExplorerWindow } = await import(
+      "../tool-output-incident-explorer-window"
+    );
+    showToolOutputIncidentExplorerWindow({
+      backend: "codex" as const,
+      federationTarget: { instanceId: "peer-instance", scope: "remote" },
+      projectLabel: "PwrAgent",
+      threadId: "thread-2",
+      title: "Peer work",
+    });
+
+    expect(mocks.windows[0]?.loadFile).toHaveBeenCalledWith(
+      "/renderer.html",
+      {
+        hash:
+          "tool-output-incidents/codex/thread-2/Peer%20work/PwrAgent/peer-instance",
+      },
+    );
+  });
+
   it("routes a thread-chip click back to the explorer's exact owner window", async () => {
     const {
       showThreadFromToolOutputIncidentExplorer,

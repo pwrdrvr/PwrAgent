@@ -1777,6 +1777,17 @@ class DesktopAppServerService {
   async analyzeThreadToolHistory(
     request: AnalyzeThreadToolHistoryRequest,
   ): Promise<AnalyzeThreadToolHistoryResponse> {
+    /* The scan pages the thread's transcript, which only the owning instance
+       can serve. A viewer analyzing a peer's thread runs it over there. */
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .analyzeThreadToolHistory(remoteRequest);
+    }
     return await getDesktopBackendRegistry().analyzeThreadToolHistory(request);
   }
 

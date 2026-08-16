@@ -309,6 +309,50 @@ describe("snapshot coverage", () => {
   });
 
   it("formats credits the same way the turn strip does", () => {
-    expect(formatIncidentMicros(2_400_000, "credits")).toBe("2.4 cr");
+    expect(formatIncidentMicros(2_400_000, "credits")).toBe("2.40 cr");
+  });
+});
+
+describe("replay counting at scale", () => {
+  it("counts later trips identically however many calls share a timestamp", () => {
+    /* A full-history analyze pass stamps a turn's calls in bulk, so ties are
+       the common case, not the edge case. */
+    const tied = Array.from({ length: 5 }, (_, index) =>
+      invocation({
+        estimatedOutputTokens: 100,
+        invocationId: `tied-${index}`,
+        observedAt: 1_000,
+        turnId: "turn-1",
+      }));
+    const summary = buildThreadIncidentSummary({
+      accounting: accounting(tied),
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    /* 4 + 3 + 2 + 1 + 0 later trips, each carrying 100 tokens. */
+    expect(summary?.replayedTokens).toBe(1_000);
+  });
+
+  it("stays linear on a thread far past the notification cap", () => {
+    const many = Array.from({ length: 4_000 }, (_, index) =>
+      invocation({
+        estimatedOutputTokens: 10,
+        invocationId: `call-${index}`,
+        observedAt: 1_000 + index,
+        turnId: `turn-${index % 20}`,
+      }));
+    const started = performance.now();
+    const summary = buildThreadIncidentSummary({
+      accounting: accounting(many),
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const elapsed = performance.now() - started;
+
+    expect(summary?.flaggedInvocationCount).toBe(4_000);
+    /* The quadratic form took seconds here; a generous ceiling still catches
+       a regression back to it. */
+    expect(elapsed).toBeLessThan(1_000);
   });
 });

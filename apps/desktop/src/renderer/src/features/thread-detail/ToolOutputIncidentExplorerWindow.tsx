@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   AppServerBackendKind,
+  FederationInstanceId,
+  FederationTarget,
   AppServerReadThreadResponse,
   AppServerThreadActivityDetail,
   ThreadToolAccounting,
+  ThreadToolAnalysisCoverage,
   ThreadToolInvocationRecord,
 } from "@pwragent/shared";
 import {
@@ -78,6 +81,9 @@ export function ToolOutputIncidentExplorerWindow() {
     try {
       const response = await desktopApi.readThread({
         backend: route.backend,
+        ...(route.federationTarget
+          ? { federationTarget: route.federationTarget }
+          : {}),
         includeAllToolInvocations: true,
         limit: HISTORY_PAGE_LIMIT,
         threadId: route.threadId,
@@ -185,6 +191,9 @@ export function ToolOutputIncidentExplorerWindow() {
     void readInvocationOutput({
       backend: route.backend,
       desktopApi,
+      ...(route.federationTarget
+        ? { federationTarget: route.federationTarget }
+        : {}),
       initial: latest,
       invocation: selected,
       threadId: route.threadId,
@@ -225,6 +234,9 @@ export function ToolOutputIncidentExplorerWindow() {
     try {
       const response = await desktopApi.analyzeThreadToolHistory({
         backend: route.backend,
+        ...(route.federationTarget
+          ? { federationTarget: route.federationTarget }
+          : {}),
         threadId: route.threadId,
       });
       setAccounting(response.accounting);
@@ -235,7 +247,10 @@ export function ToolOutputIncidentExplorerWindow() {
       setStatusTone(response.coverage.completeness === "complete" ? "info" : "error");
       setStatus(
         response.coverage.completeness === "complete"
-          ? `Analyzed ${response.coverage.invocationCount.toLocaleString()} tool calls across ${response.coverage.pageCount.toLocaleString()} page${response.coverage.pageCount === 1 ? "" : "s"}.`
+          ? describeAnalysisCoverage({
+              coverage: response.coverage,
+              knownInvocationCount: response.accounting.invocations.length,
+            })
           : response.coverage.explanation ?? "Analysis is incomplete.",
       );
     } catch (error) {
@@ -252,6 +267,11 @@ export function ToolOutputIncidentExplorerWindow() {
       if (canSteerSelected && selected.turnId) {
         await desktopApi?.steerTurn?.({
           backend: route.backend,
+          /* Steering a peer's turn has to reach the peer, the same way this
+             window's reads do. */
+          ...(route.federationTarget
+            ? { federationTarget: route.federationTarget }
+            : {}),
           expectedTurnId: selected.turnId,
           input: [{ type: "text", text: prompt.trim() }],
           requestId: `tool-output-incident:${selected.invocationId}:${Date.now()}`,
@@ -262,6 +282,9 @@ export function ToolOutputIncidentExplorerWindow() {
       } else if (canSendAsNewTurn) {
         await desktopApi?.startTurn?.({
           backend: route.backend,
+          ...(route.federationTarget
+            ? { federationTarget: route.federationTarget }
+            : {}),
           input: [{ type: "text", text: prompt.trim() }],
           threadId: route.threadId,
         });
@@ -303,6 +326,9 @@ export function ToolOutputIncidentExplorerWindow() {
               title: route.title,
             }}
             onOpen={() => {
+              /* No federation target: `WindowShowThreadRequest` has none, and
+                 the main-process handler routes to this window's own owner.
+                 Passing one would be silently dropped by the spread. */
               void desktopApi?.showThreadFromToolOutputIncidentExplorer?.({
                 backend: route.backend,
                 threadId: route.threadId,
@@ -916,6 +942,29 @@ function Fact(props: {
  * output must paint nothing — a floored bar there would read as low activity
  * instead of none, blurring the contrast the polling band depends on.
  */
+/**
+ * What the scan reached, measured against what the thread already knows.
+ *
+ * "Complete" means the scan read the whole retained replay — not that it saw
+ * the whole thread. On a long thread most tool calls were recorded live and
+ * their transcript entries have since been compacted away, so the scan
+ * legitimately finds a fraction of them. Reporting only its own count reads
+ * as a contradiction next to a case list holding several times more: one real
+ * thread scanned 202 calls and listed 575 cases on the same screen.
+ */
+function describeAnalysisCoverage(params: {
+  coverage: ThreadToolAnalysisCoverage;
+  knownInvocationCount: number;
+}): string {
+  const scanned = params.coverage.invocationCount;
+  const pages = params.coverage.pageCount;
+  const scannedText = `Scanned ${scanned.toLocaleString()} tool call${scanned === 1 ? "" : "s"} still in replay across ${pages.toLocaleString()} page${pages === 1 ? "" : "s"}.`;
+  const older = params.knownInvocationCount - scanned;
+  return older > 0
+    ? `${scannedText} ${older.toLocaleString()} older call${older === 1 ? "" : "s"} recorded earlier remain accounted, but their output is no longer in the transcript.`
+    : scannedText;
+}
+
 function scaleWidth(value: number, max: number, floor = 2): number {
   if (max <= 0) return 0;
   if (value <= 0) return floor === 0 ? 0 : floor;
@@ -950,16 +999,27 @@ function countLaterTripsInTurn(
 
 function readIncidentRoute(): {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   projectLabel?: string;
   threadId: string;
   title: string;
 } | undefined {
-  const [kind, backend, threadId, title, projectLabel] = window.location.hash
-    .replace(/^#/, "")
-    .split("/");
+  const [kind, backend, threadId, title, projectLabel, instanceId] =
+    window.location.hash.replace(/^#/, "").split("/");
   if (kind !== "tool-output-incidents" || !backend || !threadId) return undefined;
+  const owner = instanceId ? decodeURIComponent(instanceId) : "";
   return {
     backend: decodeURIComponent(backend) as AppServerBackendKind,
+    /* Present only for a peer's thread; a local thread carries no target and
+       every read stays on this instance. */
+    ...(owner
+      ? {
+          federationTarget: {
+            scope: "remote" as const,
+            instanceId: owner as FederationInstanceId,
+          },
+        }
+      : {}),
     ...(projectLabel
       ? { projectLabel: decodeURIComponent(projectLabel) }
       : {}),
@@ -1009,6 +1069,7 @@ function groupCases(
 async function readInvocationOutput(params: {
   backend: AppServerBackendKind;
   desktopApi: NonNullable<ReturnType<typeof useDesktopApi>>;
+  federationTarget?: FederationTarget;
   initial: AppServerReadThreadResponse;
   invocation: ThreadToolInvocationRecord;
   threadId: string;
@@ -1028,6 +1089,9 @@ async function readInvocationOutput(params: {
     seen.add(cursor);
     response = await params.desktopApi.readThread({
       backend: params.backend,
+      ...(params.federationTarget
+        ? { federationTarget: params.federationTarget }
+        : {}),
       before: cursor,
       limit: HISTORY_PAGE_LIMIT,
       threadId: params.threadId,

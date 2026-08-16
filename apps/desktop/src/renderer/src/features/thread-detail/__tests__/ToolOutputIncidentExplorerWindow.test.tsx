@@ -460,3 +460,119 @@ function buildInvocation(): ThreadToolInvocationRecord {
     warningLines: 1,
   };
 }
+
+describe("analysis coverage reporting", () => {
+  it("reconciles what the scan reached with what the thread already knows", async () => {
+    /* Measured on a real 236-turn thread: the scan reads 202 calls still in
+       replay while the store holds 2,225, because the rest were recorded live
+       and their transcript entries were compacted away. Reporting only the
+       scan's own count read as a contradiction beside a longer case list. */
+    const analyzed = buildMultiTurnResponse();
+    const analyzeThreadToolHistory = vi.fn(async () => ({
+      accounting: analyzed.toolAccounting!,
+      coverage: {
+        analyzedAt: 1,
+        analyzerVersion: "1",
+        completeness: "complete" as const,
+        entryCount: 1_704,
+        invocationCount: 1,
+        missingOutputCount: 0,
+        pageCount: 1,
+      },
+    }));
+    installApi({
+      analyzeThreadToolHistory,
+      readThread: async () => buildMultiTurnResponse(),
+    });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    fireEvent.click(await screen.findByRole("button", { name: /Analyze history/ }));
+
+    expect(await screen.findByText(/Scanned 1 tool call still in replay/))
+      .toBeInTheDocument();
+    /* The fixture holds 4 invocations; 3 predate what replay retained. */
+    expect(screen.getByText(/3 older calls recorded earlier remain accounted/))
+      .toBeInTheDocument();
+  });
+});
+
+describe("ToolOutputIncidentExplorerWindow federation", () => {
+  it("reads and analyzes a peer's thread on the instance that owns it", async () => {
+    /* Without the target every read runs against the local registry, which
+       does not have the peer's thread id — the viewer's explorer came up
+       empty with no explanation. */
+    const readThread = vi.fn(async () => buildMultiTurnResponse());
+    const analyzeThreadToolHistory = vi.fn(async () => ({
+      accounting: { alerts: [], invocations: [], summaries: [] },
+      coverage: {
+        analyzedAt: 1,
+        analyzerVersion: "1",
+        completeness: "complete" as const,
+        entryCount: 0,
+        invocationCount: 0,
+        missingOutputCount: 0,
+        pageCount: 1,
+      },
+    }));
+    installApi({ analyzeThreadToolHistory, readThread });
+    window.location.hash =
+      "#tool-output-incidents/codex/thread-1/Noisy%20work/PwrAgent/peer-instance";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    await waitFor(() => expect(readThread).toHaveBeenCalledWith(
+      expect.objectContaining({
+        federationTarget: { instanceId: "peer-instance", scope: "remote" },
+      }),
+    ));
+
+    fireEvent.click(await screen.findByRole("button", { name: /Analyze history/ }));
+    await waitFor(() => expect(analyzeThreadToolHistory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        federationTarget: { instanceId: "peer-instance", scope: "remote" },
+        threadId: "thread-1",
+      }),
+    ));
+  });
+
+  it("leaves a local thread's reads untargeted", async () => {
+    const readThread = vi.fn(async () => buildMultiTurnResponse());
+    installApi({ readThread });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    await waitFor(() => expect(readThread).toHaveBeenCalled());
+    expect(readThread).not.toHaveBeenCalledWith(
+      expect.objectContaining({ federationTarget: expect.anything() }),
+    );
+  });
+});
+
+describe("turn selection is shared across both turn controls", () => {
+  it("marks the spark column selected when a strip row selects the turn", async () => {
+    /* The two controls were bound to one filter but only the strip rendered
+       it: clicking a spark column toggled the strip's selection while the
+       column itself stayed unmarked, so it read as a dead control. */
+    installApi({ readThread: async () => buildMultiTurnResponse() });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const turns = await screen.findByLabelText("Cost by turn");
+    const timeline = screen.getByRole("group", {
+      name: "Tool cost per turn, in order",
+    });
+    const sparkColumns = within(timeline).getAllByRole("button");
+    expect(sparkColumns.every((column) =>
+      column.getAttribute("aria-pressed") === "false")).toBe(true);
+
+    fireEvent.click(within(turns).getByRole("button", { name: /Turn 2/ }));
+
+    await waitFor(() => expect(
+      within(timeline).getAllByRole("button", { name: /Turn 2/ })[0],
+    ).toHaveAttribute("aria-pressed", "true"));
+    /* And only that one. */
+    expect(within(timeline).getAllByRole("button")
+      .filter((column) => column.getAttribute("aria-pressed") === "true"))
+      .toHaveLength(1);
+  });
+});

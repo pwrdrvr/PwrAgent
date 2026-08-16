@@ -2523,6 +2523,10 @@ export function ThreadView(props: ThreadViewProps) {
       ?? selectedThread.linkedDirectories[0]?.label;
     void desktopApi?.openToolOutputIncidentExplorerWindow?.({
       backend: selectedThread.source,
+      /* A peer's thread is analyzed and read on the instance that owns it. */
+      ...(selectedThread.federation?.ref.target
+        ? { federationTarget: selectedThread.federation.ref.target }
+        : {}),
       ...(projectLabel ? { projectLabel } : {}),
       threadId: selectedThread.id,
       title: selectedThread.title,
@@ -2532,6 +2536,9 @@ export function ThreadView(props: ThreadViewProps) {
     if (!selectedThread) return;
     void desktopApi?.analyzeThreadToolHistory?.({
       backend: selectedThread.source,
+      ...(selectedThread.federation?.ref.target
+        ? { federationTarget: selectedThread.federation.ref.target }
+        : {}),
       threadId: selectedThread.id,
     });
   }, [desktopApi, selectedThread]);

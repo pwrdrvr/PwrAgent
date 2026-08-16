@@ -481,10 +481,13 @@ describe("turn cost", () => {
       .toBeUndefined();
   });
 
-  it("formats money in the ledger's units", () => {
-    expect(formatMicrosCurrency(2_400_000, "USD")).toBe("$2.4");
-    expect(formatMicrosCurrency(358_000_000, "USD")).toBe("$358");
-    expect(formatMicrosCurrency(2_400_000, "credits")).toBe("2.4 cr");
+  it("formats money to a fixed two places so the column aligns", () => {
+    /* A column of "$3.5" over "$8.38" moves the decimal point per row. */
+    expect(formatMicrosCurrency(2_400_000, "USD")).toBe("$2.40");
+    expect(formatMicrosCurrency(3_500_000, "USD")).toBe("$3.50");
+    expect(formatMicrosCurrency(358_000_000, "USD")).toBe("$358.00");
+    expect(formatMicrosCurrency(4_000, "USD")).toBe("$0.00");
+    expect(formatMicrosCurrency(2_400_000, "credits")).toBe("2.40 cr");
   });
 });
 
