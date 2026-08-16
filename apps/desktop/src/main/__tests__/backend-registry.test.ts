@@ -33610,7 +33610,7 @@ script = "printf setup"
       startedByPwrAgent: true,
       startupConfirmed: true,
       parentShouldPoll: false,
-      completionWillWakeParent: true,
+      completionWakesParentByDefault: true,
       monitorThreadId: "monitor-thread",
       monitorTurnId: "turn-1",
     });
@@ -33626,7 +33626,12 @@ script = "printf setup"
     expect(String(payload.parentAgentGuidance)).toContain("local verification commands");
     expect(String(payload.parentAgentGuidance)).toContain("long-running command");
     expect(String(payload.parentAgentGuidance)).toContain("remain idle");
-    expect(String(payload.parentAgentGuidance)).toContain("only event that should wake");
+    expect(String(payload.parentAgentGuidance)).toContain(
+      "complete_monitoring is the only event that wakes",
+    );
+    expect(String(payload.parentAgentGuidance)).toContain(
+      "triggerParentTurn=false",
+    );
     expect(String(payload.parentAgentGuidance)).toContain("Do not call read_thread");
     expect(String(payload.parentAgentGuidance)).toContain("Do not sleep");
     expect(String(payload.parentAgentGuidance)).not.toContain("make at most one startup observation");
@@ -34126,7 +34131,6 @@ script = "printf setup"
     ).resolves.toMatchObject({
       subAgents: [
         {
-          lastMessage: "lint is running",
           monitorId,
           monitorUsage: {
             cost: {
@@ -40704,7 +40708,7 @@ script = "printf setup"
         startedByPwrAgent: true,
         startupConfirmed: true,
         parentShouldPoll: false,
-        completionWillWakeParent: true,
+        completionWakesParentByDefault: true,
       },
     });
     expect(monitorId).toMatch(/^monitor-/u);
@@ -40803,6 +40807,31 @@ script = "printf setup"
         summary: "Deployment completed.",
       },
     });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: monitorThreadId,
+          turnId: monitorTurnId,
+          model: "kimi-lite",
+          tokenUsage: {
+            last_token_usage: {
+              input_tokens: 650,
+              cached_input_tokens: 150,
+              output_tokens: 40,
+              reasoning_output_tokens: 8,
+            },
+          },
+        },
+      },
+    });
+    await emitCompletedTurn(
+      registry,
+      acpBackendId,
+      monitorThreadId,
+      monitorTurnId,
+    );
 
     await vi.waitFor(() => {
       expect(startPrompt).toHaveBeenCalledWith(
@@ -40823,6 +40852,15 @@ script = "printf setup"
           monitorId,
           outcome: "success",
           status: "success",
+          monitorUsage: expect.objectContaining({
+            model: "kimi-lite",
+            tokenUsage: expect.objectContaining({
+              inputTokens: 650,
+              cachedInputTokens: 150,
+              outputTokens: 40,
+              reasoningOutputTokens: 8,
+            }),
+          }),
         }),
       ],
     });

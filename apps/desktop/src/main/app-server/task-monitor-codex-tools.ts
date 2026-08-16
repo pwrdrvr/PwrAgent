@@ -302,7 +302,8 @@ export function buildMonitorParentAgentGuidance(params: {
     "Do not sleep, poll the delegated task, or wait for the monitor in the parent after creation succeeds.",
     `The monitor will poll and inject non-waking progress updates or heartbeats about every ${heartbeatIntervalSeconds} seconds while work is still running.`,
     "If the parent has no unrelated work, it should end its turn and remain idle. If it has unrelated work, it may continue that work without waiting on the monitor.",
-    "The monitor's complete_monitoring call is the only event that should wake, start, or queue a parent turn with the final success/failure/cancelled result.",
+    "By default, complete_monitoring is the only event that wakes, starts, or queues a parent turn with the final result.",
+    "A monitor may set triggerParentTurn=false only when the delegated workflow explicitly requires no parent follow-up.",
   ].join("\n");
 }
 

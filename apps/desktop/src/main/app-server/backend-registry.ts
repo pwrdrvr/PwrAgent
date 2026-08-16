@@ -2583,6 +2583,13 @@ function readNotificationItemType(notification: AppServerNotification): string |
 const TASK_MONITOR_STALE_CHECK_INTERVAL_MS = 15_000;
 const TASK_MONITOR_STALE_GRACE_MS = 15_000;
 
+function taskMonitorThreadKey(
+  backend: AppServerBackendKind,
+  threadId: string,
+): string {
+  return `${backend}:${threadId}`;
+}
+
 type TaskMonitorCancellationState = {
   finalizing: boolean;
   promise: Promise<TaskMonitorResponse<"cancel_monitor_delegation">>;
@@ -2611,6 +2618,7 @@ type TaskMonitorDelegationRecord = {
   pollIntervalSeconds: number;
   preferredModel: string;
   preferredReasoningEffort: string;
+  persistedStatus?: ThreadSubAgentSummary["status"];
   runtimeModel?: string;
   cancellation?: TaskMonitorCancellationState;
   finalizationStarted?: boolean;
@@ -6652,6 +6660,10 @@ export class DesktopBackendRegistry {
    */
   private liveThreadUsageFlushChain: Promise<void> = Promise.resolve();
   private readonly taskMonitorDelegations = new Map<
+    string,
+    TaskMonitorDelegationRecord
+  >();
+  private readonly completedTaskMonitorsByThread = new Map<
     string,
     TaskMonitorDelegationRecord
   >();
@@ -17485,6 +17497,7 @@ export class DesktopBackendRegistry {
     // in memory. `closed` prevents either drain from re-arming its timer; the
     // serialized flush chains ensure no write survives close().
     await liveThreadUsageEmitBarrier;
+    this.completedTaskMonitorsByThread.clear();
     await this.flushLiveThreadUsageLines();
     // A command streaming at quit time has accounting worth up to one flush
     // window sitting in memory; write it before the store goes away. The flush
@@ -19745,11 +19758,15 @@ export class DesktopBackendRegistry {
       }
     }
 
-    const monitorRecord = Array.from(this.taskMonitorDelegations.values()).find(
-      (record) =>
-        record.backend === event.backend
-        && record.monitorThreadId === notification.params.threadId,
-    );
+    const monitorRecord =
+      Array.from(this.taskMonitorDelegations.values()).find(
+        (record) =>
+          record.backend === event.backend
+          && record.monitorThreadId === notification.params.threadId,
+      ) ??
+      this.completedTaskMonitorsByThread.get(
+        taskMonitorThreadKey(event.backend, notification.params.threadId),
+      );
     if (!monitorRecord) {
       if (event.backend === "codex") {
         await this.recordCodexNativeSubAgentUsage(event);
@@ -19779,6 +19796,14 @@ export class DesktopBackendRegistry {
           });
     if (usageSnapshot) {
       monitorRecord.latestUsage = usageSnapshot;
+      const shouldPersistUsage =
+        event.backend === "codex"
+        || !readTaskMonitorTokenUsageRecords(
+          notification.params.tokenUsage,
+        )?.totalUsage;
+      if (!shouldPersistUsage) {
+        return;
+      }
       const observedReplays = this.observeLiveThreadContextReplay({
         backend: event.backend,
         threadId: notification.params.threadId,
@@ -20116,6 +20141,9 @@ export class DesktopBackendRegistry {
       Array.from(this.taskMonitorDelegations.values()).some(
         (record) =>
           record.backend === event.backend && record.monitorThreadId === threadId,
+      )
+      || this.completedTaskMonitorsByThread.has(
+        taskMonitorThreadKey(event.backend, threadId),
       )
     ) {
       return;
@@ -21209,6 +21237,7 @@ export class DesktopBackendRegistry {
       threadId: record.parentThreadId,
       subAgent,
     });
+    record.persistedStatus = subAgent.status;
     this.invalidateThreadListCache(record.parentBackend);
     await this.emit({
       backend: record.parentBackend,
@@ -26365,7 +26394,7 @@ export class DesktopBackendRegistry {
         startedByPwrAgent: true,
         startupConfirmed: true,
         parentShouldPoll: false,
-        completionWillWakeParent: true,
+        completionWakesParentByDefault: true,
         monitorThreadId: startedMonitor.threadId,
         monitorTurnId: startedMonitor.turnId,
         parentAgentGuidance,
@@ -26882,10 +26911,13 @@ export class DesktopBackendRegistry {
     }
 
     bound.record.lastActivityAt = Date.now();
-    await this.persistTaskMonitorSubAgent(bound.record, {
-      lastMessage: message,
-      status: args.status ?? "running",
-    });
+    const nextStatus = args.status ?? "running";
+    if (nextStatus !== bound.record.persistedStatus) {
+      await this.persistTaskMonitorSubAgent(bound.record, {
+        lastMessage: message,
+        status: nextStatus,
+      });
+    }
     await this.emitTaskMonitorProgressMessage({
       monitorId: bound.record.monitorId,
       parentBackend: bound.record.parentBackend,
@@ -27093,6 +27125,18 @@ export class DesktopBackendRegistry {
     }
 
     this.taskMonitorDelegations.delete(params.record.monitorId);
+    if (
+      params.completionSource.type === "monitor_tool"
+      && params.record.monitorThreadId
+    ) {
+      this.completedTaskMonitorsByThread.set(
+        taskMonitorThreadKey(
+          params.record.backend,
+          params.record.monitorThreadId,
+        ),
+        params.record,
+      );
+    }
     return parentTurn;
   }
 
@@ -27111,6 +27155,21 @@ export class DesktopBackendRegistry {
         : notification.method === "turn/failed"
           ? "failed"
           : "cancelled";
+    const completedMonitorKey = taskMonitorThreadKey(backend, threadId);
+    const completedRecord = this.completedTaskMonitorsByThread.get(
+      completedMonitorKey,
+    );
+    if (
+      completedRecord
+      && (
+        !completedRecord.monitorTurnId
+        || !turnId
+        || completedRecord.monitorTurnId === turnId
+      )
+    ) {
+      this.completedTaskMonitorsByThread.delete(completedMonitorKey);
+      return;
+    }
     const record = Array.from(this.taskMonitorDelegations.values()).find(
       (candidate) =>
         candidate.backend === backend &&

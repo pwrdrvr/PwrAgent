@@ -123,7 +123,7 @@ export type TaskMonitorDelegationData = {
   startedByPwrAgent: boolean;
   startupConfirmed: true;
   parentShouldPoll: false;
-  completionWillWakeParent: true;
+  completionWakesParentByDefault: true;
   monitorThreadId?: string;
   monitorTurnId?: string;
   parentAgentGuidance: string;

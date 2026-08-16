@@ -1,4 +1,11 @@
 {
+  "acp-task-monitor-lifecycle": {
+    "commits": 4,
+    "note": "one ACP monitor start, 120 transient heartbeats, completion, and final usage attribution",
+    "observedWalBytes": 115360,
+    "rowsChanged": 6,
+    "statements": 6
+  },
   "automation-run-transcript-burst": {
     "commits": 1,
     "note": "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",

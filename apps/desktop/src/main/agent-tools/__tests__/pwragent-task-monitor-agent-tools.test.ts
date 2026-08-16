@@ -145,7 +145,7 @@ describe("PwrAgent task monitor agent tools", () => {
         startedByPwrAgent: true,
         startupConfirmed: true as const,
         parentShouldPoll: false as const,
-        completionWillWakeParent: true as const,
+        completionWakesParentByDefault: true as const,
         parentAgentGuidance: "Wait for completion.",
         prompt: "Monitor the task.",
       },
