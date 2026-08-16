@@ -221,7 +221,7 @@ export function PricingSettings(props: {
           />
           <SettingsField
             label="Tool output reaches the cap"
-            sub="Alert immediately when one tool call reaches the model-visible output cap and is truncated."
+            sub="Alert immediately when one tool call reaches the model-visible output cap and is truncated. This trigger does not use the calls-per-turn setting."
             source={sourceBadge(toolOutputAlerts.outputCapHitsEnabled)}
             control={
               <SettingsSwitch
@@ -264,7 +264,7 @@ export function PricingSettings(props: {
             source={sourceBadge(
               toolOutputAlerts.repeatedLargeOutputMinimumCalls,
             )}
-            sub="Number of qualifying tool calls required before the alert is raised."
+            sub="Number of qualifying calls required for Repeated large tool outputs. Cap-hit alerts remain immediate."
             suffix="calls"
             value={toolOutputAlerts.repeatedLargeOutputMinimumCalls.value}
             onSave={(next) => {
