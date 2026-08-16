@@ -1413,6 +1413,13 @@ describe("ThreadRow chip flow", () => {
     const backendChip = container.querySelector(".thread-row__chip--backend");
     expect(backendChip).not.toBeNull();
 
+    // Pinned to a value, not just to each other: the resolver returns
+    // `undefined` for a chip it can find no rule for, and two `undefined`s
+    // compare equal — so a change that put the sizing somewhere this narrow
+    // parser cannot see (an `@layer`/`@media` wrapper, a custom property)
+    // would leave the comparison green with the bug back.
+    expect(resolvedChipHeight(backendChip!)).toBe("20px");
+
     // The instance chip is the row's only piece of remote identity. Rendered
     // a size up from its neighbours it reads as a different KIND of chip —
     // and pushes the row taller than every local row beside it.
@@ -1438,6 +1445,12 @@ describe("ThreadRow chip flow", () => {
       flow!.querySelectorAll(".chip, .thread-row__chip, .pr-chip"),
     );
     expect(chips.length).toBeGreaterThan(1);
+    // The chip this test was written for has to be in the measured set —
+    // otherwise the remaining chips agree at 20px on their own and the test
+    // passes while measuring nothing about the instance chip.
+    expect(chips.some((chip) => chip.classList.contains("chip--instance"))).toBe(
+      true,
+    );
 
     // Reported as class → height so a failure names the offending chip
     // instead of just proving the set has two members.
