@@ -1478,6 +1478,67 @@ describe("app server ipc", () => {
     });
   });
 
+  it("tells an active Auto-fix turn that it owns the repair", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const primaryPr = githubPr({
+      number: 1695,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "failing",
+      title: "Grok 4.6 pricing mismatch",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1695",
+    });
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-1",
+        title: "Grok 4.6 pricing mismatch",
+        titleSource: "explicit",
+        source: "codex",
+        gitOriginUrl: "git@github.com:pwrdrvr/PwrAgent.git",
+        linkedDirectories: [],
+        prs: [primaryPr],
+        updatedAt: 2_000,
+      },
+    ] as never);
+    getThreadOverlayState.mockResolvedValue({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      prs: [primaryPr],
+      prAutoDispatchEnabled: true,
+    });
+    getPrAutoDispatchCandidateWinner.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+    } as never);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
+    await vi.waitFor(async () => {
+      const status = await autoDispatchHandlers?.inspect({
+        backend: "codex",
+        threadId: "thread-1",
+      });
+      expect(status).toMatchObject({
+        autoFixActive: true,
+        guidance: expect.stringContaining(
+          "this does not mean another agent is repairing the PR",
+        ),
+      });
+      expect(status?.guidance).toContain(
+        "you are the repair turn: investigate and fix the reported failure",
+      );
+      expect(status?.guidance).toContain(
+        "validate, commit, and push the fix to the PR branch",
+      );
+      expect(status?.guidance).toContain(
+        "Do not stop merely because autoFixActive is true",
+      );
+    });
+  });
+
   it("keeps Auto-fix PR disabled globally without overwriting its thread setting", async () => {
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
     prAutomationSettings.state.prAutoDispatchAllowed = false;

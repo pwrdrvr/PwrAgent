@@ -45,8 +45,25 @@ describe("PwrAgent thread agent tools", () => {
       throw new Error("Expected PwrAgent namespace tool spec.");
     }
     const tools = namespace.tools;
-    expect(tools.find((tool) => tool.name === "check_thread_pull_request_status")
-      ?.description).toContain("do not poll CI");
+    const getThreadStatus = tools.find(
+      (tool) => tool.name === "get_thread_status",
+    );
+    expect(getThreadStatus?.description).toContain(
+      "not that another agent is repairing the PR",
+    );
+    expect(getThreadStatus?.description).toContain(
+      "If Auto-fix PR started the current turn, continue the repair",
+    );
+    const checkPullRequestStatus = tools.find(
+      (tool) => tool.name === "check_thread_pull_request_status",
+    );
+    expect(checkPullRequestStatus?.description).toContain(
+      "not that another agent is repairing the PR",
+    );
+    expect(checkPullRequestStatus?.description).toContain(
+      "never end only because this field is true",
+    );
+    expect(checkPullRequestStatus?.description).toContain("do not poll CI");
     expect(tools.find((tool) => tool.name === "watch_thread_pull_request"))
       .toMatchObject({
         name: "watch_thread_pull_request",

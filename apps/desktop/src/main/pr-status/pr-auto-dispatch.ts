@@ -809,7 +809,8 @@ function buildPrAutoDispatchPrompt(params: {
   pr: PrSummary;
 }): string {
   return [
-    "PwrAgent scheduled this bounded repair turn because an attached pull request needs attention.",
+    "You are the Auto-fix PR repair turn. PwrAgent started this turn so you can repair the attached pull request. No separate agent or repair turn is handling it.",
+    "If prAutomation.autoFixActive is true, that means this thread owns automatic monitoring. During this turn, it is not a reason to stop or wait for another agent.",
     "",
     "Pull request event",
     `- PR: ${params.event.prKey}`,
@@ -822,6 +823,6 @@ function buildPrAutoDispatchPrompt(params: {
     `- Observed at: ${new Date(params.observedAt).toISOString()}`,
     `- Dedupe fingerprint: ${params.event.fingerprint}`,
     "",
-    "Investigate the current PR checks or merge conflict, make only scoped fixes, run relevant validation, and update the attached PR when appropriate. Verify current provider state before changing code. If the condition is external, transient, or no safe fix is available, explain that and stop; do not create another retry loop.",
+    "Work on the incident now. Verify current provider state, inspect the failed checks or merge conflict, and make only scoped fixes. When a code change is the safe fix, implement it, run relevant validation, commit it, and push it to the attached PR branch. Do not merely report the failure and end the turn. If the condition is external, transient, or has no safe fix, explain that and stop; do not create another retry loop.",
   ].join("\n");
 }

@@ -3808,7 +3808,7 @@ class DesktopAppServerService {
     const guidance = autoFixActive && waitingForPr
       ? "Auto-fix PR is armed. This primary workspace has no linked PR yet; PwrAgent will begin monitoring when one is linked. Do not poll CI or create a monitor thread after a PR is linked."
       : autoFixActive
-      ? "Auto-fix PR is active. Do not poll CI and do not create a monitor thread for this PR. End the turn; PwrAgent will start a repair turn on a CI failure or merge conflict. Use watch_thread_pull_request before ending when the thread should also wake on successful completion."
+      ? "Auto-fix PR is active. This thread owns automatic monitoring; this does not mean another agent is repairing the PR. If PwrAgent started the current turn with an Auto-fix PR event, you are the repair turn: investigate and fix the reported failure or conflict now, then validate, commit, and push the fix to the PR branch. Do not stop merely because autoFixActive is true. In any other turn, do not poll CI or create a monitor; end the turn and PwrAgent will start the repair turn when a new failure or conflict appears. Use watch_thread_pull_request before ending when the thread should also wake on successful completion."
       : autoFixEnabled
         ? this.backgroundPrPollingEnabled
           ? this.prAutoDispatchAllowed

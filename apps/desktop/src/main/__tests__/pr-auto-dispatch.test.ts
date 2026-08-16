@@ -408,7 +408,15 @@ describe("PrAutoDispatchCoordinator", () => {
     expect(harness.submitTurnIfIdle.mock.calls[0]?.[0].input[0]).toEqual(
       expect.objectContaining({
         type: "text",
-        text: expect.stringContaining(`- Head SHA: ${"a".repeat(40)}`),
+        text: expect.stringMatching(
+          new RegExp([
+            "You are the Auto-fix PR repair turn",
+            "No separate agent or repair turn is handling it",
+            `- Head SHA: ${"a".repeat(40)}`,
+            "commit it, and push it to the attached PR branch",
+            "Do not merely report the failure and end the turn",
+          ].join("[\\s\\S]+")),
+        ),
       }),
     );
     expect(harness.submitTurnIfIdle.mock.calls[0]?.[0]).toMatchObject({
