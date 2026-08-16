@@ -23,7 +23,8 @@
   - Do not delete or rewrite a record without explicit user authorization.
   - You may update the plan that the current branch implements.
   - Limit updates to progress, dependencies, and resolved implementation questions.
-  - Read [the historical-document rules](docs/plans/AGENTS.md) before you change these files.
+  - Read a record only for a specific provenance question or an explicit document reference.
+  - Use current code, `ARCHITECTURE.md`, and package guidance for current behavior and API shape.
 - Default `rg` searches exclude brainstorms, plans, and solutions through [`.rgignore`](.rgignore).
   - Use `rg --no-ignore` or `rg -u` only when you need these records.
 - Read the [workflow label list](.github/workflows/README.md) before you use a CI-triggering label.
