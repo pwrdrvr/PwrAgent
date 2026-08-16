@@ -1838,25 +1838,30 @@ describe("bootstrapApp", () => {
     // own that dir; cleanup happens at graduation in Task E.
     expect(initializeAppStateMock).toHaveBeenCalledWith("bootstrap");
     expect(cleanupBootstrapProfileMock).not.toHaveBeenCalled();
-    expect(writeDockProfileSnapshotMock).toHaveBeenCalledWith({
-      schemaVersion: 2,
-      pwragentHome: "/tmp/pwragent",
-      defaultProfile: "default",
-      profiles: [],
-    });
-    const dockTemplate = buildFromTemplateMock.mock.calls.at(-1)?.[0] as
-      Array<{ submenu?: Array<{ enabled?: boolean; label?: string }> }>;
-    expect(dockTemplate).toEqual([
-      {
-        label: "Open Profile",
-        submenu: [
-          {
-            enabled: false,
-            label: "No Profiles Found",
-          },
-        ],
-      },
-    ]);
+    if (process.platform === "darwin") {
+      expect(writeDockProfileSnapshotMock).toHaveBeenCalledWith({
+        schemaVersion: 2,
+        pwragentHome: "/tmp/pwragent",
+        defaultProfile: "default",
+        profiles: [],
+      });
+      const dockTemplate = buildFromTemplateMock.mock.calls.at(-1)?.[0] as
+        Array<{ submenu?: Array<{ enabled?: boolean; label?: string }> }>;
+      expect(dockTemplate).toEqual([
+        {
+          label: "Open Profile",
+          submenu: [
+            {
+              enabled: false,
+              label: "No Profiles Found",
+            },
+          ],
+        },
+      ]);
+    } else {
+      expect(writeDockProfileSnapshotMock).not.toHaveBeenCalled();
+      expect(dockSetMenuMock).not.toHaveBeenCalled();
+    }
   });
 
   it("initializes app state in bootstrap mode when env names a missing profile", async () => {
