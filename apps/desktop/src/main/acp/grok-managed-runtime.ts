@@ -92,6 +92,7 @@ type ManagedGrokRuntimeOptions = {
   fetch?: typeof globalThis.fetch;
   now?: () => number;
   platform?: NodeJS.Platform;
+  probeVersion?: (command: string) => Promise<string>;
   requirePlatformSignature?: boolean;
   rootDir?: string;
 };
@@ -349,6 +350,7 @@ async function installRelease(
       extractedRoot,
       options.platform ?? process.platform,
       options.requirePlatformSignature === true,
+      options.probeVersion,
     );
     const versionRoot = path.join(rootDir, "versions", release.tag);
     await mkdir(path.dirname(versionRoot), { recursive: true });
@@ -429,6 +431,7 @@ async function validateExtractedBundle(
   directory: string,
   platform: NodeJS.Platform,
   requirePlatformSignature: boolean,
+  probeVersion?: (command: string) => Promise<string>,
 ): Promise<string> {
   const executable = platform === "win32" ? "grok.exe" : "grok";
   const command = path.join(directory, executable);
@@ -480,14 +483,20 @@ async function validateExtractedBundle(
       command,
     ]);
   }
-  const version = await execFile(command, ["--version"], {
-    timeout: 20_000,
-  });
-  const versionOutput = `${version.stdout ?? ""}\n${version.stderr ?? ""}`;
+  const versionOutput = probeVersion
+    ? await probeVersion(command)
+    : await readVersionOutput(command);
   if (!/\bgrok\b/iu.test(versionOutput)) {
     throw new Error("Managed Grok executable returned an invalid version banner");
   }
   return command;
+}
+
+async function readVersionOutput(command: string): Promise<string> {
+  const version = await execFile(command, ["--version"], {
+    timeout: 20_000,
+  });
+  return `${version.stdout ?? ""}\n${version.stderr ?? ""}`;
 }
 
 function expectedChecksum(checksumText: string, assetName: string): string {

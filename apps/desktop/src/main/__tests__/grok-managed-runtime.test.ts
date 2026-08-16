@@ -101,6 +101,7 @@ describe("ensureManagedGrokRuntime", () => {
       fetch: fetchMock as typeof globalThis.fetch,
       now: () => 1_000,
       platform: "linux",
+      probeVersion: async () => "grok 2.0.0-test",
       rootDir,
     });
 
@@ -196,6 +197,7 @@ describe("ensureManagedGrokRuntime", () => {
       },
       fetch: fetchMock as typeof globalThis.fetch,
       platform: "linux",
+      probeVersion: async () => "grok 2.1.0-test",
       rootDir,
     });
 
@@ -235,7 +237,7 @@ async function temporaryRoot(): Promise<string> {
 
 async function writeFakeBundle(targetDir: string): Promise<void> {
   await Promise.all([
-    writeFile(path.join(targetDir, "grok"), "#!/bin/sh\necho 'grok 2.0.0-test'\n"),
+    writeFile(path.join(targetDir, "grok"), "fake executable"),
     writeFile(path.join(targetDir, "LICENSE"), "license"),
     writeFile(path.join(targetDir, "THIRD-PARTY-NOTICES"), "notices"),
     writeFile(path.join(targetDir, "SOURCE_REV"), "source"),
