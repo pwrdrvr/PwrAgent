@@ -147,6 +147,55 @@ describe("local diagnostics info", () => {
     ].join("\n"));
   });
 
+  it("uses the remote viewer as owner for an unstamped direct thread", () => {
+    const output = buildLocalThreadDiagnosticsInfo(
+      {
+        backend: "codex",
+        federationHealth: {
+          enabled: true,
+          role: "gateway",
+          status: "connected",
+          instanceId: "local-viewer-instance",
+          peers: [{
+            id: "remote-viewer-instance",
+            label: "Remote Viewer Mac",
+            role: "client",
+            status: "connected",
+            capabilities: ["thread_navigation", "thread_detail"],
+            profileName: "work",
+            host: {
+              hostname: "remote-viewer.local",
+              platform: "darwin",
+              osVersion: "25.0.0",
+              arch: "arm64",
+            },
+          }],
+        },
+        federationWindowTarget: {
+          scope: "remote",
+          instanceId: "remote-viewer-instance",
+        },
+        threadId: "direct-remote-thread",
+        title: "Direct remote thread",
+      },
+      metadata,
+    );
+
+    expect(output).toContain([
+      "Thread/view classification: Remote Thread in Remote Viewer",
+      "Remote viewer target instance ID: remote-viewer-instance",
+      "Remote viewer target label: Remote Viewer Mac",
+      "Thread owner federation instance ID: remote-viewer-instance",
+      "Thread owner label: Remote Viewer Mac",
+      "Thread owner hostname: remote-viewer.local",
+      "Thread owner profile: work",
+      "Thread owner status: connected",
+      "Federation routing target: remote:remote-viewer-instance",
+      "Federation source backend: codex",
+      "Federation source thread ID: direct-remote-thread",
+    ].join("\n"));
+  });
+
   it("identifies a transitive remote thread in a remote viewer", () => {
     const output = buildLocalThreadDiagnosticsInfo(
       {

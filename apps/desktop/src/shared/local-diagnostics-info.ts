@@ -39,17 +39,17 @@ function federationLines(
   const remoteTarget = target && isRemoteFederationTarget(target)
     ? target
     : undefined;
-  const owner = remoteTarget
-    ? context.federationHealth?.peers.find(
-        (peer) => peer.id === remoteTarget.instanceId,
-      )
-    : undefined;
   const remoteViewerTarget = context.federationWindowTarget;
   const remoteViewer = remoteViewerTarget
     ? context.federationHealth?.peers.find(
         (peer) => peer.id === remoteViewerTarget.instanceId,
       )
     : undefined;
+  const owner = remoteTarget
+    ? context.federationHealth?.peers.find(
+        (peer) => peer.id === remoteTarget.instanceId,
+      )
+    : remoteViewer;
   if (!remoteTarget && !remoteViewerTarget) {
     return [];
   }
