@@ -16841,6 +16841,7 @@ export class MessagingController {
           type: "image" as const,
           url: messagingOutboundImageDataUrl(outbound.mimeType, outbound.data),
           alt: outbound.filename,
+          sourceUrl: outbound.path,
         }
       : {
           type: "file" as const,
@@ -16880,6 +16881,22 @@ export class MessagingController {
         },
       };
     }
+    if (
+      !sendPrivately
+      && sourceBinding
+      && filePart.type === "image"
+    ) {
+      this.rememberOutboundMessagingFileImages({
+        backend: request.context.backend,
+        binding: sourceBinding,
+        images: [filePart],
+        pathAliases: [outbound.path, typeof request.args?.path === "string"
+          ? request.args.path.trim()
+          : ""],
+        threadId: request.context.threadId,
+        turnId: request.context.turnId,
+      });
+    }
 
     return {
       ok: true,
@@ -16900,6 +16917,57 @@ export class MessagingController {
           : {}),
       },
     };
+  }
+
+  private rememberOutboundMessagingFileImages(params: {
+    backend: AppServerBackendKind;
+    binding: MessagingBindingRecord;
+    images: MessagingImagePart[];
+    pathAliases?: readonly string[];
+    threadId: ThreadIdentifier;
+    turnId?: string;
+  }): void {
+    if (params.images.length === 0) {
+      return;
+    }
+    const identity = {
+      threadId: params.threadId,
+      turnId: params.turnId,
+    };
+    const syntheticEvent = {
+      backend: params.backend,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: params.threadId,
+          turnId: params.turnId,
+        },
+      },
+    } as AgentEvent;
+    const variants: MessagingImagePart[][] = [params.images];
+    for (const image of params.images) {
+      variants.push([{ ...image, sourceUrl: undefined }]);
+      const aliases = [
+        image.sourceUrl,
+        image.url,
+        ...(params.pathAliases ?? []),
+      ].filter((value): value is string => Boolean(value));
+      for (const alias of aliases) {
+        variants.push([{
+          ...image,
+          url: alias,
+          sourceUrl: alias,
+        }]);
+      }
+    }
+    for (const images of variants) {
+      this.claimAssistantMessageContentDelivery(
+        syntheticEvent,
+        params.binding,
+        assistantImageDeliverySignature(images),
+        identity,
+      );
+    }
   }
 
   private async resolveOutboundFileAccess(

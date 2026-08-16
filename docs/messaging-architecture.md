@@ -149,7 +149,11 @@ user IDs and DM routing remain validated and opaque inside the adapter; the
 Agent cannot select an arbitrary recipient.
 
 `send_messaging_file` is the opt-in companion for generated files that are not
-already in the assistant response (rendered PDFs, screenshots, zips). The model
+already in the assistant response (rendered PDFs, zips, installers). Do not use
+it for images the model will embed in the final reply; those already mirror to
+the current messaging surface. After an image send, the controller claims the
+same assistant-image delivery signature so a later transcript embed does not
+post the photo twice. The model
 must call it with an absolute local path. The controller realpath()s the file,
 refuses Codex/PwrAgent private storage, and only reads from the bound thread's
 workspace or a PwrAgent generated-output (scratch project) directory. It then

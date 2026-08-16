@@ -22604,6 +22604,68 @@ describe("send_messaging_file agent tool", () => {
     );
   });
 
+  it("does not re-post a tool-sent image from the final assistant message", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-send-image-once-"));
+    tempDirs.push(tempDir);
+    const pngBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const filePath = path.join(tempDir, "shot.png");
+    await writeFile(filePath, pngBytes);
+    const dataUrl = `data:image/png;base64,${pngBytes.toString("base64")}`;
+    const harness = await createHarness({
+      outboundFileAccess: { allowedRoots: [tempDir] },
+      resolveAssistantMessageImages: async () => [{
+        type: "image" as const,
+        url: dataUrl,
+        alt: "shot.png",
+        source: "assistant" as const,
+        sourceUrl: filePath,
+      }],
+    });
+    await startMessagingTurn(harness);
+
+    await harness.controller.handlePwrAgentMessagingRequest({
+      operation: "send_messaging_file",
+      context: {
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+      args: { path: filePath },
+    });
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: {
+            id: "assistant-message-1",
+            type: "agentMessage",
+            phase: "final",
+            text: "Here is the screenshot.",
+          },
+        },
+      },
+    });
+
+    expect(
+      harness.delivered.filter((intent) => intent.kind === "message"),
+    ).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        parts: [
+          expect.objectContaining({
+            type: "text",
+            text: "Here is the screenshot.",
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("delivers privately when requested without suppressing the source turn", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-send-private-file-"));
     tempDirs.push(tempDir);

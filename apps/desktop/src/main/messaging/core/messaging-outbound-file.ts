@@ -29,6 +29,7 @@ export type MessagingOutboundFile =
       filename: string;
       mediaKind: MessagingOutboundMediaKind;
       mimeType: string;
+      path: string;
       sizeBytes: number;
     }
   | {
@@ -147,6 +148,7 @@ export async function resolveMessagingOutboundFile(
     mimeType:
       classification.mimeType
       ?? (mediaKind.mediaKind === "image" ? "image/png" : "application/octet-stream"),
+    path: readable.path,
     sizeBytes: data.byteLength,
   };
 }
