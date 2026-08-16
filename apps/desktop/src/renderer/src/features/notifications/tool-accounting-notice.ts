@@ -11,6 +11,8 @@ export function buildToolAccountingNotice(params: {
   onExamine: () => void;
   onDismiss: () => void;
   onMute?: () => void;
+  /** Ephemeral sub-agent turns cannot be opened in the incident explorer. */
+  isEphemeralSubAgent?: boolean;
   showCost: boolean;
   summary: ThreadIncidentSummary;
   threadLink?: ResolvedThreadLink;
@@ -19,11 +21,13 @@ export function buildToolAccountingNotice(params: {
   const critical = summary.severity === "critical";
   return {
     actions: [
-      {
-        label: `Examine ${summary.flaggedInvocationCount.toLocaleString()} case${summary.flaggedInvocationCount === 1 ? "" : "s"}`,
-        onClick: params.onExamine,
-        tone: "primary" as const,
-      },
+      ...(params.isEphemeralSubAgent
+        ? []
+        : [{
+            label: `Examine ${summary.flaggedInvocationCount.toLocaleString()} case${summary.flaggedInvocationCount === 1 ? "" : "s"}`,
+            onClick: params.onExamine,
+            tone: "primary" as const,
+          }]),
       {
         label: "Dismiss",
         onClick: params.onDismiss,
@@ -41,18 +45,29 @@ export function buildToolAccountingNotice(params: {
         : []),
     ],
     autoDismiss: false,
-    copyText: describeToolAccountingIncident({ showCost: true, summary }),
+    copyText: describeToolAccountingIncident({
+      isEphemeralSubAgent: params.isEphemeralSubAgent,
+      showCost: true,
+      summary,
+    }),
     id: threadIncidentNoticeId(summary),
     message: describeToolAccountingIncident({
+      isEphemeralSubAgent: params.isEphemeralSubAgent,
       showCost: params.showCost,
       summary,
     }),
     threadLink: params.threadLink,
     title: critical
-      ? "Tool output hit the cap"
+      ? params.isEphemeralSubAgent
+        ? "Sub-agent output hit the cap"
+        : "Tool output hit the cap"
       : summary.pollingInvocationCount >= summary.flaggedInvocationCount
-        ? "Repeated queued checks"
-        : "Large tool output",
+        ? params.isEphemeralSubAgent
+          ? "Sub-agent repeated queued checks"
+          : "Repeated queued checks"
+        : params.isEphemeralSubAgent
+          ? "Sub-agent large tool output"
+          : "Large tool output",
     tone: critical ? "error" : "warning",
   };
 }
@@ -63,6 +78,7 @@ export function buildToolAccountingNotice(params: {
  * ledger has priced rows — the rest of the card still stands without them.
  */
 export function describeToolAccountingIncident(params: {
+  isEphemeralSubAgent?: boolean;
   showCost: boolean;
   summary: ThreadIncidentSummary;
 }): string {
@@ -94,6 +110,11 @@ export function describeToolAccountingIncident(params: {
   } else if (summary.replayedTokens > 0) {
     lines.push(
       `About ${summary.replayedTokens.toLocaleString()} tokens of tool output have been replayed through later round trips.`,
+    );
+  }
+  if (params.isEphemeralSubAgent) {
+    lines.push(
+      "This came from an ephemeral sub-agent; its individual turns are unavailable.",
     );
   }
   return lines.join(" ");

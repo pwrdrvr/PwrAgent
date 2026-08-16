@@ -10854,6 +10854,7 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
     });
+    const subAgentOwner = this.resolveSubAgentThreadOwner(params);
     await this.emit({
       backend: params.backend,
       notification: {
@@ -10861,6 +10862,17 @@ export class DesktopBackendRegistry {
         params: {
           threadId: params.threadId,
           toolAccounting,
+          /* Codex sub-agents run in ephemeral threads. Their accounting still
+             matters, but reading the child with turns is unsupported, so the
+             renderer needs a durable parent to attach the notice to. */
+          ...(params.backend === "codex" && subAgentOwner.isSubAgent
+            ? {
+                ephemeralSubAgentParent: {
+                  backend: subAgentOwner.backend,
+                  threadId: subAgentOwner.threadId,
+                },
+              }
+            : {}),
           ...(overlay?.toolIncidentNotice
             ? { incidentNotice: overlay.toolIncidentNotice }
             : {}),
@@ -11978,7 +11990,7 @@ export class DesktopBackendRegistry {
       }
     }
     const addThread = (backend: AppServerBackendKind, threadId: string): void => {
-      const owner = this.resolveQuitThreadOwner({ backend, threadId });
+      const owner = this.resolveSubAgentThreadOwner({ backend, threadId });
       const threadKey = formatQuitThreadKey(owner.backend, owner.threadId);
       if (!automationExecutionThreadKeys.has(threadKey)) {
         threadKeys.add(threadKey);
@@ -12043,11 +12055,11 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Collapse a worker thread onto the ordinary thread that owns it. Quit is a
-   * thread-level decision: the worker id is intentionally ephemeral and is not
-   * present in PwrAgent's navigation or title index.
+   * Collapse a worker thread onto the durable thread that owns it. Worker IDs
+   * are intentionally absent from PwrAgent's navigation and title indexes, so
+   * both quit and notification surfaces must resolve this relationship first.
    */
-  private resolveQuitThreadOwner(params: {
+  private resolveSubAgentThreadOwner(params: {
     backend: AppServerBackendKind;
     threadId: string;
   }): {

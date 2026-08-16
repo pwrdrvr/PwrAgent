@@ -19514,6 +19514,58 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("identifies the durable parent of an ephemeral sub-agent accounting update", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    (registry as unknown as {
+      taskMonitorDelegations: Map<string, {
+        backend: "codex";
+        monitorThreadId: string;
+        parentBackend: "codex";
+        parentThreadId: string;
+      }>;
+    }).taskMonitorDelegations.set("monitor-1", {
+      backend: "codex",
+      monitorThreadId: "ephemeral-child",
+      parentBackend: "codex",
+      parentThreadId: "parent-thread",
+    });
+
+    await (registry as unknown as {
+      emitThreadToolAccountingUpdated: (params: {
+        backend: "codex";
+        threadId: string;
+      }) => Promise<void>;
+    }).emitThreadToolAccountingUpdated({
+      backend: "codex",
+      threadId: "ephemeral-child",
+    });
+
+    expect(events).toContainEqual(expect.objectContaining({
+      backend: "codex",
+      notification: expect.objectContaining({
+        method: "thread/toolAccounting/updated",
+        params: expect.objectContaining({
+          ephemeralSubAgentParent: {
+            backend: "codex",
+            threadId: "parent-thread",
+          },
+          threadId: "ephemeral-child",
+        }),
+      }),
+    }));
+    await registry.close();
+  });
+
   it("persists and aggregates live large-output alerts without completion", async () => {
     vi.useFakeTimers();
     const codexClient = new MockBackendClient({

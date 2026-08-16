@@ -682,6 +682,10 @@ function DesktopAppShell(props: {
       if (event.notification.method === "thread/toolAccounting/updated") {
         const params = event.notification.params as {
           threadId: string;
+          ephemeralSubAgentParent?: {
+            backend: AppServerBackendKind;
+            threadId: string;
+          };
           incidentNotice?: ThreadToolIncidentNoticeState;
           toolAccounting?: ThreadToolAccounting;
           triggeredAlerts?: ThreadToolInvocationAlert[];
@@ -743,17 +747,64 @@ function DesktopAppShell(props: {
               event.federationTarget,
             ),
         );
-        const threadLink = matchingThread
+        /* Native monitors and reviews can run on an ephemeral child thread.
+           The child emits the accounting event, but it never appears in
+           navigation and its App Server transcript rejects `includeTurns`.
+           Find its durable parent instead: the notice belongs with the work
+           that spawned it, while the child itself remains non-explorable. */
+        const ephemeralSubAgentParent = params.ephemeralSubAgentParent;
+        const subAgentOwner = ephemeralSubAgentParent
+          ? backendErrorThreadsRef.current.find(
+              (thread) =>
+                thread.source === ephemeralSubAgentParent.backend
+                && thread.id === ephemeralSubAgentParent.threadId
+                && federationTargetsEqual(
+                  thread.federation?.ref.target,
+                  event.federationTarget,
+                ),
+            )
+          : matchingThread
+            ? undefined
+            : backendErrorThreadsRef.current.find(
+                (thread) =>
+                  federationTargetsEqual(
+                    thread.federation?.ref.target,
+                    event.federationTarget,
+                  )
+                  && thread.subAgents?.some(
+                    (subAgent) =>
+                      (subAgent.backend ?? thread.source) === event.backend
+                      && subAgent.monitorThreadId === params.threadId,
+                  ),
+              );
+        const noticeThread = ephemeralSubAgentParent
+          ? subAgentOwner
+          : matchingThread ?? subAgentOwner;
+        const isEphemeralSubAgent = ephemeralSubAgentParent !== undefined
+          || (event.backend === "codex" && subAgentOwner !== undefined);
+        const threadLink = noticeThread
           ? {
-              backend: matchingThread.source,
+              backend: noticeThread.source,
               inThreadList: true,
               ...(instanceId ? { instanceId } : {}),
-              threadId: matchingThread.id,
-              title: matchingThread.title,
-              titleSource: matchingThread.titleSource,
-              gitBranch: matchingThread.gitBranch,
-              linkedDirectories: matchingThread.linkedDirectories,
+              threadId: noticeThread.id,
+              title: noticeThread.title,
+              titleSource: noticeThread.titleSource,
+              gitBranch: noticeThread.gitBranch,
+              linkedDirectories: noticeThread.linkedDirectories,
             }
+          : ephemeralSubAgentParent
+            ? {
+                backend: ephemeralSubAgentParent.backend,
+                inThreadList: true,
+                ...(instanceId ? { instanceId } : {}),
+                threadId: ephemeralSubAgentParent.threadId,
+                title: labelForThread(
+                  ephemeralSubAgentParent.backend,
+                  ephemeralSubAgentParent.threadId,
+                ),
+                titleSource: "fallback" as const,
+              }
           : undefined;
         const persistIncident = (
           patch: Omit<SetThreadToolIncidentNoticeRequest, "backend" | "threadId">,
@@ -836,6 +887,7 @@ function DesktopAppShell(props: {
             onDismiss: dismiss,
             onExamine: examine,
             onMute: mute,
+            isEphemeralSubAgent,
             showCost: showIncidentCostRef.current,
             summary,
             threadLink,

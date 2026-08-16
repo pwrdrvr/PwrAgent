@@ -1382,6 +1382,15 @@ export type AppServerNotification =
         threadId: string;
         toolAccounting: ThreadToolAccounting;
         /**
+         * Present when an ephemeral Codex sub-agent produced this accounting
+         * update. The child cannot supply a turn transcript, so clients must
+         * attach the notice to this durable parent instead of opening it.
+         */
+        ephemeralSubAgentParent?: {
+          backend: AppServerBackendKind;
+          threadId: string;
+        };
+        /**
          * The operator's persisted disposition for this thread's incident
          * card. Carried here so a renderer that just launched knows what was
          * dismissed or muted before it existed, without a per-thread read.
