@@ -90,6 +90,42 @@ describe("Slack formatting", () => {
     ]);
   });
 
+  it("renders bound response identity on final streamed replies", () => {
+    const intent: MessagingSurfaceIntent = {
+      id: "streamed-reply",
+      kind: "stream_update",
+      attribution: { label: "Agent: Signals Agent" },
+      createdAt: 1,
+      role: "assistant",
+      markdown: "markdown",
+      stream: {
+        isFinal: true,
+        key: "thread-1:turn-1:item-1",
+        sequence: 2,
+      },
+      text: "Investigation complete.",
+    };
+
+    expect(
+      buildSlackBlocksForIntent({ intent, text: intent.text }),
+    ).toEqual([
+      {
+        type: "markdown",
+        text: "Investigation complete.",
+      },
+      {
+        type: "context",
+        elements: [
+          {
+            type: "plain_text",
+            text: "Agent: Signals Agent",
+            emoji: true,
+          },
+        ],
+      },
+    ]);
+  });
+
   it("clamps remote image alt text to Slack's plain-text limit", () => {
     const alt = "a".repeat(2_500);
     const intent: MessagingSurfaceIntent = {

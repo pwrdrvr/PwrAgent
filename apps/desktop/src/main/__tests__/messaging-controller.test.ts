@@ -2275,7 +2275,9 @@ describe("MessagingController", () => {
     );
     expect(assistantReplies).toHaveLength(1);
     expect(assistantReplies[0]?.bindingId).toMatch(/^default-agent-route:/);
-    expect(assistantReplies[0]).not.toHaveProperty("attribution");
+    expect(assistantReplies[0]).toMatchObject({
+      attribution: { label: "Agent: Topic Agent" },
+    });
   });
 
   async function createSlackPrivateResponseHarness(options?: {
@@ -2452,7 +2454,7 @@ describe("MessagingController", () => {
 
     expect(harness.delivered).toContainEqual(
       expect.objectContaining({
-        attribution: expect.objectContaining({ label: "Signals Agent" }),
+        attribution: expect.objectContaining({ label: "Agent: Signals Agent" }),
         kind: "message",
       }),
     );
@@ -2503,7 +2505,7 @@ describe("MessagingController", () => {
     expect(harness.delivered).toContainEqual(
       expect.objectContaining({
         attribution: expect.objectContaining({
-          label: "AWS incident follow-up",
+          label: "Bound thread: AWS incident follow-up",
         }),
         kind: "message",
       }),
@@ -2585,7 +2587,7 @@ describe("MessagingController", () => {
           }),
         }),
         attribution: {
-          label: "Signals Agent",
+          label: "Agent: Signals Agent",
           hint: "Private Request · Reply in Thread to Respond to this Agent",
         },
         kind: "message",
@@ -2779,7 +2781,7 @@ describe("MessagingController", () => {
     expect(harness.delivered).toContainEqual(
       expect.objectContaining({
         attribution: {
-          label: "Signals Agent",
+          label: "Agent: Signals Agent",
           hint:
             "Private Request · Reply in Thread to Respond to this Agent; Completion Returns to the Original Conversation",
         },
@@ -3043,7 +3045,7 @@ describe("MessagingController", () => {
     ).toEqual([
       expect.objectContaining({
         attribution: expect.objectContaining({
-          label: "Signals Agent",
+          label: "Agent: Signals Agent",
         }),
         parts: [expect.objectContaining({
           text: expect.stringContaining("PRIVATE-CODE"),
@@ -7369,6 +7371,7 @@ describe("MessagingController", () => {
       threadId: "thread-1",
     });
     expect(harness.delivered.at(-1)).toMatchObject({
+      attribution: { label: "Bound thread: Thread one" },
       kind: "message",
       role: "assistant",
       parts: [
@@ -14346,6 +14349,7 @@ describe("MessagingController", () => {
 
     expect(harness.delivered).toHaveLength(1);
     expect(harness.delivered.at(-1)).toMatchObject({
+      attribution: { label: "Bound thread: Thread one" },
       kind: "message",
       role: "assistant",
       parts: [
@@ -14486,6 +14490,7 @@ describe("MessagingController", () => {
       (intent) => intent.kind === "stream_update",
     );
     expect(streamUpdates.at(-1)).toMatchObject({
+      attribution: { label: "Bound thread: Thread one" },
       delivery: {
         mode: "update",
         fallback: "fail",

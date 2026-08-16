@@ -6206,6 +6206,9 @@ export class MessagingController {
       buffer.turnId,
     );
     const now = this.now();
+    const attribution = isFinal
+      ? await this.responseAttributionForBinding(binding)
+      : undefined;
     const intent: MessagingStreamUpdateIntent = {
       id: this.newIntentId(isFinal ? "assistant-stream-final" : "assistant-stream"),
       kind: "stream_update",
@@ -6221,6 +6224,7 @@ export class MessagingController {
           }
         : {}),
       role: "assistant",
+      ...(attribution ? { attribution } : {}),
       markdown: isFinal ? "markdown" : "plain",
       policy: binding.preferences?.streamingResponses ?? "inherit",
       delta: buffer.delta,
@@ -6551,6 +6555,7 @@ export class MessagingController {
     this.logger.debug?.(
       `messaging assistant deliver thread=${binding.threadId} binding=${binding.id} chars=${text.length} images=${messageImages.length} preview="${compactLogPreview(text)}"`,
     );
+    const attribution = await this.responseAttributionForBinding(binding);
 
     await this.deliver(
       {
@@ -6559,6 +6564,7 @@ export class MessagingController {
         bindingId: binding.id,
         createdAt: this.now(),
         role: "assistant",
+        attribution,
         parts: [
           {
             type: "text",
@@ -6603,6 +6609,7 @@ export class MessagingController {
     ) {
       return;
     }
+    const attribution = await this.responseAttributionForBinding(binding);
     await this.deliver(
       {
         id: this.newIntentId("assistant-images"),
@@ -6610,6 +6617,7 @@ export class MessagingController {
         bindingId: binding.id,
         createdAt: this.now(),
         role: "assistant",
+        attribution,
         parts: images,
       },
       binding,
@@ -6753,6 +6761,7 @@ export class MessagingController {
         bindingId: binding.id,
         createdAt: this.now(),
         role: "assistant",
+        attribution: await this.responseAttributionForBinding(binding),
         parts: [
           {
             type: "text",
@@ -16535,7 +16544,7 @@ export class MessagingController {
       ? await this.resolveBoundThreadSummary(sourceBinding)
       : undefined;
     const attributionLabel = sourceBinding
-      ? privateResponseAttributionLabel(sourceBinding, sourceThread)
+      ? responseAttributionLabel(sourceBinding, sourceThread)
       : "PwrAgent Agent";
     const result = await this.deliver(
       {
@@ -17055,6 +17064,17 @@ export class MessagingController {
       });
       return undefined;
     }
+  }
+
+  private async responseAttributionForBinding(
+    binding: MessagingBindingRecord,
+  ): Promise<{ label: string }> {
+    return {
+      label: responseAttributionLabel(
+        binding,
+        await this.resolveBoundThreadSummary(binding),
+      ),
+    };
   }
 
   private async resolveManagedConversationSummary(
@@ -19643,7 +19663,7 @@ function summarizeNavigationThreadForMessaging(
   };
 }
 
-function privateResponseAttributionLabel(
+function responseAttributionLabel(
   binding: MessagingBindingRecord,
   thread: PwrAgentMessagingBoundThreadSummary | undefined,
 ): string {
@@ -19655,7 +19675,9 @@ function privateResponseAttributionLabel(
       : thread?.title;
   const normalized = identity?.replace(/\s+/g, " ").trim();
   if (normalized) {
-    return normalized;
+    return targetKind === "agent_thread"
+      ? `Agent: ${normalized}`
+      : `Bound thread: ${normalized}`;
   }
   return targetKind === "agent_thread"
     ? "PwrAgent Agent"

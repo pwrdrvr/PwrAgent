@@ -211,7 +211,10 @@ export function buildSlackBlocksForIntent(params: {
     });
   }
 
-  if (params.intent.kind === "message" && params.intent.attribution) {
+  if (
+    (params.intent.kind === "message" || params.intent.kind === "stream_update")
+    && params.intent.attribution
+  ) {
     blocks.push({
       type: "context",
       elements: [
