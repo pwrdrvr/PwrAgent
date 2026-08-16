@@ -52,6 +52,7 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
           className="transcript-work-phase-group__toggle"
           aria-controls={hiddenRegionId}
           aria-expanded={props.expanded}
+          aria-label={workPhaseGroupToggleLabel(props.label)}
           onClick={props.onToggle}
         >
           <span className="transcript-work-phase-group__chevron" aria-hidden="true" />
@@ -95,6 +96,13 @@ export const TranscriptWorkPhaseGroup = memo(function TranscriptWorkPhaseGroup(
 });
 
 TranscriptWorkPhaseGroup.displayName = "TranscriptWorkPhaseGroup";
+
+function workPhaseGroupToggleLabel(label: string): string {
+  // The visible work summary can include individual tool labels. Keeping those
+  // out of the parent disclosure's accessible name prevents it from colliding
+  // with the nested activity controls when the group is expanded.
+  return label.split(":", 1)[0] ?? label;
+}
 
 function TranscriptWorkPhaseGroupLabel(props: {
   activeStartedAt?: number;
