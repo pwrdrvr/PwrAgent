@@ -175,6 +175,10 @@ type ReplayRuntimeClient = {
     threadId: string;
     name: string;
   }): Promise<{ threadId: string }>;
+  updateThreadWorkspace?(params: {
+    threadId: string;
+    cwd: string;
+  }): Promise<{ threadId: string }>;
   respondToPendingRequest?(requestId: string): Promise<void>;
 };
 
