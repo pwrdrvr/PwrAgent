@@ -114,6 +114,8 @@ import {
   type BackendSummary,
   type DesktopProviderModelDefaults,
   type DesktopProviderThreadModelMigration,
+  type DesktopSpendAlertPolicy,
+  type DesktopToolOutputAlertPolicy,
   type CancelQueuedTurnResponse,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
@@ -294,7 +296,11 @@ import {
   DEFAULT_TASK_MONITOR_REASONING_EFFORT,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
+  DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
+  DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
+  TOOL_OUTPUT_CAP_CHARS,
+  toolOutputWarningChars,
   type CancelMonitorDelegationToolArgs,
   type CompleteMonitoringToolArgs,
   type CreateMonitorDelegationToolArgs,
@@ -459,6 +465,7 @@ import {
   type ToolOutputIncidentAggregate,
 } from "./tool-invocation-accounting";
 import { analyzeNormalizedToolReplay } from "./tool-output-replay-analyzer";
+import { detectUsageSpendAlerts } from "./usage-spend-alerts";
 import {
   ThreadTitleGenerationService,
   type ThreadTitleGenerator,
@@ -6732,7 +6739,8 @@ export class DesktopBackendRegistry {
   /**
    * Full in-memory output totals for active commands. Flush windows clear the
    * sqlite write buffer every 250ms, but warning thresholds must span those
-   * windows or a steady stream of small chunks never reaches 4,000 chars.
+   * windows or a steady stream of small chunks never reaches the configured
+   * large-output boundary.
    */
   private readonly streamedToolInvocationOutputTotals = new Map<
     string,
@@ -6752,6 +6760,7 @@ export class DesktopBackendRegistry {
     string,
     ToolOutputIncidentAggregate
   >();
+  private readonly triggeredSpendAlertIds = new Set<string>();
   private pendingToolInvocationDeltaTimer: NodeJS.Timeout | undefined;
   /**
    * Serializes every flush and streamed alert boundary so a timer-driven write
@@ -6933,6 +6942,10 @@ export class DesktopBackendRegistry {
   >;
   private readonly resolveCodexFastAllowedFn: () => boolean;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
+  private readonly resolveSpendAlertPolicyFn: () => DesktopSpendAlertPolicy;
+  private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
+  private spendAlertPolicy = DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
+  private toolOutputAlertPolicy = DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
   private readonly localFilePrivateStorageRoots: readonly string[];
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
   private readonly pdfToolMcpServer?: AgentToolMcpServerLike;
@@ -7001,6 +7014,8 @@ export class DesktopBackendRegistry {
     >;
     resolveCodexFastAllowed?: () => boolean;
     resolvePdfAnalysisEnabled?: () => boolean;
+    resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
+    resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
     runtimeInstanceId?: string;
     registrySessionId?: string;
     resolveLiveProfileRuntimeInstanceIds?: () => string[];
@@ -7124,6 +7139,53 @@ export class DesktopBackendRegistry {
           return true;
         }
       });
+    this.resolveToolOutputAlertPolicyFn =
+      options?.resolveToolOutputAlertPolicy ??
+      (() => {
+        try {
+          return (
+            settingsService ?? getDesktopSettingsService()
+          ).resolveToolOutputAlertPolicy();
+        } catch (error) {
+          backendRegistryLog.warn(
+            "failed to resolve tool-output alert settings",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+          return DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
+        }
+      });
+    this.resolveSpendAlertPolicyFn =
+      options?.resolveSpendAlertPolicy ??
+      (() => {
+        try {
+          if (settingsService) {
+            return typeof settingsService.resolveSpendAlertPolicy === "function"
+              ? settingsService.resolveSpendAlertPolicy()
+              : DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
+          }
+          return getDesktopSettingsService().resolveSpendAlertPolicy();
+        } catch (error) {
+          backendRegistryLog.warn(
+            "failed to resolve spend alert settings",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+          return DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
+        }
+      });
+    this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
+    this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
+    if (typeof settingsService?.onConfigWritten === "function") {
+      this.unsubscribers.push(
+        settingsService.onConfigWritten(() => {
+          this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
+          this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
+        }),
+      );
+    }
     const codexCommand = settingsService?.resolveCodexCommandPreference();
     const codexEnv =
       typeof settingsService?.resolveCodexSpawnEnv === "function"
@@ -10784,6 +10846,9 @@ export class DesktopBackendRegistry {
     const analysis = analyzeNormalizedToolReplay({
       backend: request.backend,
       complete,
+      largeOutputThresholdChars: toolOutputWarningChars(
+        this.toolOutputAlertPolicy.repeatedLargeOutputMinimumPercent,
+      ),
       pages,
       threadId: request.threadId,
     });
@@ -10870,6 +10935,7 @@ export class DesktopBackendRegistry {
   }
 
   private async emitThreadPricingUpdated(params: {
+    activeTurnIds?: readonly string[];
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<void> {
@@ -10880,6 +10946,17 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
     });
+    const triggeredSpendAlerts = detectUsageSpendAlerts({
+      ...(params.activeTurnIds ? { activeTurnIds: params.activeTurnIds } : {}),
+      backend: params.backend,
+      policy: this.spendAlertPolicy,
+      pricing,
+      threadId: params.threadId,
+      triggeredAlertIds: this.triggeredSpendAlertIds,
+    });
+    for (const alert of triggeredSpendAlerts) {
+      this.triggeredSpendAlertIds.add(alert.alertId);
+    }
     await this.emit({
       backend: params.backend,
       notification: {
@@ -10887,6 +10964,9 @@ export class DesktopBackendRegistry {
         params: {
           threadId: params.threadId,
           pricing,
+          ...(triggeredSpendAlerts.length > 0
+            ? { triggeredSpendAlerts }
+            : {}),
         },
       },
     });
@@ -20787,6 +20867,9 @@ export class DesktopBackendRegistry {
         return;
       }
       await this.emitThreadPricingUpdated({
+        ...(line.parentThreadId === undefined && line.turnId
+          ? { activeTurnIds: [line.turnId] }
+          : {}),
         backend: event.backend,
         threadId: line.parentThreadId ?? line.threadId,
       });
@@ -20864,23 +20947,36 @@ export class DesktopBackendRegistry {
 
     const pricingTargets = new Map<
       string,
-      { backend: AppServerBackendKind; threadId: string }
+      {
+        activeTurnIds: Set<string>;
+        backend: AppServerBackendKind;
+        threadId: string;
+      }
     >();
     for (const { backend, line } of pending) {
-      const target = {
+      const threadId = line.parentThreadId ?? line.threadId;
+      const key = JSON.stringify([backend, threadId]);
+      const target = pricingTargets.get(key) ?? {
+        activeTurnIds: new Set<string>(),
         backend,
-        threadId: line.parentThreadId ?? line.threadId,
+        threadId,
       };
-      pricingTargets.set(
-        JSON.stringify([target.backend, target.threadId]),
-        target,
-      );
+      if (line.parentThreadId === undefined && line.turnId) {
+        target.activeTurnIds.add(line.turnId);
+      }
+      pricingTargets.set(key, target);
     }
     for (const target of pricingTargets.values()) {
       try {
         // The notification embeds a fresh store read, so observers can never
         // receive pricing for a usage line that has not committed yet.
-        await this.emitThreadPricingUpdated(target);
+        await this.emitThreadPricingUpdated({
+          ...(target.activeTurnIds.size > 0
+            ? { activeTurnIds: [...target.activeTurnIds] }
+            : {}),
+          backend: target.backend,
+          threadId: target.threadId,
+        });
       } catch (error) {
         backendRegistryLog.warn("live thread pricing update failed", {
           backend: target.backend,
@@ -22225,8 +22321,13 @@ export class DesktopBackendRegistry {
       return;
     }
     const now = Date.now();
+    const toolOutputAlertPolicy = this.toolOutputAlertPolicy;
+    const largeOutputThresholdChars = toolOutputWarningChars(
+      toolOutputAlertPolicy.repeatedLargeOutputMinimumPercent,
+    );
     const invocation = toolInvocationFromNotification({
       backend: event.backend,
+      largeOutputThresholdChars,
       notification: event.notification,
       now,
     });
@@ -22235,21 +22336,34 @@ export class DesktopBackendRegistry {
     }
 
     if (event.notification.method === "item/commandExecution/outputDelta") {
-      // Streamed output never notifies anyone (`shouldNotify` stays false for
-      // deltas) and never triggers noisy-polling detection (that only looks at
-      // `write_stdin`). Ordinary deltas can wait for the flush timer; a large-
-      // output threshold crossing becomes a durable boundary before its live
-      // alert reaches listeners.
+      // Streamed output never triggers noisy-polling detection (that only
+      // looks at `write_stdin`). Ordinary deltas can wait for the flush timer;
+      // a qualifying repeated-output or cap-hit boundary becomes durable
+      // before its live alert reaches listeners.
       const buffered = this.bufferStreamedToolInvocationDelta(invocation);
-      const detection = detectLargeToolOutput({
-        current: buffered.current,
-        now,
-        previousOutputChars: buffered.previousOutputChars,
-      });
+      const crossedLargeOutputBoundary =
+        (
+          buffered.previousOutputChars < largeOutputThresholdChars
+          && buffered.current.outputChars >= largeOutputThresholdChars
+        )
+        || (
+          buffered.previousOutputChars < TOOL_OUTPUT_CAP_CHARS
+          && buffered.current.outputChars >= TOOL_OUTPUT_CAP_CHARS
+        );
+      const detection = crossedLargeOutputBoundary
+        ? detectLargeToolOutput({
+            current: buffered.current,
+            now,
+            policy: toolOutputAlertPolicy,
+            previousOutputChars: buffered.previousOutputChars,
+          })
+        : undefined;
       if (detection) {
         const incident = mergeLargeToolOutputIncident({
           current: this.liveToolOutputIncidents.get(detection.alert.alertId),
           detection,
+          minimumWarningInvocationCount:
+            toolOutputAlertPolicy.repeatedLargeOutputMinimumCalls,
         });
         this.liveToolOutputIncidents.set(
           incident.aggregate.alert.alertId,
@@ -22284,6 +22398,7 @@ export class DesktopBackendRegistry {
     const rawLargeOutputDetection = detectLargeToolOutput({
       current: invocationWithStreamedOutput,
       now,
+      policy: toolOutputAlertPolicy,
     });
     const largeOutputIncident = rawLargeOutputDetection
       ? mergeLargeToolOutputIncident({
@@ -22291,6 +22406,8 @@ export class DesktopBackendRegistry {
             rawLargeOutputDetection.alert.alertId,
           ),
           detection: rawLargeOutputDetection,
+          minimumWarningInvocationCount:
+            toolOutputAlertPolicy.repeatedLargeOutputMinimumCalls,
         })
       : undefined;
     if (largeOutputIncident) {
@@ -22316,7 +22433,8 @@ export class DesktopBackendRegistry {
       ? this.readVolatileDeferredChecks(invocationWithStreamedOutput, now)
       : [];
     const rawPollingDetection =
-      typeof this.overlayStore.readRecentThreadToolInvocations === "function"
+      toolOutputAlertPolicy.repeatedQueuedChecksEnabled
+      && typeof this.overlayStore.readRecentThreadToolInvocations === "function"
       ? detectNoisyPolling({
           current: invocationWithStreamedOutput,
           now,
@@ -22391,7 +22509,9 @@ export class DesktopBackendRegistry {
       ),
     );
     const alertsToPersist = [
-      ...(largeOutputDetection ? [largeOutputDetection.alert] : []),
+      ...(largeOutputDetection && largeOutputIncident?.shouldNotify
+        ? [largeOutputDetection.alert]
+        : []),
       ...(pollingDetection && shouldPersistPollingAlert
         ? [pollingDetection.alert]
         : []),

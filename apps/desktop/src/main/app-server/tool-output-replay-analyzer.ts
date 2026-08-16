@@ -7,14 +7,17 @@ import type {
   ThreadToolInvocationRecord,
 } from "@pwragent/shared";
 import {
+  TOOL_OUTPUT_CAP_CHARS,
+  TOOL_OUTPUT_WARNING_CHARS,
+} from "@pwragent/shared";
+import {
   buildToolInvocationSteeringPrompt,
   buildToolOutputMetrics,
   normalizeToolInvocationCommand,
 } from "./tool-invocation-accounting";
 
-export const TOOL_OUTPUT_ANALYZER_VERSION = "1";
-const LARGE_OUTPUT_CHARS = 4_000;
-const CRITICAL_OUTPUT_CHARS = 40_000;
+export const TOOL_OUTPUT_ANALYZER_VERSION = "3";
+const CRITICAL_OUTPUT_CHARS = TOOL_OUTPUT_CAP_CHARS;
 const POLLING_MIN_CASES = 5;
 
 export type ToolOutputReplayAnalysis = {
@@ -26,6 +29,7 @@ export function analyzeNormalizedToolReplay(params: {
   analyzedAt?: number;
   backend: AppServerBackendKind;
   complete: boolean;
+  largeOutputThresholdChars?: number;
   pages: AppServerThreadReplay[];
   threadId: string;
 }): ToolOutputReplayAnalysis {
@@ -72,6 +76,8 @@ export function analyzeNormalizedToolReplay(params: {
         }
         const reason = classifyNoisyReason({
           category,
+          largeOutputThresholdChars:
+            params.largeOutputThresholdChars ?? TOOL_OUTPUT_WARNING_CHARS,
           outputChars: metrics.outputChars,
           outputState,
         });
@@ -188,13 +194,14 @@ function categoryForReplayDetail(
 
 function classifyNoisyReason(params: {
   category: ThreadToolInvocationCategory;
+  largeOutputThresholdChars: number;
   outputChars: number;
   outputState: ThreadToolInvocationRecord["outputState"];
 }): string | undefined {
   if (params.outputChars >= CRITICAL_OUTPUT_CHARS) {
     return "large-output-critical";
   }
-  if (params.outputChars < LARGE_OUTPUT_CHARS) {
+  if (params.outputChars < params.largeOutputThresholdChars) {
     return undefined;
   }
   if (params.category === "file-io") return "broad-file-read";

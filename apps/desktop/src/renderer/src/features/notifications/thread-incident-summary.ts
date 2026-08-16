@@ -69,6 +69,7 @@ export function buildThreadIncidentSummary(params: {
   backend: string;
   /** Persisted baseline. Survives restart so the cost window does not reset. */
   firstWarningAt?: number;
+  largeOutputThresholdChars?: number;
   threadId: string;
   usageLines?: readonly ThreadUsageLineRecord[];
 }): ThreadIncidentSummary | undefined {
@@ -76,7 +77,9 @@ export function buildThreadIncidentSummary(params: {
   /* Same predicate the explorer uses: a card that counted only rows the
      detectors happened to mark would under-report exactly the threads whose
      history predates them. */
-  const flagged = invocations.filter(isFlaggedToolInvocation);
+  const flagged = invocations.filter((invocation) =>
+    isFlaggedToolInvocation(invocation, params.largeOutputThresholdChars)
+  );
   if (flagged.length === 0) return undefined;
 
   const observedFirst = flagged.reduce(

@@ -24,7 +24,9 @@ import type {
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
   DesktopSettingsConfigPatch,
+  DesktopSpendAlertPolicy,
   DesktopTextSize,
+  DesktopToolOutputAlertPolicy,
   DesktopUpdateChannel,
   DesktopUpdateTrain,
   DesktopWorktreeStorageLocation,
@@ -99,6 +101,8 @@ export type DesktopSettingsConfig = {
     hotCpuProfilingCaptureHeapSnapshot?: boolean;
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
+    toolOutputAlerts?: Partial<DesktopToolOutputAlertPolicy>;
+    spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;
@@ -640,6 +644,68 @@ export function desktopSettingsPatchToEdits(
   }
   if (patch.general?.notificationsEnabled !== undefined) {
     set(["general", "notifications_enabled"], patch.general.notificationsEnabled);
+  }
+  if (patch.general?.toolOutputAlerts?.outputCapHitsEnabled !== undefined) {
+    set(
+      ["general", "tool_output_alerts", "output_cap_hits_enabled"],
+      patch.general.toolOutputAlerts.outputCapHitsEnabled,
+    );
+  }
+  if (
+    patch.general?.toolOutputAlerts?.repeatedLargeOutputsEnabled !== undefined
+  ) {
+    set(
+      ["general", "tool_output_alerts", "repeated_large_outputs_enabled"],
+      patch.general.toolOutputAlerts.repeatedLargeOutputsEnabled,
+    );
+  }
+  if (
+    patch.general?.toolOutputAlerts?.repeatedLargeOutputMinimumCalls !== undefined
+  ) {
+    set(
+      ["general", "tool_output_alerts", "repeated_large_output_minimum_calls"],
+      patch.general.toolOutputAlerts.repeatedLargeOutputMinimumCalls,
+    );
+  }
+  if (
+    patch.general?.toolOutputAlerts?.repeatedLargeOutputMinimumPercent !== undefined
+  ) {
+    set(
+      ["general", "tool_output_alerts", "repeated_large_output_minimum_percent"],
+      patch.general.toolOutputAlerts.repeatedLargeOutputMinimumPercent,
+    );
+  }
+  if (
+    patch.general?.toolOutputAlerts?.repeatedQueuedChecksEnabled !== undefined
+  ) {
+    set(
+      ["general", "tool_output_alerts", "repeated_queued_checks_enabled"],
+      patch.general.toolOutputAlerts.repeatedQueuedChecksEnabled,
+    );
+  }
+  if (patch.general?.spendAlerts?.activeTurnSpendEnabled !== undefined) {
+    set(
+      ["general", "spend_alerts", "active_turn_spend_enabled"],
+      patch.general.spendAlerts.activeTurnSpendEnabled,
+    );
+  }
+  if (patch.general?.spendAlerts?.activeTurnSpendThresholdUsd !== undefined) {
+    set(
+      ["general", "spend_alerts", "active_turn_spend_threshold_usd"],
+      patch.general.spendAlerts.activeTurnSpendThresholdUsd,
+    );
+  }
+  if (patch.general?.spendAlerts?.threadSpendEnabled !== undefined) {
+    set(
+      ["general", "spend_alerts", "thread_spend_enabled"],
+      patch.general.spendAlerts.threadSpendEnabled,
+    );
+  }
+  if (patch.general?.spendAlerts?.threadSpendThresholdUsd !== undefined) {
+    set(
+      ["general", "spend_alerts", "thread_spend_threshold_usd"],
+      patch.general.spendAlerts.threadSpendThresholdUsd,
+    );
   }
 
   if (patch.experimental?.diffCondensation?.enabled !== undefined) {
@@ -1542,6 +1608,8 @@ function normalizeDesktopConfig(
 ): DesktopSettingsConfig {
   const general = tables["general"];
   const generalAppearance = tables["general.appearance"];
+  const generalToolOutputAlerts = tables["general.tool_output_alerts"];
+  const generalSpendAlerts = tables["general.spend_alerts"];
   const generalMessagingAck = tables["general.messaging_acknowledgment"];
   const onboarding = tables["onboarding"];
   const experimental = tables["experimental"];
@@ -1598,6 +1666,37 @@ function normalizeDesktopConfig(
         general?.hot_cpu_profiling_heap_snapshot_limit,
       ),
       notificationsEnabled: readBoolean(general?.notifications_enabled),
+      toolOutputAlerts: {
+        outputCapHitsEnabled: readBoolean(
+          generalToolOutputAlerts?.output_cap_hits_enabled,
+        ),
+        repeatedLargeOutputsEnabled: readBoolean(
+          generalToolOutputAlerts?.repeated_large_outputs_enabled,
+        ),
+        repeatedLargeOutputMinimumCalls: readNumber(
+          generalToolOutputAlerts?.repeated_large_output_minimum_calls,
+        ),
+        repeatedLargeOutputMinimumPercent: readNumber(
+          generalToolOutputAlerts?.repeated_large_output_minimum_percent,
+        ),
+        repeatedQueuedChecksEnabled: readBoolean(
+          generalToolOutputAlerts?.repeated_queued_checks_enabled,
+        ),
+      },
+      spendAlerts: {
+        activeTurnSpendEnabled: readBoolean(
+          generalSpendAlerts?.active_turn_spend_enabled,
+        ),
+        activeTurnSpendThresholdUsd: readNumber(
+          generalSpendAlerts?.active_turn_spend_threshold_usd,
+        ),
+        threadSpendEnabled: readBoolean(
+          generalSpendAlerts?.thread_spend_enabled,
+        ),
+        threadSpendThresholdUsd: readNumber(
+          generalSpendAlerts?.thread_spend_threshold_usd,
+        ),
+      },
       appearance: {
         theme: readAppearanceTheme(generalAppearance?.theme),
         density: readAppearanceDensity(generalAppearance?.density),
@@ -1926,6 +2025,11 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
+  const toolOutputAlerts = config.general?.toolOutputAlerts;
+  const toolOutputAlertsDefined =
+    toolOutputAlerts && hasDefinedValue(toolOutputAlerts);
+  const spendAlerts = config.general?.spendAlerts;
+  const spendAlertsDefined = spendAlerts && hasDefinedValue(spendAlerts);
   const appearance = config.general?.appearance;
   const appearanceDefined = appearance && hasDefinedValue(appearance);
   const codexProfileModel = config.general?.codexProfileModel;
@@ -1942,6 +2046,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     attentionPromoteOnTurnEnd !== undefined ||
     pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
+    toolOutputAlertsDefined ||
+    spendAlertsDefined ||
     appearanceDefined ||
     codexProfileModel !== undefined ||
     messagingAcknowledgment !== undefined
@@ -1983,6 +2089,12 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (notificationsEnabled !== undefined) {
       pruned.general.notificationsEnabled = notificationsEnabled;
+    }
+    if (toolOutputAlertsDefined) {
+      pruned.general.toolOutputAlerts = toolOutputAlerts;
+    }
+    if (spendAlertsDefined) {
+      pruned.general.spendAlerts = spendAlerts;
     }
     if (appearanceDefined) {
       pruned.general.appearance = appearance;

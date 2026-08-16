@@ -2,6 +2,8 @@ import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
   DesktopTextSize,
+  DesktopSpendAlertPolicy,
+  DesktopToolOutputAlertPolicy,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
@@ -42,6 +44,8 @@ import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
+  DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_FEDERATION_MODE_DEFAULT,
@@ -55,8 +59,14 @@ import {
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
   MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+  MAX_REPEATED_LARGE_OUTPUT_CALLS,
+  MAX_REPEATED_LARGE_OUTPUT_PERCENT,
+  MAX_SPEND_ALERT_THRESHOLD_USD,
   MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
+  MIN_REPEATED_LARGE_OUTPUT_CALLS,
+  MIN_REPEATED_LARGE_OUTPUT_PERCENT,
+  MIN_SPEND_ALERT_THRESHOLD_USD,
 } from "@pwragent/shared";
 import {
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
@@ -645,6 +655,54 @@ export class DesktopSettingsService {
           config.general?.notificationsEnabled,
           false,
         ),
+        toolOutputAlerts: {
+          outputCapHitsEnabled: this.resolveConfigBoolean(
+            config.general?.toolOutputAlerts?.outputCapHitsEnabled,
+            DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.outputCapHitsEnabled,
+          ),
+          repeatedLargeOutputsEnabled: this.resolveConfigBoolean(
+            config.general?.toolOutputAlerts?.repeatedLargeOutputsEnabled,
+            DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputsEnabled,
+          ),
+          repeatedLargeOutputMinimumCalls: this.resolveBoundedConfigInteger(
+            config.general?.toolOutputAlerts?.repeatedLargeOutputMinimumCalls,
+            DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputMinimumCalls,
+            MIN_REPEATED_LARGE_OUTPUT_CALLS,
+            MAX_REPEATED_LARGE_OUTPUT_CALLS,
+          ),
+          repeatedLargeOutputMinimumPercent: this.resolveBoundedConfigInteger(
+            config.general?.toolOutputAlerts?.repeatedLargeOutputMinimumPercent,
+            DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputMinimumPercent,
+            MIN_REPEATED_LARGE_OUTPUT_PERCENT,
+            MAX_REPEATED_LARGE_OUTPUT_PERCENT,
+          ),
+          repeatedQueuedChecksEnabled: this.resolveConfigBoolean(
+            config.general?.toolOutputAlerts?.repeatedQueuedChecksEnabled,
+            DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedQueuedChecksEnabled,
+          ),
+        },
+        spendAlerts: {
+          activeTurnSpendEnabled: this.resolveConfigBoolean(
+            config.general?.spendAlerts?.activeTurnSpendEnabled,
+            DESKTOP_SPEND_ALERT_POLICY_DEFAULT.activeTurnSpendEnabled,
+          ),
+          activeTurnSpendThresholdUsd: this.resolveBoundedConfigAmount(
+            config.general?.spendAlerts?.activeTurnSpendThresholdUsd,
+            DESKTOP_SPEND_ALERT_POLICY_DEFAULT.activeTurnSpendThresholdUsd,
+            MIN_SPEND_ALERT_THRESHOLD_USD,
+            MAX_SPEND_ALERT_THRESHOLD_USD,
+          ),
+          threadSpendEnabled: this.resolveConfigBoolean(
+            config.general?.spendAlerts?.threadSpendEnabled,
+            DESKTOP_SPEND_ALERT_POLICY_DEFAULT.threadSpendEnabled,
+          ),
+          threadSpendThresholdUsd: this.resolveBoundedConfigAmount(
+            config.general?.spendAlerts?.threadSpendThresholdUsd,
+            DESKTOP_SPEND_ALERT_POLICY_DEFAULT.threadSpendThresholdUsd,
+            MIN_SPEND_ALERT_THRESHOLD_USD,
+            MAX_SPEND_ALERT_THRESHOLD_USD,
+          ),
+        },
         appearance: {
           theme: this.resolveAppearanceTheme(
             config.general?.appearance?.theme,
@@ -1282,6 +1340,62 @@ export class DesktopSettingsService {
       this.readConfig().config.general?.notificationsEnabled,
       false,
     ).value;
+  }
+
+  resolveToolOutputAlertPolicy(): DesktopToolOutputAlertPolicy {
+    const config = this.readConfig().config.general?.toolOutputAlerts;
+    return {
+      outputCapHitsEnabled: this.resolveConfigBoolean(
+        config?.outputCapHitsEnabled,
+        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.outputCapHitsEnabled,
+      ).value,
+      repeatedLargeOutputsEnabled: this.resolveConfigBoolean(
+        config?.repeatedLargeOutputsEnabled,
+        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputsEnabled,
+      ).value,
+      repeatedLargeOutputMinimumCalls: this.resolveBoundedConfigInteger(
+        config?.repeatedLargeOutputMinimumCalls,
+        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputMinimumCalls,
+        MIN_REPEATED_LARGE_OUTPUT_CALLS,
+        MAX_REPEATED_LARGE_OUTPUT_CALLS,
+      ).value,
+      repeatedLargeOutputMinimumPercent: this.resolveBoundedConfigInteger(
+        config?.repeatedLargeOutputMinimumPercent,
+        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputMinimumPercent,
+        MIN_REPEATED_LARGE_OUTPUT_PERCENT,
+        MAX_REPEATED_LARGE_OUTPUT_PERCENT,
+      ).value,
+      repeatedQueuedChecksEnabled: this.resolveConfigBoolean(
+        config?.repeatedQueuedChecksEnabled,
+        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedQueuedChecksEnabled,
+      ).value,
+    };
+  }
+
+  resolveSpendAlertPolicy(): DesktopSpendAlertPolicy {
+    const config = this.readConfig().config.general?.spendAlerts;
+    return {
+      activeTurnSpendEnabled: this.resolveConfigBoolean(
+        config?.activeTurnSpendEnabled,
+        DESKTOP_SPEND_ALERT_POLICY_DEFAULT.activeTurnSpendEnabled,
+      ).value,
+      activeTurnSpendThresholdUsd: this.resolveBoundedConfigAmount(
+        config?.activeTurnSpendThresholdUsd,
+        DESKTOP_SPEND_ALERT_POLICY_DEFAULT.activeTurnSpendThresholdUsd,
+        MIN_SPEND_ALERT_THRESHOLD_USD,
+        MAX_SPEND_ALERT_THRESHOLD_USD,
+      ).value,
+      threadSpendEnabled: this.resolveConfigBoolean(
+        config?.threadSpendEnabled,
+        DESKTOP_SPEND_ALERT_POLICY_DEFAULT.threadSpendEnabled,
+      ).value,
+      threadSpendThresholdUsd: this.resolveBoundedConfigAmount(
+        config?.threadSpendThresholdUsd,
+        DESKTOP_SPEND_ALERT_POLICY_DEFAULT.threadSpendThresholdUsd,
+        MIN_SPEND_ALERT_THRESHOLD_USD,
+        MAX_SPEND_ALERT_THRESHOLD_USD,
+      ).value,
+    };
   }
 
   resolveCodexDefaultModeRequestUserInput(): boolean {
@@ -2366,6 +2480,41 @@ export class DesktopSettingsService {
     return {
       value: configValue ?? defaultValue,
       source: configValue === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveBoundedConfigInteger(
+    configValue: number | undefined,
+    defaultValue: number,
+    minValue: number,
+    maxValue: number,
+  ): DesktopSettingsValue<number> {
+    const normalized =
+      configValue !== undefined && Number.isFinite(configValue)
+        ? Math.min(maxValue, Math.max(minValue, Math.round(configValue)))
+        : undefined;
+    return {
+      value: normalized ?? defaultValue,
+      source: normalized === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveBoundedConfigAmount(
+    configValue: number | undefined,
+    defaultValue: number,
+    minValue: number,
+    maxValue: number,
+  ): DesktopSettingsValue<number> {
+    const normalized =
+      configValue !== undefined && Number.isFinite(configValue)
+        ? Math.min(
+            maxValue,
+            Math.max(minValue, Math.round(configValue * 100) / 100),
+          )
+        : undefined;
+    return {
+      value: normalized ?? defaultValue,
+      source: normalized === undefined ? "default" : "config",
     };
   }
 

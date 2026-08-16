@@ -129,6 +129,19 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      toolOutputAlerts: {
+        outputCapHitsEnabled: { value: true, source: "default" },
+        repeatedLargeOutputsEnabled: { value: true, source: "default" },
+        repeatedLargeOutputMinimumCalls: { value: 5, source: "default" },
+        repeatedLargeOutputMinimumPercent: { value: 50, source: "default" },
+        repeatedQueuedChecksEnabled: { value: true, source: "default" },
+      },
+      spendAlerts: {
+        activeTurnSpendEnabled: { value: true, source: "default" },
+        activeTurnSpendThresholdUsd: { value: 5, source: "default" },
+        threadSpendEnabled: { value: true, source: "default" },
+        threadSpendThresholdUsd: { value: 25, source: "default" },
+      },
       appearance: {
         theme: { value: "system", source: "default" },
         density: { value: "mission-control", source: "default" },
@@ -930,6 +943,85 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("heading", { name: "Usage & pricing" }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Alerts" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("switch", { name: "Repeated large tool outputs" }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.change(
+      screen.getByRole("spinbutton", {
+        name: "Active turn spend threshold",
+      }),
+      { target: { value: "7.50" } },
+    );
+    fireEvent.blur(
+      screen.getByRole("spinbutton", {
+        name: "Active turn spend threshold",
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          spendAlerts: {
+            activeTurnSpendThresholdUsd: 7.5,
+          },
+        },
+      });
+    });
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Total thread spend" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          spendAlerts: {
+            threadSpendEnabled: false,
+          },
+        },
+      });
+    });
+    fireEvent.change(screen.getByRole("spinbutton", { name: "Calls per turn" }), {
+      target: { value: "7" },
+    });
+    fireEvent.blur(screen.getByRole("spinbutton", { name: "Calls per turn" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          toolOutputAlerts: {
+            repeatedLargeOutputMinimumCalls: 7,
+          },
+        },
+      });
+    });
+    fireEvent.change(
+      screen.getByRole("spinbutton", { name: "Output size threshold" }),
+      { target: { value: "65" } },
+    );
+    fireEvent.blur(
+      screen.getByRole("spinbutton", { name: "Output size threshold" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          toolOutputAlerts: {
+            repeatedLargeOutputMinimumPercent: 65,
+          },
+        },
+      });
+    });
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Repeated large tool outputs" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          toolOutputAlerts: {
+            repeatedLargeOutputsEnabled: false,
+          },
+        },
+      });
+    });
     fireEvent.click(
       screen.getByRole("switch", {
         name: "Show thread pricing",

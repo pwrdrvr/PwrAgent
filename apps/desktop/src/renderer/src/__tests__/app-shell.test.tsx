@@ -1235,6 +1235,19 @@ describe("App", () => {
           value: false,
           source: "default",
         },
+        toolOutputAlerts: {
+          outputCapHitsEnabled: { value: true, source: "default" },
+          repeatedLargeOutputsEnabled: { value: true, source: "default" },
+          repeatedLargeOutputMinimumCalls: { value: 5, source: "default" },
+          repeatedLargeOutputMinimumPercent: { value: 50, source: "default" },
+          repeatedQueuedChecksEnabled: { value: true, source: "default" },
+        },
+        spendAlerts: {
+          activeTurnSpendEnabled: { value: true, source: "default" },
+          activeTurnSpendThresholdUsd: { value: 5, source: "default" },
+          threadSpendEnabled: { value: true, source: "default" },
+          threadSpendThresholdUsd: { value: 25, source: "default" },
+        },
         appearance: {
           theme: { value: "system", source: "default" },
           density: { value: "mission-control", source: "default" },

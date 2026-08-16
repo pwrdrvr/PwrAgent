@@ -19440,6 +19440,187 @@ command = "pnpm dev"
     });
   });
 
+  it("emits configured spend alerts once per threshold", async () => {
+    const activeLine: ThreadUsageLineRecord = {
+      backend: "codex",
+      cachedInputCostMicros: 0,
+      cachedInputTokens: 0,
+      createdAt: 1_800_000_000_000,
+      currency: "USD",
+      inputTokens: 0,
+      outputCostMicros: 0,
+      outputTokens: 0,
+      priceStatus: "priced",
+      provider: "openai",
+      reasoningOutputTokens: 0,
+      scope: "turn",
+      source: "live",
+      status: "pending",
+      threadId: "thread-1",
+      totalCostMicros: 5_250_000,
+      totalTokens: 0,
+      turnId: "turn-2",
+      turnUsageAttributed: true,
+      uncachedInputCostMicros: 0,
+      uncachedInputTokens: 0,
+      usageLineId: "usage-turn-2",
+    };
+    const pricing = {
+      lines: [activeLine],
+      summaries: [{
+        backend: "codex",
+        cachedInputTokens: 0,
+        currency: "USD",
+        inputTokens: 0,
+        outputTokens: 0,
+        pricedUsageLineCount: 1,
+        provider: "openai",
+        reasoningOutputTokens: 0,
+        threadId: "thread-1",
+        totalCostMicros: 30_000_000,
+        totalTokens: 0,
+        uncachedInputTokens: 0,
+        unpricedUsageLineCount: 0,
+        updatedAt: 1_800_000_000_000,
+        usageLineCount: 1,
+      }],
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: {
+        ...createOverlayStoreMock(),
+        readThreadPricing: vi.fn(async () => pricing),
+      } as never,
+      resolveSpendAlertPolicy: () => ({
+        activeTurnSpendEnabled: true,
+        activeTurnSpendThresholdUsd: 5,
+        threadSpendEnabled: true,
+        threadSpendThresholdUsd: 25,
+      }),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    const emitPricing = (registry as unknown as {
+      emitThreadPricingUpdated(params: {
+        activeTurnIds?: readonly string[];
+        backend: AppServerBackendKind;
+        threadId: string;
+      }): Promise<void>;
+    }).emitThreadPricingUpdated.bind(registry);
+
+    await emitPricing({
+      activeTurnIds: ["turn-2"],
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    await emitPricing({
+      activeTurnIds: ["turn-2"],
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    const pricingEvents = events.filter(
+      (event) => event.notification.method === "thread/pricing/updated",
+    );
+    expect(pricingEvents[0]?.notification.params).toMatchObject({
+      triggeredSpendAlerts: [
+        { kind: "active-turn-spend", spendMicros: 5_250_000 },
+        { kind: "thread-spend", spendMicros: 30_000_000 },
+      ],
+    });
+    expect(pricingEvents[1]?.notification.params).not.toHaveProperty(
+      "triggeredSpendAlerts",
+    );
+
+    await registry.close();
+  });
+
+  it("preserves every active turn while coalescing pricing updates", async () => {
+    const lines: ThreadUsageLineRecord[] = ["turn-a", "turn-b"].map(
+      (turnId, index) => ({
+        backend: "codex",
+        cachedInputCostMicros: 0,
+        cachedInputTokens: 0,
+        createdAt: 1_800_000_000_000 + index,
+        currency: "USD",
+        inputTokens: 0,
+        outputCostMicros: 0,
+        outputTokens: 0,
+        priceStatus: "priced",
+        provider: "openai",
+        reasoningOutputTokens: 0,
+        scope: "turn",
+        source: "live",
+        status: "pending",
+        threadId: "thread-1",
+        totalCostMicros: 6_000_000 + index * 1_000_000,
+        totalTokens: 0,
+        turnId,
+        turnUsageAttributed: true,
+        uncachedInputCostMicros: 0,
+        uncachedInputTokens: 0,
+        usageLineId: `usage-${turnId}`,
+      }),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadPricing: vi.fn(async () => ({
+        lines,
+        summaries: [],
+      })),
+      upsertThreadUsageLines: vi.fn(async () => ({
+        lines,
+        summaries: [],
+      })),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      resolveSpendAlertPolicy: () => ({
+        activeTurnSpendEnabled: true,
+        activeTurnSpendThresholdUsd: 5,
+        threadSpendEnabled: false,
+        threadSpendThresholdUsd: 25,
+      }),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    const usageBatch = registry as unknown as {
+      bufferLiveThreadUsageLine(params: {
+        backend: AppServerBackendKind;
+        line: ThreadUsageLineRecord;
+        observationSequence: number;
+      }): void;
+      writePendingLiveThreadUsageLines(): Promise<void>;
+    };
+    lines.forEach((line, index) => {
+      usageBatch.bufferLiveThreadUsageLine({
+        backend: "codex",
+        line,
+        observationSequence: index + 1,
+      });
+    });
+
+    await usageBatch.writePendingLiveThreadUsageLines();
+
+    const pricingEvents = events.filter(
+      (event) => event.notification.method === "thread/pricing/updated",
+    );
+    expect(pricingEvents).toHaveLength(1);
+    expect(pricingEvents[0]?.notification.params).toMatchObject({
+      triggeredSpendAlerts: [
+        { kind: "active-turn-spend", turnId: "turn-a" },
+        { kind: "active-turn-spend", turnId: "turn-b" },
+      ],
+    });
+
+    await registry.close();
+  });
+
   it("coalesces streamed command output into one accounting write", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
@@ -19533,6 +19714,13 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: overlayStore as never,
+      resolveToolOutputAlertPolicy: () => ({
+        outputCapHitsEnabled: true,
+        repeatedLargeOutputsEnabled: true,
+        repeatedLargeOutputMinimumCalls: 3,
+        repeatedLargeOutputMinimumPercent: 25,
+        repeatedQueuedChecksEnabled: true,
+      }),
     });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
@@ -19561,14 +19749,18 @@ command = "pnpm dev"
         } as AgentEvent);
       };
 
-      await stream("x".repeat(2_000));
+      await stream("x".repeat(5_000));
       await vi.advanceTimersByTimeAsync(250);
       expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
 
       // The warning total spans sqlite flush windows. A detector tied to the
-      // 250ms pending-write buffer would see two harmless 2,000-char chunks
-      // and never report that the command reached 4,000.
-      await stream("x".repeat(2_000));
+      // 250ms pending-write buffer would see two harmless 5,000-char chunks
+      // and never count that the command reached the configured 25% threshold.
+      await stream("x".repeat(5_000));
+      await stream("x".repeat(10_000), "cmd-2");
+      expect(persistThreadToolInvocationBoundary).not.toHaveBeenCalled();
+
+      await stream("x".repeat(10_000), "cmd-3");
       const alertEvent = events.find(
         (event) =>
           event.notification.method === "thread/toolAccounting/updated",
@@ -19577,9 +19769,10 @@ command = "pnpm dev"
         threadId: "thread-1",
         triggeredAlerts: [
           {
+            invocationCount: 3,
             kind: "large-output",
             severity: "warning",
-            totalOutputChars: 4_000,
+            totalOutputChars: 30_000,
             turnId: "turn-1",
           },
         ],
@@ -19590,14 +19783,15 @@ command = "pnpm dev"
           expect.objectContaining({
             kind: "large-output",
             severity: "warning",
-            totalOutputChars: 4_000,
+            invocationCount: 3,
+            totalOutputChars: 30_000,
           }),
         ],
         invocation: expect.objectContaining({
-          invocationId: "tool:codex:thread-1:turn-1:cmd-1",
+          invocationId: "tool:codex:thread-1:turn-1:cmd-3",
           noisy: true,
           noisyReason: "large-output",
-          outputChars: 2_000,
+          outputChars: 10_000,
           outputState: "available",
           source: "live",
           status: "in_progress",
@@ -19605,30 +19799,8 @@ command = "pnpm dev"
         }),
       });
 
-      await stream("x".repeat(4_000), "cmd-2");
-      expect(persistThreadToolInvocationBoundary).toHaveBeenCalledTimes(2);
-      expect(persistThreadToolInvocationBoundary.mock.calls[1]?.[0]).toMatchObject({
-        alerts: [
-          {
-            invocationCount: 2,
-            invocationIds: [
-              "tool:codex:thread-1:turn-1:cmd-1",
-              "tool:codex:thread-1:turn-1:cmd-2",
-            ],
-            totalOutputChars: 8_000,
-            worstOutputChars: 4_000,
-          },
-        ],
-        invocation: {
-          invocationId: "tool:codex:thread-1:turn-1:cmd-2",
-          outputChars: 4_000,
-          outputState: "available",
-          source: "live",
-        },
-      });
-
       await registry.close();
-      expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
+      expect(upsertThreadToolInvocation.mock.calls.length).toBeGreaterThan(1);
     } finally {
       vi.useRealTimers();
     }

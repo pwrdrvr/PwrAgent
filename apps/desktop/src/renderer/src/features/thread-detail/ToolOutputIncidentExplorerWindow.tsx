@@ -11,11 +11,13 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadToolIncidentPrompt,
+  DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   isFlaggedToolInvocation,
-  TOOL_OUTPUT_WARNING_CHARS,
+  toolOutputWarningChars,
 } from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { useDesktopApi } from "../../lib/desktop-api";
+import { useDesktopSettings } from "../settings/useDesktopSettings";
 import { ThreadChip } from "./ThreadChip";
 import { detailMatchesInvocationItem } from "./tool-call-details";
 import type {
@@ -49,6 +51,7 @@ const HISTORY_PAGE_LIMIT = 100;
 
 export function ToolOutputIncidentExplorerWindow() {
   const desktopApi = useDesktopApi();
+  const settings = useDesktopSettings(desktopApi);
   const [route, setRoute] = useState(readIncidentRoute);
   const [accounting, setAccounting] = useState<ThreadToolAccounting>();
   const [latest, setLatest] = useState<AppServerReadThreadResponse>();
@@ -122,18 +125,30 @@ export function ToolOutputIncidentExplorerWindow() {
     () => accounting?.invocations ?? [],
     [accounting?.invocations],
   );
-  const flagged = useMemo(
-    () => allInvocations.filter(isFlaggedToolInvocation),
-    [allInvocations],
+  const largeOutputThresholdChars = toolOutputWarningChars(
+    settings.snapshot?.general.toolOutputAlerts
+      ?.repeatedLargeOutputMinimumPercent.value
+      ?? DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT
+        .repeatedLargeOutputMinimumPercent,
   );
-  const summary = useMemo(() => summarizeIncidents(allInvocations), [allInvocations]);
+  const flagged = useMemo(
+    () => allInvocations.filter((invocation) =>
+      isFlaggedToolInvocation(invocation, largeOutputThresholdChars)
+    ),
+    [allInvocations, largeOutputThresholdChars],
+  );
+  const summary = useMemo(
+    () => summarizeIncidents(allInvocations, { largeOutputThresholdChars }),
+    [allInvocations, largeOutputThresholdChars],
+  );
   const usageLines = latest?.pricing?.lines;
   const turnStrip = useMemo(
     () => buildTurnCostStrip(allInvocations, {
+      largeOutputThresholdChars,
       scope: turnScope,
       ...(usageLines ? { usageLines } : {}),
     }),
-    [allInvocations, turnScope, usageLines],
+    [allInvocations, largeOutputThresholdChars, turnScope, usageLines],
   );
   const currency = usageLines?.[0]?.currency;
   const composition = useMemo(() => buildCategoryComposition(flagged), [flagged]);
@@ -524,7 +539,7 @@ export function ToolOutputIncidentExplorerWindow() {
                 ? "No findings match these filters."
                 : allInvocations.length === 0
                   ? "No tool calls are recorded for this thread yet."
-                  : `None of this thread's ${allInvocations.length.toLocaleString()} recorded tool calls returned more than ${TOOL_OUTPUT_WARNING_CHARS.toLocaleString()} characters.`}
+                  : `None of this thread's ${allInvocations.length.toLocaleString()} recorded tool calls returned at least ${largeOutputThresholdChars.toLocaleString()} characters.`}
             </p>
           ) : null}
         </aside>
@@ -1145,4 +1160,3 @@ function filterOutputLines(output: string | undefined, query: string) {
 function formatTimestamp(timestamp: number): string {
   return new Date(timestamp).toLocaleString();
 }
-

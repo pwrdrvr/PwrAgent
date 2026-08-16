@@ -15,6 +15,7 @@ import {
   buildThreadIdentityKey,
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   isRemoteFederationTarget,
   parseThreadIdentityKey,
   type AppServerBackendKind,
@@ -30,9 +31,11 @@ import {
   type ThreadToolAccounting,
   type ThreadToolIncidentNoticeState,
   type ThreadToolInvocationAlert,
+  type ThreadSpendAlert,
   type ThreadUsageLineRecord,
   type SetThreadToolIncidentNoticeRequest,
   resolveToolIncidentVisibility,
+  toolOutputWarningChars,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { useThreadJump } from "./features/navigation/useThreadJump";
@@ -113,6 +116,7 @@ import { buildGithubPrAuthenticationNotice } from "./features/notifications/gith
 import {
   buildToolAccountingNotice,
 } from "./features/notifications/tool-accounting-notice";
+import { buildSpendAlertNotice } from "./features/notifications/spend-alert-notice";
 import {
   buildThreadIncidentSummary,
   threadIncidentNoticeId,
@@ -362,6 +366,12 @@ function DesktopAppShell(props: {
     readonly ThreadUsageLineRecord[]
   >());
   const showIncidentCostRef = useRef(false);
+  const largeOutputThresholdCharsRef = useRef(toolOutputWarningChars(
+    props.settings.snapshot?.general.toolOutputAlerts
+      ?.repeatedLargeOutputMinimumPercent.value
+      ?? DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT
+        .repeatedLargeOutputMinimumPercent,
+  ));
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
@@ -679,6 +689,44 @@ function DesktopAppShell(props: {
       const instanceId = event.federationTarget?.scope === "remote"
         ? event.federationTarget.instanceId
         : undefined;
+      if (event.notification.method === "thread/pricing/updated") {
+        const params = event.notification.params;
+        const spendAlerts = params.triggeredSpendAlerts as
+          | ThreadSpendAlert[]
+          | undefined;
+        if (spendAlerts?.length) {
+          const matchingThread = backendErrorThreadsRef.current.find(
+            (thread) =>
+              thread.source === event.backend
+              && thread.id === params.threadId
+              && federationTargetsEqual(
+                thread.federation?.ref.target,
+                event.federationTarget,
+              ),
+          );
+          const threadLink = matchingThread
+            ? {
+                backend: matchingThread.source,
+                inThreadList: true,
+                ...(instanceId ? { instanceId } : {}),
+                threadId: matchingThread.id,
+                title: matchingThread.title,
+                titleSource: matchingThread.titleSource,
+                gitBranch: matchingThread.gitBranch,
+                linkedDirectories: matchingThread.linkedDirectories,
+              }
+            : undefined;
+          for (const alert of spendAlerts) {
+            dispatchAppNotice({
+              type: "show",
+              notice: buildSpendAlertNotice({
+                alert,
+                ...(threadLink ? { threadLink } : {}),
+              }),
+            });
+          }
+        }
+      }
       if (event.notification.method === "thread/toolAccounting/updated") {
         const params = event.notification.params as {
           threadId: string;
@@ -720,6 +768,7 @@ function DesktopAppShell(props: {
           ...(incidentState?.firstWarningAt !== undefined
             ? { firstWarningAt: incidentState.firstWarningAt }
             : {}),
+          largeOutputThresholdChars: largeOutputThresholdCharsRef.current,
           threadId: params.threadId,
           usageLines: threadUsageLinesRef.current.get(
             buildThreadIdentityKey(event.backend, params.threadId),
@@ -1157,6 +1206,14 @@ function DesktopAppShell(props: {
           ?.value ?? false)
       );
   }, [settings.snapshot?.experimental]);
+  useEffect(() => {
+    largeOutputThresholdCharsRef.current = toolOutputWarningChars(
+      settings.snapshot?.general.toolOutputAlerts
+        ?.repeatedLargeOutputMinimumPercent.value
+        ?? DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT
+          .repeatedLargeOutputMinimumPercent,
+    );
+  }, [settings.snapshot?.general.toolOutputAlerts]);
   const backendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
     federationTarget: activeFederationTarget,

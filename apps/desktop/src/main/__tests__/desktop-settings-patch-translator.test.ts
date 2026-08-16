@@ -115,6 +115,104 @@ describe("desktopSettingsPatchToEdits — general", () => {
       },
     ]);
   });
+
+  it("writes tool-output alert trigger preferences", () => {
+    const edits = desktopSettingsPatchToEdits({
+      general: {
+        toolOutputAlerts: {
+          outputCapHitsEnabled: false,
+          repeatedLargeOutputsEnabled: true,
+          repeatedLargeOutputMinimumCalls: 7,
+          repeatedLargeOutputMinimumPercent: 65,
+          repeatedQueuedChecksEnabled: false,
+        },
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["general", "tool_output_alerts", "output_cap_hits_enabled"],
+        value: false,
+      },
+      {
+        op: "set",
+        path: [
+          "general",
+          "tool_output_alerts",
+          "repeated_large_outputs_enabled",
+        ],
+        value: true,
+      },
+      {
+        op: "set",
+        path: [
+          "general",
+          "tool_output_alerts",
+          "repeated_large_output_minimum_calls",
+        ],
+        value: 7,
+      },
+      {
+        op: "set",
+        path: [
+          "general",
+          "tool_output_alerts",
+          "repeated_large_output_minimum_percent",
+        ],
+        value: 65,
+      },
+      {
+        op: "set",
+        path: [
+          "general",
+          "tool_output_alerts",
+          "repeated_queued_checks_enabled",
+        ],
+        value: false,
+      },
+    ]);
+  });
+
+  it("writes spend alert preferences", () => {
+    const edits = desktopSettingsPatchToEdits({
+      general: {
+        spendAlerts: {
+          activeTurnSpendEnabled: false,
+          activeTurnSpendThresholdUsd: 7.5,
+          threadSpendEnabled: true,
+          threadSpendThresholdUsd: 40,
+        },
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["general", "spend_alerts", "active_turn_spend_enabled"],
+        value: false,
+      },
+      {
+        op: "set",
+        path: [
+          "general",
+          "spend_alerts",
+          "active_turn_spend_threshold_usd",
+        ],
+        value: 7.5,
+      },
+      {
+        op: "set",
+        path: ["general", "spend_alerts", "thread_spend_enabled"],
+        value: true,
+      },
+      {
+        op: "set",
+        path: ["general", "spend_alerts", "thread_spend_threshold_usd"],
+        value: 40,
+      },
+    ]);
+  });
 });
 
 describe("desktopSettingsPatchToEdits — experimental", () => {

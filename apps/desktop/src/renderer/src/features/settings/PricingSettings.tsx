@@ -1,4 +1,17 @@
-import type { DesktopSettingsSnapshot } from "@pwragent/shared";
+import type {
+  DesktopSettingsSnapshot,
+  DesktopSpendAlertPolicy,
+  DesktopToolOutputAlertPolicy,
+} from "@pwragent/shared";
+import {
+  MAX_REPEATED_LARGE_OUTPUT_CALLS,
+  MAX_REPEATED_LARGE_OUTPUT_PERCENT,
+  MAX_SPEND_ALERT_THRESHOLD_USD,
+  MIN_REPEATED_LARGE_OUTPUT_CALLS,
+  MIN_REPEATED_LARGE_OUTPUT_PERCENT,
+  MIN_SPEND_ALERT_THRESHOLD_USD,
+} from "@pwragent/shared";
+import { useEffect, useState } from "react";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -29,6 +42,12 @@ export function PricingSettings(props: {
   onThreadPricingSummaryChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayUsdChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayCodexCreditsChange: (enabled: boolean) => Promise<void>;
+  onSpendAlertsChange: (
+    patch: Partial<DesktopSpendAlertPolicy>,
+  ) => Promise<void>;
+  onToolOutputAlertsChange: (
+    patch: Partial<DesktopToolOutputAlertPolicy>,
+  ) => Promise<void>;
 }) {
   const threadPricingSummary =
     props.snapshot.experimental.threadPricingSummary ??
@@ -39,14 +58,18 @@ export function PricingSettings(props: {
   const threadPricingDisplayCodexCredits =
     props.snapshot.experimental.threadPricingDisplayCodexCredits ??
     DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS;
+  const toolOutputAlerts = props.snapshot.general.toolOutputAlerts;
+  const spendAlerts = props.snapshot.general.spendAlerts;
   const displayControlsDisabled = props.saving || !threadPricingSummary.value;
+  const repeatedLargeOutputDescription =
+    `Alert after ${toolOutputAlerts.repeatedLargeOutputMinimumCalls.value.toLocaleString()} tool calls in one turn each produce at least ${toolOutputAlerts.repeatedLargeOutputMinimumPercent.value.toLocaleString()}% of the model-visible output cap.`;
 
   return (
     <SettingsSectionStack paneId="pricing" aria-label="Usage and pricing settings">
       <SettingsPanelHead
         eyebrow="Pricing"
         title="Usage & pricing"
-        help="Control how estimated thread usage costs are shown."
+        help="Control how thread usage costs are shown and which usage patterns raise alerts."
       />
 
       <SettingsSection
@@ -118,6 +141,239 @@ export function PricingSettings(props: {
           />
         </div>
       </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Usage"
+        title="Alerts"
+        description="Choose which costly or lossy tool-use patterns should interrupt you."
+        chip={sourceBadge(toolOutputAlerts.repeatedLargeOutputsEnabled)}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Active turn spend"
+            sub={`Alert when one active turn reaches $${spendAlerts.activeTurnSpendThresholdUsd.value.toFixed(2)} in estimated list-price spend.`}
+            source={sourceBadge(spendAlerts.activeTurnSpendEnabled)}
+            control={
+              <SettingsSwitch
+                checked={spendAlerts.activeTurnSpendEnabled.value}
+                disabled={props.saving}
+                label="Active turn spend"
+                onChange={(next) => {
+                  void props.onSpendAlertsChange({
+                    activeTurnSpendEnabled: next,
+                  });
+                }}
+              />
+            }
+          />
+          <AlertNumberField
+            decimals={2}
+            disabled={
+              props.saving || !spendAlerts.activeTurnSpendEnabled.value
+            }
+            label="Active turn spend threshold"
+            max={MAX_SPEND_ALERT_THRESHOLD_USD}
+            min={MIN_SPEND_ALERT_THRESHOLD_USD}
+            source={sourceBadge(spendAlerts.activeTurnSpendThresholdUsd)}
+            step={0.01}
+            sub="Estimated list-price spend allowed for one active turn before the alert is raised."
+            suffix="USD"
+            value={spendAlerts.activeTurnSpendThresholdUsd.value}
+            onSave={(next) => {
+              void props.onSpendAlertsChange({
+                activeTurnSpendThresholdUsd: next,
+              });
+            }}
+          />
+          <SettingsField
+            label="Total thread spend"
+            sub={`Alert when a thread reaches $${spendAlerts.threadSpendThresholdUsd.value.toFixed(2)} in estimated list-price spend.`}
+            source={sourceBadge(spendAlerts.threadSpendEnabled)}
+            control={
+              <SettingsSwitch
+                checked={spendAlerts.threadSpendEnabled.value}
+                disabled={props.saving}
+                label="Total thread spend"
+                onChange={(next) => {
+                  void props.onSpendAlertsChange({
+                    threadSpendEnabled: next,
+                  });
+                }}
+              />
+            }
+          />
+          <AlertNumberField
+            decimals={2}
+            disabled={props.saving || !spendAlerts.threadSpendEnabled.value}
+            label="Total thread spend threshold"
+            max={MAX_SPEND_ALERT_THRESHOLD_USD}
+            min={MIN_SPEND_ALERT_THRESHOLD_USD}
+            source={sourceBadge(spendAlerts.threadSpendThresholdUsd)}
+            step={0.01}
+            sub="Estimated list-price spend allowed across the thread before the alert is raised."
+            suffix="USD"
+            value={spendAlerts.threadSpendThresholdUsd.value}
+            onSave={(next) => {
+              void props.onSpendAlertsChange({
+                threadSpendThresholdUsd: next,
+              });
+            }}
+          />
+          <SettingsField
+            label="Tool output reaches the cap"
+            sub="Alert immediately when one tool call reaches the model-visible output cap and is truncated."
+            source={sourceBadge(toolOutputAlerts.outputCapHitsEnabled)}
+            control={
+              <SettingsSwitch
+                checked={toolOutputAlerts.outputCapHitsEnabled.value}
+                disabled={props.saving}
+                label="Tool output reaches the cap"
+                onChange={(next) => {
+                  void props.onToolOutputAlertsChange({
+                    outputCapHitsEnabled: next,
+                  });
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Repeated large tool outputs"
+            sub={repeatedLargeOutputDescription}
+            source={sourceBadge(toolOutputAlerts.repeatedLargeOutputsEnabled)}
+            control={
+              <SettingsSwitch
+                checked={toolOutputAlerts.repeatedLargeOutputsEnabled.value}
+                disabled={props.saving}
+                label="Repeated large tool outputs"
+                onChange={(next) => {
+                  void props.onToolOutputAlertsChange({
+                    repeatedLargeOutputsEnabled: next,
+                  });
+                }}
+              />
+            }
+          />
+          <AlertNumberField
+            disabled={
+              props.saving
+              || !toolOutputAlerts.repeatedLargeOutputsEnabled.value
+            }
+            label="Calls per turn"
+            max={MAX_REPEATED_LARGE_OUTPUT_CALLS}
+            min={MIN_REPEATED_LARGE_OUTPUT_CALLS}
+            source={sourceBadge(
+              toolOutputAlerts.repeatedLargeOutputMinimumCalls,
+            )}
+            sub="Number of qualifying tool calls required before the alert is raised."
+            suffix="calls"
+            value={toolOutputAlerts.repeatedLargeOutputMinimumCalls.value}
+            onSave={(next) => {
+              void props.onToolOutputAlertsChange({
+                repeatedLargeOutputMinimumCalls: next,
+              });
+            }}
+          />
+          <AlertNumberField
+            disabled={
+              props.saving
+              || !toolOutputAlerts.repeatedLargeOutputsEnabled.value
+            }
+            label="Output size threshold"
+            max={MAX_REPEATED_LARGE_OUTPUT_PERCENT}
+            min={MIN_REPEATED_LARGE_OUTPUT_PERCENT}
+            source={sourceBadge(
+              toolOutputAlerts.repeatedLargeOutputMinimumPercent,
+            )}
+            sub="Each qualifying call must produce at least this share of the model-visible output cap."
+            suffix="% of cap"
+            value={toolOutputAlerts.repeatedLargeOutputMinimumPercent.value}
+            onSave={(next) => {
+              void props.onToolOutputAlertsChange({
+                repeatedLargeOutputMinimumPercent: next,
+              });
+            }}
+          />
+          <SettingsField
+            label="Repeated queued checks"
+            sub="Alert when repeated wait or polling calls keep waking the model and replaying the turn context."
+            source={sourceBadge(toolOutputAlerts.repeatedQueuedChecksEnabled)}
+            control={
+              <SettingsSwitch
+                checked={toolOutputAlerts.repeatedQueuedChecksEnabled.value}
+                disabled={props.saving}
+                label="Repeated queued checks"
+                onChange={(next) => {
+                  void props.onToolOutputAlertsChange({
+                    repeatedQueuedChecksEnabled: next,
+                  });
+                }}
+              />
+            }
+          />
+        </div>
+      </SettingsSection>
     </SettingsSectionStack>
+  );
+}
+
+function AlertNumberField(props: {
+  decimals?: number;
+  disabled?: boolean;
+  label: string;
+  max: number;
+  min: number;
+  source: string;
+  step?: number;
+  sub: string;
+  suffix: string;
+  value: number;
+  onSave: (value: number) => void;
+}) {
+  const [value, setValue] = useState(String(props.value));
+
+  useEffect(() => {
+    setValue(String(props.value));
+  }, [props.value]);
+
+  return (
+    <SettingsField
+      label={props.label}
+      sub={props.sub}
+      source={props.source}
+      control={
+        <span className="settings-number">
+          <input
+            aria-label={props.label}
+            className="settings-input settings-input--inline"
+            disabled={props.disabled}
+            max={props.max}
+            min={props.min}
+            step={props.step}
+            type="number"
+            value={value}
+            onBlur={() => {
+              const parsed = Number(value);
+              if (!Number.isFinite(parsed)) {
+                setValue(String(props.value));
+                return;
+              }
+              const normalized = props.decimals === undefined
+                ? Math.trunc(parsed)
+                : Number(parsed.toFixed(props.decimals));
+              const clamped = Math.min(
+                Math.max(normalized, props.min),
+                props.max,
+              );
+              setValue(String(clamped));
+              if (clamped !== props.value) {
+                props.onSave(clamped);
+              }
+            }}
+            onChange={(event) => setValue(event.currentTarget.value)}
+          />
+          <span className="settings-source">{props.suffix}</span>
+        </span>
+      }
+    />
   );
 }
