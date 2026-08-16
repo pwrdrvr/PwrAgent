@@ -19514,7 +19514,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("identifies the durable parent of an ephemeral sub-agent accounting update", async () => {
+  it("does not emit an incident notification for ephemeral sub-agent accounting", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
@@ -19544,25 +19544,45 @@ command = "pnpm dev"
       emitThreadToolAccountingUpdated: (params: {
         backend: "codex";
         threadId: string;
+        triggeredAlerts: ThreadToolInvocationAlert[];
       }) => Promise<void>;
     }).emitThreadToolAccountingUpdated({
       backend: "codex",
       threadId: "ephemeral-child",
+      triggeredAlerts: [{
+        alertId: "large-output:codex:ephemeral-child:child-turn",
+        backend: "codex",
+        createdAt: 1,
+        estimatedOutputTokens: 2_000,
+        firstObservedAt: 1,
+        invocationCount: 1,
+        kind: "large-output",
+        lastObservedAt: 1,
+        message: "The sub-agent returned too much output.",
+        severity: "warning",
+        suggestedPrompt: "Use a bounded command.",
+        threadId: "ephemeral-child",
+        toolName: "commandExecution",
+        totalOutputChars: 8_000,
+        turnId: "child-turn",
+        updatedAt: 1,
+      }],
     });
 
-    expect(events).toContainEqual(expect.objectContaining({
+    const accountingEvent = events.find(
+      (event) => event.notification.method === "thread/toolAccounting/updated",
+    );
+    expect(accountingEvent).toEqual(expect.objectContaining({
       backend: "codex",
       notification: expect.objectContaining({
         method: "thread/toolAccounting/updated",
         params: expect.objectContaining({
-          ephemeralSubAgentParent: {
-            backend: "codex",
-            threadId: "parent-thread",
-          },
           threadId: "ephemeral-child",
+          toolAccounting: expect.any(Object),
         }),
       }),
     }));
+    expect(accountingEvent?.notification.params).not.toHaveProperty("triggeredAlerts");
     await registry.close();
   });
 

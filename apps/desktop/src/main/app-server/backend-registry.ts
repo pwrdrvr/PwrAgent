@@ -10855,6 +10855,13 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
     });
     const subAgentOwner = this.resolveSubAgentThreadOwner(params);
+    /* A child is expected to spend its own turn budget. Keep the raw
+       accounting record for diagnostics, but do not turn that expected cost
+       into an operator-facing incident. */
+    const triggeredAlerts =
+      params.backend === "codex" && subAgentOwner.isSubAgent
+        ? undefined
+        : params.triggeredAlerts;
     await this.emit({
       backend: params.backend,
       notification: {
@@ -10862,22 +10869,11 @@ export class DesktopBackendRegistry {
         params: {
           threadId: params.threadId,
           toolAccounting,
-          /* Codex sub-agents run in ephemeral threads. Their accounting still
-             matters, but reading the child with turns is unsupported, so the
-             renderer needs a durable parent to attach the notice to. */
-          ...(params.backend === "codex" && subAgentOwner.isSubAgent
-            ? {
-                ephemeralSubAgentParent: {
-                  backend: subAgentOwner.backend,
-                  threadId: subAgentOwner.threadId,
-                },
-              }
-            : {}),
           ...(overlay?.toolIncidentNotice
             ? { incidentNotice: overlay.toolIncidentNotice }
             : {}),
-          ...(params.triggeredAlerts?.length
-            ? { triggeredAlerts: params.triggeredAlerts }
+          ...(triggeredAlerts?.length
+            ? { triggeredAlerts }
             : {}),
         },
       },
@@ -12057,7 +12053,7 @@ export class DesktopBackendRegistry {
   /**
    * Collapse a worker thread onto the durable thread that owns it. Worker IDs
    * are intentionally absent from PwrAgent's navigation and title indexes, so
-   * both quit and notification surfaces must resolve this relationship first.
+   * quit and alert-policy surfaces must resolve this relationship first.
    */
   private resolveSubAgentThreadOwner(params: {
     backend: AppServerBackendKind;
