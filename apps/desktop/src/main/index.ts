@@ -1020,7 +1020,7 @@ function installWindowMenuRefreshHandlers(): void {
     window.on("closed", refresh);
     window.on("page-title-updated", refresh);
   });
-  // Keep File → Remote Instances in sync with peer connectivity.
+  // Keep Profiles → Remote Instances in sync with peer connectivity.
   getDesktopFederationRuntime().onPeerStatusChanged(() => {
     installApplicationMenu();
   });
