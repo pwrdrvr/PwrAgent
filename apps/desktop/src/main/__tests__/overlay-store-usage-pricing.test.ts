@@ -843,6 +843,52 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
+  it("reprices persisted Grok 4.6 usage under the xAI provider", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        backend: "acp:grok",
+        cachedInputTokens: 128,
+        completedAt: Date.UTC(2026, 7, 15),
+        createdAt: Date.UTC(2026, 7, 15),
+        inputTokens: 255_459,
+        model: "grok-4.6",
+        outputTokens: 266,
+        priceStatus: "unpriced",
+        priceUnavailableReason: "missing-rate",
+        pricingCatalogId: undefined,
+        pricingCatalogVersion: undefined,
+        pricingRateId: undefined,
+        reasoningOutputTokens: 130,
+        totalCostMicros: 0,
+        totalTokens: 255_725,
+        uncachedInputTokens: 255_331,
+        usageLineId: "line-grok-4-6",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "acp:grok",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines[0]).toMatchObject({
+      priceStatus: "priced",
+      pricingCatalogId: "xai-api",
+      pricingCatalogVersion: "2026-08-12",
+      pricingRateId:
+        "xai:2026-08-12:grok-4.6:standard:input-gte-200k",
+      provider: "xai",
+      totalCostMicros: 1_024_644,
+    });
+    expect(pricing.lines[0]?.priceUnavailableReason).toBeUndefined();
+    expect(pricing.summaries[0]).toMatchObject({
+      pricedUsageLineCount: 1,
+      provider: "xai",
+      totalCostMicros: 1_024_644,
+      unpricedUsageLineCount: 0,
+    });
+  });
+
   it("reprices persisted Qwen ACP usage under the Qwen provider", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
