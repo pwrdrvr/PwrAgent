@@ -1135,6 +1135,152 @@ describe("useThreadSessionState", () => {
     expect(retainedTailIdReads).toBeLessThanOrEqual(tailEntryCount * 8);
   });
 
+  it("keeps changed-id refresh matching linear in retained tail entries", async () => {
+    const tailEntryCount = 50;
+    const turn = {
+      id: "changed-id-turn",
+      status: "completed" as const,
+      startedAt: 1_000,
+      completedAt: 2_000,
+    };
+    let retainedTailIdReads = 0;
+    const retainedTail = Array.from(
+      { length: tailEntryCount },
+      (_value, index): AppServerThreadEntry =>
+        new Proxy(
+          {
+            ...messageEntry({
+              id: `retained-${index}`,
+              text: `Unique message ${index}`,
+              createdAt: 1_000 + index,
+            }),
+            turn,
+          },
+          {
+            get(target, property, receiver) {
+              if (property === "id") {
+                retainedTailIdReads += 1;
+              }
+              return Reflect.get(target, property, receiver);
+            },
+          },
+        ),
+    );
+    const refreshedTail = Array.from(
+      { length: tailEntryCount },
+      (_value, index): AppServerThreadEntry => ({
+        ...messageEntry({
+          id: `fresh-${index}`,
+          text: `Unique message ${index}`,
+          createdAt: 1_000 + index,
+        }),
+        turn,
+      }),
+    );
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: retainedTail,
+        hasPreviousPage: true,
+        previousCursor: "older",
+      }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [messageEntry({
+          id: "older-history",
+          text: "Older history",
+          createdAt: 500,
+        })],
+        hasPreviousPage: false,
+      }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: refreshedTail,
+        hasPreviousPage: true,
+        previousCursor: "fresh-0",
+      }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+    retainedTailIdReads = 0;
+    rerender({ updatedAt: 2_000 });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+    });
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries.map((entry) => entry.id)).toEqual([
+        "older-history",
+        ...Array.from({ length: tailEntryCount }, (_value, index) => `fresh-${index}`),
+      ]);
+    });
+    // The full-tail fallback read 6,425 retained IDs here. Unique logical
+    // buckets reduce that to 350 while leaving room for async observation.
+    expect(retainedTailIdReads).toBeLessThanOrEqual(tailEntryCount * 12);
+  });
+
+  it("keeps batched live optimistic appends linear in prior tail entries", async () => {
+    const liveEntryCount = 100;
+    let liveEntryIdReads = 0;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread: vi.fn(async () => readThreadResponse({
+        entries: [],
+        hasPreviousPage: false,
+        supportsPagination: false,
+      })),
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+    act(() => {
+      for (let index = 0; index < liveEntryCount; index += 1) {
+        result.current.upsertLiveTranscriptEntry(
+          new Proxy(
+            messageEntry({
+              id: `live-${index}`,
+              text: `Live ${index}`,
+              createdAt: 2_000 + index,
+            }),
+            {
+              get(target, property, receiver) {
+                if (property === "id") {
+                  liveEntryIdReads += 1;
+                }
+                return Reflect.get(target, property, receiver);
+              },
+            },
+          ),
+        );
+      }
+    });
+
+    expect(result.current.entries.map((entry) => entry.id)).toEqual(
+      Array.from({ length: liveEntryCount }, (_value, index) => `live-${index}`),
+    );
+    // Array upsert plus transcript/message merge read 25,650 IDs here. The
+    // indexed store and ordered-append paths reduce that to 800.
+    expect(liveEntryIdReads).toBeLessThanOrEqual(liveEntryCount * 12);
+  });
+
   it("coalesces reviews and suppresses duplicates across page-tail boundaries", async () => {
     const fullReview = [
       "Full review comments:",
