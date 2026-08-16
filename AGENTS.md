@@ -18,6 +18,20 @@
   documented in [.github/workflows/README.md](.github/workflows/README.md).
   Check that list before adding or using a CI-triggering PR label.
 - Exclude `apps/desktop/.local/protocol-captures/` from broad searches by default. Only search it when the task is specifically about captured E2E protocol snippets.
+- **Keep model-visible command output bounded.** Tool output is part of the
+  thread context and can be replayed on later turns, so do not use a broad,
+  context-heavy search as a first read. For discovery, start with
+  `rg -l`/`rg --count-matches` (and exclude `__tests__` unless tests are in
+  scope); then inspect only the named files and line ranges needed for the
+  next decision. Use `rg -n -C` only for a selected file or small file set,
+  with the minimum useful context. `sed` has no ignore-file setting: it reads
+  only the explicit path and range, so keep those operands specific.
+- Do not chain content-producing reads/searches with `&&`: their combined
+  stdout is sent as one tool result. For a deliberately broad scan, redirect
+  full stdout/stderr to an ignored `.local/` log and return only the exact
+  command, exit state, matching-file/count summary, failures or warnings, and
+  a bounded tail or targeted fields needed for the next decision. Truncation
+  is not a safe output budget.
 - Never read Codex-owned storage files directly from PwrAgent code. Treat
   Codex session JSONL files, rollout files, and Codex sqlite databases as
   private implementation details; use the Codex App Server protocol instead.
