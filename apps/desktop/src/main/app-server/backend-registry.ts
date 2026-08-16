@@ -6502,10 +6502,30 @@ type PendingLiveThreadUsageLine = {
 
 type LiveThreadUsageEmitWork = {
   backend: AppServerBackendKind;
+  derivationFinished: boolean;
+  derivationKey: string;
+  derivationTail: Promise<void>;
   observationSequence: number;
+  precedingDerivation: Promise<void>;
+  settleDerivation: () => void;
   settled: Promise<void>;
   settle: () => void;
   threadId: string;
+};
+
+type DerivedLiveThreadTokenUsage = {
+  // Whether turnTokenUsage is a real measurement of this turn — a per-turn
+  // delta or a per-request "last" snapshot — vs a fallback to a whole-thread
+  // total we could not decompose.
+  attributed: boolean;
+  cumulativeTokenUsage?: TaskMonitorTokenUsageBreakdown;
+  turnTokenUsage: TaskMonitorTokenUsageBreakdown | unknown;
+  /**
+   * The `total - latest` baseline, set only on the call that first seeds it
+   * for a `(thread, turn)`. For a fork's first observed turn this equals the
+   * context copied in at the fork point.
+   */
+  seededBaselineTokenUsage?: TaskMonitorTokenUsageBreakdown;
 };
 
 function isCodexInvalidIdRecoveryCooldownActive(
@@ -6750,6 +6770,14 @@ export class DesktopBackendRegistry {
    * an exact arrival-ordered durability barrier.
    */
   private readonly liveThreadUsageEmitWork = new Set<LiveThreadUsageEmitWork>();
+  // Registered synchronously at notification arrival, before the async event
+  // pipeline can reorder overlay reads. Each thread's derivation waits for the
+  // preceding arrival to publish its cumulative snapshot, while unrelated
+  // threads remain fully concurrent.
+  private readonly liveThreadUsageDerivationTails = new Map<
+    string,
+    Promise<void>
+  >();
   private pendingLiveThreadUsageTimer: NodeJS.Timeout | undefined;
   /**
    * Serializes timer, terminal, retry, and shutdown drains. A caller awaiting
@@ -20499,22 +20527,7 @@ export class DesktopBackendRegistry {
     threadId: string;
     tokenUsage: unknown;
     turnId?: string;
-  }): {
-    // Whether turnTokenUsage is a real measurement of this turn — a per-turn
-    // delta or a per-request "last" snapshot — vs a fallback to a whole-thread
-    // total we couldn't decompose. Carried onto the persisted row so the
-    // renderer classifies summaries by fact, not a token-count guess.
-    attributed: boolean;
-    cumulativeTokenUsage?: TaskMonitorTokenUsageBreakdown;
-    turnTokenUsage: TaskMonitorTokenUsageBreakdown | unknown;
-    /**
-     * The `total − latest` baseline, set only on the call that first seeds it
-     * for a `(thread, turn)`. For a fork's first observed turn this equals the
-     * context copied in at the fork point, which pricing captures as the
-     * inherited (never re-billed) fork baseline.
-     */
-    seededBaselineTokenUsage?: TaskMonitorTokenUsageBreakdown;
-  } {
+  }): DerivedLiveThreadTokenUsage {
     const records = readTaskMonitorTokenUsageRecords(params.tokenUsage);
     if (!records) {
       return { attributed: false, turnTokenUsage: params.tokenUsage };
@@ -20576,7 +20589,13 @@ export class DesktopBackendRegistry {
       && observationSequence !== undefined
       && (
         !priorCumulative
-        || observationSequence > priorCumulative.observationSequence
+        || (
+          observationSequence > priorCumulative.observationSequence
+          && canSubtractTaskMonitorTokenUsage(
+            records.totalUsage,
+            priorCumulative.usage,
+          )
+        )
       )
     ) {
       this.liveCodexThreadCumulativeUsage.set(cumulativeKey, {
@@ -20776,13 +20795,28 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     threadId: string,
   ): LiveThreadUsageEmitWork {
+    const derivationKey = [backend, threadId].join(":");
+    const precedingDerivation =
+      this.liveThreadUsageDerivationTails.get(derivationKey)
+      ?? Promise.resolve();
+    let settleDerivation!: () => void;
+    const derivationSettled = new Promise<void>((resolve) => {
+      settleDerivation = resolve;
+    });
+    const derivationTail = precedingDerivation.then(() => derivationSettled);
+    this.liveThreadUsageDerivationTails.set(derivationKey, derivationTail);
     let settle!: () => void;
     const settled = new Promise<void>((resolve) => {
       settle = resolve;
     });
     const work = {
       backend,
+      derivationFinished: false,
+      derivationKey,
+      derivationTail,
       observationSequence: ++this.liveThreadUsageObservationSequence,
+      precedingDerivation,
+      settleDerivation,
       settled,
       settle,
       threadId,
@@ -20791,9 +20825,30 @@ export class DesktopBackendRegistry {
     return work;
   }
 
+  private finishLiveThreadUsageDerivation(
+    work: LiveThreadUsageEmitWork,
+  ): void {
+    if (work.derivationFinished) {
+      return;
+    }
+    work.derivationFinished = true;
+    work.settleDerivation();
+    void work.derivationTail.then(() => {
+      if (
+        this.liveThreadUsageDerivationTails.get(work.derivationKey)
+        === work.derivationTail
+      ) {
+        this.liveThreadUsageDerivationTails.delete(work.derivationKey);
+      }
+    });
+  }
+
   private finishLiveThreadUsageEmitWork(
     work: LiveThreadUsageEmitWork,
   ): void {
+    // If an earlier pipeline stage failed before recordLiveThreadUsage, release
+    // this arrival's derivation slot so later usage cannot deadlock behind it.
+    this.finishLiveThreadUsageDerivation(work);
     if (!this.liveThreadUsageEmitWork.delete(work)) {
       return;
     }
@@ -20816,45 +20871,76 @@ export class DesktopBackendRegistry {
 
   private async recordLiveThreadUsage(
     event: AgentEvent,
-    observationSequence?: number,
+    work?: LiveThreadUsageEmitWork,
   ): Promise<void> {
     const notification = event.notification;
     if (
       notification.method !== "thread/tokenUsage/updated"
-      || observationSequence === undefined
+      || !work
     ) {
       return;
     }
     const threadId = notification.params.threadId;
     if (!threadId) {
+      this.finishLiveThreadUsageDerivation(work);
       return;
     }
-    if (event.backend === "codex" && this.codexNativeSubAgentParents.has(threadId)) {
-      return;
-    }
-    if (
-      Array.from(this.taskMonitorDelegations.values()).some(
-        (record) =>
-          record.backend === event.backend && record.monitorThreadId === threadId,
-      )
-      || this.completedTaskMonitorsByThread.has(
-        taskMonitorThreadKey(event.backend, threadId),
-      )
-    ) {
-      return;
-    }
-    if (notification.params.turnId) {
-      const reviewKey = buildReviewSubAgentKey(
-        event.backend,
-        threadId,
-        notification.params.turnId,
-      );
+    await work.precedingDerivation;
+    let derivedUsage: DerivedLiveThreadTokenUsage | undefined;
+    let observedReplays: ObservedContextReplayTally | undefined;
+    try {
       if (
-        this.activeReviewSubAgents.has(reviewKey) ||
-        this.reviewSubAgentsByReviewTurn.has(reviewKey)
+        event.backend === "codex"
+        && this.codexNativeSubAgentParents.has(threadId)
       ) {
         return;
       }
+      if (
+        Array.from(this.taskMonitorDelegations.values()).some(
+          (record) =>
+            record.backend === event.backend && record.monitorThreadId === threadId,
+        )
+        || this.completedTaskMonitorsByThread.has(
+          taskMonitorThreadKey(event.backend, threadId),
+        )
+      ) {
+        return;
+      }
+      if (notification.params.turnId) {
+        const reviewKey = buildReviewSubAgentKey(
+          event.backend,
+          threadId,
+          notification.params.turnId,
+        );
+        if (
+          this.activeReviewSubAgents.has(reviewKey)
+          || this.reviewSubAgentsByReviewTurn.has(reviewKey)
+        ) {
+          return;
+        }
+      }
+
+      const tokenUsage = notification.params.tokenUsage;
+      derivedUsage = this.deriveLiveThreadTokenUsage({
+        backend: event.backend,
+        observationSequence: work.observationSequence,
+        threadId,
+        tokenUsage,
+        turnId: notification.params.turnId ?? undefined,
+      });
+      observedReplays = this.observeLiveThreadContextReplay({
+        backend: event.backend,
+        threadId,
+        tokenUsage,
+        turnId: notification.params.turnId ?? undefined,
+      });
+    } finally {
+      // Publish the cumulative cursor before any overlay or sqlite await lets
+      // a later arrival overtake this derivation.
+      this.finishLiveThreadUsageDerivation(work);
+    }
+    if (!derivedUsage) {
+      return;
     }
 
     const overlay = await this.overlayStore.getThreadOverlayState({
@@ -20882,19 +20968,6 @@ export class DesktopBackendRegistry {
         "effort",
       ]) ??
       overlay?.reasoningEffort;
-    const derivedUsage = this.deriveLiveThreadTokenUsage({
-      backend: event.backend,
-      observationSequence,
-      threadId,
-      tokenUsage,
-      turnId: notification.params.turnId ?? undefined,
-    });
-    const observedReplays = this.observeLiveThreadContextReplay({
-      backend: event.backend,
-      threadId,
-      tokenUsage,
-      turnId: notification.params.turnId ?? undefined,
-    });
     const usageTiming = resolveLiveThreadUsageTiming({
       overlay,
       turnId: notification.params.turnId ?? undefined,
@@ -20949,7 +21022,7 @@ export class DesktopBackendRegistry {
         this.bufferLiveThreadUsageLine({
           backend: event.backend,
           line,
-          observationSequence,
+          observationSequence: work.observationSequence,
         });
         return;
       }
@@ -31372,7 +31445,7 @@ export class DesktopBackendRegistry {
 
     await this.recordLiveThreadUsage(
       event,
-      liveThreadUsageWork?.observationSequence,
+      liveThreadUsageWork,
     );
     await this.recordToolInvocationAccounting(event);
     this.forgetCompletedTurnReplayObservations(event);

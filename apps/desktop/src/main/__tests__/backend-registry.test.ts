@@ -21243,6 +21243,160 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("derives consecutive Codex turns in arrival order when overlay reads overlap", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlay: ThreadOverlayState = {
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      model: "gpt-5.5",
+      serviceTier: "standard",
+    };
+    const baseOverlayStore = createOverlayStoreMock({
+      overlays: { "codex:thread-1": overlay },
+    });
+    let releaseFirstOverlay!: () => void;
+    const firstOverlay = new Promise<ThreadOverlayState>((resolve) => {
+      releaseFirstOverlay = () => resolve(overlay);
+    });
+    const getThreadOverlayState = vi.fn()
+      .mockImplementationOnce(() => firstOverlay)
+      .mockResolvedValue(overlay);
+    const overlayStore = {
+      ...baseOverlayStore,
+      getThreadOverlayState,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+    });
+    const usage = (params: {
+      inputTokens: number;
+      lastInputTokens: number;
+      turnId: string;
+    }): AppServerNotification => ({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-1",
+        turnId: params.turnId,
+        tokenUsage: {
+          last: {
+            inputTokens: params.lastInputTokens,
+            cachedInputTokens: 0,
+            outputTokens: 0,
+            reasoningOutputTokens: 0,
+            totalTokens: params.lastInputTokens,
+          },
+          total: {
+            inputTokens: params.inputTokens,
+            cachedInputTokens: 0,
+            outputTokens: 0,
+            reasoningOutputTokens: 0,
+            totalTokens: params.inputTokens,
+          },
+        },
+      },
+    });
+
+    const turn1 = codexClient.emit(usage({
+      inputTokens: 1_000,
+      lastInputTokens: 100,
+      turnId: "turn-1",
+    }));
+    await vi.waitFor(() => expect(getThreadOverlayState).toHaveBeenCalledTimes(1));
+    const turn2 = codexClient.emit(usage({
+      inputTokens: 3_000,
+      lastInputTokens: 200,
+      turnId: "turn-2",
+    }));
+    await vi.waitFor(() =>
+      expect(getThreadOverlayState.mock.calls.length).toBeGreaterThanOrEqual(2),
+    );
+    releaseFirstOverlay();
+    await Promise.all([turn1, turn2]);
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(
+      pricing.lines.find((line) => line.turnId === "turn-2")?.inputTokens,
+    ).toBe(2_000);
+
+    await registry.close();
+  });
+
+  it("does not regress Codex cumulative usage on a late older-turn snapshot", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [],
+          model: "gpt-5.5",
+          serviceTier: "standard",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+    });
+    const emitUsage = async (params: {
+      inputTokens: number;
+      lastInputTokens: number;
+      turnId: string;
+    }) => {
+      await codexClient.emit({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-1",
+          turnId: params.turnId,
+          tokenUsage: {
+            last: {
+              inputTokens: params.lastInputTokens,
+              cachedInputTokens: 0,
+              outputTokens: 0,
+              reasoningOutputTokens: 0,
+              totalTokens: params.lastInputTokens,
+            },
+            total: {
+              inputTokens: params.inputTokens,
+              cachedInputTokens: 0,
+              outputTokens: 0,
+              reasoningOutputTokens: 0,
+              totalTokens: params.inputTokens,
+            },
+          },
+        },
+      });
+    };
+
+    await emitUsage({ inputTokens: 1_000, lastInputTokens: 100, turnId: "turn-1" });
+    await emitUsage({ inputTokens: 3_000, lastInputTokens: 200, turnId: "turn-2" });
+    // A reconnect can re-emit turn 1 after turn 2. Its larger arrival sequence
+    // must not make the lower cumulative total the new high-water mark.
+    await emitUsage({ inputTokens: 1_000, lastInputTokens: 100, turnId: "turn-1" });
+    await emitUsage({ inputTokens: 6_000, lastInputTokens: 300, turnId: "turn-3" });
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(
+      pricing.lines.find((line) => line.turnId === "turn-3")?.inputTokens,
+    ).toBe(3_000);
+
+    await registry.close();
+  });
+
   it("persists Qwen turn usage as an unpriced card when no catalog rate exists", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },
