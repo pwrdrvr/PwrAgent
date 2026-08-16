@@ -49,8 +49,7 @@ import {
   DESKTOP_HOT_CPU_PROFILE_START_DELAY_DEFAULT_MS,
   DESKTOP_HOT_CPU_PROFILE_TRIGGER_MODE_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
-  DESKTOP_UPDATE_CHANNEL_DEFAULT,
-  DESKTOP_UPDATE_TRAIN_DEFAULT,
+  inferDesktopUpdateSelection,
   DESKTOP_WORKTREE_STORAGE_DEFAULT,
   MAX_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
@@ -233,6 +232,8 @@ type DesktopSettingsServiceOptions = {
   resolveCodexShellEnv?: (
     env: NodeJS.ProcessEnv
   ) => NodeJS.ProcessEnv | undefined;
+  appVersion?: string;
+  resolveAppVersion?: () => string;
   /**
    * Side-effect hook invoked from `writeConfigPatch` whenever a write
    * touched `[general.appearance]`. The production wiring routes this
@@ -1957,21 +1958,46 @@ export class DesktopSettingsService {
     };
   }
 
+  private currentAppVersion(): string {
+    return this.options.appVersion
+      ?? this.options.resolveAppVersion?.()
+      ?? "";
+  }
+
+  private inferredUpdateSelection(): {
+    channel: DesktopUpdateChannel;
+    train: DesktopUpdateTrain;
+  } {
+    return inferDesktopUpdateSelection(this.currentAppVersion());
+  }
+
   private resolveUpdateChannelValue(
     configValue: DesktopUpdateChannel | undefined,
   ): DesktopSettingsValue<DesktopUpdateChannel> {
+    if (configValue !== undefined) {
+      return {
+        value: configValue,
+        source: "config",
+      };
+    }
     return {
-      value: configValue ?? DESKTOP_UPDATE_CHANNEL_DEFAULT,
-      source: configValue === undefined ? "default" : "config",
+      value: this.inferredUpdateSelection().channel,
+      source: "default",
     };
   }
 
   private resolveUpdateTrainValue(
     configValue: DesktopUpdateTrain | undefined,
   ): DesktopSettingsValue<DesktopUpdateTrain> {
+    if (configValue !== undefined) {
+      return {
+        value: configValue,
+        source: "config",
+      };
+    }
     return {
-      value: configValue ?? DESKTOP_UPDATE_TRAIN_DEFAULT,
-      source: configValue === undefined ? "default" : "config",
+      value: this.inferredUpdateSelection().train,
+      source: "default",
     };
   }
 

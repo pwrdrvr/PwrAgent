@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import type { DesktopSettingsSnapshot } from "../settings";
-import { isDesktopChatReplyComposer } from "../settings";
+import {
+  inferDesktopUpdateSelection,
+  isDesktopChatReplyComposer,
+} from "../settings";
 
 describe("desktop settings contracts", () => {
   it("represents read snapshots without raw secret values", () => {
@@ -420,5 +423,33 @@ describe("desktop settings contracts", () => {
     expect(isDesktopChatReplyComposer("tiptap-wysiwyg-markdown-chips")).toBe(true);
     expect(isDesktopChatReplyComposer("custom-widget-chips")).toBe(false);
     expect(isDesktopChatReplyComposer("markdown")).toBe(false);
+  });
+});
+
+describe("inferDesktopUpdateSelection", () => {
+  it("maps website download versions onto the matching train and track", () => {
+    expect(inferDesktopUpdateSelection("1.0.1")).toEqual({
+      train: "stable",
+      channel: "latest",
+    });
+    expect(inferDesktopUpdateSelection("1.0.1-prerelease.5")).toEqual({
+      train: "stable",
+      channel: "prerelease",
+    });
+    expect(inferDesktopUpdateSelection("1.1.0-beta.2")).toEqual({
+      train: "beta",
+      channel: "latest",
+    });
+    expect(inferDesktopUpdateSelection("v1.1.0-alpha.7")).toEqual({
+      train: "beta",
+      channel: "prerelease",
+    });
+  });
+
+  it("keeps historical 1.0.0-beta builds on Stable Latest", () => {
+    expect(inferDesktopUpdateSelection("1.0.0-beta.50")).toEqual({
+      train: "stable",
+      channel: "latest",
+    });
   });
 });

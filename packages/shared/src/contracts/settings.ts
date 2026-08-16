@@ -60,6 +60,68 @@ export type DesktopUpdateTrain = (typeof DESKTOP_UPDATE_TRAINS)[number];
 
 export const DESKTOP_UPDATE_TRAIN_DEFAULT: DesktopUpdateTrain = "stable";
 
+// Last 1.0 core that used `-beta.N` as the Stable prerelease line. Builds
+// at this core stay on Stable so a website Beta download cannot be confused
+// with `v1.0.0-beta.50`.
+const LEGACY_STABLE_BETA_CORE: [number, number, number] = [1, 0, 0];
+
+function parseDesktopUpdateVersion(
+  version: string,
+): { core: [number, number, number]; pre: string[] } | undefined {
+  const trimmed = version.trim().replace(/^v/i, "");
+  const match = trimmed.match(
+    /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/,
+  );
+  if (!match) {
+    return undefined;
+  }
+  const [, maj, min, patch, pre] = match;
+  return {
+    core: [Number(maj), Number(min), Number(patch)],
+    pre: pre ? pre.split(".") : [],
+  };
+}
+
+/**
+ * Map a desktop app version onto the Settings update train/track.
+ * Used when `updates.train` / `updates.channel` are unset so a GitHub or
+ * website download of Beta/Prerelease follows that feed instead of Stable
+ * Latest.
+ */
+export function inferDesktopUpdateSelection(version: string): {
+  channel: DesktopUpdateChannel;
+  train: DesktopUpdateTrain;
+} {
+  const parsed = parseDesktopUpdateVersion(version);
+  if (!parsed || parsed.pre.length === 0) {
+    return {
+      channel: DESKTOP_UPDATE_CHANNEL_DEFAULT,
+      train: DESKTOP_UPDATE_TRAIN_DEFAULT,
+    };
+  }
+  const id = parsed.pre[0];
+  if (id === "alpha") {
+    return { channel: "prerelease", train: "beta" };
+  }
+  if (id === "prerelease" || id === "rc") {
+    return { channel: "prerelease", train: "stable" };
+  }
+  if (id === "beta") {
+    const isLegacyStableBeta =
+      parsed.core[0] === LEGACY_STABLE_BETA_CORE[0]
+      && parsed.core[1] === LEGACY_STABLE_BETA_CORE[1]
+      && parsed.core[2] === LEGACY_STABLE_BETA_CORE[2];
+    if (isLegacyStableBeta) {
+      return {
+        channel: DESKTOP_UPDATE_CHANNEL_DEFAULT,
+        train: DESKTOP_UPDATE_TRAIN_DEFAULT,
+      };
+    }
+    return { channel: "latest", train: "beta" };
+  }
+  return { channel: "prerelease", train: DESKTOP_UPDATE_TRAIN_DEFAULT };
+}
+
 export const DESKTOP_APPEARANCE_THEMES = ["system", "dark", "light"] as const;
 export type DesktopAppearanceTheme = (typeof DESKTOP_APPEARANCE_THEMES)[number];
 export const DESKTOP_APPEARANCE_THEME_DEFAULT: DesktopAppearanceTheme = "system";

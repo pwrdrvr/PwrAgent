@@ -37,8 +37,6 @@ import {
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_FEDERATION_MODE_DEFAULT,
   DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELL_DEFAULT,
-  DESKTOP_UPDATE_CHANNEL_DEFAULT,
-  DESKTOP_UPDATE_TRAIN_DEFAULT,
   isDesktopAppearanceDensity,
   isDesktopAppearanceTheme,
   isDesktopTextSize,
@@ -830,25 +828,14 @@ export function desktopSettingsPatchToEdits(
   }
 
   if (patch.updates?.channel !== undefined) {
-    if (patch.updates.channel === DESKTOP_UPDATE_CHANNEL_DEFAULT) {
-      edits.push({
-        op: "delete",
-        path: ["updates", "channel"],
-      });
-    } else {
-      set(["updates", "channel"], patch.updates.channel);
-    }
+    // Persist Latest/Stable too. A Beta/alpha binary infers those keys when
+    // they are absent, so deleting the default would put the operator back
+    // on the downloaded train after they chose Stable.
+    set(["updates", "channel"], patch.updates.channel);
   }
 
   if (patch.updates?.train !== undefined) {
-    if (patch.updates.train === DESKTOP_UPDATE_TRAIN_DEFAULT) {
-      edits.push({
-        op: "delete",
-        path: ["updates", "train"],
-      });
-    } else {
-      set(["updates", "train"], patch.updates.train);
-    }
+    set(["updates", "train"], patch.updates.train);
   }
 
   if (patch.integratedTerminal?.windowsShell !== undefined) {

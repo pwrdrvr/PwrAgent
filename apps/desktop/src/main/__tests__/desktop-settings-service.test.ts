@@ -306,7 +306,7 @@ describe("DesktopSettingsService", () => {
     );
   });
 
-  it("defaults the update channel and only persists prerelease", async () => {
+  it("defaults the update channel from the running app version", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     const service = new DesktopSettingsService({
@@ -357,16 +357,61 @@ describe("DesktopSettingsService", () => {
     });
 
     const afterDefault = fs.readFileSync(configPath, "utf8");
-    expect(afterDefault).not.toContain("channel");
-    expect(afterDefault).not.toContain("train");
+    expect(afterDefault).toContain('channel = "latest"');
+    expect(afterDefault).toContain('train = "stable"');
     expect((await service.readSettings()).updates.channel).toEqual({
       value: "latest",
-      source: "default",
+      source: "config",
     });
     expect((await service.readSettings()).updates.train).toEqual({
       value: "stable",
+      source: "config",
+    });
+  });
+
+  it("infers Beta Prerelease from an alpha desktop version", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      appVersion: "1.1.0-alpha.7",
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.updates.train).toEqual({
+      value: "beta",
       source: "default",
     });
+    expect(snapshot.updates.channel).toEqual({
+      value: "prerelease",
+      source: "default",
+    });
+    expect(service.resolveUpdateTrain()).toBe("beta");
+    expect(service.resolveUpdateChannel()).toBe("prerelease");
+  });
+
+  it("keeps an explicit Stable choice on a Beta binary", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      appVersion: "1.1.0-beta.2",
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect(service.resolveUpdateTrain()).toBe("beta");
+    await service.writeConfigPatch({
+      updates: {
+        train: "stable",
+        channel: "latest",
+      },
+    });
+    expect(service.resolveUpdateTrain()).toBe("stable");
+    expect(service.resolveUpdateChannel()).toBe("latest");
+    expect(fs.readFileSync(configPath, "utf8")).toContain('train = "stable"');
   });
 
   it("persists and reuses a federation Noise static keypair", async () => {
