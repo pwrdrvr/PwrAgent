@@ -230,7 +230,7 @@ describe("ThreadTurnQueue", () => {
     expect(startedEntries).toEqual(["second"]);
   });
 
-  it("guards duplicate terminal release signals", async () => {
+  it("does not apply a coalesced idle release to a successfully started turn", async () => {
     let active = true;
     const startedEntries: string[] = [];
     const queue = new ThreadTurnQueue({
@@ -246,6 +246,7 @@ describe("ThreadTurnQueue", () => {
     });
 
     await queue.submit(buildEntry({ id: "queued-1" }));
+    await queue.submit(buildEntry({ id: "queued-2" }));
 
     active = false;
     await Promise.all([
@@ -254,6 +255,60 @@ describe("ThreadTurnQueue", () => {
     ]);
 
     expect(startedEntries).toEqual(["queued-1"]);
+    expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
+      .toMatchObject([{ id: "queued-2" }]);
+  });
+
+  it("retries a blocked queued start after a coalesced idle release", async () => {
+    let rejectFirstQueuedStart!: (reason?: unknown) => void;
+    let resolveFirstQueuedAttempt!: () => void;
+    let resolveRetriedQueuedStart!: () => void;
+    const firstQueuedStart = new Promise<never>((_resolve, reject) => {
+      rejectFirstQueuedStart = reject;
+    });
+    const firstQueuedAttempt = new Promise<void>((resolve) => {
+      resolveFirstQueuedAttempt = resolve;
+    });
+    const retriedQueuedStart = new Promise<void>((resolve) => {
+      resolveRetriedQueuedStart = resolve;
+    });
+    const startedEntries: string[] = [];
+    let queuedAttempts = 0;
+    const queue = new ThreadTurnQueue({
+      startTurn: async (entry) => {
+        startedEntries.push(entry.id);
+        if (entry.id === "queued" && queuedAttempts++ === 0) {
+          resolveFirstQueuedAttempt();
+          return await firstQueuedStart;
+        }
+        if (entry.id === "queued") {
+          resolveRetriedQueuedStart();
+        }
+        return {
+          backend: entry.backend,
+          threadId: entry.threadId,
+          turnId: `turn-${entry.id}-${queuedAttempts}`,
+        };
+      },
+    });
+
+    await queue.submit(buildEntry({ id: "running" }));
+    await queue.submit(buildEntry({ id: "queued" }));
+
+    const terminalRelease = queue.releaseThread({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-running-0",
+    });
+    await firstQueuedAttempt;
+    await queue.releaseThread({ backend: "codex", threadId: "thread-1" });
+    rejectFirstQueuedStart(new Error("backend rejected queued start"));
+
+    await terminalRelease;
+    await retriedQueuedStart;
+    expect(startedEntries).toEqual(["running", "queued", "queued"]);
+    expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
+      .toEqual([]);
   });
 
   it("retains a failed queued entry and retries it before later entries", async () => {
