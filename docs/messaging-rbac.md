@@ -237,6 +237,9 @@ near-root-equivalent control of the host. Any role granting it:
   main-side, not just in the UI),
 - carries the danger badge in the Access Control pane, and
 - double-gates at enforcement time behind the global full-access toggle.
+
+Additional workflow rules:
+
 - Inherited Full Access launchpad defaults do not trigger dismissable warnings
   during new-thread startup.
 - Explicit messaging escalation and the Always policy still require the Full

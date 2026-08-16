@@ -58,6 +58,8 @@ the active PwrAgent profile sqlite database under `~/.pwragent/profiles/<name>/`
 Installed agents continue to be listed from profile state when the registry is
 temporarily unavailable.
 
+Runtime discovery follows these rules:
+
 - Runtime capability discovery uses a hidden scratch session and never creates
   a user-visible PwrAgent thread.
 - Persist discovered runtime capabilities separately from curated ACP product
