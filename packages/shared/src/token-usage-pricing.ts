@@ -214,6 +214,8 @@ type PricingCatalogEntry = {
   outputTokensIncludeReasoning?: boolean;
   provider: TokenUsagePricingProvider;
   rateBandId?: string;
+  // Per-request thresholds cannot be selected safely from multi-call totals.
+  requiresSingleRequestInput?: boolean;
   serviceTier: TokenUsagePricingServiceTier;
 };
 
@@ -263,6 +265,9 @@ const OPENAI_CODEX_FAST_RATE_MULTIPLIERS = {
 const XAI_PRICING_CATALOG_ID = "xai-api";
 const XAI_PRICING_CATALOG_VERSION = "2026-07-17";
 const XAI_GROK45_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 6, 8);
+// https://docs.x.ai/developers/pricing
+const XAI_GROK46_PRICING_CATALOG_VERSION = "2026-08-12";
+const XAI_GROK46_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 7, 12);
 // ModelStudio Standard, Singapore / International list pricing:
 // https://www.alibabacloud.com/help/en/model-studio/model-pricing
 // Implicit-cache hits cost 20% of the normal input-token rate:
@@ -487,6 +492,40 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
 ];
 
 const XAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
+  {
+    aliases: ["grok-4.6-latest"],
+    cachedInputUsdPerMillion: 0.5,
+    catalogId: XAI_PRICING_CATALOG_ID,
+    catalogVersion: XAI_GROK46_PRICING_CATALOG_VERSION,
+    displayModel: "Grok 4.6",
+    displayTier: "Standard (<200K input)",
+    effectiveFrom: XAI_GROK46_PRICING_EFFECTIVE_FROM,
+    inputUsdPerMillion: 2,
+    maximumInputTokens: 199_999,
+    model: "grok-4.6",
+    outputTokensIncludeReasoning: true,
+    outputUsdPerMillion: 6,
+    provider: "xai",
+    rateBandId: "input-lt-200k",
+    serviceTier: "standard",
+  },
+  {
+    aliases: ["grok-4.6-latest"],
+    cachedInputUsdPerMillion: 1,
+    catalogId: XAI_PRICING_CATALOG_ID,
+    catalogVersion: XAI_GROK46_PRICING_CATALOG_VERSION,
+    displayModel: "Grok 4.6",
+    displayTier: "Standard (>=200K input)",
+    effectiveFrom: XAI_GROK46_PRICING_EFFECTIVE_FROM,
+    inputUsdPerMillion: 4,
+    model: "grok-4.6",
+    outputTokensIncludeReasoning: true,
+    outputUsdPerMillion: 12,
+    provider: "xai",
+    rateBandId: "input-gte-200k",
+    requiresSingleRequestInput: true,
+    serviceTier: "standard",
+  },
   {
     aliases: [
       "grok-4.5-build",
@@ -714,6 +753,8 @@ export function estimateTokenUsageCost(params: {
   cachedInputTokens: number;
   at?: number;
   fastMode?: boolean;
+  // True only when the input count is known to belong to one model request.
+  inputTokensAreSingleRequest?: boolean;
   outputTokensIncludeReasoning?: boolean;
   model?: string;
   outputTokens: number;
@@ -729,6 +770,7 @@ function estimateTokenUsageCostFromCatalog(
     cachedInputTokens: number;
     at?: number;
     fastMode?: boolean;
+    inputTokensAreSingleRequest?: boolean;
     outputTokensIncludeReasoning?: boolean;
     model?: string;
     outputTokens: number;
@@ -750,6 +792,7 @@ function estimateTokenUsageCostFromCatalog(
       && pricingEntryMatchesInputTokens(
         candidate,
         params.cachedInputTokens + params.uncachedInputTokens,
+        params.inputTokensAreSingleRequest,
       ),
   );
   const provider = matchingEntries[0]?.provider;
@@ -777,6 +820,7 @@ function estimateTokenUsageCostFromCatalog(
       && pricingEntryMatchesInputTokens(
         candidate,
         params.cachedInputTokens + params.uncachedInputTokens,
+        params.inputTokensAreSingleRequest,
       ),
   );
   const uncachedInputCostMicros = calculateTokenCostMicros(
@@ -1054,10 +1098,14 @@ function pricingEntryMatchesModel(
 function pricingEntryMatchesInputTokens(
   entry: PricingCatalogEntry,
   inputTokens: number,
+  inputTokensAreSingleRequest: boolean | undefined,
 ): boolean {
   return (
-    entry.maximumInputTokens === undefined
-    || inputTokens <= entry.maximumInputTokens
+    (!entry.requiresSingleRequestInput || inputTokensAreSingleRequest === true)
+    && (
+      entry.maximumInputTokens === undefined
+      || inputTokens <= entry.maximumInputTokens
+    )
   );
 }
 

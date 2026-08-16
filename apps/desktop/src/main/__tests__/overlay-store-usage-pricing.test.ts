@@ -843,6 +843,99 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     });
   });
 
+  it("reprices persisted Grok 4.6 usage under the xAI provider", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        backend: "acp:grok",
+        cachedInputTokens: 128,
+        completedAt: Date.UTC(2026, 7, 15),
+        createdAt: Date.UTC(2026, 7, 15),
+        inputTokens: 155_459,
+        model: "grok-4.6",
+        outputTokens: 266,
+        priceStatus: "unpriced",
+        priceUnavailableReason: "missing-rate",
+        pricingCatalogId: undefined,
+        pricingCatalogVersion: undefined,
+        pricingRateId: undefined,
+        provider: "xai",
+        reasoningOutputTokens: 130,
+        totalCostMicros: 0,
+        totalTokens: 155_725,
+        uncachedInputTokens: 155_331,
+        usageLineId: "line-grok-4-6",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "acp:grok",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines[0]).toMatchObject({
+      priceStatus: "priced",
+      pricingCatalogId: "xai-api",
+      pricingCatalogVersion: "2026-08-12",
+      pricingRateId:
+        "xai:2026-08-12:grok-4.6:standard:input-lt-200k",
+      provider: "xai",
+      totalCostMicros: 312_322,
+    });
+    expect(pricing.lines[0]?.priceUnavailableReason).toBeUndefined();
+    expect(pricing.summaries[0]).toMatchObject({
+      pricedUsageLineCount: 1,
+      provider: "xai",
+      totalCostMicros: 312_322,
+      unpricedUsageLineCount: 0,
+    });
+  });
+
+  it("leaves ambiguous Grok 4.6 long-context turn aggregates unpriced", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        backend: "acp:grok",
+        cachedInputTokens: 128,
+        completedAt: Date.UTC(2026, 7, 15),
+        createdAt: Date.UTC(2026, 7, 15),
+        inputTokens: 255_459,
+        model: "grok-4.6",
+        outputTokens: 266,
+        priceStatus: "unpriced",
+        priceUnavailableReason: "missing-rate",
+        pricingCatalogId: undefined,
+        pricingCatalogVersion: undefined,
+        pricingRateId: undefined,
+        provider: "xai",
+        reasoningOutputTokens: 130,
+        totalCostMicros: 0,
+        totalTokens: 255_725,
+        uncachedInputTokens: 255_331,
+        usageLineId: "line-grok-4-6-aggregate",
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "acp:grok",
+      threadId: "thread-1",
+    });
+
+    expect(pricing.lines[0]).toMatchObject({
+      priceStatus: "unpriced",
+      priceUnavailableReason: "missing-rate",
+      provider: "xai",
+      totalCostMicros: 0,
+    });
+    expect(pricing.lines[0]?.pricingCatalogId).toBeUndefined();
+    expect(pricing.lines[0]?.pricingCatalogVersion).toBeUndefined();
+    expect(pricing.lines[0]?.pricingRateId).toBeUndefined();
+    expect(pricing.summaries[0]).toMatchObject({
+      pricedUsageLineCount: 0,
+      provider: "xai",
+      totalCostMicros: 0,
+      unpricedUsageLineCount: 1,
+    });
+  });
+
   it("reprices persisted Qwen ACP usage under the Qwen provider", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
@@ -937,13 +1030,15 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     await store.upsertThreadUsageLine({ line: buildUsageLine() });
     await store.upsertThreadUsageLine({
       line: buildUsageLine({
+        createdAt: Date.UTC(2026, 6, 26),
         model: "grok-4.5",
-        outputCostMicros: 2_000,
+        outputCostMicros: 1_800,
         provider: "xai",
         pricingCatalogId: "xai-api",
         pricingCatalogVersion: "2026-07-17",
         pricingRateId: "xai:2026-07-17:grok-4.5:standard",
-        totalCostMicros: 3_000,
+        totalCostMicros: 3_460,
+        uncachedInputCostMicros: 1_600,
         usageLineId: "xai-line-1",
       }),
     });
@@ -962,7 +1057,7 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
       }),
       expect.objectContaining({
         provider: "xai",
-        totalCostMicros: 3_000,
+        totalCostMicros: 3_460,
         usageLineCount: 1,
       }),
     ]);
