@@ -258,7 +258,7 @@ describe("desktopSettingsPatchToEdits — updates", () => {
     ]);
   });
 
-  it("removes the update channel when saving the default", () => {
+  it("persists the latest update channel so a Beta binary does not re-infer", () => {
     expect(
       desktopSettingsPatchToEdits({
         updates: {
@@ -267,8 +267,41 @@ describe("desktopSettingsPatchToEdits — updates", () => {
       }),
     ).toEqual([
       {
-        op: "delete",
+        op: "set",
         path: ["updates", "channel"],
+        value: "latest",
+      },
+    ]);
+  });
+
+  it("writes the beta update train", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        updates: {
+          train: "beta",
+        },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["updates", "train"],
+        value: "beta",
+      },
+    ]);
+  });
+
+  it("persists the stable update train so a Beta binary does not re-infer", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        updates: {
+          train: "stable",
+        },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["updates", "train"],
+        value: "stable",
       },
     ]);
   });
