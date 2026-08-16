@@ -2905,6 +2905,8 @@ function AttentionLensTab(props: {
   // doing the structural work. See "Structured hover cards" in AGENTS.md.
   const tooltip = useViewportTooltip({ className: "attention-card" });
   const remoteActiveThreadCount = props.remoteActiveThreadCount;
+  // Creating this element is not rendering it: it stays an inert object until
+  // `show` hands it to the portal on hover or focus.
   const card = (
     <>
       <div className="attention-card__eyebrow">{browseModeLabels.attention}</div>
@@ -2956,6 +2958,36 @@ function AttentionLensTab(props: {
       ]),
     formatReviewThreadCount(props.reviewThreadCount),
   ].join(", ");
+
+  // Turns start and end while the pointer rests on the tab, so push fresh
+  // numbers into an already-open card rather than freezing it at hover-time
+  // values — the same thing `PrChip` does for a live PR status. Freezing is
+  // not cosmetic here: the card would keep claiming there is no peer work
+  // after a peer starts a turn, on the one surface that exists to answer
+  // "can I quit now?".
+  //
+  // The key guard is not optional: a React element is a new object on every
+  // render, so feeding one straight into `update` would set state on every
+  // render that very update caused. Compare the card's DATA and push only
+  // when it moved.
+  const latestCardRef = useRef(card);
+  latestCardRef.current = card;
+  const cardKey = [
+    props.activeThreadCount,
+    remoteActiveThreadCount ?? "off",
+    props.reviewThreadCount,
+  ].join("|");
+  const pushedCardKeyRef = useRef<string | undefined>(undefined);
+  const tooltipVisible = tooltip.visible;
+  const updateTooltip = tooltip.update;
+  useEffect(() => {
+    const moved = pushedCardKeyRef.current !== cardKey;
+    pushedCardKeyRef.current = cardKey;
+    if (!moved || !tooltipVisible) {
+      return;
+    }
+    updateTooltip(latestCardRef.current);
+  }, [cardKey, tooltipVisible, updateTooltip]);
 
   return (
     <>

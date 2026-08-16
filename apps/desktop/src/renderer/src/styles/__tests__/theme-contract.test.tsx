@@ -1499,14 +1499,25 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toContain("--thinking-scanner-full-offset");
     expect(css).not.toContain("--thinking-scanner-mini-offset");
     expect(css).toContain("@keyframes pwragent-thinking-scanner-sweep");
-    expect(css).toMatch(
-      /\.thinking-scanner\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*18px;[\s\S]*?--thinking-scanner-travel:\s*44px;[\s\S]*?width:\s*62px;[\s\S]*?\}/
-    );
-    expect(css).toMatch(
-      /\.thinking-scanner--mini\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*6px;[\s\S]*?--thinking-scanner-travel:\s*10px;[\s\S]*?width:\s*16px;[\s\S]*?\}/
-    );
-    expect(css).toMatch(
-      /\.thinking-scanner__beam\s*\{[\s\S]*?animation:\s*pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;[\s\S]*?\}/
+    // Read the blocks out by selector rather than matching declarations
+    // anywhere after the first `.thinking-scanner {` in the file. A descendant
+    // rule that retints the scanner (`.lens-switch__signal--remote-active
+    // .thinking-scanner`) ends with the same three characters, so an
+    // unanchored pattern starts THERE and lazily bridges thousands of lines to
+    // collect these declarations from wherever they happen to live — which
+    // would let the geometry drift out of the base block with the test still
+    // green. `extractRuleBody` anchors on a line start and stops at the
+    // block's own closing brace.
+    const scanner = extractRuleBody(css, ".thinking-scanner");
+    expect(scanner).toMatch(/--thinking-scanner-beam-width:\s*18px;/);
+    expect(scanner).toMatch(/--thinking-scanner-travel:\s*44px;/);
+    expect(scanner).toMatch(/width:\s*62px;/);
+    const miniScanner = extractRuleBody(css, ".thinking-scanner--mini");
+    expect(miniScanner).toMatch(/--thinking-scanner-beam-width:\s*6px;/);
+    expect(miniScanner).toMatch(/--thinking-scanner-travel:\s*10px;/);
+    expect(miniScanner).toMatch(/width:\s*16px;/);
+    expect(extractRuleBody(css, ".thinking-scanner__beam")).toMatch(
+      /animation:\s*pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;/
     );
   });
 

@@ -2934,6 +2934,56 @@ describe("Sidebar", () => {
       expect(tab).toHaveAttribute("aria-describedby", card.id);
     });
 
+    it("pushes fresh counts into a card the pointer is still resting on", async () => {
+      // Turns start and end while the pointer sits on the tab, and this card
+      // is where "can I quit now?" gets answered. Frozen at hover-time values
+      // it would disagree with the readout directly under it, and would keep
+      // claiming there is no peer work after a peer starts a turn.
+      const remoteActive = {
+        ...activeThread,
+        id: "thread-remote-live",
+        federation: {
+          instanceLabel: "studio",
+          ref: {
+            backend: "codex" as const,
+            target: { scope: "remote" as const, instanceId: "peer-1" },
+            threadId: "thread-remote-live",
+          },
+        },
+      };
+      const props = (threads: typeof allThreads) => ({
+        backends,
+        browseMode: "inbox" as const,
+        createThreadError: undefined,
+        directories,
+        inboxThreads: threads,
+        launchpadError: undefined,
+        loading: false,
+        creatingThread: undefined,
+        selectedItemKey: undefined,
+        threads,
+        onBrowseModeChange: () => undefined,
+        onCreateThread: async () => undefined,
+        onOpenLaunchpad: async () => undefined,
+        onSelectThread: () => undefined,
+      });
+
+      const view = render(<Sidebar {...props([activeThread, unreadThread])} />);
+      fireEvent.mouseEnter(screen.getByRole("tab", { name: /^Attention,/ }));
+      expect(await screen.findByRole("tooltip")).toHaveTextContent(
+        /In progress1/,
+      );
+
+      // A peer starts a turn without the pointer ever leaving the tab.
+      view.rerender(
+        <Sidebar {...props([activeThread, remoteActive, unreadThread])} />,
+      );
+
+      const card = await screen.findByRole("tooltip");
+      expect(card).toHaveTextContent(/In progress elsewhere/);
+      expect(card).toHaveTextContent(/Quitting leaves these running/);
+    });
+
     it("names the machines and what quitting does once a peer is running work", async () => {
       const remoteActive = {
         ...activeThread,
