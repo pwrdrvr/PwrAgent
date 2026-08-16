@@ -129,6 +129,28 @@ describe("buildThreadIncidentSummary", () => {
       threadId: "thread-1",
     })?.flaggedInvocationCount).toBe(1);
   });
+
+  it("does not carry size flags minted under an older lower threshold", () => {
+    const summary = buildThreadIncidentSummary({
+      accounting: accounting([
+        invocation({
+          invocationId: "old-default-case",
+          noisyReason: "large-output",
+          outputChars: 8_000,
+        }),
+        invocation({
+          invocationId: "current-default-case",
+          noisyReason: "large-output",
+          outputChars: 24_000,
+        }),
+      ]),
+      backend: "codex",
+      largeOutputThresholdChars: 20_000,
+      threadId: "thread-1",
+    });
+
+    expect(summary?.flaggedInvocationCount).toBe(1);
+  });
 });
 
 describe("resolveToolIncidentVisibility", () => {
