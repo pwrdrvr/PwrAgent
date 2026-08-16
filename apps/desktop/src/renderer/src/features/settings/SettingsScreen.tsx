@@ -370,12 +370,18 @@ function SettingsSectionBody(props: {
         }}
         onUpdateChannelChange={async (channel: DesktopUpdateChannel) => {
           await props.settings.writeConfig({
-            updates: { channel },
+            updates: {
+              channel,
+              train: props.snapshot.updates.train.value,
+            },
           });
         }}
         onUpdateTrainChange={async (train: DesktopUpdateTrain) => {
           await props.settings.writeConfig({
-            updates: { train },
+            updates: {
+              train,
+              channel: props.snapshot.updates.channel.value,
+            },
           });
         }}
         onPastedImageMaxPatchesChange={async (pastedImageMaxPatches) => {
