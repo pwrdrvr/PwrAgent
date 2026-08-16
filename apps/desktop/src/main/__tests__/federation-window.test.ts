@@ -15,7 +15,7 @@ vi.mock("../federation/federation-runtime", () => ({
   getDesktopFederationRuntime: () => runtime,
 }));
 
-type WindowEvent = "closed" | "ready-to-show";
+type WindowEvent = "closed" | "show";
 
 function createWindow(id: number) {
   const listeners = new Map<WindowEvent, Array<() => void>>();
@@ -88,9 +88,10 @@ describe("federation window", () => {
 
     expect(second).toBe(first);
     expect(createMainWindow).toHaveBeenCalledTimes(1);
-    expect(runtime.setRemoteWindowEventSubscription).toHaveBeenCalledTimes(1);
+    expect(runtime.setRemoteWindowEventSubscription).toHaveBeenCalledTimes(2);
 
-    window.emit("ready-to-show");
+    window.emit("show");
+    await Promise.resolve();
     expect(window.show).toHaveBeenCalledTimes(1);
     expect(window.focus).toHaveBeenCalledTimes(1);
     expect(window.webContents.send).toHaveBeenCalledWith(
@@ -99,12 +100,15 @@ describe("federation window", () => {
     );
   });
 
-  it("navigates a reused viewer instead of creating another window", async () => {
+  it("reuses a viewer shown through the non-mac fallback milestone", async () => {
     const window = createWindow(8);
     createMainWindow.mockReturnValue(window);
     const { createFederationWindow } = await import("../federation/federation-window");
     createFederationWindow({ peer });
-    window.emit("ready-to-show");
+    // createMainWindow emits show from either ready-to-show or its non-mac
+    // did-finish-load fallback. No ready-to-show event reaches this registry.
+    window.emit("show");
+    await Promise.resolve();
     window.webContents.send.mockClear();
     window.setMinimized(true);
 
@@ -131,7 +135,8 @@ describe("federation window", () => {
     createMainWindow.mockReturnValue(window);
     const { createFederationWindow } = await import("../federation/federation-window");
     createFederationWindow({ peer });
-    window.emit("ready-to-show");
+    window.emit("show");
+    await Promise.resolve();
     window.webContents.send.mockClear();
 
     createFederationWindow({ peer, initialLaunchpad: true });
@@ -139,6 +144,33 @@ describe("federation window", () => {
     expect(createMainWindow).toHaveBeenCalledTimes(1);
     expect(window.webContents.send).toHaveBeenCalledWith(
       WINDOW_OPEN_NEW_THREAD_CHANNEL,
+    );
+  });
+
+  it("refreshes remote event subscriptions from the latest peer capabilities", async () => {
+    const window = createWindow(14);
+    createMainWindow.mockReturnValue(window);
+    const { createFederationWindow } = await import("../federation/federation-window");
+    createFederationWindow({ peer });
+    window.emit("show");
+    await Promise.resolve();
+
+    const upgradedPeer = {
+      ...peer,
+      capabilities: [
+        "remote_window",
+        "thread_navigation",
+        "thread_detail",
+        "event_subscriptions",
+      ] as const,
+    };
+    createFederationWindow({ peer: upgradedPeer });
+
+    expect(createMainWindow).toHaveBeenCalledTimes(1);
+    expect(runtime.setRemoteWindowEventSubscription).toHaveBeenLastCalledWith(
+      window.webContents.id,
+      peer.target.instanceId,
+      upgradedPeer.capabilities,
     );
   });
 

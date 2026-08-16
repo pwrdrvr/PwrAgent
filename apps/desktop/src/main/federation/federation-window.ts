@@ -80,8 +80,14 @@ export function createFederationWindow(options: {
   }
 
   const instanceId = peer.target.instanceId;
+  const runtime = getDesktopFederationRuntime();
   const existing = federationWindows.get(instanceId);
   if (existing && !existing.window.isDestroyed()) {
+    runtime.setRemoteWindowEventSubscription(
+      existing.window.webContents.id,
+      instanceId,
+      peer.capabilities,
+    );
     return reuseFederationWindow(existing, options);
   }
   federationWindows.delete(instanceId);
@@ -100,20 +106,25 @@ export function createFederationWindow(options: {
     window,
   };
   federationWindows.set(instanceId, entry);
-  window.once("ready-to-show", () => {
-    if (window.isDestroyed()) {
-      return;
-    }
-    entry.ready = true;
-    if (entry.focusWhenReady) {
-      focusFederationWindow(window);
-    }
-    if (entry.pendingRequest) {
-      sendFederationWindowRequest(window, entry.pendingRequest);
-      entry.pendingRequest = undefined;
-    }
+  window.once("show", () => {
+    // createMainWindow can show through ready-to-show or, on non-macOS,
+    // through its did-finish-load fallback. Defer one microtask so the
+    // creator's initial navigation is delivered first and the latest queued
+    // reuse request remains authoritative.
+    queueMicrotask(() => {
+      if (window.isDestroyed()) {
+        return;
+      }
+      entry.ready = true;
+      if (entry.focusWhenReady) {
+        focusFederationWindow(window);
+      }
+      if (entry.pendingRequest) {
+        sendFederationWindowRequest(window, entry.pendingRequest);
+        entry.pendingRequest = undefined;
+      }
+    });
   });
-  const runtime = getDesktopFederationRuntime();
   const webContentsId = window.webContents.id;
   runtime.setRemoteWindowEventSubscription(
     webContentsId,
