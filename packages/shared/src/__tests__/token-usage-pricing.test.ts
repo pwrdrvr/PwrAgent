@@ -290,6 +290,7 @@ describe("token usage pricing", () => {
     const cost = estimateTokenUsageCost({
       at: Date.UTC(2026, 7, 15),
       cachedInputTokens: 128,
+      inputTokensAreSingleRequest: true,
       model: "grok-4.6",
       outputTokens: 266,
       reasoningOutputTokens: 130,
@@ -334,11 +335,15 @@ describe("token usage pricing", () => {
     });
   });
 
-  it("switches Grok 4.6 to long-context pricing at 200K input tokens", () => {
-    const estimateAtInputTokens = (inputTokens: number) =>
+  it("requires single-request evidence for Grok 4.6 long-context pricing", () => {
+    const estimateAtInputTokens = (
+      inputTokens: number,
+      inputTokensAreSingleRequest?: boolean,
+    ) =>
       estimateTokenUsageCost({
         at: Date.UTC(2026, 7, 15),
         cachedInputTokens: 0,
+        inputTokensAreSingleRequest,
         model: "grok-4.6",
         outputTokens: 0,
         uncachedInputTokens: inputTokens,
@@ -348,7 +353,8 @@ describe("token usage pricing", () => {
       inputUsdPerMillion: 2,
       rateId: "xai:2026-08-12:grok-4.6:standard:input-lt-200k",
     });
-    expect(estimateAtInputTokens(200_000)).toMatchObject({
+    expect(estimateAtInputTokens(200_000)).toBeUndefined();
+    expect(estimateAtInputTokens(200_000, true)).toMatchObject({
       inputUsdPerMillion: 4,
       rateId: "xai:2026-08-12:grok-4.6:standard:input-gte-200k",
     });

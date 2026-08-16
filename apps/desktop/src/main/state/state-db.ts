@@ -2503,7 +2503,7 @@ function repairTokenUsagePricing(db: BetterSqlite3.Database): void {
          service_tier,
          uncached_input_tokens
        FROM thread_usage_lines
-       WHERE provider IN ('openai', 'qwen')
+       WHERE provider IN ('openai', 'qwen', 'xai')
          AND scope != 'fork-baseline'`,
     )
     .all() as Array<{

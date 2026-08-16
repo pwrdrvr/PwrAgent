@@ -6220,6 +6220,7 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
   if (
     line.provider !== "openai"
     && line.provider !== "qwen"
+    && line.provider !== "xai"
   ) {
     return line;
   }

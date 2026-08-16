@@ -214,6 +214,8 @@ type PricingCatalogEntry = {
   outputTokensIncludeReasoning?: boolean;
   provider: TokenUsagePricingProvider;
   rateBandId?: string;
+  // Per-request thresholds cannot be selected safely from multi-call totals.
+  requiresSingleRequestInput?: boolean;
   serviceTier: TokenUsagePricingServiceTier;
 };
 
@@ -521,6 +523,7 @@ const XAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     outputUsdPerMillion: 12,
     provider: "xai",
     rateBandId: "input-gte-200k",
+    requiresSingleRequestInput: true,
     serviceTier: "standard",
   },
   {
@@ -750,6 +753,8 @@ export function estimateTokenUsageCost(params: {
   cachedInputTokens: number;
   at?: number;
   fastMode?: boolean;
+  // True only when the input count is known to belong to one model request.
+  inputTokensAreSingleRequest?: boolean;
   outputTokensIncludeReasoning?: boolean;
   model?: string;
   outputTokens: number;
@@ -765,6 +770,7 @@ function estimateTokenUsageCostFromCatalog(
     cachedInputTokens: number;
     at?: number;
     fastMode?: boolean;
+    inputTokensAreSingleRequest?: boolean;
     outputTokensIncludeReasoning?: boolean;
     model?: string;
     outputTokens: number;
@@ -786,6 +792,7 @@ function estimateTokenUsageCostFromCatalog(
       && pricingEntryMatchesInputTokens(
         candidate,
         params.cachedInputTokens + params.uncachedInputTokens,
+        params.inputTokensAreSingleRequest,
       ),
   );
   const provider = matchingEntries[0]?.provider;
@@ -813,6 +820,7 @@ function estimateTokenUsageCostFromCatalog(
       && pricingEntryMatchesInputTokens(
         candidate,
         params.cachedInputTokens + params.uncachedInputTokens,
+        params.inputTokensAreSingleRequest,
       ),
   );
   const uncachedInputCostMicros = calculateTokenCostMicros(
@@ -1090,10 +1098,14 @@ function pricingEntryMatchesModel(
 function pricingEntryMatchesInputTokens(
   entry: PricingCatalogEntry,
   inputTokens: number,
+  inputTokensAreSingleRequest: boolean | undefined,
 ): boolean {
   return (
-    entry.maximumInputTokens === undefined
-    || inputTokens <= entry.maximumInputTokens
+    (!entry.requiresSingleRequestInput || inputTokensAreSingleRequest === true)
+    && (
+      entry.maximumInputTokens === undefined
+      || inputTokens <= entry.maximumInputTokens
+    )
   );
 }
 
