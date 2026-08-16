@@ -1,5 +1,12 @@
 # Changelog
 
+## v1.0.2-prerelease.1 - 2026-08-16
+
+- Updates - Added Stable and Beta update channels, each with Latest and Prerelease tracks. Stable installs stay insulated from 1.1 alpha and beta builds unless you opt into Beta.
+- Grok Usage - Added accurate Grok 4.6 usage pricing, including `grok-4.6`, Build, and Latest variants across context sizes. Existing unpriced recent usage is repaired safely when it can be priced confidently.
+- Windows Environment Actions - Improved child-process ownership and shutdown, preventing action workspaces from being removed before launched Windows processes have exited.
+- Reliability - Restored the macOS CI GPU-disable gate to make Electron test runs reliable; production and normal development behavior are unchanged.
+
 ## v1.0.1 - 2026-08-14
 
 - Windows Installer and Release Safety - Added Azure-signed Windows NSIS installers and made release publication wait for signed macOS and Windows builds plus both Linux packages. Releases now publish the Windows installer/blockmap, macOS updater assets, Linux packages, and one checksum manifest together.
