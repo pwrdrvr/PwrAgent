@@ -1249,114 +1249,29 @@ function getThreadHydrationVersion(
   return typeof thread.updatedAt === "number" ? thread.updatedAt : "unknown";
 }
 
-type MessageMatchCandidate = Pick<
-  AppServerThreadMessage,
-  "parts" | "role" | "text"
->;
-
-type MessageMatchIndex = Map<string, Map<number, number>>;
-
-function messageMatchKey(message: MessageMatchCandidate): string {
-  return JSON.stringify([
-    message.role,
-    normalizeComposerFileReferenceText(message.text),
-  ]);
-}
-
-function messageImageCount(message: MessageMatchCandidate): number {
-  return (message.parts ?? []).filter((part) => part.type === "image").length;
-}
-
-function createMessageMatchIndex(params: {
-  additionalEntries: AppServerThreadEntry[];
-  response?: AppServerReadThreadResponse;
-}): MessageMatchIndex {
-  const availableMessageCountsByKey = new Map<string, Map<number, number>>();
-  const addMessage = (message: MessageMatchCandidate): void => {
-    const key = messageMatchKey(message);
-    const imageCount = messageImageCount(message);
-    const imageCounts = availableMessageCountsByKey.get(key) ?? new Map<number, number>();
-    imageCounts.set(imageCount, (imageCounts.get(imageCount) ?? 0) + 1);
-    availableMessageCountsByKey.set(key, imageCounts);
-  };
-
-  for (const message of params.response?.replay.messages ?? []) {
-    addMessage(message);
-  }
-  for (const entry of params.additionalEntries) {
-    if (entry.type === "message") {
-      addMessage(entry);
-    }
-  }
-
-  return availableMessageCountsByKey;
-}
-
-function consumeMatchingMessage(
-  message: AppServerThreadMessageEntry,
-  messageMatchIndex: MessageMatchIndex
-): boolean {
-  const key = messageMatchKey(message);
-  const imageCounts = messageMatchIndex.get(key);
-  if (!imageCounts) {
-    return false;
-  }
-
-  const imageCount = messageImageCount(message);
-  const matchingImageCount = imageCount === 0
-    ? (imageCounts.has(0) ? 0 : imageCounts.keys().next().value)
-    : imageCount;
-  if (matchingImageCount === undefined) {
-    return false;
-  }
-
-  const availableCount = imageCounts.get(matchingImageCount) ?? 0;
-  if (availableCount === 0) {
-    return false;
-  }
-
-  if (availableCount === 1) {
-    imageCounts.delete(matchingImageCount);
-    if (imageCounts.size === 0) {
-      messageMatchIndex.delete(key);
-    }
-  } else {
-    imageCounts.set(matchingImageCount, availableCount - 1);
-  }
-  return true;
-}
-
 function pruneOptimisticEntries(
   optimisticEntries: AppServerThreadEntry[],
   response: AppServerReadThreadResponse | undefined,
-  additionalAuthoritativeEntries: AppServerThreadEntry[] = []
+  reconciledLaunchpadMessageId?: string
 ): AppServerThreadEntry[] {
-  if (
-    optimisticEntries.length === 0 ||
-    (!response && additionalAuthoritativeEntries.length === 0)
-  ) {
+  if (!response) {
     return optimisticEntries;
   }
 
-  const responseEntries = response?.replay.entries ?? [];
-  const latestResponseTurnId = latestTranscriptTurnId(responseEntries);
-  const latestResponseCreatedAt = latestTranscriptCreatedAt(responseEntries);
-  const hasOptimisticMessages = optimisticEntries.some(
-    (entry) => entry.type === "message"
-  );
-  const messageMatchIndex = hasOptimisticMessages
-    ? createMessageMatchIndex({
-        additionalEntries: additionalAuthoritativeEntries,
-        response,
-      })
-    : undefined;
+  const latestResponseTurnId = latestTranscriptTurnId(response.replay.entries);
+  const latestResponseCreatedAt = latestTranscriptCreatedAt(response.replay.entries);
   return optimisticEntries.filter((entry) => {
     if (entry.type === "message") {
-      return !consumeMatchingMessage(entry, messageMatchIndex!);
+      return !response.replay.messages.some((message) =>
+        message.id !== reconciledLaunchpadMessageId
+        && messageMatchesOptimisticEntry(message, entry, {
+          allowImageUrlMismatch: true,
+        })
+      );
     }
 
     if (entry.type === "review") {
-      return !responseEntries.some(
+      return !response.replay.entries.some(
         (candidate) =>
           candidate.type === "review" &&
           reviewEntriesMatch(candidate, entry)
@@ -1373,14 +1288,14 @@ function pruneOptimisticEntries(
         return false;
       }
 
-      return !responseEntries.some(
+      return !response.replay.entries.some(
         (candidate) =>
           candidate.type === "activity" &&
           activityEntriesMatch(candidate, entry)
       );
     }
 
-    return !responseEntries.some((candidate) => candidate.id === entry.id);
+    return !response.replay.entries.some((candidate) => candidate.id === entry.id);
   });
 }
 
@@ -3251,6 +3166,53 @@ function messageTextMatchesOptimisticEntry(
   return true;
 }
 
+type LaunchpadMessageCandidate = {
+  entry: AppServerThreadMessageEntry;
+  turnId?: string;
+};
+
+function buildLaunchpadMessageCandidate(params: {
+  optimisticActiveTurnId?: string;
+  optimisticUserMessage: NonNullable<
+    NavigationThreadSummary["optimisticUserMessage"]
+  >;
+  threadKey: string;
+}): LaunchpadMessageCandidate {
+  return {
+    entry: {
+      type: "message",
+      id: `optimistic-launchpad-${params.threadKey}`,
+      role: "user",
+      text: params.optimisticUserMessage.text,
+      parts: [
+        ...(params.optimisticUserMessage.text
+          ? [{ type: "text" as const, text: params.optimisticUserMessage.text }]
+          : []),
+        ...(params.optimisticUserMessage.imageParts ?? []),
+      ],
+      createdAt: params.optimisticUserMessage.createdAt ?? Date.now(),
+    },
+    turnId: params.optimisticActiveTurnId,
+  };
+}
+
+function matchesAuthoritativeLaunchpadMessage(
+  message: AppServerThreadMessageEntry,
+  candidate: LaunchpadMessageCandidate
+): boolean {
+  if (
+    candidate.turnId
+    && message.turn?.id
+    && message.turn.id !== candidate.turnId
+  ) {
+    return false;
+  }
+
+  return messageMatchesOptimisticEntry(message, candidate.entry, {
+    allowImageUrlMismatch: true,
+  });
+}
+
 function mergeCompletedUserMessageWithOptimisticEntry(
   message: AppServerThreadMessageEntry,
   optimisticEntries: AppServerThreadEntry[]
@@ -4181,8 +4143,27 @@ export function useThreadSessionState(params: {
   const threadKey = thread
     ? threadSummaryIdentityKey(thread)
     : undefined;
+  const launchpadMessageCandidate = useMemo(() => {
+    if (!threadKey || !thread?.optimisticUserMessage) {
+      return undefined;
+    }
+    return buildLaunchpadMessageCandidate({
+      optimisticActiveTurnId: thread.optimisticActiveTurn?.id,
+      optimisticUserMessage: thread.optimisticUserMessage,
+      threadKey,
+    });
+  }, [
+    thread?.optimisticActiveTurn?.id,
+    thread?.optimisticUserMessage,
+    threadKey,
+  ]);
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
   const consumedOptimisticActiveTurnKeysRef = useRef<Set<string>>(new Set());
+  const launchpadMessageCandidateRef = useRef<{
+    candidate: LaunchpadMessageCandidate;
+    threadKey: string;
+  } | undefined>(undefined);
+  const reconciledLaunchpadMessageIdsRef = useRef<Record<string, string>>({});
   const lastLiveActivitySignatureRef = useRef<Record<string, string>>({});
   const loadedHistoryIndexesRef = useRef<Record<string, TranscriptHistoryIndex>>({});
   // Avoid copying and rescanning every previously retained live aggregate on
@@ -4196,6 +4177,19 @@ export function useThreadSessionState(params: {
   const [sessions, setSessions] = useState<ThreadSessionState>({});
 
   selectedThreadKeyRef.current = threadKey;
+  if (launchpadMessageCandidateRef.current?.threadKey !== threadKey) {
+    launchpadMessageCandidateRef.current = undefined;
+  }
+  if (
+    threadKey
+    && launchpadMessageCandidate
+    && reconciledLaunchpadMessageIdsRef.current[threadKey] === undefined
+  ) {
+    launchpadMessageCandidateRef.current = {
+      candidate: launchpadMessageCandidate,
+      threadKey,
+    };
+  }
 
   useEffect(() => {
     const retainedThreadKeys = new Set(Object.keys(sessions));
@@ -4207,6 +4201,15 @@ export function useThreadSessionState(params: {
     for (const retainedThreadKey of Object.keys(retainedLiveEntriesRef.current)) {
       if (!retainedThreadKeys.has(retainedThreadKey)) {
         delete retainedLiveEntriesRef.current[retainedThreadKey];
+      }
+    }
+    for (
+      const reconciledThreadKey of Object.keys(
+        reconciledLaunchpadMessageIdsRef.current,
+      )
+    ) {
+      if (!retainedThreadKeys.has(reconciledThreadKey)) {
+        delete reconciledLaunchpadMessageIdsRef.current[reconciledThreadKey];
       }
     }
   }, [sessions]);
@@ -4556,7 +4559,8 @@ export function useThreadSessionState(params: {
               + (didPruneRetainedLiveEntries ? 1 : 0),
             optimisticEntries: pruneOptimisticEntries(
               current.optimisticEntries,
-              responseWithRetainedTail
+              responseWithRetainedTail,
+              reconciledLaunchpadMessageIdsRef.current[targetThreadKey],
             ),
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
@@ -4675,28 +4679,25 @@ export function useThreadSessionState(params: {
       }
     }
 
-    const optimisticUserMessage = thread.optimisticUserMessage;
-    if (optimisticUserMessage) {
-      const optimisticEntry: AppServerThreadMessageEntry = {
-        type: "message",
-        id: `optimistic-launchpad-${threadKey}`,
-        role: "user",
-        text: optimisticUserMessage.text,
-        parts: [
-          ...(optimisticUserMessage.text
-            ? [{ type: "text" as const, text: optimisticUserMessage.text }]
-            : []),
-          ...(optimisticUserMessage.imageParts ?? []),
-        ],
-        createdAt: optimisticUserMessage.createdAt ?? Date.now(),
-      };
-
+    if (
+      launchpadMessageCandidate
+      && reconciledLaunchpadMessageIdsRef.current[threadKey] === undefined
+    ) {
+      const optimisticEntry = launchpadMessageCandidate.entry;
       updateSession(threadKey, (current) => {
-        const persistedMessageExists = current.response?.replay.messages.some((message) =>
-          messageMatchesOptimisticEntry(message, optimisticEntry, {
-            allowImageUrlMismatch: true,
-          })
+        const persistedMessage = current.response?.replay.entries.find(
+          (entry): entry is AppServerThreadMessageEntry =>
+            entry.type === "message"
+            && matchesAuthoritativeLaunchpadMessage(
+              entry,
+              launchpadMessageCandidate,
+            )
         );
+        const persistedMessageExists = persistedMessage !== undefined;
+        if (persistedMessage) {
+          reconciledLaunchpadMessageIdsRef.current[threadKey] =
+            persistedMessage.id;
+        }
         const persistedTextMessageExists = current.response?.replay.messages.some(
           (message) => messageTextMatchesOptimisticEntry(message, optimisticEntry)
         );
@@ -4890,7 +4891,15 @@ export function useThreadSessionState(params: {
     }
 
     void loadLatest(thread);
-  }, [initialHistoryLimit, loadLatest, sessions, thread, threadKey, updateSession]);
+  }, [
+    initialHistoryLimit,
+    launchpadMessageCandidate,
+    loadLatest,
+    sessions,
+    thread,
+    threadKey,
+    updateSession,
+  ]);
 
   useEffect(() => {
     if (!thread || !threadKey) {
@@ -6347,24 +6356,71 @@ export function useThreadSessionState(params: {
         return;
       }
 
+      const launchpadMessageCandidate =
+        launchpadMessageCandidateRef.current?.threadKey === threadKey
+          ? launchpadMessageCandidateRef.current.candidate
+          : undefined;
+      let matchingLaunchpadMessageCandidate: LaunchpadMessageCandidate | undefined;
+      let retainedEntry = entry;
+      if (
+        entry.type === "message"
+        && entry.role === "user"
+        && launchpadMessageCandidate !== undefined
+        && reconciledLaunchpadMessageIdsRef.current[threadKey] === undefined
+        && matchesAuthoritativeLaunchpadMessage(
+          entry,
+          launchpadMessageCandidate,
+        )
+      ) {
+        matchingLaunchpadMessageCandidate = launchpadMessageCandidate;
+        retainedEntry = mergeCompletedUserMessageWithOptimisticEntry(
+          entry,
+          [launchpadMessageCandidate.entry],
+        );
+      }
+      if (matchingLaunchpadMessageCandidate) {
+        reconciledLaunchpadMessageIdsRef.current[threadKey] = retainedEntry.id;
+      }
+
       const retainedLiveEntryStore =
         retainedLiveEntriesRef.current[threadKey]
         ?? new Map<string, AppServerThreadEntry>();
       retainedLiveEntriesRef.current[threadKey] = retainedLiveEntryStore;
-      const entryId = entry.id;
-      if (retainedLiveEntryStore.get(entryId) === entry) {
+      const entryId = retainedEntry.id;
+      const retainedEntryUnchanged =
+        retainedLiveEntryStore.get(entryId) === retainedEntry;
+      if (retainedEntryUnchanged && !matchingLaunchpadMessageCandidate) {
         return;
       }
-      retainedLiveEntryStore.set(entryId, entry);
+      if (!retainedEntryUnchanged) {
+        retainedLiveEntryStore.set(entryId, retainedEntry);
+      }
 
-      updateSession(threadKey, (current) => ({
-        ...current,
-        expectOwnUpdate: true,
-        interacted: true,
-        lastTouchedAt: Date.now(),
-        retainedLiveEntryCount: retainedLiveEntryStore.size,
-        retainedLiveEntryVersion: current.retainedLiveEntryVersion + 1,
-      }));
+      updateSession(threadKey, (current) => {
+        const optimisticEntries = matchingLaunchpadMessageCandidate
+          ? current.optimisticEntries.filter(
+              (optimisticEntry) =>
+                optimisticEntry.id !== matchingLaunchpadMessageCandidate.entry.id
+            )
+          : current.optimisticEntries;
+        if (
+          retainedEntryUnchanged
+          && optimisticEntries === current.optimisticEntries
+        ) {
+          return current;
+        }
+        return {
+          ...current,
+          expectOwnUpdate: true,
+          interacted: true,
+          lastTouchedAt: Date.now(),
+          optimisticEntries,
+          retainedLiveEntryCount: retainedLiveEntryStore.size,
+          retainedLiveEntryVersion:
+            current.retainedLiveEntryVersion
+            + (retainedEntryUnchanged ? 0 : 1),
+        };
+      });
     },
     [threadKey, updateSession]
   );
@@ -6600,26 +6656,23 @@ export function useThreadSessionState(params: {
     }
     return [...(retainedLiveEntriesRef.current[threadKey]?.values() ?? [])];
   }, [selectedRetainedLiveEntryVersion, threadKey]);
+  const visibleLocalOptimisticEntries = useMemo(
+    () => pruneOptimisticEntries(
+      selectedSession?.optimisticEntries ?? [],
+      selectedSession?.response,
+      threadKey
+        ? reconciledLaunchpadMessageIdsRef.current[threadKey]
+        : undefined,
+    ),
+    [selectedSession?.optimisticEntries, selectedSession?.response, threadKey],
+  );
   const visibleOptimisticEntries = useMemo(
-    () => {
-      const optimisticEntries = selectedSession?.optimisticEntries ?? [];
-      const retainedLiveEntries = pruneOptimisticEntries(
-        selectedRetainedLiveEntries,
-        selectedSession?.response,
-      );
-      const localOptimisticEntries = pruneOptimisticEntries(
-        optimisticEntries,
-        selectedSession?.response,
-        retainedLiveEntries,
-      );
-      return retainedLiveEntries.length > 0
-        ? [...localOptimisticEntries, ...retainedLiveEntries]
-        : localOptimisticEntries;
-    },
+    () => selectedRetainedLiveEntries.length > 0
+      ? [...visibleLocalOptimisticEntries, ...selectedRetainedLiveEntries]
+      : visibleLocalOptimisticEntries,
     [
       selectedRetainedLiveEntries,
-      selectedSession?.optimisticEntries,
-      selectedSession?.response,
+      visibleLocalOptimisticEntries,
     ],
   );
 
