@@ -31,6 +31,27 @@ function processIdLines(metadata: AppMetadata): string[] {
   ];
 }
 
+function viewerSupportLines(metadata: AppMetadata): string[] {
+  return [
+    `Viewer PwrAgent profile: ${metadata.activeProfileName}`,
+    `Viewer main process PID: ${metadata.mainProcessId}`,
+    ...(metadata.rendererProcessId === undefined
+      ? []
+      : [`Viewer renderer process PID: ${metadata.rendererProcessId}`]),
+    `Viewer PwrAgent log path: ${available(metadata.logFilePath)}`,
+  ];
+}
+
+function hasRemoteThreadContext(
+  context: LocalThreadDiagnosticsContext,
+): boolean {
+  const target = context.federation?.ref.target;
+  return Boolean(
+    context.federationWindowTarget
+    || (target && isRemoteFederationTarget(target)),
+  );
+}
+
 function federationLines(
   context: LocalThreadDiagnosticsContext,
 ): string[] {
@@ -70,6 +91,7 @@ function federationLines(
 
   return [
     `Thread/view classification: ${classification}`,
+    "Owner-local diagnostics: Not available from this viewer; request them from the thread-owning machine if needed",
     ...(remoteTarget
       ? [`Federation mount provenance: ${
           federation?.derivedFromMountedParent
@@ -115,15 +137,20 @@ export function buildLocalThreadDiagnosticsInfo(
   context: LocalThreadDiagnosticsContext,
   metadata: AppMetadata,
 ): string {
+  const remoteThreadContext = hasRemoteThreadContext(context);
   return [
     `Thread ID: ${available(context.threadId)}`,
     `Project directory/worktree path: ${available(context.projectPath)}`,
     `Provider/backend: ${available(context.backend)}`,
     `Thread title: ${available(context.title)}`,
     ...federationLines(context),
-    `PwrAgent profile: ${metadata.activeProfileName}`,
-    ...processIdLines(metadata),
-    `PwrAgent log path: ${available(metadata.logFilePath)}`,
-    `Codex profile path: ${available(metadata.codexProfilePath)}`,
+    ...(remoteThreadContext
+      ? viewerSupportLines(metadata)
+      : [
+          `PwrAgent profile: ${metadata.activeProfileName}`,
+          ...processIdLines(metadata),
+          `PwrAgent log path: ${available(metadata.logFilePath)}`,
+          `Codex profile path: ${available(metadata.codexProfilePath)}`,
+        ]),
   ].join("\n");
 }

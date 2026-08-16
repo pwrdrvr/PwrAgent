@@ -90,8 +90,13 @@ describe("local diagnostics info", () => {
       metadata,
     );
 
+    expect(output).toContain("Thread ID: remote-thread");
+    expect(output).toContain(
+      "Project directory/worktree path: /Users/operator/.codex/worktrees/remote/PwrAgent",
+    );
     expect(output).toContain([
       "Thread/view classification: Remote Thread Mounted in Local Viewer",
+      "Owner-local diagnostics: Not available from this viewer; request them from the thread-owning machine if needed",
       "Federation mount provenance: Direct",
       "Thread owner federation instance ID: owner-instance",
       "Thread owner label: Harold-MBP-M5-Max / default",
@@ -101,6 +106,10 @@ describe("local diagnostics info", () => {
       "Federation routing target: remote:owner-instance",
       "Federation source backend: codex",
       "Federation source thread ID: remote-thread",
+      "Viewer PwrAgent profile: sstk",
+      "Viewer main process PID: 4100",
+      "Viewer renderer process PID: 4101",
+      "Viewer PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
     ].join("\n"));
     expect(output).not.toContain("machine ID");
     expect(output).not.toContain("OS version");
@@ -137,6 +146,7 @@ describe("local diagnostics info", () => {
       ),
     ).toContain([
       "Thread/view classification: Remote Thread in Remote Viewer",
+      "Owner-local diagnostics: Not available from this viewer; request them from the thread-owning machine if needed",
       "Federation mount provenance: Derived from mounted parent",
       "Remote viewer target instance ID: owner-instance",
       "Thread owner federation instance ID: owner-instance",
@@ -175,14 +185,20 @@ describe("local diagnostics info", () => {
           scope: "remote",
           instanceId: "remote-viewer-instance",
         },
+        projectPath: "/Users/remote/.codex/worktrees/direct/PwrAgent",
         threadId: "direct-remote-thread",
         title: "Direct remote thread",
       },
       metadata,
     );
 
+    expect(output).toContain("Thread ID: direct-remote-thread");
+    expect(output).toContain(
+      "Project directory/worktree path: /Users/remote/.codex/worktrees/direct/PwrAgent",
+    );
     expect(output).toContain([
       "Thread/view classification: Remote Thread in Remote Viewer",
+      "Owner-local diagnostics: Not available from this viewer; request them from the thread-owning machine if needed",
       "Remote viewer target instance ID: remote-viewer-instance",
       "Remote viewer target label: Remote Viewer Mac",
       "Thread owner federation instance ID: remote-viewer-instance",
@@ -193,6 +209,10 @@ describe("local diagnostics info", () => {
       "Federation routing target: remote:remote-viewer-instance",
       "Federation source backend: codex",
       "Federation source thread ID: direct-remote-thread",
+      "Viewer PwrAgent profile: sstk",
+      "Viewer main process PID: 4100",
+      "Viewer renderer process PID: 4101",
+      "Viewer PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
     ].join("\n"));
   });
 
@@ -227,6 +247,9 @@ describe("local diagnostics info", () => {
       "Thread/view classification: Remote² Thread in Remote Viewer",
     );
     expect(output).toContain(
+      "Owner-local diagnostics: Not available from this viewer; request them from the thread-owning machine if needed",
+    );
+    expect(output).toContain(
       "Remote viewer target instance ID: remote-viewer-instance",
     );
     expect(output).toContain(
@@ -235,6 +258,8 @@ describe("local diagnostics info", () => {
     expect(output).toContain(
       "Thread owner federation instance ID: thread-owner-instance",
     );
+    expect(output).toContain("Viewer PwrAgent profile: sstk");
+    expect(output).toContain("Viewer main process PID: 4100");
   });
 
   it("formats the Troubleshooting payload with profile, PIDs, and log path", () => {
