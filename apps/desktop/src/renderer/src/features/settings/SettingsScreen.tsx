@@ -508,6 +508,11 @@ function SettingsSectionBody(props: {
             general: { toolOutputAlerts },
           });
         }}
+        onSpendAlertsChange={async (spendAlerts) => {
+          await props.settings.writeConfig({
+            general: { spendAlerts },
+          });
+        }}
       />
     );
   }

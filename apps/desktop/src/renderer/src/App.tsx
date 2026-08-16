@@ -30,6 +30,7 @@ import {
   type ThreadToolAccounting,
   type ThreadToolIncidentNoticeState,
   type ThreadToolInvocationAlert,
+  type ThreadSpendAlert,
   type ThreadUsageLineRecord,
   type SetThreadToolIncidentNoticeRequest,
   resolveToolIncidentVisibility,
@@ -113,6 +114,7 @@ import { buildGithubPrAuthenticationNotice } from "./features/notifications/gith
 import {
   buildToolAccountingNotice,
 } from "./features/notifications/tool-accounting-notice";
+import { buildSpendAlertNotice } from "./features/notifications/spend-alert-notice";
 import {
   buildThreadIncidentSummary,
   threadIncidentNoticeId,
@@ -679,6 +681,44 @@ function DesktopAppShell(props: {
       const instanceId = event.federationTarget?.scope === "remote"
         ? event.federationTarget.instanceId
         : undefined;
+      if (event.notification.method === "thread/pricing/updated") {
+        const params = event.notification.params;
+        const spendAlerts = params.triggeredSpendAlerts as
+          | ThreadSpendAlert[]
+          | undefined;
+        if (spendAlerts?.length) {
+          const matchingThread = backendErrorThreadsRef.current.find(
+            (thread) =>
+              thread.source === event.backend
+              && thread.id === params.threadId
+              && federationTargetsEqual(
+                thread.federation?.ref.target,
+                event.federationTarget,
+              ),
+          );
+          const threadLink = matchingThread
+            ? {
+                backend: matchingThread.source,
+                inThreadList: true,
+                ...(instanceId ? { instanceId } : {}),
+                threadId: matchingThread.id,
+                title: matchingThread.title,
+                titleSource: matchingThread.titleSource,
+                gitBranch: matchingThread.gitBranch,
+                linkedDirectories: matchingThread.linkedDirectories,
+              }
+            : undefined;
+          for (const alert of spendAlerts) {
+            dispatchAppNotice({
+              type: "show",
+              notice: buildSpendAlertNotice({
+                alert,
+                ...(threadLink ? { threadLink } : {}),
+              }),
+            });
+          }
+        }
+      }
       if (event.notification.method === "thread/toolAccounting/updated") {
         const params = event.notification.params as {
           threadId: string;

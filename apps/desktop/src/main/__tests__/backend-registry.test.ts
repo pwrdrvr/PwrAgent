@@ -19440,6 +19440,103 @@ command = "pnpm dev"
     });
   });
 
+  it("emits configured spend alerts once per threshold", async () => {
+    const activeLine: ThreadUsageLineRecord = {
+      backend: "codex",
+      cachedInputCostMicros: 0,
+      cachedInputTokens: 0,
+      createdAt: 1_800_000_000_000,
+      currency: "USD",
+      inputTokens: 0,
+      outputCostMicros: 0,
+      outputTokens: 0,
+      priceStatus: "priced",
+      provider: "openai",
+      reasoningOutputTokens: 0,
+      scope: "turn",
+      source: "live",
+      status: "pending",
+      threadId: "thread-1",
+      totalCostMicros: 5_250_000,
+      totalTokens: 0,
+      turnId: "turn-2",
+      turnUsageAttributed: true,
+      uncachedInputCostMicros: 0,
+      uncachedInputTokens: 0,
+      usageLineId: "usage-turn-2",
+    };
+    const pricing = {
+      lines: [activeLine],
+      summaries: [{
+        backend: "codex",
+        cachedInputTokens: 0,
+        currency: "USD",
+        inputTokens: 0,
+        outputTokens: 0,
+        pricedUsageLineCount: 1,
+        provider: "openai",
+        reasoningOutputTokens: 0,
+        threadId: "thread-1",
+        totalCostMicros: 30_000_000,
+        totalTokens: 0,
+        uncachedInputTokens: 0,
+        unpricedUsageLineCount: 0,
+        updatedAt: 1_800_000_000_000,
+        usageLineCount: 1,
+      }],
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: {
+        ...createOverlayStoreMock(),
+        readThreadPricing: vi.fn(async () => pricing),
+      } as never,
+      resolveSpendAlertPolicy: () => ({
+        activeTurnSpendEnabled: true,
+        activeTurnSpendThresholdUsd: 5,
+        threadSpendEnabled: true,
+        threadSpendThresholdUsd: 25,
+      }),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    const emitPricing = (registry as unknown as {
+      emitThreadPricingUpdated(params: {
+        activeTurnId?: string;
+        backend: AppServerBackendKind;
+        threadId: string;
+      }): Promise<void>;
+    }).emitThreadPricingUpdated.bind(registry);
+
+    await emitPricing({
+      activeTurnId: "turn-2",
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    await emitPricing({
+      activeTurnId: "turn-2",
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    const pricingEvents = events.filter(
+      (event) => event.notification.method === "thread/pricing/updated",
+    );
+    expect(pricingEvents[0]?.notification.params).toMatchObject({
+      triggeredSpendAlerts: [
+        { kind: "active-turn-spend", spendMicros: 5_250_000 },
+        { kind: "thread-spend", spendMicros: 30_000_000 },
+      ],
+    });
+    expect(pricingEvents[1]?.notification.params).not.toHaveProperty(
+      "triggeredSpendAlerts",
+    );
+
+    await registry.close();
+  });
+
   it("coalesces streamed command output into one accounting write", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },

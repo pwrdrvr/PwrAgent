@@ -125,6 +125,17 @@ export type ThreadPricingSummary = {
   usageLineCount: number;
 };
 
+export type ThreadSpendAlert = {
+  alertId: string;
+  createdAt: number;
+  currency: "USD";
+  kind: "active-turn-spend" | "thread-spend";
+  spendMicros: number;
+  threadId: string;
+  thresholdMicros: number;
+  turnId?: string;
+};
+
 export type TokenUsagePricingCatalogRate = {
   cachedInputMicrosPerMillion: number;
   cachedInputUsdPerMillion: number;

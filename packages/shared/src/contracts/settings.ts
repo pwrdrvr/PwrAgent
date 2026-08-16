@@ -183,6 +183,23 @@ export const DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT: DesktopToolOutputAlertPol
   repeatedQueuedChecksEnabled: true,
 };
 
+export type DesktopSpendAlertPolicy = {
+  activeTurnSpendEnabled: boolean;
+  activeTurnSpendThresholdUsd: number;
+  threadSpendEnabled: boolean;
+  threadSpendThresholdUsd: number;
+};
+
+export const MIN_SPEND_ALERT_THRESHOLD_USD = 0.01;
+export const MAX_SPEND_ALERT_THRESHOLD_USD = 10_000;
+
+export const DESKTOP_SPEND_ALERT_POLICY_DEFAULT: DesktopSpendAlertPolicy = {
+  activeTurnSpendEnabled: true,
+  activeTurnSpendThresholdUsd: 5,
+  threadSpendEnabled: true,
+  threadSpendThresholdUsd: 25,
+};
+
 export const DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELLS = [
   "auto",
   "pwsh",
@@ -511,6 +528,12 @@ export type DesktopGeneralSettingsSnapshot = {
     repeatedLargeOutputMinimumCalls: DesktopSettingsValue<number>;
     repeatedLargeOutputMinimumPercent: DesktopSettingsValue<number>;
     repeatedQueuedChecksEnabled: DesktopSettingsValue<boolean>;
+  };
+  spendAlerts: {
+    activeTurnSpendEnabled: DesktopSettingsValue<boolean>;
+    activeTurnSpendThresholdUsd: DesktopSettingsValue<number>;
+    threadSpendEnabled: DesktopSettingsValue<boolean>;
+    threadSpendThresholdUsd: DesktopSettingsValue<number>;
   };
   appearance: DesktopAppearanceSnapshot;
   codexProfileModel: DesktopSettingsValue<DesktopCodexProfileModel>;
@@ -1028,6 +1051,7 @@ export type DesktopSettingsConfigPatch = {
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
     toolOutputAlerts?: Partial<DesktopToolOutputAlertPolicy>;
+    spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;

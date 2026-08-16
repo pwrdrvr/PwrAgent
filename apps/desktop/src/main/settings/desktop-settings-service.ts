@@ -2,6 +2,7 @@ import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
   DesktopTextSize,
+  DesktopSpendAlertPolicy,
   DesktopToolOutputAlertPolicy,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
@@ -43,6 +44,7 @@ import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
@@ -59,10 +61,12 @@ import {
   MAX_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   MAX_REPEATED_LARGE_OUTPUT_CALLS,
   MAX_REPEATED_LARGE_OUTPUT_PERCENT,
+  MAX_SPEND_ALERT_THRESHOLD_USD,
   MIN_PR_AUTO_DISPATCH_BUDGET_CAPACITY,
   MIN_PR_AUTO_DISPATCH_BUDGET_REFILL_PER_MINUTE,
   MIN_REPEATED_LARGE_OUTPUT_CALLS,
   MIN_REPEATED_LARGE_OUTPUT_PERCENT,
+  MIN_SPEND_ALERT_THRESHOLD_USD,
 } from "@pwragent/shared";
 import {
   SLACK_CHANNEL_AUTHORIZATION_MODE_DEFAULT,
@@ -675,6 +679,28 @@ export class DesktopSettingsService {
           repeatedQueuedChecksEnabled: this.resolveConfigBoolean(
             config.general?.toolOutputAlerts?.repeatedQueuedChecksEnabled,
             DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedQueuedChecksEnabled,
+          ),
+        },
+        spendAlerts: {
+          activeTurnSpendEnabled: this.resolveConfigBoolean(
+            config.general?.spendAlerts?.activeTurnSpendEnabled,
+            DESKTOP_SPEND_ALERT_POLICY_DEFAULT.activeTurnSpendEnabled,
+          ),
+          activeTurnSpendThresholdUsd: this.resolveBoundedConfigAmount(
+            config.general?.spendAlerts?.activeTurnSpendThresholdUsd,
+            DESKTOP_SPEND_ALERT_POLICY_DEFAULT.activeTurnSpendThresholdUsd,
+            MIN_SPEND_ALERT_THRESHOLD_USD,
+            MAX_SPEND_ALERT_THRESHOLD_USD,
+          ),
+          threadSpendEnabled: this.resolveConfigBoolean(
+            config.general?.spendAlerts?.threadSpendEnabled,
+            DESKTOP_SPEND_ALERT_POLICY_DEFAULT.threadSpendEnabled,
+          ),
+          threadSpendThresholdUsd: this.resolveBoundedConfigAmount(
+            config.general?.spendAlerts?.threadSpendThresholdUsd,
+            DESKTOP_SPEND_ALERT_POLICY_DEFAULT.threadSpendThresholdUsd,
+            MIN_SPEND_ALERT_THRESHOLD_USD,
+            MAX_SPEND_ALERT_THRESHOLD_USD,
           ),
         },
         appearance: {
@@ -1342,6 +1368,32 @@ export class DesktopSettingsService {
       repeatedQueuedChecksEnabled: this.resolveConfigBoolean(
         config?.repeatedQueuedChecksEnabled,
         DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedQueuedChecksEnabled,
+      ).value,
+    };
+  }
+
+  resolveSpendAlertPolicy(): DesktopSpendAlertPolicy {
+    const config = this.readConfig().config.general?.spendAlerts;
+    return {
+      activeTurnSpendEnabled: this.resolveConfigBoolean(
+        config?.activeTurnSpendEnabled,
+        DESKTOP_SPEND_ALERT_POLICY_DEFAULT.activeTurnSpendEnabled,
+      ).value,
+      activeTurnSpendThresholdUsd: this.resolveBoundedConfigAmount(
+        config?.activeTurnSpendThresholdUsd,
+        DESKTOP_SPEND_ALERT_POLICY_DEFAULT.activeTurnSpendThresholdUsd,
+        MIN_SPEND_ALERT_THRESHOLD_USD,
+        MAX_SPEND_ALERT_THRESHOLD_USD,
+      ).value,
+      threadSpendEnabled: this.resolveConfigBoolean(
+        config?.threadSpendEnabled,
+        DESKTOP_SPEND_ALERT_POLICY_DEFAULT.threadSpendEnabled,
+      ).value,
+      threadSpendThresholdUsd: this.resolveBoundedConfigAmount(
+        config?.threadSpendThresholdUsd,
+        DESKTOP_SPEND_ALERT_POLICY_DEFAULT.threadSpendThresholdUsd,
+        MIN_SPEND_ALERT_THRESHOLD_USD,
+        MAX_SPEND_ALERT_THRESHOLD_USD,
       ).value,
     };
   }
@@ -2440,6 +2492,25 @@ export class DesktopSettingsService {
     const normalized =
       configValue !== undefined && Number.isFinite(configValue)
         ? Math.min(maxValue, Math.max(minValue, Math.round(configValue)))
+        : undefined;
+    return {
+      value: normalized ?? defaultValue,
+      source: normalized === undefined ? "default" : "config",
+    };
+  }
+
+  private resolveBoundedConfigAmount(
+    configValue: number | undefined,
+    defaultValue: number,
+    minValue: number,
+    maxValue: number,
+  ): DesktopSettingsValue<number> {
+    const normalized =
+      configValue !== undefined && Number.isFinite(configValue)
+        ? Math.min(
+            maxValue,
+            Math.max(minValue, Math.round(configValue * 100) / 100),
+          )
         : undefined;
     return {
       value: normalized ?? defaultValue,

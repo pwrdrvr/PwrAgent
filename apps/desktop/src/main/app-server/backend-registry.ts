@@ -114,6 +114,7 @@ import {
   type BackendSummary,
   type DesktopProviderModelDefaults,
   type DesktopProviderThreadModelMigration,
+  type DesktopSpendAlertPolicy,
   type DesktopToolOutputAlertPolicy,
   type CancelQueuedTurnResponse,
   type CheckThreadBranchDriftRequest,
@@ -295,6 +296,7 @@ import {
   DEFAULT_TASK_MONITOR_REASONING_EFFORT,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
+  DESKTOP_SPEND_ALERT_POLICY_DEFAULT,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
   TOOL_OUTPUT_CAP_CHARS,
@@ -463,6 +465,7 @@ import {
   type ToolOutputIncidentAggregate,
 } from "./tool-invocation-accounting";
 import { analyzeNormalizedToolReplay } from "./tool-output-replay-analyzer";
+import { detectUsageSpendAlerts } from "./usage-spend-alerts";
 import {
   ThreadTitleGenerationService,
   type ThreadTitleGenerator,
@@ -6701,6 +6704,7 @@ export class DesktopBackendRegistry {
     string,
     ToolOutputIncidentAggregate
   >();
+  private readonly triggeredSpendAlertIds = new Set<string>();
   private pendingToolInvocationDeltaTimer: NodeJS.Timeout | undefined;
   /**
    * Serializes every flush and streamed alert boundary so a timer-driven write
@@ -6882,7 +6886,9 @@ export class DesktopBackendRegistry {
   >;
   private readonly resolveCodexFastAllowedFn: () => boolean;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
+  private readonly resolveSpendAlertPolicyFn: () => DesktopSpendAlertPolicy;
   private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
+  private spendAlertPolicy = DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
   private toolOutputAlertPolicy = DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
   private readonly localFilePrivateStorageRoots: readonly string[];
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
@@ -6952,6 +6958,7 @@ export class DesktopBackendRegistry {
     >;
     resolveCodexFastAllowed?: () => boolean;
     resolvePdfAnalysisEnabled?: () => boolean;
+    resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
     resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
     runtimeInstanceId?: string;
     registrySessionId?: string;
@@ -7093,10 +7100,32 @@ export class DesktopBackendRegistry {
           return DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
         }
       });
+    this.resolveSpendAlertPolicyFn =
+      options?.resolveSpendAlertPolicy ??
+      (() => {
+        try {
+          if (settingsService) {
+            return typeof settingsService.resolveSpendAlertPolicy === "function"
+              ? settingsService.resolveSpendAlertPolicy()
+              : DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
+          }
+          return getDesktopSettingsService().resolveSpendAlertPolicy();
+        } catch (error) {
+          backendRegistryLog.warn(
+            "failed to resolve spend alert settings",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+          return DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
+        }
+      });
+    this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
     this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
     if (typeof settingsService?.onConfigWritten === "function") {
       this.unsubscribers.push(
         settingsService.onConfigWritten(() => {
+          this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
           this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
         }),
       );
@@ -10850,6 +10879,7 @@ export class DesktopBackendRegistry {
   }
 
   private async emitThreadPricingUpdated(params: {
+    activeTurnId?: string;
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<void> {
@@ -10860,6 +10890,17 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
     });
+    const triggeredSpendAlerts = detectUsageSpendAlerts({
+      ...(params.activeTurnId ? { activeTurnId: params.activeTurnId } : {}),
+      backend: params.backend,
+      policy: this.spendAlertPolicy,
+      pricing,
+      threadId: params.threadId,
+      triggeredAlertIds: this.triggeredSpendAlertIds,
+    });
+    for (const alert of triggeredSpendAlerts) {
+      this.triggeredSpendAlertIds.add(alert.alertId);
+    }
     await this.emit({
       backend: params.backend,
       notification: {
@@ -10867,6 +10908,9 @@ export class DesktopBackendRegistry {
         params: {
           threadId: params.threadId,
           pricing,
+          ...(triggeredSpendAlerts.length > 0
+            ? { triggeredSpendAlerts }
+            : {}),
         },
       },
     });
@@ -20739,6 +20783,9 @@ export class DesktopBackendRegistry {
         return;
       }
       await this.emitThreadPricingUpdated({
+        ...(line.parentThreadId === undefined && line.turnId
+          ? { activeTurnId: line.turnId }
+          : {}),
         backend: event.backend,
         threadId: line.parentThreadId ?? line.threadId,
       });
@@ -20816,10 +20863,17 @@ export class DesktopBackendRegistry {
 
     const pricingTargets = new Map<
       string,
-      { backend: AppServerBackendKind; threadId: string }
+      {
+        activeTurnId?: string;
+        backend: AppServerBackendKind;
+        threadId: string;
+      }
     >();
     for (const { backend, line } of pending) {
       const target = {
+        ...(line.parentThreadId === undefined && line.turnId
+          ? { activeTurnId: line.turnId }
+          : {}),
         backend,
         threadId: line.parentThreadId ?? line.threadId,
       };

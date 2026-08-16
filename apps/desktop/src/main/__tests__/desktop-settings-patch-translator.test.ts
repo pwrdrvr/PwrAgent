@@ -173,6 +173,46 @@ describe("desktopSettingsPatchToEdits — general", () => {
       },
     ]);
   });
+
+  it("writes spend alert preferences", () => {
+    const edits = desktopSettingsPatchToEdits({
+      general: {
+        spendAlerts: {
+          activeTurnSpendEnabled: false,
+          activeTurnSpendThresholdUsd: 7.5,
+          threadSpendEnabled: true,
+          threadSpendThresholdUsd: 40,
+        },
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["general", "spend_alerts", "active_turn_spend_enabled"],
+        value: false,
+      },
+      {
+        op: "set",
+        path: [
+          "general",
+          "spend_alerts",
+          "active_turn_spend_threshold_usd",
+        ],
+        value: 7.5,
+      },
+      {
+        op: "set",
+        path: ["general", "spend_alerts", "thread_spend_enabled"],
+        value: true,
+      },
+      {
+        op: "set",
+        path: ["general", "spend_alerts", "thread_spend_threshold_usd"],
+        value: 40,
+      },
+    ]);
+  });
 });
 
 describe("desktopSettingsPatchToEdits — experimental", () => {

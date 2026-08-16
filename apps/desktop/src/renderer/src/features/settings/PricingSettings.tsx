@@ -1,12 +1,15 @@
 import type {
   DesktopSettingsSnapshot,
+  DesktopSpendAlertPolicy,
   DesktopToolOutputAlertPolicy,
 } from "@pwragent/shared";
 import {
   MAX_REPEATED_LARGE_OUTPUT_CALLS,
   MAX_REPEATED_LARGE_OUTPUT_PERCENT,
+  MAX_SPEND_ALERT_THRESHOLD_USD,
   MIN_REPEATED_LARGE_OUTPUT_CALLS,
   MIN_REPEATED_LARGE_OUTPUT_PERCENT,
+  MIN_SPEND_ALERT_THRESHOLD_USD,
 } from "@pwragent/shared";
 import { useEffect, useState } from "react";
 import {
@@ -39,6 +42,9 @@ export function PricingSettings(props: {
   onThreadPricingSummaryChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayUsdChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayCodexCreditsChange: (enabled: boolean) => Promise<void>;
+  onSpendAlertsChange: (
+    patch: Partial<DesktopSpendAlertPolicy>,
+  ) => Promise<void>;
   onToolOutputAlertsChange: (
     patch: Partial<DesktopToolOutputAlertPolicy>,
   ) => Promise<void>;
@@ -53,6 +59,7 @@ export function PricingSettings(props: {
     props.snapshot.experimental.threadPricingDisplayCodexCredits ??
     DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS;
   const toolOutputAlerts = props.snapshot.general.toolOutputAlerts;
+  const spendAlerts = props.snapshot.general.spendAlerts;
   const displayControlsDisabled = props.saving || !threadPricingSummary.value;
   const repeatedLargeOutputDescription =
     `Alert after ${toolOutputAlerts.repeatedLargeOutputMinimumCalls.value.toLocaleString()} tool calls in one turn each produce at least ${toolOutputAlerts.repeatedLargeOutputMinimumPercent.value.toLocaleString()}% of the model-visible output cap.`;
@@ -142,6 +149,76 @@ export function PricingSettings(props: {
         chip={sourceBadge(toolOutputAlerts.repeatedLargeOutputsEnabled)}
       >
         <div className="settings-fields">
+          <SettingsField
+            label="Active turn spend"
+            sub={`Alert when one active turn reaches $${spendAlerts.activeTurnSpendThresholdUsd.value.toFixed(2)} in estimated list-price spend.`}
+            source={sourceBadge(spendAlerts.activeTurnSpendEnabled)}
+            control={
+              <SettingsSwitch
+                checked={spendAlerts.activeTurnSpendEnabled.value}
+                disabled={props.saving}
+                label="Active turn spend"
+                onChange={(next) => {
+                  void props.onSpendAlertsChange({
+                    activeTurnSpendEnabled: next,
+                  });
+                }}
+              />
+            }
+          />
+          <AlertNumberField
+            decimals={2}
+            disabled={
+              props.saving || !spendAlerts.activeTurnSpendEnabled.value
+            }
+            label="Active turn spend threshold"
+            max={MAX_SPEND_ALERT_THRESHOLD_USD}
+            min={MIN_SPEND_ALERT_THRESHOLD_USD}
+            source={sourceBadge(spendAlerts.activeTurnSpendThresholdUsd)}
+            step={0.01}
+            sub="Estimated list-price spend allowed for one active turn before the alert is raised."
+            suffix="USD"
+            value={spendAlerts.activeTurnSpendThresholdUsd.value}
+            onSave={(next) => {
+              void props.onSpendAlertsChange({
+                activeTurnSpendThresholdUsd: next,
+              });
+            }}
+          />
+          <SettingsField
+            label="Total thread spend"
+            sub={`Alert when a thread reaches $${spendAlerts.threadSpendThresholdUsd.value.toFixed(2)} in estimated list-price spend.`}
+            source={sourceBadge(spendAlerts.threadSpendEnabled)}
+            control={
+              <SettingsSwitch
+                checked={spendAlerts.threadSpendEnabled.value}
+                disabled={props.saving}
+                label="Total thread spend"
+                onChange={(next) => {
+                  void props.onSpendAlertsChange({
+                    threadSpendEnabled: next,
+                  });
+                }}
+              />
+            }
+          />
+          <AlertNumberField
+            decimals={2}
+            disabled={props.saving || !spendAlerts.threadSpendEnabled.value}
+            label="Total thread spend threshold"
+            max={MAX_SPEND_ALERT_THRESHOLD_USD}
+            min={MIN_SPEND_ALERT_THRESHOLD_USD}
+            source={sourceBadge(spendAlerts.threadSpendThresholdUsd)}
+            step={0.01}
+            sub="Estimated list-price spend allowed across the thread before the alert is raised."
+            suffix="USD"
+            value={spendAlerts.threadSpendThresholdUsd.value}
+            onSave={(next) => {
+              void props.onSpendAlertsChange({
+                threadSpendThresholdUsd: next,
+              });
+            }}
+          />
           <SettingsField
             label="Tool output reaches the cap"
             sub="Alert immediately when one tool call reaches the model-visible output cap and is truncated."
@@ -240,11 +317,13 @@ export function PricingSettings(props: {
 }
 
 function AlertNumberField(props: {
+  decimals?: number;
   disabled?: boolean;
   label: string;
   max: number;
   min: number;
   source: string;
+  step?: number;
   sub: string;
   suffix: string;
   value: number;
@@ -269,6 +348,7 @@ function AlertNumberField(props: {
             disabled={props.disabled}
             max={props.max}
             min={props.min}
+            step={props.step}
             type="number"
             value={value}
             onBlur={() => {
@@ -277,8 +357,11 @@ function AlertNumberField(props: {
                 setValue(String(props.value));
                 return;
               }
+              const normalized = props.decimals === undefined
+                ? Math.trunc(parsed)
+                : Number(parsed.toFixed(props.decimals));
               const clamped = Math.min(
-                Math.max(Math.trunc(parsed), props.min),
+                Math.max(normalized, props.min),
                 props.max,
               );
               setValue(String(clamped));

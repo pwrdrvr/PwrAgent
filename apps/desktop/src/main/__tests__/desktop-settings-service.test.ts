@@ -768,6 +768,43 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("persists bounded active-turn and thread spend alerts", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).general.spendAlerts).toEqual({
+      activeTurnSpendEnabled: { value: true, source: "default" },
+      activeTurnSpendThresholdUsd: { value: 5, source: "default" },
+      threadSpendEnabled: { value: true, source: "default" },
+      threadSpendThresholdUsd: { value: 25, source: "default" },
+    });
+
+    await service.writeConfigPatch({
+      general: {
+        spendAlerts: {
+          activeTurnSpendEnabled: false,
+          activeTurnSpendThresholdUsd: 7.499,
+          threadSpendThresholdUsd: 40,
+        },
+      },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "active_turn_spend_threshold_usd = 7.499",
+    );
+    expect(service.resolveSpendAlertPolicy()).toEqual({
+      activeTurnSpendEnabled: false,
+      activeTurnSpendThresholdUsd: 7.5,
+      threadSpendEnabled: true,
+      threadSpendThresholdUsd: 40,
+    });
+  });
+
   it("defaults quit confirmation to enabled and persists overrides", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

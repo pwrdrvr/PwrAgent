@@ -1,0 +1,159 @@
+import type {
+  DesktopSpendAlertPolicy,
+  ThreadPricingSummary,
+  ThreadUsageLineRecord,
+} from "@pwragent/shared";
+import { describe, expect, it } from "vitest";
+import {
+  detectUsageSpendAlerts,
+  spendThresholdMicros,
+} from "../app-server/usage-spend-alerts";
+
+const POLICY: DesktopSpendAlertPolicy = {
+  activeTurnSpendEnabled: true,
+  activeTurnSpendThresholdUsd: 5,
+  threadSpendEnabled: true,
+  threadSpendThresholdUsd: 25,
+};
+
+describe("usage spend alerts", () => {
+  it("converts dollar thresholds to integer micros", () => {
+    expect(spendThresholdMicros(7.5)).toBe(7_500_000);
+  });
+
+  it("alerts independently for active-turn and total-thread spend", () => {
+    const alerts = detectUsageSpendAlerts({
+      activeTurnId: "turn-2",
+      backend: "codex",
+      now: 1_800_000_000_000,
+      policy: POLICY,
+      pricing: {
+        lines: [
+          usageLine({ turnId: "turn-2", totalCostMicros: 5_250_000 }),
+          usageLine({ turnId: "turn-1", totalCostMicros: 30_000_000 }),
+        ],
+        summaries: [pricingSummary(35_250_000)],
+      },
+      threadId: "thread-1",
+      triggeredAlertIds: new Set(),
+    });
+
+    expect(alerts).toMatchObject([
+      {
+        kind: "active-turn-spend",
+        spendMicros: 5_250_000,
+        thresholdMicros: 5_000_000,
+        turnId: "turn-2",
+      },
+      {
+        kind: "thread-spend",
+        spendMicros: 35_250_000,
+        thresholdMicros: 25_000_000,
+      },
+    ]);
+  });
+
+  it("ignores disabled, unpriced, historical-summary, and non-USD rows", () => {
+    const alerts = detectUsageSpendAlerts({
+      activeTurnId: "turn-2",
+      backend: "codex",
+      policy: {
+        ...POLICY,
+        threadSpendEnabled: false,
+      },
+      pricing: {
+        lines: [
+          usageLine({ priceStatus: "unpriced", totalCostMicros: 20_000_000 }),
+          usageLine({
+            currency: "EUR",
+            totalCostMicros: 20_000_000,
+          }),
+          usageLine({
+            totalCostMicros: 20_000_000,
+            turnUsageAttributed: false,
+          }),
+        ],
+        summaries: [pricingSummary(50_000_000)],
+      },
+      threadId: "thread-1",
+      triggeredAlertIds: new Set(),
+    });
+
+    expect(alerts).toEqual([]);
+  });
+
+  it("does not repeat an alert already emitted for the same threshold", () => {
+    const first = detectUsageSpendAlerts({
+      backend: "codex",
+      policy: POLICY,
+      pricing: {
+        lines: [],
+        summaries: [pricingSummary(30_000_000)],
+      },
+      threadId: "thread-1",
+      triggeredAlertIds: new Set(),
+    });
+    const triggeredAlertIds = new Set(first.map((alert) => alert.alertId));
+
+    expect(detectUsageSpendAlerts({
+      backend: "codex",
+      policy: POLICY,
+      pricing: {
+        lines: [],
+        summaries: [pricingSummary(40_000_000)],
+      },
+      threadId: "thread-1",
+      triggeredAlertIds,
+    })).toEqual([]);
+  });
+});
+
+function usageLine(
+  overrides: Partial<ThreadUsageLineRecord> = {},
+): ThreadUsageLineRecord {
+  return {
+    backend: "codex",
+    cachedInputCostMicros: 0,
+    cachedInputTokens: 0,
+    createdAt: 1_800_000_000_000,
+    currency: "USD",
+    inputTokens: 0,
+    outputCostMicros: 0,
+    outputTokens: 0,
+    priceStatus: "priced",
+    provider: "openai",
+    reasoningOutputTokens: 0,
+    scope: "turn",
+    source: "live",
+    status: "pending",
+    threadId: "thread-1",
+    totalCostMicros: 0,
+    totalTokens: 0,
+    turnId: "turn-2",
+    turnUsageAttributed: true,
+    uncachedInputCostMicros: 0,
+    uncachedInputTokens: 0,
+    usageLineId: "usage-turn-2",
+    ...overrides,
+  };
+}
+
+function pricingSummary(totalCostMicros: number): ThreadPricingSummary {
+  return {
+    backend: "codex",
+    cachedInputTokens: 0,
+    currency: "USD",
+    inputTokens: 0,
+    outputTokens: 0,
+    pricedUsageLineCount: 1,
+    provider: "openai",
+    reasoningOutputTokens: 0,
+    threadId: "thread-1",
+    totalCostMicros,
+    totalTokens: 0,
+    uncachedInputTokens: 0,
+    unpricedUsageLineCount: 0,
+    updatedAt: 1_800_000_000_000,
+    usageLineCount: 1,
+  };
+}

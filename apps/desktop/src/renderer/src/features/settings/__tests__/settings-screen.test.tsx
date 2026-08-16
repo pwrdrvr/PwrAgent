@@ -136,6 +136,12 @@ function createSnapshot(
         repeatedLargeOutputMinimumPercent: { value: 50, source: "default" },
         repeatedQueuedChecksEnabled: { value: true, source: "default" },
       },
+      spendAlerts: {
+        activeTurnSpendEnabled: { value: true, source: "default" },
+        activeTurnSpendThresholdUsd: { value: 5, source: "default" },
+        threadSpendEnabled: { value: true, source: "default" },
+        threadSpendThresholdUsd: { value: 25, source: "default" },
+      },
       appearance: {
         theme: { value: "system", source: "default" },
         density: { value: "mission-control", source: "default" },
@@ -943,6 +949,38 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("switch", { name: "Repeated large tool outputs" }),
     ).toHaveAttribute("aria-checked", "true");
+    fireEvent.change(
+      screen.getByRole("spinbutton", {
+        name: "Active turn spend threshold",
+      }),
+      { target: { value: "7.50" } },
+    );
+    fireEvent.blur(
+      screen.getByRole("spinbutton", {
+        name: "Active turn spend threshold",
+      }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          spendAlerts: {
+            activeTurnSpendThresholdUsd: 7.5,
+          },
+        },
+      });
+    });
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Total thread spend" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          spendAlerts: {
+            threadSpendEnabled: false,
+          },
+        },
+      });
+    });
     fireEvent.change(screen.getByRole("spinbutton", { name: "Calls per turn" }), {
       target: { value: "7" },
     });

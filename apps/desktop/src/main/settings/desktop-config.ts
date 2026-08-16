@@ -24,6 +24,7 @@ import type {
   DesktopProviderModelDefaults,
   DesktopProviderThreadModelMigration,
   DesktopSettingsConfigPatch,
+  DesktopSpendAlertPolicy,
   DesktopTextSize,
   DesktopToolOutputAlertPolicy,
   DesktopUpdateChannel,
@@ -101,6 +102,7 @@ export type DesktopSettingsConfig = {
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
     toolOutputAlerts?: Partial<DesktopToolOutputAlertPolicy>;
+    spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;
@@ -679,6 +681,30 @@ export function desktopSettingsPatchToEdits(
     set(
       ["general", "tool_output_alerts", "repeated_queued_checks_enabled"],
       patch.general.toolOutputAlerts.repeatedQueuedChecksEnabled,
+    );
+  }
+  if (patch.general?.spendAlerts?.activeTurnSpendEnabled !== undefined) {
+    set(
+      ["general", "spend_alerts", "active_turn_spend_enabled"],
+      patch.general.spendAlerts.activeTurnSpendEnabled,
+    );
+  }
+  if (patch.general?.spendAlerts?.activeTurnSpendThresholdUsd !== undefined) {
+    set(
+      ["general", "spend_alerts", "active_turn_spend_threshold_usd"],
+      patch.general.spendAlerts.activeTurnSpendThresholdUsd,
+    );
+  }
+  if (patch.general?.spendAlerts?.threadSpendEnabled !== undefined) {
+    set(
+      ["general", "spend_alerts", "thread_spend_enabled"],
+      patch.general.spendAlerts.threadSpendEnabled,
+    );
+  }
+  if (patch.general?.spendAlerts?.threadSpendThresholdUsd !== undefined) {
+    set(
+      ["general", "spend_alerts", "thread_spend_threshold_usd"],
+      patch.general.spendAlerts.threadSpendThresholdUsd,
     );
   }
 
@@ -1583,6 +1609,7 @@ function normalizeDesktopConfig(
   const general = tables["general"];
   const generalAppearance = tables["general.appearance"];
   const generalToolOutputAlerts = tables["general.tool_output_alerts"];
+  const generalSpendAlerts = tables["general.spend_alerts"];
   const generalMessagingAck = tables["general.messaging_acknowledgment"];
   const onboarding = tables["onboarding"];
   const experimental = tables["experimental"];
@@ -1654,6 +1681,20 @@ function normalizeDesktopConfig(
         ),
         repeatedQueuedChecksEnabled: readBoolean(
           generalToolOutputAlerts?.repeated_queued_checks_enabled,
+        ),
+      },
+      spendAlerts: {
+        activeTurnSpendEnabled: readBoolean(
+          generalSpendAlerts?.active_turn_spend_enabled,
+        ),
+        activeTurnSpendThresholdUsd: readNumber(
+          generalSpendAlerts?.active_turn_spend_threshold_usd,
+        ),
+        threadSpendEnabled: readBoolean(
+          generalSpendAlerts?.thread_spend_enabled,
+        ),
+        threadSpendThresholdUsd: readNumber(
+          generalSpendAlerts?.thread_spend_threshold_usd,
         ),
       },
       appearance: {
@@ -1987,6 +2028,8 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const toolOutputAlerts = config.general?.toolOutputAlerts;
   const toolOutputAlertsDefined =
     toolOutputAlerts && hasDefinedValue(toolOutputAlerts);
+  const spendAlerts = config.general?.spendAlerts;
+  const spendAlertsDefined = spendAlerts && hasDefinedValue(spendAlerts);
   const appearance = config.general?.appearance;
   const appearanceDefined = appearance && hasDefinedValue(appearance);
   const codexProfileModel = config.general?.codexProfileModel;
@@ -2004,6 +2047,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
     toolOutputAlertsDefined ||
+    spendAlertsDefined ||
     appearanceDefined ||
     codexProfileModel !== undefined ||
     messagingAcknowledgment !== undefined
@@ -2048,6 +2092,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (toolOutputAlertsDefined) {
       pruned.general.toolOutputAlerts = toolOutputAlerts;
+    }
+    if (spendAlertsDefined) {
+      pruned.general.spendAlerts = spendAlerts;
     }
     if (appearanceDefined) {
       pruned.general.appearance = appearance;
