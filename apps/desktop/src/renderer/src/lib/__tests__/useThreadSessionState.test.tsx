@@ -412,6 +412,442 @@ describe("useThreadSessionState", () => {
     );
   });
 
+  it("keeps completed remote turns ordered when a bounded refresh advances past them", async () => {
+    const publishedTurn = {
+      id: "published-turn",
+      status: "completed" as const,
+      startedAt: 200,
+      completedAt: 500,
+    };
+    const repairTurn = {
+      id: "repair-turn",
+      status: "completed" as const,
+      startedAt: 600,
+      completedAt: 900,
+    };
+    const ciTurn = {
+      id: "ci-turn",
+      status: "completed" as const,
+      startedAt: 1_000,
+      completedAt: 1_100,
+    };
+    const repairUsage: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "repair-usage",
+      summary: "Turn usage: repair",
+      createdAt: 901,
+      details: [],
+      turn: repairTurn,
+    };
+    const initialTail = readThreadResponse({
+      entries: [
+        {
+          type: "activity",
+          id: "published-diff",
+          summary: "Edited 2 files",
+          createdAt: 300,
+          details: [],
+          turn: publishedTurn,
+        },
+        {
+          ...messageEntry({
+            id: "published-final",
+            text: "Draft PR created",
+            createdAt: 500,
+          }),
+          phase: "final" as const,
+          turn: publishedTurn,
+        },
+        {
+          type: "review",
+          id: "review-start",
+          review: "changes against origin/main",
+          displayText: "Review changes against origin/main",
+          turn: {
+            id: "review-turn",
+            status: "completed" as const,
+            startedAt: 550,
+            completedAt: 590,
+          },
+        },
+        {
+          type: "review",
+          id: "review-result",
+          review: "The release workflow is blocked.",
+          createdAt: 590,
+          turn: {
+            id: "review-turn",
+            status: "completed" as const,
+            startedAt: 550,
+            completedAt: 590,
+          },
+        },
+        repairUsage,
+      ],
+      hasPreviousPage: true,
+      previousCursor: "published-diff",
+    });
+    const olderPage = readThreadResponse({
+      entries: [
+        {
+          ...messageEntry({
+            id: "older-history",
+            text: "Older history",
+            createdAt: 100,
+          }),
+          turn: {
+            id: "older-turn",
+            status: "completed" as const,
+          },
+        },
+      ],
+      hasPreviousPage: false,
+    });
+    const refreshedTail = readThreadResponse({
+      entries: [
+        repairUsage,
+        {
+          ...messageEntry({
+            id: "ci-notification",
+            role: "user",
+            text: "CI failed",
+            createdAt: 1_000,
+          }),
+          turn: ciTurn,
+        },
+        {
+          ...messageEntry({
+            id: "ci-final",
+            text: "Auto-fix is already active",
+            createdAt: 1_100,
+          }),
+          phase: "final" as const,
+          turn: ciTurn,
+        },
+      ],
+      hasPreviousPage: true,
+      previousCursor: "repair-usage",
+    });
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockResolvedValueOnce(olderPage)
+      .mockResolvedValueOnce(refreshedTail);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const remoteThread = (updatedAt: number): NavigationThreadSummary => ({
+      ...buildThread({ id: "thread-1", updatedAt }),
+      federation: {
+        ref: {
+          backend: "codex",
+          target: {
+            scope: "remote",
+            instanceId: "owner-m5",
+          },
+          threadId: "thread-1",
+        },
+        instanceLabel: "Remote M5",
+        capabilities: ["thread_detail"],
+      },
+    });
+    const { result, rerender } = renderHook(
+      ({ selectedThread }: { selectedThread?: NavigationThreadSummary }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+          thread: selectedThread,
+        }),
+      {
+        initialProps: {
+          selectedThread: remoteThread(1_000) as NavigationThreadSummary | undefined,
+        },
+      },
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+
+    // Reproduce leaving the mounted thread and selecting it again after the
+    // owner advances. The retained session survives this temporary unmount.
+    rerender({ selectedThread: undefined });
+    rerender({ selectedThread: remoteThread(2_000) });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(3);
+    });
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries.map((entry) => entry.id)).toEqual([
+        "older-history",
+        "published-diff",
+        "published-final",
+        "review-start",
+        "review-result",
+        "repair-usage",
+        "ci-notification",
+        "ci-final",
+      ]);
+    });
+    expect(result.current.response?.replay.messages.map((message) => message.id)).toEqual([
+      "older-history",
+      "published-final",
+      "ci-notification",
+      "ci-final",
+    ]);
+    expect(readThread).toHaveBeenLastCalledWith(expect.objectContaining({
+      federationTarget: {
+        scope: "remote",
+        instanceId: "owner-m5",
+      },
+      limit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+      threadId: "thread-1",
+    }));
+  });
+
+  it("keeps an omitted completed turn before a disjoint newer tail", async () => {
+    const initialTail = readThreadResponse({
+      entries: [
+        {
+          ...messageEntry({
+            id: "completed-old-turn",
+            text: "Completed old turn",
+            createdAt: 200,
+          }),
+          turn: {
+            id: "old-turn",
+            status: "completed" as const,
+            completedAt: 200,
+          },
+        },
+      ],
+      hasPreviousPage: true,
+      previousCursor: "completed-old-turn",
+    });
+    const olderPage = readThreadResponse({
+      entries: [
+        messageEntry({
+          id: "older-history",
+          text: "Older history",
+          createdAt: 100,
+        }),
+      ],
+      hasPreviousPage: false,
+    });
+    const refreshedTail = readThreadResponse({
+      entries: [
+        {
+          ...messageEntry({
+            id: "new-turn",
+            text: "New turn",
+            createdAt: 300,
+          }),
+          turn: {
+            id: "new-turn",
+            status: "completed" as const,
+            completedAt: 300,
+          },
+        },
+      ],
+      hasPreviousPage: true,
+      previousCursor: "new-turn",
+    });
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockResolvedValueOnce(olderPage)
+      .mockResolvedValueOnce(refreshedTail);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+    rerender({ updatedAt: 2_000 });
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries.map((entry) => entry.id)).toEqual([
+        "older-history",
+        "completed-old-turn",
+        "new-turn",
+      ]);
+    });
+  });
+
+  it("keeps an omitted completed turn between refreshed anchors", async () => {
+    const completedMessage = (
+      id: string,
+      text: string,
+      createdAt: number,
+    ): AppServerThreadMessageEntry => ({
+      ...messageEntry({ id, text, createdAt }),
+      turn: {
+        id: `${id}-turn`,
+        status: "completed" as const,
+        completedAt: createdAt,
+      },
+    });
+    const firstAnchor = completedMessage("first-anchor", "First anchor", 200);
+    const lastAnchor = completedMessage("last-anchor", "Last anchor", 400);
+    const initialTail = readThreadResponse({
+      entries: [
+        firstAnchor,
+        completedMessage("omitted-middle", "Omitted middle", 300),
+        lastAnchor,
+      ],
+      hasPreviousPage: true,
+      previousCursor: "first-anchor",
+    });
+    const olderPage = readThreadResponse({
+      entries: [
+        messageEntry({
+          id: "older-history",
+          text: "Older history",
+          createdAt: 100,
+        }),
+      ],
+      hasPreviousPage: false,
+    });
+    const refreshedTail = readThreadResponse({
+      entries: [
+        firstAnchor,
+        lastAnchor,
+        completedMessage("new-tail", "New tail", 500),
+      ],
+      hasPreviousPage: true,
+      previousCursor: "first-anchor",
+    });
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockResolvedValueOnce(olderPage)
+      .mockResolvedValueOnce(refreshedTail);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+    rerender({ updatedAt: 2_000 });
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries.map((entry) => entry.id)).toEqual([
+        "older-history",
+        "first-anchor",
+        "omitted-middle",
+        "last-anchor",
+        "new-tail",
+      ]);
+    });
+  });
+
+  it("retains a genuinely newer completed turn after a lagging refresh", async () => {
+    const anchor = {
+      ...messageEntry({
+        id: "refresh-anchor",
+        text: "Refresh anchor",
+        createdAt: 200,
+      }),
+      turn: {
+        id: "anchor-turn",
+        status: "completed" as const,
+        completedAt: 200,
+      },
+    };
+    const initialTail = readThreadResponse({
+      entries: [
+        anchor,
+        {
+          ...messageEntry({
+            id: "newer-live-turn",
+            text: "Newer live turn",
+            createdAt: 300,
+          }),
+          turn: {
+            id: "newer-turn",
+            status: "completed" as const,
+            completedAt: 300,
+          },
+        },
+      ],
+      hasPreviousPage: true,
+      previousCursor: "refresh-anchor",
+    });
+    const olderPage = readThreadResponse({
+      entries: [
+        messageEntry({
+          id: "older-history",
+          text: "Older history",
+          createdAt: 100,
+        }),
+      ],
+      hasPreviousPage: false,
+    });
+    const staleTail = readThreadResponse({
+      entries: [anchor],
+      hasPreviousPage: true,
+      previousCursor: "refresh-anchor",
+    });
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockResolvedValueOnce(olderPage)
+      .mockResolvedValueOnce(staleTail);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result, rerender } = renderHook(
+      ({ updatedAt }: { updatedAt: number }) =>
+        useThreadSessionState({
+          desktopApi,
+          initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+          thread: buildThread({ id: "thread-1", updatedAt }),
+        }),
+      { initialProps: { updatedAt: 1_000 } },
+    );
+
+    await waitForThreadHydration(result);
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+    rerender({ updatedAt: 2_000 });
+
+    await waitFor(() => {
+      expect(result.current.response?.replay.entries.map((entry) => entry.id)).toEqual([
+        "older-history",
+        "refresh-anchor",
+        "newer-live-turn",
+      ]);
+    });
+  });
+
   it("stitches many older pages without weakening exact-id overlap rules", async () => {
     const readThread = vi
       .fn()

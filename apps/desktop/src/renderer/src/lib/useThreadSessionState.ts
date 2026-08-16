@@ -641,6 +641,10 @@ function preserveRetainedTranscriptTail(
   // Both inputs are the bounded newest-page tail now; loaded history pages do
   // not participate, so pagination depth cannot amplify it.
   const matchedRetainedEntries = new Set<AppServerThreadEntry>();
+  const freshEntryByRetainedEntry = new Map<
+    AppServerThreadEntry,
+    AppServerThreadEntry
+  >();
   for (const freshEntry of response.replay.entries) {
     const retainedMatch = findUniqueTranscriptRefreshMatch(
       freshEntry,
@@ -650,14 +654,13 @@ function preserveRetainedTranscriptTail(
     );
     if (retainedMatch) {
       matchedRetainedEntries.add(retainedMatch);
+      freshEntryByRetainedEntry.set(retainedMatch, freshEntry);
     }
   }
-  const retainedTailRemainder = retainedResponse.replay.entries.filter(
-    (entry) => !matchedRetainedEntries.has(entry)
-  );
-  const entries = mergeTranscriptEntries(
+  const entries = reconcileRetainedTranscriptTail(
     response.replay.entries,
-    retainedTailRemainder,
+    retainedResponse.replay.entries,
+    freshEntryByRetainedEntry,
   );
 
   return {
@@ -672,6 +675,89 @@ function preserveRetainedTranscriptTail(
       ),
     },
   };
+}
+
+function reconcileRetainedTranscriptTail(
+  freshEntries: AppServerThreadEntry[],
+  retainedEntries: AppServerThreadEntry[],
+  freshEntryByRetainedEntry: ReadonlyMap<
+    AppServerThreadEntry,
+    AppServerThreadEntry
+  >,
+): AppServerThreadEntry[] {
+  const retainedEntriesBeforeFresh = new Map<
+    AppServerThreadEntry,
+    AppServerThreadEntry[]
+  >();
+  let pendingRetainedEntries: AppServerThreadEntry[] = [];
+  let lastMatchedFreshEntry: AppServerThreadEntry | undefined;
+
+  for (const retainedEntry of retainedEntries) {
+    const freshEntry = freshEntryByRetainedEntry.get(retainedEntry);
+    if (!freshEntry) {
+      pendingRetainedEntries.push(retainedEntry);
+      continue;
+    }
+
+    if (pendingRetainedEntries.length > 0) {
+      retainedEntriesBeforeFresh.set(freshEntry, pendingRetainedEntries);
+      pendingRetainedEntries = [];
+    }
+    lastMatchedFreshEntry = freshEntry;
+  }
+
+  const entries: AppServerThreadEntry[] = [];
+  let trailingInsertionFloor = 0;
+  for (const freshEntry of freshEntries) {
+    entries.push(...(retainedEntriesBeforeFresh.get(freshEntry) ?? []));
+    entries.push(freshEntry);
+    if (freshEntry === lastMatchedFreshEntry) {
+      trailingInsertionFloor = entries.length;
+    }
+  }
+
+  // A bounded newest-page refresh advances naturally as later turns arrive.
+  // Entries that fell off its front are older history, not missing live tail,
+  // and must remain ahead of the newer page. Entries after the last retained
+  // anchor can still be genuinely newer live work omitted by a lagging read,
+  // so only move one when its known timestamp proves it precedes a fresh item.
+  for (const retainedEntry of pendingRetainedEntries) {
+    const retainedTimestamp = transcriptRefreshOrderTimestamp(retainedEntry);
+    const insertionIndex = typeof retainedTimestamp === "number"
+      ? entries.findIndex((entry, index) => {
+          if (index < trailingInsertionFloor) {
+            return false;
+          }
+          const entryTimestamp = transcriptRefreshOrderTimestamp(entry);
+          return (
+            typeof entryTimestamp === "number"
+            && entryTimestamp > retainedTimestamp
+          );
+        })
+      : -1;
+
+    if (insertionIndex === -1) {
+      entries.push(retainedEntry);
+    } else {
+      entries.splice(insertionIndex, 0, retainedEntry);
+    }
+  }
+
+  return entries;
+}
+
+function transcriptRefreshOrderTimestamp(
+  entry: AppServerThreadEntry,
+): number | undefined {
+  if (typeof entry.createdAt === "number") {
+    return entry.createdAt;
+  }
+  if (typeof entry.turn?.startedAt === "number") {
+    return entry.turn.startedAt;
+  }
+  return typeof entry.turn?.completedAt === "number"
+    ? entry.turn.completedAt
+    : undefined;
 }
 
 function findUniqueTranscriptRefreshMatch(
