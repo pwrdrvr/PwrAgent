@@ -813,6 +813,33 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toMatch(/\.star-map-card:focus-visible\s*\{/);
   });
 
+  it("keeps the first directory thread's focus ring clear of the sticky header", () => {
+    // The header deliberately paints above rows that scroll underneath it.
+    // A focused first row therefore needs more top clearance than the ring's
+    // full outside reach (outline width + outline offset). Equality is not
+    // enough at 1x: fractional row positions can hand the shared boundary
+    // pixel to the sticky header, erasing the ring's horizontal top run while
+    // leaving its sides and bottom intact.
+    const rowRing = extractRuleBody(
+      css,
+      ".thread-row:has(.thread-row__open:focus)",
+    );
+    const directoryDetails = extractRuleBody(css, ".directory-row__details");
+    const ringWidth = Number(
+      rowRing.match(/outline:\s*(?<width>\d+)px\s+solid/)?.groups?.width,
+    );
+    const ringOffset = Number(
+      rowRing.match(/outline-offset:\s*(?<offset>\d+)px/)?.groups?.offset,
+    );
+    const detailsTopPadding = Number(
+      directoryDetails.match(/padding:\s*(?<top>\d+)px\s/)?.groups?.top,
+    );
+
+    expect(ringWidth).toBeGreaterThan(0);
+    expect(ringOffset).toBeGreaterThanOrEqual(0);
+    expect(detailsTopPadding).toBeGreaterThan(ringWidth + ringOffset);
+  });
+
   // The three focusable controls in the Star Map "View" popover: the chip that
   // opens it, each button of the layout switch, and the "Reset view" action.
   // They are ordinary `<button>`s, so they are tab-reachable whether or not

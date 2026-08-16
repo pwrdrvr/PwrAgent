@@ -6081,9 +6081,16 @@ textarea,
      row rhythm: 4px here + the next `.directory-row`'s 2px top pad =
      6px, the same band the thread cards keep between each other
      (`.directory-list` zeroes the sidebar-list gap, so the row pad is
-     the only other term). Top 8 → 4 for the mirror seam under the
-     sticky header. */
-  padding: 4px 0 4px 0;
+     the only other term).
+
+     Top is 6px: a focused thread's 2px outline at a 2px offset reaches 4px
+     outside the card, while the sticky header deliberately paints above
+     scrolling rows at z-index 5. Matching that reach with the old 4px pad
+     left both on the same subpixel boundary; at 1x, rows on the losing phase
+     handed that boundary to the header, erasing the focus ring's horizontal
+     top run. Two pixels of real clearance keep the ring intact without lifting
+     rows over the sticky header when they genuinely scroll underneath it. */
+  padding: 6px 0 4px 0;
 }
 
 .directory-row__threads {
