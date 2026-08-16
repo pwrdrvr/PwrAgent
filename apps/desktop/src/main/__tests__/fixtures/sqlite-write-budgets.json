@@ -98,22 +98,22 @@
     "statements": 8
   },
   "streamed-command-output": {
-    "commits": 3,
+    "commits": 2,
     "note": "500 streamed output deltas plus the completion for one command",
-    "observedWalBytes": 74160,
-    "rowsChanged": 5,
-    "statements": 5
+    "observedWalBytes": 37080,
+    "rowsChanged": 2,
+    "statements": 2
   },
   "streamed-large-output-alert-boundary": {
     "commits": 1,
-    "note": "one threshold-crossing streamed output window and its alert",
+    "note": "five large streamed outputs and their first repeated-output alert",
     "observedWalBytes": 32960,
     "rowsChanged": 2,
     "statements": 2
   },
   "structured-mcp-output-alert": {
     "commits": 1,
-    "note": "one large structured MCP result and its alert in one boundary",
+    "note": "one capped structured MCP result and its alert in one boundary",
     "observedWalBytes": 32960,
     "rowsChanged": 2,
     "statements": 2

@@ -421,6 +421,11 @@ function SettingsSectionBody(props: {
             general: { notificationsEnabled },
           });
         }}
+        onToolOutputAlertsChange={async (toolOutputAlerts) => {
+          await props.settings.writeConfig({
+            general: { toolOutputAlerts },
+          });
+        }}
         onClearMessagingAcknowledgment={async () => {
           await props.settings.writeConfig({
             general: { messagingAcknowledgment: null },

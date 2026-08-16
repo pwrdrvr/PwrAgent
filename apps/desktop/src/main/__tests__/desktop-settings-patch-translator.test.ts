@@ -115,6 +115,44 @@ describe("desktopSettingsPatchToEdits — general", () => {
       },
     ]);
   });
+
+  it("writes tool-output alert trigger preferences", () => {
+    const edits = desktopSettingsPatchToEdits({
+      general: {
+        toolOutputAlerts: {
+          outputCapHitsEnabled: false,
+          repeatedLargeOutputsEnabled: true,
+          repeatedQueuedChecksEnabled: false,
+        },
+      },
+    });
+
+    expect(edits).toEqual([
+      {
+        op: "set",
+        path: ["general", "tool_output_alerts", "output_cap_hits_enabled"],
+        value: false,
+      },
+      {
+        op: "set",
+        path: [
+          "general",
+          "tool_output_alerts",
+          "repeated_large_outputs_enabled",
+        ],
+        value: true,
+      },
+      {
+        op: "set",
+        path: [
+          "general",
+          "tool_output_alerts",
+          "repeated_queued_checks_enabled",
+        ],
+        value: false,
+      },
+    ]);
+  });
 });
 
 describe("desktopSettingsPatchToEdits — experimental", () => {

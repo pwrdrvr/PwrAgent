@@ -152,6 +152,24 @@ export const DESKTOP_TEXT_SIZES = [
 export type DesktopTextSize = (typeof DESKTOP_TEXT_SIZES)[number];
 export const DESKTOP_TEXT_SIZE_DEFAULT: DesktopTextSize = "md";
 
+export type DesktopToolOutputAlertPolicy = {
+  outputCapHitsEnabled: boolean;
+  repeatedLargeOutputsEnabled: boolean;
+  repeatedQueuedChecksEnabled: boolean;
+};
+
+/**
+ * Tool-output alerts stay on by default, but the large-output warning is
+ * deliberately a repeated-pattern signal rather than a one-call tripwire.
+ * The detector owns that threshold; these flags let operators choose which
+ * classes of signal should interrupt them.
+ */
+export const DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT: DesktopToolOutputAlertPolicy = {
+  outputCapHitsEnabled: true,
+  repeatedLargeOutputsEnabled: true,
+  repeatedQueuedChecksEnabled: true,
+};
+
 export const DESKTOP_INTEGRATED_TERMINAL_WINDOWS_SHELLS = [
   "auto",
   "pwsh",
@@ -474,6 +492,11 @@ export type DesktopGeneralSettingsSnapshot = {
   hotCpuProfilingCaptureHeapSnapshot: DesktopSettingsValue<boolean>;
   hotCpuProfilingHeapSnapshotLimit: DesktopSettingsValue<number>;
   notificationsEnabled: DesktopSettingsValue<boolean>;
+  toolOutputAlerts: {
+    outputCapHitsEnabled: DesktopSettingsValue<boolean>;
+    repeatedLargeOutputsEnabled: DesktopSettingsValue<boolean>;
+    repeatedQueuedChecksEnabled: DesktopSettingsValue<boolean>;
+  };
   appearance: DesktopAppearanceSnapshot;
   codexProfileModel: DesktopSettingsValue<DesktopCodexProfileModel>;
   messagingAcknowledgment: DesktopSettingsValue<DesktopMessagingAcknowledgment | null>;
@@ -989,6 +1012,7 @@ export type DesktopSettingsConfigPatch = {
     hotCpuProfilingCaptureHeapSnapshot?: boolean;
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
+    toolOutputAlerts?: Partial<DesktopToolOutputAlertPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;

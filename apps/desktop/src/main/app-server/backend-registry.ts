@@ -114,6 +114,7 @@ import {
   type BackendSummary,
   type DesktopProviderModelDefaults,
   type DesktopProviderThreadModelMigration,
+  type DesktopToolOutputAlertPolicy,
   type CancelQueuedTurnResponse,
   type CheckThreadBranchDriftRequest,
   type CheckThreadBranchDriftResponse,
@@ -294,7 +295,11 @@ import {
   DEFAULT_TASK_MONITOR_REASONING_EFFORT,
   DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS,
   DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
+  DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
+  TOOL_OUTPUT_CAP_CHARS,
+  TOOL_OUTPUT_WARNING_CHARS,
+  TOOL_OUTPUT_WARNING_INVOCATIONS,
   type CancelMonitorDelegationToolArgs,
   type CompleteMonitoringToolArgs,
   type CreateMonitorDelegationToolArgs,
@@ -6676,7 +6681,8 @@ export class DesktopBackendRegistry {
   /**
    * Full in-memory output totals for active commands. Flush windows clear the
    * sqlite write buffer every 250ms, but warning thresholds must span those
-   * windows or a steady stream of small chunks never reaches 4,000 chars.
+   * windows or a steady stream of small chunks never reaches the configured
+   * large-output boundary.
    */
   private readonly streamedToolInvocationOutputTotals = new Map<
     string,
@@ -6877,6 +6883,7 @@ export class DesktopBackendRegistry {
   >;
   private readonly resolveCodexFastAllowedFn: () => boolean;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
+  private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
   private readonly localFilePrivateStorageRoots: readonly string[];
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
   private readonly pdfToolMcpServer?: AgentToolMcpServerLike;
@@ -6945,6 +6952,7 @@ export class DesktopBackendRegistry {
     >;
     resolveCodexFastAllowed?: () => boolean;
     resolvePdfAnalysisEnabled?: () => boolean;
+    resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
     runtimeInstanceId?: string;
     registrySessionId?: string;
     resolveLiveProfileRuntimeInstanceIds?: () => string[];
@@ -7066,6 +7074,23 @@ export class DesktopBackendRegistry {
             error: error instanceof Error ? error.message : String(error),
           });
           return true;
+        }
+      });
+    this.resolveToolOutputAlertPolicyFn =
+      options?.resolveToolOutputAlertPolicy ??
+      (() => {
+        try {
+          return (
+            settingsService ?? getDesktopSettingsService()
+          ).resolveToolOutputAlertPolicy();
+        } catch (error) {
+          backendRegistryLog.warn(
+            "failed to resolve tool-output alert settings",
+            {
+              error: error instanceof Error ? error.message : String(error),
+            },
+          );
+          return DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
         }
       });
     const codexCommand = settingsService?.resolveCodexCommandPreference();
@@ -22148,21 +22173,33 @@ export class DesktopBackendRegistry {
     }
 
     if (event.notification.method === "item/commandExecution/outputDelta") {
-      // Streamed output never notifies anyone (`shouldNotify` stays false for
-      // deltas) and never triggers noisy-polling detection (that only looks at
-      // `write_stdin`). Ordinary deltas can wait for the flush timer; a large-
-      // output threshold crossing becomes a durable boundary before its live
-      // alert reaches listeners.
+      // Streamed output never triggers noisy-polling detection (that only
+      // looks at `write_stdin`). Ordinary deltas can wait for the flush timer;
+      // a qualifying repeated-output or cap-hit boundary becomes durable
+      // before its live alert reaches listeners.
       const buffered = this.bufferStreamedToolInvocationDelta(invocation);
-      const detection = detectLargeToolOutput({
-        current: buffered.current,
-        now,
-        previousOutputChars: buffered.previousOutputChars,
-      });
+      const crossedLargeOutputBoundary =
+        (
+          buffered.previousOutputChars < TOOL_OUTPUT_WARNING_CHARS
+          && buffered.current.outputChars >= TOOL_OUTPUT_WARNING_CHARS
+        )
+        || (
+          buffered.previousOutputChars < TOOL_OUTPUT_CAP_CHARS
+          && buffered.current.outputChars >= TOOL_OUTPUT_CAP_CHARS
+        );
+      const detection = crossedLargeOutputBoundary
+        ? detectLargeToolOutput({
+            current: buffered.current,
+            now,
+            policy: this.resolveToolOutputAlertPolicyFn(),
+            previousOutputChars: buffered.previousOutputChars,
+          })
+        : undefined;
       if (detection) {
         const incident = mergeLargeToolOutputIncident({
           current: this.liveToolOutputIncidents.get(detection.alert.alertId),
           detection,
+          minimumWarningInvocationCount: TOOL_OUTPUT_WARNING_INVOCATIONS,
         });
         this.liveToolOutputIncidents.set(
           incident.aggregate.alert.alertId,
@@ -22194,9 +22231,15 @@ export class DesktopBackendRegistry {
     }
     let shouldNotify = event.notification.method === "item/completed";
     const triggeredAlerts: ThreadToolInvocationAlert[] = [];
+    const toolOutputAlertPolicy =
+      invocationWithStreamedOutput.outputChars >= TOOL_OUTPUT_WARNING_CHARS
+      || invocationWithStreamedOutput.category === "polling"
+        ? this.resolveToolOutputAlertPolicyFn()
+        : DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
     const rawLargeOutputDetection = detectLargeToolOutput({
       current: invocationWithStreamedOutput,
       now,
+      policy: toolOutputAlertPolicy,
     });
     const largeOutputIncident = rawLargeOutputDetection
       ? mergeLargeToolOutputIncident({
@@ -22204,6 +22247,7 @@ export class DesktopBackendRegistry {
             rawLargeOutputDetection.alert.alertId,
           ),
           detection: rawLargeOutputDetection,
+          minimumWarningInvocationCount: TOOL_OUTPUT_WARNING_INVOCATIONS,
         })
       : undefined;
     if (largeOutputIncident) {
@@ -22229,7 +22273,8 @@ export class DesktopBackendRegistry {
       ? this.readVolatileDeferredChecks(invocationWithStreamedOutput, now)
       : [];
     const rawPollingDetection =
-      typeof this.overlayStore.readRecentThreadToolInvocations === "function"
+      toolOutputAlertPolicy.repeatedQueuedChecksEnabled
+      && typeof this.overlayStore.readRecentThreadToolInvocations === "function"
       ? detectNoisyPolling({
           current: invocationWithStreamedOutput,
           now,
@@ -22304,7 +22349,9 @@ export class DesktopBackendRegistry {
       ),
     );
     const alertsToPersist = [
-      ...(largeOutputDetection ? [largeOutputDetection.alert] : []),
+      ...(largeOutputDetection && largeOutputIncident?.shouldNotify
+        ? [largeOutputDetection.alert]
+        : []),
       ...(pollingDetection && shouldPersistPollingAlert
         ? [pollingDetection.alert]
         : []),

@@ -260,22 +260,24 @@ describe("sqlite write metrics", () => {
     }).emit.bind(registry);
 
     const { writes } = await measureSqliteWrites(async () => {
-      await emit({
-        backend: "codex",
-        notification: {
-          method: "item/commandExecution/outputDelta",
-          params: {
-            threadId: "thread-streaming-alert",
-            turnId: "turn-1",
-            itemId: "cmd-1",
-            delta: "x".repeat(4_100),
+      for (let index = 0; index < 5; index += 1) {
+        await emit({
+          backend: "codex",
+          notification: {
+            method: "item/commandExecution/outputDelta",
+            params: {
+              threadId: "thread-streaming-alert",
+              turnId: "turn-1",
+              itemId: `cmd-${index + 1}`,
+              delta: "x".repeat(20_100),
+            },
           },
-        },
-      } as AgentEvent);
+        } as AgentEvent);
+      }
     });
 
     expectSqliteWriteBudget({
-      note: "one threshold-crossing streamed output window and its alert",
+      note: "five large streamed outputs and their first repeated-output alert",
       scenario: "streamed-large-output-alert-boundary",
       writes,
     });
@@ -287,14 +289,15 @@ describe("sqlite write metrics", () => {
     expect(accounting.alerts).toEqual([
       expect.objectContaining({
         kind: "large-output",
-        totalOutputChars: 4_100,
+        invocationCount: 5,
+        totalOutputChars: 100_500,
       }),
     ]);
     expect(accounting.invocations).toEqual([
       expect.objectContaining({
         noisy: true,
         noisyReason: "large-output",
-        outputChars: 4_100,
+        outputChars: 20_100,
         status: "in_progress",
       }),
     ]);
@@ -351,7 +354,7 @@ describe("sqlite write metrics", () => {
     }
   });
 
-  it("holds one large structured MCP result and its alert to one commit", async () => {
+  it("holds one capped structured MCP result and its alert to one commit", async () => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
@@ -376,7 +379,7 @@ describe("sqlite write metrics", () => {
               status: "completed",
               arguments: { action: "list" },
               result: {
-                content: [{ type: "text", text: "x".repeat(4_100) }],
+                content: [{ type: "text", text: "x".repeat(40_100) }],
               },
             },
           },
@@ -385,7 +388,7 @@ describe("sqlite write metrics", () => {
     });
 
     expectSqliteWriteBudget({
-      note: "one large structured MCP result and its alert in one boundary",
+      note: "one capped structured MCP result and its alert in one boundary",
       scenario: "structured-mcp-output-alert",
       writes,
     });

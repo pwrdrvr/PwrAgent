@@ -25,6 +25,7 @@ import type {
   DesktopProviderThreadModelMigration,
   DesktopSettingsConfigPatch,
   DesktopTextSize,
+  DesktopToolOutputAlertPolicy,
   DesktopUpdateChannel,
   DesktopUpdateTrain,
   DesktopWorktreeStorageLocation,
@@ -99,6 +100,7 @@ export type DesktopSettingsConfig = {
     hotCpuProfilingCaptureHeapSnapshot?: boolean;
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
+    toolOutputAlerts?: Partial<DesktopToolOutputAlertPolicy>;
     appearance?: {
       theme?: DesktopAppearanceTheme;
       density?: DesktopAppearanceDensity;
@@ -640,6 +642,28 @@ export function desktopSettingsPatchToEdits(
   }
   if (patch.general?.notificationsEnabled !== undefined) {
     set(["general", "notifications_enabled"], patch.general.notificationsEnabled);
+  }
+  if (patch.general?.toolOutputAlerts?.outputCapHitsEnabled !== undefined) {
+    set(
+      ["general", "tool_output_alerts", "output_cap_hits_enabled"],
+      patch.general.toolOutputAlerts.outputCapHitsEnabled,
+    );
+  }
+  if (
+    patch.general?.toolOutputAlerts?.repeatedLargeOutputsEnabled !== undefined
+  ) {
+    set(
+      ["general", "tool_output_alerts", "repeated_large_outputs_enabled"],
+      patch.general.toolOutputAlerts.repeatedLargeOutputsEnabled,
+    );
+  }
+  if (
+    patch.general?.toolOutputAlerts?.repeatedQueuedChecksEnabled !== undefined
+  ) {
+    set(
+      ["general", "tool_output_alerts", "repeated_queued_checks_enabled"],
+      patch.general.toolOutputAlerts.repeatedQueuedChecksEnabled,
+    );
   }
 
   if (patch.experimental?.diffCondensation?.enabled !== undefined) {
@@ -1542,6 +1566,7 @@ function normalizeDesktopConfig(
 ): DesktopSettingsConfig {
   const general = tables["general"];
   const generalAppearance = tables["general.appearance"];
+  const generalToolOutputAlerts = tables["general.tool_output_alerts"];
   const generalMessagingAck = tables["general.messaging_acknowledgment"];
   const onboarding = tables["onboarding"];
   const experimental = tables["experimental"];
@@ -1598,6 +1623,17 @@ function normalizeDesktopConfig(
         general?.hot_cpu_profiling_heap_snapshot_limit,
       ),
       notificationsEnabled: readBoolean(general?.notifications_enabled),
+      toolOutputAlerts: {
+        outputCapHitsEnabled: readBoolean(
+          generalToolOutputAlerts?.output_cap_hits_enabled,
+        ),
+        repeatedLargeOutputsEnabled: readBoolean(
+          generalToolOutputAlerts?.repeated_large_outputs_enabled,
+        ),
+        repeatedQueuedChecksEnabled: readBoolean(
+          generalToolOutputAlerts?.repeated_queued_checks_enabled,
+        ),
+      },
       appearance: {
         theme: readAppearanceTheme(generalAppearance?.theme),
         density: readAppearanceDensity(generalAppearance?.density),
@@ -1926,6 +1962,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
+  const toolOutputAlerts = config.general?.toolOutputAlerts;
+  const toolOutputAlertsDefined =
+    toolOutputAlerts && hasDefinedValue(toolOutputAlerts);
   const appearance = config.general?.appearance;
   const appearanceDefined = appearance && hasDefinedValue(appearance);
   const codexProfileModel = config.general?.codexProfileModel;
@@ -1942,6 +1981,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     attentionPromoteOnTurnEnd !== undefined ||
     pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
+    toolOutputAlertsDefined ||
     appearanceDefined ||
     codexProfileModel !== undefined ||
     messagingAcknowledgment !== undefined
@@ -1983,6 +2023,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (notificationsEnabled !== undefined) {
       pruned.general.notificationsEnabled = notificationsEnabled;
+    }
+    if (toolOutputAlertsDefined) {
+      pruned.general.toolOutputAlerts = toolOutputAlerts;
     }
     if (appearanceDefined) {
       pruned.general.appearance = appearance;

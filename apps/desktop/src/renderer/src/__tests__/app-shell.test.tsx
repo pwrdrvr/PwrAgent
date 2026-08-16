@@ -1235,6 +1235,11 @@ describe("App", () => {
           value: false,
           source: "default",
         },
+        toolOutputAlerts: {
+          outputCapHitsEnabled: { value: true, source: "default" },
+          repeatedLargeOutputsEnabled: { value: true, source: "default" },
+          repeatedQueuedChecksEnabled: { value: true, source: "default" },
+        },
         appearance: {
           theme: { value: "system", source: "default" },
           density: { value: "mission-control", source: "default" },

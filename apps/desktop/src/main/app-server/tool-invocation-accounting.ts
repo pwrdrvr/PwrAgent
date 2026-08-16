@@ -1,6 +1,7 @@
 import type {
   AppServerBackendKind,
   AppServerNotification,
+  DesktopToolOutputAlertPolicy,
   ThreadToolInvocationAlert,
   ThreadToolInvocationCategory,
   ThreadToolInvocationRecord,
@@ -8,6 +9,7 @@ import type {
 } from "@pwragent/shared";
 import {
   buildThreadToolIncidentPrompt,
+  DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   TOOL_OUTPUT_CAP_CHARS,
   TOOL_OUTPUT_TOKEN_CHAR_RATIO,
   TOOL_OUTPUT_WARNING_CHARS,
@@ -71,6 +73,7 @@ export type ToolOutputIncidentAggregate = {
 export function mergeLargeToolOutputIncident(params: {
   current?: ToolOutputIncidentAggregate;
   detection: LargeToolOutputDetection | NoisyPollingDetection;
+  minimumWarningInvocationCount?: number;
 }): {
   aggregate: ToolOutputIncidentAggregate;
   shouldNotify: boolean;
@@ -105,6 +108,9 @@ export function mergeLargeToolOutputIncident(params: {
     : "warning" as const;
   const estimatedOutputTokens = Math.ceil(totalOutputChars / OUTPUT_TOKEN_CHAR_RATIO);
   const caseCount = entries.length;
+  const previousCaseCount = Object.keys(previousCases).length;
+  const minimumWarningInvocationCount =
+    params.minimumWarningInvocationCount ?? 1;
   const subject = incoming.kind === "noisy-polling"
     ? `repeated queued check${caseCount === 1 ? "" : "s"}`
     : `noisy tool-output case${caseCount === 1 ? "" : "s"}`;
@@ -134,7 +140,13 @@ export function mergeLargeToolOutputIncident(params: {
   return {
     aggregate: { alert, cases },
     shouldNotify:
-      newInvocationIds.length > 0 || escalated,
+      severity === "critical"
+        ? newInvocationIds.length > 0 || escalated
+        : caseCount >= minimumWarningInvocationCount
+          && (
+            previousCaseCount < minimumWarningInvocationCount
+            || newInvocationIds.length > 0
+          ),
   };
 }
 
@@ -593,10 +605,12 @@ export function detectNoisyPolling(params: {
 
 export function detectLargeToolOutput(params: {
   current: ThreadToolInvocationRecord;
+  policy?: DesktopToolOutputAlertPolicy;
   previousOutputChars?: number;
   now?: number;
 }): LargeToolOutputDetection | undefined {
   const current = params.current;
+  const policy = params.policy ?? DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT;
   const previousOutputChars = params.previousOutputChars ?? 0;
   const crossedWarning =
     previousOutputChars < LARGE_OUTPUT_WARNING_CHARS
@@ -604,18 +618,28 @@ export function detectLargeToolOutput(params: {
   const crossedCritical =
     previousOutputChars < LARGE_OUTPUT_CRITICAL_CHARS
     && current.outputChars >= LARGE_OUTPUT_CRITICAL_CHARS;
+  const warningEligible =
+    policy.repeatedLargeOutputsEnabled
+    && current.outputChars >= LARGE_OUTPUT_WARNING_CHARS;
+  const criticalEligible =
+    policy.outputCapHitsEnabled
+    && current.outputChars >= LARGE_OUTPUT_CRITICAL_CHARS;
   const terminal = current.status !== "in_progress";
   if (
-    current.outputChars < LARGE_OUTPUT_WARNING_CHARS
-    || (!crossedWarning && !crossedCritical && !terminal)
+    (!warningEligible && !criticalEligible)
+    || (
+      !(policy.repeatedLargeOutputsEnabled && crossedWarning)
+      && !(policy.outputCapHitsEnabled && crossedCritical)
+      && !terminal
+    )
   ) {
     return undefined;
   }
 
   const now = params.now ?? current.observedAt;
-  const critical = current.outputChars >= LARGE_OUTPUT_CRITICAL_CHARS;
+  const critical = criticalEligible;
   const estimatedCapPercentage = Math.max(
-    10,
+    50,
     Math.round(current.outputChars / LARGE_OUTPUT_CRITICAL_CHARS * 100),
   );
   const message = critical

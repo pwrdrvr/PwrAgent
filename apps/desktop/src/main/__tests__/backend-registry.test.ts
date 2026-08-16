@@ -19561,14 +19561,20 @@ command = "pnpm dev"
         } as AgentEvent);
       };
 
-      await stream("x".repeat(2_000));
+      await stream("x".repeat(10_000));
       await vi.advanceTimersByTimeAsync(250);
       expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
 
       // The warning total spans sqlite flush windows. A detector tied to the
-      // 250ms pending-write buffer would see two harmless 2,000-char chunks
-      // and never report that the command reached 4,000.
-      await stream("x".repeat(2_000));
+      // 250ms pending-write buffer would see two harmless 10,000-char chunks
+      // and never count that the command reached half of the output cap.
+      await stream("x".repeat(10_000));
+      await stream("x".repeat(20_000), "cmd-2");
+      await stream("x".repeat(20_000), "cmd-3");
+      await stream("x".repeat(20_000), "cmd-4");
+      expect(persistThreadToolInvocationBoundary).not.toHaveBeenCalled();
+
+      await stream("x".repeat(20_000), "cmd-5");
       const alertEvent = events.find(
         (event) =>
           event.notification.method === "thread/toolAccounting/updated",
@@ -19577,9 +19583,10 @@ command = "pnpm dev"
         threadId: "thread-1",
         triggeredAlerts: [
           {
+            invocationCount: 5,
             kind: "large-output",
             severity: "warning",
-            totalOutputChars: 4_000,
+            totalOutputChars: 100_000,
             turnId: "turn-1",
           },
         ],
@@ -19590,14 +19597,15 @@ command = "pnpm dev"
           expect.objectContaining({
             kind: "large-output",
             severity: "warning",
-            totalOutputChars: 4_000,
+            invocationCount: 5,
+            totalOutputChars: 100_000,
           }),
         ],
         invocation: expect.objectContaining({
-          invocationId: "tool:codex:thread-1:turn-1:cmd-1",
+          invocationId: "tool:codex:thread-1:turn-1:cmd-5",
           noisy: true,
           noisyReason: "large-output",
-          outputChars: 2_000,
+          outputChars: 20_000,
           outputState: "available",
           source: "live",
           status: "in_progress",
@@ -19605,30 +19613,8 @@ command = "pnpm dev"
         }),
       });
 
-      await stream("x".repeat(4_000), "cmd-2");
-      expect(persistThreadToolInvocationBoundary).toHaveBeenCalledTimes(2);
-      expect(persistThreadToolInvocationBoundary.mock.calls[1]?.[0]).toMatchObject({
-        alerts: [
-          {
-            invocationCount: 2,
-            invocationIds: [
-              "tool:codex:thread-1:turn-1:cmd-1",
-              "tool:codex:thread-1:turn-1:cmd-2",
-            ],
-            totalOutputChars: 8_000,
-            worstOutputChars: 4_000,
-          },
-        ],
-        invocation: {
-          invocationId: "tool:codex:thread-1:turn-1:cmd-2",
-          outputChars: 4_000,
-          outputState: "available",
-          source: "live",
-        },
-      });
-
       await registry.close();
-      expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
+      expect(upsertThreadToolInvocation.mock.calls.length).toBeGreaterThan(1);
     } finally {
       vi.useRealTimers();
     }

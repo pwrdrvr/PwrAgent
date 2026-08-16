@@ -7,14 +7,18 @@ import type {
   ThreadToolInvocationRecord,
 } from "@pwragent/shared";
 import {
+  TOOL_OUTPUT_CAP_CHARS,
+  TOOL_OUTPUT_WARNING_CHARS,
+} from "@pwragent/shared";
+import {
   buildToolInvocationSteeringPrompt,
   buildToolOutputMetrics,
   normalizeToolInvocationCommand,
 } from "./tool-invocation-accounting";
 
-export const TOOL_OUTPUT_ANALYZER_VERSION = "1";
-const LARGE_OUTPUT_CHARS = 4_000;
-const CRITICAL_OUTPUT_CHARS = 40_000;
+export const TOOL_OUTPUT_ANALYZER_VERSION = "2";
+const LARGE_OUTPUT_CHARS = TOOL_OUTPUT_WARNING_CHARS;
+const CRITICAL_OUTPUT_CHARS = TOOL_OUTPUT_CAP_CHARS;
 const POLLING_MIN_CASES = 5;
 
 export type ToolOutputReplayAnalysis = {

@@ -10,7 +10,9 @@ describe("normalized tool-output replay analyzer", () => {
       complete: true,
       pages: [replayWithDetail({
         displayCommand: "mcp__github__search({\"query\":\"is:open\"})",
-        output: JSON.stringify({ items: Array.from({ length: 600 }, (_, id) => ({ id })) }),
+        output: JSON.stringify({
+          items: Array.from({ length: 2_500 }, (_, id) => ({ id })),
+        }),
         source: "tool",
       })],
       threadId: "thread-mcp",

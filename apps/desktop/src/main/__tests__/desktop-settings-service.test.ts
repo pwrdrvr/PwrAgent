@@ -723,6 +723,39 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("defaults tool-output alert triggers on and persists independent opt-outs", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).general.toolOutputAlerts).toEqual({
+      outputCapHitsEnabled: { value: true, source: "default" },
+      repeatedLargeOutputsEnabled: { value: true, source: "default" },
+      repeatedQueuedChecksEnabled: { value: true, source: "default" },
+    });
+
+    await service.writeConfigPatch({
+      general: {
+        toolOutputAlerts: {
+          repeatedLargeOutputsEnabled: false,
+        },
+      },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "repeated_large_outputs_enabled = false",
+    );
+    expect(service.resolveToolOutputAlertPolicy()).toEqual({
+      outputCapHitsEnabled: true,
+      repeatedLargeOutputsEnabled: false,
+      repeatedQueuedChecksEnabled: true,
+    });
+  });
+
   it("defaults quit confirmation to enabled and persists overrides", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

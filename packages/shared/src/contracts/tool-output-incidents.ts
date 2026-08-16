@@ -25,8 +25,11 @@ export const TOOL_OUTPUT_TOKEN_CHAR_RATIO = 4;
  */
 export const TOOL_OUTPUT_CAP_CHARS = 40_000;
 
-/** Output at or above this is large enough to be worth flagging on its own. */
-export const TOOL_OUTPUT_WARNING_CHARS = 4_000;
+/** A large-output case starts at half of the observed model-visible cap. */
+export const TOOL_OUTPUT_WARNING_CHARS = TOOL_OUTPUT_CAP_CHARS / 2;
+
+/** Repeated large output becomes alert-worthy at this many calls in one turn. */
+export const TOOL_OUTPUT_WARNING_INVOCATIONS = 5;
 
 /** Fraction of the observed output cap this invocation consumed. Uncapped. */
 export function toolOutputCapShare(outputChars: number): number {

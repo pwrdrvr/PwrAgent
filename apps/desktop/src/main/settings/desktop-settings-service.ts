@@ -2,6 +2,7 @@ import type {
   DesktopAppearanceDensity,
   DesktopAppearanceTheme,
   DesktopTextSize,
+  DesktopToolOutputAlertPolicy,
   DesktopApplicationsSnapshot,
   DesktopChatReplyComposer,
   DesktopAuthorizedContact,
@@ -42,6 +43,7 @@ import {
   DESKTOP_APPEARANCE_DENSITY_DEFAULT,
   DESKTOP_APPEARANCE_THEME_DEFAULT,
   DESKTOP_TEXT_SIZE_DEFAULT,
+  DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
   DESKTOP_CODEX_PROFILE_MODEL_DEFAULT,
   DESKTOP_FEDERATION_MODE_DEFAULT,
@@ -645,6 +647,20 @@ export class DesktopSettingsService {
           config.general?.notificationsEnabled,
           false,
         ),
+        toolOutputAlerts: {
+          outputCapHitsEnabled: this.resolveConfigBoolean(
+            config.general?.toolOutputAlerts?.outputCapHitsEnabled,
+            DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.outputCapHitsEnabled,
+          ),
+          repeatedLargeOutputsEnabled: this.resolveConfigBoolean(
+            config.general?.toolOutputAlerts?.repeatedLargeOutputsEnabled,
+            DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputsEnabled,
+          ),
+          repeatedQueuedChecksEnabled: this.resolveConfigBoolean(
+            config.general?.toolOutputAlerts?.repeatedQueuedChecksEnabled,
+            DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedQueuedChecksEnabled,
+          ),
+        },
         appearance: {
           theme: this.resolveAppearanceTheme(
             config.general?.appearance?.theme,
@@ -1282,6 +1298,24 @@ export class DesktopSettingsService {
       this.readConfig().config.general?.notificationsEnabled,
       false,
     ).value;
+  }
+
+  resolveToolOutputAlertPolicy(): DesktopToolOutputAlertPolicy {
+    const config = this.readConfig().config.general?.toolOutputAlerts;
+    return {
+      outputCapHitsEnabled: this.resolveConfigBoolean(
+        config?.outputCapHitsEnabled,
+        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.outputCapHitsEnabled,
+      ).value,
+      repeatedLargeOutputsEnabled: this.resolveConfigBoolean(
+        config?.repeatedLargeOutputsEnabled,
+        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedLargeOutputsEnabled,
+      ).value,
+      repeatedQueuedChecksEnabled: this.resolveConfigBoolean(
+        config?.repeatedQueuedChecksEnabled,
+        DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT.repeatedQueuedChecksEnabled,
+      ).value,
+    };
   }
 
   resolveCodexDefaultModeRequestUserInput(): boolean {

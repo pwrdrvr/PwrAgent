@@ -129,6 +129,11 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      toolOutputAlerts: {
+        outputCapHitsEnabled: { value: true, source: "default" },
+        repeatedLargeOutputsEnabled: { value: true, source: "default" },
+        repeatedQueuedChecksEnabled: { value: true, source: "default" },
+      },
       appearance: {
         theme: { value: "system", source: "default" },
         density: { value: "mission-control", source: "default" },
@@ -834,6 +839,22 @@ describe("SettingsScreen", () => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         general: {
           notificationsEnabled: true,
+        },
+      });
+    });
+
+    expect(
+      screen.getByRole("switch", { name: "Repeated large tool outputs" }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Repeated large tool outputs" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          toolOutputAlerts: {
+            repeatedLargeOutputsEnabled: false,
+          },
         },
       });
     });
