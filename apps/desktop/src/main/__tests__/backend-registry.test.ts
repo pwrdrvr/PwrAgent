@@ -58,6 +58,7 @@ import type {
   ThreadExecutionMode,
   ThreadOverlayState,
   ThreadToolAccounting,
+  ThreadToolInvocationAlert,
   ThreadUsageLineRecord,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
