@@ -1,11 +1,20 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureManagedGrokRuntime,
+  isManagedGrokTagEligible,
   managedGrokAssetPlatform,
+  MANAGED_GROK_MINIMUM_SIGNED_TAG,
   MANAGED_GROK_RELEASES_FEED_URL,
   MANAGED_GROK_RELEASES_URL,
   selectManagedGrokRelease,
@@ -51,19 +60,41 @@ describe("managed Grok release selection", () => {
 
   it("derives public asset URLs from the ordered Atom feed", () => {
     const selected = selectManagedGrokReleaseFromFeed(
-      '<link href="https://github.com/pwrdrvr/grok-build/releases/tag/pwragent-v1.0.4-pwragent.1"/>',
+      '<link href="https://github.com/pwrdrvr/grok-build/releases/tag/pwragent-v1.0.4-pwragent.2"/>',
       "windows-x86_64",
     );
 
     expect(selected).toMatchObject({
-      tag: "pwragent-v1.0.4-pwragent.1",
+      tag: "pwragent-v1.0.4-pwragent.2",
       archive: {
-        name: "pwragent-grok-1.0.4-pwragent.1-windows-x86_64.zip",
+        name: "pwragent-grok-1.0.4-pwragent.2-windows-x86_64.zip",
         url: expect.stringContaining(
-          "/pwragent-v1.0.4-pwragent.1/pwragent-grok-1.0.4-pwragent.1-windows-x86_64.zip",
+          "/pwragent-v1.0.4-pwragent.2/pwragent-grok-1.0.4-pwragent.2-windows-x86_64.zip",
         ),
       },
     });
+  });
+
+  it("rejects every downstream build before the first signed tag", () => {
+    expect(MANAGED_GROK_MINIMUM_SIGNED_TAG).toBe(
+      "pwragent-v1.0.4-pwragent.2",
+    );
+    expect(isManagedGrokTagEligible("pwragent-v1.0.4-pwragent.1")).toBe(false);
+    expect(isManagedGrokTagEligible("pwragent-v1.0.4-pwragent.2")).toBe(true);
+    expect(isManagedGrokTagEligible("pwragent-v1.0.4-pwragent.10")).toBe(true);
+    expect(isManagedGrokTagEligible("pwragent-v1.0.5-pwragent.1")).toBe(true);
+    expect(isManagedGrokTagEligible("pwragent-v1.0.4")).toBe(false);
+
+    expect(selectManagedGrokRelease([
+      release("pwragent-v1.0.4-pwragent.1", [
+        asset("SHA256SUMS"),
+        asset("pwragent-grok-1.0.4-pwragent.1-linux-x86_64.tar.gz"),
+      ]),
+    ], "linux-x86_64")).toBeUndefined();
+    expect(selectManagedGrokReleaseFromFeed(
+      '<link href="https://github.com/pwrdrvr/grok-build/releases/tag/pwragent-v1.0.4-pwragent.1"/>',
+      "linux-x86_64",
+    )).toBeUndefined();
   });
 });
 
@@ -123,6 +154,7 @@ describe("ensureManagedGrokRuntime", () => {
       fetch: fetchMock as typeof globalThis.fetch,
       now: () => 1_001,
       platform: "linux",
+      probeVersion: async () => "grok 2.0.0-test",
       rootDir,
     });
 
@@ -135,14 +167,14 @@ describe("ensureManagedGrokRuntime", () => {
 
   it("falls back to the last verified runtime when a forced check is offline", async () => {
     const rootDir = await temporaryRoot();
-    const tag = "pwragent-v1.0.0-pwragent.1";
+    const tag = "pwragent-v1.0.4-pwragent.2";
     const commandDir = path.join(rootDir, "versions", tag);
     await mkdir(commandDir, { recursive: true });
-    await writeFile(path.join(commandDir, "grok"), "cached");
+    await writeFakeBundle(commandDir);
     await writeFile(
       path.join(rootDir, "managed-release.json"),
       `${JSON.stringify({
-        asset: "pwragent-grok-1.0.0-pwragent.1-linux-x86_64.tar.gz",
+        asset: "pwragent-grok-1.0.4-pwragent.2-linux-x86_64.tar.gz",
         checkedAt: 100,
         installedAt: 100,
         repository: "pwrdrvr/grok-build",
@@ -157,6 +189,7 @@ describe("ensureManagedGrokRuntime", () => {
       checkMode: "force",
       fetch: vi.fn(async () => new Response("offline", { status: 503 })),
       platform: "linux",
+      probeVersion: async () => "grok 1.0.4-pwragent.2",
       rootDir,
     });
 
@@ -207,6 +240,156 @@ describe("ensureManagedGrokRuntime", () => {
       expect.any(Object),
     );
   });
+
+  it("revalidates a fresh packaged cache against the running app signer", async () => {
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v1.0.4-pwragent.2";
+    await writeManagedCache(rootDir, {
+      asset: "pwragent-grok-1.0.4-pwragent.2-macos-universal.tar.gz",
+      tag,
+    });
+    const verifyPlatformSignature = vi.fn(async () => undefined);
+
+    const runtime = await ensureManagedGrokRuntime({
+      applicationCommand: "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
+      arch: "arm64",
+      checkMode: "ttl",
+      now: () => 101,
+      platform: "darwin",
+      probeVersion: async () => "grok 1.0.4-pwragent.2",
+      requirePlatformSignature: true,
+      rootDir,
+      verifyPlatformSignature,
+    });
+
+    expect(runtime?.metadata.tag).toBe(tag);
+    expect(verifyPlatformSignature).toHaveBeenCalledWith(
+      path.join(rootDir, "versions", tag, "grok"),
+      "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
+      "darwin",
+    );
+  });
+
+  it("rejects a packaged cache when signer revalidation fails", async () => {
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v1.0.4-pwragent.2";
+    await writeManagedCache(rootDir, {
+      asset: "pwragent-grok-1.0.4-pwragent.2-macos-universal.tar.gz",
+      tag,
+    });
+
+    const runtime = await ensureManagedGrokRuntime({
+      arch: "arm64",
+      checkMode: "ttl",
+      fetch: vi.fn(async () => new Response("offline", { status: 503 })),
+      platform: "darwin",
+      probeVersion: async () => "grok 1.0.4-pwragent.2",
+      requirePlatformSignature: true,
+      rootDir,
+      verifyPlatformSignature: async () => {
+        throw new Error("signer mismatch");
+      },
+    });
+
+    expect(runtime).toBeUndefined();
+  });
+
+  it("replaces a same-tag cache built for another architecture", async () => {
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v2.0.0-pwragent.1";
+    const archiveName = "pwragent-grok-2.0.0-pwragent.1-linux-x86_64.tar.gz";
+    const archive = Buffer.from("x64 archive");
+    const digest = createHash("sha256").update(archive).digest("hex");
+    await writeManagedCache(rootDir, {
+      asset: "pwragent-grok-2.0.0-pwragent.1-linux-aarch64.tar.gz",
+      commandContents: "wrong architecture",
+      tag,
+    });
+
+    const runtime = await ensureManagedGrokRuntime({
+      arch: "x64",
+      checkMode: "force",
+      extractArchive: async (_archivePath, targetDir) => {
+        await writeFakeBundle(targetDir, "grok", "correct architecture");
+      },
+      fetch: releaseFetch(tag, archiveName, archive, digest),
+      platform: "linux",
+      probeVersion: async () => "grok 2.0.0-pwragent.1",
+      rootDir,
+    });
+
+    expect(runtime?.metadata.asset).toBe(archiveName);
+    expect(await readFile(runtime?.command ?? "", "utf8")).toBe(
+      "correct architecture",
+    );
+  });
+
+  it("atomically repairs a broken existing same-tag directory", async () => {
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v2.0.0-pwragent.1";
+    const archiveName = "pwragent-grok-2.0.0-pwragent.1-linux-x86_64.tar.gz";
+    const archive = Buffer.from("repair archive");
+    const digest = createHash("sha256").update(archive).digest("hex");
+    await writeManagedCache(rootDir, { asset: archiveName, tag });
+    await rm(path.join(rootDir, "versions", tag, "grok"));
+
+    const runtime = await ensureManagedGrokRuntime({
+      arch: "x64",
+      checkMode: "force",
+      extractArchive: async (_archivePath, targetDir) => {
+        await writeFakeBundle(targetDir, "grok", "repaired executable");
+      },
+      fetch: releaseFetch(tag, archiveName, archive, digest),
+      platform: "linux",
+      probeVersion: async () => "grok 2.0.0-pwragent.1",
+      rootDir,
+    });
+
+    expect(await readFile(runtime?.command ?? "", "utf8")).toBe(
+      "repaired executable",
+    );
+  });
+
+  it("prunes superseded versions except live and rolling-upgrade caches", async () => {
+    const rootDir = await temporaryRoot();
+    const versionsRoot = path.join(rootDir, "versions");
+    const activeTag = "pwragent-v1.0.4-pwragent.2";
+    const prunedTag = "pwragent-v1.0.5-pwragent.1";
+    const compatibilityTag = "pwragent-v1.0.6-pwragent.1";
+    for (const tag of [activeTag, prunedTag, compatibilityTag]) {
+      const versionRoot = path.join(versionsRoot, tag);
+      await mkdir(versionRoot, { recursive: true });
+      await writeFakeBundle(versionRoot);
+    }
+    await writeFile(
+      path.join(versionsRoot, activeTag, ".pwragent-use-424242"),
+      "active\n",
+    );
+    const tag = "pwragent-v2.0.0-pwragent.1";
+    const archiveName = "pwragent-grok-2.0.0-pwragent.1-linux-x86_64.tar.gz";
+    const archive = Buffer.from("current archive");
+    const digest = createHash("sha256").update(archive).digest("hex");
+
+    await ensureManagedGrokRuntime({
+      arch: "x64",
+      checkMode: "force",
+      extractArchive: async (_archivePath, targetDir) => {
+        await writeFakeBundle(targetDir);
+      },
+      fetch: releaseFetch(tag, archiveName, archive, digest),
+      isProcessAlive: (pid) => pid === 424242,
+      platform: "linux",
+      probeVersion: async () => "grok 2.0.0-pwragent.1",
+      rootDir,
+    });
+
+    const installedTags = (await readdir(versionsRoot)).sort();
+    expect(installedTags).toEqual([
+      activeTag,
+      compatibilityTag,
+      tag,
+    ].sort());
+  });
 });
 
 function release(tag: string, assets: ReturnType<typeof asset>[]) {
@@ -235,12 +418,69 @@ async function temporaryRoot(): Promise<string> {
   return root;
 }
 
-async function writeFakeBundle(targetDir: string): Promise<void> {
+async function writeFakeBundle(
+  targetDir: string,
+  executable = "grok",
+  commandContents = "fake executable",
+): Promise<void> {
   await Promise.all([
-    writeFile(path.join(targetDir, "grok"), "fake executable"),
+    writeFile(path.join(targetDir, executable), commandContents),
     writeFile(path.join(targetDir, "LICENSE"), "license"),
     writeFile(path.join(targetDir, "THIRD-PARTY-NOTICES"), "notices"),
     writeFile(path.join(targetDir, "SOURCE_REV"), "source"),
     writeFile(path.join(targetDir, "PWRAGENT-BUILD.txt"), "build"),
   ]);
+}
+
+async function writeManagedCache(
+  rootDir: string,
+  options: {
+    asset: string;
+    commandContents?: string;
+    tag: string;
+  },
+): Promise<void> {
+  const versionRoot = path.join(rootDir, "versions", options.tag);
+  await mkdir(versionRoot, { recursive: true });
+  await writeFakeBundle(
+    versionRoot,
+    options.asset.includes("windows-") ? "grok.exe" : "grok",
+    options.commandContents,
+  );
+  await writeFile(
+    path.join(rootDir, "managed-release.json"),
+    `${JSON.stringify({
+      asset: options.asset,
+      checkedAt: 100,
+      installedAt: 100,
+      repository: "pwrdrvr/grok-build",
+      schemaVersion: 1,
+      sha256: "a".repeat(64),
+      tag: options.tag,
+    })}\n`,
+  );
+}
+
+function releaseFetch(
+  tag: string,
+  archiveName: string,
+  archive: Buffer,
+  digest: string,
+): typeof globalThis.fetch {
+  return vi.fn(async (input: string | URL | Request) => {
+    const url = String(input);
+    if (url === MANAGED_GROK_RELEASES_URL) {
+      return Response.json([release(tag, [
+        asset("SHA256SUMS"),
+        asset(archiveName, digest, archive.length),
+      ])]);
+    }
+    if (url.endsWith("/SHA256SUMS")) {
+      return new Response(`${digest}  ${archiveName}\n`);
+    }
+    if (url.endsWith(`/${archiveName}`)) {
+      return new Response(archive.toString("utf8"));
+    }
+    return new Response("missing", { status: 404 });
+  }) as typeof globalThis.fetch;
 }

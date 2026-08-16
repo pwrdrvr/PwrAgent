@@ -9,11 +9,11 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   realpath,
   rename,
   rm,
-  stat,
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -33,6 +33,8 @@ export const MANAGED_GROK_RELEASES_URL =
   `https://api.github.com/repos/${MANAGED_GROK_REPOSITORY}/releases?per_page=20`;
 export const MANAGED_GROK_RELEASES_FEED_URL =
   `https://github.com/${MANAGED_GROK_REPOSITORY}/releases.atom`;
+export const MANAGED_GROK_MINIMUM_SIGNED_TAG =
+  "pwragent-v1.0.4-pwragent.2";
 export const MANAGED_GROK_CHECK_TTL_MS = 24 * 60 * 60_000;
 const MANAGED_GROK_MAX_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const MANAGED_GROK_FETCH_TIMEOUT_MS = 5 * 60_000;
@@ -86,19 +88,42 @@ export type ManagedGrokRuntime = {
 };
 
 type ManagedGrokRuntimeOptions = {
+  applicationCommand?: string;
   arch?: NodeJS.Architecture;
   checkMode?: ManagedGrokCheckMode;
   extractArchive?: (archivePath: string, targetDir: string) => Promise<void>;
   fetch?: typeof globalThis.fetch;
+  isProcessAlive?: (pid: number) => boolean;
   now?: () => number;
   platform?: NodeJS.Platform;
   probeVersion?: (command: string) => Promise<string>;
   requirePlatformSignature?: boolean;
   rootDir?: string;
+  verifyPlatformSignature?: (
+    command: string,
+    applicationCommand: string,
+    platform: NodeJS.Platform,
+  ) => Promise<void>;
+};
+
+type BundleValidationOptions = {
+  applicationCommand: string;
+  platform: NodeJS.Platform;
+  probeVersion?: (command: string) => Promise<string>;
+  requirePlatformSignature: boolean;
+  verifyPlatformSignature?: ManagedGrokRuntimeOptions["verifyPlatformSignature"];
+};
+
+type ParsedSemver = {
+  major: number;
+  minor: number;
+  patch: number;
+  prerelease: string[];
 };
 
 const processChecks = new Set<string>();
 const activeChecks = new Map<string, Promise<ManagedGrokRuntime | undefined>>();
+const markedRuntimeCommands = new Map<string, string>();
 
 export async function ensureManagedGrokRuntime(
   options: ManagedGrokRuntimeOptions = {},
@@ -127,7 +152,7 @@ async function ensureManagedGrokRuntimeInner(
   options: ManagedGrokRuntimeOptions,
 ): Promise<ManagedGrokRuntime | undefined> {
   const now = options.now?.() ?? Date.now();
-  const cached = await readCachedRuntime(rootDir, options.platform);
+  const cached = await readCachedRuntime(rootDir, options);
   const checkMode = options.checkMode ?? "ttl";
   if (
     (checkMode === "once-per-process" && processChecks.has(rootDir))
@@ -137,7 +162,9 @@ async function ensureManagedGrokRuntimeInner(
       && now - cached.metadata.checkedAt < MANAGED_GROK_CHECK_TTL_MS
     )
   ) {
-    return cached;
+    return cached
+      ? await activateRuntime(rootDir, cached, options)
+      : undefined;
   }
 
   processChecks.add(rootDir);
@@ -149,7 +176,11 @@ async function ensureManagedGrokRuntimeInner(
     if (cached?.metadata.tag === release.tag) {
       const metadata = { ...cached.metadata, checkedAt: now };
       await writeMetadata(rootDir, metadata);
-      return { command: cached.command, metadata };
+      return await activateRuntime(
+        rootDir,
+        { command: cached.command, metadata },
+        options,
+      );
     }
     const runtime = await installRelease(rootDir, release, now, options);
     managedGrokLog.info("managed_grok_runtime_installed", {
@@ -157,13 +188,15 @@ async function ensureManagedGrokRuntimeInner(
       command: runtime.command,
       tag: runtime.metadata.tag,
     });
-    return runtime;
+    return await activateRuntime(rootDir, runtime, options);
   } catch (error) {
     managedGrokLog.warn("managed_grok_runtime_update_failed", {
       error: error instanceof Error ? error.message : String(error),
       usingCachedTag: cached?.metadata.tag,
     });
-    return cached;
+    return cached
+      ? await activateRuntime(rootDir, cached, options)
+      : undefined;
   }
 }
 
@@ -225,7 +258,7 @@ export function selectManagedGrokRelease(
       : "";
     if (
       release.draft === true
-      || !/^pwragent-v[0-9A-Za-z][0-9A-Za-z.+-]*$/u.test(tag)
+      || !isManagedGrokTagEligible(tag)
       || !Array.isArray(release.assets)
     ) {
       continue;
@@ -237,8 +270,7 @@ export function selectManagedGrokRelease(
     const archive = normalizedAsset(
       assets.find((asset) =>
         typeof asset.name === "string"
-        && asset.name.startsWith("pwragent-grok-")
-        && asset.name.includes(`-${assetPlatform}.`),
+        && asset.name === managedGrokArchiveName(tag, assetPlatform),
       ),
     );
     if (!checksum || !archive) {
@@ -267,9 +299,10 @@ export function selectManagedGrokReleaseFromFeed(
   );
   for (const match of feed.matchAll(linkPattern)) {
     const tag = match[1];
-    const version = tag.slice("pwragent-v".length);
-    const extension = assetPlatform === "windows-x86_64" ? "zip" : "tar.gz";
-    const assetName = `pwragent-grok-${version}-${assetPlatform}.${extension}`;
+    if (!isManagedGrokTagEligible(tag)) {
+      continue;
+    }
+    const assetName = managedGrokArchiveName(tag, assetPlatform);
     const releaseBase =
       `https://github.com/${MANAGED_GROK_REPOSITORY}/releases/download/${tag}`;
     return {
@@ -285,6 +318,95 @@ export function selectManagedGrokReleaseFromFeed(
     };
   }
   return undefined;
+}
+
+export function isManagedGrokTagEligible(tag: string): boolean {
+  if (!isManagedGrokTag(tag)) {
+    return false;
+  }
+  const candidate = parseManagedGrokSemver(tag);
+  const minimum = parseManagedGrokSemver(MANAGED_GROK_MINIMUM_SIGNED_TAG);
+  return Boolean(
+    candidate
+    && minimum
+    && compareParsedSemver(candidate, minimum) >= 0,
+  );
+}
+
+function isManagedGrokTag(tag: string): boolean {
+  return (
+    /-pwragent\.(0|[1-9][0-9]*)(?:\+[0-9A-Za-z.-]+)?$/u.test(tag)
+    && parseManagedGrokSemver(tag) !== undefined
+  );
+}
+
+function managedGrokArchiveName(tag: string, assetPlatform: string): string {
+  const version = tag.slice("pwragent-v".length);
+  const extension = assetPlatform === "windows-x86_64" ? "zip" : "tar.gz";
+  return `pwragent-grok-${version}-${assetPlatform}.${extension}`;
+}
+
+function parseManagedGrokSemver(tag: string): ParsedSemver | undefined {
+  const match = /^pwragent-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u.exec(
+    tag,
+  );
+  if (!match) {
+    return undefined;
+  }
+  const core = match.slice(1, 4).map((part) => Number(part));
+  if (core.some((part) => !Number.isSafeInteger(part))) {
+    return undefined;
+  }
+  const prerelease = match[4]?.split(".") ?? [];
+  if (
+    prerelease.some((part) =>
+      /^[0-9]+$/u.test(part)
+      && /^0[0-9]+$/u.test(part)
+    )
+  ) {
+    return undefined;
+  }
+  return {
+    major: core[0],
+    minor: core[1],
+    patch: core[2],
+    prerelease,
+  };
+}
+
+function compareParsedSemver(left: ParsedSemver, right: ParsedSemver): number {
+  for (const key of ["major", "minor", "patch"] as const) {
+    if (left[key] !== right[key]) {
+      return left[key] < right[key] ? -1 : 1;
+    }
+  }
+  if (left.prerelease.length === 0 || right.prerelease.length === 0) {
+    if (left.prerelease.length === right.prerelease.length) {
+      return 0;
+    }
+    return left.prerelease.length === 0 ? 1 : -1;
+  }
+  const length = Math.max(left.prerelease.length, right.prerelease.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftPart = left.prerelease[index];
+    const rightPart = right.prerelease[index];
+    if (leftPart === undefined || rightPart === undefined) {
+      return leftPart === undefined ? -1 : 1;
+    }
+    if (leftPart === rightPart) {
+      continue;
+    }
+    const leftNumeric = /^[0-9]+$/u.test(leftPart);
+    const rightNumeric = /^[0-9]+$/u.test(rightPart);
+    if (leftNumeric && rightNumeric) {
+      return BigInt(leftPart) < BigInt(rightPart) ? -1 : 1;
+    }
+    if (leftNumeric !== rightNumeric) {
+      return leftNumeric ? -1 : 1;
+    }
+    return leftPart < rightPart ? -1 : 1;
+  }
+  return 0;
 }
 
 function normalizedAsset(
@@ -346,24 +468,19 @@ async function installRelease(
     const extractedRoot = path.join(stagingRoot, "extracted");
     await mkdir(extractedRoot);
     await (options.extractArchive ?? extractArchive)(archivePath, extractedRoot);
+    const validationOptions = bundleValidationOptions(options);
     const command = await validateExtractedBundle(
       extractedRoot,
-      options.platform ?? process.platform,
-      options.requirePlatformSignature === true,
-      options.probeVersion,
+      validationOptions,
     );
     const versionRoot = path.join(rootDir, "versions", release.tag);
     await mkdir(path.dirname(versionRoot), { recursive: true });
-    if (!existsSync(versionRoot)) {
-      try {
-        await rename(extractedRoot, versionRoot);
-      } catch (error) {
-        if (!existsSync(versionRoot)) {
-          throw error;
-        }
-      }
-    }
-    const installedCommand = path.join(versionRoot, path.basename(command));
+    const installedCommand = await activateExtractedVersion(
+      extractedRoot,
+      versionRoot,
+      path.basename(command),
+      validationOptions,
+    );
     const metadata: ManagedGrokMetadata = {
       asset: release.archive.name,
       checkedAt: now,
@@ -377,6 +494,57 @@ async function installRelease(
     return { command: installedCommand, metadata };
   } finally {
     await rm(stagingRoot, { force: true, recursive: true });
+  }
+}
+
+async function activateExtractedVersion(
+  extractedRoot: string,
+  versionRoot: string,
+  executable: string,
+  validationOptions: BundleValidationOptions,
+): Promise<string> {
+  const displacedRoot = `${versionRoot}.replaced-${process.pid}-${Date.now()}`;
+  let displaced = false;
+  try {
+    try {
+      await rename(versionRoot, displacedRoot);
+      displaced = true;
+    } catch (error) {
+      if (!isFileSystemError(error, "ENOENT")) {
+        throw error;
+      }
+    }
+
+    try {
+      await rename(extractedRoot, versionRoot);
+    } catch (error) {
+      // Another PwrAgent process may have completed the same immutable-tag
+      // install after our initial check. Accept it only after full validation.
+      if (existsSync(versionRoot)) {
+        try {
+          return await validateExtractedBundle(versionRoot, validationOptions);
+        } catch {
+          // Fall through and restore the displaced directory when possible.
+        }
+      }
+      if (displaced && !existsSync(versionRoot)) {
+        await rename(displacedRoot, versionRoot);
+        displaced = false;
+      }
+      throw error;
+    }
+    return path.join(versionRoot, executable);
+  } finally {
+    if (displaced) {
+      try {
+        await rm(displacedRoot, { force: true, recursive: true });
+      } catch (error) {
+        managedGrokLog.warn("managed_grok_displaced_version_cleanup_failed", {
+          error: error instanceof Error ? error.message : String(error),
+          displacedRoot,
+        });
+      }
+    }
   }
 }
 
@@ -429,11 +597,9 @@ async function extractArchive(
 
 async function validateExtractedBundle(
   directory: string,
-  platform: NodeJS.Platform,
-  requirePlatformSignature: boolean,
-  probeVersion?: (command: string) => Promise<string>,
+  options: BundleValidationOptions,
 ): Promise<string> {
-  const executable = platform === "win32" ? "grok.exe" : "grok";
+  const executable = options.platform === "win32" ? "grok.exe" : "grok";
   const command = path.join(directory, executable);
   const requiredFiles = [
     command,
@@ -456,40 +622,98 @@ async function validateExtractedBundle(
       throw new Error(`Managed Grok bundle entry is not a file: ${requiredFile}`);
     }
   }
-  if (platform !== "win32") {
+  if (options.platform !== "win32") {
     await chmod(command, 0o755);
   }
-  if (requirePlatformSignature && platform === "darwin") {
+  if (
+    options.requirePlatformSignature
+    && (options.platform === "darwin" || options.platform === "win32")
+  ) {
+    await (
+      options.verifyPlatformSignature ?? verifyMatchingPlatformSignature
+    )(
+      command,
+      options.applicationCommand,
+      options.platform,
+    );
+  }
+  const versionOutput = options.probeVersion
+    ? await options.probeVersion(command)
+    : await readVersionOutput(command);
+  if (!/\bgrok\b/iu.test(versionOutput)) {
+    throw new Error("Managed Grok executable returned an invalid version banner");
+  }
+  return command;
+}
+
+async function verifyMatchingPlatformSignature(
+  command: string,
+  applicationCommand: string,
+  platform: NodeJS.Platform,
+): Promise<void> {
+  if (platform === "darwin") {
+    await execFile("codesign", [
+      "--verify",
+      "--strict",
+      "--verbose=2",
+      applicationCommand,
+    ]);
+    const applicationSignature = await execFile("codesign", [
+      "--display",
+      "--verbose=4",
+      applicationCommand,
+    ]);
+    const signatureDetails =
+      `${applicationSignature.stdout ?? ""}\n${applicationSignature.stderr ?? ""}`;
+    const teamIdentifier = /^TeamIdentifier=([A-Z0-9]+)$/mu.exec(
+      signatureDetails,
+    )?.[1];
+    if (!teamIdentifier) {
+      throw new Error("Signed PwrAgent executable has no Apple team identifier");
+    }
     await execFile("codesign", [
       "--verify",
       "--strict",
       "--verbose=2",
       "--test-requirement",
-      '=anchor apple generic and certificate leaf[subject.OU] = "T44CNHC4UH"',
+      `=anchor apple generic and certificate leaf[subject.OU] = "${teamIdentifier}"`,
       command,
     ]);
+    return;
   }
-  if (requirePlatformSignature && platform === "win32") {
+
+  if (platform === "win32") {
     await execFile("powershell.exe", [
       "-NoLogo",
       "-NoProfile",
       "-NonInteractive",
       "-Command",
       [
-        "$signature = Get-AuthenticodeSignature -LiteralPath $args[0]",
-        "if ($signature.Status -ne 'Valid') { exit 1 }",
-        "if ($signature.SignerCertificate.Subject -notmatch 'PwrDrvr LLC') { exit 1 }",
+        "$application = Get-AuthenticodeSignature -LiteralPath $args[0]",
+        "$runtime = Get-AuthenticodeSignature -LiteralPath $args[1]",
+        "if ($application.Status -ne 'Valid' -or $runtime.Status -ne 'Valid') { exit 1 }",
+        "if ($null -eq $application.SignerCertificate -or $null -eq $runtime.SignerCertificate) { exit 1 }",
+        "if ($runtime.SignerCertificate.Subject -cne $application.SignerCertificate.Subject) { exit 1 }",
+        "if ($runtime.SignerCertificate.Issuer -cne $application.SignerCertificate.Issuer) { exit 1 }",
       ].join("; "),
+      applicationCommand,
       command,
     ]);
   }
-  const versionOutput = probeVersion
-    ? await probeVersion(command)
-    : await readVersionOutput(command);
-  if (!/\bgrok\b/iu.test(versionOutput)) {
-    throw new Error("Managed Grok executable returned an invalid version banner");
-  }
-  return command;
+}
+
+function bundleValidationOptions(
+  options: ManagedGrokRuntimeOptions,
+): BundleValidationOptions {
+  return {
+    applicationCommand: options.applicationCommand ?? process.execPath,
+    platform: options.platform ?? process.platform,
+    ...(options.probeVersion ? { probeVersion: options.probeVersion } : {}),
+    requirePlatformSignature: options.requirePlatformSignature === true,
+    ...(options.verifyPlatformSignature
+      ? { verifyPlatformSignature: options.verifyPlatformSignature }
+      : {}),
+  };
 }
 
 async function readVersionOutput(command: string): Promise<string> {
@@ -519,7 +743,7 @@ async function sha256(filePath: string): Promise<string> {
 
 async function readCachedRuntime(
   rootDir: string,
-  platform: NodeJS.Platform = process.platform,
+  options: ManagedGrokRuntimeOptions,
 ): Promise<ManagedGrokRuntime | undefined> {
   try {
     const metadata = JSON.parse(
@@ -529,7 +753,7 @@ async function readCachedRuntime(
       metadata.schemaVersion !== MANAGED_GROK_METADATA_VERSION
       || metadata.repository !== MANAGED_GROK_REPOSITORY
       || typeof metadata.tag !== "string"
-      || !/^pwragent-v[0-9A-Za-z][0-9A-Za-z.+-]*$/u.test(metadata.tag)
+      || !isManagedGrokTagEligible(metadata.tag)
       || typeof metadata.asset !== "string"
       || typeof metadata.sha256 !== "string"
       || typeof metadata.checkedAt !== "number"
@@ -537,16 +761,154 @@ async function readCachedRuntime(
     ) {
       return undefined;
     }
-    const executable = platform === "win32" ? "grok.exe" : "grok";
-    const command = path.join(rootDir, "versions", metadata.tag, executable);
-    const commandStat = await stat(command);
-    if (!commandStat.isFile()) {
+    const assetPlatform = managedGrokAssetPlatform(
+      options.platform ?? process.platform,
+      options.arch ?? process.arch,
+    );
+    if (
+      !assetPlatform
+      || metadata.asset !== managedGrokArchiveName(metadata.tag, assetPlatform)
+    ) {
       return undefined;
     }
+    const versionRoot = path.join(rootDir, "versions", metadata.tag);
+    const command = await validateExtractedBundle(
+      versionRoot,
+      bundleValidationOptions(options),
+    );
     return { command, metadata: metadata as ManagedGrokMetadata };
   } catch {
     return undefined;
   }
+}
+
+async function activateRuntime(
+  rootDir: string,
+  runtime: ManagedGrokRuntime,
+  options: ManagedGrokRuntimeOptions,
+): Promise<ManagedGrokRuntime> {
+  try {
+    await markRuntimeInUse(rootDir, runtime.command);
+    await pruneSupersededVersions(
+      rootDir,
+      runtime.metadata.tag,
+      options.isProcessAlive ?? isProcessAlive,
+    );
+  } catch (error) {
+    // Installation and signature validation have already succeeded. Marker or
+    // pruning failures must not turn an otherwise usable runtime into an
+    // outage; a later activation gets another cleanup opportunity.
+    managedGrokLog.warn("managed_grok_runtime_prune_failed", {
+      error: error instanceof Error ? error.message : String(error),
+      tag: runtime.metadata.tag,
+    });
+  }
+  return runtime;
+}
+
+async function markRuntimeInUse(
+  rootDir: string,
+  command: string,
+): Promise<void> {
+  const markerPath = path.join(
+    path.dirname(command),
+    `.pwragent-use-${process.pid}`,
+  );
+  if (
+    markedRuntimeCommands.get(rootDir) === command
+    && existsSync(markerPath)
+  ) {
+    return;
+  }
+  await writeFile(markerPath, `${Date.now()}\n`);
+  markedRuntimeCommands.set(rootDir, command);
+}
+
+async function pruneSupersededVersions(
+  rootDir: string,
+  currentTag: string,
+  processAlive: (pid: number) => boolean,
+): Promise<void> {
+  const versionsRoot = path.join(rootDir, "versions");
+  const entries = await readdir(versionsRoot, { withFileTypes: true });
+  const superseded = entries
+    .filter((entry) =>
+      entry.isDirectory()
+      && entry.name !== currentTag
+      && isManagedGrokTag(entry.name),
+    )
+    .sort((left, right) => {
+      const leftVersion = parseManagedGrokSemver(left.name);
+      const rightVersion = parseManagedGrokSemver(right.name);
+      if (!leftVersion || !rightVersion) {
+        return 0;
+      }
+      return compareParsedSemver(rightVersion, leftVersion);
+    });
+
+  // Keep one pre-marker generation for rolling-upgrade compatibility. Any
+  // additional version is retained only while another live PwrAgent process
+  // has marked that exact command as selected.
+  const compatibilityTag = superseded[0]?.name;
+  for (const entry of superseded) {
+    const versionRoot = path.join(versionsRoot, entry.name);
+    const active = await hasActiveRuntimeMarker(versionRoot, processAlive);
+    if (active || entry.name === compatibilityTag) {
+      continue;
+    }
+    try {
+      await rm(versionRoot, { force: true, recursive: true });
+    } catch (error) {
+      managedGrokLog.warn("managed_grok_runtime_version_prune_failed", {
+        error: error instanceof Error ? error.message : String(error),
+        tag: entry.name,
+      });
+    }
+  }
+}
+
+async function hasActiveRuntimeMarker(
+  versionRoot: string,
+  processAlive: (pid: number) => boolean,
+): Promise<boolean> {
+  const entries = await readdir(versionRoot, { withFileTypes: true });
+  let active = false;
+  for (const entry of entries) {
+    const match = entry.isFile()
+      ? /^\.pwragent-use-([1-9][0-9]*)$/u.exec(entry.name)
+      : undefined;
+    if (!match) {
+      continue;
+    }
+    const pid = Number(match[1]);
+    if (
+      Number.isSafeInteger(pid)
+      && pid !== process.pid
+      && processAlive(pid)
+    ) {
+      active = true;
+      continue;
+    }
+    await rm(path.join(versionRoot, entry.name), { force: true });
+  }
+  return active;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return isFileSystemError(error, "EPERM");
+  }
+}
+
+function isFileSystemError(error: unknown, code: string): boolean {
+  return (
+    error instanceof Error
+    && "code" in error
+    && error.code === code
+  );
 }
 
 async function writeMetadata(

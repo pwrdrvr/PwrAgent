@@ -37,6 +37,23 @@ bundle contents, and installs it under `~/.pwragent/agents/grok/versions/` (or
 the active `PWRAGENT_HOME`). The selected release is machine-wide, so profiles
 and dev checkouts on the same machine reuse the verified download.
 
+`pwragent-v1.0.4-pwragent.2` is the minimum managed release because it is the
+first release produced by the signed Grok pipeline. Older tags are neither
+downloaded nor accepted from cache. In packaged PwrAgent builds, macOS verifies
+the Grok code signature against the Apple team identifier read from the running
+PwrAgent executable. Windows requires valid Authenticode signatures on both
+executables and exact matching certificate subject and issuer identities. The
+same checks run again before a cached runtime is accepted, so an unsigned dev
+cache cannot cross into a packaged launch.
+
+Cache metadata includes the platform-specific asset name; a cache restored on
+an incompatible platform or architecture is rejected and repaired from the
+matching release asset. A broken same-tag directory is displaced and replaced
+only after the new archive passes checksum, contents, signature, and version
+validation. Activation markers retain versions selected by other live PwrAgent
+processes, while cleanup keeps only the current version, live selections, and
+one rolling-upgrade compatibility version.
+
 Development runs enable managed builds by default and check once per Electron
 process, which makes a fresh `pnpm dev` pick up a newly published downstream
 build. Packaged apps keep the setting off by default, require the PwrDrvr Apple
