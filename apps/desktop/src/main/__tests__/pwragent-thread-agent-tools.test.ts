@@ -49,21 +49,29 @@ describe("PwrAgent thread agent tools", () => {
       (tool) => tool.name === "get_thread_status",
     );
     expect(getThreadStatus?.description).toContain(
-      "not that another agent is repairing the PR",
+      "not that another agent is repairing it",
     );
     expect(getThreadStatus?.description).toContain(
-      "If Auto-fix PR started the current turn, continue the repair",
+      "If Auto-fix started this thread's current turn, continue only the reported repair",
+    );
+    expect(getThreadStatus?.description).toContain(
+      "When it is false, do not assume PwrAgent will dispatch a repair turn",
     );
     const checkPullRequestStatus = tools.find(
       (tool) => tool.name === "check_thread_pull_request_status",
     );
     expect(checkPullRequestStatus?.description).toContain(
-      "not that another agent is repairing the PR",
+      "not that another agent is repairing it",
     );
     expect(checkPullRequestStatus?.description).toContain(
-      "never end only because this field is true",
+      "Ignore unrelated prior context unless the user explicitly added it to this turn",
     );
-    expect(checkPullRequestStatus?.description).toContain("do not poll CI");
+    expect(checkPullRequestStatus?.description).toContain(
+      "When it is false, do not assume PwrAgent will dispatch a repair turn",
+    );
+    expect(checkPullRequestStatus?.description).not.toContain(
+      "In any other turn",
+    );
     expect(tools.find((tool) => tool.name === "watch_thread_pull_request"))
       .toMatchObject({
         name: "watch_thread_pull_request",

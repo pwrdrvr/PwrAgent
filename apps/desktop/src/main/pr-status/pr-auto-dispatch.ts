@@ -811,6 +811,7 @@ function buildPrAutoDispatchPrompt(params: {
   return [
     "You are the Auto-fix PR repair turn. PwrAgent started this turn so you can repair the attached pull request. No separate agent or repair turn is handling it.",
     "If prAutomation.autoFixActive is true, that means this thread owns automatic monitoring. During this turn, it is not a reason to stop or wait for another agent.",
+    "Fix only the event kinds listed in this prompt. Do not fix anything else from prior conversation context, including review findings the user did not ask this turn to address.",
     "",
     "Pull request event",
     `- PR: ${params.event.prKey}`,

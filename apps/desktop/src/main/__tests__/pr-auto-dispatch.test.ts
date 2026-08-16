@@ -412,6 +412,8 @@ describe("PrAutoDispatchCoordinator", () => {
           new RegExp([
             "You are the Auto-fix PR repair turn",
             "No separate agent or repair turn is handling it",
+            "Do not fix anything else from prior conversation context",
+            "review findings the user did not ask this turn to address",
             `- Head SHA: ${"a".repeat(40)}`,
             "commit it, and push it to the attached PR branch",
             "Do not merely report the failure and end the turn",

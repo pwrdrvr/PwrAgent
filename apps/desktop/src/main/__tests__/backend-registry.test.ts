@@ -31852,17 +31852,18 @@ script = "printf setup"
         },
       }),
     });
+    const inspectPrAutomation = vi.fn(async () => ({
+      backgroundPollingEnabled: true,
+      autoFixAllowed: true,
+      autoFixEnabled: true,
+      autoFixActive: true,
+      guidance: "End the turn and let PwrAgent watch CI.",
+    }));
     registry.setThreadPrAutoDispatchHandler({
       preferenceChanged: vi.fn(async () => undefined),
       cancelPending: vi.fn(async () => false),
       sendPendingNow: vi.fn(async () => false),
-      inspect: vi.fn(async () => ({
-        backgroundPollingEnabled: true,
-        autoFixAllowed: true,
-        autoFixEnabled: true,
-        autoFixActive: true,
-        guidance: "End the turn and let PwrAgent watch CI.",
-      })),
+      inspect: inspectPrAutomation,
     });
     await registry.publishLocalEvent({
       backend: "codex",
@@ -31924,6 +31925,16 @@ script = "printf setup"
         repositoryPath: "/repo/pwragent",
       }),
     ]);
+    expect(inspectPrAutomation).toHaveBeenCalledWith(
+      {
+        backend: "codex",
+        threadId: "agent-thread",
+      },
+      {
+        backend: "codex",
+        threadId: "agent-thread",
+      },
+    );
 
     await registry.close();
   });
@@ -33121,8 +33132,8 @@ script = "printf setup"
         },
       }),
     });
-    registry.setThreadPullRequestStatusToolHandler(async (args) => ({
-      ok: true,
+    const handler = vi.fn(async (args) => ({
+      ok: true as const,
       data: {
         pullRequestStatus: {
           backend: args.backend ?? "codex",
@@ -33146,6 +33157,7 @@ script = "printf setup"
         },
       },
     }));
+    registry.setThreadPullRequestStatusToolHandler(handler);
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -33193,6 +33205,18 @@ script = "printf setup"
         directoryPaths: ["/repo"],
       },
     });
+    expect(handler).toHaveBeenCalledWith(
+      {
+        backend: "codex",
+        threadId: "target-thread",
+        branch: "feature/pr",
+        directoryPaths: ["/repo"],
+      },
+      {
+        backend: "codex",
+        threadId: "agent-thread",
+      },
+    );
 
     await registry.close();
   });
@@ -33260,11 +33284,17 @@ script = "printf setup"
       },
     } as AppServerPendingRequestNotification);
 
-    expect(handler).toHaveBeenCalledWith({
-      backend: "codex",
-      threadId: "agent-thread",
-      branch: "feature/pr",
-    });
+    expect(handler).toHaveBeenCalledWith(
+      {
+        backend: "codex",
+        threadId: "agent-thread",
+        branch: "feature/pr",
+      },
+      {
+        backend: "codex",
+        threadId: "agent-thread",
+      },
+    );
     expect(response).toMatchObject({ success: true });
     const payload = JSON.parse(
       (response as { contentItems: Array<{ text: string }> }).contentItems[0]!.text,

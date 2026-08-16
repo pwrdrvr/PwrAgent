@@ -1059,6 +1059,8 @@ describe("app server ipc", () => {
     getThreadOverlayStates.mockResolvedValue({});
     setThreadPullRequests.mockClear();
     addThreadPullRequestReference.mockClear();
+    getPrAutoDispatchCandidateWinner.mockReset();
+    getPrAutoDispatchCandidateWinner.mockResolvedValue(undefined);
     readPrStatusCache.mockReset();
     readPrStatusCache.mockResolvedValue({});
     writePrStatusCacheEntries.mockClear();
@@ -1508,7 +1510,7 @@ describe("app server ipc", () => {
       prs: [primaryPr],
       prAutoDispatchEnabled: true,
     });
-    getPrAutoDispatchCandidateWinner.mockResolvedValueOnce({
+    getPrAutoDispatchCandidateWinner.mockResolvedValue({
       backend: "codex",
       threadId: "thread-1",
     } as never);
@@ -1517,10 +1519,16 @@ describe("app server ipc", () => {
     await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
     const autoDispatchHandlers = setThreadPrAutoDispatchHandler.mock.calls.at(-1)?.[0];
     await vi.waitFor(async () => {
-      const status = await autoDispatchHandlers?.inspect({
-        backend: "codex",
-        threadId: "thread-1",
-      });
+      const status = await autoDispatchHandlers?.inspect(
+        {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      );
       expect(status).toMatchObject({
         autoFixActive: true,
         guidance: expect.stringContaining(
@@ -1528,7 +1536,7 @@ describe("app server ipc", () => {
         ),
       });
       expect(status?.guidance).toContain(
-        "you are the repair turn: investigate and fix the reported failure",
+        "you are the repair turn: investigate and fix only the reported failure",
       );
       expect(status?.guidance).toContain(
         "validate, commit, and push the fix to the PR branch",
@@ -1536,6 +1544,28 @@ describe("app server ipc", () => {
       expect(status?.guidance).toContain(
         "Do not stop merely because autoFixActive is true",
       );
+      expect(status?.guidance).toContain(
+        "review findings the user did not ask this turn to address",
+      );
+    });
+    await vi.waitFor(async () => {
+      const status = await autoDispatchHandlers?.inspect(
+        {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+        {
+          backend: "codex",
+          threadId: "other-thread",
+        },
+      );
+      expect(status).toMatchObject({
+        autoFixActive: true,
+        guidance: expect.stringContaining(
+          "does not authorize the current turn to repair that thread's PR",
+        ),
+      });
+      expect(status?.guidance).not.toContain("you are the repair turn");
     });
   });
 
