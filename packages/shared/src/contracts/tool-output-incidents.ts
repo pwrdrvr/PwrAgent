@@ -34,6 +34,19 @@ export const TOOL_OUTPUT_WARNING_CHARS = toolOutputWarningChars(
 /** Repeated large output becomes alert-worthy at this many calls in one turn. */
 export const TOOL_OUTPUT_WARNING_INVOCATIONS = 5;
 
+/* These reasons are conclusions drawn from one invocation's output size.
+   Unlike pattern-derived flags such as repeated polling, they can be
+   re-evaluated when the operator changes the effective size threshold. */
+const SIZE_DERIVED_TOOL_OUTPUT_REASONS = new Set([
+  "broad-file-read",
+  "broad-mcp-result",
+  "broad-search",
+  "large-output",
+  "large-output-critical",
+  "large-truncated-output",
+  "verbose-build-test",
+]);
+
 /** Translate an operator-facing percentage into the detector's character cap. */
 export function toolOutputWarningChars(percent: number): number {
   return Math.ceil(TOOL_OUTPUT_CAP_CHARS * percent / 100);
@@ -54,14 +67,25 @@ export function toolOutputCapShare(outputChars: number): number {
  * populated turn strip. The size test is re-derivable from a row we already
  * have, so derive it rather than trusting when the row was written.
  *
- * The flag still matters and is ORed in, because polling is a pattern across
- * invocations: no single row carries enough to reconstruct it.
+ * The flag still matters for patterns such as repeated polling: no single row
+ * carries enough to reconstruct why a small result was part of the incident.
+ * A size-derived flag is different. It records the threshold that was active
+ * when the row was written, so trusting it forever would make a later, higher
+ * operator threshold ineffective for existing threads. Re-derive those flags
+ * from the stored output size and preserve only pattern-derived/legacy flags.
  */
 export function isFlaggedToolInvocation(
-  invocation: Pick<ThreadToolInvocationRecord, "noisy" | "outputChars">,
+  invocation: Pick<
+    ThreadToolInvocationRecord,
+    "noisy" | "noisyReason" | "outputChars"
+  >,
   largeOutputThresholdChars = TOOL_OUTPUT_WARNING_CHARS,
 ): boolean {
-  return invocation.noisy || invocation.outputChars >= largeOutputThresholdChars;
+  const sizeDerivedFlag = invocation.noisyReason !== undefined
+    && SIZE_DERIVED_TOOL_OUTPUT_REASONS.has(invocation.noisyReason);
+  const patternOrLegacyFlag = invocation.noisy && !sizeDerivedFlag;
+  return patternOrLegacyFlag
+    || invocation.outputChars >= largeOutputThresholdChars;
 }
 
 /**

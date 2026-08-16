@@ -949,6 +949,12 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("switch", { name: "Repeated large tool outputs" }),
     ).toHaveAttribute("aria-checked", "true");
+    expect(
+      screen.getByText(/This trigger does not use the calls-per-turn setting/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Cap-hit alerts remain immediate/),
+    ).toBeInTheDocument();
     fireEvent.change(
       screen.getByRole("spinbutton", {
         name: "Active turn spend threshold",
