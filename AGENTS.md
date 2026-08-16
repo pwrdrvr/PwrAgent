@@ -320,82 +320,118 @@ Canonical primitives and the tokens they read:
 
 ## Current Product Direction
 
+### Thread model and lenses
+
 - Threads are first-class and may exist without a directory.
-- Attention, Drafts, Inbox, Recents, and Directories share the thread lens
-  switch. The tabs are icon-only; the lens name lives in `aria-label` and the
-  tooltip.
-- Attention is the work-queue lens: threads with a live turn or waiting to be
-  reviewed. Its tab is two indicators with counts
-  (scanner + in-progress, cookie + unread) rather than an icon, and each goes
-  grey at zero so the tab reads as "nothing running, nothing unread" without
-  being opened. A zero is shown, never hidden — a vanishing count makes an
-  idle tab look like a broken one.
-- **Attention orders by turn, not by activity.** Every other lens is a pure
-  sort over `updatedAt` / `createdAt`; this one is not, because `updatedAt`
-  moves on every streamed item, sub-agent invocation, and tool result, and a
-  queue that re-sorts under the pointer while two turns run is unusable. Each
-  member holds a rank minted when its turn *starts* and left alone for the rest
-  of that turn, so a thread moves at most twice per turn no matter how loud the
-  turn is. The second move is the one exception, and it is a setting:
-  `general.attention_promote_on_turn_end` (default on) gives a finished turn one
-  last trip to the top so freshly completed work surfaces for review. That
-  covers a turn this window watched run *and* one it only learned about
-  afterwards — a messaging- or peer-driven turn can start and finish inside a
-  single poll interval, so an idle member whose `updatedAt` advanced counts as a
-  finished turn too. A live turn can never take that path, which is what keeps
-  it from becoming a back door to update-driven churn. Ranks are
-  a monotonic counter, not a clock — no `Date.now()` in a render path and no
-  ties to break — and they are scoped to current lens membership, so a thread
-  that leaves and returns is fresh activity and re-enters at the top. The
-  reducer and the reasoning live in
-  [attention-order.ts](apps/desktop/src/renderer/src/features/navigation/attention-order.ts).
-- Drafts is the second state lens: threads holding unsent composer text, in
-  recent-activity order. A draft belongs to whoever typed it — it is stored in
-  that machine's `composer_draft_latest` table, re-hydrated on the next launch,
-  and deliberately **never federated**. A viewer that half-writes a reply to a
-  peer's thread sees its own "Draft" chip on that row; the owning instance does
-  not, because publishing an operator's unsent text to another machine is not
-  something the affordance is worth. Threads carry the chip in every lens, not
-  only this one. Two limits are deliberate rather than bugs: the storage is
-  machine-wide but each window reads it once at mount, so a second open window
-  does not light up until it restarts; and launchpad (new-thread) composer text
-  has no thread row, so the lens says "replies" and its empty state says "No
-  unsent replies."
-- Inbox is the default browsing lens: all threads in recent-activity order.
-- Recents shows all threads in thread-creation order so active threads do not
-  jump around.
-- Inbox and Recents are **pure sort orders** — they do not float pinned threads
-  into a section. A pinned thread appears in its natural position by
-  updated/created time. Pin *ordering* (drag, the ⌘⇧↑/↓ shortcut, and the
-  context menu's Move Up / Move Down) is offered only in Directories, the one
-  lens where pin order is visible.
-- Directories keep pinned threads first within each directory, then sort
-  unpinned threads by thread creation time.
-- Unread state remains available as the orange cookie marker on thread rows
-  wherever they appear.
-- **Unread clears on focus everywhere except the Attention lens.** There,
-  focusing a thread deliberately leaves the cookie in place and only a reply
-  clears it (the composer reports sends and steers via
-  `onUserRepliedToThread`, which routes to `markThreadsSeen`). The rule is
-  scoped to that lens rather than global on purpose: a global "only a reply
-  clears unread" would stop every lens's unread count draining on its own, so
-  a thread you read and decide not to answer would sit unread until you
-  explicitly marked it read. Scoping it keeps ordinary browsing unchanged and
-  confines the work-queue semantics to the surface that asked for them. The
-  `retainedUnreadThread` mechanism is skipped in this lens for the same
-  reason — it exists to release (clear) a thread on the way out.
-- The exemption belongs to the **lens, not the thread**: leaving Attention
-  while an unread thread stays selected marks it seen, because the operator is
-  now browsing rather than working a queue. Carrying "never auto-clear" out
-  with the thread would leak a rule nobody asked for into every other lens.
-  Both halves are pinned by tests in `useThreadNavigation.test.tsx`.
-- Reply reporting is **acceptance-gated**, not intent-gated: the composer
-  calls `onUserRepliedToThread` only after `startTurn` / `steerTurn` resolves,
-  and `useQueuedTurnRelease` does the same when it drains a turn the operator
-  queued earlier. Reporting before the await would drop a thread out of the
-  queue for a message that never left the machine — the exact loss this lens
-  exists to prevent.
-- A thread may be associated with multiple linked Git directories.
+- Attention, Drafts, Inbox, Recents, and Directories use one thread lens switch.
+- Each lens tab contains only an icon or status indicators.
+- Put the lens name in the `aria-label` and tooltip.
+- A thread can have links to multiple Git directories.
+
+### Attention lens
+
+- Use Attention as the work queue.
+- Include threads with a live turn.
+- Include threads that wait for review.
+- Use two count indicators instead of a tab icon:
+  - A scanner for turns in progress.
+  - An orange cookie for unread threads.
+- Show zero for each empty count.
+- Make an indicator grey when its count is zero.
+- Do not hide a zero indicator. A missing indicator makes an idle tab appear broken.
+
+### Attention order
+
+- Order Attention by turn, not by activity.
+- All other lenses use a pure `updatedAt` or `createdAt` sort.
+- Do not use `updatedAt` to order Attention.
+- `updatedAt` changes for each streamed item, subagent call, and tool result.
+- Activity ordering would move queue items while the operator uses the queue.
+- Give each Attention member a rank when its turn starts.
+- Keep that rank for the complete turn.
+- A thread can move at most twice during one turn.
+- The optional second move occurs when the turn ends.
+- `general.attention_promote_on_turn_end` controls that move and defaults to on.
+- When enabled, move a finished turn to the top for review.
+- Apply this promotion to a turn that the current window observed.
+- Also apply it to a turn that starts and finishes between polls.
+- Messaging and peer-driven turns can use this case.
+- For that case, treat an idle member with a newer `updatedAt` as a finished turn.
+- Never use this detection path for a live turn.
+- Use a monotonic counter for ranks. Do not use a clock.
+- Do not call `Date.now()` from the render path.
+- Do not create rank ties.
+- Scope ranks to current Attention membership.
+- If a thread leaves and returns, give it a new rank at the top.
+- The reducer and design rationale are in [attention-order.ts](apps/desktop/src/renderer/src/features/navigation/attention-order.ts).
+
+### Drafts lens
+
+- Drafts is the second state lens.
+- Use Drafts for threads that contain unsent composer text.
+- Sort Drafts by recent activity.
+- Store a draft on the machine where the operator writes it.
+- Store the latest draft in `composer_draft_latest`.
+- Restore that draft during the next application launch.
+- Never federate draft text.
+- A viewer can draft a reply to a thread from a peer instance.
+- Show the Draft chip only to that viewer.
+- Do not show that draft to the instance that owns the thread.
+- This rule prevents publication of an operator's unsent text.
+- Show the Draft chip in every lens.
+- The current implementation has two intentional limits:
+  - Draft storage is machine-wide, but each window reads it only during mount.
+  - A second window does not update its Draft chips until it restarts.
+  - Launchpad composer text has no thread row.
+  - Therefore, the lens label refers to replies.
+  - Its empty state is `No unsent replies.`
+
+### Inbox, Recents, and Directories
+
+- Use Inbox as the default browsing lens.
+- Sort Inbox by recent activity.
+- Show all threads in Inbox.
+- Sort Recents by thread creation time.
+- Show all threads in Recents.
+- This creation-time order prevents active threads from moving.
+- Keep Inbox and Recents as pure sort orders.
+- Do not create a pinned section in those lenses.
+- In Inbox, show each pinned thread at its normal `updatedAt` position.
+- In Recents, show each pinned thread at its normal `createdAt` position.
+- Offer visible pin ordering only in Directories.
+- The pin-order controls are:
+  - Drag.
+  - The `⌘⇧↑` and `⌘⇧↓` shortcuts.
+  - **Move Up** and **Move Down** in the context menu.
+- Within each directory, show pinned threads first.
+- Sort unpinned directory threads by thread creation time.
+
+### Unread behavior
+
+- Show unread state as an orange cookie on thread rows in every lens.
+- In all lenses except Attention, clear unread state when the thread gets focus.
+- In Attention, keep unread state when the thread gets focus.
+- In Attention, clear unread state only after the operator sends a reply.
+- The composer reports accepted sends and steers through `onUserRepliedToThread`.
+- That callback calls `markThreadsSeen`.
+- Do not apply reply-only clearing to other lenses.
+- A global rule would leave read threads unread when the operator does not reply.
+- Keep normal focus-based clearing in ordinary browsing lenses.
+- Skip `retainedUnreadThread` in Attention.
+- That mechanism normally clears a retained thread when the operator leaves it.
+- Apply the exemption to the Attention lens, not to a thread.
+- If the operator leaves Attention, clear the selected thread's unread state.
+- This rule applies when the selected thread remains selected in the next lens.
+- Tests in `useThreadNavigation.test.tsx` enforce both parts of this transition.
+
+### Reply acceptance
+
+- Report a reply only after the backend accepts it.
+- Do not report a reply when the operator only attempts it.
+- Call `onUserRepliedToThread` only after `startTurn` or `steerTurn` resolves.
+- Apply the same rule when `useQueuedTurnRelease` sends a queued turn.
+- If the send fails, keep the thread in Attention.
+- Early reporting would remove a thread for a message that never left the machine.
 
 ## Dependency Boundary Enforcement
 
