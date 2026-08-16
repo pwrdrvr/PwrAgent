@@ -55,6 +55,14 @@ updates:
       - dependency-name: "@electron/*"
         update-types:
           - "version-update:semver-major"
+      # better-sqlite3 13 is the N-API rewrite: it drops prebuild-install and
+      # Electron-tagged GitHub assets. Desktop postinstall still fetches an
+      # Electron prebuild into electron-native/, so 13.x needs a planned native
+      # pipeline migration rather than a Dependabot bump. 12.x minor/patch
+      # updates stay in desktop-runtime-minor-patch.
+      - dependency-name: "better-sqlite3"
+        versions:
+          - "13.x"
       # node-fetch is kept at v2 for grammY's current Node runtime shim. The
       # latest grammY release still depends on node-fetch v2 and its CommonJS
       # entrypoint; v3 is ESM-only and should be handled as a planned Telegram
