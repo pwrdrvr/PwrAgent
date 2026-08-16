@@ -23,7 +23,7 @@ import type {
   MessagingConversationKind,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { isCelestialIconId } from "@pwragent/shared";
+import { isAppServerBackendKind, isCelestialIconId } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import { readRendererFederationTarget } from "./federation-window";
 import {
@@ -3428,6 +3428,7 @@ function reviewEntryFromCompletedItem(params: {
         : "Code review started"
       : undefined;
   const output = normalizeReviewOutput(record.data?.reviewOutput);
+  const reviewer = normalizeReviewer(record.data?.reviewer);
   const turn = buildTurnMetadata({
     fallbackId: typeof params.turnId === "string" ? params.turnId : undefined,
     fallbackStatus:
@@ -3440,11 +3441,38 @@ function reviewEntryFromCompletedItem(params: {
     review: displayText ?? review,
     ...(displayText ? { displayText } : {}),
     ...(output ? { output } : {}),
+    ...(reviewer ? { reviewer } : {}),
     ...(turn ? { turn } : {}),
     createdAt:
       normalizeNotificationTimestamp(record.createdAt) ??
       normalizeNotificationTimestamp(record.created_at) ??
       Date.now(),
+  };
+}
+
+function normalizeReviewer(
+  value: unknown,
+): AppServerThreadReviewEntry["reviewer"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const backend = record.backend;
+  if (typeof backend !== "string" || !isAppServerBackendKind(backend)) {
+    return undefined;
+  }
+  const model =
+    typeof record.model === "string" && record.model.trim()
+      ? record.model.trim()
+      : undefined;
+  const reasoningEffort =
+    typeof record.reasoningEffort === "string" && record.reasoningEffort.trim()
+      ? record.reasoningEffort.trim()
+      : undefined;
+  return {
+    backend,
+    ...(model ? { model } : {}),
+    ...(reasoningEffort ? { reasoningEffort } : {}),
   };
 }
 

@@ -10917,6 +10917,11 @@ describe("useThreadSessionState", () => {
                 type: "exitedReviewMode",
                 review: "No findings. Ready to merge.",
                 data: {
+                  reviewer: {
+                    backend: "codex",
+                    model: "gpt-5.6-sol",
+                    reasoningEffort: "high",
+                  },
                   reviewOutput: {
                     findings: [],
                     overall_correctness: "patch is correct",
@@ -10972,6 +10977,14 @@ describe("useThreadSessionState", () => {
         type: "review",
         review: "Review changes against main",
         displayText: "Review changes against main",
+      });
+      expect(result.current.entries[2]).toMatchObject({
+        type: "review",
+        reviewer: {
+          backend: "codex",
+          model: "gpt-5.6-sol",
+          reasoningEffort: "high",
+        },
       });
     });
     expect(result.current.response?.replay.messages).toHaveLength(1);

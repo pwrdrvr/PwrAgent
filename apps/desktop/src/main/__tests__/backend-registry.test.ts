@@ -19089,6 +19089,14 @@ command = "pnpm dev"
     const parentThreadId = "grok-parent-with-codex-review";
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
+      models: [
+        {
+          id: "gpt-5.5",
+          label: "GPT-5.5",
+          current: true,
+          supportsReasoning: true,
+        },
+      ],
       startThreadResult: { threadId: "codex-review-child" },
     });
     const overlayStore = createOverlayStoreMock({
@@ -19128,6 +19136,8 @@ command = "pnpm dev"
       threadId: parentThreadId,
       target: { type: "baseBranch", branch: "origin/main" },
       delivery: "inline",
+      model: "gpt-5.5",
+      reasoningEffort: "high",
     });
     expect(response).toMatchObject({
       backend: acpBackendId,
@@ -19178,6 +19188,36 @@ command = "pnpm dev"
     });
     await expect(approvalResponse).resolves.toEqual({ decision: "accept" });
 
+    await codexClient.emit({
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: response.reviewThreadId,
+        turnId: response.turnId,
+        model: "gpt-5.5",
+        tokenUsage: {
+          total: {
+            inputTokens: 1_000,
+            cachedInputTokens: 200,
+            outputTokens: 50,
+            reasoningOutputTokens: 10,
+          },
+        },
+      },
+    });
+    const pricing = await overlayStore.readThreadPricing({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+    });
+    expect(pricing.lines).toEqual([
+      expect.objectContaining({
+        backend: acpBackendId,
+        model: "gpt-5.5",
+        parentThreadId,
+        reasoningEffort: "high",
+        scope: "monitor",
+      }),
+    ]);
+
     const reviewOutput = JSON.stringify({
       findings: [],
       overall_correctness: "patch is correct",
@@ -19206,6 +19246,8 @@ command = "pnpm dev"
         backend: "codex",
         monitorThreadId: response.reviewThreadId,
         monitorTurnId: response.turnId,
+        preferredModel: "gpt-5.5",
+        preferredReasoningEffort: "high",
         outcome: "success",
         status: "success",
       }),
@@ -19213,9 +19255,19 @@ command = "pnpm dev"
     expect(overlay?.managedReviewEntries).toEqual([
       expect.objectContaining({
         id: `managed-review:${response.turnId}:started`,
+        reviewer: {
+          backend: "codex",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+        },
       }),
       expect.objectContaining({
         id: `managed-review:${response.turnId}:result`,
+        reviewer: {
+          backend: "codex",
+          model: "gpt-5.5",
+          reasoningEffort: "high",
+        },
         output: expect.objectContaining({
           overall_correctness: "patch is correct",
         }),
@@ -19225,6 +19277,25 @@ command = "pnpm dev"
         }),
       }),
     ]);
+    expect(
+      events.find((event) =>
+        isCompletedItemType(event, "exitedReviewMode")
+      ),
+    ).toMatchObject({
+      notification: {
+        params: {
+          item: {
+            data: {
+              reviewer: {
+                backend: "codex",
+                model: "gpt-5.5",
+                reasoningEffort: "high",
+              },
+            },
+          },
+        },
+      },
+    });
 
     await registry.close();
   });

@@ -2686,6 +2686,7 @@ type ReviewSubAgentRecord = {
   latestUsage?: TaskMonitorUsageSnapshot;
   mode: "managed" | "native";
   model?: string;
+  reasoningEffort?: string;
   /** Backend owning the thread being reviewed. */
   parentBackend: AppServerBackendKind;
   parentThreadId: string;
@@ -3850,6 +3851,7 @@ function buildTaskMonitorUsageLine(params: {
   monitorTurnId?: string;
   observedReplays?: ObservedContextReplayTally;
   parentThreadId: string;
+  reasoningEffort?: string;
   serviceTier?: string;
   source: ThreadUsageLineRecord["source"];
   usage: TaskMonitorUsageSnapshot;
@@ -3921,6 +3923,9 @@ function buildTaskMonitorUsageLine(params: {
     ...(cost?.catalogId ? { pricingCatalogId: cost.catalogId } : {}),
     ...(cost?.catalogVersion ? { pricingCatalogVersion: cost.catalogVersion } : {}),
     ...(cost?.rateId ? { pricingRateId: cost.rateId } : {}),
+    ...(params.reasoningEffort
+      ? { reasoningEffort: params.reasoningEffort }
+      : {}),
     reasoningOutputTokens,
     scope: "monitor",
     ...(params.serviceTier ? { serviceTier: params.serviceTier } : {}),
@@ -5117,6 +5122,69 @@ function mergeManagedReviewEntries(params: {
     ...params.replay,
     entries,
   };
+}
+
+function reviewEntryReviewer(
+  record: Pick<
+    ReviewSubAgentRecord,
+    "backend" | "model" | "reasoningEffort"
+  >,
+): NonNullable<AppServerThreadReviewEntry["reviewer"]> {
+  return {
+    backend: record.backend,
+    ...(record.model ? { model: record.model } : {}),
+    ...(record.reasoningEffort ? { reasoningEffort: record.reasoningEffort } : {}),
+  };
+}
+
+/**
+ * Native review entries come from the provider transcript, which does not
+ * carry the reviewer configuration. The durable review sub-agent summary is
+ * the authority for that configuration, including after an app restart.
+ */
+function attachReviewEntryReviewers(params: {
+  replay: AppServerThreadReplay;
+  subAgents?: ThreadSubAgentSummary[];
+}): AppServerThreadReplay {
+  const reviewerByTurnId = new Map<string, AppServerThreadReviewEntry["reviewer"]>();
+  for (const subAgent of params.subAgents ?? []) {
+    if (
+      !subAgent.monitorId.startsWith("review:")
+      || !subAgent.monitorTurnId
+      || !subAgent.backend
+    ) {
+      continue;
+    }
+    const model =
+      subAgent.preferredModel
+      ?? subAgent.monitorUsage?.model
+      ?? subAgent.monitorUsage?.cost?.model;
+    reviewerByTurnId.set(subAgent.monitorTurnId, {
+      backend: subAgent.backend,
+      ...(model ? { model } : {}),
+      ...(subAgent.preferredReasoningEffort
+        ? { reasoningEffort: subAgent.preferredReasoningEffort }
+        : {}),
+    });
+  }
+
+  if (reviewerByTurnId.size === 0) {
+    return params.replay;
+  }
+
+  let changed = false;
+  const entries = params.replay.entries.map((entry) => {
+    if (entry.type !== "review" || entry.reviewer || !entry.turn?.id) {
+      return entry;
+    }
+    const reviewer = reviewerByTurnId.get(entry.turn.id);
+    if (!reviewer) {
+      return entry;
+    }
+    changed = true;
+    return { ...entry, reviewer };
+  });
+  return changed ? { ...params.replay, entries } : params.replay;
 }
 
 function mergeImmutableUsageActivities(params: {
@@ -8982,6 +9050,10 @@ export class DesktopBackendRegistry {
       replayWithTranscriptOverlays,
       messageOrigins,
     );
+    const replayWithReviewers = attachReviewEntryReviewers({
+      replay: replayWithMessageOrigins,
+      subAgents: overlay?.subAgents,
+    });
     const pricing =
       typeof this.overlayStore.readThreadPricing === "function"
         ? await this.overlayStore.readThreadPricing({
@@ -9017,10 +9089,10 @@ export class DesktopBackendRegistry {
       threadId: request.threadId,
       ...(toolAccounting ? { toolAccounting } : {}),
       ...(pendingRequest ? { pendingRequest } : {}),
-      ...(replayWithMessageOrigins.threadStatus
-        ? { threadStatus: replayWithMessageOrigins.threadStatus }
+      ...(replayWithReviewers.threadStatus
+        ? { threadStatus: replayWithReviewers.threadStatus }
         : {}),
-      replay: replayWithMessageOrigins,
+      replay: replayWithReviewers,
     };
   }
 
@@ -10747,6 +10819,10 @@ export class DesktopBackendRegistry {
       replayWithImmutableUsage,
       messageOrigins,
     );
+    const replayWithReviewers = attachReviewEntryReviewers({
+      replay: replayWithMessageOrigins,
+      subAgents: overlay?.subAgents,
+    });
     if (!request.viewOnly && !request.before && shouldAppendTranscriptOverlays) {
       // Hydration supersedes live rows for the same turn in sqlite. Preserve
       // that ordering now that live observations are delayed in memory: first
@@ -10791,10 +10867,10 @@ export class DesktopBackendRegistry {
       pricing,
       ...(toolAccounting ? { toolAccounting } : {}),
       ...(pendingRequest ? { pendingRequest } : {}),
-      ...(replayWithMessageOrigins.threadStatus
-        ? { threadStatus: replayWithMessageOrigins.threadStatus }
+      ...(replayWithReviewers.threadStatus
+        ? { threadStatus: replayWithReviewers.threadStatus }
         : {}),
-      replay: replayWithMessageOrigins,
+      replay: replayWithReviewers,
     };
   }
 
@@ -13397,6 +13473,9 @@ export class DesktopBackendRegistry {
       displayText: reviewTaskLabel(params.target),
       ...(modelSettings.fastMode !== undefined ? { fastMode: modelSettings.fastMode } : {}),
       ...(modelSettings.model ? { model: modelSettings.model } : {}),
+      ...(modelSettings.reasoningEffort
+        ? { reasoningEffort: modelSettings.reasoningEffort }
+        : {}),
       mode: managedMode ? "managed" : "native",
       parentBackend: params.backend,
       parentThreadId: result.threadId,
@@ -13549,6 +13628,7 @@ export class DesktopBackendRegistry {
       review: record.displayText,
       displayText: record.displayText,
       createdAt: startedAt,
+      reviewer: reviewEntryReviewer(record),
       turn: {
         id: record.turnId,
         status: "in_progress",
@@ -13587,6 +13667,7 @@ export class DesktopBackendRegistry {
             type: "enteredReviewMode",
             review: record.displayText,
             createdAt: startedAt,
+            data: { reviewer: entry.reviewer },
           },
         },
       },
@@ -20317,6 +20398,7 @@ export class DesktopBackendRegistry {
             monitorTurnId: reviewRecord.turnId,
             observedReplays,
             parentThreadId: reviewRecord.parentThreadId,
+            reasoningEffort: reviewRecord.reasoningEffort,
             serviceTier,
             source: "monitor",
             usage: usageSnapshot,
@@ -20358,6 +20440,7 @@ export class DesktopBackendRegistry {
             observedReplays,
             parentThreadId:
               completedReviewRecord?.parentThreadId ?? notification.params.threadId,
+            reasoningEffort: completedReviewRecord?.reasoningEffort,
             serviceTier,
             source: "monitor",
             usage: usageSnapshot,
@@ -21914,6 +21997,18 @@ export class DesktopBackendRegistry {
       ownerRegistrySessionId:
         existing?.ownerRegistrySessionId ?? this.registrySessionId,
       backend: record.backend,
+      ...(record.model ?? existing?.preferredModel
+        ? { preferredModel: record.model ?? existing?.preferredModel }
+        : {}),
+      ...(record.reasoningEffort ?? existing?.preferredReasoningEffort
+        ? {
+            preferredReasoningEffort:
+              record.reasoningEffort ?? existing?.preferredReasoningEffort,
+          }
+        : {}),
+      ...(record.fastMode ?? existing?.preferredFastMode
+        ? { preferredFastMode: record.fastMode ?? existing?.preferredFastMode }
+        : {}),
       monitorThreadId: record.reviewThreadId,
       monitorTurnId: record.turnId,
       ...(patch.lastMessage ?? existing?.lastMessage
@@ -22053,6 +22148,7 @@ export class DesktopBackendRegistry {
         id: `managed-review:${params.record.turnId}:result`,
         review,
         createdAt: completedAt,
+        reviewer: reviewEntryReviewer(params.record),
         ...(parsed ? { output: parsed } : {}),
         turn: {
           id: params.record.turnId,
@@ -22078,7 +22174,10 @@ export class DesktopBackendRegistry {
               type: "exitedReviewMode",
               review,
               createdAt: completedAt,
-              ...(parsed ? { data: { reviewOutput: parsed } } : {}),
+              data: {
+                ...(parsed ? { reviewOutput: parsed } : {}),
+                reviewer: entry.reviewer,
+              },
             },
           },
         },
@@ -31306,7 +31405,55 @@ export class DesktopBackendRegistry {
     if (liveThreadUsageWork) {
       this.finishLiveThreadUsageEmitWork(liveThreadUsageWork);
     }
+    event = this.withReviewRuntimeMetadata(event);
     await this.emitToListeners(event);
+  }
+
+  /**
+   * Provider transcripts do not attach model settings to review-mode items.
+   * The registry owns that association for the review's lifetime, so include
+   * it in the live item as well as the durable review artifact.
+   */
+  private withReviewRuntimeMetadata(event: AgentEvent): AgentEvent {
+    if (event.notification.method !== "item/completed") {
+      return event;
+    }
+    const params = readRecord(event.notification.params);
+    const threadId = readNonEmptyString(params?.threadId);
+    const turnId = readNonEmptyString(params?.turnId);
+    const item = readRecord(params?.item);
+    const itemType = readNonEmptyString(item?.type);
+    if (
+      !threadId
+      || !turnId
+      || !item
+      || (itemType !== "enteredReviewMode" && itemType !== "exitedReviewMode")
+    ) {
+      return event;
+    }
+    const reviewKey = buildReviewSubAgentKey(event.backend, threadId, turnId);
+    const record =
+      this.activeReviewSubAgents.get(reviewKey)
+      ?? this.reviewSubAgentsByReviewTurn.get(reviewKey);
+    if (!record || readRecord(item.data)?.reviewer) {
+      return event;
+    }
+    return {
+      ...event,
+      notification: {
+        ...event.notification,
+        params: {
+          ...event.notification.params,
+          item: {
+            ...item,
+            data: {
+              ...(readRecord(item.data) ?? {}),
+              reviewer: reviewEntryReviewer(record),
+            },
+          },
+        },
+      },
+    } as AgentEvent;
   }
 
   /**
