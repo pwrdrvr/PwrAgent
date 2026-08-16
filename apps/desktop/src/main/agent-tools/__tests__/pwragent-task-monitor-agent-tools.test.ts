@@ -6,6 +6,10 @@ import { buildPwrAgentTaskMonitorToolRouter } from "../pwragent-task-monitor-age
 describe("PwrAgent task monitor agent tools", () => {
   it("includes monitor creation and cancellation in both parent transports", () => {
     const catalogs = resolveAgentToolCatalogs({});
+    const mcpCatalogs = resolveAgentToolCatalogs(
+      {},
+      { taskMonitorRole: "all" },
+    );
     const dynamicTools = catalogs
       .flatMap((catalog) => catalog.dynamicTools)
       .flatMap((tool) =>
@@ -22,7 +26,7 @@ describe("PwrAgent task monitor agent tools", () => {
             }],
       )
       .sort((left, right) => left.name.localeCompare(right.name));
-    const mcpTools = catalogs
+    const mcpTools = mcpCatalogs
       .flatMap((catalog) => catalog.router.buildMcpTools())
       .sort((left, right) => left.name.localeCompare(right.name));
 
@@ -32,13 +36,17 @@ describe("PwrAgent task monitor agent tools", () => {
       "search_messaging_pdf_text",
     ]);
     expect(dynamicTools).toHaveLength(33);
-    expect(mcpTools).toEqual(
+    expect(mcpTools).toEqual(expect.arrayContaining(
       dynamicTools.filter((tool) => !dynamicOnlyToolNames.has(tool.name)),
-    );
+    ));
     expect(mcpTools.map((tool) => tool.name))
       .toContain("create_monitor_delegation");
     expect(mcpTools.map((tool) => tool.name))
       .toContain("cancel_monitor_delegation");
+    expect(mcpTools.map((tool) => tool.name))
+      .toContain("inject_progress");
+    expect(mcpTools.map((tool) => tool.name))
+      .toContain("complete_monitoring");
     expect(mcpTools.map((tool) => tool.name))
       .toContain("start_review");
     expect(mcpTools.map((tool) => tool.name))
@@ -54,10 +62,22 @@ describe("PwrAgent task monitor agent tools", () => {
       "Omit preferredModel and preferredReasoningEffort",
     );
     expect(createMonitorTool?.description).toContain(
-      "Do not use it for an attached PR",
+      "Do not use this for an attached PR",
+    );
+    expect(createMonitorTool?.description).toContain(
+      "A successful response means the monitor thread and turn have started",
+    );
+    expect(createMonitorTool?.description).toContain(
+      "Do not inspect the monitor thread, poll, or sleep in the parent",
     );
     expect(createMonitorTool?.inputSchema).toMatchObject({
       properties: {
+        task: {
+          description: expect.stringContaining("Self-contained polling procedure"),
+        },
+        pollIntervalSeconds: {
+          description: expect.stringContaining("Polling and heartbeat cadence"),
+        },
         preferredModel: {
           description: expect.stringContaining(
             "Omit it to use the monitor default",
@@ -123,6 +143,9 @@ describe("PwrAgent task monitor agent tools", () => {
         heartbeatIntervalSeconds: 30,
         startupTimeoutSeconds: 45,
         startedByPwrAgent: true,
+        startupConfirmed: true as const,
+        parentShouldPoll: false as const,
+        completionWillWakeParent: true as const,
         parentAgentGuidance: "Wait for completion.",
         prompt: "Monitor the task.",
       },

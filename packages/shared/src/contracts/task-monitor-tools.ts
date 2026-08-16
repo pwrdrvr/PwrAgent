@@ -121,6 +121,9 @@ export type TaskMonitorDelegationData = {
   heartbeatIntervalSeconds: number;
   startupTimeoutSeconds: number;
   startedByPwrAgent: boolean;
+  startupConfirmed: true;
+  parentShouldPoll: false;
+  completionWillWakeParent: true;
   monitorThreadId?: string;
   monitorTurnId?: string;
   parentAgentGuidance: string;

@@ -25,8 +25,12 @@ import type {
   DynamicToolSpec,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
+  TASK_MONITOR_COMPLETE_TOOL_DESCRIPTION,
+  TASK_MONITOR_COMPLETE_TOOL_INPUT_SCHEMA,
   TASK_MONITOR_CREATE_TOOL_DESCRIPTION,
   TASK_MONITOR_CREATE_TOOL_INPUT_SCHEMA,
+  TASK_MONITOR_PROGRESS_TOOL_DESCRIPTION,
+  TASK_MONITOR_PROGRESS_TOOL_INPUT_SCHEMA,
 } from "../agent-tools/pwragent-task-monitor-agent-tools.js";
 
 export type TaskMonitorHandler = (
@@ -56,43 +60,15 @@ export function buildTaskMonitorDynamicToolSpecs(
     {
       type: "function",
       name: "inject_progress",
-      description:
-        "Inject a concise progress update from a monitor subagent into the parent PwrAgent thread without starting or waking a parent turn.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          monitorId: { type: "string" },
-          message: { type: "string" },
-          status: {
-            type: "string",
-            enum: ["pending", "running", "blocked", "failed"],
-          },
-        },
-        required: ["monitorId", "message"],
-        additionalProperties: false,
-      },
+      description: TASK_MONITOR_PROGRESS_TOOL_DESCRIPTION,
+      inputSchema: TASK_MONITOR_PROGRESS_TOOL_INPUT_SCHEMA,
       deferLoading: false,
     },
     {
       type: "function",
       name: "complete_monitoring",
-      description:
-        "Finish a monitor delegation, inject the final result, and by default trigger exactly one parent turn with the final context.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          monitorId: { type: "string" },
-          outcome: {
-            type: "string",
-            enum: ["success", "failure", "cancelled"],
-          },
-          summary: { type: "string" },
-          details: { type: "string" },
-          triggerParentTurn: { type: "boolean" },
-        },
-        required: ["monitorId", "outcome", "summary"],
-        additionalProperties: false,
-      },
+      description: TASK_MONITOR_COMPLETE_TOOL_DESCRIPTION,
+      inputSchema: TASK_MONITOR_COMPLETE_TOOL_INPUT_SCHEMA,
       deferLoading: false,
     },
   ];
@@ -257,8 +233,8 @@ export function buildMonitorDelegationPrompt(params: {
     "",
     "<model_guidance>",
     "- PwrAgent should have started this monitor on a cost-efficient lightweight model.",
-    "- For Codex, this monitor should use the returned preferredModel and preferredReasoningEffort values.",
-    "- For ACP or other agent runtimes, choose a non-thinking model or the lowest reasoning setting that can poll status reliably.",
+    "- This monitor is already running on the parent provider with the returned preferredModel and preferredReasoningEffort values.",
+    "- Do not launch or hand off to a different provider runtime.",
     "</model_guidance>",
     "",
     "<task>",
@@ -312,16 +288,19 @@ export function buildMonitorParentAgentGuidance(params: {
   const heartbeatIntervalSeconds = pollIntervalSeconds;
   return [
     "PwrAgent starts one lightweight monitor thread for this delegation; do not call generic spawnAgent for this flow.",
-    `The managed monitor uses model=${params.preferredModel} and reasoning_effort=${params.preferredReasoningEffort} for Codex; ACP or other runtimes should use a mini/non-thinking model or the lowest reliable reasoning setting.`,
+    `The managed monitor is already running on the parent provider with model=${params.preferredModel} and reasoning_effort=${params.preferredReasoningEffort}.`,
     "Do not fork the full parent context unless the monitor task explicitly requires it; give create_monitor_delegation only the minimal task data and exact polling procedure.",
     "Before creating the delegation, write down the exact monitoring procedure you were about to perform yourself: cwd, command/status command or wait API, poll cadence, terminal success/failure criteria, and log lines needed for final diagnosis.",
     "Do not delegate an already-running parent tool session by Codex/agent session id. Monitor threads cannot read the parent turn's exec_command/write_stdin stdin, stdout, stderr, or exit status.",
     "For local build/test/script commands, prefer delegating before starting the command: include cwd plus the exact command so the monitor starts it, captures stdout/stderr, observes exit status, and reports the relevant output tail. Include desired stdout/stderr capture-file paths when useful. If the command is already running, only delegate when there is a durable pid/log/status file or external wait API the monitor can access.",
     "If you have checked something for progress for about 30 seconds and the check is repeatable, stop polling in the parent and delegate that repeatable check to the monitor.",
     "Use this for local verification commands too when the alternative is repeatedly checking whether a long-running command has finished.",
-    `After the tool reports startedByPwrAgent=true, make at most one startup observation for up to ${startupTimeoutSeconds} seconds. The monitor must inject an immediate startup progress message before its first sleep or poll.`,
-    "If the tool fails or no startup progress injection appears within the startup window, tell the user the monitor did not start and fall back to parent-side monitoring.",
-    `After startup is confirmed, do not poll the task from the parent. The monitor should poll and inject a non-waking progress update or heartbeat about every ${heartbeatIntervalSeconds} seconds while work is still running.`,
+    "A successful create_monitor_delegation response confirms that PwrAgent started the monitor thread and its turn.",
+    "Treat startedByPwrAgent=true and startupConfirmed=true as final startup confirmation. Do not wait for or inspect a progress injection.",
+    `The ${startupTimeoutSeconds}-second startup timeout is internal to PwrAgent. The parent must not wait on it.`,
+    "Do not call read_thread, get_thread_status, or another discovery tool to inspect the monitor after creation.",
+    "Do not sleep, poll the delegated task, or wait for the monitor in the parent after creation succeeds.",
+    `The monitor will poll and inject non-waking progress updates or heartbeats about every ${heartbeatIntervalSeconds} seconds while work is still running.`,
     "If the parent has no unrelated work, it should end its turn and remain idle. If it has unrelated work, it may continue that work without waiting on the monitor.",
     "The monitor's complete_monitoring call is the only event that should wake, start, or queue a parent turn with the final success/failure/cancelled result.",
   ].join("\n");
