@@ -32,8 +32,8 @@ async function openSkillAutocompleteThread(
 async function getActiveOptionIndex(
   listbox: Locator,
 ): Promise<number> {
-  return await listbox.getByRole("button").evaluateAll((buttons) =>
-    buttons.findIndex((button) => button.getAttribute("aria-selected") === "true"),
+  return await listbox.getByRole("option").evaluateAll((options) =>
+    options.findIndex((option) => option.getAttribute("aria-selected") === "true"),
   );
 }
 
@@ -76,14 +76,14 @@ test("thread reply Tiptap skill autocomplete filters and commits the reported mu
     await app.window.keyboard.type(":p");
     let firstOption = app.window
       .getByRole("listbox", { name: "Skills" })
-      .getByRole("button")
+      .getByRole("option")
       .first();
     await expect(firstOption).toContainText("$ce:plan");
 
     await app.window.keyboard.type("lan");
     firstOption = app.window
       .getByRole("listbox", { name: "Skills" })
-      .getByRole("button")
+      .getByRole("option")
       .first();
     await expect(firstOption).toContainText("$ce:plan");
 
@@ -142,7 +142,7 @@ test("thread reply Tiptap slash review autocomplete stays open on exact command 
 
     const commands = app.window.getByRole("listbox", { name: "Commands" });
     await expect(commands).toBeVisible();
-    await expect(commands.getByRole("button", { name: /\/review/i })).toBeVisible();
+    await expect(commands.getByRole("option", { name: /\/review/i })).toBeVisible();
   } finally {
     await app.close();
   }
@@ -204,7 +204,7 @@ test("thread reply Tiptap skill insertion preserves rich Markdown blocks", async
 
     await app.window.keyboard.type("$ce:plan");
     await expect(
-      app.window.getByRole("button", { name: /\$ce:plan/i }),
+      app.window.getByRole("option", { name: /\$ce:plan/i }),
     ).toBeVisible();
     await app.window.keyboard.press("Enter");
 
@@ -240,7 +240,7 @@ test("thread reply Tiptap Tab insertion keeps caret after chip and copy-paste pr
     await textbox.focus();
     await app.window.keyboard.type("Let's use $ce:plan");
     await expect(
-      app.window.getByRole("button", { name: /\$ce:plan/i }),
+      app.window.getByRole("option", { name: /\$ce:plan/i }),
     ).toBeVisible();
     await app.window.keyboard.press("Tab");
 

@@ -241,7 +241,7 @@ async function typeSkillChip(
   optionName: RegExp,
 ) {
   await app.window.keyboard.type(triggerText);
-  const option = app.window.getByRole("button", { name: optionName });
+  const option = app.window.getByRole("option", { name: optionName });
   await option.focus();
   await expect(option).toBeFocused();
   await app.window.keyboard.press("Enter");
@@ -266,10 +266,10 @@ test("directory launchpad loads skill autocomplete from user and local scope", a
     await app.window.getByRole("textbox", { name: "New thread" }).fill("$");
 
     await expect(
-      app.window.getByRole("button", { name: /\$frontend-design/i }),
+      app.window.getByRole("option", { name: /\$frontend-design/i }),
     ).toBeVisible();
     await expect(
-      app.window.getByRole("button", { name: /\$desktop-e2e-fixture-seeding/i }),
+      app.window.getByRole("option", { name: /\$desktop-e2e-fixture-seeding/i }),
     ).toBeVisible();
   } finally {
     await app.close();
@@ -295,7 +295,7 @@ test("directory launchpad keyboard typing updates the composer once", async () =
       )
       .toBe("$ce");
     await expect(
-      app.window.getByRole("button", { name: /\$ce:brainstorm/i }),
+      app.window.getByRole("option", { name: /\$ce:brainstorm/i }),
     ).toBeVisible();
   } finally {
     await app.close();
@@ -641,7 +641,7 @@ test("directory launchpad skill autocomplete honors markdown offsets after forma
     await expect(tiptapInput).toHaveAttribute("data-value", "## heading\n\n$ce:b");
     const listbox = app.window.getByRole("listbox", { name: "Skills" });
     await expect(listbox).toBeVisible();
-    const brainstormOption = listbox.getByRole("button", {
+    const brainstormOption = listbox.getByRole("option", {
       name: /\$ce:brainstorm/i,
     });
     await expect(brainstormOption).toBeVisible();
@@ -674,7 +674,7 @@ test("directory launchpad Tiptap composer selects focused skills as undoable inl
     await textbox.focus();
     await app.window.keyboard.type("$front");
 
-    const option = app.window.getByRole("button", { name: /\$frontend-design/i });
+    const option = app.window.getByRole("option", { name: /\$frontend-design/i });
     await option.focus();
     await expect(option).toBeFocused();
     await app.window.keyboard.press("Enter");

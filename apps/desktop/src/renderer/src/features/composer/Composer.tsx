@@ -11100,6 +11100,7 @@ export function Composer(props: ComposerProps) {
                 }}
                 aria-selected={index === activeSkillIndex}
                 className={`composer__autocomplete-option${index === activeSkillIndex ? " is-active" : ""}`}
+                role="option"
                 tabIndex={index === activeSkillIndex ? 0 : -1}
                 type="button"
                 onMouseDown={(event) => {
@@ -11144,6 +11145,7 @@ export function Composer(props: ComposerProps) {
                 }}
                 aria-selected={index === activeSlashIndex}
                 className={`composer__autocomplete-option${index === activeSlashIndex ? " is-active" : ""}`}
+                role="option"
                 tabIndex={index === activeSlashIndex ? 0 : -1}
                 type="button"
                 onMouseDown={(event) => {
@@ -11179,46 +11181,50 @@ export function Composer(props: ComposerProps) {
           <div
             className={`composer__autocomplete composer__autocomplete--directories composer__autocomplete--${autocompleteLayout.placement}`}
             ref={autocompleteListRef}
-            role="listbox"
-            aria-label="Directories"
-            id={directoryRefListboxId}
             style={{ maxHeight: autocompleteLayout.maxHeight }}
           >
-            {filteredDirectoryRefs.map((directory, index) => (
-              <button
-                key={directory.key}
-                id={`${directoryRefListboxId}-option-${index}`}
-                ref={(node) => {
-                  autocompleteOptionRefs.current[index] = node;
-                }}
-                aria-selected={index === activeDirectoryRefIndex}
-                className={`composer__autocomplete-option${index === activeDirectoryRefIndex ? " is-active" : ""}`}
-                tabIndex={index === activeDirectoryRefIndex ? 0 : -1}
-                type="button"
-                onMouseDown={(event) => {
-                  event.preventDefault();
-                  applyDirectoryReference(directory);
-                }}
-                onClick={() => {
-                  applyDirectoryReference(directory);
-                }}
-                onFocus={() => {
-                  setActiveDirectoryRefIndex(index);
-                }}
-                onKeyDown={handleAutocompleteKeyDown}
-              >
-                <span className="composer__autocomplete-title">
-                  <FolderIcon size={13} aria-hidden="true" />
-                  <HighlightedAutocompleteLabel
-                    label={directory.label}
-                    query={directoryRefTrigger?.query ?? ""}
-                  />
-                </span>
-                <span className="composer__autocomplete-meta">
-                  {buildDirectoryReferenceInsertText(directory)}
-                </span>
-              </button>
-            ))}
+            <div
+              aria-label="Directories"
+              id={directoryRefListboxId}
+              role="listbox"
+            >
+              {filteredDirectoryRefs.map((directory, index) => (
+                <button
+                  key={directory.key}
+                  id={`${directoryRefListboxId}-option-${index}`}
+                  ref={(node) => {
+                    autocompleteOptionRefs.current[index] = node;
+                  }}
+                  aria-selected={index === activeDirectoryRefIndex}
+                  className={`composer__autocomplete-option${index === activeDirectoryRefIndex ? " is-active" : ""}`}
+                  role="option"
+                  tabIndex={index === activeDirectoryRefIndex ? 0 : -1}
+                  type="button"
+                  onMouseDown={(event) => {
+                    event.preventDefault();
+                    applyDirectoryReference(directory);
+                  }}
+                  onClick={() => {
+                    applyDirectoryReference(directory);
+                  }}
+                  onFocus={() => {
+                    setActiveDirectoryRefIndex(index);
+                  }}
+                  onKeyDown={handleAutocompleteKeyDown}
+                >
+                  <span className="composer__autocomplete-title">
+                    <FolderIcon size={13} aria-hidden="true" />
+                    <HighlightedAutocompleteLabel
+                      label={directory.label}
+                      query={directoryRefTrigger?.query ?? ""}
+                    />
+                  </span>
+                  <span className="composer__autocomplete-meta">
+                    {buildDirectoryReferenceInsertText(directory)}
+                  </span>
+                </button>
+              ))}
+            </div>
             {props.onPickDirectoryForReference ||
             props.desktopApi?.pickFileFromDisk ? (
               <div
@@ -11323,6 +11329,7 @@ export function Composer(props: ComposerProps) {
                       }}
                       aria-selected={index === activeHashReferenceIndex}
                       className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
+                      role="option"
                       tabIndex={index === activeHashReferenceIndex ? 0 : -1}
                       // The visible label is one clamped line; hovering the
                       // row still gives the operator the whole title.
@@ -11401,6 +11408,7 @@ export function Composer(props: ComposerProps) {
                     }}
                     aria-selected={index === activeHashReferenceIndex}
                     className={`composer__autocomplete-option${index === activeHashReferenceIndex ? " is-active" : ""}`}
+                    role="option"
                     tabIndex={index === activeHashReferenceIndex ? 0 : -1}
                     title={pullRequest.title || pullRequest.url}
                     type="button"

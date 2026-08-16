@@ -135,6 +135,11 @@ const COPY_CHIP_FIXTURE = path.resolve(
   "fixtures/a11y-copy-chips/replay.fixture.json",
 );
 
+const COMPOSER_AUTOCOMPLETE_FIXTURE = path.resolve(
+  specDir,
+  "fixtures/skill-autocomplete-interactions/replay.fixture.json",
+);
+
 const WCAG_AA_TAGS = [
   "wcag2a",
   "wcag2aa",
@@ -177,6 +182,8 @@ async function runAxe(
      * genuinely needs it.
      */
     include?: string;
+    /** Run only the named axe rules when a regression gate is rule-specific. */
+    rules?: string[];
   },
 ): Promise<void> {
   // setLegacyMode is required under Electron: the default analyze()
@@ -187,9 +194,12 @@ async function runAxe(
   // cross-origin iframes, so the legacy single-context path covers
   // everything we render anyway. See
   // https://github.com/dequelabs/axe-core-npm/blob/develop/packages/playwright/error-handling.md
-  let builder = new AxeBuilder({ page: window })
-    .withTags(WCAG_AA_TAGS)
-    .setLegacyMode(true);
+  let builder = new AxeBuilder({ page: window }).setLegacyMode(true);
+  if (options?.rules) {
+    builder = builder.withRules(options.rules);
+  } else {
+    builder = builder.withTags(WCAG_AA_TAGS);
+  }
   if (options?.include) {
     builder = builder.include(options.include);
   }
@@ -364,6 +374,65 @@ for (const theme of AUDIT_THEMES) {
             }),
           ).toBeVisible();
           await runAxe(app.window, "sidebar rows carrying copy chips");
+        });
+      } finally {
+        await app.close();
+      }
+    });
+
+    // The default smoke fixture never opens a composer autocomplete, so its
+    // listboxes and active-descendant targets otherwise remain outside the
+    // gate. Audit both shapes: `$` is the shared listbox-of-options pattern,
+    // while `@` also carries real Add buttons that must stay outside the
+    // listbox rather than masquerading as directory options.
+    test("composer autocomplete listbox semantics are valid", async () => {
+      const app = await launchAuditApp({
+        theme,
+        fixturePath: COMPOSER_AUTOCOMPLETE_FIXTURE,
+      });
+      try {
+        await app.window
+          .getByRole("button", { name: /Skill autocomplete replay/i })
+          .first()
+          .click();
+        const textbox = app.window.getByRole("textbox", { name: "Reply" });
+        await expect(textbox).toBeVisible();
+
+        await test.step("skills autocomplete", async () => {
+          await textbox.fill("$ce");
+          const skills = app.window.getByRole("listbox", { name: "Skills" });
+          const activeOption = skills.getByRole("option").first();
+          await expect(activeOption).toBeVisible();
+          await expect(activeOption).toHaveAttribute("aria-selected", "true");
+          await expect(textbox).toHaveAttribute(
+            "aria-activedescendant",
+            await activeOption.getAttribute("id") ?? "missing-option-id",
+          );
+          await runAxe(app.window, "skills autocomplete", {
+            rules: ["aria-required-children", "aria-required-parent"],
+          });
+        });
+
+        await test.step("directory autocomplete with sibling actions", async () => {
+          await textbox.fill("@");
+          const directories = app.window.getByRole("listbox", {
+            name: "Directories",
+          });
+          await expect(directories.getByRole("option").first()).toBeVisible();
+          await expect(directories.getByRole("button")).toHaveCount(0);
+          await expect(
+            app.window.getByRole("button", { name: "+ Add directory…" }),
+          ).toBeVisible();
+          await expect(
+            app.window.getByRole("button", { name: "+ Add file…" }),
+          ).toBeVisible();
+          await runAxe(
+            app.window,
+            "directory autocomplete with sibling actions",
+            {
+              rules: ["aria-required-children", "aria-required-parent"],
+            },
+          );
         });
       } finally {
         await app.close();

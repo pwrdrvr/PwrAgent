@@ -2122,7 +2122,7 @@ describe("App", () => {
     });
 
     expect(
-      await screen.findByRole("button", { name: /\$frontend-design/i }, { timeout: 5_000 })
+      await screen.findByRole("option", { name: /\$frontend-design/i }, { timeout: 5_000 })
     ).toBeInTheDocument();
   }, 10_000);
 
