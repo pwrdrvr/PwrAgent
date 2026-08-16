@@ -2447,7 +2447,7 @@ async function callRegistryMcpTool(params: {
     taskMonitorHandler: async (request) =>
       await internal.handleAgentTaskMonitorRequest(request),
     threadOrchestrationHandler: internal.threadOrchestrationHandler,
-  });
+  }, { taskMonitorRole: "all" });
   const router = catalogs
     .map((catalog) => catalog.router)
     .find((candidate) =>
@@ -34567,6 +34567,9 @@ script = "printf setup"
       heartbeatIntervalSeconds: 30,
       startupTimeoutSeconds: 45,
       startedByPwrAgent: true,
+      startupConfirmed: true,
+      parentShouldPoll: false,
+      completionWakesParentByDefault: true,
       monitorThreadId: "monitor-thread",
       monitorTurnId: "turn-1",
     });
@@ -34582,7 +34585,15 @@ script = "printf setup"
     expect(String(payload.parentAgentGuidance)).toContain("local verification commands");
     expect(String(payload.parentAgentGuidance)).toContain("long-running command");
     expect(String(payload.parentAgentGuidance)).toContain("remain idle");
-    expect(String(payload.parentAgentGuidance)).toContain("only event that should wake");
+    expect(String(payload.parentAgentGuidance)).toContain(
+      "complete_monitoring is the only event that wakes",
+    );
+    expect(String(payload.parentAgentGuidance)).toContain(
+      "triggerParentTurn=false",
+    );
+    expect(String(payload.parentAgentGuidance)).toContain("Do not call read_thread");
+    expect(String(payload.parentAgentGuidance)).toContain("Do not sleep");
+    expect(String(payload.parentAgentGuidance)).not.toContain("make at most one startup observation");
     expect(codexClient.lastStartThreadParams).toMatchObject({
       ephemeral: true,
       model: "gpt-5.6-luna",
@@ -35094,7 +35105,6 @@ script = "printf setup"
     ).resolves.toMatchObject({
       subAgents: [
         {
-          lastMessage: "lint is running",
           monitorId,
           monitorUsage: {
             cost: {
@@ -41691,11 +41701,7 @@ script = "printf setup"
       sessionId: params.sessionId,
       turnId: params.turnId ?? `turn:${params.sessionId}`,
     }));
-    const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["thread/start", "turn/start"] },
-      models: TEST_TASK_MONITOR_MODELS,
-      startThreadResult: { threadId: "monitor-thread" },
-    });
+    const codexClient = new MockBackendClient({ threads: [] });
     const overlayStore = createOverlayStoreMock({
       overlays: {
         [`${acpBackendId}:${parentThreadId}`]: {
@@ -41713,6 +41719,32 @@ script = "printf setup"
       startPrompt,
       codexClient,
       overlayStore,
+      runtimeCapabilities: {
+        schemaVersion: 1,
+        status: "discovered",
+        discoveredAt: 1000,
+        checkedAt: 1000,
+        source: "initialize",
+        agentCapabilities: {
+          mcp: { http: true },
+        },
+        models: {
+          currentModelId: "kimi-k2",
+          availableModels: [
+            {
+              id: "kimi-k2",
+              current: true,
+              supportsReasoning: true,
+              reasoningEfforts: ["medium", "high"],
+            },
+            {
+              id: "kimi-lite",
+              supportsReasoning: true,
+              reasoningEfforts: ["low", "medium"],
+            },
+          ],
+        },
+      },
     });
     await registry.publishLocalEvent({
       backend: acpBackendId,
@@ -41737,15 +41769,26 @@ script = "printf setup"
       },
     });
     const monitorId = String(response.structuredContent?.monitorId);
+    const monitorThreadId = String(
+      response.structuredContent?.monitorThreadId,
+    );
+    const monitorTurnId = String(response.structuredContent?.monitorTurnId);
 
     expect(response).toMatchObject({
       structuredContent: {
         parentThreadId,
-        monitorThreadId: "monitor-thread",
+        monitorThreadId,
+        preferredModel: "kimi-lite",
+        preferredReasoningEffort: "low",
         startedByPwrAgent: true,
+        startupConfirmed: true,
+        parentShouldPoll: false,
+        completionWakesParentByDefault: true,
       },
     });
     expect(monitorId).toMatch(/^monitor-/u);
+    expect(monitorThreadId).not.toBe(parentThreadId);
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
     await expect(
       overlayStore.getThreadOverlayState({
         backend: acpBackendId,
@@ -41754,9 +41797,11 @@ script = "printf setup"
     ).resolves.toMatchObject({
       subAgents: [
         expect.objectContaining({
-          backend: "codex",
+          backend: acpBackendId,
           monitorId,
-          monitorThreadId: "monitor-thread",
+          monitorThreadId,
+          preferredModel: "kimi-lite",
+          preferredReasoningEffort: "low",
           status: "running",
         }),
       ],
@@ -41777,22 +41822,91 @@ script = "printf setup"
         },
       },
     });
-    await codexClient.emitRequest({
-      method: "item/tool/call",
-      params: {
-        threadId: "monitor-thread",
-        turnId: "turn-1",
-        callId: "complete-monitor",
-        requestId: "complete-monitor",
-        namespace: "pwragent",
-        tool: "complete_monitoring",
-        arguments: {
-          monitorId,
-          outcome: "success",
-          summary: "Deployment completed.",
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: monitorThreadId,
+          turnId: monitorTurnId,
+          model: "kimi-lite",
+          tokenUsage: {
+            total: {
+              inputTokens: 500,
+              cachedInputTokens: 100,
+              outputTokens: 25,
+              reasoningOutputTokens: 5,
+            },
+          },
         },
       },
-    } as AppServerPendingRequestNotification);
+    });
+    const progress = await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId: monitorThreadId,
+      turnId: monitorTurnId,
+      tool: "inject_progress",
+      args: {
+        monitorId,
+        message: "Deployment is still running.",
+        status: "running",
+      },
+    });
+    expect(progress).toMatchObject({
+      structuredContent: {
+        monitorId,
+        injected: true,
+        monitorUsage: {
+          model: "kimi-lite",
+          tokenUsage: {
+            inputTokens: 500,
+            cachedInputTokens: 100,
+            outputTokens: 25,
+            reasoningOutputTokens: 5,
+          },
+        },
+      },
+    });
+    expect(startPrompt).toHaveBeenCalledTimes(1);
+
+    await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId: monitorThreadId,
+      turnId: monitorTurnId,
+      tool: "complete_monitoring",
+      args: {
+        monitorId,
+        outcome: "success",
+        summary: "Deployment completed.",
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: monitorThreadId,
+          turnId: monitorTurnId,
+          model: "kimi-lite",
+          tokenUsage: {
+            last_token_usage: {
+              input_tokens: 650,
+              cached_input_tokens: 150,
+              output_tokens: 40,
+              reasoning_output_tokens: 8,
+            },
+          },
+        },
+      },
+    });
+    await emitCompletedTurn(
+      registry,
+      acpBackendId,
+      monitorThreadId,
+      monitorTurnId,
+    );
 
     await vi.waitFor(() => {
       expect(startPrompt).toHaveBeenCalledWith(
@@ -41813,6 +41927,15 @@ script = "printf setup"
           monitorId,
           outcome: "success",
           status: "success",
+          monitorUsage: expect.objectContaining({
+            model: "kimi-lite",
+            tokenUsage: expect.objectContaining({
+              inputTokens: 650,
+              cachedInputTokens: 150,
+              outputTokens: 40,
+              reasoningOutputTokens: 8,
+            }),
+          }),
         }),
       ],
     });
@@ -41873,18 +41996,12 @@ script = "printf setup"
       sessionId: params.sessionId,
       turnId: params.turnId ?? `turn:${params.sessionId}`,
     }));
-    const codexClient = new MockBackendClient({
-      initializeResult: { methods: ["thread/start", "turn/start"] },
-      models: TEST_TASK_MONITOR_MODELS,
-      startThreadResult: { threadId: "monitor-thread" },
-    });
     const { registry } = createKimiAcpRegistry({
       acpBackendId,
       acpRolloutStore,
       sessions,
       sessionId: "unused-child",
       startPrompt,
-      codexClient,
       replay: providerReplay,
       runtimeCapabilities: {
         schemaVersion: 1,
@@ -41922,6 +42039,10 @@ script = "printf setup"
         },
       });
       const monitorId = String(response.structuredContent?.monitorId);
+      const monitorThreadId = String(
+        response.structuredContent?.monitorThreadId,
+      );
+      const monitorTurnId = String(response.structuredContent?.monitorTurnId);
       await emitCompletedTurn(
         registry,
         acpBackendId,
@@ -41929,25 +42050,24 @@ script = "printf setup"
         "parent-turn",
       );
 
-      await codexClient.emitRequest({
-        method: "item/tool/call",
-        params: {
-          threadId: "monitor-thread",
-          turnId: "turn-1",
-          callId: "complete-monitor",
-          requestId: "complete-monitor",
-          namespace: "pwragent",
-          tool: "complete_monitoring",
-          arguments: {
-            monitorId,
-            outcome: "success",
-            summary: "Deployment completed.",
-            triggerParentTurn: false,
-          },
+      await callRegistryMcpTool({
+        registry,
+        backend: acpBackendId,
+        threadId: monitorThreadId,
+        turnId: monitorTurnId,
+        tool: "complete_monitoring",
+        args: {
+          monitorId,
+          outcome: "success",
+          summary: "Deployment completed.",
+          triggerParentTurn: false,
         },
-      } as AppServerPendingRequestNotification);
+      });
 
-      expect(startPrompt).not.toHaveBeenCalled();
+      expect(startPrompt).toHaveBeenCalledTimes(1);
+      expect(startPrompt).toHaveBeenCalledWith(
+        expect.objectContaining({ sessionId: monitorThreadId }),
+      );
       const diskReplay = new AcpRolloutStore(rolloutRoot).readReplay({
         backendId: acpBackendId,
         sessionId: parentThreadId,
@@ -41985,7 +42105,7 @@ script = "printf setup"
     }
   });
 
-  it("returns a structured ACP MCP error when no Codex monitor model is available", async () => {
+  it("uses the ACP provider default when no monitor model catalog is available", async () => {
     const acpBackendId = "acp:kimi" as AcpBackendId;
     const parentThreadId = "acp-parent";
     const codexClient = new MockBackendClient({
@@ -42032,15 +42152,135 @@ script = "printf setup"
     });
 
     expect(response).toMatchObject({
-      isError: true,
       structuredContent: {
-        code: "internal_error",
-        message: expect.stringContaining(
-          "requires an available Codex model",
-        ),
+        parentThreadId,
+        preferredModel: "kimi-default",
+        preferredReasoningEffort: "provider-default",
+        startedByPwrAgent: true,
       },
     });
     expect(codexClient.lastStartThreadParams).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("recovers an ACP monitor once before a fallback wakes its parent", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const parentThreadId = "acp-parent";
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: acpBackendId,
+        sessionId: parentThreadId,
+        title: "ACP Parent",
+        cwd: "/repo/app",
+        createdAt: 1000,
+        updatedAt: 1000,
+        executionMode: "default",
+        status: "idle",
+      },
+    ];
+    const startPrompt = vi.fn((params: {
+      sessionId: string;
+      prompt: string;
+      turnId?: string;
+    }) => ({
+      sessionId: params.sessionId,
+      turnId: params.turnId ?? `turn:${params.sessionId}`,
+    }));
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        [`${acpBackendId}:${parentThreadId}`]: {
+          backend: acpBackendId,
+          threadId: parentThreadId,
+          executionMode: "default",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessions,
+      sessionId: "acp-monitor",
+      startPrompt,
+      overlayStore,
+    });
+    await registry.publishLocalEvent({
+      backend: acpBackendId,
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: parentThreadId,
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      turnId: "parent-turn",
+      tool: "create_monitor_delegation",
+      args: { task: "Watch the deployment until it finishes." },
+    });
+    const monitorId = String(response.structuredContent?.monitorId);
+    const monitorThreadId = String(
+      response.structuredContent?.monitorThreadId,
+    );
+    const firstMonitorTurnId = String(
+      response.structuredContent?.monitorTurnId,
+    );
+    await emitCompletedTurn(
+      registry,
+      acpBackendId,
+      parentThreadId,
+      "parent-turn",
+    );
+
+    await emitCompletedTurn(
+      registry,
+      acpBackendId,
+      monitorThreadId,
+      firstMonitorTurnId,
+    );
+    expect(startPrompt).toHaveBeenCalledTimes(2);
+    const recoveryTurnId = String(startPrompt.mock.calls[1]?.[0].turnId);
+    expect(startPrompt.mock.calls[1]?.[0]).toMatchObject({
+      sessionId: monitorThreadId,
+      prompt: expect.stringContaining("monitor recovery instruction"),
+    });
+
+    await emitCompletedTurn(
+      registry,
+      acpBackendId,
+      monitorThreadId,
+      recoveryTurnId,
+    );
+    expect(startPrompt).toHaveBeenCalledTimes(3);
+    expect(startPrompt.mock.calls[2]?.[0]).toMatchObject({
+      sessionId: parentThreadId,
+      prompt: expect.stringContaining(
+        "Monitor subagent stopped without reporting a final result",
+      ),
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({
+        backend: acpBackendId,
+        threadId: parentThreadId,
+      }),
+    ).resolves.toMatchObject({
+      subAgents: [
+        expect.objectContaining({
+          backend: acpBackendId,
+          monitorId,
+          outcome: "failure",
+          completionSource: expect.objectContaining({
+            type: "pwragent_fallback",
+            recoveryAttempted: true,
+          }),
+        }),
+      ],
+    });
 
     await registry.close();
   });

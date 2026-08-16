@@ -49,6 +49,8 @@ export function resolveAgentToolCatalogs(params: {
   taskMonitorHandler?: PwrAgentTaskMonitorHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
   threadOrchestrationHandler?: PwrAgentThreadOrchestrationHandler;
+}, options?: {
+  taskMonitorRole?: "parent" | "monitor" | "all";
 }): ResolvedAgentToolCatalog[] {
   const automationRouter = buildAutomationInspectionToolRouter(
     params.automationInspectionHandler,
@@ -65,7 +67,10 @@ export function resolveAgentToolCatalogs(params: {
       ...buildPwrAgentThreadOrchestrationToolDefinitions(
         params.threadOrchestrationHandler,
       ),
-      ...buildPwrAgentTaskMonitorToolDefinitions(params.taskMonitorHandler),
+      ...buildPwrAgentTaskMonitorToolDefinitions(
+        params.taskMonitorHandler,
+        options?.taskMonitorRole,
+      ),
     ],
   );
   const threadOrchestrationDynamicTools =

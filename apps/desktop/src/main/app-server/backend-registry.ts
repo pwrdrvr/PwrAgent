@@ -2621,6 +2621,13 @@ function readNotificationItemType(notification: AppServerNotification): string |
 const TASK_MONITOR_STALE_CHECK_INTERVAL_MS = 15_000;
 const TASK_MONITOR_STALE_GRACE_MS = 15_000;
 
+function taskMonitorThreadKey(
+  backend: AppServerBackendKind,
+  threadId: string,
+): string {
+  return `${backend}:${threadId}`;
+}
+
 type TaskMonitorCancellationState = {
   finalizing: boolean;
   promise: Promise<TaskMonitorResponse<"cancel_monitor_delegation">>;
@@ -2633,7 +2640,7 @@ type TaskMonitorCancellationState = {
 
 type TaskMonitorDelegationRecord = {
   activeCommandCount: number;
-  backend: "codex";
+  backend: AppServerBackendKind;
   createdAt: number;
   cwd?: string;
   executionMode?: ThreadExecutionMode;
@@ -2649,6 +2656,8 @@ type TaskMonitorDelegationRecord = {
   pollIntervalSeconds: number;
   preferredModel: string;
   preferredReasoningEffort: string;
+  persistedStatus?: ThreadSubAgentSummary["status"];
+  runtimeModel?: string;
   cancellation?: TaskMonitorCancellationState;
   finalizationStarted?: boolean;
   recoveryAttempted?: boolean;
@@ -5540,6 +5549,45 @@ function getDefaultReasoningEffort(
   return reasoningEfforts[0];
 }
 
+const MONITOR_REASONING_EFFORT_ORDER = [
+  "none",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+] as const;
+
+function isLightweightMonitorModel(modelId: string): boolean {
+  return /(?:mini|lite|flash|haiku|small|nano)/iu.test(modelId);
+}
+
+function readAcpThoughtLevelValues(
+  runtimeCapabilities: BackendAcpRuntimeCapabilities | undefined,
+): string[] {
+  return runtimeCapabilities?.configOptions
+    ?.find((option) => option.category === "thought_level")
+    ?.values.map((value) => value.value) ?? [];
+}
+
+function selectLowestMonitorReasoningEffort(
+  reasoningEfforts: string[],
+): string | undefined {
+  if (reasoningEfforts.length === 0) {
+    return undefined;
+  }
+  const normalized = new Map(
+    reasoningEfforts.map((effort) => [effort.toLowerCase(), effort]),
+  );
+  for (const effort of MONITOR_REASONING_EFFORT_ORDER) {
+    const match = normalized.get(effort);
+    if (match) {
+      return match;
+    }
+  }
+  return reasoningEfforts[0];
+}
+
 function resolveModelSettingsFromOptions(
   backend: AppServerBackendKind,
   options: BackendLaunchpadOptions | undefined,
@@ -6658,6 +6706,10 @@ export class DesktopBackendRegistry {
     string,
     TaskMonitorDelegationRecord
   >();
+  private readonly completedTaskMonitorsByThread = new Map<
+    string,
+    TaskMonitorDelegationRecord
+  >();
   private readonly taskMonitorWatchdogTimer?: NodeJS.Timeout;
   private readonly runtimeInstanceId: string;
   private readonly registrySessionId: string;
@@ -7156,7 +7208,7 @@ export class DesktopBackendRegistry {
                   await this.handleAgentTaskMonitorRequest(request),
                 threadInspectionHandler: this.threadInspectionHandler,
                 threadOrchestrationHandler: this.threadOrchestrationHandler,
-              }),
+              }, { taskMonitorRole: "all" }),
           });
     this.pdfToolMcpServer =
       options?.pdfToolMcpServer === null
@@ -14151,11 +14203,7 @@ export class DesktopBackendRegistry {
       // terminal handler cannot mistake this user action for a crash.
       this.taskMonitorDelegations.delete(params.monitorId);
       try {
-        const executionMode = taskMonitor.executionMode ?? "default";
-        await this.getClient("codex", executionMode).interruptTurn({
-          threadId: taskMonitor.monitorThreadId,
-          turnId: taskMonitor.monitorTurnId,
-        });
+        await this.interruptManagedTaskMonitor(taskMonitor);
       } catch (error) {
         this.taskMonitorDelegations.set(params.monitorId, taskMonitor);
         throw error;
@@ -17958,6 +18006,7 @@ export class DesktopBackendRegistry {
     // in memory. `closed` prevents either drain from re-arming its timer; the
     // serialized flush chains ensure no write survives close().
     await liveThreadUsageEmitBarrier;
+    this.completedTaskMonitorsByThread.clear();
     await this.flushLiveThreadUsageLines();
     // A command streaming at quit time has accounting worth up to one flush
     // window sitting in memory; write it before the store goes away. The flush
@@ -20234,25 +20283,52 @@ export class DesktopBackendRegistry {
       }
     }
 
-    if (event.backend !== "codex") {
-      return;
-    }
-
-    const monitorRecord = Array.from(this.taskMonitorDelegations.values()).find(
-      (record) => record.monitorThreadId === notification.params.threadId,
-    );
+    const monitorRecord =
+      Array.from(this.taskMonitorDelegations.values()).find(
+        (record) =>
+          record.backend === event.backend
+          && record.monitorThreadId === notification.params.threadId,
+      ) ??
+      this.completedTaskMonitorsByThread.get(
+        taskMonitorThreadKey(event.backend, notification.params.threadId),
+      );
     if (!monitorRecord) {
-      await this.recordCodexNativeSubAgentUsage(event);
+      if (event.backend === "codex") {
+        await this.recordCodexNativeSubAgentUsage(event);
+      }
       return;
     }
 
     monitorRecord.lastActivityAt = Date.now();
-    const usageSnapshot = buildTaskMonitorUsageSnapshot({
-      model: monitorRecord.preferredModel,
-      tokenUsage: notification.params.tokenUsage,
-    });
+    const model =
+      readTaskMonitorUsageModel({
+        notificationModel: notification.params.model,
+        tokenUsage: notification.params.tokenUsage,
+      }) ?? monitorRecord.preferredModel;
+    const usageSnapshot =
+      event.backend === "codex"
+        ? buildTaskMonitorUsageSnapshot({
+            model,
+            tokenUsage: notification.params.tokenUsage,
+          })
+        : this.buildIncrementalSubAgentUsageSnapshot({
+            backend: event.backend,
+            model,
+            threadId: notification.params.threadId,
+            tokenUsage: notification.params.tokenUsage,
+            turnId:
+              notification.params.turnId ?? monitorRecord.monitorTurnId,
+          });
     if (usageSnapshot) {
       monitorRecord.latestUsage = usageSnapshot;
+      const shouldPersistUsage =
+        event.backend === "codex"
+        || !readTaskMonitorTokenUsageRecords(
+          notification.params.tokenUsage,
+        )?.totalUsage;
+      if (!shouldPersistUsage) {
+        return;
+      }
       const observedReplays = this.observeLiveThreadContextReplay({
         backend: event.backend,
         threadId: notification.params.threadId,
@@ -20264,8 +20340,8 @@ export class DesktopBackendRegistry {
       });
       if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
         const line = buildTaskMonitorUsageLine({
-          backend: monitorRecord.parentBackend,
-          model: monitorRecord.preferredModel,
+          backend: monitorRecord.backend,
+          model,
           monitorId: monitorRecord.monitorId,
           monitorThreadId: monitorRecord.monitorThreadId ?? notification.params.threadId,
           monitorTurnId: monitorRecord.monitorTurnId,
@@ -20588,7 +20664,11 @@ export class DesktopBackendRegistry {
     }
     if (
       Array.from(this.taskMonitorDelegations.values()).some(
-        (record) => record.monitorThreadId === threadId,
+        (record) =>
+          record.backend === event.backend && record.monitorThreadId === threadId,
+      )
+      || this.completedTaskMonitorsByThread.has(
+        taskMonitorThreadKey(event.backend, threadId),
       )
     ) {
       return;
@@ -21682,6 +21762,7 @@ export class DesktopBackendRegistry {
       threadId: record.parentThreadId,
       subAgent,
     });
+    record.persistedStatus = subAgent.status;
     this.invalidateThreadListCache(record.parentBackend);
     await this.emit({
       backend: record.parentBackend,
@@ -22086,7 +22167,8 @@ export class DesktopBackendRegistry {
     return undefined;
   }
 
-  private recordTaskMonitorActivity(notification: AppServerNotification): void {
+  private recordTaskMonitorActivity(event: AgentEvent): void {
+    const notification = event.notification;
     const params = readRecord(notification.params);
     const threadId = typeof params?.threadId === "string" ? params.threadId : undefined;
     if (!threadId) {
@@ -22094,7 +22176,8 @@ export class DesktopBackendRegistry {
     }
 
     const monitorRecord = Array.from(this.taskMonitorDelegations.values()).find(
-      (record) => record.monitorThreadId === threadId,
+      (record) =>
+        record.backend === event.backend && record.monitorThreadId === threadId,
     );
     if (!monitorRecord) {
       return;
@@ -27095,12 +27178,12 @@ export class DesktopBackendRegistry {
     }
     if (request.operation === "inject_progress") {
       return await this.injectTaskMonitorProgress(
-        request.context.threadId,
+        request.context,
         request.args as InjectMonitorProgressToolArgs,
       );
     }
     return await this.completeTaskMonitoring(
-      request.context.threadId,
+      request.context,
       request.args as CompleteMonitoringToolArgs,
     );
   }
@@ -27200,24 +27283,27 @@ export class DesktopBackendRegistry {
       normalizePollIntervalSeconds(args.pollIntervalSeconds) ??
       DEFAULT_TASK_MONITOR_POLL_INTERVAL_SECONDS;
     const heartbeatIntervalSeconds = pollIntervalSeconds;
-    const requestedModel = normalizePreferredMonitorModel(args.preferredModel);
-    const requestedReasoningEffort = normalizePreferredMonitorReasoningEffort(
-      args.preferredReasoningEffort,
-    );
+    const requestedModel = args.preferredModel?.trim() || undefined;
+    const requestedReasoningEffort =
+      args.preferredReasoningEffort?.trim() || undefined;
     let preferredModel: string;
     let preferredReasoningEffort: string;
+    let runtimeModel: string | undefined;
     try {
       const resolved = await this.resolveTaskMonitorModelSettings({
+        backend: context.backend,
+        parentThreadId,
         preferredModel: requestedModel,
         preferredReasoningEffort: requestedReasoningEffort,
       });
       preferredModel = resolved.preferredModel;
       preferredReasoningEffort = resolved.preferredReasoningEffort;
+      runtimeModel = resolved.runtimeModel;
     } catch (error) {
       return taskMonitorFailure(
         "create_monitor_delegation",
         "internal_error",
-        `Task monitor delegation requires an available Codex model: ${error instanceof Error ? error.message : String(error)}`,
+        `Task monitor delegation could not select a runtime model: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
     const startupTimeoutSeconds = DEFAULT_TASK_MONITOR_STARTUP_TIMEOUT_SECONDS;
@@ -27252,7 +27338,7 @@ export class DesktopBackendRegistry {
     }
     const record: TaskMonitorDelegationRecord = {
       activeCommandCount: 0,
-      backend: "codex",
+      backend: context.backend,
       createdAt: Date.now(),
       finalHandoffPrompt: args.finalHandoffPrompt?.trim() || undefined,
       heartbeatIntervalSeconds,
@@ -27263,6 +27349,7 @@ export class DesktopBackendRegistry {
       pollIntervalSeconds,
       preferredModel,
       preferredReasoningEffort,
+      runtimeModel,
       startupTimeoutSeconds,
       task,
     };
@@ -27270,6 +27357,7 @@ export class DesktopBackendRegistry {
     backendRegistryLog.info("created task monitor delegation", {
       heartbeatIntervalSeconds,
       monitorId,
+      monitorBackend: context.backend,
       parentThreadId,
       pollIntervalSeconds,
       startupTimeoutSeconds,
@@ -27288,6 +27376,7 @@ export class DesktopBackendRegistry {
         monitorId,
         preferredModel,
         preferredReasoningEffort,
+        runtimeModel,
         prompt,
       });
     } catch (error) {
@@ -27322,6 +27411,9 @@ export class DesktopBackendRegistry {
         heartbeatIntervalSeconds,
         startupTimeoutSeconds,
         startedByPwrAgent: true,
+        startupConfirmed: true,
+        parentShouldPoll: false,
+        completionWakesParentByDefault: true,
         monitorThreadId: startedMonitor.threadId,
         monitorTurnId: startedMonitor.turnId,
         parentAgentGuidance,
@@ -27425,7 +27517,6 @@ export class DesktopBackendRegistry {
     // one interrupt and one terminal completion.
     record.cancellation = cancellation;
     record.lastActivityAt = Date.now();
-    const executionMode = record.executionMode ?? "default";
     cancellation.requestPersisted = this.persistTaskMonitorSubAgent(record, {
       lastMessage: "Cancellation requested; waiting for the monitor turn to stop.",
       status: "cancelling",
@@ -27438,10 +27529,7 @@ export class DesktopBackendRegistry {
       ) {
         return await cancellation.promise;
       }
-      await this.getClient("codex", executionMode).interruptTurn({
-        threadId: record.monitorThreadId,
-        turnId: record.monitorTurnId,
-      });
+      await this.interruptManagedTaskMonitor(record);
     } catch (error) {
       if (
         record.cancellation !== cancellation
@@ -27530,13 +27618,29 @@ export class DesktopBackendRegistry {
   }
 
   private async resolveTaskMonitorModelSettings(params: {
+    backend: AppServerBackendKind;
+    parentThreadId: string;
     preferredModel?: string;
     preferredReasoningEffort?: string;
-  }): Promise<{ preferredModel: string; preferredReasoningEffort: string }> {
-    const requestedModel = normalizePreferredMonitorModel(params.preferredModel);
-    const requestedReasoningEffort = normalizePreferredMonitorReasoningEffort(
-      params.preferredReasoningEffort,
+  }): Promise<{
+    preferredModel: string;
+    preferredReasoningEffort: string;
+    runtimeModel?: string;
+  }> {
+    if (isAcpBackendId(params.backend)) {
+      return this.resolveAcpTaskMonitorModelSettings({
+        ...params,
+        backend: params.backend,
+      });
+    }
+
+    const requestedModel = normalizePreferredMonitorModel(
+      params.preferredModel,
     );
+    const requestedReasoningEffort =
+      normalizePreferredMonitorReasoningEffort(
+        params.preferredReasoningEffort,
+      );
     const discoveredModels = await this.readCodexDefaultModelsOnce("task-monitor");
     const options = buildLaunchpadOptions("codex", discoveredModels, {
       allowFallbackModels: false,
@@ -27571,12 +27675,68 @@ export class DesktopBackendRegistry {
     };
   }
 
+  private resolveAcpTaskMonitorModelSettings(params: {
+    backend: AcpBackendId;
+    parentThreadId: string;
+    preferredModel?: string;
+    preferredReasoningEffort?: string;
+  }): {
+    preferredModel: string;
+    preferredReasoningEffort: string;
+    runtimeModel?: string;
+  } {
+    const options = this.acpBackend.getLaunchpadOptions(params.backend);
+    const models = options?.models ?? [];
+    const parentSession = this.acpBackend.getSession(
+      params.backend,
+      params.parentThreadId,
+    );
+    const requestedModel = params.preferredModel?.trim();
+    const selectedModel =
+      (requestedModel
+        ? models.find((model) => model.id === requestedModel)
+        : undefined) ??
+      models.find((model) => isLightweightMonitorModel(model.id)) ??
+      models.find(
+        (model) => model.id === parentSession?.acpRuntime?.currentModelId,
+      ) ??
+      models.find((model) => model.current) ??
+      models[0];
+    const preferredModel =
+      selectedModel?.id ??
+      requestedModel ??
+      parentSession?.acpRuntime?.currentModelId ??
+      `${params.backend.slice("acp:".length)}-default`;
+    const runtimeModel =
+      selectedModel?.id ??
+      requestedModel ??
+      parentSession?.acpRuntime?.currentModelId;
+    const reasoningEfforts =
+      selectedModel?.reasoningEfforts ??
+      options?.reasoningEfforts ??
+      readAcpThoughtLevelValues(
+        this.acpBackend.getInstalledAgent(params.backend)?.runtimeCapabilities,
+      );
+    const requestedReasoningEffort = params.preferredReasoningEffort?.trim();
+    const preferredReasoningEffort =
+      (requestedReasoningEffort && reasoningEfforts.includes(requestedReasoningEffort)
+        ? requestedReasoningEffort
+        : undefined) ??
+      selectLowestMonitorReasoningEffort(reasoningEfforts) ??
+      requestedReasoningEffort ??
+      parentSession?.acpRuntime?.reasoningEffort ??
+      "provider-default";
+
+    return { preferredModel, preferredReasoningEffort, runtimeModel };
+  }
+
   private async startManagedTaskMonitor(params: {
     context: TaskMonitorRequest<"create_monitor_delegation">["context"];
     cwd?: string;
     monitorId: string;
     preferredModel: string;
     preferredReasoningEffort: string;
+    runtimeModel?: string;
     prompt: string;
   }): Promise<{
     cwd?: string;
@@ -27613,8 +27773,10 @@ export class DesktopBackendRegistry {
         params.context.threadId,
         sourceOverlay,
       ));
-    const client = this.getClient("codex", executionMode);
-    const dynamicTools = buildTaskMonitorDynamicToolSpecs("monitor");
+    const dynamicTools =
+      params.context.backend === "codex"
+        ? buildTaskMonitorDynamicToolSpecs("monitor")
+        : [];
 
     backendRegistryLog.info("starting managed task monitor thread", {
       cwd: cwd ?? null,
@@ -27631,10 +27793,69 @@ export class DesktopBackendRegistry {
       monitorId: params.monitorId,
       model: params.preferredModel,
       parentThreadId: params.context.threadId,
+      provider: params.context.backend,
       reasoningEffort: params.preferredReasoningEffort,
       toolCount: dynamicTools.length,
     });
 
+    if (isAcpBackendId(params.context.backend)) {
+      const parentSession = this.acpBackend.getSession(
+        params.context.backend,
+        params.context.threadId,
+      );
+      const runtimeCapabilities = this.acpBackend.getInstalledAgent(
+        params.context.backend,
+      )?.runtimeCapabilities;
+      const reasoningEffort =
+        params.preferredReasoningEffort === "provider-default"
+          ? undefined
+          : params.preferredReasoningEffort;
+      const thoughtLevelOption = findAcpThoughtLevelConfigOption(
+        runtimeCapabilities,
+      );
+      const selectedRuntime = params.runtimeModel
+        ? withAcpModelRuntimeSelection({
+            runtime: parentSession?.acpRuntime,
+            runtimeCapabilities,
+            model: params.runtimeModel,
+            reasoningEffort,
+            now: Date.now(),
+          })
+        : reasoningEffort && thoughtLevelOption
+          ? {
+              ...parentSession?.acpRuntime,
+              configValues: {
+                ...(parentSession?.acpRuntime?.configValues ?? {}),
+                [thoughtLevelOption.id]: reasoningEffort,
+              },
+              reasoningEffort,
+              updatedAt: Date.now(),
+            }
+          : parentSession?.acpRuntime;
+      const thread = await this.startAcpSession({
+        backend: params.context.backend,
+        cwd,
+        executionMode,
+        acpRuntime: selectedRuntime,
+        reasoningEffort,
+        hidden: true,
+      });
+      const turn = await this.startAcpTurn({
+        backend: params.context.backend,
+        threadId: thread.threadId,
+        input: [{ type: "text", text: params.prompt }],
+        model: params.runtimeModel,
+        reasoningEffort,
+      });
+      return {
+        cwd,
+        executionMode,
+        threadId: turn.threadId,
+        turnId: turn.turnId,
+      };
+    }
+
+    const client = this.getClient("codex", executionMode);
     const thread = await client.startThread({
       ...(cwd ? { cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
@@ -27696,10 +27917,10 @@ export class DesktopBackendRegistry {
   }
 
   private async injectTaskMonitorProgress(
-    callerThreadId: string,
+    caller: TaskMonitorRequest["context"],
     args: InjectMonitorProgressToolArgs,
   ): Promise<TaskMonitorResponse<"inject_progress">> {
-    const bound = this.bindTaskMonitorCaller(args.monitorId, callerThreadId);
+    const bound = this.bindTaskMonitorCaller(args.monitorId, caller);
     if (!bound.ok) {
       return taskMonitorFailure("inject_progress", bound.code, bound.message);
     }
@@ -27709,10 +27930,13 @@ export class DesktopBackendRegistry {
     }
 
     bound.record.lastActivityAt = Date.now();
-    await this.persistTaskMonitorSubAgent(bound.record, {
-      lastMessage: message,
-      status: args.status ?? "running",
-    });
+    const nextStatus = args.status ?? "running";
+    if (nextStatus !== bound.record.persistedStatus) {
+      await this.persistTaskMonitorSubAgent(bound.record, {
+        lastMessage: message,
+        status: nextStatus,
+      });
+    }
     await this.emitTaskMonitorProgressMessage({
       monitorId: bound.record.monitorId,
       parentBackend: bound.record.parentBackend,
@@ -27740,10 +27964,10 @@ export class DesktopBackendRegistry {
   }
 
   private async completeTaskMonitoring(
-    callerThreadId: string,
+    caller: TaskMonitorRequest["context"],
     args: CompleteMonitoringToolArgs,
   ): Promise<TaskMonitorResponse<"complete_monitoring">> {
-    const bound = this.bindTaskMonitorCaller(args.monitorId, callerThreadId);
+    const bound = this.bindTaskMonitorCaller(args.monitorId, caller);
     if (!bound.ok) {
       return taskMonitorFailure("complete_monitoring", bound.code, bound.message);
     }
@@ -27920,10 +28144,23 @@ export class DesktopBackendRegistry {
     }
 
     this.taskMonitorDelegations.delete(params.record.monitorId);
+    if (
+      params.completionSource.type === "monitor_tool"
+      && params.record.monitorThreadId
+    ) {
+      this.completedTaskMonitorsByThread.set(
+        taskMonitorThreadKey(
+          params.record.backend,
+          params.record.monitorThreadId,
+        ),
+        params.record,
+      );
+    }
     return parentTurn;
   }
 
   private async handleTaskMonitorTerminalNotification(
+    backend: AppServerBackendKind,
     notification: Extract<
       AppServerNotification,
       { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
@@ -27937,8 +28174,24 @@ export class DesktopBackendRegistry {
         : notification.method === "turn/failed"
           ? "failed"
           : "cancelled";
+    const completedMonitorKey = taskMonitorThreadKey(backend, threadId);
+    const completedRecord = this.completedTaskMonitorsByThread.get(
+      completedMonitorKey,
+    );
+    if (
+      completedRecord
+      && (
+        !completedRecord.monitorTurnId
+        || !turnId
+        || completedRecord.monitorTurnId === turnId
+      )
+    ) {
+      this.completedTaskMonitorsByThread.delete(completedMonitorKey);
+      return;
+    }
     const record = Array.from(this.taskMonitorDelegations.values()).find(
       (candidate) =>
+        candidate.backend === backend &&
         candidate.monitorThreadId === threadId &&
         (!candidate.monitorTurnId || !turnId || candidate.monitorTurnId === turnId),
     );
@@ -28037,11 +28290,7 @@ export class DesktopBackendRegistry {
     });
 
     try {
-      const executionMode = record.executionMode ?? "default";
-      await this.getClient("codex", executionMode).interruptTurn({
-        threadId: record.monitorThreadId,
-        turnId: record.monitorTurnId,
-      });
+      await this.interruptManagedTaskMonitor(record);
     } catch (error) {
       backendRegistryLog.error("failed to interrupt stale task monitor", {
         error: error instanceof Error ? error.message : String(error),
@@ -28077,13 +28326,46 @@ export class DesktopBackendRegistry {
     record.staleInterruptAttempted = false;
     const executionMode = record.executionMode ?? "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
-    const client = this.getClient("codex", executionMode);
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend: record.parentBackend,
       threadId: record.parentThreadId,
     });
 
     try {
+      if (isAcpBackendId(record.backend)) {
+        const turn = await this.startAcpTurn({
+          backend: record.backend,
+          threadId: record.monitorThreadId,
+          input: [
+            {
+              type: "text",
+              text: buildTaskMonitorRecoveryPrompt({
+                monitorId: record.monitorId,
+                task: record.task,
+                terminalStatus: params.terminalStatus,
+              }),
+            },
+          ],
+          model: record.runtimeModel,
+          reasoningEffort:
+            record.preferredReasoningEffort === "provider-default"
+              ? undefined
+              : record.preferredReasoningEffort,
+        });
+        record.monitorTurnId = turn.turnId;
+        record.lastActivityAt = Date.now();
+        backendRegistryLog.warn("started ACP task monitor recovery turn", {
+          backend: record.backend,
+          monitorId: record.monitorId,
+          monitorThreadId: record.monitorThreadId,
+          monitorTurnId: record.monitorTurnId,
+          parentThreadId: record.parentThreadId,
+          terminalStatus: params.terminalStatus,
+        });
+        return;
+      }
+
+      const client = this.getClient("codex", executionMode);
       const turn = await client.startTurn({
         threadId: record.monitorThreadId,
         input: [
@@ -28129,6 +28411,27 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async interruptManagedTaskMonitor(
+    record: TaskMonitorDelegationRecord,
+  ): Promise<void> {
+    if (!record.monitorThreadId || !record.monitorTurnId) {
+      throw new Error("Task monitor does not expose an active turn.");
+    }
+    if (isAcpBackendId(record.backend)) {
+      await this.interruptTurn({
+        backend: record.backend,
+        threadId: record.monitorThreadId,
+        turnId: record.monitorTurnId,
+      });
+      return;
+    }
+    const executionMode = record.executionMode ?? "default";
+    await this.getClient("codex", executionMode).interruptTurn({
+      threadId: record.monitorThreadId,
+      turnId: record.monitorTurnId,
+    });
+  }
+
   private async synthesizeTaskMonitorFallbackCompletion(params: {
     record: TaskMonitorDelegationRecord;
     reason: string;
@@ -28170,7 +28473,7 @@ export class DesktopBackendRegistry {
 
   private bindTaskMonitorCaller(
     monitorId: string,
-    callerThreadId: string,
+    caller: TaskMonitorRequest["context"],
   ):
     | { ok: true; record: TaskMonitorDelegationRecord }
     | { ok: false; code: "forbidden" | "invalid_arguments" | "not_found"; message: string } {
@@ -28182,7 +28485,14 @@ export class DesktopBackendRegistry {
     if (!record) {
       return { ok: false, code: "not_found", message: "Unknown or completed monitorId." };
     }
-    if (record.monitorThreadId && record.monitorThreadId !== callerThreadId) {
+    if (record.backend !== caller.backend) {
+      return {
+        ok: false,
+        code: "forbidden",
+        message: "This monitorId belongs to another provider runtime.",
+      };
+    }
+    if (record.monitorThreadId && record.monitorThreadId !== caller.threadId) {
       return {
         ok: false,
         code: "forbidden",
@@ -28190,7 +28500,7 @@ export class DesktopBackendRegistry {
       };
     }
     if (!record.monitorThreadId) {
-      record.monitorThreadId = callerThreadId;
+      record.monitorThreadId = caller.threadId;
     }
     return { ok: true, record };
   }
@@ -30387,9 +30697,7 @@ export class DesktopBackendRegistry {
     event = this.withEmbeddedFileChangeApprovalContext(event);
     this.rememberManagedReviewOutput(event);
 
-    if (event.backend === "codex") {
-      this.recordTaskMonitorActivity(event.notification);
-    }
+    this.recordTaskMonitorActivity(event);
 
     this.rememberThreadTitleFromEvent(event);
     if (this.shouldInvalidateThreadListCacheForNotification(event.notification.method)) {
@@ -30696,12 +31004,12 @@ export class DesktopBackendRegistry {
     }
 
     if (
-      event.backend === "codex" &&
-      (event.notification.method === "turn/completed" ||
-        event.notification.method === "turn/failed" ||
-        event.notification.method === "turn/cancelled")
+      event.notification.method === "turn/completed" ||
+      event.notification.method === "turn/failed" ||
+      event.notification.method === "turn/cancelled"
     ) {
       await this.handleTaskMonitorTerminalNotification(
+        event.backend,
         event.notification as Extract<
           AppServerNotification,
           { method: "turn/completed" | "turn/failed" | "turn/cancelled" }
