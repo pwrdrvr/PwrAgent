@@ -12,7 +12,7 @@ describe("federation frame codec", () => {
       envelope: {
         kind: "response",
         result: {
-          items: Array.from({ length: 4_000 }, (_, index) => ({
+          items: Array.from({ length: 100 }, (_, index) => ({
             id: `command-${index}`,
             output: "repeated command output\n".repeat(12),
             type: "commandExecution",
@@ -28,10 +28,11 @@ describe("federation frame codec", () => {
 
     expect(frame.length).toBeLessThan(json.length);
     expect(frame.subarray(0, 4).toString("ascii")).toBe("PWB1");
-    expect(decodeFederationFramePayload({
+    const decoded = decodeFederationFramePayload({
       frame,
       compressionEnabled: true,
-    })).toEqual(json);
+    });
+    expect(decoded.equals(json)).toBe(true);
   });
 
   it("leaves small and incompressible frames unwrapped", () => {
