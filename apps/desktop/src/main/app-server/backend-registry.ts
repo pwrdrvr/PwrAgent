@@ -5146,7 +5146,10 @@ function attachReviewEntryReviewers(params: {
   replay: AppServerThreadReplay;
   subAgents?: ThreadSubAgentSummary[];
 }): AppServerThreadReplay {
-  const reviewerByTurnId = new Map<string, AppServerThreadReviewEntry["reviewer"]>();
+  const reviewerByTurnId = new Map<
+    string,
+    NonNullable<AppServerThreadReviewEntry["reviewer"]>
+  >();
   for (const subAgent of params.subAgents ?? []) {
     if (
       !subAgent.monitorId.startsWith("review:")
@@ -5174,11 +5177,26 @@ function attachReviewEntryReviewers(params: {
 
   let changed = false;
   const entries = params.replay.entries.map((entry) => {
-    if (entry.type !== "review" || entry.reviewer || !entry.turn?.id) {
+    if (entry.type !== "review" || !entry.turn?.id) {
       return entry;
     }
-    const reviewer = reviewerByTurnId.get(entry.turn.id);
-    if (!reviewer) {
+    const durableReviewer = reviewerByTurnId.get(entry.turn.id);
+    if (!durableReviewer) {
+      return entry;
+    }
+    const model = entry.reviewer?.model ?? durableReviewer.model;
+    const reasoningEffort =
+      entry.reviewer?.reasoningEffort ?? durableReviewer.reasoningEffort;
+    const reviewer = {
+      backend: entry.reviewer?.backend ?? durableReviewer.backend,
+      ...(model ? { model } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    };
+    if (
+      entry.reviewer?.backend === reviewer.backend
+      && entry.reviewer?.model === reviewer.model
+      && entry.reviewer?.reasoningEffort === reviewer.reasoningEffort
+    ) {
       return entry;
     }
     changed = true;
