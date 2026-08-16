@@ -187,6 +187,18 @@ describe("messaging tool activity", () => {
     expect(activity?.title).toBe("Read file");
   });
 
+  it("replaces generic provider placeholders with an explicit diagnostic", () => {
+    const activity = summarizeToolActivityFromBackendEvent(
+      buildCompletedItem({
+        id: "sparse-tool-1",
+        type: "commandExecution",
+        command: "tool",
+      }),
+    );
+
+    expect(formatToolActivityLine(activity!)).toBe("Tool details unavailable");
+  });
+
   it("redacts token-like web search query fragments from titles", () => {
     const directQuery = summarizeToolActivityFromBackendEvent(
       buildCompletedItem({

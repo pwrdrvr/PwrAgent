@@ -5,6 +5,7 @@ import type {
   AppServerThreadPlanEntry,
   AppServerThreadTurnMetadata,
 } from "@pwragent/shared";
+import { coalesceToolActivityBurst } from "@pwragent/shared";
 
 export type TranscriptRenderItem =
   | {
@@ -175,7 +176,7 @@ function buildCompletedGroups(
       label: hasWork
         ? repeatedWorkTurn
           ? "More work"
-          : workGroupLabel(turn)
+          : workGroupLabel(turn, currentEntries)
         : previousMessagesLabel(currentEntries.filter(isAssistantCommentaryMessage).length),
     });
     if (hasWork) {
@@ -399,20 +400,47 @@ function readCompletedTurn(
     );
 }
 
-function workGroupLabel(turn: AppServerThreadTurnMetadata): string {
-  if (typeof turn.durationMs === "number" && turn.durationMs > 60_000) {
-    return `Worked for ${formatElapsedMs(turn.durationMs)}`;
+function workGroupLabel(
+  turn: AppServerThreadTurnMetadata,
+  entries: AppServerThreadEntry[],
+): string {
+  const base = typeof turn.durationMs === "number" && turn.durationMs > 60_000
+    ? `Worked for ${formatElapsedMs(turn.durationMs)}`
+    : typeof turn.startedAt === "number"
+      && typeof turn.completedAt === "number"
+      && turn.completedAt > turn.startedAt + 60_000
+      ? `Worked for ${formatElapsedMs(turn.completedAt - turn.startedAt)}`
+      : "Previous work";
+  const toolEntries = entries.filter(
+    (entry): entry is AppServerThreadActivityEntry => entry.type === "activity",
+  );
+  if (toolEntries.length < 2) {
+    return base;
   }
 
-  if (
-    typeof turn.startedAt === "number" &&
-    typeof turn.completedAt === "number" &&
-    turn.completedAt > turn.startedAt + 60_000
-  ) {
-    return `Worked for ${formatElapsedMs(turn.completedAt - turn.startedAt)}`;
-  }
-
-  return "Previous work";
+  const groups = coalesceToolActivityBurst(
+    toolEntries.map((entry) => ({
+      entry,
+      label: entry.summary,
+      status: entry.status,
+    })),
+  );
+  const visibleGroups = groups.slice(0, 3);
+  const omittedToolCount = groups
+    .slice(3)
+    .reduce((total, group) => total + group.count, 0);
+  const summary = visibleGroups
+    .map((group) =>
+      group.count === 1 ? group.label : `${group.count} × ${group.label}`
+    )
+    .join(", ");
+  return `${base} · ${toolEntries.length} tool update${
+    toolEntries.length === 1 ? "" : "s"
+  }: ${summary}${
+    omittedToolCount > 0
+      ? `, ${omittedToolCount} other tool update${omittedToolCount === 1 ? "" : "s"}`
+      : ""
+  }`;
 }
 
 function previousMessagesLabel(count: number): string {

@@ -1,6 +1,7 @@
 import path from "node:path";
 import {
   formatSearchCommandActionLabel,
+  normalizeToolActivityBurstLabel,
   type AgentEvent,
 } from "@pwragent/shared";
 import {
@@ -110,10 +111,10 @@ export function summarizeToolActivityFromBackendEvent(
 export function formatToolActivityLine(activity: MessagingToolActivity): string {
   return [
     activity.status === "failed"
-      ? `Failed: ${activity.title}`
+      ? `Failed: ${normalizeToolActivityBurstLabel(activity.title)}`
       : activity.status === "cancelled"
-        ? `Cancelled: ${activity.title}`
-        : activity.title,
+        ? `Cancelled: ${normalizeToolActivityBurstLabel(activity.title)}`
+        : normalizeToolActivityBurstLabel(activity.title),
     activity.durationMs !== undefined
       ? ` (${formatToolActivityDuration(activity.durationMs)})`
       : "",
