@@ -22,6 +22,7 @@ import type {
   AcpAgentInstance,
   AcpAgentPreference,
   AcpBackendId,
+  AcpRejectedAgentInstance,
 } from "@pwragent/shared";
 import { resolveActiveAcpInstance } from "./acp-instance-resolver.js";
 import { acpAgentCapabilitiesForRegistryId } from "./acp-agent-capabilities.js";
@@ -59,6 +60,8 @@ export type AcpInstanceDiscovery = {
   instances: AcpAgentInstance[];
   /** Detected command collisions that are intentionally excluded. */
   incompatibleInstances?: AcpAgentInstance[];
+  /** Detected executables that failed ACP verification and cannot launch. */
+  rejectedInstances?: AcpRejectedAgentInstance[];
   /** The instance command currently in effect (override → picked → first). */
   activeCommand?: string;
 };
@@ -117,6 +120,7 @@ export async function discoverAcpAgentInstances(
     ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
     ...(options?.env ? { env: options.env } : {}),
     ...(options?.now ? { now: options.now } : {}),
+    includeRejectedCandidates: true,
   });
   const groups = await withBundledGrok(
     discoveredGroups,
@@ -131,9 +135,11 @@ export async function discoverAcpAgentInstances(
   const byRegistryId = new Map<string, AcpInstanceDiscovery>();
   for (const group of groups) {
     const classified = await classifyGroupInstances(group, options);
+    const rejectedInstances = mapRejectedInstances(group);
     if (
       classified.instances.length === 0
       && classified.incompatibleInstances.length === 0
+      && rejectedInstances.length === 0
     ) {
       continue;
     }
@@ -146,6 +152,7 @@ export async function discoverAcpAgentInstances(
       ...(classified.incompatibleInstances.length > 0
         ? { incompatibleInstances: classified.incompatibleInstances }
         : {}),
+      ...(rejectedInstances.length > 0 ? { rejectedInstances } : {}),
       ...(active !== undefined ? { activeCommand: active.command } : {}),
     });
   }
@@ -180,6 +187,7 @@ export async function discoverLocalAcpAgentRecords(
     ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
     ...(options?.env ? { env: options.env } : {}),
     ...(options?.now ? { now: options.now } : {}),
+    includeRejectedCandidates: true,
   });
   const now = options?.now?.() ?? Date.now();
   const bundledGrokCommand =
@@ -197,9 +205,11 @@ export async function discoverLocalAcpAgentRecords(
   const records: AcpInstalledAgentRecord[] = [];
   for (const group of groups) {
     const classified = await classifyGroupInstances(group, options);
+    const rejectedInstances = mapRejectedInstances(group);
     if (
       classified.instances.length === 0
       && classified.incompatibleInstances.length === 0
+      && rejectedInstances.length === 0
     ) {
       continue;
     }
@@ -216,6 +226,15 @@ export async function discoverLocalAcpAgentRecords(
           legacyKimiUnavailableRecord({
             group,
             incompatibleInstances: classified.incompatibleInstances,
+            rejectedInstances,
+            now,
+          }),
+        );
+      } else if (rejectedInstances.length > 0) {
+        records.push(
+          rejectedAcpAgentRecord({
+            group,
+            rejectedInstances,
             now,
           }),
         );
@@ -273,10 +292,22 @@ export async function discoverLocalAcpAgentRecords(
       ...(classified.incompatibleInstances.length > 0
         ? { incompatibleInstances: classified.incompatibleInstances }
         : {}),
+      ...(rejectedInstances.length > 0 ? { rejectedInstances } : {}),
       activeCommand: active.command,
     });
   }
   return records;
+}
+
+function mapRejectedInstances(
+  group: DiscoveredAcpAgentGroup,
+): AcpRejectedAgentInstance[] {
+  return (group.rejectedInstances ?? []).map((instance) => ({
+    command: instance.command,
+    ...(instance.version !== undefined ? { version: instance.version } : {}),
+    source: instance.source,
+    reason: instance.reason,
+  }));
 }
 
 async function classifyGroupInstances(
@@ -360,6 +391,7 @@ async function defaultReadVersionOutput(
 function legacyKimiUnavailableRecord(params: {
   group: DiscoveredAcpAgentGroup;
   incompatibleInstances: AcpAgentInstance[];
+  rejectedInstances: AcpRejectedAgentInstance[];
   now: number;
 }): AcpInstalledAgentRecord {
   const active = params.incompatibleInstances[0];
@@ -399,7 +431,67 @@ function legacyKimiUnavailableRecord(params: {
     registryAgent,
     instances: [],
     incompatibleInstances: params.incompatibleInstances,
+    ...(params.rejectedInstances.length > 0
+      ? { rejectedInstances: params.rejectedInstances }
+      : {}),
   };
+}
+
+function rejectedAcpAgentRecord(params: {
+  group: DiscoveredAcpAgentGroup;
+  rejectedInstances: AcpRejectedAgentInstance[];
+  now: number;
+}): AcpInstalledAgentRecord {
+  const rejected = params.rejectedInstances[0];
+  const strategy = strategyById(params.group.strategyId);
+  const registryAgent: AcpRegistryAgent = {
+    id: params.group.strategyId,
+    backendId: params.group.backendId as AcpBackendId,
+    name: params.group.name,
+    ...(rejected?.version !== undefined ? { version: rejected.version } : {}),
+    authors: strategy?.authors ?? [],
+    ...(strategy?.license !== undefined ? { license: strategy.license } : {}),
+    ...(strategy?.repositoryUrl !== undefined
+      ? { repositoryUrl: strategy.repositoryUrl }
+      : {}),
+    distributions: [],
+    distributionKinds: ["local"],
+    auth: { required: false, methods: ["agent-managed"] },
+    raw: { source: "rejected-local-cli" },
+  };
+  return {
+    backendId: params.group.backendId as AcpBackendId,
+    registryId: params.group.strategyId,
+    name: params.group.name,
+    ...(rejected?.version !== undefined ? { version: rejected.version } : {}),
+    distributionKind: "local",
+    distributionSource: `${rejected?.command ?? params.group.strategyId} (ACP verification failed)`,
+    installStatus: "unavailable",
+    authStatus: "not-required",
+    verificationStatus: "not-applicable",
+    allowlistRuleId: `local-${params.group.strategyId}-cli`,
+    installedAt: params.now,
+    updatedAt: params.now,
+    lastError: rejectedAcpCandidateMessage(rejected),
+    capabilities: acpAgentCapabilitiesForRegistryId(params.group.strategyId),
+    registryAgent,
+    instances: [],
+    rejectedInstances: params.rejectedInstances,
+  };
+}
+
+function rejectedAcpCandidateMessage(
+  rejected: AcpRejectedAgentInstance | undefined,
+): string {
+  const command = rejected?.command ?? "The detected executable";
+  switch (rejected?.reason) {
+    case "version-probe-failed":
+      return `${command} was found, but its version check failed.`;
+    case "acp-help-mismatch":
+      return `${command} was found, but its help output did not identify an ACP-capable CLI.`;
+    default:
+      return `${command} was found, but PwrAgent could not verify ACP support.`;
+  }
 }
 
 function strategiesForEnabledRegistryIds(

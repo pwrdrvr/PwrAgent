@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AcpAgentInstance } from "@pwragent/shared";
+import type {
+  AcpAgentInstance,
+  AcpRejectedAgentInstance,
+} from "@pwragent/shared";
 import type { LocalAcpDiscoveryOptions } from "@pwrdrvr/agent-acp";
 import { resolveActiveAcpInstance } from "../acp/acp-instance-resolver";
 import {
@@ -17,7 +20,11 @@ function instance(
   return { command, source, ...(version !== undefined ? { version } : {}) };
 }
 
-function group(strategyId: string, instances: AcpAgentInstance[]) {
+function group(
+  strategyId: string,
+  instances: AcpAgentInstance[],
+  rejectedInstances?: AcpRejectedAgentInstance[],
+) {
   return {
     strategyId,
     backendId: `acp:${strategyId}`,
@@ -25,6 +32,7 @@ function group(strategyId: string, instances: AcpAgentInstance[]) {
     args: ["--acp"],
     env: {},
     instances,
+    ...(rejectedInstances !== undefined ? { rejectedInstances } : {}),
     discoveredAt: 0,
   };
 }
@@ -300,6 +308,44 @@ describe("discoverLocalAcpAgentRecords", () => {
     expect(record).not.toHaveProperty("runtimeCapabilities");
   });
 
+  it("preserves rejected candidates alongside a legacy Kimi diagnostic", async () => {
+    const legacy = "/Users/me/.local/bin/kimi";
+    const rejected = "/Users/me/bin/not-kimi";
+    const discover = vi.fn(async () => [
+      group(
+        "kimi",
+        [instance(legacy, "path", "1.46.0")],
+        [
+          {
+            command: rejected,
+            source: "override",
+            reason: "acp-probe-failed",
+          },
+        ],
+      ),
+    ]);
+
+    const [record, ...rest] = await discoverLocalAcpAgentRecords({
+      discover,
+      now: () => 4242,
+      readVersionOutput: async () => "kimi, version 1.46.0",
+    });
+
+    expect(rest).toHaveLength(0);
+    expect(record).toMatchObject({
+      installStatus: "unavailable",
+      incompatibleInstances: [expect.objectContaining({ command: legacy })],
+      rejectedInstances: [
+        {
+          command: rejected,
+          source: "override",
+          reason: "acp-probe-failed",
+        },
+      ],
+    });
+    expect(record).not.toHaveProperty("launchDescriptor");
+  });
+
   it("builds installed-agent records with a resolved launch descriptor", async () => {
     const discover = vi.fn(async () => [
       group("qwen", [
@@ -340,6 +386,47 @@ describe("discoverLocalAcpAgentRecords", () => {
       bundledGrokCommand: null,
     });
     expect(records).toEqual([]);
+  });
+
+  it("retains a detected CLI that failed ACP verification as unavailable", async () => {
+    const rejectedPath = "/usr/local/bin/qwen";
+    const discover = vi.fn(async () => [
+      group("qwen", [], [
+        {
+          command: rejectedPath,
+          version: "0.21.0",
+          source: "path",
+          reason: "acp-probe-failed",
+        },
+      ]),
+    ]);
+
+    const [record, ...rest] = await discoverLocalAcpAgentRecords({
+      discover,
+      now: () => 4242,
+    });
+
+    expect(rest).toHaveLength(0);
+    expect(discover).toHaveBeenCalledWith(
+      expect.objectContaining({ includeRejectedCandidates: true }),
+    );
+    expect(record).toMatchObject({
+      backendId: "acp:qwen",
+      installStatus: "unavailable",
+      installedAt: 4242,
+      instances: [],
+      rejectedInstances: [
+        {
+          command: rejectedPath,
+          version: "0.21.0",
+          source: "path",
+          reason: "acp-probe-failed",
+        },
+      ],
+      lastError: `${rejectedPath} was found, but PwrAgent could not verify ACP support.`,
+    });
+    expect(record).not.toHaveProperty("launchDescriptor");
+    expect(record).not.toHaveProperty("runtimeCapabilities");
   });
 
   it("passes an empty strategy list when every provider is disabled", async () => {

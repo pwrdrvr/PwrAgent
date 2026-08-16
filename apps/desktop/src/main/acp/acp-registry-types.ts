@@ -1,6 +1,7 @@
 import type {
   AcpAgentUpdateStatus,
   AcpAgentInstance,
+  AcpRejectedAgentInstance,
   AcpBackendId,
   BackendAcpAuthStatus,
   BackendAcpDistributionKind,
@@ -116,6 +117,8 @@ export type AcpInstalledAgentRecord = {
   instances?: AcpAgentInstance[];
   /** Detected provider-name collisions that must not be launched. */
   incompatibleInstances?: AcpAgentInstance[];
+  /** Detected executables that failed ACP verification and must not launch. */
+  rejectedInstances?: AcpRejectedAgentInstance[];
   activeCommand?: string;
   update?: AcpAgentUpdateStatus;
   updateCommand?: string;

@@ -48,6 +48,13 @@ if (process.argv.includes("--version")) {
   process.stdout.write("kimi-code 0.1.0\\n");
   process.exit(0);
 }
+// Agent Kit verifies Kimi ACP support through the exit status of
+// kimi acp --help. Keep this fixture on the same discovery contract as the
+// real CLI so a configured, executable-backed fake remains launchable.
+if (process.argv.includes("acp") && process.argv.includes("--help")) {
+  process.stdout.write("Usage: kimi acp [options]\\n");
+  process.exit(0);
+}
 const readline = require("node:readline");
 const input = readline.createInterface({ input: process.stdin });
 input.on("line", (line) => {

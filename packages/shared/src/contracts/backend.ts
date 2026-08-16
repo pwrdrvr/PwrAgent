@@ -284,6 +284,9 @@ export type AcpAgentSettingsEntry = {
    *  unsupported predecessor product. They are shown for remediation but are
    *  never eligible for launch or model discovery. */
   incompatibleInstances?: AcpAgentInstance[];
+  /** Detected executables that failed the Agent Kit ACP discovery probe.
+   *  They are diagnostic-only and must never be offered as launch targets. */
+  rejectedInstances?: AcpRejectedAgentInstance[];
   activeCommand?: string;
   enabled?: boolean;
   preference?: AcpAgentPreference;
@@ -316,6 +319,11 @@ export type AcpAgentInstance = {
   version?: string;
   /** How the path was found: user override, a `PATH` match, or a fallback path. */
   source: AcpAgentInstanceSource;
+};
+
+/** An executable that was found but did not pass ACP discovery. */
+export type AcpRejectedAgentInstance = AcpAgentInstance & {
+  reason: "version-probe-failed" | "acp-probe-failed" | "acp-help-mismatch";
 };
 
 /** A user's per-agent path choice. `overridePath` is a manual absolute path
