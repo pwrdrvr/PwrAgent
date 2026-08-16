@@ -2,10 +2,8 @@ import type {
   BrowserWindow,
   BrowserWindowConstructorOptions,
 } from "electron";
-import {
-  readBootstrapAppearance,
-  themedTitleBarOverlay,
-} from "./settings/appearance-bootstrap";
+import { readBootstrapAppearance } from "./settings/appearance-bootstrap";
+import { themedTitleBarOverlay } from "./native-appearance";
 
 const supportsPerWindowMenuBar =
   process.platform === "linux" || process.platform === "win32";

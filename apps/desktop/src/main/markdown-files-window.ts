@@ -22,8 +22,8 @@ import {
 import {
   readBootstrapAppearance,
   themedWindowAdditionalArguments,
-  themedWindowBackgroundColor,
 } from "./settings/appearance-bootstrap";
+import { themedWindowBackgroundColor } from "./native-appearance";
 import {
   auxiliaryWindowChromeOptions,
   hideAuxiliaryWindowMenuBar,
