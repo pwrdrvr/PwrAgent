@@ -109,22 +109,32 @@ repo root. The package-level
 
 ### macOS VM E2E and visual goldens
 
-Do not run a full headed Electron suite on an active desktop. On a Mac with the
-Tart lab installed, use `~/pwragent-mac-vm/run-e2e.sh --local <repo-path>` so
-the windows render on the guest display. The complete setup, shared-runner
-security model, and troubleshooting guide live in
+Do not run a full headed Electron suite on an active desktop. The authoritative
+visual workflow uses a separately managed PwrSuiteLab Tart controller so the
+windows render on the guest display; it is not installed by this repository.
+Use available workspace/directory tools, PwrAgent Federation tools, or MCP
+resources to locate an existing local PwrSuiteLab checkout. If none is
+discoverable, ask the operator for the appropriate lab pointer. The security
+model and full workflow live in
 [`.agents/skills/macos-vm-e2e-lab/SKILL.md`](.agents/skills/macos-vm-e2e-lab/SKILL.md).
 
-The small macOS/ARM64 visual-regression suite has PNG baselines under
+The small macOS/ARM64 visual-regression suite has lossless WebP baselines under
 `apps/desktop/e2e/*.spec.ts-snapshots/`. They are Git LFS objects, not ordinary
-Git blobs. Update them only inside the Tart VM with:
+Git blobs. Generate them only inside the Tart VM with:
 
 ```bash
-~/pwragent-mac-vm/run-e2e.sh --local /absolute/path/to/PwrAgent \
-  e2e/visual-regression.spec.ts --update-snapshots
+suite_lab_root="<PwrSuiteLab checkout discovered with tools/MCP>"
+pwragent_root="$(git rev-parse --show-toplevel)"
+"$suite_lab_root/macos-tart/run-e2e.sh" --confirm-live-run \
+  --workload pwragent --local "$pwragent_root" \
+  e2e/visual-regression.spec.ts
 ```
 
-Review each changed image and check `git lfs status` before committing. The CI
+Review the retrieved `*-actual.webp` artifacts, promote the approved files to
+their `*-darwin.webp` baseline names, and check `git lfs status`. The controller
+rejects a dirty worktree and transports only committed `HEAD`, so commit the
+promoted references as a disposable checkpoint before rerunning the focused
+spec. Amend or squash that checkpoint only after the VM verifies it. The CI
 lane runs on the selected-repository PwrDrvr organization runner shared with
 PwrSnap; fork PRs are deliberately excluded from that machine.
 

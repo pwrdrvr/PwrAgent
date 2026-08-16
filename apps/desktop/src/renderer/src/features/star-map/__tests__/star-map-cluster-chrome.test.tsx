@@ -66,8 +66,6 @@ function renderOrbit(
       localThreads={threads}
       sessionKeys={{}}
       localInstanceLabel="Mac-Mini-M4"
-      floating={false}
-      onClose={() => undefined}
       onOpenLocalThread={() => undefined}
       onFocusLocalInstance={() => undefined}
     />,
@@ -79,8 +77,6 @@ function renderOrbit(
         localThreads={next}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -545,8 +541,6 @@ describe("star map load card overview fixes", () => {
         localThreads={threads}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,

@@ -15,6 +15,25 @@ const request: SteerTurnRequest = {
 };
 
 describe("admitSteerTurn", () => {
+  it("preserves provider next-turn steering delivery", async () => {
+    const steerTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      disposition: "queued" as const,
+    }));
+    const create = vi.fn();
+
+    await expect(admitSteerTurn({ steerTurn }, { create }, request))
+      .resolves.toEqual({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-1",
+        disposition: "queued",
+      });
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("durably schedules the accepted fallback when the target is stale", async () => {
     const steerTurn = vi.fn(async () => {
       throw new Error("expected active turn id `turn-1` but found `turn-2`");

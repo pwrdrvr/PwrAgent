@@ -62,7 +62,6 @@ function renderMap(
   count: number,
   overrides?: {
     desktopApi?: DesktopApi;
-    onClose?: () => void;
     onRefreshLocalThreads?: () => void;
   },
 ) {
@@ -75,8 +74,6 @@ function renderMap(
       )}
       sessionKeys={{}}
       localInstanceLabel="Mac-Mini-M4"
-      floating={false}
-      onClose={overrides?.onClose ?? (() => undefined)}
       onOpenLocalThread={() => undefined}
       onFocusLocalInstance={() => undefined}
       onRefreshLocalThreads={overrides?.onRefreshLocalThreads}
@@ -300,9 +297,8 @@ describe("star map selection is amendable", () => {
     expect(selectedShells()).toHaveLength(before);
   });
 
-  it("drops the selection on Escape before it closes the map", async () => {
-    const onClose = vi.fn();
-    renderMap(4, { onClose });
+  it("drops the selection on Escape, and a second press is a no-op", async () => {
+    renderMap(4);
     await ready();
     await sweepEverything();
     await waitFor(() => expect(selectedShells().length).toBeGreaterThan(1));
@@ -312,11 +308,13 @@ describe("star map selection is amendable", () => {
     fireEvent.keyDown(layer, { key: "Escape" });
 
     await waitFor(() => expect(selectedShells()).toHaveLength(0));
-    expect(onClose).not.toHaveBeenCalled();
 
-    // Nothing left to unwind, so the second press closes.
+    // Nothing left to unwind. The map lives in its own OS window, so a
+    // bare Escape deliberately does nothing — closing is the OS chrome's
+    // job, and the map must survive the reflexive dismiss tap.
     fireEvent.keyDown(layer, { key: "Escape" });
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(document.querySelector(".star-map")).not.toBeNull();
+    expect(selectedShells()).toHaveLength(0);
   });
 
   it("takes a card back out of the selection on a modifier-click", async () => {

@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { arch, hostname, platform, release } from "node:os";
 import { resolve } from "node:path";
 import { app, BrowserWindow, ipcMain } from "electron";
 import {
@@ -63,6 +64,10 @@ export function resolveAppMetadata(
     electronVersion: process.versions.electron ?? "",
     chromeVersion: process.versions.chrome ?? "",
     nodeVersion: process.versions.node ?? "",
+    hostname: hostname(),
+    platform: platform(),
+    osVersion: release(),
+    architecture: arch(),
     mainProcessId: process.pid,
     ...(rendererProcessId === undefined ? {} : { rendererProcessId }),
     activeProfileName,

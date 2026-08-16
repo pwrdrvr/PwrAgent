@@ -49,8 +49,6 @@ function screen(threads: readonly NavigationThreadSummary[]) {
       desktopApi={buildDesktopApi()}
       localThreads={threads}
       sessionKeys={{}}
-      floating={false}
-      onClose={() => undefined}
       onOpenLocalThread={() => undefined}
       onFocusLocalInstance={() => undefined}
     />
@@ -88,6 +86,12 @@ describe("star map idle performance", () => {
   });
 
   it("updates card layout from ResizeObserver without reading offsetHeight", async () => {
+    // The expected card position is a lanes-geometry number; the default
+    // lens is orbit now, so pin the layout the assertion assumes.
+    window.localStorage.setItem(
+      "pwragent.starMap.viewPreferences",
+      JSON.stringify({ layout: "lanes" }),
+    );
     const observers: Array<{
       callback: ResizeObserverCallback;
       elements: Set<Element>;

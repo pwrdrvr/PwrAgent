@@ -483,7 +483,7 @@ type QueuedTurnDraft = {
 type PendingSteerDraft = QueuedTurnDraft & {
   clearComposerDraftOnAdmission?: boolean;
   expectedTurnId: string;
-  status: "pending" | "steering";
+  status: "pending" | "queued" | "steering";
 };
 
 function scheduledActionFailureMessage(action: {
@@ -5466,9 +5466,12 @@ export function Composer(props: ComposerProps) {
       }
 
       if (
-        pendingSteer?.status === "steering" &&
-        event.notification.method === "item/completed" &&
-        notificationIncludesDraftContent(event.notification.params, pendingSteer)
+        (
+          pendingSteer?.status === "steering"
+          || pendingSteer?.status === "queued"
+        )
+        && event.notification.method === "item/completed"
+        && notificationIncludesDraftContent(event.notification.params, pendingSteer)
       ) {
         if (steeringRequestIdRef.current === pendingSteer.id) {
           steeringRequestIdRef.current = undefined;
@@ -5523,7 +5526,10 @@ export function Composer(props: ComposerProps) {
         ) {
           props.removeOptimisticMessage?.(activeOptimisticMessageId);
         }
-        props.onPendingStatusChange?.(undefined);
+        const providerQueuedSteer = pendingSteer?.status === "queued";
+        props.onPendingStatusChange?.(
+          providerQueuedSteer ? "Queued" : undefined,
+        );
         if (clearsReleasedQueuedTurn) {
           globalQueuedTurnReleaseScopeKeys.delete(composerScopeKey);
         }
@@ -5538,7 +5544,9 @@ export function Composer(props: ComposerProps) {
             composerScopeKey,
           );
         }
-        setPendingSteer(undefined);
+        if (!providerQueuedSteer) {
+          setPendingSteer(undefined);
+        }
         updateActiveTurnId(undefined);
         props.onActiveTurnIdChange?.(undefined);
         setActiveOptimisticMessageId(undefined);
@@ -5561,12 +5569,17 @@ export function Composer(props: ComposerProps) {
         ) {
           return;
         }
-        props.onPendingStatusChange?.(undefined);
+        const providerQueuedSteer = pendingSteer?.status === "queued";
+        props.onPendingStatusChange?.(
+          providerQueuedSteer ? "Queued" : undefined,
+        );
         updateSending(false);
         setInterrupting(false);
         setSteering(false);
         steeringRequestIdRef.current = undefined;
-        setPendingSteer(undefined);
+        if (!providerQueuedSteer) {
+          setPendingSteer(undefined);
+        }
         updateActiveTurnId(undefined);
         props.onActiveTurnIdChange?.(undefined);
         setActiveOptimisticMessageId(undefined);
@@ -7096,6 +7109,18 @@ export function Composer(props: ComposerProps) {
       // the backend has taken it — a throw below must leave the thread in the
       // Attention queue.
       props.onUserRepliedToThread?.(props.thread);
+      if (response.disposition === "queued") {
+        if (steeringRequestIdRef.current === pending.id) {
+          steeringRequestIdRef.current = undefined;
+        }
+        updatePendingSteer((current) =>
+          current?.id === pending.id
+            ? { ...current, status: "queued" }
+            : current
+        );
+        setSendError(undefined);
+        props.onPendingStatusChange?.("Queued");
+      }
       if (response.disposition === "scheduled" && response.scheduledAction) {
         const action = response.scheduledAction;
         const failureMessage = scheduledActionFailureMessage(action);
@@ -10246,7 +10271,11 @@ export function Composer(props: ComposerProps) {
         >
           <div className="composer__queued-copy">
             <span className="composer__queued-label">
-              {pendingSteer.status === "steering" ? "Steering now" : "Pending steer"}
+              {pendingSteer.status === "steering"
+                ? "Steering now"
+                : pendingSteer.status === "queued"
+                  ? "Queued by Grok"
+                  : "Pending steer"}
             </span>
             <span className="composer__queued-text">
               {formatDraftPreview(pendingSteer)}

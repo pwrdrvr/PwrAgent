@@ -112,6 +112,7 @@ const NAVIGATION_ACTIVITY_EVENTS = [
   "paste",
   "pointerdown",
 ] as const;
+const RELOAD_SELECTION_STORAGE_KEY = "pwragent.navigation.reloadSelection";
 
 const DEFAULT_BROWSE_MODE = DEFAULT_NAVIGATION_BROWSE_MODE;
 const normalizeBrowseMode = normalizeNavigationBrowseMode;
@@ -124,6 +125,34 @@ function readBridgedBrowseMode(): BrowseMode {
     __pwragentNavigationPreferences?: { browseMode?: unknown };
   }).__pwragentNavigationPreferences;
   return normalizeBrowseMode(bridged?.browseMode);
+}
+
+function readReloadSelectionKey(): string | undefined {
+  if (typeof window === "undefined") {
+    return undefined;
+  }
+
+  try {
+    return window.sessionStorage.getItem(RELOAD_SELECTION_STORAGE_KEY) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeReloadSelectionKey(selectionKey?: string): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    if (selectionKey) {
+      window.sessionStorage.setItem(RELOAD_SELECTION_STORAGE_KEY, selectionKey);
+    } else {
+      window.sessionStorage.removeItem(RELOAD_SELECTION_STORAGE_KEY);
+    }
+  } catch {
+    // Navigation still works when the renderer denies storage access.
+  }
 }
 
 function isRendererViewForeground(): boolean {
@@ -1796,6 +1825,46 @@ function applyThreadNameUpdate(
     : snapshot;
 }
 
+function applyThreadRewindUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+    updatedAt: number;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (
+      thread.source !== params.backend
+      || thread.id !== params.threadId
+      || !federationTargetsEqual(
+        thread.federation?.ref.target,
+        params.federationTarget,
+      )
+    ) {
+      return thread;
+    }
+    const updatedAt = Math.max(thread.updatedAt ?? 0, params.updatedAt);
+    if (thread.updatedAt === updatedAt && thread.threadStatus === "idle") {
+      return thread;
+    }
+    changed = true;
+    return {
+      ...thread,
+      threadStatus: "idle" as const,
+      updatedAt,
+    };
+  });
+
+  return changed ? { ...snapshot, threads } : snapshot;
+}
+
 function applyThreadStatusUpdate(
   snapshot: NavigationSnapshot | undefined,
   params: {
@@ -2973,6 +3042,7 @@ export function useThreadNavigation(
   });
   const [viewForeground, setViewForeground] = useState(isRendererViewForeground);
   const prChipLocationIndexRef = useRef<PrChipLocationIndex | undefined>(undefined);
+  const reloadSelectionKeyRef = useRef(readReloadSelectionKey());
 
   const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
   const retainedUnreadThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
@@ -3586,8 +3656,20 @@ export function useThreadNavigation(
       return;
     }
 
-    void refresh();
+    // sessionStorage is scoped to this BrowserWindow and survives the full
+    // page reload Vite uses when an HMR update reaches the renderer entry.
+    // Feed the remembered selection through the normal validated preferred-
+    // selection path so a removed thread falls back instead of stranding the
+    // detail pane on a stale key.
+    void refresh(reloadSelectionKeyRef.current);
   }, [enabled, refresh]);
+
+  useEffect(() => {
+    if (!state.response) {
+      return;
+    }
+    writeReloadSelectionKey(selectedItemKey);
+  }, [selectedItemKey, state.response]);
 
   useEffect(() => {
     if (
@@ -4001,6 +4083,33 @@ export function useThreadNavigation(
             titleSource: "explicit",
           };
         });
+        return;
+      }
+
+      if (method === "thread/rewound") {
+        const { threadId, updatedAt } = event.notification.params as {
+          threadId: string;
+          updatedAt: number;
+        };
+        setState((current) => ({
+          ...current,
+          response: applyThreadRewindUpdate(current.response, {
+            backend: event.backend,
+            federationTarget: event.federationTarget,
+            threadId,
+            updatedAt,
+          }),
+        }));
+        setOptimisticThread((current) =>
+          current && agentEventMatchesThread(event, current, threadId)
+            ? {
+                ...current,
+                threadStatus: "idle",
+                updatedAt: Math.max(current.updatedAt ?? 0, updatedAt),
+              }
+            : current
+        );
+        scheduleRefresh();
         return;
       }
 

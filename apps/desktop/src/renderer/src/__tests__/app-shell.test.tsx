@@ -441,6 +441,95 @@ describe("App", () => {
     })).not.toBeInTheDocument();
   });
 
+  it("does not offer the current remote window as a new-thread target", async () => {
+    (window as typeof window & {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = {
+      scope: "remote",
+      instanceId: "m4",
+    };
+    const windowFocusListeners = new Set<() => void>();
+    const readFederationHealth = vi.fn(async () => ({
+      health: {
+        enabled: true,
+        role: "gateway" as const,
+        status: "connected" as const,
+        instanceId: "local-instance",
+        peers: [
+          {
+            id: "m4",
+            label: "Harold-Mac-Mini-M4",
+            role: "client" as const,
+            status: "connected" as const,
+            capabilities: [
+              "remote_window",
+              "thread_navigation",
+              "environment_actions",
+            ] as const,
+          },
+          {
+            id: "laptop",
+            label: "Harold-MBP-M2-Max",
+            role: "client" as const,
+            status: "connected" as const,
+            capabilities: [
+              "remote_window",
+              "thread_navigation",
+              "environment_actions",
+            ] as const,
+          },
+        ],
+      },
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: (listener: () => void) => {
+          windowFocusListeners.add(listener);
+          return () => {
+            windowFocusListeners.delete(listener);
+          };
+        },
+        openFederationWindow: vi.fn(),
+        readFederationHealth,
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(windowFocusListeners.size).toBeGreaterThan(0));
+    act(() => {
+      for (const listener of windowFocusListeners) {
+        listener();
+      }
+    });
+    await waitFor(() => expect(readFederationHealth).toHaveBeenCalled());
+
+    const button = screen.getByRole("button", { name: "New thread" });
+    await waitFor(() => expect(button).toHaveAttribute("aria-haspopup", "menu"));
+    fireEvent.mouseEnter(button.parentElement as HTMLElement);
+
+    expect(await screen.findByRole("menuitem", {
+      name: "Harold-MBP-M2-Max",
+    })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", {
+      name: "Harold-Mac-Mini-M4",
+    })).not.toBeInTheDocument();
+  });
+
   it("surfaces GitHub organization SAML enforcement as a sticky error toast", async () => {
     let samlListener:
       | ((event: {
@@ -644,6 +733,196 @@ describe("App", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next notice" }));
     expect(screen.getByText("Agent backend error")).toBeInTheDocument();
     expect(screen.getByText("3 of 3")).toBeInTheDocument();
+  });
+
+  it("opens the incident explorer from a replay-risk notice", async () => {
+    const agentEventListeners = new Set<(event: AgentEvent) => void>();
+    const openToolOutputIncidentExplorerWindow = vi.fn(async () => ({
+      opened: true as const,
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        onAgentEvent: (listener: (event: AgentEvent) => void) => {
+          agentEventListeners.add(listener);
+          return () => {
+            agentEventListeners.delete(listener);
+          };
+        },
+        readSettings: async () =>
+          await new Promise<never>(() => {
+            // Keep the shell mounted without needing a full settings fixture.
+          }),
+        openToolOutputIncidentExplorerWindow,
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
+
+    act(() => {
+      const event = {
+        backend: "codex",
+        notification: {
+          method: "thread/toolAccounting/updated",
+          params: {
+            threadId: "thread-1",
+            toolAccounting: {
+              alerts: [],
+              invocations: Array.from({ length: 5 }, (_, index) => ({
+                backend: "codex",
+                category: "polling",
+                debugLines: 0,
+                errorLines: 0,
+                estimatedOutputTokens: 0,
+                infoLines: 0,
+                invocationId: `wait-${index}`,
+                itemId: `item-${index}`,
+                noisy: true,
+                noisyReason: "repeat-polling-output",
+                observedAt: 1_000 + index * 30_000,
+                outputChars: 0,
+                outputLines: 0,
+                outputTruncated: false,
+                status: "completed",
+                threadId: "thread-1",
+                toolName: "wait",
+                turnId: "turn-1",
+                updatedAt: 1_000 + index * 30_000,
+                warningLines: 0,
+              })),
+              summaries: [],
+            },
+            triggeredAlerts: [{
+              alertId: "noisy-polling:codex:thread-1:wait:turn-1",
+              backend: "codex",
+              createdAt: 1,
+              estimatedOutputTokens: 0,
+              firstObservedAt: 1,
+              invocationCount: 5,
+              kind: "noisy-polling",
+              lastObservedAt: 2,
+              message: "Five queued checks keep replaying the turn context.",
+              severity: "warning",
+              suggestedPrompt: "Stop polling and use a monitor job.",
+              threadId: "thread-1",
+              toolName: "wait",
+              totalOutputChars: 0,
+              turnId: "turn-1",
+              updatedAt: 2,
+            }],
+          },
+        },
+      } as AgentEvent;
+      for (const listener of agentEventListeners) {
+        listener(event);
+      }
+    });
+
+    expect(screen.getByText("Repeated queued checks")).toBeInTheDocument();
+    /* One consolidated card for the thread, describing the whole pattern,
+       rather than one card per turn that tripped the detector. */
+    expect(screen.getByText(/5 are repeated queued checks/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Examine 5 cases" }));
+
+    await waitFor(() => {
+      expect(openToolOutputIncidentExplorerWindow).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        title: "Codex thread",
+      });
+    });
+  });
+
+  it("does not raise a tool-output card when no new threshold tripped", async () => {
+    /* Accounting updates fire on every tool call. Folding on all of them
+       re-alerted about last week's calls the first time an old thread ran
+       anything. */
+    const agentEventListeners = new Set<(event: AgentEvent) => void>();
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        onAgentEvent: (listener: (event: AgentEvent) => void) => {
+          agentEventListeners.add(listener);
+          return () => {
+            agentEventListeners.delete(listener);
+          };
+        },
+        readSettings: async () =>
+          await new Promise<never>(() => {
+            // Keep the shell mounted without needing a full settings fixture.
+          }),
+      },
+    });
+    render(<App />);
+    await waitFor(() => expect(agentEventListeners.size).toBeGreaterThan(0));
+
+    act(() => {
+      const event = {
+        backend: "codex",
+        notification: {
+          method: "thread/toolAccounting/updated",
+          params: {
+            threadId: "thread-1",
+            toolAccounting: {
+              alerts: [],
+              invocations: [{
+                backend: "codex",
+                category: "shell",
+                debugLines: 0,
+                errorLines: 0,
+                estimatedOutputTokens: 5_000,
+                infoLines: 0,
+                invocationId: "old-large-call",
+                itemId: "old-item",
+                noisy: true,
+                observedAt: 1_000,
+                outputChars: 20_000,
+                outputLines: 100,
+                outputTruncated: false,
+                status: "completed",
+                threadId: "thread-1",
+                toolName: "commandExecution",
+                turnId: "turn-old",
+                updatedAt: 1_000,
+                warningLines: 0,
+              }],
+              summaries: [],
+            },
+            /* No triggeredAlerts: nothing crossed a threshold just now. */
+          },
+        },
+      } as AgentEvent;
+      for (const listener of agentEventListeners) listener(event);
+    });
+
+    expect(screen.queryByText("Large tool output")).not.toBeInTheDocument();
   });
 
   it("reveals the sidebar when adding a project from the hidden-sidebar masthead", async () => {
@@ -999,6 +1278,7 @@ describe("App", () => {
       },
       updates: {
         channel: { value: "latest", source: "default" },
+        train: { value: "stable", source: "default" },
       },
       integratedTerminal: {
         windowsShell: { value: "auto", source: "default" },
@@ -2378,6 +2658,10 @@ describe("App", () => {
           electronVersion: "41.2.1",
           chromeVersion: "142.0.0.0",
           nodeVersion: "24.0.0",
+          hostname: "viewer-mac.local",
+          platform: "darwin",
+          osVersion: "25.0.0",
+          architecture: "arm64",
           mainProcessId: 4100,
           rendererProcessId: 4101,
           activeProfileName: "sstk",
@@ -2414,11 +2698,40 @@ describe("App", () => {
         "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
         "Provider/backend: codex",
         "Thread title: Fix handoff project paths and diagnostics",
-        "PwrAgent profile: sstk",
-        "Main process PID: 4100",
-        "Renderer process PID: 4101",
-        "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
-        "Codex profile path: /Users/operator/.codex/profiles/sstk",
+        "Thread/view classification: Local Thread in Local Viewer",
+        "Federation mount provenance: Not mounted",
+        "Local viewer federation instance ID: Unavailable",
+        "Remote viewer target instance ID: Unavailable",
+        "Remote viewer target label: Unavailable",
+        "Remote viewer target hostname: Unavailable",
+        "Remote viewer target machine ID: Unavailable",
+        "Remote viewer target profile: Unavailable",
+        "Remote viewer target status: Unavailable",
+        "Thread owner federation instance ID: Unavailable",
+        "Thread owner label: Unavailable",
+        "Thread owner hostname: viewer-mac.local",
+        "Thread owner machine ID: Unavailable",
+        "Thread owner platform: darwin",
+        "Thread owner OS version: 25.0.0",
+        "Thread owner architecture: arm64",
+        "Thread owner profile: sstk",
+        "Thread owner status: Unavailable",
+        "Federation routing target: local",
+        "Federation source backend: codex",
+        "Federation source thread ID: thread-1",
+        "Viewer machine hostname: viewer-mac.local",
+        "Viewer platform: darwin",
+        "Viewer OS version: 25.0.0",
+        "Viewer architecture: arm64",
+        "Viewer PwrAgent version: 1.2.3",
+        "Viewer Electron version: 41.2.1",
+        "Viewer Chrome version: 142.0.0.0",
+        "Viewer Node version: 24.0.0",
+        "Viewer PwrAgent profile: sstk",
+        "Viewer main process PID: 4100",
+        "Viewer renderer process PID: 4101",
+        "Viewer PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
+        "Viewer Codex profile path: /Users/operator/.codex/profiles/sstk",
       ].join("\n"));
     });
   });

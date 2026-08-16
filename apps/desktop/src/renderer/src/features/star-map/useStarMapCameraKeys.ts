@@ -24,11 +24,6 @@ const NO_KEYS: ReadonlySet<StarMapCameraKey> = new Set();
  * never per frame, so it costs one render per press rather than per frame.
  */
 export function useStarMapCameraKeys(params: {
-  /**
-   * Off while a thread floats over the map: the map has shoved aside and
-   * the operator is working in the thread, where `w` means `w`.
-   */
-  enabled: boolean;
   /** Keydown is scoped here, so the map only flies while it has focus. */
   layerRef: RefObject<HTMLElement | null>;
   /** The transformed canvas, written directly during flight. */
@@ -83,11 +78,11 @@ export function useStarMapCameraKeys(params: {
     };
   });
 
-  const { enabled, layerRef, liveViewRef } = params;
+  const { layerRef, liveViewRef } = params;
 
   useEffect(() => {
     const layer = layerRef.current;
-    if (!enabled || !layer) return;
+    if (!layer) return;
 
     let frame = 0;
     let last = 0;
@@ -221,7 +216,7 @@ export function useStarMapCameraKeys(params: {
       heldRef.current = NO_KEYS;
       setHeld(NO_KEYS);
     };
-  }, [enabled, layerRef, liveViewRef]);
+  }, [layerRef, liveViewRef]);
 
   return held;
 }

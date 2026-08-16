@@ -1,5 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -7,10 +8,14 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { useViewportTooltip } from "../useViewportTooltip";
+import {
+  TOOLTIP_HOVER_DELAY_MS,
+  useViewportTooltip,
+} from "../useViewportTooltip";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -31,6 +36,27 @@ function TooltipFixture() {
         </button>
       </div>
       <div data-testid="transcript-scroll-region" />
+      {tooltip.tooltipNode}
+    </div>
+  );
+}
+
+function DelayedTooltipFixture() {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+
+  return (
+    <div>
+      <div data-testid="sidebar-scroll-region">
+        <button
+          type="button"
+          onMouseEnter={(event) =>
+            tooltip.showAfterDelay(event.currentTarget, "Branch details")
+          }
+          onMouseLeave={tooltip.hide}
+        >
+          agent/delay-tooltip
+        </button>
+      </div>
       {tooltip.tooltipNode}
     </div>
   );
@@ -75,6 +101,28 @@ describe("useViewportTooltip", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("cancels a pending tooltip when the window loses focus", () => {
+    vi.useFakeTimers();
+    render(<DelayedTooltipFixture />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    fireEvent.blur(window);
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("cancels a pending tooltip when scrolling moves its anchor", () => {
+    vi.useFakeTimers();
+    render(<DelayedTooltipFixture />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    fireEvent.scroll(screen.getByTestId("sidebar-scroll-region"));
+    act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
   it("places the tooltip below its target when above would overlap the app shell boundary", async () => {
     vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
       function getBoundingClientRect(this: HTMLElement) {
@@ -104,6 +152,130 @@ describe("useViewportTooltip", () => {
 
     await waitFor(() => {
       expect(screen.getByRole("tooltip")).toHaveStyle({ top: "118px" });
+    });
+  });
+
+  describe("macOS stoplight gutter", () => {
+    // `titleBarStyle: "hiddenInset"` reserves the traffic lights INSIDE the
+    // renderer, so `.app-shell` starts at 0 and the shell-boundary clamp lets a
+    // tooltip park on top of the close/minimize/zoom buttons and the wordmark
+    // beside them. Whichever strip carries the 80px reservation is the real
+    // floor.
+    function mockStoplightLayout(gutterClass: string) {
+      vi.spyOn(
+        HTMLElement.prototype,
+        "getBoundingClientRect",
+      ).mockImplementation(function getBoundingClientRect(this: HTMLElement) {
+        if (this.classList.contains("app-shell")) {
+          return rectangle({ top: 0, width: 1200, height: 800 });
+        }
+        if (this.classList.contains(gutterClass)) {
+          return rectangle({ top: 0, width: 320, height: 46 });
+        }
+        if (this.getAttribute("role") === "tooltip") {
+          // Short enough that "above the target" lands at y=26 — inside the
+          // bare 12px viewport padding, but ON the 46px stoplight strip. That
+          // gap is what each case below measures.
+          return rectangle({ width: 264, height: 60 });
+        }
+        if (this.tagName === "BUTTON") {
+          return rectangle({ left: 20, top: 96, width: 72, height: 26 });
+        }
+        return rectangle({});
+      });
+      vi.stubGlobal("innerWidth", 1200);
+      vi.stubGlobal("innerHeight", 800);
+    }
+
+    afterEach(() => {
+      delete document.documentElement.dataset.platform;
+      delete document.documentElement.dataset.fullscreen;
+    });
+
+    it("keeps clear of the sidebar masthead, which the app shell does not fence off", async () => {
+      document.documentElement.dataset.platform = "darwin";
+      mockStoplightLayout("sidebar__masthead");
+
+      render(
+        <div className="app-shell">
+          <header className="sidebar__masthead" />
+          <TooltipFixture />
+        </div>,
+      );
+
+      fireEvent.mouseEnter(screen.getByRole("button"));
+
+      await waitFor(() => {
+        // Above would be 96 − 60 − 10 = 26, which is on the strip. It flips
+        // below the 26px-tall target instead of covering the traffic lights.
+        expect(screen.getByRole("tooltip")).toHaveStyle({ top: "132px" });
+      });
+    });
+
+    it("keeps clear of the thread header's cluster when the sidebar is hidden", async () => {
+      // `.sidebar` goes `display: none` in that layout, so its masthead
+      // measures zero and reserves nothing — the relocated cluster in the
+      // thread header holds the stoplight room instead. Reading only the
+      // sidebar's strip would put tooltips back on the traffic lights after a
+      // single toggle.
+      document.documentElement.dataset.platform = "darwin";
+      mockStoplightLayout("thread-header__masthead");
+
+      render(
+        <div className="app-shell" data-sidebar-hidden="true">
+          <header className="sidebar__masthead" />
+          <div className="thread-header__masthead" />
+          <TooltipFixture />
+        </div>,
+      );
+
+      fireEvent.mouseEnter(screen.getByRole("button"));
+
+      await waitFor(() => {
+        expect(screen.getByRole("tooltip")).toHaveStyle({ top: "132px" });
+      });
+    });
+
+    it("does not reserve a gutter in fullscreen, where the stoplights are gone", async () => {
+      // app.css drops the 80px reservation under `[data-fullscreen="true"]`
+      // for the same reason. Flooring anyway would flip a tooltip that had
+      // room above onto the content it points at.
+      document.documentElement.dataset.platform = "darwin";
+      document.documentElement.dataset.fullscreen = "true";
+      mockStoplightLayout("sidebar__masthead");
+
+      render(
+        <div className="app-shell">
+          <header className="sidebar__masthead" />
+          <TooltipFixture />
+        </div>,
+      );
+
+      fireEvent.mouseEnter(screen.getByRole("button"));
+
+      await waitFor(() => {
+        // No gutter reserved, so y=26 is free and the tooltip keeps its
+        // preferred side rather than being flipped onto the content.
+        expect(screen.getByRole("tooltip")).toHaveStyle({ top: "26px" });
+      });
+    });
+
+    it("does not reserve a gutter off macOS, where no buttons sit in the renderer", async () => {
+      document.documentElement.dataset.platform = "linux";
+      mockStoplightLayout("sidebar__masthead");
+
+      render(
+        <div className="app-shell">
+          <header className="sidebar__masthead" />
+          <TooltipFixture />
+        </div>,
+      );
+
+      fireEvent.mouseEnter(screen.getByRole("button"));
+
+      await waitFor(() => {
+        expect(screen.getByRole("tooltip")).toHaveStyle({ top: "26px" });
+      });
     });
   });
 });

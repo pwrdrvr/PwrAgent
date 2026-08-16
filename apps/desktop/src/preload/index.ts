@@ -26,6 +26,8 @@ import type {
   DesktopTextSize,
   CancelThreadExecutionModeQueueRequest,
   CancelThreadExecutionModeQueueResponse,
+  ConfigureGrokWorkflowBudgetRequest,
+  ConfigureGrokWorkflowBudgetResponse,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
   ForkThreadRequest,
@@ -62,9 +64,13 @@ import type {
   ReloadCodexMcpServersRequest,
   RemoveCodexMcpServerRequest,
   RemoveCodexMcpServerResponse,
+  RewindAcpThreadRequest,
+  RewindAcpThreadResponse,
   StartCodexMcpServerLoginRequest,
   StartCodexMcpServerLoginResponse,
   LatestCodexConfigWarningResponse,
+  ListAcpThreadRewindPointsRequest,
+  ListAcpThreadRewindPointsResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -98,6 +104,8 @@ import type {
   ThreadSearchResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  AnalyzeThreadToolHistoryRequest,
+  AnalyzeThreadToolHistoryResponse,
   GetThreadFileDiffRequest,
   GetThreadFileDiffResponse,
   PersistThreadUsageActivityRequest,
@@ -148,6 +156,8 @@ import type {
   SetThreadPinResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  SetThreadToolIncidentNoticeRequest,
+  SetThreadToolIncidentNoticeResponse,
   GetGhStatusRequest,
   GhStatus,
   ApproveMessagingPairingRequest,
@@ -309,6 +319,8 @@ import type {
   OpenMarkdownFileViewerResponse,
   OpenSubAgentTranscriptWindowRequest,
   OpenSubAgentTranscriptWindowResponse,
+  OpenToolOutputIncidentExplorerWindowRequest,
+  OpenToolOutputIncidentExplorerWindowResponse,
   OpenPathRequest,
   OpenPathResponse,
   ReadMarkdownFileRequest,
@@ -424,9 +436,11 @@ import {
   AGENT_EVENT_CHANNEL,
   AGENT_FORK_THREAD_CHANNEL,
   AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
+  AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL,
   APPEARANCE_CHANGED_EVENT_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_COMPACT_THREAD_CHANNEL,
+  AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL,
   AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL,
   AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL,
   CODEX_MCP_SERVERS_LIST_CHANNEL,
@@ -438,6 +452,7 @@ import {
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
+  AGENT_REWIND_ACP_THREAD_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -505,6 +520,7 @@ import {
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
+  APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL,
   APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
   APPLICATIONS_READ_CHANNEL,
   APPLICATION_OPEN_CHANNEL,
@@ -513,6 +529,9 @@ import {
   MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL,
   MARKDOWN_FILE_VIEWER_SNAPSHOT_READ_CHANNEL,
   SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL,
+  TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL,
+  TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL,
+  TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL,
   DIAGNOSTICS_CAPTURE_HEAP_SNAPSHOT_CHANNEL,
   DIAGNOSTICS_CODEX_PROTOCOL_CAPTURE_STATUS_CHANNEL,
   DIAGNOSTICS_HEAP_SNAPSHOT_CAPTURED_EVENT_CHANNEL,
@@ -543,7 +562,10 @@ import {
   FEDERATION_REVOKE_PEER_CHANNEL,
   FEDERATION_SET_CELESTIAL_ICON_CHANNEL,
   FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL,
+  STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL,
   STAR_MAP_INTAKE_CHANNEL,
+  STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL,
+  STAR_MAP_OPEN_WINDOW_CHANNEL,
   STAR_MAP_READ_ARRANGEMENT_CHANNEL,
   STAR_MAP_SET_CARD_POSITION_CHANNEL,
   FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
@@ -630,6 +652,7 @@ import {
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+  NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
@@ -1038,6 +1061,17 @@ const desktopApi = Object.freeze({
     request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
   ): Promise<StarMapIntakeResponse> =>
     await ipcRenderer.invoke(STAR_MAP_INTAKE_CHANNEL, request),
+  openStarMapWindow: async (): Promise<void> => {
+    await ipcRenderer.invoke(STAR_MAP_OPEN_WINDOW_CHANNEL);
+  },
+  openStarMapThreadInMainWindow: async (
+    request: WindowShowThreadRequest,
+  ): Promise<void> => {
+    await ipcRenderer.invoke(STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL, request);
+  },
+  focusMainWindowFromStarMap: async (): Promise<void> => {
+    await ipcRenderer.invoke(STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL);
+  },
   ...(isDevelopment
     ? {
         getRuntimeIdentity: async (): Promise<RuntimeIdentity> =>
@@ -1186,6 +1220,41 @@ const desktopApi = Object.freeze({
     request: OpenSubAgentTranscriptWindowRequest,
   ): Promise<OpenSubAgentTranscriptWindowResponse> =>
     await ipcRenderer.invoke(SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL, request),
+  openToolOutputIncidentExplorerWindow: async (
+    request: OpenToolOutputIncidentExplorerWindowRequest,
+  ): Promise<OpenToolOutputIncidentExplorerWindowResponse> =>
+    await ipcRenderer.invoke(
+      TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL,
+      request,
+    ),
+  onToolOutputIncidentExplorerRefresh: (
+    callback: (
+      request?: OpenToolOutputIncidentExplorerWindowRequest,
+    ) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      request?: OpenToolOutputIncidentExplorerWindowRequest,
+    ) => callback(request);
+    ipcRenderer.on(
+      TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL,
+      listener,
+    );
+    return () => {
+      ipcRenderer.off(
+        TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL,
+        listener,
+      );
+    };
+  },
+  showThreadFromToolOutputIncidentExplorer: async (
+    request: WindowShowThreadRequest,
+  ): Promise<void> => {
+    await ipcRenderer.invoke(
+      TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL,
+      request,
+    );
+  },
   createIntegratedTerminal: async (
     request: IntegratedTerminalCreateRequest,
   ): Promise<IntegratedTerminalCreateResponse> =>
@@ -1313,6 +1382,13 @@ const desktopApi = Object.freeze({
     await invokeWithStartupProfileTiming(
       "readThread",
       APP_SERVER_READ_THREAD_CHANNEL,
+      request,
+    ),
+  analyzeThreadToolHistory: async (
+    request: AnalyzeThreadToolHistoryRequest,
+  ): Promise<AnalyzeThreadToolHistoryResponse> =>
+    await ipcRenderer.invoke(
+      APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL,
       request,
     ),
   getThreadFileDiff: async (
@@ -1448,6 +1524,21 @@ const desktopApi = Object.freeze({
     request: SteerTurnRequest
   ): Promise<SteerTurnResponse> =>
     await ipcRenderer.invoke(AGENT_STEER_TURN_CHANNEL, request),
+  listAcpThreadRewindPoints: async (
+    request: ListAcpThreadRewindPointsRequest,
+  ): Promise<ListAcpThreadRewindPointsResponse> =>
+    await ipcRenderer.invoke(AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL, request),
+  rewindAcpThread: async (
+    request: RewindAcpThreadRequest,
+  ): Promise<RewindAcpThreadResponse> =>
+    await ipcRenderer.invoke(AGENT_REWIND_ACP_THREAD_CHANNEL, request),
+  configureGrokWorkflowBudget: async (
+    request: ConfigureGrokWorkflowBudgetRequest,
+  ): Promise<ConfigureGrokWorkflowBudgetResponse> =>
+    await ipcRenderer.invoke(
+      AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL,
+      request,
+    ),
   setThreadExecutionMode: async (
     request: SetThreadExecutionModeRequest
   ): Promise<SetThreadExecutionModeResponse> =>
@@ -1585,6 +1676,13 @@ const desktopApi = Object.freeze({
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_REACTION_CHANNEL, request),
+  setThreadToolIncidentNotice: async (
+    request: SetThreadToolIncidentNoticeRequest,
+  ): Promise<SetThreadToolIncidentNoticeResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
+      request,
+    ),
   setThreadPin: async (
     request: SetThreadPinRequest,
   ): Promise<SetThreadPinResponse> =>

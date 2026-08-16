@@ -34,7 +34,13 @@ type SubAgentsPanelProps = {
 export function SubAgentsPanel(props: SubAgentsPanelProps) {
   const { subAgents, loading } = useSubAgents(props.thread);
   const { onDetailsModalOpenChange } = props;
-  const [detailsFor, setDetailsFor] = useState<ThreadSubAgentSummary | null>(null);
+  // Track the open dialog by id, not by the summary object: the snapshot the
+  // Details button was clicked with goes stale the moment the sub-agent
+  // streams another update, and the dialog would sit on frozen status, timing,
+  // and usage until it was closed and reopened.
+  const [detailsForId, setDetailsForId] = useState<string | null>(null);
+  const detailsFor =
+    subAgents.find((subAgent) => subAgent.monitorId === detailsForId) ?? null;
   const hasRunningSubAgent = subAgents.some(
     (subAgent) => !isTerminalSubAgent(subAgent),
   );
@@ -46,13 +52,24 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
     return () => onDetailsModalOpenChange?.(false);
   }, [onDetailsModalOpenChange]);
 
+  // The tracked sub-agent can leave the list under us (thread switch, overlay
+  // rewrite). Release the rail's pinned-open state rather than stranding it.
+  const detailsMissing = detailsForId !== null && detailsFor === null;
+  useEffect(() => {
+    if (!detailsMissing) {
+      return;
+    }
+    setDetailsForId(null);
+    onDetailsModalOpenChange?.(false);
+  }, [detailsMissing, onDetailsModalOpenChange]);
+
   const openDetails = (subAgent: ThreadSubAgentSummary): void => {
     onDetailsModalOpenChange?.(true);
-    setDetailsFor(subAgent);
+    setDetailsForId(subAgent.monitorId);
   };
 
   const closeDetails = (): void => {
-    setDetailsFor(null);
+    setDetailsForId(null);
     onDetailsModalOpenChange?.(false);
   };
 

@@ -607,6 +607,47 @@ describe("ThreadMarkdown", () => {
     expect(screen.queryByRole("link", { name: "$frontend-design" })).not.toBeInTheDocument();
   });
 
+  it("hydrates inline-code skill tokens from the live skill inventory", () => {
+    const inspectSkillPath = [
+      "/Users/huntharo/github/PwrSuiteLab/.agents/skills",
+      "inspect-macos-gha-runner/SKILL.md",
+    ].join("/");
+    const manageSkillPath = [
+      "/Users/huntharo/github/PwrSuiteLab/.agents/skills",
+      "manage-macos-gha-runner/SKILL.md",
+    ].join("/");
+
+    render(
+      <ThreadMarkdown
+        skills={[
+          {
+            name: "inspect-macos-gha-runner",
+            description: "Collect read-only health evidence for a macOS runner.",
+            path: inspectSkillPath,
+            enabled: true,
+          },
+          {
+            name: "manage-macos-gha-runner",
+            description: "Pause, resume, start, and stop a macOS runner.",
+            path: manageSkillPath,
+            enabled: true,
+          },
+        ]}
+        text={[
+          "I’m using `$inspect-macos-gha-runner` to capture evidence and",
+          "`$manage-macos-gha-runner` for the restart boundary.",
+        ].join(" ")}
+      />
+    );
+
+    expect(screen.getByText("$inspect-macos-gha-runner")
+      .closest("[data-skill-chip]")).toBeInTheDocument();
+    expect(screen.getByText("$manage-macos-gha-runner")
+      .closest("[data-skill-chip]")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Copy inline code" }))
+      .not.toBeInTheDocument();
+  });
+
   it("renders explicit SKILL.md links as chips without live skill inventory", () => {
     const skillPath = [
       "/Users/huntharo/.codex/plugins/cache/openai-curated-remote/github",

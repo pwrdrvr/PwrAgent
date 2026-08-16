@@ -100,4 +100,36 @@ describe("ThreadHeader", () => {
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     expect(toggle).toHaveTextContent("");
   });
+
+  it("opens Grok conversation rewind from the header control", () => {
+    const onOpen = vi.fn();
+    render(
+      <ThreadHeader
+        rewind={{ onOpen }}
+        thread={{ ...thread, source: "acp:grok" }}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Rewind Grok conversation" }),
+    );
+
+    expect(onOpen).toHaveBeenCalledOnce();
+  });
+
+  it("opens Grok workflow budgets from the header control", () => {
+    const onOpen = vi.fn();
+    render(
+      <ThreadHeader
+        thread={{ ...thread, source: "acp:grok" }}
+        workflowBudget={{ onOpen }}
+      />,
+    );
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Configure Grok workflow budgets" }),
+    );
+
+    expect(onOpen).toHaveBeenCalledOnce();
+  });
 });

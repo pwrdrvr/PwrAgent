@@ -118,8 +118,6 @@ function renderMap(props: { threads: NavigationThreadSummary[] }) {
       localThreads={props.threads}
       sessionKeys={{}}
       localInstanceLabel="Mac-Mini-M4"
-      floating={false}
-      onClose={() => undefined}
       onOpenLocalThread={() => undefined}
       onFocusLocalInstance={() => undefined}
     />,
@@ -154,8 +152,6 @@ describe("star map view stability", () => {
         localThreads={threads(8)}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -189,8 +185,6 @@ describe("star map view stability", () => {
         localThreads={threads(5)}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -261,8 +255,6 @@ describe("star map view stability", () => {
         localThreads={threads(4)}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,

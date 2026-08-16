@@ -114,15 +114,13 @@ function controlAnimationFrames() {
   };
 }
 
-async function openMap(floating = false) {
+async function openMap() {
   const rendered = render(
     <StarMapScreen
       desktopApi={buildDesktopApi()}
       localThreads={Array.from({ length: 9 }, (_, index) => thread(`t${index}`))}
       sessionKeys={{}}
       localInstanceLabel="Mac-Mini-M4"
-      floating={floating}
-      onClose={() => undefined}
       onOpenLocalThread={() => undefined}
       onFocusLocalInstance={() => undefined}
     />,
@@ -346,16 +344,4 @@ describe("star map keyboard camera", () => {
     await flushFrame();
   });
 
-  it("hands the keyboard back to the thread floating over the map", async () => {
-    // The map has shoved aside and the operator is in a composer, where `w`
-    // means `w`.
-    await openMap(true);
-    expect(document.querySelector(".star-map__key-hint")).toBeNull();
-    const before = readTransform();
-
-    fireEvent.keyDown(layer(), { key: "d", code: "KeyD" });
-    await flushFrame();
-
-    expect(readTransform()).toEqual(before);
-  });
 });

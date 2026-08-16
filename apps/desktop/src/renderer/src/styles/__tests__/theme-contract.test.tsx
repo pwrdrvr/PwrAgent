@@ -230,9 +230,17 @@ describe("Tangerine Terminal theme contract", () => {
           + ".thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,\n"
           + ".thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading",
       ),
-    ).toMatch(/padding-right:\s*44px;/);
+    ).toMatch(/padding-right:\s*46px;/);
     expect(extractRuleBody(css, ".thread-row__actions")).toMatch(
-      /right:\s*9px;[\s\S]*gap:\s*4px;/,
+      /right:\s*11px;[\s\S]*gap:\s*4px;/,
+    );
+    // The cluster's 11px offset and the reserve inequality's first term
+    // both derive from the card's inline padding (10px + 1px border), so
+    // that literal belongs in the same pin set: shrink the card padding
+    // and 11/46 stay green while the kebab drifts off the content edge
+    // and the pin loses its clearance.
+    expect(extractRuleBody(css, ".thread-row")).toMatch(
+      /padding:\s*4px 10px;/,
     );
     // Not extractRuleBody: the bare selector would match the shared
     // pin+kebab chrome rule first; this anchors the standalone width
@@ -243,6 +251,15 @@ describe("Tangerine Terminal theme contract", () => {
     // in-flow button carried: at the XS title notch a chipless card
     // computes to 23.75px, so covering the card alone is not enough.
     expect(extractRuleBody(css, ".thread-row__open")).toMatch(
+      /min-height:\s*24px;/,
+    );
+
+    // The directory summary button is a 2.5.8 target too. The third
+    // density pass took its block padding to 2px (content ~20px), so
+    // this min-height is the ONLY thing holding the button — and the
+    // selected-directory highlight box that shares its chrome — at the
+    // floor. Padding is free to move; this is not.
+    expect(extractRuleBody(css, ".directory-row__summary")).toMatch(
       /min-height:\s*24px;/,
     );
   });
@@ -305,6 +322,13 @@ describe("Tangerine Terminal theme contract", () => {
     const localTokens = new Set([
       "thinking-scanner-beam-width",
       "thinking-scanner-travel",
+      // Scanner tint indirection — defined on `.thinking-scanner`, not
+      // `:root`. Every value they resolve to IS a theme token; the locals
+      // exist so a variant (the Attention tab's remote-turn readout) can
+      // retarget the colour without restating the beam gradient.
+      "thinking-scanner-tint",
+      "thinking-scanner-tint-bright",
+      "thinking-scanner-track",
       // Sidebar rail/lane inset system — defined on `.sidebar`, not `:root`.
       "sidebar-rail-inset",
       "sidebar-lane-inset",
@@ -548,6 +572,19 @@ describe("Tangerine Terminal theme contract", () => {
     expect(settingsLayerRule).toContain("z-index: 120;");
     expect(appTitlebarRule).toContain("z-index: 130;");
     expect(messagingTooltipRule).toContain("z-index: 140;");
+  });
+
+  it("keeps every Windows title-bar control and hover bridge interactive", () => {
+    const appTitlebarRuleIndex = css.indexOf(".app-titlebar {");
+    const titlebarControlsRuleIndex = css.indexOf(
+      ".app-titlebar__left,\n.app-titlebar__left *,",
+    );
+
+    expect(appTitlebarRuleIndex).toBeGreaterThan(-1);
+    expect(titlebarControlsRuleIndex).toBeGreaterThan(appTitlebarRuleIndex);
+    expect(css).toMatch(
+      /\.app-titlebar__left,\s*\.app-titlebar__left \*,\s*\.app-titlebar__right,\s*\.app-titlebar__right \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
+    );
   });
 
   it("keeps the thread title reveal hit target to the rendered title text", () => {
@@ -860,18 +897,14 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
-  it("layers app toasts above the full-window Star Map", () => {
-    const starMapLayerRule = extractRuleBody(
-      css,
-      ".app-shell__star-map-layer",
-    );
-    const toastStackRule = extractRuleBody(css, ".app-toast-stack");
-    const readZIndex = (rule: string): number =>
-      Number(rule.match(/z-index:\s*(\d+);/)?.[1] ?? Number.NaN);
-
-    expect(readZIndex(toastStackRule)).toBeGreaterThan(
-      readZIndex(starMapLayerRule),
-    );
+  it("scopes the Star Map window's card z-scale inside its own stacking context", () => {
+    // The dedicated map window's root must open a stacking context: the
+    // map's internal card z-scale runs to STAR_MAP_CARD_MAX_Z (4000), and
+    // without the containment those cards would out-stack every
+    // body-portaled tooltip in the window.
+    const windowRule = extractRuleBody(css, ".star-map-window");
+    expect(windowRule).toContain("position: relative;");
+    expect(windowRule).toMatch(/z-index:\s*\d+;/);
   });
 
   it("right-aligns the keyboard shortcut hint chip on context menu items", () => {
@@ -1449,16 +1482,16 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toMatch(/\n\.pr-status-card__dot--\w+\s*[,{]/);
   });
 
-  it("layers the PR hover card above the full-window Star Map", () => {
-    // PR chips render inside `.app-shell__star-map-layer` (z-index 120), and
-    // `.app-shell` opens no stacking context, so a portal at the usual 90
-    // paints underneath the map.
-    const layer = extractRuleBody(css, ".app-shell__star-map-layer");
+  it("layers the PR hover card above the Star Map window root", () => {
+    // PR chips render on cards inside `.star-map-window`, whose stacking
+    // context scopes the card z-scale — the portal only has to beat the
+    // window root's own z-index, not the cards inside it.
+    const windowRule = extractRuleBody(css, ".star-map-window");
     const card = extractRuleBody(css, ".pr-status-card");
-    const layerZ = Number(layer.match(/z-index:\s*(\d+);/)?.[1]);
+    const windowZ = Number(windowRule.match(/z-index:\s*(\d+);/)?.[1]);
     const cardZ = Number(card.match(/z-index:\s*(\d+);/)?.[1]);
-    expect(Number.isFinite(layerZ)).toBe(true);
-    expect(cardZ).toBeGreaterThan(layerZ);
+    expect(Number.isFinite(windowZ)).toBe(true);
+    expect(cardZ).toBeGreaterThan(windowZ);
   });
 
   it("keeps thinking scanner variants on one shared visible sweep", () => {
@@ -1466,14 +1499,25 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toContain("--thinking-scanner-full-offset");
     expect(css).not.toContain("--thinking-scanner-mini-offset");
     expect(css).toContain("@keyframes pwragent-thinking-scanner-sweep");
-    expect(css).toMatch(
-      /\.thinking-scanner\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*18px;[\s\S]*?--thinking-scanner-travel:\s*44px;[\s\S]*?width:\s*62px;[\s\S]*?\}/
-    );
-    expect(css).toMatch(
-      /\.thinking-scanner--mini\s*\{[\s\S]*?--thinking-scanner-beam-width:\s*6px;[\s\S]*?--thinking-scanner-travel:\s*10px;[\s\S]*?width:\s*16px;[\s\S]*?\}/
-    );
-    expect(css).toMatch(
-      /\.thinking-scanner__beam\s*\{[\s\S]*?animation:\s*pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;[\s\S]*?\}/
+    // Read the blocks out by selector rather than matching declarations
+    // anywhere after the first `.thinking-scanner {` in the file. A descendant
+    // rule that retints the scanner (`.lens-switch__signal--remote-active
+    // .thinking-scanner`) ends with the same three characters, so an
+    // unanchored pattern starts THERE and lazily bridges thousands of lines to
+    // collect these declarations from wherever they happen to live — which
+    // would let the geometry drift out of the base block with the test still
+    // green. `extractRuleBody` anchors on a line start and stops at the
+    // block's own closing brace.
+    const scanner = extractRuleBody(css, ".thinking-scanner");
+    expect(scanner).toMatch(/--thinking-scanner-beam-width:\s*18px;/);
+    expect(scanner).toMatch(/--thinking-scanner-travel:\s*44px;/);
+    expect(scanner).toMatch(/width:\s*62px;/);
+    const miniScanner = extractRuleBody(css, ".thinking-scanner--mini");
+    expect(miniScanner).toMatch(/--thinking-scanner-beam-width:\s*6px;/);
+    expect(miniScanner).toMatch(/--thinking-scanner-travel:\s*10px;/);
+    expect(miniScanner).toMatch(/width:\s*16px;/);
+    expect(extractRuleBody(css, ".thinking-scanner__beam")).toMatch(
+      /animation:\s*pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;/
     );
   });
 

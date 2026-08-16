@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +11,9 @@ import {
   listRunningDetachedCommands,
   startLocalCodexEnvironmentAction,
   stopCodexEnvironmentDetachedCommand,
+  waitForCodexEnvironmentDetachedCommandGone,
 } from "../app-server/codex-environment-runtime";
+import { collectProcessTreeIds } from "../process-tree";
 import { WINDOWS_JOB_OVERALL_READY_TIMEOUT_MS } from "../windows-job-wrapper";
 import { resolveWindowsBashShell } from "../windows-shell";
 
@@ -74,6 +77,48 @@ describe("codex environment runtime", () => {
     mainLogEntries.length = 0;
   });
 
+  it("treats a missing detached command as already gone", async () => {
+    await expect(
+      waitForCodexEnvironmentDetachedCommandGone({
+        runId: "missing-run",
+        timeoutMs: 200,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not throw when the command is already gone at the timeout boundary", async () => {
+    await expect(
+      waitForCodexEnvironmentDetachedCommandGone({
+        runId: "missing-run",
+        timeoutMs: 0,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("throws at the timeout boundary only when a tracked pid is still alive", async () => {
+    // Use a leaf child. process.pid on Windows desktop-main is the Vitest
+    // worker; collecting that tree does a CIM query per descendant and
+    // overruns the 30s test timeout before timeoutMs: 0 can throw.
+    const child = spawn(
+      process.execPath,
+      ["-e", "setInterval(() => undefined, 1000)"],
+      { stdio: "ignore" },
+    );
+    try {
+      expect(child.pid).toEqual(expect.any(Number));
+      await expect(
+        waitForCodexEnvironmentDetachedCommandGone({
+          knownPids: [child.pid!],
+          pid: child.pid,
+          runId: "missing-run",
+          timeoutMs: 0,
+        }),
+      ).rejects.toThrow(/did not exit within 0ms/);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
+
   it("rejects detached actions with a clear missing-cwd error before spawn", async () => {
     await expect(
       startLocalCodexEnvironmentAction({
@@ -101,6 +146,10 @@ describe("codex environment runtime", () => {
   it("runs detached actions with the provided hydrated environment", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-runtime-"));
     const outputPath = path.join(root, "env.txt");
+    let resolveDetachedExit!: (event: { exitCode: number | null }) => void;
+    const detachedExit = new Promise<{ exitCode: number | null }>((resolve) => {
+      resolveDetachedExit = resolve;
+    });
 
     try {
       const result = await startLocalCodexEnvironmentAction({
@@ -110,6 +159,7 @@ describe("codex environment runtime", () => {
           ...process.env,
           PWRAGENT_TEST_HYDRATED_ENV: "hydrated",
         },
+        onDetachedExit: resolveDetachedExit,
         runtime: {
           environmentId: "env",
           environmentName: "Env",
@@ -135,6 +185,10 @@ describe("codex environment runtime", () => {
       await expect(expectEventually(async () => await readFile(outputPath, "utf8"))).resolves.toBe(
         "hydrated",
       );
+      // File creation proves the shell ran, not that the detached Windows Job
+      // and its PowerShell launcher have released their cwd handles. Await the
+      // owner lifecycle before deleting that cwd.
+      await expect(detachedExit).resolves.toMatchObject({ exitCode: 0 });
     } finally {
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
@@ -259,8 +313,8 @@ describe("codex environment runtime", () => {
   it("counts an auto-started environment action as a quit blocker", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-env-auto-"));
     const runId = "test-run-auto";
-    let detachedExited = false;
     let registeredPid: number | undefined;
+    let knownPids: number[] = [];
     try {
       await applyLocalCodexEnvironmentSelection({
         cwd: root,
@@ -269,9 +323,6 @@ describe("codex environment runtime", () => {
         // owner arrives without a thread id.
         owner: { backend: "codex" },
         env: { ...process.env, SHELL: spawnableShell("/bin/sh") },
-        onActionDetachedExit: () => {
-          detachedExited = true;
-        },
         selection: {
           executionTarget: "local",
           runSetup: false,
@@ -313,6 +364,9 @@ describe("codex environment runtime", () => {
         }),
       ]);
       registeredPid = running[0]?.pid;
+      // Snapshot before terminate. Windows reparents Job grandchildren after
+      // the PowerShell launcher dies, so a later parent walk cannot find them.
+      knownPids = registeredPid ? collectProcessTreeIds(registeredPid) : [];
 
       // The thread now exists; the run gets its owner and becomes linkable.
       attachDetachedCommandThreadId(runId, "thread-1");
@@ -320,13 +374,12 @@ describe("codex environment runtime", () => {
     } finally {
       const stopResult = stopCodexEnvironmentDetachedCommand(runId, "terminate");
       if (stopResult.found && !stopResult.alreadyClosed) {
-        await expectEventually(async () => {
-          if (!detachedExited) {
-            throw new Error(
-              `Detached action ${String(registeredPid)} did not exit within 5000ms: ${JSON.stringify(mainLogEntries)}`,
-            );
-          }
-        }, 5_000);
+        await waitForCodexEnvironmentDetachedCommandGone({
+          knownPids,
+          pid: registeredPid,
+          runId,
+          timeoutMs: 5_000,
+        });
       }
       await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }

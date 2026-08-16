@@ -24,6 +24,10 @@ import {
 import { getMainLogger } from "../log";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import {
+  collectProcessTreeIds,
+  isProcessIdAlive,
+} from "../process-tree";
+import {
   formatWindowsJobStartupTelemetry,
   formatWindowsJobStartupTimeout,
   readWindowsJobStartupTelemetry,
@@ -299,6 +303,78 @@ export type CodexEnvironmentDetachedCommandStopResult = {
   found: boolean;
   alreadyClosed: boolean;
 };
+
+export type CodexEnvironmentDetachedCommandGoneParams = {
+  knownPids?: Iterable<number>;
+  pid?: number;
+  runId: string;
+  timeoutMs?: number;
+};
+
+/**
+ * After `stop`/`terminate`, wait for the Node close bit AND the OS process
+ * tree to die. `taskkill /T /F` returning 0 and `child.kill` on the Windows
+ * Job PowerShell launcher both race handle release; callers that `rm` the
+ * action cwd must wait here first.
+ */
+export async function waitForCodexEnvironmentDetachedCommandGone(
+  params: CodexEnvironmentDetachedCommandGoneParams,
+): Promise<void> {
+  const timeoutMs = params.timeoutMs ?? 5_000;
+  const startedAt = Date.now();
+  const remainingMs = () => timeoutMs - (Date.now() - startedAt);
+  const tracked = new Set<number>(
+    [...(params.knownPids ?? [])].filter(
+      (pid) => Number.isInteger(pid) && pid > 0,
+    ),
+  );
+  if (params.pid && Number.isInteger(params.pid) && params.pid > 0) {
+    tracked.add(params.pid);
+  }
+
+  const snapshot = () => {
+    const entry = detachedCommandProcesses.get(params.runId);
+    return {
+      closed: !entry || entry.closed(),
+      alive: [...tracked].filter((pid) => isProcessIdAlive(pid)),
+    };
+  };
+
+  while (true) {
+    // Expand only while budget remains. A 5s CIM walk per live pid would
+    // otherwise ignore timeoutMs (including 0) and hang Windows CI when the
+    // tracked root is a busy process with many descendants.
+    if (remainingMs() > 0) {
+      for (const pid of [...tracked]) {
+        if (remainingMs() <= 0) {
+          break;
+        }
+        if (isProcessIdAlive(pid)) {
+          for (const childPid of collectProcessTreeIds(pid)) {
+            tracked.add(childPid);
+          }
+        }
+      }
+    }
+    // Blocking CIM walks stall the event loop, so a close handler queued
+    // during the walk cannot run until we yield.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    const { closed, alive } = snapshot();
+    if (closed && alive.length === 0) {
+      return;
+    }
+    if (remainingMs() <= 0) {
+      throw new Error(
+        `Detached environment command ${params.runId} did not exit within ${timeoutMs}ms`
+          + ` (closed=${closed}, alive=[${alive.join(", ")}], pid=${String(params.pid)})`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
 
 export function stopCodexEnvironmentDetachedCommand(
   terminationKey: string,

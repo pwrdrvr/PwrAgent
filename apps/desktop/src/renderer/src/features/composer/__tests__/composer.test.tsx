@@ -7571,6 +7571,123 @@ describe("Composer", () => {
     expect(screen.queryByText("Steering now")).not.toBeInTheDocument();
   });
 
+  it("keeps a Grok next-turn steer projected until its queued message arrives", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "acp:grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const steerTurn = vi.fn(async () => ({
+      backend: "acp:grok" as const,
+      threadId: "grok-thread",
+      turnId: "turn-a",
+      disposition: "queued" as const,
+    }));
+
+    render(
+      <Composer
+        activeTurnId="turn-a"
+        backends={[
+          {
+            ...backendSummary("acp:grok", {
+              models: [
+                {
+                  id: "grok-4.6",
+                  label: "Grok 4.6",
+                  current: true,
+                  supportsSteering: true,
+                },
+              ],
+            }),
+            capabilities: {
+              ...backendSummary("acp:grok").capabilities,
+              steerTurn: true,
+            },
+          },
+        ]}
+        desktopApi={{
+          onAgentEvent: (callback) => {
+            agentEventHandler = callback as typeof agentEventHandler;
+            return () => undefined;
+          },
+          steerTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "grok-thread",
+          title: "Grok steer queue",
+          titleSource: "explicit",
+          source: "acp:grok",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Mention blueberries" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), {
+      key: "Enter",
+      metaKey: true,
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Queued by Grok")).toBeInTheDocument();
+    });
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "acp:grok",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: "grok-thread",
+            turnId: "turn-a",
+            turn: { id: "turn-a", status: "completed" },
+          },
+        },
+      });
+    });
+    expect(screen.getByText("Queued by Grok")).toBeInTheDocument();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "acp:grok",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "grok-thread",
+            turnId: "turn-b",
+            turn: { id: "turn-b", status: "in_progress" },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "acp:grok",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "grok-thread",
+            turnId: "turn-b",
+            item: {
+              id: "queued-user-message",
+              type: "userMessage",
+              text: "Mention blueberries",
+            },
+          },
+        },
+      });
+    });
+
+    expect(screen.queryByText("Queued by Grok")).not.toBeInTheDocument();
+  });
+
   it("clears an image-only pending steer after Codex acknowledges the image", async () => {
     let agentEventHandler:
       | ((event: {

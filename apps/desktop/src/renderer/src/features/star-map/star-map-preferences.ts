@@ -38,7 +38,15 @@ export type StarMapViewPreferences = {
  * scannable at a glance.
  */
 export const DEFAULT_STAR_MAP_PREFERENCES: StarMapViewPreferences = {
-  layout: "lanes",
+  /**
+   * Orbit, not lanes. Lanes were the first layout and read as a list of
+   * columns; orbit is the one that shows the fleet as a fleet, which is
+   * what the map is for. An explicitly chosen layout is stored and wins;
+   * an operator who never touched the view options has no stored choice
+   * and rides this default — including across upgrades, so flipping it
+   * moves them too, not only fresh installs.
+   */
+  layout: "orbit",
   cardFields: {
     provider: false,
     branch: false,
@@ -69,10 +77,16 @@ export function readStoredPreferences(): StarMapViewPreferences {
     if (!raw) return DEFAULT_STAR_MAP_PREFERENCES;
     const parsed = JSON.parse(raw) as Partial<StarMapViewPreferences>;
     return {
+      // Every recognized layout is accepted verbatim; anything else —
+      // including a blob from before `layout` existed — falls back to
+      // the SAME default a fresh profile gets, so "the default lens"
+      // has exactly one definition in this module.
       layout:
-        parsed.layout === "orbit" || parsed.layout === "projects"
+        parsed.layout === "lanes"
+        || parsed.layout === "orbit"
+        || parsed.layout === "projects"
           ? parsed.layout
-          : "lanes",
+          : DEFAULT_STAR_MAP_PREFERENCES.layout,
       cardFields: {
         ...DEFAULT_STAR_MAP_PREFERENCES.cardFields,
         ...(parsed.cardFields ?? {}),

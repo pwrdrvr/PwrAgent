@@ -1486,6 +1486,10 @@ class MockBackendClient {
       sha?: string | null;
     } | null;
   };
+  lastUpdateThreadWorkspaceParams?: {
+    threadId: string;
+    cwd: string;
+  };
   lastSetThreadPermissionsParams?: {
     threadId: string;
     cwd?: string;
@@ -1589,6 +1593,7 @@ class MockBackendClient {
       };
       startReviewDelay?: Promise<unknown>;
       startReviewError?: Error;
+      updateThreadWorkspaceError?: Error;
       codexHome?: string;
     }
   ) {}
@@ -1678,6 +1683,17 @@ class MockBackendClient {
     } | null;
   }): Promise<{ threadId: string }> {
     this.lastUpdateThreadMetadataParams = params;
+    return { threadId: params.threadId };
+  }
+
+  async updateThreadWorkspace(params: {
+    threadId: string;
+    cwd: string;
+  }): Promise<{ threadId: string }> {
+    this.lastUpdateThreadWorkspaceParams = params;
+    if (this.options.updateThreadWorkspaceError) {
+      throw this.options.updateThreadWorkspaceError;
+    }
     return { threadId: params.threadId };
   }
 
@@ -2200,6 +2216,24 @@ type KimiStartPrompt = (params: {
   turnId?: string;
 }) => { sessionId: string; turnId: string };
 
+type AcpSteerSession = (params: {
+  sessionId: string;
+  text: string;
+  content: unknown[];
+  interjectionId: string;
+}) => Promise<{ delivery: "currentTurn" | "nextTurn" }>;
+
+type AcpRewindSession = (params: {
+  sessionId: string;
+  targetPromptIndex: number;
+}) => Promise<{ promptText?: string; updatedAt: number }>;
+
+type AcpConfigureWorkflowBudget = (params: {
+  sessionId: string;
+  defaultAgentBudget?: number;
+  maxAgentBudget?: number;
+}) => Promise<{ defaultAgentBudget: number; maxAgentBudget: number }>;
+
 function createKimiAcpRegistry(options?: {
   acpBackendId?: AcpBackendId;
   installedAgent?: AcpInstalledAgentRecord;
@@ -2229,6 +2263,9 @@ function createKimiAcpRegistry(options?: {
   availableCommandsOnSessionStart?: AppServerAvailableCommandSummary[];
   createScratchProjectDirectory?: () => Promise<string>;
   startSession?: KimiStartSession;
+  steerSession?: AcpSteerSession;
+  rewindSession?: AcpRewindSession;
+  configureWorkflowBudget?: AcpConfigureWorkflowBudget;
 }) {
   const acpBackendId =
     options?.installedAgent?.backendId
@@ -2244,6 +2281,15 @@ function createKimiAcpRegistry(options?: {
   const startPrompt: KimiStartPrompt =
     options?.startPrompt ??
     vi.fn(() => ({ sessionId, turnId: "turn-1" }));
+  const steerSession: AcpSteerSession =
+    options?.steerSession
+    ?? vi.fn(async () => ({ delivery: "currentTurn" as const }));
+  const rewindSession: AcpRewindSession =
+    options?.rewindSession
+    ?? vi.fn(async () => ({ promptText: "Breakfast", updatedAt: 3000 }));
+  const configureWorkflowBudget: AcpConfigureWorkflowBudget =
+    options?.configureWorkflowBudget
+    ?? vi.fn(async () => ({ defaultAgentBudget: 128, maxAgentBudget: 1024 }));
   const replay: AppServerThreadReplay =
     options?.replay ?? {
       entries: [],
@@ -2303,6 +2349,9 @@ function createKimiAcpRegistry(options?: {
     }): Promise<BackendAcpSessionRuntimeState> =>
       sessions.find((session) => session.sessionId === params.sessionId)?.acpRuntime
       ?? { updatedAt: 1000 }),
+    steerSession,
+    rewindSession,
+    configureWorkflowBudget,
   };
   const registry = new DesktopBackendRegistry({
     codexClient: options?.codexClient ?? new MockBackendClient({ threads: [] }),
@@ -2336,6 +2385,9 @@ function createKimiAcpRegistry(options?: {
     sendControlPrompt,
     sessions,
     startPrompt,
+    steerSession,
+    rewindSession,
+    configureWorkflowBudget,
   };
 }
 
@@ -2433,6 +2485,31 @@ async function emitCompletedTurn(
           id: turnId,
           status: "completed",
           output: [],
+        },
+      },
+    },
+  });
+}
+
+async function emitStartedTurn(
+  registry: DesktopBackendRegistry,
+  backend: AppServerBackendKind,
+  threadId: string,
+  turnId: string,
+): Promise<void> {
+  await (
+    registry as unknown as { emit(event: AgentEvent): Promise<void> }
+  ).emit({
+    backend,
+    notification: {
+      method: "turn/started",
+      params: {
+        threadId,
+        turnId,
+        turn: {
+          id: turnId,
+          status: "in_progress",
+          startedAt: Date.now(),
         },
       },
     },
@@ -10504,7 +10581,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("does not let Codex source metadata replace active handoff workspace overlays", async () => {
+  it("preserves legacy handoff overlays while synchronizing stale local Codex metadata", async () => {
     const projectA = "/Users/huntharo/projects/ProjectA";
     const handoffWorktreePath = "/Users/huntharo/projects/ProjectA/.worktrees/thread-1";
     const localThread: AppServerThreadSummary = {
@@ -10554,6 +10631,13 @@ script = "echo setup"
       callerReason: "startup-prewarm",
     });
 
+    await vi.waitFor(() => {
+      expect(codexClient.lastUpdateThreadWorkspaceParams).toEqual({
+        threadId: "thread-1",
+        cwd: handoffWorktreePath,
+      });
+    });
+
     await expect(
       overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
     ).resolves.toMatchObject({
@@ -10563,7 +10647,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("does not let Codex source worktree metadata replace active handoff workspace overlays", async () => {
+  it("preserves legacy handoff overlays while synchronizing stale worktree Codex metadata", async () => {
     const projectA = "/Users/huntharo/projects/ProjectA";
     const codexWorktreePath =
       "/Users/huntharo/.codex/profiles/sstk/worktrees/original/ProjectA";
@@ -10616,6 +10700,13 @@ script = "echo setup"
       callerReason: "startup-prewarm",
     });
 
+    await vi.waitFor(() => {
+      expect(codexClient.lastUpdateThreadWorkspaceParams).toEqual({
+        threadId: "thread-1",
+        cwd: handoffWorktreePath,
+      });
+    });
+
     await expect(
       overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
     ).resolves.toMatchObject({
@@ -10625,7 +10716,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("does not backfill Codex worktree metadata over active handoff workspace overlays", async () => {
+  it("does not backfill stale Codex worktree metadata over a legacy handoff overlay", async () => {
     const projectA = "/Users/huntharo/projects/ProjectA";
     const codexWorktreePath =
       "/Users/huntharo/.codex/profiles/sstk/worktrees/original/ProjectA";
@@ -10693,11 +10784,82 @@ script = "echo setup"
       callerReason: "startup-prewarm",
     });
 
-    expect(enrichThreadDirectories).not.toHaveBeenCalled();
+    expect(enrichThreadDirectories).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(codexClient.lastUpdateThreadWorkspaceParams).toEqual({
+        threadId: "thread-1",
+        cwd: handoffWorktreePath,
+      });
+    });
     await expect(
       overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
     ).resolves.toMatchObject({
       extraLinkedDirectories: [handoffDirectory],
+    });
+
+    await registry.close();
+  });
+
+  it("promotes a handoff overlay after Codex acknowledges the same workspace", async () => {
+    const projectA = "/Users/huntharo/projects/ProjectA";
+    const handoffWorktreePath = "/Users/huntharo/projects/ProjectA/.worktrees/thread-1";
+    const worktreeThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "ProjectA worktree",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: handoffWorktreePath,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      linkedDirectories: [
+        {
+          id: projectA,
+          label: "ProjectA",
+          path: projectA,
+          worktreePath: handoffWorktreePath,
+          kind: "worktree",
+        },
+      ],
+    };
+    const codexClient = new MockBackendClient({ threads: [worktreeThread] });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [
+            {
+              id: "pwragent-handoff:codex:thread-1",
+              label: "ProjectA",
+              path: projectA,
+              worktreePath: handoffWorktreePath,
+              kind: "worktree",
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "startup-prewarm",
+    });
+
+    expect(codexClient.lastUpdateThreadWorkspaceParams).toBeUndefined();
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      extraLinkedDirectories: [
+        {
+          id: expectedDir(handoffWorktreePath),
+          label: "ProjectA",
+          path: expectedDir(projectA),
+          worktreePath: expectedDir(handoffWorktreePath),
+          kind: "worktree",
+        },
+      ],
     });
 
     await registry.close();
@@ -17218,6 +17380,299 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("steers an active Grok turn through its ACP extension", async () => {
+    const backend = "acp:grok" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [
+      {
+        backendId: backend,
+        sessionId: "grok-session-1",
+        title: "Breakfast poem",
+        createdAt: 1000,
+        updatedAt: 2000,
+        executionMode: "default",
+        status: "active",
+      },
+    ];
+    const installedAgent = {
+      ...createKimiAgentRecord(backend),
+      registryId: "grok",
+      name: "Grok Build",
+    };
+    const { registry, steerSession } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      installedAgent,
+      sessions,
+    });
+    await emitStartedTurn(registry, backend, "grok-session-1", "turn-1");
+
+    await expect(registry.steerTurn({
+      backend,
+      threadId: "grok-session-1",
+      expectedTurnId: "turn-1",
+      input: [{ type: "text", text: "Add blueberries" }],
+      requestId: "grok-steer-1",
+    })).resolves.toEqual({
+      backend,
+      threadId: "grok-session-1",
+      turnId: "turn-1",
+      disposition: "steered",
+    });
+    expect(steerSession).toHaveBeenCalledWith({
+      sessionId: "grok-session-1",
+      text: "Add blueberries",
+      content: [{ type: "text", text: "Add blueberries" }],
+      interjectionId: "grok-steer-1",
+    });
+
+    await registry.close();
+  });
+
+  it("rejects a stale Grok steer before it can reach a replacement turn", async () => {
+    const backend = "acp:grok" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [{
+      backendId: backend,
+      sessionId: "grok-session-stale",
+      title: "Breakfast poem",
+      createdAt: 1000,
+      updatedAt: 2000,
+      executionMode: "default",
+      status: "active",
+    }];
+    const installedAgent = {
+      ...createKimiAgentRecord(backend),
+      registryId: "grok",
+      name: "Grok Build",
+    };
+    const { registry, steerSession } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      installedAgent,
+      sessions,
+    });
+    await emitStartedTurn(
+      registry,
+      backend,
+      "grok-session-stale",
+      "turn-b",
+    );
+
+    await expect(registry.steerTurn({
+      backend,
+      threadId: "grok-session-stale",
+      expectedTurnId: "turn-a",
+      input: [{ type: "text", text: "Add blueberries" }],
+      requestId: "grok-steer-stale",
+    })).rejects.toThrow(
+      "expected active turn id `turn-a` but found `turn-b`",
+    );
+    expect(steerSession).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("projects Grok next-turn steering and leaves its message context unbound", async () => {
+    const backend = "acp:grok" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [{
+      backendId: backend,
+      sessionId: "grok-session-next",
+      title: "Breakfast poem",
+      createdAt: 1000,
+      updatedAt: 2000,
+      executionMode: "default",
+      status: "active",
+    }];
+    const installedAgent = {
+      ...createKimiAgentRecord(backend),
+      registryId: "grok",
+      name: "Grok Build",
+    };
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      installedAgent,
+      sessions,
+      steerSession: vi.fn(async () => ({ delivery: "nextTurn" as const })),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    await emitStartedTurn(registry, backend, "grok-session-next", "turn-a");
+
+    await expect(registry.steerTurn(
+      {
+        backend,
+        threadId: "grok-session-next",
+        expectedTurnId: "turn-a",
+        input: [{ type: "text", text: "Add blueberries" }],
+        requestId: "grok-steer-next",
+      },
+      { kind: "pwragent" },
+    )).resolves.toMatchObject({
+      disposition: "queued",
+      turnId: "turn-a",
+    });
+
+    await emitCompletedTurn(registry, backend, "grok-session-next", "turn-a");
+    await emitStartedTurn(registry, backend, "grok-session-next", "turn-b");
+    await (
+      registry as unknown as { emit(event: AgentEvent): Promise<void> }
+    ).emit({
+      backend,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: "grok-session-next",
+          turnId: "turn-b",
+          item: {
+            id: "next-turn-user-message",
+            type: "userMessage",
+            text: "Add blueberries",
+          },
+        },
+      },
+    });
+
+    const nextTurnUserMessageEvent = events.find((event) => {
+      if (event.notification.method !== "item/completed") {
+        return false;
+      }
+      const item = event.notification.params.item as { id?: string };
+      return item.id === "next-turn-user-message";
+    });
+    expect(nextTurnUserMessageEvent).toMatchObject({
+      notification: {
+        params: {
+          turnId: "turn-b",
+          item: {
+            origin: { kind: "pwragent" },
+          },
+        },
+      },
+    });
+
+    await registry.close();
+  });
+
+  it("serializes destructive Grok rewind with the next ACP prompt start", async () => {
+    const backend = "acp:grok" as AcpBackendId;
+    const sessions: AcpSessionMetadata[] = [{
+      backendId: backend,
+      sessionId: "grok-session-rewind-lock",
+      title: "Breakfast poem",
+      createdAt: 1000,
+      updatedAt: 2000,
+      executionMode: "default",
+      status: "idle",
+    }];
+    const rewindDeferred = createDeferred<{
+      promptText?: string;
+      updatedAt: number;
+    }>();
+    const events: AgentEvent[] = [];
+    const installedAgent = {
+      ...createKimiAgentRecord(backend),
+      registryId: "grok",
+      name: "Grok Build",
+    };
+    const rewindSession = vi.fn(async () => await rewindDeferred.promise);
+    const { registry, startPrompt } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      installedAgent,
+      sessions,
+      rewindSession,
+    });
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const rewind = registry.rewindAcpThread({
+      backend,
+      threadId: "grok-session-rewind-lock",
+      targetPromptIndex: 0,
+    });
+    await waitForCondition(() => rewindSession.mock.calls.length === 1);
+    const start = registry.startTurn({
+      backend,
+      threadId: "grok-session-rewind-lock",
+      input: [{ type: "text", text: "Write another poem" }],
+    });
+    await flushAsync();
+    expect(startPrompt).not.toHaveBeenCalled();
+
+    rewindDeferred.resolve({ promptText: "Breakfast poem", updatedAt: 3000 });
+    await expect(rewind).resolves.toMatchObject({
+      promptText: "Breakfast poem",
+      updatedAt: 3000,
+    });
+    await expect(start).resolves.toMatchObject({ turnId: "turn-1" });
+    expect(events).toContainEqual({
+      backend,
+      notification: {
+        method: "thread/rewound",
+        params: {
+          threadId: "grok-session-rewind-lock",
+          targetPromptIndex: 0,
+          updatedAt: 3000,
+        },
+      },
+    });
+
+    await registry.close();
+  });
+
+  it("serializes Grok workflow-budget changes with ACP prompt starts", async () => {
+    const backend = "acp:grok" as const;
+    const sessions: AcpSessionMetadata[] = [{
+      backendId: backend,
+      sessionId: "grok-session-budget-lock",
+      title: "Breakfast poem",
+      createdAt: 1000,
+      updatedAt: 2000,
+      executionMode: "default",
+      status: "idle",
+    }];
+    const budgetDeferred = createDeferred<{
+      defaultAgentBudget: number;
+      maxAgentBudget: number;
+    }>();
+    const installedAgent = {
+      ...createKimiAgentRecord(backend),
+      registryId: "grok",
+      name: "Grok Build",
+    };
+    const configureWorkflowBudget = vi.fn(
+      async () => await budgetDeferred.promise,
+    );
+    const { registry, startPrompt } = createKimiAcpRegistry({
+      acpBackendId: backend,
+      installedAgent,
+      sessions,
+      configureWorkflowBudget,
+    });
+
+    const configure = registry.configureGrokWorkflowBudget({
+      backend,
+      threadId: "grok-session-budget-lock",
+      defaultAgentBudget: 4,
+      maxAgentBudget: 8,
+    });
+    await waitForCondition(() => configureWorkflowBudget.mock.calls.length === 1);
+    const start = registry.startTurn({
+      backend,
+      threadId: "grok-session-budget-lock",
+      input: [{ type: "text", text: "Write another poem" }],
+    });
+    await flushAsync();
+    expect(startPrompt).not.toHaveBeenCalled();
+
+    budgetDeferred.resolve({ defaultAgentBudget: 4, maxAgentBudget: 8 });
+    await expect(configure).resolves.toMatchObject({
+      policy: { defaultAgentBudget: 4, maxAgentBudget: 8 },
+    });
+    await expect(start).resolves.toMatchObject({ turnId: "turn-1" });
+
+    await registry.close();
+  });
+
   it("coalesces concurrent identical steer requests before they reach the backend", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/steer"] },
@@ -18586,6 +19041,151 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("completes a Codex review child against its ACP parent", async () => {
+    const acpBackendId = "acp:grok" as AcpBackendId;
+    const parentThreadId = "grok-parent-with-codex-review";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      startThreadResult: { threadId: "codex-review-child" },
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        [`${acpBackendId}:${parentThreadId}`]: {
+          backend: acpBackendId,
+          threadId: parentThreadId,
+          executionMode: "full-access",
+          extraLinkedDirectories: [],
+        },
+      },
+    });
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      codexClient,
+      overlayStore,
+      sessionId: parentThreadId,
+      sessions: [{
+        backendId: acpBackendId,
+        sessionId: parentThreadId,
+        title: "Grok parent",
+        cwd: "/repo/worktree",
+        createdAt: 1_000,
+        updatedAt: 1_000,
+        executionMode: "full-access",
+        status: "idle",
+      }],
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    const response = await registry.startReview({
+      backend: acpBackendId,
+      reviewBackend: "codex",
+      threadId: parentThreadId,
+      target: { type: "baseBranch", branch: "origin/main" },
+      delivery: "inline",
+    });
+    expect(response).toMatchObject({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      reviewThreadId: "codex-review-child",
+      turnId: "turn-1",
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: [`${acpBackendId}:${parentThreadId}`],
+      subAgentThreadKeys: [`${acpBackendId}:${parentThreadId}`],
+      threadTitles: {
+        [`${acpBackendId}:${parentThreadId}`]: "Grok parent",
+      },
+    });
+
+    const approvalResponse = codexClient.emitRequest({
+      method: "item/commandExecution/requestApproval",
+      params: {
+        threadId: response.reviewThreadId,
+        turnId: response.turnId,
+        itemId: "review-command",
+        requestId: "review-approval",
+        command: "git diff origin/main...HEAD",
+      },
+    } as AppServerPendingRequestNotification);
+    await waitForCondition(() => events.some((event) =>
+      event.notification.method === "item/commandExecution/requestApproval"
+    ));
+    expect(events.find((event) =>
+      event.notification.method === "item/commandExecution/requestApproval"
+    )).toMatchObject({
+      backend: acpBackendId,
+      notification: {
+        params: {
+          threadId: parentThreadId,
+          turnId: response.turnId,
+          requestId: "review-approval",
+        },
+      },
+    });
+    await registry.submitServerRequest({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+      turnId: response.turnId,
+      requestId: "review-approval",
+      response: { decision: "accept" },
+    });
+    await expect(approvalResponse).resolves.toEqual({ decision: "accept" });
+
+    const reviewOutput = JSON.stringify({
+      findings: [],
+      overall_correctness: "patch is correct",
+      overall_explanation: "No blocking findings.",
+      overall_confidence_score: 0.98,
+    });
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: response.reviewThreadId,
+        turnId: response.turnId,
+        turn: {
+          id: response.turnId,
+          status: "completed",
+          output: [{ type: "text", text: reviewOutput }],
+        },
+      },
+    });
+
+    const overlay = await overlayStore.getThreadOverlayState({
+      backend: acpBackendId,
+      threadId: parentThreadId,
+    });
+    expect(overlay?.subAgents).toEqual([
+      expect.objectContaining({
+        backend: "codex",
+        monitorThreadId: response.reviewThreadId,
+        monitorTurnId: response.turnId,
+        outcome: "success",
+        status: "success",
+      }),
+    ]);
+    expect(overlay?.managedReviewEntries).toEqual([
+      expect.objectContaining({
+        id: `managed-review:${response.turnId}:started`,
+      }),
+      expect.objectContaining({
+        id: `managed-review:${response.turnId}:result`,
+        output: expect.objectContaining({
+          overall_correctness: "patch is correct",
+        }),
+        turn: expect.objectContaining({
+          id: response.turnId,
+          status: "completed",
+        }),
+      }),
+    ]);
+
+    await registry.close();
+  });
+
   it("normalizes file-change approval diffs and omits empty placeholders", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
@@ -18912,6 +19512,126 @@ command = "pnpm dev"
     });
 
     await registry.close();
+  });
+
+  it("persists and aggregates live large-output alerts without completion", async () => {
+    vi.useFakeTimers();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+    });
+    const upsertThreadToolInvocation = vi.fn(
+      async (params: { invocation: unknown }) => params.invocation,
+    );
+    const persistThreadToolInvocationBoundary = vi.fn(
+      async (params: { invocation: unknown }) => params.invocation,
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      persistThreadToolInvocationBoundary,
+      upsertThreadToolInvocation,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: overlayStore as never,
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+
+    try {
+      const emit = (registry as unknown as {
+        emit(event: AgentEvent): Promise<void>;
+      }).emit.bind(registry);
+      const stream = async (
+        delta: string,
+        itemId = "cmd-1",
+      ): Promise<void> => {
+        await emit({
+          backend: "codex",
+          notification: {
+            method: "item/commandExecution/outputDelta",
+            params: {
+              threadId: "thread-1",
+              turnId: "turn-1",
+              itemId,
+              delta,
+            },
+          },
+        } as AgentEvent);
+      };
+
+      await stream("x".repeat(2_000));
+      await vi.advanceTimersByTimeAsync(250);
+      expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
+
+      // The warning total spans sqlite flush windows. A detector tied to the
+      // 250ms pending-write buffer would see two harmless 2,000-char chunks
+      // and never report that the command reached 4,000.
+      await stream("x".repeat(2_000));
+      const alertEvent = events.find(
+        (event) =>
+          event.notification.method === "thread/toolAccounting/updated",
+      );
+      expect(alertEvent?.notification.params).toMatchObject({
+        threadId: "thread-1",
+        triggeredAlerts: [
+          {
+            kind: "large-output",
+            severity: "warning",
+            totalOutputChars: 4_000,
+            turnId: "turn-1",
+          },
+        ],
+      });
+      expect(persistThreadToolInvocationBoundary).toHaveBeenCalledTimes(1);
+      expect(persistThreadToolInvocationBoundary).toHaveBeenCalledWith({
+        alerts: [
+          expect.objectContaining({
+            kind: "large-output",
+            severity: "warning",
+            totalOutputChars: 4_000,
+          }),
+        ],
+        invocation: expect.objectContaining({
+          invocationId: "tool:codex:thread-1:turn-1:cmd-1",
+          noisy: true,
+          noisyReason: "large-output",
+          outputChars: 2_000,
+          outputState: "available",
+          source: "live",
+          status: "in_progress",
+          suggestedPrompt: expect.stringContaining("commandExecution"),
+        }),
+      });
+
+      await stream("x".repeat(4_000), "cmd-2");
+      expect(persistThreadToolInvocationBoundary).toHaveBeenCalledTimes(2);
+      expect(persistThreadToolInvocationBoundary.mock.calls[1]?.[0]).toMatchObject({
+        alerts: [
+          {
+            invocationCount: 2,
+            invocationIds: [
+              "tool:codex:thread-1:turn-1:cmd-1",
+              "tool:codex:thread-1:turn-1:cmd-2",
+            ],
+            totalOutputChars: 8_000,
+            worstOutputChars: 4_000,
+          },
+        ],
+        invocation: {
+          invocationId: "tool:codex:thread-1:turn-1:cmd-2",
+          outputChars: 4_000,
+          outputState: "available",
+          source: "live",
+        },
+      });
+
+      await registry.close();
+      expect(upsertThreadToolInvocation).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("flushes buffered command output on the timer, without a lifecycle event", async () => {
@@ -20694,6 +21414,10 @@ command = "pnpm dev"
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
     });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:thread-1"],
+    });
 
     await expect
       .poll(async () => {
@@ -21226,6 +21950,19 @@ command = "pnpm dev"
     });
     expect(overlay?.subAgents?.[0]?.task).toEqual(expect.stringContaining("correctness"));
     expect(upsertThreadSubAgent).toHaveBeenCalledTimes(1);
+
+    await codexClient.emit({
+      method: "thread/status/changed",
+      params: {
+        threadId: nativeThreadId,
+        status: { type: "active" },
+      },
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:thread-parent"],
+      subAgentThreadKeys: ["codex:thread-parent"],
+    });
 
     await codexClient.emit({
       method: "thread/tokenUsage/updated",
@@ -28926,10 +29663,15 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("rejects self-control, idle targets, and stale expected turns", async () => {
+  it("preserves idle and stale steers as follow-ups while rejecting invalid stops", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
-        methods: ["thread/resume", "turn/interrupt", "turn/steer"],
+        methods: [
+          "thread/resume",
+          "turn/start",
+          "turn/interrupt",
+          "turn/steer",
+        ],
       },
       threads: [{
         id: "idle-thread",
@@ -28980,6 +29722,34 @@ script = "printf setup"
       structuredContent: { code: "no_active_turn" },
     });
 
+    const idleSteer = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "steer_thread",
+      args: {
+        backend: "codex",
+        threadId: "idle-thread",
+        requestId: "steer-idle",
+        prompt: "Apply the corrected branch guidance.",
+      },
+    });
+    expect(idleSteer).toMatchObject({
+      structuredContent: {
+        backend: "codex",
+        threadId: "idle-thread",
+        requestId: "steer-idle",
+        turnId: "turn-1",
+        disposition: "started",
+        fallbackReason: "no_active_turn",
+      },
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "idle-thread",
+      input: [{ type: "text", text: "Apply the corrected branch guidance." }],
+    });
+
     const stale = await callRegistryMcpTool({
       registry,
       backend: "codex",
@@ -28995,13 +29765,13 @@ script = "printf setup"
       },
     });
     expect(stale).toMatchObject({
-      isError: true,
       structuredContent: {
-        code: "stale_target",
-        data: {
-          activeTurnId: "turn-new",
-          expectedTurnId: "turn-old",
-        },
+        backend: "codex",
+        threadId: "live-thread",
+        requestId: "steer-stale",
+        disposition: "queued",
+        fallbackReason: "stale_target",
+        queueEntryId: expect.stringMatching(/^thread-turn:/),
       },
     });
 
@@ -29022,6 +29792,111 @@ script = "printf setup"
       structuredContent: { code: "forbidden" },
     });
     expect(codexClient.interruptTurnCallCount).toBe(0);
+
+    await registry.close();
+  });
+
+  it("starts one follow-up when the target finishes during steer admission", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        methods: ["thread/resume", "turn/start", "turn/steer"],
+      },
+      threads: [{
+        id: "target-thread",
+        title: "target-thread",
+        titleSource: "fallback",
+        source: "codex",
+        linkedDirectories: [],
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    for (const [threadId, turnId] of [
+      ["target-thread", "target-turn"],
+      ["parent-thread", "parent-turn"],
+    ] as const) {
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: { threadId, turnId, turn: { id: turnId } },
+        },
+      });
+    }
+
+    const steerTurn = vi.spyOn(codexClient, "steerTurn")
+      .mockImplementationOnce(async () => {
+        await registry.publishLocalEvent({
+          backend: "codex",
+          notification: {
+            method: "turn/completed",
+            params: {
+              threadId: "target-thread",
+              turnId: "target-turn",
+              turn: {
+                id: "target-turn",
+                status: "completed",
+                output: [],
+              },
+            },
+          },
+        });
+        throw new Error("no active turn to steer");
+      });
+    const args = {
+      backend: "codex",
+      threadId: "target-thread",
+      requestId: "steer-race",
+      expectedTurnId: "target-turn",
+      prompt: "Switch to the real remote-tracking branch.",
+    };
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "steer_thread",
+      args,
+    });
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: "codex",
+        threadId: "target-thread",
+        requestId: "steer-race",
+        turnId: "turn-1",
+        disposition: "started",
+        fallbackReason: "no_active_turn",
+      },
+    });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "target-thread",
+      input: [{
+        type: "text",
+        text: "Switch to the real remote-tracking branch.",
+      }],
+    });
+
+    const replay = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "steer_thread",
+      args,
+    });
+    expect(replay).toMatchObject({
+      structuredContent: {
+        disposition: "started",
+        idempotentReplay: true,
+        requestId: "steer-race",
+      },
+    });
+    expect(steerTurn).toHaveBeenCalledTimes(1);
+    expect(codexClient.startTurnCallCount).toBe(1);
 
     await registry.close();
   });
@@ -29884,6 +30759,90 @@ script = "printf setup"
       structuredContent: { code: "not_found" },
     });
     expect(federatedControl).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("preserves a stale remote steer through the federated follow-up path", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{
+        id: "parent-thread",
+        title: "M4 runner-host conversion preflight",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    const federatedControl = vi.fn(async () => {
+      throw new PwrAgentFederatedThreadMessageError(
+        "no_active_turn",
+        "Remote thread has no active turn.",
+      );
+    });
+    const federatedSend = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "remote-thread",
+      turnId: "remote-follow-up",
+      title: "Remote target",
+      instanceId: "pwr_studio",
+      instanceLabel: "Studio Mac",
+    }));
+    registry.setFederatedThreadControlHandler(federatedControl);
+    registry.setFederatedThreadMessageHandler(federatedSend);
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/started",
+        params: {
+          threadId: "parent-thread",
+          turnId: "parent-turn",
+          turn: { id: "parent-turn" },
+        },
+      },
+    });
+
+    const response = await callRegistryMcpTool({
+      registry,
+      backend: "codex",
+      threadId: "parent-thread",
+      turnId: "parent-turn",
+      tool: "steer_thread",
+      args: {
+        backend: "codex",
+        threadId: "remote-thread",
+        instanceId: "pwr_studio",
+        requestId: "steer-remote-stale",
+        prompt: "Apply the branch correction before continuing.",
+      },
+    });
+    expect(response).toMatchObject({
+      structuredContent: {
+        backend: "codex",
+        threadId: "remote-thread",
+        instanceId: "pwr_studio",
+        requestId: "steer-remote-stale",
+        turnId: "remote-follow-up",
+        disposition: "started",
+        fallbackReason: "no_active_turn",
+      },
+    });
+    expect(federatedControl).toHaveBeenCalledOnce();
+    expect(federatedSend).toHaveBeenCalledWith(expect.objectContaining({
+      backend: "codex",
+      threadId: "remote-thread",
+      instanceId: "pwr_studio",
+      input: [{
+        type: "text",
+        text: "Apply the branch correction before continuing.",
+      }],
+    }));
+    expect(codexClient.startTurnCallCount).toBe(0);
 
     await registry.close();
   });
@@ -33685,12 +34644,23 @@ script = "printf setup"
       initializeResult: { methods: ["turn/start"] },
       models: TEST_TASK_MONITOR_MODELS,
       startThreadResult: { threadId: "monitor-thread" },
+      threads: [
+        {
+          id: "parent-thread",
+          title: "Deploy recoverable M2 Max runner",
+          titleSource: "explicit",
+          threadStatus: "idle",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
       threadTitleGenerationService: null,
     });
+    await registry.listThreads({ backend: "codex" });
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -33735,7 +34705,11 @@ script = "printf setup"
 
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 1,
-      threadIds: ["codex:monitor-thread"],
+      threadIds: ["codex:parent-thread"],
+      subAgentThreadKeys: ["codex:parent-thread"],
+      threadTitles: {
+        "codex:parent-thread": "Deploy recoverable M2 Max runner",
+      },
     });
 
     await registry.publishLocalEvent({
@@ -37904,6 +38878,10 @@ script = "printf setup"
         branch: "feature/handoff",
       },
     });
+    expect(codexClient.lastUpdateThreadWorkspaceParams).toEqual({
+      threadId: "thread-1",
+      cwd: "/repo/app/.worktrees/app-feature-handoff",
+    });
     await expect(
       overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
     ).resolves.toMatchObject({
@@ -37915,6 +38893,99 @@ script = "printf setup"
           kind: "worktree",
         }),
       ],
+    });
+
+    await registry.close();
+  });
+
+  it("finishes committed handoff bookkeeping when Codex CWD synchronization fails", async () => {
+    const worktreePath = "/repo/app/.worktrees/app-feature-handoff";
+    const thread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "Move me back",
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: "pwragent-handoff:codex:thread-1",
+          label: "app",
+          path: "/repo/app",
+          worktreePath,
+          kind: "worktree",
+        },
+      ],
+      source: "codex",
+      gitBranch: "feature/handoff",
+      updatedAt: 2,
+    };
+    const archivedSourceWorktree: WorktreeSnapshotSummary = {
+      id: "snapshot-handoff",
+      backend: "codex",
+      threadId: "thread-1",
+      worktreePath,
+      repositoryPath: "/repo/app",
+      snapshotRef: "refs/pwragent/snapshots/snapshot-handoff",
+      snapshotCommit: "abc123",
+      sourceBranch: "feature/handoff",
+      sourceHead: "abc123",
+      createdAt: 1_000,
+      archivedAt: 1_000,
+      state: "archived",
+      ignoredFilesExcluded: true,
+    };
+    const handoff = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      direction: "worktree-to-local" as const,
+      strategy: "move-branch" as const,
+      workMode: "local" as const,
+      branch: "feature/handoff",
+      repositoryPath: "/repo/app",
+      targetPath: "/repo/app",
+      linkedDirectory: {
+        id: "pwragent-handoff:codex:thread-1",
+        label: "app",
+        path: "/repo/app",
+        kind: "local" as const,
+      },
+      archivedSourceWorktree,
+      warnings: [],
+      completedAt: 1_000,
+    }));
+    const codexClient = new MockBackendClient({
+      threads: [thread],
+      updateThreadWorkspaceError: new Error("Codex connection dropped"),
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      gitWorkspaceHandoffService: { handoff } as never,
+    });
+
+    const response = await registry.handoffThreadWorkspace({
+      backend: "codex",
+      threadId: "thread-1",
+      direction: "worktree-to-local",
+    });
+
+    expect(response.warnings).toContain(
+      "Codex workspace CWD synchronization is pending and will retry automatically.",
+    );
+    expect(codexClient.lastUpdateThreadMetadataParams).toEqual({
+      threadId: "thread-1",
+      gitInfo: { branch: "feature/handoff" },
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      extraLinkedDirectories: [
+        expect.objectContaining({
+          id: "pwragent-handoff:codex:thread-1",
+          kind: "local",
+          path: "/repo/app",
+        }),
+      ],
+      worktreeSnapshots: [archivedSourceWorktree],
     });
 
     await registry.close();
@@ -38684,6 +39755,10 @@ script = "printf setup"
       gitInfo: {
         branch: "HEAD",
       },
+    });
+    expect(codexClient.lastUpdateThreadWorkspaceParams).toEqual({
+      threadId: "thread-1",
+      cwd: "/repo/app",
     });
     await expect(
       overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),

@@ -57,6 +57,17 @@ import {
   withRendererSequence,
 } from "../features/thread-detail/live-transcript-activity";
 import { THREAD_HISTORY_PAGE_LIMIT } from "./thread-history-limits";
+import {
+  combineTranscriptEntries,
+  combineTranscriptMessages,
+  combineTranscriptResponse,
+  createTranscriptHistoryIndex,
+  createTranscriptReviewPresentation,
+  prependTranscriptHistoryPage,
+  type LoadedTranscriptHistory,
+  type TranscriptHistoryIndex,
+} from "./segmented-transcript";
+import { normalizeTranscriptText } from "./transcript-review-presentation";
 
 const MAX_VIEW_ONLY_THREADS = 10;
 const EMPTY_EXPANDED_TRANSCRIPT_ACTIVITY_IDS: string[] = [];
@@ -148,7 +159,7 @@ type ThreadSessionEntry = {
   initialLoadDurationMs?: number;
   interacted: boolean;
   lastTouchedAt: number;
-  loadedHistoryEntries: AppServerThreadEntry[];
+  loadedHistory?: LoadedTranscriptHistory;
   loading: boolean;
   loadingMore: boolean;
   needsHydrationAfterCompletion: boolean;
@@ -200,7 +211,6 @@ function createEmptyThreadSessionEntry(): ThreadSessionEntry {
     expectOwnUpdate: false,
     interacted: false,
     lastTouchedAt: Date.now(),
-    loadedHistoryEntries: [],
     loading: false,
     loadingMore: false,
     needsHydrationAfterCompletion: false,
@@ -218,29 +228,6 @@ function mergeItems<T extends { id: string }>(olderItems: T[], newerItems: T[]):
   }
 
   return [...deduped.values()];
-}
-
-function stitchOrderedTranscriptSegments(
-  olderEntries: AppServerThreadEntry[],
-  newerEntries: AppServerThreadEntry[]
-): AppServerThreadEntry[] {
-  // Page reads can overlap a moving tail. Only stable IDs prove that entries
-  // overlap; repeated content with different IDs is legitimate transcript.
-  const newerEntryIds = new Set(newerEntries.map((entry) => entry.id));
-
-  return [
-    ...olderEntries.filter((entry) => !newerEntryIds.has(entry.id)),
-    ...newerEntries,
-  ];
-}
-
-function excludeTranscriptSegment(
-  entries: AppServerThreadEntry[],
-  excludedSegment: AppServerThreadEntry[]
-): AppServerThreadEntry[] {
-  const excludedEntryIds = new Set(excludedSegment.map((entry) => entry.id));
-
-  return entries.filter((entry) => !excludedEntryIds.has(entry.id));
 }
 
 function transcriptMessagesForEntries(
@@ -635,43 +622,66 @@ function mergeTranscriptMessages(
   return merged;
 }
 
-function preserveLoadedTranscriptHistory(
+function preserveRetainedTranscriptTail(
   response: AppServerReadThreadResponse,
   retainedResponse: AppServerReadThreadResponse | undefined,
-  loadedHistoryEntries: AppServerThreadEntry[]
+  hasLoadedHistory: boolean,
 ): AppServerReadThreadResponse {
   if (
-    loadedHistoryEntries.length === 0 ||
+    !hasLoadedHistory ||
     !retainedResponse ||
     !response.replay.pagination.supportsPagination
   ) {
     return response;
   }
 
-  // History provenance is explicit. A positional prefix becomes stale as soon
-  // as live items or a refresh mutate the combined response.
-  const retainedTail = excludeTranscriptSegment(
-    retainedResponse.replay.entries,
-    loadedHistoryEntries
-  );
   // A refresh can lag the live stream. Replace only exact or uniquely
   // equivalent retained entries; keep anything the refresh omitted.
+  // Stable IDs take the indexed linear path; only entries whose server IDs
+  // changed need the bounded logical-match fallback. Loaded history pages do
+  // not participate, so pagination depth cannot amplify either path.
   const matchedRetainedEntries = new Set<AppServerThreadEntry>();
+  const retainedEntriesById = new Map<string, AppServerThreadEntry[]>();
+  const retainedEntryIndexById = new Map<string, number>();
+  for (const retainedEntry of retainedResponse.replay.entries) {
+    const retainedEntryId = retainedEntry.id;
+    const entriesForId = retainedEntriesById.get(retainedEntryId);
+    if (entriesForId) {
+      entriesForId.push(retainedEntry);
+    } else {
+      retainedEntriesById.set(retainedEntryId, [retainedEntry]);
+    }
+  }
+  const freshEntryByRetainedEntry = new Map<
+    AppServerThreadEntry,
+    AppServerThreadEntry
+  >();
   for (const freshEntry of response.replay.entries) {
-    const retainedMatch = findUniqueTranscriptRefreshMatch(
+    const exactCandidates = retainedEntriesById.get(freshEntry.id);
+    let exactCandidateIndex = retainedEntryIndexById.get(freshEntry.id) ?? 0;
+    let retainedMatch = exactCandidates?.[exactCandidateIndex];
+    while (retainedMatch && matchedRetainedEntries.has(retainedMatch)) {
+      exactCandidateIndex += 1;
+      retainedMatch = exactCandidates?.[exactCandidateIndex];
+    }
+    if (retainedMatch) {
+      retainedEntryIndexById.set(freshEntry.id, exactCandidateIndex + 1);
+    }
+    retainedMatch ??= findUniqueLogicalTranscriptRefreshMatch(
       freshEntry,
-      retainedTail.filter((entry) => !matchedRetainedEntries.has(entry))
+      retainedResponse.replay.entries.filter(
+        (entry) => !matchedRetainedEntries.has(entry)
+      ),
     );
     if (retainedMatch) {
       matchedRetainedEntries.add(retainedMatch);
+      freshEntryByRetainedEntry.set(retainedMatch, freshEntry);
     }
   }
-  const retainedTailRemainder = retainedTail.filter(
-    (entry) => !matchedRetainedEntries.has(entry)
-  );
-  const entries = stitchOrderedTranscriptSegments(
-    loadedHistoryEntries,
-    mergeTranscriptEntries(response.replay.entries, retainedTailRemainder)
+  const entries = reconcileRetainedTranscriptTail(
+    response.replay.entries,
+    retainedResponse.replay.entries,
+    freshEntryByRetainedEntry,
   );
 
   return {
@@ -684,22 +694,118 @@ function preserveLoadedTranscriptHistory(
         retainedResponse.replay.messages,
         response.replay.messages
       ),
-      pagination: retainedResponse.replay.pagination,
     },
   };
 }
 
-function findUniqueTranscriptRefreshMatch(
+function reconcileRetainedTranscriptTail(
+  freshEntries: AppServerThreadEntry[],
+  retainedEntries: AppServerThreadEntry[],
+  freshEntryByRetainedEntry: ReadonlyMap<
+    AppServerThreadEntry,
+    AppServerThreadEntry
+  >,
+): AppServerThreadEntry[] {
+  const retainedEntriesBeforeFresh = new Map<
+    AppServerThreadEntry,
+    AppServerThreadEntry[]
+  >();
+  let pendingRetainedEntries: AppServerThreadEntry[] = [];
+  let lastMatchedFreshEntry: AppServerThreadEntry | undefined;
+
+  for (const retainedEntry of retainedEntries) {
+    const freshEntry = freshEntryByRetainedEntry.get(retainedEntry);
+    if (!freshEntry) {
+      pendingRetainedEntries.push(retainedEntry);
+      continue;
+    }
+
+    if (pendingRetainedEntries.length > 0) {
+      retainedEntriesBeforeFresh.set(freshEntry, pendingRetainedEntries);
+      pendingRetainedEntries = [];
+    }
+    lastMatchedFreshEntry = freshEntry;
+  }
+
+  const entries: AppServerThreadEntry[] = [];
+  let trailingInsertionFloor = 0;
+  for (const freshEntry of freshEntries) {
+    entries.push(...(retainedEntriesBeforeFresh.get(freshEntry) ?? []));
+    entries.push(freshEntry);
+    if (freshEntry === lastMatchedFreshEntry) {
+      trailingInsertionFloor = entries.length;
+    }
+  }
+
+  if (pendingRetainedEntries.length === 0) {
+    return entries;
+  }
+
+  // A bounded newest-page refresh advances naturally as later turns arrive.
+  // Entries that fell off its front are older history, not missing live tail,
+  // and must remain ahead of the newer page. Entries after the last retained
+  // anchor can still be genuinely newer live work omitted by a lagging read.
+  // Merge the two ordered suffixes in one forward pass; an unknown retained
+  // timestamp conservatively keeps that entry and the remainder at the end.
+  const mergedSuffix: AppServerThreadEntry[] = [];
+  const freshSuffix = entries.slice(trailingInsertionFloor);
+  let freshIndex = 0;
+  let retainedIndex = 0;
+  while (retainedIndex < pendingRetainedEntries.length) {
+    const retainedEntry = pendingRetainedEntries[retainedIndex]!;
+    const retainedTimestamp = transcriptRefreshOrderTimestamp(retainedEntry);
+    if (typeof retainedTimestamp !== "number") {
+      mergedSuffix.push(
+        ...freshSuffix.slice(freshIndex),
+        ...pendingRetainedEntries.slice(retainedIndex),
+      );
+      return [
+        ...entries.slice(0, trailingInsertionFloor),
+        ...mergedSuffix,
+      ];
+    }
+
+    while (freshIndex < freshSuffix.length) {
+      const freshEntry = freshSuffix[freshIndex]!;
+      const freshTimestamp = transcriptRefreshOrderTimestamp(freshEntry);
+      if (
+        typeof freshTimestamp === "number"
+        && freshTimestamp > retainedTimestamp
+      ) {
+        break;
+      }
+      mergedSuffix.push(freshEntry);
+      freshIndex += 1;
+    }
+    mergedSuffix.push(retainedEntry);
+    retainedIndex += 1;
+  }
+  mergedSuffix.push(...freshSuffix.slice(freshIndex));
+
+  return [
+    ...entries.slice(0, trailingInsertionFloor),
+    ...mergedSuffix,
+  ];
+}
+
+function transcriptRefreshOrderTimestamp(
+  entry: AppServerThreadEntry,
+): number | undefined {
+  if (typeof entry.createdAt === "number") {
+    return entry.createdAt;
+  }
+  if (typeof entry.turn?.startedAt === "number") {
+    return entry.turn.startedAt;
+  }
+  return typeof entry.turn?.completedAt === "number"
+    ? entry.turn.completedAt
+    : undefined;
+}
+
+function findUniqueLogicalTranscriptRefreshMatch(
   freshEntry: AppServerThreadEntry,
   retainedEntries: AppServerThreadEntry[]
 ): AppServerThreadEntry | undefined {
-  const exactMatch = retainedEntries.find(
-    (retainedEntry) => retainedEntry.id === freshEntry.id
-  );
-  if (exactMatch) {
-    return exactMatch;
-  }
-
   const logicalMatches = retainedEntries.filter((retainedEntry) => {
     if (
       freshEntry.turn?.id &&
@@ -1126,13 +1232,12 @@ function transcriptEntriesMatch(
 
 function findUniqueTranscriptOrderSource(
   entry: AppServerThreadEntry,
-  sources: AppServerThreadEntry[]
+  sources: AppServerThreadEntry[],
+  exactSourcesById: ReadonlyMap<string, AppServerThreadEntry>,
 ): AppServerThreadEntry | undefined {
-  const exactMatches = sources.filter(
-    (source) => source.id === entry.id && typeof source.createdAt === "number"
-  );
-  if (exactMatches.length > 0) {
-    return exactMatches[0];
+  const exactMatch = exactSourcesById.get(entry.id);
+  if (exactMatch) {
+    return exactMatch;
   }
 
   const logicalMatches = sources.filter(
@@ -1157,7 +1262,11 @@ type MatchedHydratedEntry = HydratedEntryOrderMatch & {
 
 function reorderHydratedEntriesByKnownOrder(
   entries: AppServerThreadEntry[],
-  sources: AppServerThreadEntry[]
+  sources: AppServerThreadEntry[],
+  sourceByHydratedEntry: ReadonlyMap<
+    AppServerThreadEntry,
+    AppServerThreadEntry
+  >,
 ): AppServerThreadEntry[] {
   if (entries.length < 2 || sources.length === 0) {
     return entries;
@@ -1169,7 +1278,7 @@ function reorderHydratedEntriesByKnownOrder(
   });
   const hydratedEntries: HydratedEntryOrderMatch[] = entries.map(
     (entry, hydrationIndex) => {
-      const source = findUniqueTranscriptOrderSource(entry, sources);
+      const source = sourceByHydratedEntry.get(entry);
       const sourceIndex = source ? sourceIndexes.get(source) : undefined;
       return {
         entry,
@@ -1221,9 +1330,27 @@ function carryForwardTranscriptEntryOrder(
     return response;
   }
 
+  const exactSourcesById = new Map<string, AppServerThreadEntry>();
+  for (const source of sources) {
+    const sourceId = source.id;
+    if (
+      typeof source.createdAt === "number"
+      && !exactSourcesById.has(sourceId)
+    ) {
+      exactSourcesById.set(sourceId, source);
+    }
+  }
+  const sourceByHydratedEntry = new Map<
+    AppServerThreadEntry,
+    AppServerThreadEntry
+  >();
   let changed = false;
   let entries = response.replay.entries.map((entry) => {
-    const source = findUniqueTranscriptOrderSource(entry, sources);
+    const source = findUniqueTranscriptOrderSource(
+      entry,
+      sources,
+      exactSourcesById,
+    );
     if (!source) {
       return entry;
     }
@@ -1243,18 +1370,25 @@ function carryForwardTranscriptEntryOrder(
       ? source.createdAt
       : undefined;
     if (!origin && !turn && createdAt === undefined) {
+      sourceByHydratedEntry.set(entry, source);
       return entry;
     }
 
     changed = true;
-    return {
+    const hydratedEntry = {
       ...entry,
       ...(createdAt !== undefined ? { createdAt } : {}),
       ...(turn ? { turn } : {}),
       ...(origin ? { origin } : {}),
     };
+    sourceByHydratedEntry.set(hydratedEntry, source);
+    return hydratedEntry;
   });
-  const reorderedEntries = reorderHydratedEntriesByKnownOrder(entries, sources);
+  const reorderedEntries = reorderHydratedEntriesByKnownOrder(
+    entries,
+    sources,
+    sourceByHydratedEntry,
+  );
   if (reorderedEntries !== entries) {
     changed = true;
     entries = reorderedEntries;
@@ -1421,118 +1555,6 @@ function reviewEntryLabels(entry: AppServerThreadReviewEntry): string[] {
   return [entry.displayText, entry.review]
     .filter((value): value is string => Boolean(value?.trim()))
     .map((value) => normalizeReviewDisplayText(value).toLocaleLowerCase());
-}
-
-function normalizeTranscriptText(value: string): string {
-  return value.trim().replace(/\s+/g, " ").toLocaleLowerCase();
-}
-
-function isPlainReviewFindingText(text: string): boolean {
-  return (
-    /\b(?:full\s+)?review comments?:/i.test(text) &&
-    /(?:^|\n)\s*-\s*\[P[0-3]\]\s+.+(?:\s+—\s+|\s+-\s+).+:\d+/u.test(text)
-  );
-}
-
-function shouldUseAssistantReviewText(params: {
-  assistantText: string;
-  reviewText: string;
-}): boolean {
-  if (!isPlainReviewFindingText(params.assistantText)) {
-    return false;
-  }
-
-  const normalizedAssistant = normalizeTranscriptText(params.assistantText);
-  const normalizedReview = normalizeTranscriptText(params.reviewText);
-  return (
-    !normalizedReview ||
-    normalizedAssistant === normalizedReview ||
-    normalizedAssistant.startsWith(normalizedReview) ||
-    normalizedAssistant.includes(normalizedReview)
-  );
-}
-
-function coalesceReviewAssistantMessages(
-  entries: AppServerThreadEntry[]
-): AppServerThreadEntry[] {
-  const output: AppServerThreadEntry[] = [];
-
-  for (const entry of entries) {
-    if (
-      entry.type === "message" &&
-      entry.role === "assistant" &&
-      shouldUseAssistantReviewText({
-        assistantText: entry.text,
-        reviewText: "",
-      })
-    ) {
-      const matchingReviewIndex = output.findLastIndex((candidate) => {
-        if (candidate.type !== "review") {
-          return false;
-        }
-        if (
-          entry.turn?.id &&
-          candidate.turn?.id &&
-          entry.turn.id !== candidate.turn.id
-        ) {
-          return false;
-        }
-        return shouldUseAssistantReviewText({
-          assistantText: entry.text,
-          reviewText: candidate.review,
-        });
-      });
-
-      if (matchingReviewIndex !== -1) {
-        const reviewEntry = output[matchingReviewIndex] as AppServerThreadReviewEntry;
-        output[matchingReviewIndex] = {
-          ...reviewEntry,
-          review: entry.text,
-        };
-        continue;
-      }
-    }
-
-    output.push(entry);
-  }
-
-  return output;
-}
-
-function reviewResultTexts(entries: AppServerThreadEntry[]): Set<string> {
-  const output = new Set<string>();
-  for (const entry of entries) {
-    if (entry.type !== "review") {
-      continue;
-    }
-
-    const text = entry.output?.overall_explanation ?? entry.review;
-    if (text.trim()) {
-      output.add(normalizeTranscriptText(text));
-    }
-  }
-  return output;
-}
-
-function suppressReviewDuplicateMessages<T extends AppServerThreadMessage | AppServerThreadEntry>(
-  messagesOrEntries: T[],
-  reviewTexts: Set<string>
-): T[] {
-  if (reviewTexts.size === 0) {
-    return messagesOrEntries;
-  }
-
-  return messagesOrEntries.filter((entry) => {
-    if (
-      "role" in entry &&
-      entry.role === "assistant" &&
-      "text" in entry &&
-      typeof entry.text === "string"
-    ) {
-      return !reviewTexts.has(normalizeTranscriptText(entry.text));
-    }
-    return true;
-  });
 }
 
 function optimisticMessageEntries(
@@ -3596,6 +3618,7 @@ const TRANSIENT_MESSAGE_SETTLEMENT_METHODS = new Set([
   "item/mcpToolCall/progress",
   "item/started",
   "thread/compacted",
+  "thread/rewound",
   "turn/cancelled",
   "turn/completed",
   "turn/failed",
@@ -3631,7 +3654,10 @@ function transitionTransientMessagesAtBoundary(
   current: ThreadSessionEntry,
   notification: AppServerNotification
 ): ThreadSessionEntry {
-  if (notification.method === "thread/compacted") {
+  if (
+    notification.method === "thread/compacted"
+    || notification.method === "thread/rewound"
+  ) {
     if (
       !current.transientMessage &&
       current.settledTransientMessages.length === 0
@@ -3674,6 +3700,7 @@ function transitionTransientMessagesAtBoundary(
   if (
     notification.method !== "turn/started" &&
     notification.method !== "thread/compacted" &&
+    notification.method !== "thread/rewound" &&
     statusType !== "idle" &&
     notificationTurnId &&
     transientTurnId &&
@@ -3744,6 +3771,7 @@ export function useThreadSessionState(params: {
   loading: boolean;
   loadingMore: boolean;
   loadOlder: () => Promise<void>;
+  reload: () => Promise<void>;
   messages: AppServerThreadMessage[];
   contextWindow?: ThreadContextWindowState;
   pendingAssistantMessage?: AppServerThreadMessageEntry;
@@ -3785,12 +3813,22 @@ export function useThreadSessionState(params: {
   const selectedThreadKeyRef = useRef<string | undefined>(undefined);
   const consumedOptimisticActiveTurnKeysRef = useRef<Set<string>>(new Set());
   const lastLiveActivitySignatureRef = useRef<Record<string, string>>({});
+  const loadedHistoryIndexesRef = useRef<Record<string, TranscriptHistoryIndex>>({});
   const requestVersionsRef = useRef<Record<string, number>>({});
   const staleThinkingLogKeysRef = useRef<Set<string>>(new Set());
   const threadStatusSummarySeedRef = useRef<Record<string, string>>({});
   const [sessions, setSessions] = useState<ThreadSessionState>({});
 
   selectedThreadKeyRef.current = threadKey;
+
+  useEffect(() => {
+    const retainedThreadKeys = new Set(Object.keys(sessions));
+    for (const indexedThreadKey of Object.keys(loadedHistoryIndexesRef.current)) {
+      if (!retainedThreadKeys.has(indexedThreadKey)) {
+        delete loadedHistoryIndexesRef.current[indexedThreadKey];
+      }
+    }
+  }, [sessions]);
 
   const updateSession = useCallback(
     (
@@ -3942,6 +3980,12 @@ export function useThreadSessionState(params: {
         if (requestVersionsRef.current[targetThreadKey] !== requestVersion) {
           return;
         }
+        if (
+          !response.replay.pagination.supportsPagination
+          || !response.replay.pagination.hasPreviousPage
+        ) {
+          delete loadedHistoryIndexesRef.current[targetThreadKey];
+        }
 
         updateSession(targetThreadKey, (current) => {
           const liveTranscriptSources = [
@@ -3957,10 +4001,10 @@ export function useThreadSessionState(params: {
             transcriptOrderSources,
             liveTranscriptSources
           );
-          const responseWithLoadedHistory = preserveLoadedTranscriptHistory(
+          const responseWithRetainedTail = preserveRetainedTranscriptTail(
             orderedResponse,
             current.response,
-            current.loadedHistoryEntries
+            Boolean(current.loadedHistory),
           );
           const hydratedPendingRequest = response.pendingRequest;
           const hydratedPendingUserInput =
@@ -3985,7 +4029,7 @@ export function useThreadSessionState(params: {
             : undefined;
           const hydratedCompletedTurn = didHydrateCompletedTurn(
             current.response,
-            responseWithLoadedHistory
+            responseWithRetainedTail
           );
           const needsHydrationAfterCompletion =
             current.needsHydrationAfterCompletion && !hydratedCompletedTurn;
@@ -4017,7 +4061,7 @@ export function useThreadSessionState(params: {
             current.expectOwnUpdate
             && sessionHasInProgressReviewTurn(current, current.activeTurnId)
             && !responseHasCompletedTurn(
-              responseWithLoadedHistory,
+              responseWithRetainedTail,
               current.activeTurnId
             )
             && now < ownUpdateSettlesAt;
@@ -4029,7 +4073,7 @@ export function useThreadSessionState(params: {
             && !ownUpdateStillSettling
             && !reviewUpdateStillSettling
             && !responseHasInProgressTurn(
-              responseWithLoadedHistory,
+              responseWithRetainedTail,
               current.activeTurnId
             );
 
@@ -4042,7 +4086,7 @@ export function useThreadSessionState(params: {
             logStaleThinkingState({
               current,
               reasons: thinkingReasons,
-              response: responseWithLoadedHistory,
+              response: responseWithRetainedTail,
               targetThreadKey,
             });
           }
@@ -4058,7 +4102,7 @@ export function useThreadSessionState(params: {
           // "previous messages" groups while the turn is still writing them.
           const trailingInProgressTurn =
             !shouldClearStaleThinking && responseThreadStatus === "active"
-              ? readTrailingInProgressTurn(responseWithLoadedHistory)
+              ? readTrailingInProgressTurn(responseWithRetainedTail)
               : undefined;
           const shouldAdoptHydratedTurn =
             trailingInProgressTurn !== undefined
@@ -4095,17 +4139,17 @@ export function useThreadSessionState(params: {
             initialLoadDurationMs:
               current.initialLoadDurationMs ?? response.readDurationMs,
             lastTouchedAt: Date.now(),
-            loadedHistoryEntries:
+            loadedHistory:
               response.replay.pagination.supportsPagination
               && response.replay.pagination.hasPreviousPage
-                ? current.loadedHistoryEntries
-                : [],
+                ? current.loadedHistory
+                : undefined,
             loading: false,
             completionHydrationRetries,
             needsHydrationAfterCompletion,
             optimisticEntries: pruneOptimisticEntries(
               current.optimisticEntries,
-              responseWithLoadedHistory
+              responseWithRetainedTail
             ),
             pendingAssistantMessage: shouldClearStaleThinking
               ? undefined
@@ -4128,7 +4172,7 @@ export function useThreadSessionState(params: {
             pendingUserInput: hydratedPendingInteraction
               ? hydratedPendingUserInput
               : current.pendingUserInput,
-            response: responseWithLoadedHistory,
+            response: responseWithRetainedTail,
             staleThinkingRecheckAt:
               ownUpdateStillSettling || reviewUpdateStillSettling
               ? ownUpdateSettlesAt
@@ -4165,6 +4209,12 @@ export function useThreadSessionState(params: {
       updateSession,
     ]
   );
+
+  const reload = useCallback(async (): Promise<void> => {
+    if (thread) {
+      await loadLatest(thread);
+    }
+  }, [loadLatest, thread]);
 
   useEffect(() => {
     if (!threadKey) {
@@ -4365,7 +4415,25 @@ export function useThreadSessionState(params: {
       return;
     }
 
-    if (session.loading || session.activeTurnId) {
+    if (session.loading) {
+      return;
+    }
+
+    if (session.activeTurnId) {
+      const remoteSummaryAdvanced =
+        thread.federation?.ref.target.scope === "remote"
+        && thread.updatedAt != null
+        && session.hydratedUpdatedAt !== thread.updatedAt
+        && session.failedHydrationVersion !== hydrationVersion;
+      if (remoteSummaryAdvanced) {
+        // Federation events are live-only. A selected mounted thread can miss
+        // commentary or a request-user-input notification during a transport
+        // gap, then remain active indefinitely because the missing prompt is
+        // the only way to finish its turn. The owner's navigation snapshot is
+        // the durable catch-up signal: when its updatedAt advances beyond the
+        // detail snapshot we hydrated, re-read even while the turn is active.
+        void loadLatest(thread);
+      }
       return;
     }
 
@@ -5470,7 +5538,11 @@ export function useThreadSessionState(params: {
           }
         }
 
-        if (event.notification.method === "thread/compacted") {
+        if (
+          event.notification.method === "thread/compacted"
+          || event.notification.method === "thread/rewound"
+        ) {
+          delete loadedHistoryIndexesRef.current[targetThreadKey];
           return {
             ...current,
             activeTurnId: undefined,
@@ -5479,7 +5551,7 @@ export function useThreadSessionState(params: {
             failedHydrationVersion: undefined,
             hydratedUpdatedAt: undefined,
             lastTouchedAt: nextLastTouchedAt,
-            loadedHistoryEntries: [],
+            loadedHistory: undefined,
             pendingUsageActivityEntry: undefined,
             pendingTurnUsage: undefined,
             pendingStatusText: undefined,
@@ -5661,15 +5733,19 @@ export function useThreadSessionState(params: {
   ]);
 
   const selectedSession = threadKey ? sessions[threadKey] : undefined;
+  const selectedPagination =
+    selectedSession?.loadedHistory?.pagination
+    ?? selectedSession?.response?.replay.pagination;
 
   const loadOlder = useCallback(async (): Promise<void> => {
     if (
       !thread ||
       !threadKey ||
       !desktopApi?.readThread ||
-      !selectedSession?.response?.replay.pagination.supportsPagination ||
-      !selectedSession.response.replay.pagination.hasPreviousPage ||
-      !selectedSession.response.replay.pagination.previousCursor
+      selectedSession?.loadingMore ||
+      !selectedPagination?.supportsPagination ||
+      !selectedPagination.hasPreviousPage ||
+      !selectedPagination.previousCursor
     ) {
       return;
     }
@@ -5688,7 +5764,7 @@ export function useThreadSessionState(params: {
         federationTarget: thread.federation?.ref.target ??
           readRendererFederationTarget(),
         threadId: thread.id,
-        before: selectedSession.response.replay.pagination.previousCursor,
+        before: selectedPagination.previousCursor,
         limit: THREAD_HISTORY_PAGE_LIMIT,
       });
 
@@ -5696,8 +5772,16 @@ export function useThreadSessionState(params: {
         return;
       }
 
+      const historyIndex =
+        loadedHistoryIndexesRef.current[threadKey]
+        ?? createTranscriptHistoryIndex();
+      loadedHistoryIndexesRef.current[threadKey] = historyIndex;
+      let didAppendHistory = false;
+      let appendedHistorySource: LoadedTranscriptHistory | undefined;
+      let appendedHistory: LoadedTranscriptHistory | undefined;
       updateSession(threadKey, (current) => {
         if (!current.response) {
+          delete loadedHistoryIndexesRef.current[threadKey];
           return {
             ...current,
             lastTouchedAt: Date.now(),
@@ -5706,38 +5790,21 @@ export function useThreadSessionState(params: {
           };
         }
 
-        const retainedTail = excludeTranscriptSegment(
-          current.response.replay.entries,
-          current.loadedHistoryEntries
-        );
-        const loadedHistoryEntries = excludeTranscriptSegment(
-          stitchOrderedTranscriptSegments(
-            olderResponse.replay.entries,
-            current.loadedHistoryEntries
-          ),
-          retainedTail
-        );
-        const mergedEntries = stitchOrderedTranscriptSegments(
-          loadedHistoryEntries,
-          retainedTail
-        );
+        if (!didAppendHistory || appendedHistorySource !== current.loadedHistory) {
+          didAppendHistory = true;
+          appendedHistorySource = current.loadedHistory;
+          appendedHistory = prependTranscriptHistoryPage({
+            history: current.loadedHistory,
+            index: historyIndex,
+            page: olderResponse,
+            tailEntries: current.response.replay.entries,
+          });
+        }
         return {
           ...current,
           lastTouchedAt: Date.now(),
-          loadedHistoryEntries,
+          loadedHistory: appendedHistory,
           loadingMore: false,
-          response: {
-            ...olderResponse,
-            replay: {
-              ...olderResponse.replay,
-              entries: mergedEntries,
-              messages: transcriptMessagesForEntries(
-                mergedEntries,
-                olderResponse.replay.messages,
-                current.response.replay.messages
-              ),
-            },
-          },
         };
       });
     } catch (error) {
@@ -5752,7 +5819,14 @@ export function useThreadSessionState(params: {
         loadingMore: false,
       }));
     }
-  }, [desktopApi, selectedSession?.response, thread, threadKey, updateSession]);
+  }, [
+    desktopApi,
+    selectedPagination,
+    selectedSession?.loadingMore,
+    thread,
+    threadKey,
+    updateSession,
+  ]);
 
   const addOptimisticUserMessage = useCallback(
     (text: string, imageParts: AppServerThreadImagePart[] = []): string => {
@@ -6079,35 +6153,81 @@ export function useThreadSessionState(params: {
     [selectedSession?.optimisticEntries, selectedSession?.response]
   );
 
+  const selectedHistoryIndex = threadKey
+    ? loadedHistoryIndexesRef.current[threadKey]
+    : undefined;
+  const response = useMemo(
+    () => combineTranscriptResponse({
+      history: selectedSession?.loadedHistory,
+      index: selectedHistoryIndex,
+      response: selectedSession?.response,
+    }),
+    [
+      selectedHistoryIndex,
+      selectedSession?.loadedHistory,
+      selectedSession?.response,
+    ],
+  );
+
+  const mergedTailEntries = useMemo(
+    () => mergeTranscriptEntries(
+      selectedSession?.response?.replay.entries ?? [],
+      visibleOptimisticEntries,
+    ),
+    [selectedSession?.response?.replay.entries, visibleOptimisticEntries],
+  );
+  const mergedTailMessages = useMemo(
+    () => mergeTranscriptMessages(
+      selectedSession?.response?.replay.messages ?? [],
+      visibleOptimisticEntries
+        .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
+        .map(({ type: _type, ...message }) => message),
+    ),
+    [selectedSession?.response?.replay.messages, visibleOptimisticEntries],
+  );
+  const reviewPresentation = useMemo(
+    () => createTranscriptReviewPresentation({
+      history: selectedSession?.loadedHistory,
+      index: selectedHistoryIndex,
+      tailEntries: mergedTailEntries,
+      tailMessages: mergedTailMessages,
+    }),
+    [
+      mergedTailEntries,
+      mergedTailMessages,
+      selectedHistoryIndex,
+      selectedSession?.loadedHistory,
+    ],
+  );
+
   const entries = useMemo(
-    () => {
-      const mergedEntries = mergeTranscriptEntries(
-        selectedSession?.response?.replay.entries ?? [],
-        visibleOptimisticEntries
-      );
-      const coalescedEntries = coalesceReviewAssistantMessages(mergedEntries);
-      return suppressReviewDuplicateMessages(
-        coalescedEntries,
-        reviewResultTexts(coalescedEntries)
-      );
-    },
-    [selectedSession?.response?.replay.entries, visibleOptimisticEntries]
+    () =>
+      combineTranscriptEntries(
+        selectedSession?.loadedHistory,
+        selectedHistoryIndex,
+        reviewPresentation.tailEntries,
+        reviewPresentation,
+      ),
+    [
+      reviewPresentation,
+      selectedHistoryIndex,
+      selectedSession?.loadedHistory,
+    ]
   );
 
   const messages = useMemo(
-    () => {
-      const mergedMessages = mergeTranscriptMessages(
-        selectedSession?.response?.replay.messages ?? [],
-        visibleOptimisticEntries
-          .filter((entry): entry is AppServerThreadMessageEntry => entry.type === "message")
-          .map(({ type: _type, ...message }) => message)
-      );
-      return suppressReviewDuplicateMessages(
-        mergedMessages,
-        reviewResultTexts(entries)
-      );
-    },
-    [entries, selectedSession?.response?.replay.messages, visibleOptimisticEntries]
+    () =>
+      combineTranscriptMessages(
+        selectedSession?.loadedHistory,
+        selectedHistoryIndex,
+        reviewPresentation.tailMessages,
+        reviewPresentation,
+      ),
+    [
+      reviewPresentation,
+      selectedHistoryIndex,
+      selectedSession?.loadedHistory,
+    ]
   );
 
   const thinkingThreadKeys = useMemo(
@@ -6173,6 +6293,7 @@ export function useThreadSessionState(params: {
     loading: selectedSession?.loading ?? false,
     loadingMore: selectedSession?.loadingMore ?? false,
     loadOlder,
+    reload,
     messages,
     contextWindow: selectedSession?.contextWindow,
     pendingAssistantMessage: selectedSession?.pendingAssistantMessage,
@@ -6188,7 +6309,7 @@ export function useThreadSessionState(params: {
     approvalRequestThreadKeys,
     inputRequestThreadKeys,
     removeOptimisticMessage,
-    response: selectedSession?.response,
+    response,
     setActiveTurnId,
     setExpandedTranscriptWorkPhaseGroupIds,
     upsertLiveTranscriptEntry,

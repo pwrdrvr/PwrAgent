@@ -41,6 +41,59 @@ describe("useThreadNavigation", () => {
     vi.restoreAllMocks();
   });
 
+  it("restores the selected thread after a full renderer reload", async () => {
+    const snapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+        {
+          id: "thread-2",
+          title: "Focused before reload",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot: vi.fn(async () => snapshot),
+      onAgentEvent: () => () => undefined,
+    };
+    const firstRenderer = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => {
+      expect(firstRenderer.result.current.selectedThread?.id).toBe("thread-1");
+    });
+    act(() => {
+      firstRenderer.result.current.selectThread(snapshot.threads[1]!);
+    });
+    await waitFor(() => {
+      expect(firstRenderer.result.current.selectedThread?.id).toBe("thread-2");
+    });
+    firstRenderer.unmount();
+
+    const reloadedRenderer = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => {
+      expect(reloadedRenderer.result.current.selectedThread?.id).toBe("thread-2");
+    });
+    reloadedRenderer.unmount();
+  });
+
   function createDeferred<T>(): {
     promise: Promise<T>;
     resolve: (value: T) => void;
@@ -4309,6 +4362,64 @@ describe("useThreadNavigation", () => {
       await result.current.refresh();
     });
     expect(result.current.threads[0]?.title).toBe("Newer remote title");
+  });
+
+  it("patches thread activity immediately when a rewind notification arrives", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const navigationSnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      inboxThreadKeys: ["acp:grok:grok-thread"],
+      threads: [{
+        id: "grok-thread",
+        title: "Breakfast poem",
+        titleSource: "explicit",
+        source: "acp:grok",
+        linkedDirectories: [],
+        inbox: { inInbox: true, reason: "new-thread" },
+        threadStatus: "active",
+        updatedAt: 1_000,
+      }],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot: vi.fn(async () => navigationSnapshot),
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(1);
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "acp:grok",
+        notification: {
+          method: "thread/rewound",
+          params: {
+            threadId: "grok-thread",
+            targetPromptIndex: 0,
+            updatedAt: 2_000,
+          },
+        },
+      });
+    });
+
+    expect(result.current.threads[0]).toMatchObject({
+      id: "grok-thread",
+      threadStatus: "idle",
+      updatedAt: 2_000,
+    });
   });
 
   it("isolates observed names for same-id threads owned by different peers", async () => {

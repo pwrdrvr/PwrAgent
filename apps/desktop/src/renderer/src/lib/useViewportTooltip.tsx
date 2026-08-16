@@ -16,6 +16,33 @@ import {
 const VIEWPORT_PADDING = 12;
 /** Gap between the tooltip and the target element (above or below). */
 const TOOLTIP_GAP = 10;
+/**
+ * Short entry delay for dense metadata tooltips. It filters incidental pointer
+ * crossings without requiring the pointer to remain perfectly stationary.
+ */
+export const TOOLTIP_HOVER_DELAY_MS = 250;
+
+/**
+ * The strips that reserve room for the macOS traffic lights — their
+ * `padding-left: 80px` IS the buttons' room. Which one is on screen depends on
+ * the layout: the sidebar's masthead normally, the thread header's relocated
+ * cluster when the sidebar is hidden (`.sidebar` goes `display: none` and the
+ * cluster takes over the reservation), the nav masthead in Settings.
+ *
+ * Deliberately not every drag region. `.thread-header` and
+ * `.settings-titlebar` drag too, but they sit to the RIGHT of the stoplights
+ * and are content strips — flooring tooltips below them would push half the
+ * sidebar's tooltips down the window to protect nothing.
+ *
+ * `.app-titlebar` is absent for a different reason: the Windows strip sits
+ * ABOVE `.app-shell` (which carries `margin-top: var(--win-titlebar-h)`), so
+ * the shell-boundary clamp below already clears it.
+ */
+const STOPLIGHT_GUTTER_SELECTORS = [
+  ".sidebar__masthead",
+  ".thread-header__masthead",
+  ".settings-nav__masthead",
+];
 
 function tooltipViewportTop(): number {
   // On Windows the fixed custom title bar occupies the top of the renderer,
@@ -25,7 +52,43 @@ function tooltipViewportTop(): number {
   // without the custom strip, preserving the ordinary viewport behavior.
   const appShell = document.querySelector<HTMLElement>(".app-shell");
   const appShellTop = appShell?.getBoundingClientRect().top ?? 0;
-  return Math.max(VIEWPORT_PADDING, appShellTop + VIEWPORT_PADDING);
+  const viewportTop = Math.max(
+    VIEWPORT_PADDING,
+    appShellTop + VIEWPORT_PADDING,
+  );
+  // macOS reserves its traffic lights INSIDE the renderer (`titleBarStyle:
+  // "hiddenInset"`), so `.app-shell` starts at 0 and the clamp above happily
+  // parks a tooltip on top of the close/minimize/zoom buttons and the wordmark
+  // beside them. Nothing about that region is hoverable content — it is native
+  // window chrome that a tooltip must never cover.
+  //
+  // Only there, though. No other platform puts window buttons inside the
+  // renderer, and macOS fullscreen hides them — which is why app.css drops the
+  // 80px reservation under `[data-fullscreen="true"]`. Flooring anyway would
+  // push tooltips below a gutter that is not on screen, flipping ones that had
+  // room above onto the content they point at.
+  const root = document.documentElement;
+  if (
+    root.dataset.platform !== "darwin"
+    || root.dataset.fullscreen === "true"
+  ) {
+    return viewportTop;
+  }
+  let gutterFloor = viewportTop;
+  for (const selector of STOPLIGHT_GUTTER_SELECTORS) {
+    const gutter = document.querySelector<HTMLElement>(selector);
+    if (!gutter) {
+      continue;
+    }
+    const rect = gutter.getBoundingClientRect();
+    // Only a strip actually anchored to the top of the window is a floor. One
+    // scrolled or laid out further down is ordinary content, and a hidden one
+    // (the sidebar collapsed) measures zero and reserves nothing.
+    if (rect.height > 0 && rect.top <= appShellTop + VIEWPORT_PADDING) {
+      gutterFloor = Math.max(gutterFloor, rect.bottom);
+    }
+  }
+  return gutterFloor;
 }
 
 type TooltipState = {
@@ -38,6 +101,8 @@ type TooltipState = {
   /** Computed top after measure; undefined on the first paint. */
   top?: number;
 };
+
+type DelayedTooltipContent = ReactNode | (() => ReactNode);
 
 /**
  * Hook for portal-rendered tooltips that escape any clipping ancestor
@@ -79,6 +144,14 @@ export function useViewportTooltip(options: {
   tooltipId: string;
   show: (target: HTMLElement, content: ReactNode) => void;
   /**
+   * Arm a tooltip after a short delay from pointer entry. Pointer movement does
+   * not restart the delay; leaving the target should call `hide` to cancel it.
+   */
+  showAfterDelay: (
+    target: HTMLElement,
+    content: DelayedTooltipContent,
+  ) => void;
+  /**
    * Replace the content of an already-visible tooltip in place (no-op
    * while hidden). Keeps the current position until the re-measure pass
    * settles, so live data updates don't blink the tooltip.
@@ -91,8 +164,18 @@ export function useViewportTooltip(options: {
 } {
   const tooltipRef = useRef<HTMLDivElement>(null);
   const targetRef = useRef<HTMLElement | null>(null);
+  const hoverDelayTimerRef = useRef<number | null>(null);
   const tooltipId = useId();
   const [state, setState] = useState<TooltipState | undefined>(undefined);
+  const [delayPending, setDelayPending] = useState(false);
+
+  const clearHoverDelay = useCallback((): void => {
+    if (hoverDelayTimerRef.current === null) {
+      return;
+    }
+    window.clearTimeout(hoverDelayTimerRef.current);
+    hoverDelayTimerRef.current = null;
+  }, []);
 
   // Measure the rendered tooltip and clamp position so it stays in the
   // viewport and on the side of the target where it fits. The first
@@ -144,6 +227,8 @@ export function useViewportTooltip(options: {
   }, [state]);
 
   const show = useCallback((target: HTMLElement, content: ReactNode): void => {
+    clearHoverDelay();
+    setDelayPending(false);
     if (isNativeDragInteractionActive()) {
       targetRef.current = null;
       setState(undefined);
@@ -157,28 +242,50 @@ export function useViewportTooltip(options: {
       targetBottom: rect.bottom,
       targetCenter: rect.left + rect.width / 2,
     });
-  }, []);
+  }, [clearHoverDelay]);
+
+  const showAfterDelay = useCallback(
+    (target: HTMLElement, content: DelayedTooltipContent): void => {
+      if (targetRef.current === target) {
+        return;
+      }
+      clearHoverDelay();
+      targetRef.current = target;
+      setDelayPending(true);
+      hoverDelayTimerRef.current = window.setTimeout(() => {
+        hoverDelayTimerRef.current = null;
+        setDelayPending(false);
+        show(target, typeof content === "function" ? content() : content);
+      }, TOOLTIP_HOVER_DELAY_MS);
+    },
+    [clearHoverDelay, show],
+  );
 
   const update = useCallback((content: ReactNode): void => {
     setState((current) => (current ? { ...current, content } : current));
   }, []);
 
   const hide = useCallback((): void => {
+    clearHoverDelay();
+    setDelayPending(false);
     targetRef.current = null;
     setState(undefined);
-  }, []);
+  }, [clearHoverDelay]);
 
-  // A hover tooltip is shown on pointerenter/focus, but those handlers give
+  useEffect(() => clearHoverDelay, [clearHoverDelay]);
+
+  // A hover tooltip is armed or shown on pointerenter/focus, but those handlers give
   // us no dismissal signal when the window loses focus (cmd-tab away leaves
   // the pointer "over" the chip, so no `mouseleave` fires) or when the list
   // scrolls underneath the position:fixed portal (the tooltip detaches from
   // its target and lingers). Tear it down when the viewport or an ancestor of
   // the target scrolls. A captured scroll from an unrelated pane must not
   // dismiss it — transcript auto-scrolls otherwise close sidebar tooltips.
-  // Keyed on visibility so the measure pass doesn't resubscribe each render.
+  // Keyed on activity so the measure pass doesn't resubscribe each render.
   const visible = state !== undefined;
+  const active = delayPending || visible;
   useEffect(() => {
-    if (!visible) {
+    if (!active) {
       return;
     }
     const unsubscribeNativeDrag = subscribeNativeDragInteraction((active) => {
@@ -202,7 +309,7 @@ export function useViewportTooltip(options: {
       window.removeEventListener("blur", hide);
       window.removeEventListener("scroll", onScroll, { capture: true });
     };
-  }, [visible, hide]);
+  }, [active, hide]);
 
   const tooltipNode =
     state && typeof document !== "undefined"
@@ -225,5 +332,13 @@ export function useViewportTooltip(options: {
         )
       : null;
 
-  return { tooltipId, show, update, hide, visible, tooltipNode };
+  return {
+    tooltipId,
+    show,
+    showAfterDelay,
+    update,
+    hide,
+    visible,
+    tooltipNode,
+  };
 }

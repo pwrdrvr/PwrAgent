@@ -465,8 +465,25 @@ export type SteerThreadResult = {
   instanceId?: FederationInstanceId;
   requestId: string;
   turnId: string;
-  disposition: "steered";
+  /**
+   * `steered` means the prompt reached the active turn. If that turn ended or
+   * changed before admission, PwrAgent preserves the prompt as a follow-up
+   * instead of losing it: `started` begins that turn immediately and `queued`
+   * waits behind the target's current turn.
+   */
+  disposition: "steered" | "started" | "queued";
+  /** Why inline steering fell back to follow-up delivery. */
+  fallbackReason?: "no_active_turn" | "stale_target";
+  /** Present when the preserved follow-up was queued. */
+  queueEntryId?: string;
+  position?: number;
   promptPreview: string;
+  /** Canonical thread links are included for follow-up delivery results. */
+  threadUrl?: string;
+  threadLink?: string;
+  messageId?: string;
+  messageUrl?: string;
+  messageLink?: string;
   /** True when this response replays an already accepted requestId. */
   idempotentReplay?: boolean;
 };

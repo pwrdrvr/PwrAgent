@@ -13,7 +13,7 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
-import { PinIcon, SmileyIcon } from "../../icons";
+import { MoreVerticalIcon, PinIcon, SmileyIcon } from "../../icons";
 import {
   formatMessagingPlatformName,
   MESSAGING_PLATFORM_ICONS,
@@ -558,7 +558,13 @@ export function ThreadRow(props: ThreadRowProps) {
             });
           }}
         >
-          ...
+          {/* Vertical dots (⋮), not a horizontal ellipsis: two glyphs to
+              the left the title ellipsizes, so "…" here reads as the
+              truncation mark rather than a menu affordance. Shares
+              MoreVerticalIcon with the pricing-panel and automations
+              kebabs. (StarMapCardMenu and CompactComposer still draw a
+              literal ⋯ — separate surfaces, not yet unified.) */}
+          <MoreVerticalIcon size={14} aria-hidden="true" />
         </button>
       </div>
 

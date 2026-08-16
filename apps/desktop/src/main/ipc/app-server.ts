@@ -45,6 +45,8 @@ import {
   type PersistThreadUsageActivityResponse,
   type AppServerReadThreadRequest,
   type AppServerReadThreadResponse,
+  type AnalyzeThreadToolHistoryRequest,
+  type AnalyzeThreadToolHistoryResponse,
   type GetThreadFileDiffRequest,
   type GetThreadFileDiffResponse,
   type EnsureDirectoryLaunchpadRequest,
@@ -123,6 +125,8 @@ import {
   type SetThreadPinResponse,
   type SetThreadReactionRequest,
   type SetThreadReactionResponse,
+  type SetThreadToolIncidentNoticeRequest,
+  type SetThreadToolIncidentNoticeResponse,
   type SetNavigationBrowseModeRequest,
   type SetNavigationBrowseModeResponse,
   type ListThreadMigrationSourceThreadsRequest,
@@ -214,6 +218,7 @@ import {
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
   APP_SERVER_READ_THREAD_CHANNEL,
+  APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL,
   APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCES_CHANNEL,
   THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL,
@@ -247,6 +252,7 @@ import {
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+  NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL,
@@ -363,6 +369,7 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
     | "setRemoteThreadLocalPin"
     | "listRemoteThreadPins"
     | "updateRemoteThreadPinSnapshots"
+    | "setThreadToolIncidentNotice"
   >;
 
 type ThreadPrRefreshContext = {
@@ -1720,7 +1727,10 @@ class DesktopAppServerService {
           backend: request.backend,
           threadId: request.threadId,
           before: request.before,
+          includeAllToolInvocations: request.includeAllToolInvocations,
+          includeTurns: request.includeTurns,
           limit: request.limit,
+          viewOnly: request.viewOnly,
         });
     }
     const backend = request.backend ?? "codex";
@@ -1728,6 +1738,7 @@ class DesktopAppServerService {
     const response = await registry.readThread({
       backend,
       threadId: request.threadId,
+      includeAllToolInvocations: request.includeAllToolInvocations,
       includeTurns: request.includeTurns,
       before: request.before,
       limit: request.limit,
@@ -1761,6 +1772,23 @@ class DesktopAppServerService {
     return sanitizeRendererPayload(
       shapeReadThreadFileDiffsForRenderer(materialized),
     );
+  }
+
+  async analyzeThreadToolHistory(
+    request: AnalyzeThreadToolHistoryRequest,
+  ): Promise<AnalyzeThreadToolHistoryResponse> {
+    /* The scan pages the thread's transcript, which only the owning instance
+       can serve. A viewer analyzing a peer's thread runs it over there. */
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .analyzeThreadToolHistory(remoteRequest);
+    }
+    return await getDesktopBackendRegistry().analyzeThreadToolHistory(request);
   }
 
   async persistThreadUsageActivity(
@@ -5734,6 +5762,40 @@ class DesktopAppServerService {
     return await fetcher.getAuthStatus();
   }
 
+  async setThreadToolIncidentNotice(
+    request: SetThreadToolIncidentNoticeRequest,
+  ): Promise<SetThreadToolIncidentNoticeResponse> {
+    /* Deliberately not federated. Dismissing or muting a cost warning is the
+       viewer's own preference about what it wants to be told, the same
+       reasoning that keeps composer drafts machine-local — a peer should not
+       inherit this operator's decision to stop being warned. */
+    const backend = request.backend ?? "codex";
+    const overlay = await this.getOverlayStore().setThreadToolIncidentNotice({
+      backend,
+      ...(request.dismissedSeverity
+        ? { dismissedSeverity: request.dismissedSeverity }
+        : {}),
+      ...(request.firstWarningAt !== undefined
+        ? { firstWarningAt: request.firstWarningAt }
+        : {}),
+      ...(request.mutedSeverity ? { mutedSeverity: request.mutedSeverity } : {}),
+      ...(request.reset ? { reset: request.reset } : {}),
+      threadId: request.threadId,
+    });
+    logDebug("setThreadToolIncidentNotice", {
+      backend,
+      dismissedSeverity: request.dismissedSeverity,
+      mutedSeverity: request.mutedSeverity,
+      reset: request.reset === true,
+      threadId: request.threadId,
+    });
+    return {
+      backend,
+      state: overlay.toolIncidentNotice ?? {},
+      threadId: request.threadId,
+    };
+  }
+
   async setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> {
@@ -7415,6 +7477,15 @@ export function registerAppServerIpcHandlers(): void {
       });
     }
   );
+  ipcMain.removeHandler(APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL,
+    async (
+      _event,
+      request: AnalyzeThreadToolHistoryRequest,
+    ): Promise<AnalyzeThreadToolHistoryResponse> =>
+      await appServerService.analyzeThreadToolHistory(request),
+  );
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL);
   ipcMain.handle(
     APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL,
@@ -7609,6 +7680,16 @@ export function registerAppServerIpcHandlers(): void {
       request: SetThreadReactionRequest,
     ): Promise<SetThreadReactionResponse> => {
       return await appServerService.setThreadReaction(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
+    async (
+      _event,
+      request: SetThreadToolIncidentNoticeRequest,
+    ): Promise<SetThreadToolIncidentNoticeResponse> => {
+      return await appServerService.setThreadToolIncidentNotice(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_PIN_CHANNEL);
@@ -8196,6 +8277,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_LIST_SKILLS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_LIST_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_READ_THREAD_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_THREAD_CHANNEL);

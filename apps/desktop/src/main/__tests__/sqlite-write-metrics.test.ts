@@ -90,6 +90,40 @@ describe("sqlite write metrics", () => {
     expect(metrics?.commits).toBe(1);
   });
 
+  it("persists one explicit history analysis in one transaction", async () => {
+    const invocations = Array.from({ length: 25 }, (_, index) => ({
+      ...buildInvocation(`history-tool-${index}`),
+      findingId: `history-tool-${index}`,
+      source: "history" as const,
+    }));
+    // This runs only on an explicit Analyze/Refresh action. Even at 20 manual
+    // analyses per day, one commit each is 20 commits/day; findings scale the
+    // statements inside the transaction, never the number of WAL flushes.
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.persistThreadToolHistoryAnalysis({
+        backend: "codex",
+        coverage: {
+          analyzedAt: 1_800_000_000_000,
+          analyzerVersion: "1",
+          completeness: "complete",
+          entryCount: 50,
+          invocationCount: invocations.length,
+          missingOutputCount: 0,
+          pageCount: 2,
+          scannedThrough: "oldest-entry",
+        },
+        invocations,
+        threadId: "thread-1",
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note: "replace 25 deterministic history findings plus coverage metadata in one explicit analysis transaction",
+      scenario: "tool-output-history-analysis",
+      writes,
+    });
+  });
+
   it("holds each completed questionnaire transcript record to one commit", async () => {
     // This path runs once per completed questionnaire, never per streamed
     // event. At 100 questionnaires/day, one commit each is 100 commits/day;
@@ -211,6 +245,149 @@ describe("sqlite write metrics", () => {
     expectSqliteWriteBudget({
       note: "500 streamed output deltas plus the completion for one command",
       scenario: "streamed-command-output",
+      writes,
+    });
+
+    await registry.close();
+  });
+
+  it("persists a streamed large-output alert boundary in one commit", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await emit({
+        backend: "codex",
+        notification: {
+          method: "item/commandExecution/outputDelta",
+          params: {
+            threadId: "thread-streaming-alert",
+            turnId: "turn-1",
+            itemId: "cmd-1",
+            delta: "x".repeat(4_100),
+          },
+        },
+      } as AgentEvent);
+    });
+
+    expectSqliteWriteBudget({
+      note: "one threshold-crossing streamed output window and its alert",
+      scenario: "streamed-large-output-alert-boundary",
+      writes,
+    });
+
+    const accounting = await store.readThreadToolAccounting({
+      backend: "codex",
+      threadId: "thread-streaming-alert",
+    });
+    expect(accounting.alerts).toEqual([
+      expect.objectContaining({
+        kind: "large-output",
+        totalOutputChars: 4_100,
+      }),
+    ]);
+    expect(accounting.invocations).toEqual([
+      expect.objectContaining({
+        noisy: true,
+        noisyReason: "large-output",
+        outputChars: 4_100,
+        status: "in_progress",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("holds five deferred checks and their first alert to one commit", async () => {
+    vi.useFakeTimers();
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        for (let index = 0; index < 5; index += 1) {
+          vi.setSystemTime(1_800_000_000_000 + index * 30_000);
+          await emit({
+            backend: "codex",
+            notification: {
+              method: "item/completed",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                item: {
+                  id: `wait-${index + 1}`,
+                  type: "functionCall",
+                  name: "wait",
+                  status: "completed",
+                  arguments: {
+                    cell_id: `cell-${index + 1}`,
+                    yield_time_ms: 30_000,
+                  },
+                  functionCallOutput: "still running",
+                },
+              },
+            },
+          } as AgentEvent);
+        }
+      });
+
+      expectSqliteWriteBudget({
+        note: "five in-memory 30-second deferred checks and one persisted alert boundary",
+        scenario: "deferred-check-alert",
+        writes,
+      });
+    } finally {
+      await registry.close();
+      vi.useRealTimers();
+    }
+  });
+
+  it("holds one large structured MCP result and its alert to one commit", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+    const emit = (registry as unknown as {
+      emit(event: AgentEvent): Promise<void>;
+    }).emit.bind(registry);
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await emit({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            item: {
+              id: "mcp-1",
+              type: "mcpToolCall",
+              server: "playwright",
+              tool: "browser_tabs",
+              status: "completed",
+              arguments: { action: "list" },
+              result: {
+                content: [{ type: "text", text: "x".repeat(4_100) }],
+              },
+            },
+          },
+        },
+      } as AgentEvent);
+    });
+
+    expectSqliteWriteBudget({
+      note: "one large structured MCP result and its alert in one boundary",
+      scenario: "structured-mcp-output-alert",
       writes,
     });
 
@@ -416,6 +593,44 @@ describe("sqlite write metrics", () => {
     } finally {
       await registry.close();
     }
+  });
+
+  it("repairs a thread pricing history in one transaction", async () => {
+    for (let index = 0; index < 25; index += 1) {
+      await store.upsertThreadUsageLine({
+        line: buildUnpricedGrokUsageLine(index),
+      });
+    }
+    stateDb.raw
+      .prepare(
+        `UPDATE thread_usage_lines
+         SET model = 'grok-4.6-build'
+         WHERE thread_id = 'thread-pricing-repair'`,
+      )
+      .run();
+    resetSqliteWriteMetrics();
+
+    const { writes } = await measureSqliteWrites(async () => {
+      const pricing = await store.readThreadPricing({
+        backend: "acp:grok",
+        threadId: "thread-pricing-repair",
+      });
+      expect(pricing.lines).toHaveLength(25);
+      expect(
+        pricing.lines.every((line) => line.priceStatus === "priced"),
+      ).toBe(true);
+      await store.readThreadPricing({
+        backend: "acp:grok",
+        threadId: "thread-pricing-repair",
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note:
+        "one thread load lazily reprices 25 usage rows in ten-row progress batches; a second load is read-only",
+      scenario: "thread-pricing-lazy-repair",
+      writes,
+    });
   });
 
   it("holds a burst of automation pricing snapshots to one run-usage write", async () => {
@@ -1349,6 +1564,39 @@ function buildInvocation(invocationId: string) {
     toolName: "commandExecution",
     updatedAt: 1_800_000_000_000,
     warningLines: 0,
+  };
+}
+
+function buildUnpricedGrokUsageLine(index: number): ThreadUsageLineRecord {
+  const createdAt = Date.UTC(2026, 7, 15) + index;
+  return {
+    backend: "acp:grok",
+    cachedInputCostMicros: 0,
+    cachedInputTokens: 315_776,
+    createdAt,
+    currency: "USD",
+    inputTokens: 316_222,
+    model: "unknown-grok-model",
+    outputCostMicros: 0,
+    outputTokens: 121,
+    priceStatus: "unpriced",
+    priceUnavailableReason: "missing-rate",
+    provider: "openai",
+    reasoningEffort: "high",
+    reasoningOutputTokens: 50,
+    scope: "turn",
+    settingsConfidence: "exact",
+    settingsSource: "turn-context",
+    source: "hydration",
+    sourceItemId: `item-pricing-repair-${index}`,
+    status: "finalized",
+    threadId: "thread-pricing-repair",
+    totalCostMicros: 0,
+    totalTokens: 316_343,
+    turnId: `turn-pricing-repair-${index}`,
+    uncachedInputCostMicros: 0,
+    uncachedInputTokens: 446,
+    usageLineId: `line-pricing-repair-${index}`,
   };
 }
 

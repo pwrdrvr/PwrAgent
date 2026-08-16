@@ -24,8 +24,15 @@ import {
   type FederationInstanceId,
   type FederationTarget,
   type MessagingChannelKind,
+  type NavigationDirectorySummary,
   type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
+  type ThreadToolAccounting,
+  type ThreadToolIncidentNoticeState,
+  type ThreadToolInvocationAlert,
+  type ThreadUsageLineRecord,
+  type SetThreadToolIncidentNoticeRequest,
+  resolveToolIncidentVisibility,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { useThreadJump } from "./features/navigation/useThreadJump";
@@ -104,6 +111,13 @@ import { GrokCliUpdateNotice } from "./features/notifications/GrokCliUpdateNotic
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
 import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
 import {
+  buildToolAccountingNotice,
+} from "./features/notifications/tool-accounting-notice";
+import {
+  buildThreadIncidentSummary,
+  threadIncidentNoticeId,
+} from "./features/notifications/thread-incident-summary";
+import {
   buildHeapSnapshotHandoffMessage,
   describeHeapSnapshotResult,
   HEAP_SNAPSHOT_SECRET_WARNING,
@@ -141,10 +155,6 @@ const SETTINGS_SECTIONS = new Set<SettingsSection>([
 
 const LazySettingsScreen = lazy(async () => ({
   default: (await import("./features/settings/SettingsScreen")).SettingsScreen,
-}));
-
-const LazyStarMapScreen = lazy(async () => ({
-  default: (await import("./features/star-map/StarMapScreen")).StarMapScreen,
 }));
 
 const LazyOnboardingWizard = lazy(async () => ({
@@ -266,22 +276,8 @@ function DesktopAppShell(props: {
     DEFAULT_ACTION_RUNS_DOCK,
   );
   const [mainView, setMainView] = useState<
-    "thread" | "settings" | "automations" | "search" | "star-map"
+    "thread" | "settings" | "automations" | "search"
   >("thread");
-  // Star Map floating thread: while the map is up, a clicked local thread
-  // elevates the (already mounted) main ThreadView into a floating card
-  // over the map instead of remounting a second instance.
-  const [starMapFloatOpen, setStarMapFloatOpen] = useState(false);
-  const appMainRef = useRef<HTMLElement>(null);
-  // Each float session starts at the default position. Without the reset, a
-  // drag from the previous session persists in the element's CSS vars and a
-  // card once shoved mostly off-screen would reopen unreachable.
-  useEffect(() => {
-    if (starMapFloatOpen) {
-      appMainRef.current?.style.removeProperty("--star-map-float-dx");
-      appMainRef.current?.style.removeProperty("--star-map-float-dy");
-    }
-  }, [starMapFloatOpen]);
   // In-thread find bar (⌘F). `manualFindOpen` is the ⌘F toggle; `findRequest`
   // is a deep-link from a search result (seeded query + its target thread).
   // The bar is open when either applies (see `threadFindOpen` below).
@@ -344,11 +340,28 @@ function DesktopAppShell(props: {
     useState<GithubPrSamlEnforcementEvent[]>([]);
   const [githubPrAuthenticationFailure, setGithubPrAuthenticationFailure] =
     useState<GithubPrAuthenticationFailureEvent>();
-  // Latest thread list, mirrored into a ref so the backend-error toast
-  // subscription can resolve a thread's title without re-subscribing on
-  // every navigation change. Kept fresh by an effect below, once
-  // `navigation` is defined.
+  // Latest navigation identity, mirrored into refs so the backend-error toast
+  // subscription can resolve a thread's title and configured project label
+  // without re-subscribing on every navigation change. Kept fresh by an
+  // effect below, once `navigation` is defined.
   const backendErrorThreadsRef = useRef<NavigationThreadSummary[]>([]);
+  const backendErrorDirectoriesRef = useRef<NavigationDirectorySummary[]>([]);
+  /* Per-thread incident disposition, keyed by notice id. Mirrors what the
+     overlay persists so a reply to a live notification does not need to wait
+     on a round trip to know whether the operator already silenced this. */
+  const toolIncidentStateRef = useRef(new Map<
+    string,
+    ThreadToolIncidentNoticeState
+  >());
+  /* Usage rows for the loaded thread only — the renderer's pricing ledger is
+     session-scoped. A background thread's card therefore reports replayed
+     tokens and no money until the accounting notification carries a spend
+     figure of its own. */
+  const threadUsageLinesRef = useRef(new Map<
+    string,
+    readonly ThreadUsageLineRecord[]
+  >());
+  const showIncidentCostRef = useRef(false);
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
@@ -362,7 +375,10 @@ function DesktopAppShell(props: {
   const newThreadFederationTargets = useMemo(
     () =>
       desktopApi?.openFederationWindow
-        ? buildFederationThreadTargets(liveFederationHealth)
+        ? buildFederationThreadTargets(
+            liveFederationHealth,
+            readRendererFederationTarget()?.instanceId,
+          )
         : [],
     [desktopApi?.openFederationWindow, liveFederationHealth],
   );
@@ -663,6 +679,170 @@ function DesktopAppShell(props: {
       const instanceId = event.federationTarget?.scope === "remote"
         ? event.federationTarget.instanceId
         : undefined;
+      if (event.notification.method === "thread/toolAccounting/updated") {
+        const params = event.notification.params as {
+          threadId: string;
+          incidentNotice?: ThreadToolIncidentNoticeState;
+          toolAccounting?: ThreadToolAccounting;
+          triggeredAlerts?: ThreadToolInvocationAlert[];
+        };
+        /* One card per thread, folded from the whole accounting snapshot,
+           rather than one per triggered alert. The per-alert loop this
+           replaces minted a durable notice per turn — a busy thread reached
+           "1 of 41" in the stack with no way to clear them in bulk. */
+        if (!params.toolAccounting) return;
+        /* Only a freshly tripped threshold raises the card. Folding on every
+           accounting update would re-alert on last week's calls the first
+           time an old thread runs anything, which is history, not an
+           incident. The fold still summarizes the whole thread once a new
+           alert makes it worth showing. */
+        if (!params.triggeredAlerts?.length) return;
+        const noticeId = threadIncidentNoticeId({
+          backend: event.backend,
+          threadId: params.threadId,
+        });
+        /* Persisted disposition wins over anything this session inferred: it
+           may predate this renderer entirely. Only for a local thread, though:
+           the notification is filled from the overlay of whichever instance
+           owns the thread, and a peer's dismissal is the peer operator's
+           preference, not this viewer's. Adopting it would silently stop
+           warning a viewer who never asked to stop being warned. */
+        if (params.incidentNotice && !event.federationTarget) {
+          toolIncidentStateRef.current.set(noticeId, {
+            ...toolIncidentStateRef.current.get(noticeId),
+            ...params.incidentNotice,
+          });
+        }
+        const incidentState = toolIncidentStateRef.current.get(noticeId);
+        const summary = buildThreadIncidentSummary({
+          accounting: params.toolAccounting,
+          backend: event.backend,
+          ...(incidentState?.firstWarningAt !== undefined
+            ? { firstWarningAt: incidentState.firstWarningAt }
+            : {}),
+          threadId: params.threadId,
+          usageLines: threadUsageLinesRef.current.get(
+            buildThreadIdentityKey(event.backend, params.threadId),
+          ),
+        });
+        if (!summary) return;
+        if (
+          resolveToolIncidentVisibility({
+            severity: summary.severity,
+            ...(incidentState ? { state: incidentState } : {}),
+          }) === "suppress"
+        ) {
+          return;
+        }
+        const matchingThread = backendErrorThreadsRef.current.find(
+          (thread) =>
+            thread.source === event.backend
+            && thread.id === params.threadId
+            && federationTargetsEqual(
+              thread.federation?.ref.target,
+              event.federationTarget,
+            ),
+        );
+        const threadLink = matchingThread
+          ? {
+              backend: matchingThread.source,
+              inThreadList: true,
+              ...(instanceId ? { instanceId } : {}),
+              threadId: matchingThread.id,
+              title: matchingThread.title,
+              titleSource: matchingThread.titleSource,
+              gitBranch: matchingThread.gitBranch,
+              linkedDirectories: matchingThread.linkedDirectories,
+            }
+          : undefined;
+        const persistIncident = (
+          patch: Omit<SetThreadToolIncidentNoticeRequest, "backend" | "threadId">,
+        ): void => {
+          const next: ThreadToolIncidentNoticeState = {
+            ...toolIncidentStateRef.current.get(noticeId),
+            ...(summary.firstWarningAt !== undefined
+              ? { firstWarningAt: summary.firstWarningAt }
+              : {}),
+            ...(patch.dismissedSeverity
+              ? { dismissedSeverity: patch.dismissedSeverity }
+              : {}),
+            ...(patch.mutedSeverity ? { mutedSeverity: patch.mutedSeverity } : {}),
+          };
+          toolIncidentStateRef.current.set(noticeId, next);
+          void desktopApi?.setThreadToolIncidentNotice?.({
+            backend: event.backend,
+            ...(summary.firstWarningAt !== undefined
+              ? { firstWarningAt: summary.firstWarningAt }
+              : {}),
+            ...patch,
+            threadId: params.threadId,
+          }).catch(() => undefined);
+        };
+        const dismiss = (): void => {
+          persistIncident({ dismissedSeverity: summary.severity });
+          dispatchAppNotice({ type: "dismiss", id: noticeId });
+        };
+        const mute = (): void => {
+          persistIncident({
+            dismissedSeverity: summary.severity,
+            mutedSeverity: summary.severity,
+          });
+          dispatchAppNotice({ type: "dismiss", id: noticeId });
+        };
+        const examine = (): void => {
+          const threadKey = buildThreadIdentityKey(
+            event.backend,
+            params.threadId,
+          );
+          const matchingDirectory =
+            backendErrorDirectoriesRef.current.find(
+              (directory) =>
+                directory.kind === "directory"
+                && directory.threadKeys.includes(threadKey),
+            )
+            ?? backendErrorDirectoriesRef.current.find((directory) =>
+              directory.threadKeys.includes(threadKey)
+            );
+          const projectLabel =
+            matchingDirectory?.label
+            ?? matchingThread?.linkedDirectories[0]?.label;
+          void desktopApi?.openToolOutputIncidentExplorerWindow?.({
+            backend: event.backend,
+            /* The event names the owning instance; without it a viewer's
+               explorer reads the peer's thread id locally and finds nothing. */
+            ...(event.federationTarget
+              ? { federationTarget: event.federationTarget }
+              : {}),
+            ...(projectLabel ? { projectLabel } : {}),
+            threadId: params.threadId,
+            title: matchingThread?.title ?? labelForThread(
+              event.backend,
+              params.threadId,
+            ),
+          });
+        };
+        /* Anchor the cost window the first time this thread warns. Recording
+           it only on dismissal would date the window to whenever the operator
+           happened to click, not to the first warning. */
+        if (
+          incidentState?.firstWarningAt === undefined
+          && summary.firstWarningAt !== undefined
+        ) {
+          persistIncident({});
+        }
+        dispatchAppNotice({
+          type: "show",
+          notice: buildToolAccountingNotice({
+            onDismiss: dismiss,
+            onExamine: examine,
+            onMute: mute,
+            showCost: showIncidentCostRef.current,
+            summary,
+            threadLink,
+          }),
+        });
+        return;
+      }
       // Params are cast explicitly: the AppServerNotification union is too
       // wide for the discriminant to narrow `params` reliably here.
       if (event.notification.method === "turn/failed") {
@@ -872,7 +1052,21 @@ function DesktopAppShell(props: {
     }
     return desktopApi.onCopyLocalDiagnosticsInfoRequested(() => {
       const thread = navigation.selectedThread;
-      void desktopApi.readAppMetadata?.().then((metadata) => {
+      const metadataPromise = desktopApi.readAppMetadata?.();
+      if (!metadataPromise) {
+        return;
+      }
+      const federationHealthPromise = desktopApi.readFederationHealth
+        ? desktopApi.readFederationHealth({})
+            .then((response) => response.health)
+            .catch(() => undefined)
+        : Promise.resolve(undefined);
+      void Promise.all([metadataPromise, federationHealthPromise]).then(([
+        metadata,
+        refreshedFederationHealth,
+      ]) => {
+        const federationHealth =
+          refreshedFederationHealth ?? liveFederationHealth;
         void copyText(
           buildLocalThreadDiagnosticsInfo(
             thread
@@ -881,15 +1075,23 @@ function DesktopAppShell(props: {
                   projectPath: resolveThreadWorkingStatePath(thread),
                   threadId: thread.id,
                   title: thread.title,
+                  federation: thread.federation,
+                  federationHealth,
+                  federationWindowLabel: readRendererFederationLabel(),
+                  federationWindowTarget: readRendererFederationTarget(),
                 }
-              : {},
+              : {
+                  federationHealth,
+                  federationWindowLabel: readRendererFederationLabel(),
+                  federationWindowTarget: readRendererFederationTarget(),
+                },
             metadata,
           ),
           desktopApi,
         );
       });
     });
-  }, [desktopApi, navigation.selectedThread]);
+  }, [desktopApi, liveFederationHealth, navigation.selectedThread]);
   const scheduledActionFederationTargets = useFederationThreadEventSubscriptions({
     desktopApi,
     enabled: !readRendererFederationTarget(),
@@ -941,7 +1143,20 @@ function DesktopAppShell(props: {
   // toast subscription depend on (and re-subscribe to) the thread list.
   useEffect(() => {
     backendErrorThreadsRef.current = navigation.threads;
-  }, [navigation.threads]);
+    backendErrorDirectoriesRef.current = navigation.directories;
+  }, [navigation.directories, navigation.threads]);
+  /* Incident-notice inputs the live notification handler reads without
+     re-subscribing: which thread is on screen, whether the operator has
+     pricing display on, and the loaded thread's usage rows. */
+  useEffect(() => {
+    showIncidentCostRef.current =
+      (settings.snapshot?.experimental.threadPricingSummary?.value ?? true)
+      && (
+        (settings.snapshot?.experimental.threadPricingDisplayUsd?.value ?? true)
+        || (settings.snapshot?.experimental.threadPricingDisplayCodexCredits
+          ?.value ?? false)
+      );
+  }, [settings.snapshot?.experimental]);
   const backendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
     federationTarget: activeFederationTarget,
@@ -1520,20 +1735,26 @@ function DesktopAppShell(props: {
     onCreateThreadOnFederationTarget: createThreadOnFederationTarget,
   };
   // The Star Map is a whole-federation surface owned by the primary window;
-  // federation remote-viewer windows never render its toggle.
+  // federation remote-viewer windows never render its toggle. The map
+  // itself lives in a dedicated OS window — the control opens (or
+  // focuses) it via main-process IPC.
   const starMapControls = readRendererFederationTarget()
     ? undefined
     : {
-        active: mainView === "star-map",
-        onToggle: () => {
-          setStarMapFloatOpen(false);
-          setMainView(mainView === "star-map" ? "thread" : "star-map");
+        onOpen: () => {
+          void desktopApi?.openStarMapWindow?.();
         },
       };
-  const closeStarMap = () => {
-    setStarMapFloatOpen(false);
-    setMainView("thread");
-  };
+  useEffect(() => {
+    const thread = navigation.selectedThread;
+    const lines = session.response?.pricing?.lines;
+    if (!thread || !lines) return;
+    threadUsageLinesRef.current.set(
+      buildThreadIdentityKey(thread.source, thread.id),
+      lines,
+    );
+  }, [navigation.selectedThread, session.response?.pricing?.lines]);
+
   const threadViewProps = {
     activeFederationOwnerLabel,
     activeFederationTarget,
@@ -1568,6 +1789,7 @@ function DesktopAppShell(props: {
     launchpadError: navigation.launchpadError,
     onProviderSelected: refreshSelectedAcpProvider,
     onShowNotice: showAppNotice,
+    onReloadThread: session.reload,
     initialLoadDurationMs: session.initialLoadDurationMs,
     loading: session.loading,
     loadingMore: session.loadingMore,
@@ -2116,97 +2338,14 @@ function DesktopAppShell(props: {
         />
 
         <main
-          ref={appMainRef}
           className={`app-main${
             threadDetailPending ? " app-main--thread-detail-pending" : ""
           }${
             !peerConnectivity.connected
               ? " app-main--federation-disconnected"
               : ""
-          }${
-            mainView === "star-map" && starMapFloatOpen
-              ? " app-main--star-map-float"
-              : ""
           }`}
         >
-          {mainView === "star-map" && starMapFloatOpen ? (
-            <div
-              className="star-map-float-handle"
-              onPointerDown={(event) => {
-                if (event.button !== 0) return;
-                if (
-                  event.target instanceof HTMLElement
-                  && event.target.closest("button")
-                ) {
-                  return;
-                }
-                const main = event.currentTarget.closest("main");
-                if (!(main instanceof HTMLElement)) return;
-                event.preventDefault();
-                const startX = event.clientX;
-                const startY = event.clientY;
-                const baseX =
-                  Number.parseFloat(
-                    main.style.getPropertyValue("--star-map-float-dx"),
-                  ) || 0;
-                const baseY =
-                  Number.parseFloat(
-                    main.style.getPropertyValue("--star-map-float-dy"),
-                  ) || 0;
-                // Clamp drags so a strip of the card (and its handle row)
-                // always stays on-screen — an off-screen float has no other
-                // recovery affordance.
-                const MIN_VISIBLE_PX = 160;
-                const rect = main.getBoundingClientRect();
-                const untranslatedLeft = rect.left - baseX;
-                const untranslatedTop = rect.top - baseY;
-                const clampDx = (dx: number) =>
-                  Math.min(
-                    Math.max(dx, MIN_VISIBLE_PX - untranslatedLeft - rect.width),
-                    window.innerWidth - MIN_VISIBLE_PX - untranslatedLeft,
-                  );
-                const clampDy = (dy: number) =>
-                  Math.min(
-                    Math.max(dy, -untranslatedTop),
-                    window.innerHeight - MIN_VISIBLE_PX - untranslatedTop,
-                  );
-                let lastDx = baseX;
-                let lastDy = baseY;
-                let frame = 0;
-                const move = (pointerEvent: globalThis.PointerEvent) => {
-                  lastDx = clampDx(baseX + pointerEvent.clientX - startX);
-                  lastDy = clampDy(baseY + pointerEvent.clientY - startY);
-                  if (!frame) {
-                    frame = requestAnimationFrame(() => {
-                      frame = 0;
-                      main.style.setProperty("--star-map-float-dx", `${lastDx}px`);
-                      main.style.setProperty("--star-map-float-dy", `${lastDy}px`);
-                    });
-                  }
-                };
-                const stop = () => {
-                  window.removeEventListener("pointermove", move);
-                  window.removeEventListener("pointerup", stop);
-                  window.removeEventListener("pointercancel", stop);
-                };
-                window.addEventListener("pointermove", move);
-                window.addEventListener("pointerup", stop);
-                window.addEventListener("pointercancel", stop);
-              }}
-            >
-              <span className="star-map-float-handle__grip" aria-hidden="true" />
-              <span className="star-map-float-handle__title">
-                {navigation.selectedThread?.title ?? ""}
-              </span>
-              <button
-                type="button"
-                className="star-map-float-handle__close"
-                onClick={() => setStarMapFloatOpen(false)}
-              >
-                Back to map
-              </button>
-            </div>
-          ) : null}
           {!peerConnectivity.connected ? (
             // The runtime keeps reconnecting on its own; this banner
             // explains why the window went read-only (composer disabled,
@@ -2320,45 +2459,6 @@ function DesktopAppShell(props: {
                   void navigation.showThread(target);
                 }}
                 onShowNotice={showAppNotice}
-              />
-            </Suspense>
-          </div>
-        ) : null}
-
-        {mainView === "star-map" ? (
-          <div
-            className={`app-shell__star-map-layer${
-              starMapFloatOpen ? " is-floating" : ""
-            }`}
-          >
-            <Suspense fallback={null}>
-              <LazyStarMapScreen
-                desktopApi={desktopApi}
-                localThreads={navigation.threads}
-                // Not part of `sessionKeys`: those are only trusted for the
-                // local instance's cards, because thinking/approval keys are
-                // inferred from an unscoped event stream. A draft is this
-                // window's own composer state, so it is authoritative for
-                // every card it matches, local or remote.
-                draftThreadKeys={draftThreadKeys}
-                sessionKeys={{
-                  approvalRequestThreadKeys: session.approvalRequestThreadKeys,
-                  inputRequestThreadKeys: session.inputRequestThreadKeys,
-                  thinkingThreadKeys: session.thinkingThreadKeys,
-                }}
-                localInstanceLabel={
-                  settings.snapshot?.federation.instanceLabel.value
-                }
-                floating={starMapFloatOpen}
-                onClose={closeStarMap}
-                onOpenLocalThread={(thread) => {
-                  navigation.selectThread(thread);
-                  setStarMapFloatOpen(true);
-                }}
-                onFocusLocalInstance={closeStarMap}
-                onRefreshLocalThreads={() => {
-                  void navigation.refresh?.();
-                }}
               />
             </Suspense>
           </div>

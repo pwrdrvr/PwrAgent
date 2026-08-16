@@ -128,6 +128,28 @@ describe("SubAgentsPanel", () => {
     });
   });
 
+  it("keeps an open details dialog on the live sub-agent record", () => {
+    const { rerender } = render(<SubAgentsPanel thread={thread} />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]!);
+    expect(screen.getByRole("dialog")).toHaveTextContent("Running");
+
+    rerender(
+      <SubAgentsPanel
+        thread={{
+          ...thread,
+          subAgents: thread.subAgents!.map((subAgent) =>
+            subAgent.monitorId === "monitor-1"
+              ? { ...subAgent, status: "success" as const }
+              : subAgent,
+          ),
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("dialog")).toHaveTextContent("Completed");
+  });
+
   it("targets the owning instance when stopping a remote sub-agent", async () => {
     const stopSubAgent = vi.fn(async () => ({
       backend: "codex" as const,

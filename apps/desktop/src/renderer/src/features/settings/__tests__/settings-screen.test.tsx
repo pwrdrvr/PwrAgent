@@ -192,6 +192,7 @@ function createSnapshot(
     },
     updates: {
       channel: { value: "latest", source: "default" },
+      train: { value: "stable", source: "default" },
     },
     integratedTerminal: {
       windowsShell: { value: "auto", source: "default" },
@@ -685,8 +686,14 @@ describe("SettingsScreen", () => {
       })),
       readAppUpdateReleaseVersions: vi.fn(async () => ({
         fetchedAt: 1,
-        latest: { version: "v1.0.0" },
-        prerelease: { version: "v1.0.0-beta.7" },
+        stable: {
+          latest: { version: "v1.0.0" },
+          prerelease: { version: "v1.0.0-beta.7" },
+        },
+        beta: {
+          latest: { version: "v1.1.0-beta.2" },
+          prerelease: { version: "v1.1.0-alpha.7" },
+        },
       })),
     };
     render(
@@ -832,11 +839,25 @@ describe("SettingsScreen", () => {
     });
 
     expect(await screen.findByText("v1.0.0-beta.7")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /Stable/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /Beta/ }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        updates: {
+          train: "beta",
+          channel: "latest",
+        },
+      });
+    });
     fireEvent.click(screen.getByRole("radio", { name: /Prerelease/ }));
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         updates: {
           channel: "prerelease",
+          train: "stable",
         },
       });
     });
@@ -4783,6 +4804,7 @@ describe("SettingsScreen", () => {
       createSnapshot({
         updates: {
           channel: { value: "prerelease", source: "config" },
+          train: { value: "stable", source: "default" },
         },
       }),
     );
@@ -4793,8 +4815,14 @@ describe("SettingsScreen", () => {
       })),
       readAppUpdateReleaseVersions: vi.fn(async () => ({
         fetchedAt: 1,
-        latest: { version: "v1.0.0" },
-        prerelease: { version: "v1.0.0-beta.7" },
+        stable: {
+          latest: { version: "v1.0.0" },
+          prerelease: { version: "v1.0.0-beta.7" },
+        },
+        beta: {
+          latest: { version: "v1.1.0-beta.2" },
+          prerelease: { version: "v1.1.0-alpha.7" },
+        },
       })),
       readAppUpdateStatus: vi.fn(async () => ({
         status: "downloaded" as const,
@@ -5062,6 +5090,52 @@ describe("SettingsScreen", () => {
         "Enabled Auto-fix PR for 2 existing threads with a primary attached pull request.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("keeps an inferred Beta train when the operator picks Latest", async () => {
+    const settings = createSettingsState(
+      createSnapshot({
+        updates: {
+          channel: { value: "prerelease", source: "default" },
+          train: { value: "beta", source: "default" },
+        },
+      }),
+    );
+    const desktopApi = {
+      readAppUpdateReleaseVersions: vi.fn(async () => ({
+        fetchedAt: 1,
+        stable: {
+          latest: { version: "v1.0.1" },
+          prerelease: { version: "v1.0.1" },
+        },
+        beta: {
+          latest: { version: "v1.1.0-beta.2" },
+          prerelease: { version: "v1.1.0-alpha.7" },
+        },
+      })),
+    };
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("radio", { name: /Beta/ })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    fireEvent.click(screen.getByRole("radio", { name: /Latest/ }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        updates: {
+          channel: "latest",
+          train: "beta",
+        },
+      });
+    });
   });
 
   it("blocks settings edits when the config file cannot be parsed", () => {

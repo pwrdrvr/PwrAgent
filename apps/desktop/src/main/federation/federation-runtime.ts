@@ -2,6 +2,8 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { hostname } from "node:os";
 import path from "node:path";
 import type {
+  AnalyzeThreadToolHistoryRequest,
+  AnalyzeThreadToolHistoryResponse,
   AgentEvent,
   AppServerListSkillsResponse,
   AppServerListThreadsResponse,
@@ -4616,6 +4618,9 @@ function localBackendOperations(): FederationBackendOperations {
         ...(request.includeTurns !== undefined
           ? { includeTurns: request.includeTurns }
           : {}),
+        ...(request.includeAllToolInvocations !== undefined
+          ? { includeAllToolInvocations: request.includeAllToolInvocations }
+          : {}),
         before: request.before,
         limit: request.limit,
         ...(request.viewOnly !== undefined
@@ -4623,6 +4628,16 @@ function localBackendOperations(): FederationBackendOperations {
           : {}),
       });
       return rewriteTranscriptImageUrlsForRenderer(response);
+    },
+    async analyzeThreadToolHistory(
+      request: AnalyzeThreadToolHistoryRequest,
+    ): Promise<AnalyzeThreadToolHistoryResponse> {
+      /* Runs on the instance that owns the transcript — the scan pages the
+         thread's own history, which a viewer cannot reach. */
+      return await getDesktopBackendRegistry().analyzeThreadToolHistory({
+        backend: request.backend,
+        threadId: request.threadId,
+      });
     },
     async readTranscriptImage(request) {
       return await readTranscriptImageProtocolRequest(request.url);

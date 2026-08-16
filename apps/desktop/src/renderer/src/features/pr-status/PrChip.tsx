@@ -59,6 +59,8 @@ export function PrChip(props: PrChipProps) {
   // `show` hands it to the portal on hover/focus, so a sidebar full of chips
   // mounts exactly zero cards.
   const card = <PrStatusCard pr={pr} withStatusPills={props.withStatusPills} />;
+  const latestCardRef = useRef(card);
+  latestCardRef.current = card;
   const tooltipVisible = tooltipController.visible;
 
   // Status updates keep arriving while the pointer rests on a chip, so push
@@ -70,7 +72,8 @@ export function PrChip(props: PrChipProps) {
   // very update caused. Compare the card's DATA and push only when it moved.
   // Tracking the key while hidden (rather than skipping the effect entirely)
   // is what keeps a hidden chip from pushing stale-keyed content on its next
-  // hover — `show` already hands over a freshly built card at that point.
+  // hover — the delayed callback reads `latestCardRef` when it expires, while
+  // immediate focus hands over the freshly built card directly.
   const cardKey = [
     pr.org,
     pr.repo,
@@ -188,7 +191,12 @@ export function PrChip(props: PrChipProps) {
             handleActivate(event);
           }
         }}
-        onMouseEnter={(event) => tooltipController.show(event.currentTarget, card)}
+        onMouseEnter={(event) =>
+          tooltipController.showAfterDelay(
+            event.currentTarget,
+            () => latestCardRef.current,
+          )
+        }
         onMouseLeave={tooltipController.hide}
       >
         <span className="pr-chip__dot" aria-hidden="true" />
@@ -224,4 +232,3 @@ export function PrChip(props: PrChipProps) {
     </>
   );
 }
-

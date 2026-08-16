@@ -92,6 +92,18 @@ describe("buildFederationThreadTargets", () => {
     expect(targets.map((target) => target.instanceId)).toEqual(["b"]);
   });
 
+  it("excludes the instance represented by a remote federation window", () => {
+    const targets = buildFederationThreadTargets(
+      health([
+        peer({ id: "m4", label: "Harold-Mac-Mini-M4" }),
+        peer({ id: "laptop", label: "Harold-MBP-M2-Max" }),
+      ]),
+      "m4",
+    );
+
+    expect(targets.map((target) => target.instanceId)).toEqual(["laptop"]);
+  });
+
   it("breaks label ties by instance id so health order cannot reshuffle rows", () => {
     // Same machine label, neither advertising a profile: the labels are equal,
     // so without a tiebreak the order would follow health order and could flip

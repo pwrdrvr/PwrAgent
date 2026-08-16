@@ -45,6 +45,8 @@ const mocks = vi.hoisted(() => {
     ),
     remoteBackend,
     remoteBackendForTarget: vi.fn(() => remoteBackend),
+    showThreadFromToolOutputIncidentExplorer: vi.fn(),
+    showToolOutputIncidentExplorerWindow: vi.fn(),
   };
 });
 
@@ -86,6 +88,13 @@ vi.mock("../subagent-transcript-window", () => ({
   showSubAgentTranscriptWindow: vi.fn(),
 }));
 
+vi.mock("../tool-output-incident-explorer-window", () => ({
+  showThreadFromToolOutputIncidentExplorer:
+    mocks.showThreadFromToolOutputIncidentExplorer,
+  showToolOutputIncidentExplorerWindow:
+    mocks.showToolOutputIncidentExplorerWindow,
+}));
+
 describe("application IPC", () => {
   beforeEach(() => {
     mocks.handlers.clear();
@@ -94,6 +103,8 @@ describe("application IPC", () => {
     mocks.discoverDesktopApplications.mockClear();
     mocks.openDesktopApplication.mockClear();
     mocks.remoteBackendForTarget.mockClear();
+    mocks.showThreadFromToolOutputIncidentExplorer.mockClear();
+    mocks.showToolOutputIncidentExplorerWindow.mockClear();
   });
 
   it("opens applications on the selected federation peer", async () => {
@@ -139,5 +150,48 @@ describe("application IPC", () => {
     expect(mocks.readApplications).toHaveBeenCalledTimes(1);
     expect(mocks.discoverDesktopApplications).not.toHaveBeenCalled();
     expect(response).toEqual({ applications: remoteApplications });
+  });
+
+  it("opens the thread-scoped tool-output incident explorer", async () => {
+    const { registerApplicationIpcHandlers } = await import("../ipc/applications");
+    const { TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    registerApplicationIpcHandlers();
+
+    const response = await mocks.handlers.get(
+      TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL,
+    )?.({ sender: "sender" }, {
+      backend: "codex",
+      threadId: "thread-1",
+      title: "Noisy work",
+    });
+
+    expect(mocks.showToolOutputIncidentExplorerWindow).toHaveBeenCalledWith(
+      {
+        backend: "codex",
+        threadId: "thread-1",
+        title: "Noisy work",
+      },
+      { sourceWindow: undefined },
+    );
+    expect(response).toEqual({ opened: true });
+  });
+
+  it("routes incident-explorer thread navigation through its owner", async () => {
+    const { registerApplicationIpcHandlers } = await import("../ipc/applications");
+    const { TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL } = await import(
+      "../../shared/ipc"
+    );
+    registerApplicationIpcHandlers();
+    const sender = { id: 42 };
+    const request = { backend: "codex" as const, threadId: "thread-1" };
+
+    await mocks.handlers.get(
+      TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL,
+    )?.({ sender }, request);
+
+    expect(mocks.showThreadFromToolOutputIncidentExplorer)
+      .toHaveBeenCalledWith(sender, request);
   });
 });

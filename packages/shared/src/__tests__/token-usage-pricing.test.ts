@@ -286,6 +286,90 @@ describe("token usage pricing", () => {
     });
   });
 
+  it("prices Grok 4.6 usage with the xAI list rate", () => {
+    const cost = estimateTokenUsageCost({
+      at: Date.UTC(2026, 7, 15),
+      cachedInputTokens: 128,
+      model: "grok-4.6",
+      outputTokens: 266,
+      reasoningOutputTokens: 130,
+      uncachedInputTokens: 255_331,
+    });
+
+    expect(cost).toMatchObject({
+      cachedInputCostMicros: 64,
+      cachedInputUsdPerMillion: 0.5,
+      catalogId: "xai-api",
+      catalogVersion: "2026-08-12",
+      displayName: "Grok 4.6 Standard",
+      inputUsdPerMillion: 2,
+      model: "grok-4.6",
+      outputCostMicros: 1_596,
+      outputTokensIncludeReasoning: true,
+      outputUsdPerMillion: 6,
+      provider: "xai",
+      rateId: "xai:2026-08-12:grok-4.6:standard",
+      serviceTier: "standard",
+      totalCostMicros: 512_322,
+      totalUsd: 0.512322,
+      uncachedInputCostMicros: 510_662,
+    });
+  });
+
+  it("prices the Grok 4.6 latest alias", () => {
+    expect(
+      estimateTokenUsageCost({
+        at: Date.UTC(2026, 7, 15),
+        cachedInputTokens: 50_000,
+        model: "grok-4.6-latest",
+        outputTokens: 100_000,
+        uncachedInputTokens: 50_000,
+      }),
+    ).toMatchObject({
+      cachedInputUsdPerMillion: 0.5,
+      inputUsdPerMillion: 2,
+      outputUsdPerMillion: 6,
+      rateId: "xai:2026-08-12:grok-4.6:standard",
+      totalCostMicros: 725_000,
+    });
+  });
+
+  it("prices the Grok 4.6 ACP build alias above 200K at the account usage rate", () => {
+    expect(
+      estimateTokenUsageCost({
+        at: Date.UTC(2026, 7, 15),
+        cachedInputTokens: 315_776,
+        model: "grok-4.6-build",
+        outputTokens: 121,
+        reasoningOutputTokens: 50,
+        uncachedInputTokens: 446,
+      }),
+    ).toMatchObject({
+      cachedInputCostMicros: 157_888,
+      cachedInputUsdPerMillion: 0.5,
+      inputUsdPerMillion: 2,
+      model: "grok-4.6-build",
+      outputCostMicros: 726,
+      outputTokensIncludeReasoning: true,
+      outputUsdPerMillion: 6,
+      rateId: "xai:2026-08-12:grok-4.6:standard",
+      totalCostMicros: 159_506,
+      uncachedInputCostMicros: 892,
+    });
+  });
+
+  it("does not price Grok 4.6 usage before its launch date", () => {
+    expect(
+      estimateTokenUsageCost({
+        at: Date.UTC(2026, 7, 11, 23, 59, 59),
+        cachedInputTokens: 0,
+        model: "grok-4.6",
+        outputTokens: 100,
+        uncachedInputTokens: 100,
+      }),
+    ).toBeUndefined();
+  });
+
   it("prices Qwen ACP ModelStudio usage with the International list rate", () => {
     const cost = estimateTokenUsageCost({
       at: Date.UTC(2026, 6, 28),
@@ -403,6 +487,22 @@ describe("token usage pricing", () => {
         serviceTier: "priority",
       }),
     );
+    expect(listTokenUsagePricingRates()).toContainEqual(
+      expect.objectContaining({
+        cachedInputUsdPerMillion: 0.5,
+        catalogId: "xai-api",
+        catalogVersion: "2026-08-12",
+        displayName: "Grok 4.6 Standard",
+        inputUsdPerMillion: 2,
+        model: "grok-4.6",
+        outputUsdPerMillion: 6,
+        provider: "xai",
+        rateId: "xai:2026-08-12:grok-4.6:standard",
+      }),
+    );
+    expect(
+      listTokenUsagePricingRates().filter((rate) => rate.model === "grok-4.6"),
+    ).toHaveLength(1);
     expect(listTokenUsagePricingRates()).toContainEqual(
       expect.objectContaining({
         cachedInputUsdPerMillion: 0.3,

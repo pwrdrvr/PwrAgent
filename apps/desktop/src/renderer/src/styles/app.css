@@ -883,14 +883,25 @@ textarea,
   -webkit-app-region: drag;
 }
 
-/* Left cluster: wordmark + menu + action buttons (all interactive → no-drag).
-   The spacer between left and right clusters stays draggable. */
+/* Left/right clusters hold interactive chrome; the spacer between them stays
+   draggable. Apply no-drag to every descendant, not only the cluster boxes.
+   Chromium can otherwise turn a descendant back into native title-bar drag
+   hit-testing — including the transparent bridge between a hover trigger and
+   its popover. On Windows that swallows pointer movement through the bridge,
+   so the wrapper receives mouseleave and closes before the pointer reaches the
+   menu. This also keeps icon/text pixels as interactive as button padding. */
+.app-titlebar__left,
+.app-titlebar__left *,
+.app-titlebar__right,
+.app-titlebar__right * {
+  -webkit-app-region: no-drag;
+}
+
 .app-titlebar__left {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  -webkit-app-region: no-drag;
 }
 
 .app-titlebar__spacer {
@@ -902,7 +913,6 @@ textarea,
 .app-titlebar__right {
   display: flex;
   align-items: center;
-  -webkit-app-region: no-drag;
 }
 
 /* Wordmark — reuse the sidebar brand tokens (--text-primary / --accent), sized
@@ -1206,13 +1216,36 @@ textarea,
   white-space: nowrap;
 }
 
-.jump-palette__row-pr {
+.jump-palette__row-prs {
   flex: none;
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: none;
+}
+
+.jump-palette__row-prs[data-overflow="true"] {
+  max-width: 126px;
+}
+
+.jump-palette__row-prs::-webkit-scrollbar {
+  display: none;
+}
+
+.jump-palette__row-prs .pr-chip {
+  flex: none;
+  height: 19px;
+  gap: 4px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+.jump-palette__row-prs .pr-chip__dot {
+  width: 6px;
+  height: 6px;
 }
 
 /* `direction: rtl` puts the ellipsis at the START, so a long `agent/…` prefix
@@ -1588,7 +1621,8 @@ textarea,
   pointer-events: none;
 }
 
-.thread-header__terminal-toggle {
+.thread-header__terminal-toggle,
+.thread-header__rewind-toggle {
   display: inline-flex;
   width: 24px;
   height: 24px;
@@ -1609,16 +1643,20 @@ textarea,
 }
 
 .thread-header__terminal-toggle,
-.thread-header__terminal-toggle * {
+.thread-header__terminal-toggle *,
+.thread-header__rewind-toggle,
+.thread-header__rewind-toggle * {
   -webkit-app-region: no-drag;
 }
 
-.thread-header__terminal-toggle:hover {
+.thread-header__terminal-toggle:hover,
+.thread-header__rewind-toggle:hover {
   background: var(--bg-row-active);
   color: var(--text-primary);
 }
 
-.thread-header__terminal-toggle:focus-visible {
+.thread-header__terminal-toggle:focus-visible,
+.thread-header__rewind-toggle:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -1627,13 +1665,15 @@ textarea,
    stays visible (the terminal exists as a concept) but reads inert, with the
    tooltip carrying the reason. aria-disabled, not disabled, so hover still
    reaches it and the tooltip can explain why. */
-.thread-header__terminal-toggle.is-disabled {
+.thread-header__terminal-toggle.is-disabled,
+.thread-header__rewind-toggle.is-disabled {
   color: var(--text-muted);
   opacity: 0.45;
   cursor: default;
 }
 
-.thread-header__terminal-toggle.is-disabled:hover {
+.thread-header__terminal-toggle.is-disabled:hover,
+.thread-header__rewind-toggle.is-disabled:hover {
   background: transparent;
   color: var(--text-muted);
 }
@@ -3382,8 +3422,152 @@ textarea,
   font-variant-numeric: tabular-nums;
 }
 
+/* The Attention tab's hover card. Every other lens tab hovers one line of
+   `.viewport-tooltip`; this one reports two or three counts, each with its own
+   indicator and a consequence, which as running text became four sentences
+   with em-dashes doing the structural work.
+
+   Measurements are `.context-usage-card`'s (width, padding, radius, shadow,
+   eyebrow, row scale) so the app's hover cards stay one family — that one
+   rather than `.pr-status-card` because both of these sit at z-index 90:
+   the lens switch is sidebar chrome and is not reachable from the Settings
+   overlay at 120, so neither needs the 140 a PR chip does. */
+.attention-card {
+  position: fixed;
+  z-index: 90;
+  width: 264px;
+  max-width: calc(100vw - 32px);
+  padding: 12px 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--popover-bg);
+  box-shadow: 0 12px 28px var(--shadow-tint-soft);
+  color: var(--text-primary);
+  pointer-events: none;
+  text-align: left;
+}
+
+.attention-card__eyebrow {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.attention-card__caption {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.attention-card__section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* The indicator column is fixed so the labels start on one line no matter
+   which indicator a row carries — a cookie is 8px and a scanner 16px, and
+   letting them size the column staggers the text. */
+.attention-card__row {
+  display: grid;
+  align-items: center;
+  gap: 0 10px;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+}
+
+/* Reuse of the tab's own readout classes, which carry the colour and the zero
+   state. Inside the card they hold only the indicator, so drop the tab's inner
+   gap and let the grid do the spacing. */
+.attention-card__row .lens-switch__signal {
+  justify-content: center;
+  gap: 0;
+}
+
+.attention-card__row-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.attention-card__row-label {
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.attention-card__row-note {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.attention-card__row-value {
+  align-self: center;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Same rule the tab runs: a zero is shown, never hidden, but it stops claiming
+   the reader's eye. Keeping the card and the tab on one rule is what makes the
+   card read as the tab expanded rather than a second opinion. */
+.attention-card__row[data-zero="true"] .attention-card__row-label,
+.attention-card__row[data-zero="true"] .attention-card__row-value {
+  color: var(--text-muted);
+}
+
+/* The turn readouts, stacked. One row is the common case and reads exactly as
+   it did when it was a bare child of the tab — a single-item column is its own
+   content box, so nothing moves. The second row only exists while a peer has
+   work running (or just finished), and stacking is what keeps it from taking
+   width the four icon tabs need at a 280px sidebar.
+
+   `flex-start` rather than centring: the two scanners have to share a left
+   edge, or a one-digit count above a two-digit one visibly staggers them. */
+.lens-switch__turns {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+}
+
+/* Two rows have to fit the 26px tab, so the readouts drop to their own
+   line box here. Only in the stacked column: a lone readout is centred in the
+   tab and the line box never shows. */
+.lens-switch__turns .lens-switch__signal {
+  line-height: 1;
+}
+
 .lens-switch__signal--active {
   color: var(--accent-bright);
+}
+
+/* Turns on another instance. Neutral rather than accent, and that is the whole
+   point of the row: the accent means "this holds the app open", and a peer's
+   turn does not — quitting interrupts nothing that runs here. Reading the tab
+   should answer "can I quit now?" without opening anything.
+
+   Still a live sweeping scanner, not a dormant bar: the work IS running, just
+   not on this machine. */
+.lens-switch__signal--remote-active {
+  color: var(--text-muted);
+}
+
+.lens-switch__signal--remote-active .thinking-scanner {
+  --thinking-scanner-tint: var(--text-muted);
+  --thinking-scanner-tint-bright: var(--text-secondary);
+  --thinking-scanner-track: var(--bg-panel-hover);
 }
 
 .lens-switch__signal--review {
@@ -3451,6 +3635,10 @@ textarea,
 
   .lens-switch__signal {
     gap: 2px;
+  }
+
+  .lens-switch__turns {
+    gap: 1px;
   }
 }
 
@@ -4043,7 +4231,14 @@ textarea,
      boundary (which would antialias-shift the visual goldens). At the
      md notch (13px) this resolves to 1. */
   top: round(calc(4px + (var(--sidebar-title-size) * 1.25 + 2px) / 2 - 12px), 1px);
-  right: 9px;
+  /* 11px (from 9): the card's own right inset is 10px padding + 1px
+     border, so 9 put the kebab's edge 2px inside the border while its
+     6px corner radius sat against the card's 8px one — the two curves
+     read as touching. 11 lines the cluster's right edge up with the
+     content edge every chip and the timestamp already respect, giving
+     the same visible air the row's left side keeps. The pinned-row
+     heading reserve below derives from this offset — move both. */
+  right: 11px;
   z-index: 3;
   display: flex;
   align-items: center;
@@ -4082,9 +4277,11 @@ textarea,
 }
 
 .thread-row__overflow-button {
+  /* 26px is the pinned cluster-side literal the pinned-row heading
+     reserve derives from, and the 24px-tall button reads as a
+     slightly wider pill next to the square 24px add-reaction chip on
+     purpose. */
   width: 26px;
-  font-size: 13px;
-  font-weight: 700;
 }
 
 /* The hover-only add-reaction chip rides in the same cluster; match the
@@ -4130,18 +4327,18 @@ textarea,
    for them; the transition on `.thread-row__heading` glides the dock
    in step with the cluster's 120ms fade.
 
-   44px derivation, all border-box worst case. The cluster zone spans
-   69px from the card's right border: 9px offset + 26px kebab + 4px gap
-   + the add-reaction chip's RENDERED width of 30px (its `min-width:
-   24px` is a floor — the 14px smiley plus the base chip's 0 8px
-   padding is what actually paints). The pin's border box must clear
-   that zone: card padding 10px + header gap 12px + timestamp + reserve
-   − the pin's 3px `margin-right: -3px` overhang ≥ 69px + 4px air. The
-   narrowest timestamp ("1h"/"2d") measures ~13px at its fixed 12px
-   font, giving reserve ≥ 41px; 44px leaves 3px of real slack at every
-   title-size notch. The cluster-side literals in this arithmetic are
-   pinned by theme-contract next to this rule's own pin, so a cluster
-   resize fails a test instead of silently re-covering the pin.
+   46px derivation, all border-box worst case. The cluster zone spans
+   71px from the card's right border: 11px offset + 26px kebab + 4px
+   gap + the add-reaction chip's RENDERED width of 30px (its
+   `min-width: 24px` is a floor — the 14px smiley plus the base chip's
+   0 8px padding is what actually paints). The pin's border box must
+   clear that zone: card padding 10px + header gap 12px + timestamp +
+   reserve − the pin's 3px `margin-right: -3px` overhang ≥ 71px + 4px
+   air. The narrowest timestamp ("1h"/"2d") measures ~13px at its fixed
+   12px font, giving reserve ≥ 43px; 46px leaves 3px of real slack at
+   every title-size notch. The cluster-side literals in this arithmetic
+   are pinned by theme-contract next to this rule's own pin, so a
+   cluster resize fails a test instead of silently re-covering the pin.
 
    Scoped by the row's `--pinned` modifier (set by ThreadRow from the
    same expression that renders the pin — a plain class match instead
@@ -4150,7 +4347,7 @@ textarea,
    cluster's reveal states in the fade/reveal rules above (the cluster
    pin's states are absent because pinned rows never render it).
    Deliberate over-reserve: on a surface without a reaction handler the
-   revealed cluster is kebab-only (35px zone) and the rest-state gap
+   revealed cluster is kebab-only (37px zone) and the rest-state gap
    already clears it, so the reserve protects nothing there — accepted,
    since every production surface wires reactions and a narrower
    conditional would re-add the `:has()` scan this class avoids. */
@@ -4158,7 +4355,7 @@ textarea,
 .thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__heading,
 .thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,
 .thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading {
-  padding-right: 44px;
+  padding-right: 46px;
 }
 
 .thread-row__pin-button:hover,
@@ -4580,6 +4777,14 @@ textarea,
 }
 
 .thread-row__time {
+  /* Under a week the label is one unbreakable token ("now", "42m", "6d");
+     past that it becomes an absolute date ("Aug 8") that carries a space.
+     As a plain flex item that date shrank to its min-content width ("Aug")
+     in a narrow sidebar and wrapped, so an older row stood a blank line
+     taller than every row beside it. The heading is a 1-1-auto flex item
+     with an ellipsized title and absorbs the squeeze on its own. */
+  flex: 0 0 auto;
+  white-space: nowrap;
   transition: opacity 120ms ease;
 }
 
@@ -5104,13 +5309,13 @@ textarea,
    Every section inside is optional; see PrStatusCard.tsx for why. */
 .pr-status-card {
   position: fixed;
-  /* 140, not the 90 most portal tooltips use, because PR chips render inside
-     the Star Map layer (`.app-shell__star-map-layer`, z-index 120) as well as
-     the normal shell. `.app-shell` is `position: relative` with `z-index: auto`
-     and so opens no stacking context, which puts that layer in the ROOT
-     stacking context alongside this portal — at 90 the card paints UNDER the
-     map it was opened from. Same reason `.messaging-status-tooltip` sits at
-     140 over the Settings overlay. */
+  /* 140, not the 90 most portal tooltips use, because PR chips render over
+     full-window overlay surfaces (the Settings layer at 120) as well as the
+     normal shell. `.app-shell` is `position: relative` with `z-index: auto`
+     and so opens no stacking context, which puts those layers in the ROOT
+     stacking context alongside this portal — at 90 the card paints UNDER
+     the overlay it was opened from. Same reason `.messaging-status-tooltip`
+     sits at 140 over the Settings overlay. */
   z-index: 140;
   width: 272px;
   max-width: calc(100vw - 32px);
@@ -5456,10 +5661,16 @@ textarea,
      section instead of only the sticky header. Plan 2026-05-09-002
      Unit K follow-up. */
   position: relative;
-  /* 2px top (was 4): with the hairline gone and the summary's own
-     min-height slack, 4px pushed collapsed directories ~20px of blank
-     label-to-label; 2px + the 2px list gap + the summary slack lands
-     at ~10px. */
+  /* 2px top pad is the ONLY seam between directory rows: unlike the
+     thread lanes, `.directory-list` zeroes the `.sidebar-list` gap
+     (see that rule), so this pad is doing seam work, not rhythm — it
+     keeps a selected summary's accent border and its hovered
+     neighbour's fill from kissing, and keeps the 3px drop-indicator
+     bar (`.is-drop-target-*`, at -3px) landing between rows instead
+     of inside the row above. Third density pass: the collapsed-lens
+     pitch is 24px summary (min-height-bound at every notch ≤13px) +
+     this 2px = 26px, down from ~29; the summary's block padding
+     (4→2) is what closed the gap, not this pad. */
   padding: 2px 0 0;
 }
 
@@ -5570,16 +5781,25 @@ textarea,
      matched the masthead's button height, but rows are list entries
      and don't need that hit-target generosity; at 32 the leftover
      slack was still the largest blank band in the collapsed
-     Directories lens. 24 fits the 16px title line + block padding
-     with ~3px of slack, and the 24px launchpad cluster still fills
-     the row exactly on hover. */
+     Directories lens. 24 is the WCAG 2.5.8 target floor for the whole
+     summary button, not a content fit: the content box is ~20px (16px
+     line + 2px block padding each side), so this floor is what binds
+     the collapsed-lens pitch and the selected-directory highlight box
+     at every title notch ≤13px. Pinned by theme-contract; the padding
+     below is free to move, this is not. The 24px launchpad cluster
+     fills the row exactly on hover. */
   min-height: 24px;
   /* Lateral inset: 4px on the left sits before the disclosure chevron
      and folder icon; 6px on the right still clears the selected-row
      border for the meta block (attention count pill) without stranding
      the count away from the launchpad icon beside it. Was 10px, the
-     largest share of an 18px count-to-icon gap. */
-  padding: 4px 6px 4px 4px;
+     largest share of an 18px count-to-icon gap.
+
+     Block inset 2px (from 4) in the third density pass: at 4px the
+     summary alone was 24–28px and label-to-label measured ~29px for a
+     16px label — the loosest rhythm left in the lens. At 2px the
+     min-height floor binds and the pitch is 24 + the row's 2px seam. */
+  padding: 2px 6px 2px 4px;
 }
 
 .directory-row__summary:focus,
@@ -5855,10 +6075,15 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 8px;
-  /* Bottom tightened 14 → 10 with the inter-card spacing pass so the
-     seam between an expanded directory's last thread and the next
-     directory header tracks the tighter row rhythm. */
-  padding: 8px 0 10px 0;
+  /* Bottom tightened 14 → 10 → 4 across the density passes so the seam
+     between an expanded directory's last thread (or its "DIRECTORY
+     THREADS" divider) and the next directory header tracks the tighter
+     row rhythm: 4px here + the next `.directory-row`'s 2px top pad =
+     6px, the same band the thread cards keep between each other
+     (`.directory-list` zeroes the sidebar-list gap, so the row pad is
+     the only other term). Top 8 → 4 for the mirror seam under the
+     sticky header. */
+  padding: 4px 0 4px 0;
 }
 
 .directory-row__threads {
@@ -5935,8 +6160,17 @@ textarea,
   background: transparent;
   font-family: inherit;
   cursor: pointer;
+  /* Symmetric 4px above and below in the shipped configuration. The
+     base `.recents-pinned-divider` margin is 2px each side and the
+     pinned lane's list gap adds 2px below — but ABOVE the divider the
+     always-mounted `.directory-row__pin-drop-boundary` (reorder is
+     wired on every production surface) cancels that gap with its
+     `margin-block: -2px`, so the base rule alone lands 2px above vs
+     4px below. Override the top to 4px so both seams read as one band,
+     a hair wider than the 2px the cards keep between each other — it
+     is a section label, not a card. (The bottom stays at the base 2px:
+     with the list gap it totals 4.) */
   margin-top: 4px;
-  margin-bottom: 2px;
 }
 
 .directory-row__thread-divider:hover:not(:disabled) {
@@ -6683,7 +6917,7 @@ textarea,
 .app-toast-stack {
   position: fixed;
   /* App-level notices must remain visible over full-window surfaces such as
-     Star Map (120) and its floating thread (130). */
+     the Settings layer (120). */
   z-index: 140;
   left: 16px;
   bottom: 16px;
@@ -10570,19 +10804,21 @@ textarea,
   outline-offset: 1px;
 }
 
-.thread-header__star-map-toggle.is-open {
-  color: var(--accent-bright);
-}
-
-/* Full-window layer over the app shell (same tier as Settings). A faint
-   accent aurora washes down from the top of the sky; the stars are a
-   seeded SVG field colored from --text-primary so they read as space in
-   both themes. */
-.app-shell__star-map-layer {
+/* Root container of the dedicated Star Map window. A faint accent aurora
+   washes down from the top of the sky; the stars are a seeded SVG field
+   colored from --text-primary so they read as space in both themes.
+   `position: relative; z-index: 0` opens a stacking context — the map's
+   internal card z-scale (up to STAR_MAP_CARD_MAX_Z) stays scoped inside
+   it, exactly as the old full-window layer's z-index did, so cards can't
+   paint over the body-portaled tooltips (`.star-map-card__tooltip`,
+   `.pr-status-card`). */
+.star-map-window {
   display: flex;
-  position: absolute;
-  z-index: 120;
-  inset: 0;
+  position: relative;
+  z-index: 0;
+  flex-direction: column;
+  width: 100%;
+  height: 100vh;
   min-width: 0;
   min-height: 0;
   background:
@@ -10607,12 +10843,6 @@ textarea,
   position: absolute;
   inset: 0;
   transition: transform 240ms ease, opacity 240ms ease;
-}
-
-/* A floating thread shoves the map off to the left behind it. */
-.star-map--floating .star-map__viewport {
-  transform: translateX(-36%);
-  opacity: 0.85;
 }
 
 .star-map__sky {
@@ -11161,37 +11391,6 @@ textarea,
   50% {
     opacity: 0.45;
   }
-}
-
-/* The map covers the app chrome (including the header toggle that opened
-   it), so it carries its own exit. Top-RIGHT to stay clear of the macOS
-   traffic lights. */
-.star-map__close {
-  display: inline-flex;
-  position: absolute;
-  top: 14px;
-  right: 16px;
-  z-index: 4;
-  align-items: center;
-  gap: 6px;
-  padding: 5px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--bg-panel) 85%, transparent);
-  color: var(--text-secondary);
-  font-size: 11px;
-  cursor: pointer;
-  -webkit-app-region: no-drag;
-}
-
-.star-map__close:hover {
-  border-color: var(--accent-border);
-  color: var(--text-primary);
-}
-
-.star-map__close:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 .star-map__cloud {
@@ -12302,8 +12501,6 @@ textarea,
    the window can still be moved while the map is open. */
 .star-map__filters,
 .star-map__filters *,
-.star-map__close,
-.star-map__close *,
 .star-map-instance,
 .star-map-instance *,
 .star-map-card,
@@ -12314,71 +12511,6 @@ textarea,
 .star-map__cluster-label *,
 .star-map__cluster-overflow {
   -webkit-app-region: no-drag;
-}
-
-/* Floating thread over the map: the already-mounted main pane elevates
-   above the layer as a movable rounded card. */
-.app-main--star-map-float {
-  position: absolute;
-  z-index: 130;
-  inset: 24px 24px 24px 264px;
-  flex-direction: column;
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  background: var(--bg-app);
-  box-shadow: var(--shadow-popover);
-  overflow: hidden;
-  transform: translate(
-    var(--star-map-float-dx, 0px),
-    var(--star-map-float-dy, 0px)
-  );
-}
-
-.star-map-float-handle {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
-  border-bottom: 1px solid var(--border-subtle);
-  background: var(--bg-panel);
-  cursor: grab;
-  user-select: none;
-}
-
-.star-map-float-handle:active {
-  cursor: grabbing;
-}
-
-.star-map-float-handle__grip {
-  width: 28px;
-  height: 4px;
-  border-radius: 2px;
-  background: var(--border-strong);
-}
-
-.star-map-float-handle__title {
-  flex: 1;
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.star-map-float-handle__close {
-  padding: 3px 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 11px;
-  cursor: pointer;
-}
-
-.star-map-float-handle__close:hover {
-  border-color: var(--accent-border);
-  color: var(--text-primary);
 }
 
 /* Floating chat cards.
@@ -15139,6 +15271,888 @@ a.transcript-message__messaging-origin:focus-visible {
   outline-offset: 2px;
 }
 
+.incident-explorer {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--bg-app);
+  color: var(--text-primary);
+}
+
+.incident-explorer .activity-titlebar__breadcrumb {
+  flex: 0 1 auto;
+  max-width: min(62vw, 720px);
+}
+
+.incident-explorer .activity-titlebar__crumb {
+  max-width: min(20vw, 220px);
+}
+
+.incident-explorer .thread-chip-group {
+  flex: 0 1 auto;
+}
+
+.incident-explorer h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.incident-explorer__actions,
+.incident-explorer__section-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.incident-explorer__section-heading {
+  justify-content: space-between;
+  margin-bottom: 9px;
+}
+
+/* Three button weights, per the style guide's primary / secondary / ghost
+   rule. The window previously styled every `button` identically, which left
+   Close and the primary steering action reading as equals. */
+.incident-explorer__button {
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.incident-explorer__button--ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+}
+
+.incident-explorer .incident-explorer__primary {
+  border-color: var(--accent-border);
+  background: var(--accent);
+  color: var(--button-text);
+  font-weight: 650;
+}
+
+.incident-explorer__button:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.incident-explorer__button:disabled {
+  color: var(--text-muted);
+  cursor: default;
+}
+
+.incident-explorer input,
+.incident-explorer select,
+.incident-explorer textarea {
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.incident-explorer button:focus-visible,
+.incident-explorer input:focus-visible,
+.incident-explorer select:focus-visible,
+.incident-explorer summary:focus-visible,
+.incident-explorer textarea:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.incident-explorer__eyebrow {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+/* Shared magnitude primitive. Same measurements as
+   `.context-usage-card__meter` so the app has one bar language. */
+.incident-explorer__meter {
+  display: block;
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  overflow: hidden;
+}
+
+.incident-explorer__meter i {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
+.incident-explorer__meter i[data-critical="true"] {
+  background: var(--status-error);
+}
+
+.incident-explorer__caption {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.incident-explorer__summary {
+  display: grid;
+  grid-template-columns: minmax(0, 320px) minmax(0, 1fr);
+  gap: 28px;
+  padding: 13px 18px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.incident-explorer__hero {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 8px;
+}
+
+.incident-explorer__hero strong {
+  font-family: var(--font-mono);
+  font-size: 21px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.incident-explorer__hero span {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.incident-explorer__caption b {
+  color: var(--text-secondary);
+  font-weight: 600;
+}
+
+/* One accent stepped down in strength rather than a categorical palette —
+   the style guide allows exactly one accent, and a five-color chart legend
+   would spend the product's whole color budget on a 5px strip. */
+.incident-explorer__composition {
+  display: flex;
+  gap: 2px;
+  height: 5px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  overflow: hidden;
+}
+
+/* A category the legend lists has to be visible in the bar the legend
+   explains, so a tiny share keeps a 2px mark instead of rounding away. */
+.incident-explorer__composition i {
+  display: block;
+  min-width: 2px;
+  height: 100%;
+}
+
+.incident-explorer__composition i[data-rank="1"],
+.incident-explorer__swatch[data-rank="1"] {
+  background: var(--accent);
+}
+
+.incident-explorer__composition i[data-rank="2"],
+.incident-explorer__swatch[data-rank="2"] {
+  background: color-mix(in srgb, var(--accent) 74%, transparent);
+}
+
+.incident-explorer__composition i[data-rank="3"],
+.incident-explorer__swatch[data-rank="3"] {
+  background: color-mix(in srgb, var(--accent) 54%, transparent);
+}
+
+.incident-explorer__composition i[data-rank="4"],
+.incident-explorer__swatch[data-rank="4"] {
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
+}
+
+.incident-explorer__composition i[data-rank="5"],
+.incident-explorer__swatch[data-rank="5"] {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+
+.incident-explorer__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 14px;
+  margin-top: 8px;
+}
+
+.incident-explorer__legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.incident-explorer__legend-item[aria-pressed="true"] {
+  color: var(--text-primary);
+}
+
+.incident-explorer__legend-item:disabled {
+  cursor: default;
+}
+
+.incident-explorer__swatch {
+  display: block;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+}
+
+.incident-explorer__swatch--all {
+  background: color-mix(in srgb, var(--text-primary) 24%, transparent);
+}
+
+.incident-explorer__legend-item em {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+/* When it went: one column per turn across the whole thread, time order.
+   Tokens rise from the shared baseline, round trips hang below it, so a long
+   poll reads as trip spikes with no matching output directly above them. */
+.incident-explorer__timeline-block {
+  margin-top: 10px;
+}
+
+.incident-explorer__timeline {
+  display: flex;
+  align-items: stretch;
+  height: 40px;
+  overflow: hidden;
+}
+
+/* Column separation comes from a transparent right border rather than gap:
+   a 300-turn thread in a narrow window must compress to 1px columns instead
+   of overflowing, and gaps do not shrink. */
+.incident-explorer .incident-explorer__timeline-turn {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 1px;
+  padding: 0;
+  border: 0;
+  border-right: 1px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.incident-explorer .incident-explorer__timeline-turn:last-child {
+  border-right: 0;
+}
+
+/* Hover is a neutral wash: it must not look like selection, or the selected
+   column appears to vanish the moment the pointer leaves it. */
+.incident-explorer__timeline-turn:hover {
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+
+/* Selection has to survive at rest and be findable among hundreds of 1px
+   columns, so it carries an accent ring and a real tint rather than the 12%
+   wash that was invisible on black. The minimum width keeps a selected column
+   clickable and locatable when the thread is long enough to compress every
+   column to a hairline. */
+.incident-explorer__timeline-turn[aria-pressed="true"] {
+  min-width: 3px;
+  background: color-mix(in srgb, var(--accent) 24%, transparent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.incident-explorer__timeline-turn:hover .incident-explorer__timeline-tokens i,
+.incident-explorer__timeline-turn[aria-pressed="true"] .incident-explorer__timeline-tokens i {
+  background: var(--accent-strong);
+}
+
+.incident-explorer__timeline-tokens {
+  display: flex;
+  flex: 1;
+  align-items: flex-end;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.incident-explorer__timeline-tokens i {
+  display: block;
+  width: 100%;
+  min-height: 1px;
+  background: var(--accent);
+}
+
+.incident-explorer__timeline-tokens i[data-critical="true"] {
+  background: var(--status-error);
+}
+
+.incident-explorer__timeline-trips {
+  display: flex;
+  flex: 0 0 11px;
+  align-items: flex-start;
+}
+
+.incident-explorer__timeline-trips i {
+  display: block;
+  width: 100%;
+  min-height: 1px;
+  background: color-mix(in srgb, var(--text-secondary) 66%, transparent);
+}
+
+/* Cost by turn. The solid bar is output volume; the tick rail is round trips.
+   They are deliberately different marks because they are different problems:
+   a turn heavy on ticks and light on bar is a polling loop, and the fix for
+   it has nothing to do with filtering output. */
+.incident-explorer__turns {
+  padding: 11px 18px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.incident-explorer__turns-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.incident-explorer__turns-legend {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+/* Scope toggle: quiet segmented pair, same visual weight as the legend so it
+   reads as a view control rather than a primary action. */
+.incident-explorer__turns-scope {
+  display: flex;
+  gap: 2px;
+  margin: 0 12px 6px auto;
+}
+
+.incident-explorer__turns-scope button {
+  padding: 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 10px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.incident-explorer__turns-scope button[aria-pressed="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.incident-explorer__turns-key {
+  display: inline-block;
+  width: 14px;
+  height: 5px;
+  border-radius: 2px;
+  vertical-align: middle;
+}
+
+.incident-explorer__turns-key[data-kind="tokens"] {
+  background: var(--accent);
+}
+
+.incident-explorer__turns-key[data-kind="trips"] {
+  background: repeating-linear-gradient(
+    90deg,
+    var(--text-secondary) 0 2px,
+    transparent 2px 5px
+  );
+}
+
+.incident-explorer__turn {
+  display: grid;
+  align-items: center;
+  grid-template-columns: 128px minmax(0, 1fr) 72px minmax(0, 0.62fr) 66px;
+  gap: 12px;
+  width: calc(100% + 16px);
+  margin: 0 -8px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Cost rides at the end of the row, in the ledger's own units. It is the one
+   figure on this strip that is billed rather than estimated, so it takes the
+   primary text color while the estimates stay secondary. */
+.incident-explorer__turn[data-cost="true"] {
+  grid-template-columns:
+    128px minmax(0, 1fr) 72px minmax(0, 0.62fr) 66px 64px;
+}
+
+.incident-explorer__turn-cost {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.incident-explorer__turn:hover {
+  background: color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+
+.incident-explorer__turn[aria-pressed="true"] {
+  background: var(--bg-row-active);
+  box-shadow: inset 2px 0 0 0 var(--accent);
+}
+
+.incident-explorer__turn-label {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.incident-explorer__turn-label span {
+  color: var(--text-muted);
+}
+
+.incident-explorer__turn-bar,
+.incident-explorer__turn-trips {
+  height: 7px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text-primary) 9%, transparent);
+  overflow: hidden;
+}
+
+.incident-explorer__turn-bar i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+}
+
+.incident-explorer__turn-bar i[data-critical="true"] {
+  background: var(--status-error);
+}
+
+.incident-explorer__turn-trips i {
+  display: block;
+  height: 100%;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--text-secondary) 0 2px,
+    transparent 2px 5px
+  );
+}
+
+.incident-explorer__turn-number {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.incident-explorer__turns-note {
+  margin: 7px 0 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.incident-explorer__coverage,
+.incident-explorer__status,
+.incident-explorer__error {
+  margin: 0;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--status-warning);
+  font-size: 12px;
+}
+
+/* A completed analysis is not a warning. Only the partial-coverage and
+   failure paths carry status color. */
+.incident-explorer__status[data-tone="info"] {
+  color: var(--text-secondary);
+}
+
+.incident-explorer__status[data-tone="error"] {
+  color: var(--status-error);
+}
+
+.incident-explorer__body {
+  display: grid;
+  flex: 1;
+  grid-template-columns: minmax(300px, 34%) minmax(0, 1fr);
+  min-height: 0;
+}
+
+.incident-explorer__list {
+  min-height: 0;
+  overflow: auto;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-sidebar);
+}
+
+.incident-explorer__filters {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.incident-explorer__filters input,
+.incident-explorer__filters select,
+.incident-explorer__section-heading input {
+  min-width: 0;
+  padding: 6px 9px;
+  font-size: 11px;
+}
+
+.incident-explorer__active-filters {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 8px 7px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.incident-explorer__group h3 {
+  margin: 0;
+  padding: 11px 12px 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.incident-explorer__case {
+  display: block;
+  width: 100%;
+  padding: 8px 12px 9px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.incident-explorer__case:hover {
+  background: color-mix(in srgb, var(--text-primary) 3.5%, transparent);
+}
+
+.incident-explorer__case[data-selected="true"] {
+  border-left-color: var(--accent);
+  background: var(--bg-row-active);
+}
+
+.incident-explorer__case-top {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+/* No `text-overflow: ellipsis` on purpose. The row label is already elided in
+   the middle, where the distinguishing part of a command lives; a CSS ellipsis
+   is an end-truncation and would cut that part back off. */
+.incident-explorer__case-id {
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.incident-explorer__case-id b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.incident-explorer__case-id span {
+  color: var(--text-muted);
+}
+
+/* Repeat marker rides in the token slot: it qualifies the cost rather than
+   competing with it, so it stays smaller and takes the warning tone. */
+.incident-explorer__repeat {
+  margin-right: 6px;
+  color: var(--status-warning);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.incident-explorer__case-tokens {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.incident-explorer__case .incident-explorer__meter {
+  height: 4px;
+  margin-top: 6px;
+}
+
+.incident-explorer__case-sub {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.incident-explorer__detail {
+  min-height: 0;
+  overflow: auto;
+  padding: 16px 18px;
+}
+
+.incident-explorer__evidence,
+.incident-explorer__prompt,
+.incident-explorer__output {
+  margin-bottom: 16px;
+}
+
+/* The command is evidence, not the headline. Collapsed to one line by
+   default; a 1,100-character shell pipeline rendered in full was the loudest
+   thing in the window and the least decision-relevant. */
+.incident-explorer__identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px 7px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.incident-explorer__identity code {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.incident-explorer__identity[data-expanded="true"] {
+  align-items: flex-start;
+}
+
+.incident-explorer__identity[data-expanded="true"] code {
+  max-height: 180px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.incident-explorer__facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.incident-explorer__fact {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.incident-explorer__fact b {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.incident-explorer__fact[data-tone="ok"] b {
+  color: var(--status-ok);
+}
+
+.incident-explorer__fact[data-tone="warning"] b {
+  color: var(--status-warning);
+}
+
+.incident-explorer__fact[data-tone="error"] b {
+  color: var(--status-error);
+}
+
+.incident-explorer__budget {
+  margin-top: 11px;
+  padding: 11px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+.incident-explorer__budget-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 9px;
+}
+
+.incident-explorer__budget-head strong {
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__budget-head span {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.incident-explorer__reason {
+  margin: 5px 0 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.incident-explorer__steer summary {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  list-style: none;
+  cursor: pointer;
+}
+
+.incident-explorer__steer summary::-webkit-details-marker {
+  display: none;
+}
+
+.incident-explorer__steer summary::before {
+  content: "›";
+  color: var(--text-muted);
+}
+
+.incident-explorer__steer[open] summary::before {
+  content: "⌄";
+}
+
+.incident-explorer__steer textarea {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 9px 0 0;
+  padding: 10px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.incident-explorer__prompt-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.incident-explorer__prompt-actions p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.incident-explorer__output-lines {
+  max-height: 360px;
+  margin: 10px 0 0;
+  padding: 10px 10px 10px 52px;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--terminal-bg);
+  color: var(--terminal-fg);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.incident-explorer__output-lines code {
+  font-family: var(--font-mono);
+}
+
+.incident-explorer__output-lines li::marker {
+  color: var(--text-muted);
+}
+
+/* A message about missing output, not terminal content — so it takes the
+   panel surface rather than the terminal canvas, and the dashed border says
+   "nothing landed here" without color. */
+.incident-explorer__unavailable {
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.incident-explorer__unavailable b {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.incident-explorer__empty {
+  margin: 0;
+  padding: 14px 12px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .transcript-message__image-button {
   box-sizing: border-box;
   display: flex;
@@ -17204,6 +18218,14 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .thinking-scanner {
   position: relative;
+  /* Colour, in one place, so a variant can retune the tint without restating
+     the gradient — a second copy of the beam recipe is how two scanners end up
+     shaped differently. Only the accent-carrying values are indirected; the
+     geometry and the sweep stay shared and unoverridable, since every scanner
+     in the app runs one animation on one epoch. */
+  --thinking-scanner-tint: var(--accent);
+  --thinking-scanner-tint-bright: var(--accent-bright);
+  --thinking-scanner-track: var(--accent-bg-medium);
   --thinking-scanner-beam-width: 18px;
   --thinking-scanner-travel: 44px;
   width: 62px;
@@ -17211,8 +18233,9 @@ a.transcript-message__messaging-origin:focus-visible {
   flex: 0 0 auto;
   overflow: hidden;
   border-radius: 999px;
-  background: var(--accent-bg-medium);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 18%, transparent);
+  background: var(--thinking-scanner-track);
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--thinking-scanner-tint) 18%, transparent);
 }
 
 .thinking-scanner--mini {
@@ -17231,13 +18254,13 @@ a.transcript-message__messaging-origin:focus-visible {
   border-radius: 999px;
   background: linear-gradient(
     90deg,
-    color-mix(in srgb, var(--accent) 18%, transparent) 0%,
-    color-mix(in srgb, var(--accent-bright) 95%, transparent) 48%,
-    color-mix(in srgb, var(--accent) 18%, transparent) 100%
+    color-mix(in srgb, var(--thinking-scanner-tint) 18%, transparent) 0%,
+    color-mix(in srgb, var(--thinking-scanner-tint-bright) 95%, transparent) 48%,
+    color-mix(in srgb, var(--thinking-scanner-tint) 18%, transparent) 100%
   );
   box-shadow:
-    0 0 10px color-mix(in srgb, var(--accent) 42%, transparent),
-    0 0 18px color-mix(in srgb, var(--accent) 22%, transparent);
+    0 0 10px color-mix(in srgb, var(--thinking-scanner-tint) 42%, transparent),
+    0 0 18px color-mix(in srgb, var(--thinking-scanner-tint) 22%, transparent);
   animation: pwragent-thinking-scanner-sweep 1800ms ease-in-out infinite;
   opacity: 0.76;
   transform: translateX(0);
@@ -17246,8 +18269,8 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .thinking-scanner--mini .thinking-scanner__beam {
   box-shadow:
-    0 0 8px color-mix(in srgb, var(--accent) 42%, transparent),
-    0 0 14px color-mix(in srgb, var(--accent) 22%, transparent);
+    0 0 8px color-mix(in srgb, var(--thinking-scanner-tint) 42%, transparent),
+    0 0 14px color-mix(in srgb, var(--thinking-scanner-tint) 22%, transparent);
 }
 
 @keyframes pwragent-thinking-scanner-sweep {
@@ -18208,9 +19231,10 @@ a.transcript-message__messaging-origin:focus-visible {
   z-index: 140;
 }
 
-/* Star Map thread-card title tooltip — same escape, same fix: its trigger sits
-   inside `.app-shell__star-map-layer` (z-index 120), which shares the root
-   stacking context with this portal because `.app-shell` opens none. */
+/* Star Map thread-card title tooltip — same escape, same fix: its trigger
+   sits inside `.star-map-window` (the dedicated map window's stacking
+   context), and the map's internal card z-scale would otherwise bury a
+   body-portaled tooltip left at the default 90. */
 .star-map-card__tooltip {
   z-index: 140;
 }
@@ -20397,6 +21421,17 @@ a.transcript-message__messaging-origin:focus-visible {
   box-shadow: inset 2px 0 0 0 var(--status-warning);
 }
 
+.tool-calls-panel__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tool-calls-panel__heading h3 {
+  margin: 0;
+}
+
 .tool-call-alert .rail-card__title {
   color: var(--text-primary);
 }
@@ -20602,14 +21637,15 @@ a.transcript-message__messaging-origin:focus-visible {
   background: var(--scrim-opaque);
 }
 
+/* The dialog itself never scrolls: the identity header stays pinned and only
+   the detail body below it moves, so status, model, and elapsed time remain
+   readable while a long prompt is being read. */
 .subagent-modal__content {
   display: flex;
   flex-direction: column;
-  gap: 14px;
   width: min(100%, 560px);
   max-height: min(100vh - 96px, 720px);
-  overflow-y: auto;
-  padding: 20px;
+  overflow: hidden;
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-panel);
@@ -20617,9 +21653,33 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .subagent-modal__head {
   display: flex;
-  align-items: center;
+  flex: 0 0 auto;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+}
+
+.subagent-modal__identity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.subagent-modal__status-line {
+  margin: 0;
+}
+
+.subagent-modal__body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 14px;
+  overflow-y: auto;
+  padding: 16px 20px 20px;
 }
 
 .subagent-modal__close {
@@ -20659,13 +21719,19 @@ a.transcript-message__messaging-origin:focus-visible {
   white-space: nowrap;
 }
 
+/* Identity, not the prompt. Two lines is plenty for an agent name or the
+   "PwrAgent task monitor" fallback; the task text lives in the body. */
 .subagent-modal__title {
   margin: 0;
   color: var(--text-primary);
-  font-size: 17px;
+  font-size: 15px;
   font-weight: 650;
   line-height: 1.3;
   overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .subagent-modal__facts {
@@ -20691,16 +21757,24 @@ a.transcript-message__messaging-origin:focus-visible {
   overflow-wrap: anywhere;
 }
 
-.subagent-modal__mono {
-  font-family: var(--font-mono);
-}
-
 .subagent-modal__section {
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding-top: 14px;
   border-top: 1px solid var(--border-subtle);
+}
+
+.subagent-modal__section:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.subagent-modal__section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .subagent-modal__section h3 {
@@ -20712,7 +21786,34 @@ a.transcript-message__messaging-origin:focus-visible {
   text-transform: uppercase;
 }
 
-.subagent-modal__body,
+.subagent-modal__section-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 10px;
+}
+
+.subagent-modal__text-action {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 120ms ease;
+}
+
+.subagent-modal__text-action:hover {
+  color: var(--accent-bright);
+}
+
+.subagent-modal__text-action:focus-visible {
+  border-radius: 3px;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.subagent-modal__body-text,
 .subagent-modal__usage-summary {
   margin: 0;
   color: var(--text-secondary);
@@ -20720,6 +21821,24 @@ a.transcript-message__messaging-origin:focus-visible {
   line-height: 1.45;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+/* Collapsed by default so a several-hundred-word monitor prompt cannot bury
+   the rest of the dialog. `Show more` renders only when this actually clips. */
+.subagent-modal__body-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.subagent-modal__body-text--expanded {
+  display: block;
+  overflow: visible;
+}
+
+.subagent-modal__body-text--empty {
+  color: var(--text-muted);
 }
 
 .subagent-modal__usage-summary {
@@ -23367,6 +24486,141 @@ a.transcript-message__messaging-origin:focus-visible {
   font-weight: 600;
   line-height: 1.35;
   overflow-wrap: break-word;
+}
+
+.rewind-dialog {
+  width: min(560px, 100%);
+}
+
+.rewind-dialog__points {
+  display: grid;
+  max-height: min(320px, 45vh);
+  gap: 6px;
+  margin-top: 14px;
+  overflow-y: auto;
+}
+
+.rewind-dialog__point {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.rewind-dialog__point:hover,
+.rewind-dialog__point:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+  outline: none;
+}
+
+.rewind-dialog__point[aria-checked="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+}
+
+.rewind-dialog__point small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.workspace-handoff-dialog p.rewind-dialog__warning {
+  color: var(--danger-text);
+}
+
+.workspace-handoff-dialog p.rewind-dialog__error {
+  color: var(--danger-text);
+}
+
+.rewind-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.rewind-dialog__actions button {
+  padding: 6px 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.rewind-dialog__actions button:hover:not(:disabled),
+.rewind-dialog__actions button:focus-visible:not(:disabled) {
+  border-color: var(--border-strong);
+  outline: none;
+}
+
+.rewind-dialog__actions .rewind-dialog__confirm {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+  color: var(--danger-text);
+}
+
+.rewind-dialog__actions button:disabled,
+.rewind-dialog__point:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.workflow-budget-dialog__fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.workflow-budget-dialog__fields label {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.workflow-budget-dialog__fields input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.workflow-budget-dialog__fields input:focus-visible {
+  border-color: var(--accent-border);
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.workflow-budget-dialog__fields small {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.35;
+}
+
+@media (max-width: 620px) {
+  .workflow-budget-dialog__fields {
+    grid-template-columns: 1fr;
+  }
 }
 
 .workspace-handoff-dialog__summary {

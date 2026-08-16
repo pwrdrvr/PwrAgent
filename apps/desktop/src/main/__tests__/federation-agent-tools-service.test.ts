@@ -616,19 +616,30 @@ describe("federation agent tools service", () => {
       },
     });
 
-    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith({
-      directoryKey: "dir:/Users/op/pwragent",
-      launchpad: expect.objectContaining({
-        backend: "codex",
-        executionMode: "full-access",
-        workMode: "worktree",
-        model: "gpt-5.5-codex-max",
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      {
         directoryKey: "dir:/Users/op/pwragent",
-        directoryLabel: "PwrAgent",
-        prompt: "",
-      }),
-      input: [{ type: "text", text: "Fix the recorder crash" }],
-    });
+        launchpad: expect.objectContaining({
+          backend: "codex",
+          executionMode: "full-access",
+          workMode: "worktree",
+          model: "gpt-5.5-codex-max",
+          directoryKey: "dir:/Users/op/pwragent",
+          directoryLabel: "PwrAgent",
+          prompt: "",
+        }),
+        input: [{ type: "text", text: "Fix the recorder crash" }],
+      },
+      {
+        messageOrigin: {
+          kind: "agent",
+          sourceThread: {
+            backend: "codex",
+            threadId: "thread-1",
+          },
+        },
+      },
+    );
     const data = (response as { ok: true; data: CreateInstanceThreadResult })
       .data;
     expect(data).toMatchObject({
@@ -696,10 +707,25 @@ describe("federation agent tools service", () => {
       args: {
         instanceId: "pwr_studio",
         projectKey: "dir:/repo",
+        input: "Deploy the recoverable runner",
         workMode: "local",
       },
     });
 
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [{ type: "text", text: "Deploy the recoverable runner" }],
+      }),
+      {
+        messageOrigin: {
+          kind: "agent",
+          sourceThread: {
+            backend: "codex",
+            threadId: "thread-1",
+          },
+        },
+      },
+    );
     const data = (response as { ok: true; data: CreateInstanceThreadResult })
       .data;
     expect(data.threadUrl).toContain("instanceId=pwr_studio");
@@ -810,6 +836,9 @@ describe("federation agent tools service", () => {
         parentThreadBackend: "acp:grok",
         parentThreadInstanceId: "pwr_root",
       }),
+      expect.objectContaining({
+        messageOrigin: expect.objectContaining({ kind: "agent" }),
+      }),
     );
     expect(mountRemoteChild).toHaveBeenCalledWith(expect.objectContaining({
       ref: {
@@ -907,6 +936,9 @@ describe("federation agent tools service", () => {
         parentThreadId: "group-root",
         parentThreadBackend: "codex",
         parentThreadInstanceId: "pwr_root",
+      }),
+      expect.objectContaining({
+        messageOrigin: expect.objectContaining({ kind: "agent" }),
       }),
     );
     expect(mountRemoteChild).toHaveBeenCalledWith(expect.objectContaining({

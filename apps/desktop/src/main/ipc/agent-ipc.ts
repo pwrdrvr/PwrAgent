@@ -17,6 +17,8 @@ import {
   type CodexEnvironmentSetupProgressEvent,
   type CompactThreadRequest,
   type CompactThreadResponse,
+  type ConfigureGrokWorkflowBudgetRequest,
+  type ConfigureGrokWorkflowBudgetResponse,
   type ForkThreadRequest,
   type ForkThreadResponse,
   type MaterializeDirectoryLaunchpadRequest,
@@ -26,6 +28,8 @@ import {
   type StopSubAgentRequest,
   type StopSubAgentResponse,
   type LatestCodexConfigWarningResponse,
+  type ListAcpThreadRewindPointsRequest,
+  type ListAcpThreadRewindPointsResponse,
   type ListBackendsRequest,
   type ListBackendsResponse,
   type ListCodexMcpServersRequest,
@@ -36,6 +40,8 @@ import {
   type QueueThreadExecutionModeResponse,
   type RetainThreadBranchDriftRequest,
   type RetainThreadBranchDriftResponse,
+  type RewindAcpThreadRequest,
+  type RewindAcpThreadResponse,
   type ReloadCodexMcpConfigRequest,
   type ReloadCodexMcpConfigResponse,
   type ReloadCodexMcpServersResponse,
@@ -93,8 +99,10 @@ import {
   AGENT_EVENT_CHANNEL,
   AGENT_FORK_THREAD_CHANNEL,
   AGENT_LATEST_CODEX_CONFIG_WARNING_CHANNEL,
+  AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL,
   AGENT_CHECK_THREAD_BRANCH_DRIFT_CHANNEL,
   AGENT_COMPACT_THREAD_CHANNEL,
+  AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL,
   AGENT_LIST_THREAD_MCP_SERVERS_CHANNEL,
   AGENT_RELOAD_CODEX_MCP_CONFIG_CHANNEL,
   CODEX_MCP_SERVERS_LIST_CHANNEL,
@@ -106,6 +114,7 @@ import {
   AGENT_MATERIALIZE_DIRECTORY_LAUNCHPAD_CHANNEL,
   AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL,
   AGENT_RETAIN_THREAD_BRANCH_DRIFT_CHANNEL,
+  AGENT_REWIND_ACP_THREAD_CHANNEL,
   AGENT_RUN_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_STOP_CODEX_ENVIRONMENT_ACTION_CHANNEL,
   AGENT_SET_CODEX_THREAD_ENVIRONMENT_CHANNEL,
@@ -914,6 +923,57 @@ export function registerAgentIpcHandlers(): void {
     },
   );
 
+  ipcMain.removeHandler(AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL);
+  ipcMain.handle(
+    AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL,
+    async (
+      _event,
+      request: ListAcpThreadRewindPointsRequest,
+    ): Promise<ListAcpThreadRewindPointsResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        throw new Error("Conversation rewind is not available from a remote viewer yet");
+      }
+      return await registry.listAcpThreadRewindPoints(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_REWIND_ACP_THREAD_CHANNEL);
+  ipcMain.handle(
+    AGENT_REWIND_ACP_THREAD_CHANNEL,
+    async (
+      _event,
+      request: RewindAcpThreadRequest,
+    ): Promise<RewindAcpThreadResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        throw new Error("Conversation rewind is not available from a remote viewer yet");
+      }
+      return await registry.rewindAcpThread(request);
+    },
+  );
+
+  ipcMain.removeHandler(AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL);
+  ipcMain.handle(
+    AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL,
+    async (
+      _event,
+      request: ConfigureGrokWorkflowBudgetRequest,
+    ): Promise<ConfigureGrokWorkflowBudgetResponse> => {
+      if (
+        request.federationTarget
+        && isRemoteFederationTarget(request.federationTarget)
+      ) {
+        throw new Error("Grok workflow budgets are not available from a remote viewer yet");
+      }
+      return await registry.configureGrokWorkflowBudget(request);
+    },
+  );
+
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
   ipcMain.handle(
     AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL,
@@ -1265,6 +1325,9 @@ export function disposeAgentIpcHandlers(): void {
   ipcMain.removeHandler(AGENT_INTERRUPT_TURN_CHANNEL);
   ipcMain.removeHandler(AGENT_STOP_SUB_AGENT_CHANNEL);
   ipcMain.removeHandler(AGENT_STEER_TURN_CHANNEL);
+  ipcMain.removeHandler(AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL);
+  ipcMain.removeHandler(AGENT_REWIND_ACP_THREAD_CHANNEL);
+  ipcMain.removeHandler(AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL);
   ipcMain.removeHandler(AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL);
   ipcMain.removeHandler(AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL);
   ipcMain.removeHandler(AGENT_CANCEL_THREAD_EXECUTION_MODE_QUEUE_CHANNEL);

@@ -4933,6 +4933,24 @@ describe("MessagingController", () => {
       backend: "codex",
       federationTarget: { scope: "remote", instanceId: "pwr_remote" },
       notification: {
+        method: "thread/rewound",
+        params: {
+          threadId: "remote-thread",
+          targetPromptIndex: 0,
+          updatedAt: 3_000,
+        },
+      },
+    });
+    expect(getNavigationSnapshot).toHaveBeenCalledWith({
+      backend: "all",
+      federationTarget: { scope: "remote", instanceId: "pwr_remote" },
+    });
+
+    getNavigationSnapshot.mockClear();
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      federationTarget: { scope: "remote", instanceId: "pwr_remote" },
+      notification: {
         method: "account/updated",
         params: {},
       },

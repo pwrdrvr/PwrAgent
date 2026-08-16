@@ -158,6 +158,8 @@ type PanelOverrides = Partial<
     | "editedFileGroups"
     | "editedFilesDock"
     | "onEditedFilesDockChange"
+    | "onAnalyzeToolHistory"
+    | "onOpenToolOutputIncidentExplorer"
     | "pricing"
     | "toolAccounting"
     | "toolCallEntries"
@@ -394,8 +396,9 @@ describe("ThreadContextPanel", () => {
       /^Ended .*:\d{2}:\d{2} [AP]M$/,
     );
 
-    // Details (renamed from the disabled History button) opens a modal with
-    // the request, latest message, model, and token/pricing breakdown.
+    // Details (renamed from the disabled History button) opens a modal that
+    // leads with identity — never the prompt, which can run to hundreds of
+    // words — over the task, latest message, and token/pricing breakdown.
     const detailsButtons = screen.getAllByRole("button", { name: "Details" });
     expect(detailsButtons[0]).toBeEnabled();
     detailsButtons[0]!.focus();
@@ -403,12 +406,15 @@ describe("ThreadContextPanel", () => {
     const dialog = screen.getByRole("dialog");
     const modal = within(dialog);
     expect(
-      modal.getByRole("heading", { level: 2, name: "Watch CI until it completes." }),
+      modal.getByRole("heading", { level: 2, name: "Poincare" }),
+    ).toBeInTheDocument();
+    expect(modal.getByRole("heading", { name: "Task" })).toBeInTheDocument();
+    expect(
+      modal.getByText("Watch CI until it completes."),
     ).toBeInTheDocument();
     expect(modal.getByText("Latest message")).toBeInTheDocument();
-    expect(modal.getByText("Name")).toBeInTheDocument();
-    expect(modal.getByText("Poincare")).toBeInTheDocument();
-    expect(modal.getByText("Provider")).toBeInTheDocument();
+    expect(modal.getByText("Source")).toBeInTheDocument();
+    expect(modal.getByText("PwrAgent task monitor")).toBeInTheDocument();
     expect(modal.getByText("OpenAI")).toBeInTheDocument();
     expect(modal.getByText("Lint is still running.")).toBeInTheDocument();
     expect(modal.getByText("Tokens & pricing")).toBeInTheDocument();
@@ -856,7 +862,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("3 invocations")).toBeInTheDocument();
     expect(screen.getByText("6k est. tokens")).toBeInTheDocument();
     expect(screen.getByText("Diagnostics")).toBeInTheDocument();
-    expect(screen.getByText("Noisy polling detected")).toBeInTheDocument();
+    expect(screen.getByText("Repeated queued checks")).toBeInTheDocument();
     expect(screen.getByText(/Repeated write_stdin polling/)).toBeInTheDocument();
     expect(screen.getByText("write_stdin · polling")).toBeInTheDocument();
     expect(screen.queryByText("poll session 40500")).not.toBeInTheDocument();
@@ -951,6 +957,23 @@ describe("ThreadContextPanel", () => {
 
     expect(screen.getByText(/ACP captured output/)).toBeInTheDocument();
     expect(screen.queryByText(/unavailable in transcript history/)).not.toBeInTheDocument();
+  });
+
+  it("offers history analysis and the explorer from an empty Tool Calls panel", () => {
+    const onAnalyzeToolHistory = vi.fn();
+    const onOpenToolOutputIncidentExplorer = vi.fn();
+    renderPanel({
+      activeTab: "tool-calls",
+      onAnalyzeToolHistory,
+      onOpenToolOutputIncidentExplorer,
+      pinned: true,
+      threadToolAccountingEnabled: true,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Analyze history" }));
+    fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+    expect(onAnalyzeToolHistory).toHaveBeenCalledOnce();
+    expect(onOpenToolOutputIncidentExplorer).toHaveBeenCalledOnce();
   });
 
   it("hides the Tool calls tab while its experimental flag is off", () => {

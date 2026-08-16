@@ -1,5 +1,6 @@
 import type {
   AcpBackendId,
+  AcpThreadRewindPoint,
   AppServerAvailableCommandSummary,
   AppServerPendingRequestNotification,
   AppServerTranscriptPhase,
@@ -9,6 +10,7 @@ import type {
   BackendAcpRuntimeConfigOption,
   BackendAcpRuntimeOptionSource,
   BackendAcpSessionRuntimeState,
+  GrokWorkflowBudgetPolicy,
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
@@ -80,6 +82,7 @@ export type AcpJsonRpcTransport = {
 const ACP_PROTOCOL_VERSION = 1;
 const ACP_PROMPT_REQUEST_TIMEOUT_MS = 60 * 60_000;
 const ACP_PROVIDER_STATUS_REQUEST_TIMEOUT_MS = 20_000;
+const ACP_REWIND_REQUEST_TIMEOUT_MS = 20_000;
 
 export type AcpMcpServerConfig =
   | {
@@ -378,6 +381,146 @@ export class AcpAgentClient {
       ACP_PROVIDER_STATUS_REQUEST_TIMEOUT_MS,
     );
     return normalizeGrokBillingStatus(result);
+  }
+
+  async listRewindPoints(sessionId: string): Promise<AcpThreadRewindPoint[]> {
+    return await this.withOperation(async () => {
+      const result = asRecord(await this.options.transport.request(
+        "_x.ai/rewind/points",
+        { sessionId: this.protocolSessionIdFor(sessionId) },
+        ACP_REWIND_REQUEST_TIMEOUT_MS,
+      ));
+      const points = Array.isArray(result?.rewind_points)
+        ? result.rewind_points
+        : Array.isArray(result?.rewindPoints)
+          ? result.rewindPoints
+          : [];
+      return points.flatMap((value) => {
+        const point = asRecord(value);
+        const promptIndex = readFiniteNumber(point, "prompt_index")
+          ?? readFiniteNumber(point, "promptIndex");
+        if (promptIndex === undefined || !Number.isInteger(promptIndex)) {
+          return [];
+        }
+        const createdAtValue = point?.created_at ?? point?.createdAt;
+        const createdAt = normalizeRewindTimestamp(createdAtValue);
+        return [{
+          promptIndex,
+          ...(createdAt !== undefined ? { createdAt } : {}),
+          fileSnapshotCount:
+            readFiniteNumber(point, "num_file_snapshots")
+            ?? readFiniteNumber(point, "fileSnapshotCount")
+            ?? 0,
+          hasFileChanges:
+            readBooleanValue(point, "has_file_changes")
+            ?? readBooleanValue(point, "hasFileChanges")
+            ?? false,
+          promptPreview:
+            readStringValue(point, "prompt_preview")
+            ?? readStringValue(point, "promptPreview")
+            ?? `Prompt ${promptIndex + 1}`,
+        }];
+      });
+    });
+  }
+
+  async rewindSession(params: {
+    sessionId: string;
+    targetPromptIndex: number;
+  }): Promise<{ promptText?: string; updatedAt: number }> {
+    return await this.withOperation(async () => {
+      const result = asRecord(await this.options.transport.request(
+        "_x.ai/rewind/execute",
+        {
+          sessionId: this.protocolSessionIdFor(params.sessionId),
+          targetPromptIndex: params.targetPromptIndex,
+          force: true,
+          mode: "conversation_only",
+        },
+        ACP_REWIND_REQUEST_TIMEOUT_MS,
+      ));
+      if (readBooleanValue(result, "success") !== true) {
+        throw new Error(
+          readStringValue(result, "error") ?? "Grok could not rewind this conversation",
+        );
+      }
+      this.normalizerFor(params.sessionId).rewindToPromptIndex(
+        params.targetPromptIndex,
+        { missingTarget: "clear" },
+      );
+      const receivedAt = this.now();
+      this.appendHistoryUpdate(params.sessionId, receivedAt, {
+        kind: "pwragent_rewind_marker",
+        targetPromptIndex: params.targetPromptIndex,
+      });
+      this.updateSessionStatus(params.sessionId, "idle", receivedAt);
+      return {
+        updatedAt: receivedAt,
+        promptText:
+          readStringValue(result, "prompt_text")
+          ?? readStringValue(result, "promptText"),
+      };
+    });
+  }
+
+  async steerSession(params: {
+    sessionId: string;
+    text: string;
+    content: AcpPromptContentBlock[];
+    interjectionId: string;
+  }): Promise<{ delivery: "currentTurn" | "nextTurn" }> {
+    return await this.withOperation(async () => {
+      const response = asRecord(await this.options.transport.request(
+        "_x.ai/session/steer",
+        {
+          sessionId: this.protocolSessionIdFor(params.sessionId),
+          text: params.text,
+          interjectionId: params.interjectionId,
+          content: params.content,
+        },
+        ACP_REWIND_REQUEST_TIMEOUT_MS,
+      ));
+      const result = asRecord(response?.result) ?? response;
+      const delivery = readStringValue(result, "delivery");
+      if (delivery !== "currentTurn" && delivery !== "nextTurn") {
+        throw new Error("Grok steering response did not identify its delivery turn");
+      }
+      return { delivery };
+    });
+  }
+
+  async configureWorkflowBudget(params: {
+    sessionId: string;
+    defaultAgentBudget?: number;
+    maxAgentBudget?: number;
+  }): Promise<GrokWorkflowBudgetPolicy> {
+    return await this.withOperation(async () => {
+      const response = asRecord(await this.options.transport.request(
+        "_x.ai/session/workflow_budget",
+        {
+          sessionId: this.protocolSessionIdFor(params.sessionId),
+          ...(params.defaultAgentBudget !== undefined
+            ? { defaultAgentBudget: params.defaultAgentBudget }
+            : {}),
+          ...(params.maxAgentBudget !== undefined
+            ? { maxAgentBudget: params.maxAgentBudget }
+            : {}),
+        },
+        ACP_REWIND_REQUEST_TIMEOUT_MS,
+      ));
+      const result = asRecord(response?.result) ?? response;
+      const defaultAgentBudget = readFiniteNumber(result, "defaultAgentBudget");
+      const maxAgentBudget = readFiniteNumber(result, "maxAgentBudget");
+      if (
+        defaultAgentBudget === undefined
+        || maxAgentBudget === undefined
+        || !Number.isInteger(defaultAgentBudget)
+        || !Number.isInteger(maxAgentBudget)
+      ) {
+        throw new Error("Grok workflow-budget response was invalid");
+      }
+      return { defaultAgentBudget, maxAgentBudget };
+    });
   }
 
   async startSession(params: {
@@ -1986,4 +2129,39 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined;
+}
+
+function readFiniteNumber(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): number | undefined {
+  const value = record?.[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function readBooleanValue(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): boolean | undefined {
+  const value = record?.[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function readStringValue(
+  record: Record<string, unknown> | undefined,
+  key: string,
+): string | undefined {
+  const value = record?.[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function normalizeRewindTimestamp(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }

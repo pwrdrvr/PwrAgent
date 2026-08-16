@@ -1,6 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { TranscriptList } from "../TranscriptList";
@@ -455,10 +463,14 @@ describe("TranscriptList", () => {
     ).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
+    const dialog = screen.getByRole("dialog", {
+      name: "Sub-agent details: PwrAgent task monitor",
+    });
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByText(task)).toBeInTheDocument();
     expect(
-      screen.getByRole("dialog", { name: `Sub-agent details: ${task}` }),
+      within(dialog).getByText("All required checks passed."),
     ).toBeInTheDocument();
-    expect(screen.getByText("All required checks passed.")).toBeInTheDocument();
   });
 
   it("renders PR automation prompts as compact expandable PwrAgent cards", () => {

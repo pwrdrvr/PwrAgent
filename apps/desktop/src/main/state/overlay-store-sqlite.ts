@@ -24,6 +24,7 @@ import type {
   ThreadMessagingBindingTransition,
   ThreadOverlayState,
   ThreadToolAccounting,
+  ThreadToolAnalysisCoverage,
   ThreadToolInvocationAlert,
   ThreadToolInvocationRecord,
   ThreadToolInvocationStatus,
@@ -74,6 +75,8 @@ import type {
   RemoteThreadTarget,
   RemoteThreadTargetStore,
 } from "./remote-thread-target-store.js";
+
+const THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE = 10;
 
 export type DirectoryGitStatusCacheEntry = {
   directoryKey: string;
@@ -1552,6 +1555,48 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         params.threadId,
         params.threadId,
       ) as ThreadUsageLineRow[];
+
+    // Pricing catalogs can gain rates without changing sqlite's schema. When
+    // the newest card is unpriced, lazily retry this thread in ten-row groups.
+    // A group with no repairs stops the scan, so permanently unknown histories
+    // cost one bounded read rather than a full-ledger walk on every load.
+    if (lineRows[0]?.price_status === "unpriced") {
+      const repairs: Array<{
+        existing: ThreadUsageLineRow;
+        repaired: ThreadUsageLineRecord;
+      }> = [];
+      for (
+        let offset = 0;
+        offset < lineRows.length;
+        offset += THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE
+      ) {
+        const batch = lineRows.slice(
+          offset,
+          offset + THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE,
+        );
+        let repairedInBatch = 0;
+        for (const row of batch) {
+          if (row.price_status === "priced") {
+            continue;
+          }
+          const repaired = repriceTokenUsageLine(threadUsageLineFromRow(row));
+          if (repaired.priceStatus !== "priced") {
+            continue;
+          }
+          repairs.push({ existing: row, repaired });
+          repairedInBatch += 1;
+        }
+        if (repairedInBatch === 0) {
+          break;
+        }
+      }
+
+      if (repairs.length > 0) {
+        this.persistThreadUsagePricingRepairsSync(repairs);
+        return this.readThreadPricing(params);
+      }
+    }
+
     const summaryRows = this.stateDb.raw
       .prepare(
         `SELECT * FROM thread_pricing_summaries
@@ -1569,9 +1614,107 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     };
   }
 
+  private persistThreadUsagePricingRepairsSync(
+    repairs: Array<{
+      existing: ThreadUsageLineRow;
+      repaired: ThreadUsageLineRecord;
+    }>,
+  ): void {
+    const now = Date.now();
+    const updateLine = this.stateDb.raw.prepare(
+      `UPDATE thread_usage_lines
+       SET
+         price_status = @priceStatus,
+         price_unavailable_reason = @priceUnavailableReason,
+         currency = @currency,
+         pricing_catalog_id = @pricingCatalogId,
+         pricing_catalog_version = @pricingCatalogVersion,
+         pricing_rate_id = @pricingRateId,
+         uncached_input_cost_micros = @uncachedInputCostMicros,
+         cached_input_cost_micros = @cachedInputCostMicros,
+         output_cost_micros = @outputCostMicros,
+         provider = @provider,
+         total_cost_micros = @totalCostMicros,
+         updated_at = @updatedAt
+       WHERE usage_line_id = @usageLineId
+         AND price_status != 'priced'`,
+    );
+    const summaryTargets = new Map<
+      string,
+      {
+        backend: string;
+        currency: string;
+        provider: string;
+        threadId: string;
+        updatedAt: number;
+      }
+    >();
+    const queueSummary = (target: {
+      backend: string;
+      currency: string;
+      provider: string;
+      threadId: string;
+      updatedAt: number;
+    }): void => {
+      summaryTargets.set(
+        JSON.stringify([
+          target.provider,
+          target.backend,
+          target.threadId,
+          target.currency,
+        ]),
+        target,
+      );
+    };
+
+    this.stateDb.raw.transaction(() => {
+      for (const { existing, repaired } of repairs) {
+        updateLine.run({
+          cachedInputCostMicros: repaired.cachedInputCostMicros,
+          currency: repaired.currency,
+          outputCostMicros: repaired.outputCostMicros,
+          priceStatus: repaired.priceStatus,
+          priceUnavailableReason: repaired.priceUnavailableReason ?? null,
+          pricingCatalogId: repaired.pricingCatalogId ?? null,
+          pricingCatalogVersion: repaired.pricingCatalogVersion ?? null,
+          pricingRateId: repaired.pricingRateId ?? null,
+          provider: repaired.provider,
+          totalCostMicros: repaired.totalCostMicros,
+          uncachedInputCostMicros: repaired.uncachedInputCostMicros,
+          updatedAt: now,
+          usageLineId: repaired.usageLineId,
+        });
+        const threadId = repaired.parentThreadId ?? repaired.threadId;
+        queueSummary({
+          backend: existing.backend,
+          currency: existing.currency,
+          provider: existing.provider,
+          threadId: existing.parent_thread_id ?? existing.thread_id,
+          updatedAt: now,
+        });
+        queueSummary({
+          backend: repaired.backend,
+          currency: repaired.currency,
+          provider: repaired.provider,
+          threadId,
+          updatedAt: now,
+        });
+      }
+      for (const target of summaryTargets.values()) {
+        this.recomputeThreadPricingSummarySync(target);
+      }
+    })();
+  }
+
   async upsertThreadToolInvocation(params: {
     invocation: ThreadToolInvocationRecord;
   }): Promise<ThreadToolInvocationRecord> {
+    return this.upsertThreadToolInvocationSync(params);
+  }
+
+  private upsertThreadToolInvocationSync(params: {
+    invocation: ThreadToolInvocationRecord;
+  }): ThreadToolInvocationRecord {
     const invocation = normalizeThreadToolInvocation(params.invocation);
     const existing = this.readThreadToolInvocationSync(invocation.invocationId);
     const merged = existing
@@ -1582,6 +1725,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       .prepare(
         `INSERT INTO thread_tool_invocations (
           invocation_id,
+          finding_id,
           backend,
           thread_id,
           turn_id,
@@ -1605,10 +1749,14 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           info_lines,
           debug_lines,
           output_truncated,
+          output_state,
+          source,
           noisy,
-          noisy_reason
+          noisy_reason,
+          suggested_prompt
         ) VALUES (
           @invocationId,
+          @findingId,
           @backend,
           @threadId,
           @turnId,
@@ -1632,11 +1780,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           @infoLines,
           @debugLines,
           @outputTruncated,
+          @outputState,
+          @source,
           @noisy,
-          @noisyReason
+          @noisyReason,
+          @suggestedPrompt
         )
         ON CONFLICT(invocation_id) DO UPDATE SET
           backend = excluded.backend,
+          finding_id = excluded.finding_id,
           thread_id = excluded.thread_id,
           turn_id = excluded.turn_id,
           item_id = excluded.item_id,
@@ -1663,8 +1815,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           info_lines = excluded.info_lines,
           debug_lines = excluded.debug_lines,
           output_truncated = excluded.output_truncated,
+          output_state = excluded.output_state,
+          source = excluded.source,
           noisy = excluded.noisy,
-          noisy_reason = excluded.noisy_reason`,
+          noisy_reason = excluded.noisy_reason,
+          suggested_prompt = excluded.suggested_prompt`,
       )
       .run(toThreadToolInvocationRowParams(merged));
 
@@ -1684,9 +1839,42 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       .run(params.reason, Date.now(), params.invocationId);
   }
 
+  async markThreadToolInvocationsNoisy(params: {
+    invocationIds: string[];
+    reason: string;
+  }): Promise<void> {
+    if (params.invocationIds.length === 0) {
+      return;
+    }
+    this.stateDb.raw.transaction(() => {
+      this.markThreadToolInvocationsNoisySync(params);
+    })();
+  }
+
+  private markThreadToolInvocationsNoisySync(params: {
+    invocationIds: string[];
+    reason: string;
+  }): void {
+    const update = this.stateDb.raw.prepare(
+      `UPDATE thread_tool_invocations
+       SET noisy = 1, noisy_reason = ?, updated_at = ?
+       WHERE invocation_id = ?`,
+    );
+    const updatedAt = Date.now();
+    for (const invocationId of new Set(params.invocationIds)) {
+      update.run(params.reason, updatedAt, invocationId);
+    }
+  }
+
   async upsertThreadToolInvocationAlert(params: {
     alert: ThreadToolInvocationAlert;
   }): Promise<ThreadToolInvocationAlert> {
+    return this.upsertThreadToolInvocationAlertSync(params);
+  }
+
+  private upsertThreadToolInvocationAlertSync(params: {
+    alert: ThreadToolInvocationAlert;
+  }): ThreadToolInvocationAlert {
     const alert = normalizeThreadToolInvocationAlert(params.alert);
     this.stateDb.raw
       .prepare(
@@ -1694,6 +1882,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           alert_id,
           backend,
           thread_id,
+          turn_id,
           kind,
           severity,
           tool_name,
@@ -1702,8 +1891,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           first_observed_at,
           last_observed_at,
           invocation_count,
+          invocation_ids,
           total_output_chars,
           estimated_output_tokens,
+          worst_invocation_id,
+          worst_output_chars,
           average_interval_ms,
           message,
           suggested_prompt,
@@ -1713,6 +1905,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           @alertId,
           @backend,
           @threadId,
+          @turnId,
           @kind,
           @severity,
           @toolName,
@@ -1721,8 +1914,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           @firstObservedAt,
           @lastObservedAt,
           @invocationCount,
+          @invocationIds,
           @totalOutputChars,
           @estimatedOutputTokens,
+          @worstInvocationId,
+          @worstOutputChars,
           @averageIntervalMs,
           @message,
           @suggestedPrompt,
@@ -1732,6 +1928,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         ON CONFLICT(alert_id) DO UPDATE SET
           backend = excluded.backend,
           thread_id = excluded.thread_id,
+          turn_id = excluded.turn_id,
           kind = excluded.kind,
           severity = excluded.severity,
           tool_name = excluded.tool_name,
@@ -1740,8 +1937,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
           first_observed_at = MIN(thread_tool_invocation_alerts.first_observed_at, excluded.first_observed_at),
           last_observed_at = MAX(thread_tool_invocation_alerts.last_observed_at, excluded.last_observed_at),
           invocation_count = excluded.invocation_count,
+          invocation_ids = excluded.invocation_ids,
           total_output_chars = excluded.total_output_chars,
           estimated_output_tokens = excluded.estimated_output_tokens,
+          worst_invocation_id = excluded.worst_invocation_id,
+          worst_output_chars = excluded.worst_output_chars,
           average_interval_ms = excluded.average_interval_ms,
           message = excluded.message,
           suggested_prompt = excluded.suggested_prompt,
@@ -1751,10 +1951,42 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return alert;
   }
 
+  async persistThreadToolInvocationBoundary(params: {
+    alerts: ThreadToolInvocationAlert[];
+    invocation: ThreadToolInvocationRecord;
+    noisyInvocationIds?: string[];
+    noisyReason?: string;
+  }): Promise<ThreadToolInvocationRecord> {
+    let stored: ThreadToolInvocationRecord | undefined;
+    this.stateDb.raw.transaction(() => {
+      stored = this.upsertThreadToolInvocationSync({
+        invocation: params.invocation,
+      });
+      if (
+        params.noisyInvocationIds?.length
+        && params.noisyReason
+      ) {
+        this.markThreadToolInvocationsNoisySync({
+          invocationIds: params.noisyInvocationIds,
+          reason: params.noisyReason,
+        });
+      }
+      for (const alert of params.alerts) {
+        this.upsertThreadToolInvocationAlertSync({ alert });
+      }
+    })();
+    if (!stored) {
+      throw new Error("Tool invocation boundary transaction did not run");
+    }
+    return stored;
+  }
+
   async readThreadToolAccounting(params: {
     backend: ThreadOverlayState["backend"];
+    includeAllInvocations?: boolean;
     threadId: string;
   }): Promise<ThreadToolAccounting> {
+    const invocationLimit = params.includeAllInvocations ? -1 : 200;
     const invocationRows = this.stateDb.raw
       .prepare(
         `SELECT *
@@ -1762,9 +1994,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
          WHERE backend = ?
            AND thread_id = ?
          ORDER BY observed_at DESC, invocation_id DESC
-         LIMIT 200`,
+         LIMIT ?`,
       )
-      .all(params.backend, params.threadId) as ThreadToolInvocationRow[];
+      .all(
+        params.backend,
+        params.threadId,
+        invocationLimit,
+      ) as ThreadToolInvocationRow[];
     const summaryRows = this.stateDb.raw
       .prepare(
         `SELECT
@@ -1798,12 +2034,69 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
          LIMIT 20`,
       )
       .all(params.backend, params.threadId) as ThreadToolInvocationAlertRow[];
+    const analysisRow = this.stateDb.raw
+      .prepare(
+        `SELECT * FROM thread_tool_analysis
+         WHERE backend = ? AND thread_id = ?`,
+      )
+      .get(params.backend, params.threadId) as ThreadToolAnalysisRow | undefined;
 
     return {
+      ...(analysisRow ? { analysis: threadToolAnalysisFromRow(analysisRow) } : {}),
       alerts: alertRows.map(threadToolInvocationAlertFromRow),
       invocations: invocationRows.map(threadToolInvocationFromRow),
       summaries: summaryRows.map(threadToolInvocationSummaryFromRow),
     };
+  }
+
+  async persistThreadToolHistoryAnalysis(params: {
+    backend: ThreadOverlayState["backend"];
+    coverage: ThreadToolAnalysisCoverage;
+    invocations: ThreadToolInvocationRecord[];
+    threadId: string;
+  }): Promise<void> {
+    this.stateDb.raw.transaction(() => {
+      this.stateDb.raw
+        .prepare(
+          `DELETE FROM thread_tool_invocations
+           WHERE backend = ? AND thread_id = ? AND source = 'history'`,
+        )
+        .run(params.backend, params.threadId);
+      for (const invocation of params.invocations) {
+        this.upsertThreadToolInvocationSync({ invocation });
+      }
+      this.stateDb.raw
+        .prepare(
+          `INSERT INTO thread_tool_analysis (
+            backend, thread_id, analyzer_version, analyzed_at, completeness,
+            entry_count, invocation_count, missing_output_count, page_count,
+            scanned_through, explanation
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(backend, thread_id) DO UPDATE SET
+            analyzer_version = excluded.analyzer_version,
+            analyzed_at = excluded.analyzed_at,
+            completeness = excluded.completeness,
+            entry_count = excluded.entry_count,
+            invocation_count = excluded.invocation_count,
+            missing_output_count = excluded.missing_output_count,
+            page_count = excluded.page_count,
+            scanned_through = excluded.scanned_through,
+            explanation = excluded.explanation`,
+        )
+        .run(
+          params.backend,
+          params.threadId,
+          params.coverage.analyzerVersion,
+          params.coverage.analyzedAt,
+          params.coverage.completeness,
+          params.coverage.entryCount,
+          params.coverage.invocationCount,
+          params.coverage.missingOutputCount,
+          params.coverage.pageCount,
+          params.coverage.scannedThrough ?? null,
+          params.coverage.explanation ?? null,
+        );
+    })();
   }
 
   readRecentThreadToolInvocations(params: {
@@ -2030,6 +2323,59 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       ...current,
       reactions: nextReactions,
     };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  /**
+   * Records the operator's disposition of this thread's tool-output incident.
+   * `firstWarningAt` is written once and never moved forward, so the cost
+   * window the notice reports stays anchored to the first warning even after
+   * a restart drops the older accounting rows out of the live snapshot.
+   */
+  async setThreadToolIncidentNotice(params: {
+    backend: ThreadOverlayState["backend"];
+    dismissedAt?: number;
+    dismissedSeverity?: "critical" | "warning";
+    firstWarningAt?: number;
+    mutedAt?: number;
+    mutedSeverity?: "critical" | "warning";
+    reset?: boolean;
+    threadId: string;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const existing = current.toolIncidentNotice;
+    const firstWarningAt = existing?.firstWarningAt
+      ?? params.firstWarningAt;
+    const nextNotice = params.reset
+      ? (firstWarningAt !== undefined ? { firstWarningAt } : undefined)
+      : {
+          ...existing,
+          ...(firstWarningAt !== undefined ? { firstWarningAt } : {}),
+          ...(params.dismissedSeverity
+            ? {
+                dismissedSeverity: params.dismissedSeverity,
+                dismissedAt: params.dismissedAt ?? Date.now(),
+              }
+            : {}),
+          ...(params.mutedSeverity
+            ? {
+                mutedSeverity: params.mutedSeverity,
+                mutedAt: params.mutedAt ?? Date.now(),
+              }
+            : {}),
+        };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      ...(nextNotice ? { toolIncidentNotice: nextNotice } : {}),
+    };
+    if (!nextNotice) delete nextState.toolIncidentNotice;
     this.putThread(threadKey, nextState);
     return nextState;
   }
@@ -5907,6 +6253,7 @@ type ThreadPricingAggregateRow = Omit<
 
 type ThreadToolInvocationRow = {
   invocation_id: string;
+  finding_id: string | null;
   backend: ThreadToolInvocationRecord["backend"];
   thread_id: string;
   turn_id: string | null;
@@ -5930,8 +6277,11 @@ type ThreadToolInvocationRow = {
   info_lines: number;
   debug_lines: number;
   output_truncated: number;
+  output_state: ThreadToolInvocationRecord["outputState"] | null;
+  source: NonNullable<ThreadToolInvocationRecord["source"]>;
   noisy: number;
   noisy_reason: string | null;
+  suggested_prompt: string | null;
 };
 
 type ThreadToolInvocationSummaryRow = {
@@ -5953,6 +6303,7 @@ type ThreadToolInvocationAlertRow = {
   alert_id: string;
   backend: ThreadToolInvocationAlert["backend"];
   thread_id: string;
+  turn_id: string | null;
   kind: ThreadToolInvocationAlert["kind"];
   severity: ThreadToolInvocationAlert["severity"];
   tool_name: string;
@@ -5961,13 +6312,28 @@ type ThreadToolInvocationAlertRow = {
   first_observed_at: number;
   last_observed_at: number;
   invocation_count: number;
+  invocation_ids: string | null;
   total_output_chars: number;
   estimated_output_tokens: number;
+  worst_invocation_id: string | null;
+  worst_output_chars: number | null;
   average_interval_ms: number | null;
   message: string;
   suggested_prompt: string;
   created_at: number;
   updated_at: number;
+};
+
+type ThreadToolAnalysisRow = {
+  analyzer_version: string;
+  analyzed_at: number;
+  completeness: ThreadToolAnalysisCoverage["completeness"];
+  entry_count: number;
+  invocation_count: number;
+  missing_output_count: number;
+  page_count: number;
+  scanned_through: string | null;
+  explanation: string | null;
 };
 
 function normalizeThreadToolInvocation(
@@ -6220,6 +6586,7 @@ function repriceTokenUsageLine(line: ThreadUsageLineRecord): ThreadUsageLineReco
   if (
     line.provider !== "openai"
     && line.provider !== "qwen"
+    && line.provider !== "xai"
   ) {
     return line;
   }
@@ -6371,6 +6738,7 @@ function toThreadToolInvocationRowParams(
     exitCode: invocation.exitCode ?? null,
     infoLines: invocation.infoLines,
     invocationId: invocation.invocationId,
+    findingId: invocation.findingId ?? null,
     itemId: invocation.itemId,
     noisy: invocation.noisy ? 1 : 0,
     noisyReason: invocation.noisyReason ?? null,
@@ -6379,14 +6747,17 @@ function toThreadToolInvocationRowParams(
     outputChars: invocation.outputChars,
     outputLines: invocation.outputLines,
     outputTruncated: invocation.outputTruncated ? 1 : 0,
+    outputState: invocation.outputState ?? null,
     processId: invocation.processId ?? null,
     sessionId: invocation.sessionId ?? null,
+    source: invocation.source ?? "live",
     startedAt: invocation.startedAt ?? null,
     status: invocation.status,
     threadId: invocation.threadId,
     toolName: invocation.toolName,
     turnId: invocation.turnId ?? null,
     updatedAt: invocation.updatedAt,
+    suggestedPrompt: invocation.suggestedPrompt ?? null,
     warningLines: invocation.warningLines,
   };
 }
@@ -6402,6 +6773,9 @@ function toThreadToolInvocationAlertRowParams(
     estimatedOutputTokens: alert.estimatedOutputTokens,
     firstObservedAt: alert.firstObservedAt,
     invocationCount: alert.invocationCount,
+    invocationIds: alert.invocationIds
+      ? JSON.stringify(alert.invocationIds)
+      : null,
     kind: alert.kind,
     lastObservedAt: alert.lastObservedAt,
     message: alert.message,
@@ -6410,9 +6784,12 @@ function toThreadToolInvocationAlertRowParams(
     severity: alert.severity,
     suggestedPrompt: alert.suggestedPrompt,
     threadId: alert.threadId,
+    turnId: alert.turnId ?? null,
     toolName: alert.toolName,
     totalOutputChars: alert.totalOutputChars,
     updatedAt: alert.updatedAt,
+    worstInvocationId: alert.worstInvocationId ?? null,
+    worstOutputChars: alert.worstOutputChars ?? null,
   };
 }
 
@@ -6524,6 +6901,7 @@ function threadToolInvocationFromRow(
     ...(row.exit_code !== null ? { exitCode: row.exit_code } : {}),
     infoLines: row.info_lines,
     invocationId: row.invocation_id,
+    ...(row.finding_id ? { findingId: row.finding_id } : {}),
     itemId: row.item_id,
     noisy: Boolean(row.noisy),
     ...(row.noisy_reason ? { noisyReason: row.noisy_reason } : {}),
@@ -6532,14 +6910,17 @@ function threadToolInvocationFromRow(
     outputChars: row.output_chars,
     outputLines: row.output_lines,
     outputTruncated: Boolean(row.output_truncated),
+    ...(row.output_state ? { outputState: row.output_state } : {}),
     ...(row.process_id ? { processId: row.process_id } : {}),
     ...(row.session_id ? { sessionId: row.session_id } : {}),
+    source: row.source,
     ...(row.started_at !== null ? { startedAt: row.started_at } : {}),
     status: row.status,
     threadId: row.thread_id,
     toolName: row.tool_name,
     ...(row.turn_id ? { turnId: row.turn_id } : {}),
     updatedAt: row.updated_at,
+    ...(row.suggested_prompt ? { suggestedPrompt: row.suggested_prompt } : {}),
     warningLines: row.warning_lines,
   };
 }
@@ -6576,6 +6957,9 @@ function threadToolInvocationAlertFromRow(
     estimatedOutputTokens: row.estimated_output_tokens,
     firstObservedAt: row.first_observed_at,
     invocationCount: row.invocation_count,
+    ...(row.invocation_ids
+      ? { invocationIds: readStringArrayJson(row.invocation_ids) }
+      : {}),
     kind: row.kind,
     lastObservedAt: row.last_observed_at,
     message: row.message,
@@ -6584,10 +6968,44 @@ function threadToolInvocationAlertFromRow(
     severity: row.severity,
     suggestedPrompt: row.suggested_prompt,
     threadId: row.thread_id,
+    ...(row.turn_id ? { turnId: row.turn_id } : {}),
     toolName: row.tool_name,
     totalOutputChars: row.total_output_chars,
     updatedAt: row.updated_at,
+    ...(row.worst_invocation_id
+      ? { worstInvocationId: row.worst_invocation_id }
+      : {}),
+    ...(row.worst_output_chars !== null
+      ? { worstOutputChars: row.worst_output_chars }
+      : {}),
   };
+}
+
+function threadToolAnalysisFromRow(
+  row: ThreadToolAnalysisRow,
+): ThreadToolAnalysisCoverage {
+  return {
+    analyzedAt: row.analyzed_at,
+    analyzerVersion: row.analyzer_version,
+    completeness: row.completeness,
+    entryCount: row.entry_count,
+    invocationCount: row.invocation_count,
+    missingOutputCount: row.missing_output_count,
+    pageCount: row.page_count,
+    ...(row.scanned_through ? { scannedThrough: row.scanned_through } : {}),
+    ...(row.explanation ? { explanation: row.explanation } : {}),
+  };
+}
+
+function readStringArrayJson(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter((entry): entry is string => typeof entry === "string")
+      : [];
+  } catch {
+    return [];
+  }
 }
 
 function threadPricingSummaryFromRow(row: ThreadPricingSummaryRow): ThreadPricingSummary {
@@ -6630,6 +7048,7 @@ export type OverlayStoreLike = Pick<
   | "markThreadToolInvocationNoisy"
   | "upsertThreadToolInvocationAlert"
   | "readThreadToolAccounting"
+  | "persistThreadToolHistoryAnalysis"
   | "readRecentThreadToolInvocations"
   | "upsertThreadSubAgent"
   | "setThreadReaction"

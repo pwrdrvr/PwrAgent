@@ -65,6 +65,8 @@ import type {
   ForkThreadResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  AnalyzeThreadToolHistoryRequest,
+  AnalyzeThreadToolHistoryResponse,
   GetThreadFileDiffRequest,
   GetThreadFileDiffResponse,
   PersistThreadUsageActivityRequest,
@@ -74,6 +76,8 @@ import type {
   DraftAutomationPromptResponse,
   ConfigureFederationTailscaleRequest,
   ConfigureFederationTailscaleResponse,
+  ConfigureGrokWorkflowBudgetRequest,
+  ConfigureGrokWorkflowBudgetResponse,
   GetAutomationRunArtifactRequest,
   GetAutomationRunArtifactResponse,
   EnsureDirectoryLaunchpadRequest,
@@ -87,6 +91,8 @@ import type {
   StopSubAgentRequest,
   StopSubAgentResponse,
   LatestCodexConfigWarningResponse,
+  ListAcpThreadRewindPointsRequest,
+  ListAcpThreadRewindPointsResponse,
   ListAutomationReplayCandidatesRequest,
   ListAutomationReplayCandidatesResponse,
   OpenAutomationRunWindowRequest,
@@ -164,6 +170,8 @@ import type {
   SetDirectoryThreadsCollapsedResponse,
   SetThreadReactionRequest,
   SetThreadReactionResponse,
+  SetThreadToolIncidentNoticeRequest,
+  SetThreadToolIncidentNoticeResponse,
   SetThreadParentRequest,
   SetThreadParentResponse,
   SetThreadPinRequest,
@@ -288,6 +296,8 @@ import type {
   QueueThreadExecutionModeResponse,
   ReloadCodexMcpConfigRequest,
   ReloadCodexMcpConfigResponse,
+  RewindAcpThreadRequest,
+  RewindAcpThreadResponse,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -354,6 +364,8 @@ import type {
   OpenMarkdownFileViewerResponse,
   OpenSubAgentTranscriptWindowRequest,
   OpenSubAgentTranscriptWindowResponse,
+  OpenToolOutputIncidentExplorerWindowRequest,
+  OpenToolOutputIncidentExplorerWindowResponse,
   OpenPathRequest,
   OpenPathResponse,
   ReadMarkdownFileRequest,
@@ -590,6 +602,14 @@ export type DesktopApi = {
   dispatchStarMapIntake?: (
     request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
   ) => Promise<StarMapIntakeResponse>;
+  /** Spawns or focuses the dedicated Federation Star Map window. */
+  openStarMapWindow?: () => Promise<void>;
+  /** From the Star Map window: focus the main window and open a thread there. */
+  openStarMapThreadInMainWindow?: (
+    request: WindowShowThreadRequest,
+  ) => Promise<void>;
+  /** From the Star Map window: focus the main window without navigating. */
+  focusMainWindowFromStarMap?: () => Promise<void>;
   ping?: () => string;
   listSkills?: (
     request?: AppServerListSkillsRequest
@@ -602,6 +622,9 @@ export type DesktopApi = {
   readThread?: (
     request: AppServerReadThreadRequest
   ) => Promise<AppServerReadThreadResponse>;
+  analyzeThreadToolHistory?: (
+    request: AnalyzeThreadToolHistoryRequest,
+  ) => Promise<AnalyzeThreadToolHistoryResponse>;
   getThreadFileDiff?: (
     request: GetThreadFileDiffRequest,
   ) => Promise<GetThreadFileDiffResponse>;
@@ -686,6 +709,15 @@ export type DesktopApi = {
     request: StopSubAgentRequest,
   ) => Promise<StopSubAgentResponse>;
   steerTurn?: (request: SteerTurnRequest) => Promise<SteerTurnResponse>;
+  listAcpThreadRewindPoints?: (
+    request: ListAcpThreadRewindPointsRequest,
+  ) => Promise<ListAcpThreadRewindPointsResponse>;
+  rewindAcpThread?: (
+    request: RewindAcpThreadRequest,
+  ) => Promise<RewindAcpThreadResponse>;
+  configureGrokWorkflowBudget?: (
+    request: ConfigureGrokWorkflowBudgetRequest,
+  ) => Promise<ConfigureGrokWorkflowBudgetResponse>;
   setThreadExecutionMode?: (
     request: SetThreadExecutionModeRequest
   ) => Promise<SetThreadExecutionModeResponse>;
@@ -824,6 +856,15 @@ export type DesktopApi = {
   openSubAgentTranscriptWindow?: (
     request: OpenSubAgentTranscriptWindowRequest
   ) => Promise<OpenSubAgentTranscriptWindowResponse>;
+  openToolOutputIncidentExplorerWindow?: (
+    request: OpenToolOutputIncidentExplorerWindowRequest
+  ) => Promise<OpenToolOutputIncidentExplorerWindowResponse>;
+  onToolOutputIncidentExplorerRefresh?: (
+    callback: (request?: OpenToolOutputIncidentExplorerWindowRequest) => void
+  ) => () => void;
+  showThreadFromToolOutputIncidentExplorer?: (
+    request: WindowShowThreadRequest
+  ) => Promise<void>;
   createIntegratedTerminal?: (
     request: IntegratedTerminalCreateRequest,
   ) => Promise<IntegratedTerminalCreateResponse>;
@@ -876,6 +917,9 @@ export type DesktopApi = {
   setThreadReaction?: (
     request: SetThreadReactionRequest
   ) => Promise<SetThreadReactionResponse>;
+  setThreadToolIncidentNotice?: (
+    request: SetThreadToolIncidentNoticeRequest,
+  ) => Promise<SetThreadToolIncidentNoticeResponse>;
   setThreadPin?: (
     request: SetThreadPinRequest
   ) => Promise<SetThreadPinResponse>;

@@ -256,6 +256,14 @@ export class ReplayClient {
     return { threadId: params.threadId };
   }
 
+  async updateThreadWorkspace(params: {
+    threadId: string;
+    cwd: string;
+  }): Promise<{ threadId: string }> {
+    await this.ensureInitialized();
+    return { threadId: params.threadId };
+  }
+
   async advance(params: {
     stepId?: string;
     override?: ReplayStepOverride;

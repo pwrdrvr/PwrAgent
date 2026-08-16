@@ -59,6 +59,10 @@ function resolveAvailability(
  * that reorders under the pointer turns a misclick into a thread created on
  * the wrong machine.
  *
+ * A remote viewer already creates its context-default thread on the instance
+ * the window represents, so that instance is excluded from the separate
+ * "New chat on" choices instead of being offered twice.
+ *
  * Revoked peers are dropped — they are dead entries, not offline ones. They
  * are still passed to `formatFederationPeerDisplayLabel`, but only because it
  * filters them out itself; what the local instance's presence in that list
@@ -66,6 +70,7 @@ function resolveAvailability(
  */
 export function buildFederationThreadTargets(
   health: FederationHealthStatus | undefined,
+  currentWindowInstanceId?: string,
 ): FederationThreadTarget[] {
   if (!health) {
     return [];
@@ -77,7 +82,11 @@ export function buildFederationThreadTargets(
       : []),
   ];
   return health.peers
-    .filter((peer) => !peer.revokedAt)
+    .filter(
+      (peer) =>
+        !peer.revokedAt
+        && peer.id !== currentWindowInstanceId,
+    )
     .map((peer) => ({
       instanceId: peer.id,
       label: formatFederationPeerDisplayLabel(peer, visibleInstances),

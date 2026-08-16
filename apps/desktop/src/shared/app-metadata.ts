@@ -10,6 +10,11 @@ export type AppMetadata = {
   electronVersion: string;
   chromeVersion: string;
   nodeVersion: string;
+  /** Machine and OS facts for the renderer's local viewing machine. */
+  hostname?: string;
+  platform?: string;
+  osVersion?: string;
+  architecture?: string;
   /**
    * OS process ids, so an operator running several Electron apps (or several
    * dev builds) can tell a profiler, `lldb`, or a bug report exactly which
@@ -86,8 +91,13 @@ export type AppUpdateReleaseInfo = {
   unavailableReason?: string;
 };
 
-export type AppUpdateReleaseVersions = {
+export type AppUpdateReleaseSlotVersions = {
   latest: AppUpdateReleaseInfo;
   prerelease: AppUpdateReleaseInfo;
+};
+
+export type AppUpdateReleaseVersions = {
+  stable: AppUpdateReleaseSlotVersions;
+  beta: AppUpdateReleaseSlotVersions;
   fetchedAt: number;
 };

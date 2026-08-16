@@ -84,8 +84,6 @@ describe("StarMapScreen", () => {
         sessionKeys={{}}
         draftThreadKeys={{ "codex:t1": true }}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -131,8 +129,6 @@ describe("StarMapScreen", () => {
         localThreads={[]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -192,8 +188,6 @@ describe("StarMapScreen", () => {
         localThreads={[unreadThread("t1")]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -244,8 +238,6 @@ describe("StarMapScreen", () => {
           localThreads={[unreadThread("t1")]}
           sessionKeys={{}}
           localInstanceLabel="Mac-Mini-M4"
-          floating={false}
-          onClose={() => undefined}
           onOpenLocalThread={() => undefined}
           onFocusLocalInstance={() => undefined}
         />,
@@ -306,8 +298,6 @@ describe("StarMapScreen", () => {
         localThreads={[]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -391,8 +381,6 @@ describe("StarMapScreen", () => {
         localThreads={[]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -457,8 +445,6 @@ describe("StarMapScreen", () => {
         localThreads={[unreadThread("t1"), unreadThread("t2")]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -506,8 +492,6 @@ describe("StarMapScreen", () => {
         localThreads={[unreadThread("t1"), unreadThread("t2")]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -541,6 +525,11 @@ describe("StarMapScreen", () => {
   });
 
   it("does not move a single thread card when the load card opens", async () => {
+    // The invariant under guard lives in the LANES branch: thread slots
+    // are computed as if the load card did not exist. Orbit gives the
+    // load card a fixed slot that provably cannot move cards, so running
+    // this under the orbit default would make the test vacuous.
+    seedLayout("lanes");
     const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
     const desktopApi: DesktopApi = {
       ...buildDesktopApi(),
@@ -554,8 +543,6 @@ describe("StarMapScreen", () => {
         localThreads={[unreadThread("t1"), unreadThread("t2")]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -593,8 +580,6 @@ describe("StarMapScreen", () => {
         localThreads={[unreadThread("t1")]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -621,8 +606,6 @@ describe("StarMapScreen", () => {
         localThreads={[unreadThread("t1")]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={onOpenLocalThread}
         onFocusLocalInstance={() => undefined}
       />,
@@ -665,8 +648,6 @@ describe("StarMapScreen", () => {
         localThreads={[unreadThread("t1")]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -694,8 +675,6 @@ describe("StarMapScreen", () => {
         localThreads={[unreadThread("t1")]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -725,8 +704,6 @@ describe("StarMapScreen", () => {
         desktopApi={buildDesktopApi()}
         localThreads={[unreadThread("t2")]}
         sessionKeys={{}}
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -768,8 +745,6 @@ describe("StarMapScreen", () => {
         desktopApi={buildDesktopApi()}
         localThreads={[unreadThread("t3")]}
         sessionKeys={{}}
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -779,59 +754,57 @@ describe("StarMapScreen", () => {
     ).toBeTruthy();
   });
 
-  it("closes on Escape", async () => {
-    const onClose = vi.fn();
+  it("swallows a bare Escape — closing the window is the OS chrome's job", () => {
+    const outerKeyDown = vi.fn();
     render(
-      <StarMapScreen
-        desktopApi={buildDesktopApi()}
-        localThreads={[]}
-        sessionKeys={{}}
-        floating={false}
-        onClose={onClose}
-        onOpenLocalThread={() => undefined}
-        onFocusLocalInstance={() => undefined}
-      />,
+      <div onKeyDown={outerKeyDown}>
+        <StarMapScreen
+          desktopApi={buildDesktopApi()}
+          localThreads={[]}
+          sessionKeys={{}}
+          onOpenLocalThread={() => undefined}
+          onFocusLocalInstance={() => undefined}
+        />
+      </div>,
     );
     fireEvent.keyDown(screen.getByRole("region", { name: "Star Map" }), {
       key: "Escape",
     });
-    expect(onClose).toHaveBeenCalledTimes(1);
+    // With nothing selected, Escape neither escapes the map (the reflexive
+    // "dismiss the popover" tap must not reach a window-level handler) nor
+    // tears anything down.
+    expect(outerKeyDown).not.toHaveBeenCalled();
+    expect(screen.getByRole("region", { name: "Star Map" })).toBeTruthy();
   });
 
-  it("refocuses the layer when the floating thread closes so Escape works again", () => {
-    const props = {
-      desktopApi: buildDesktopApi(),
-      localThreads: [],
-      sessionKeys: {},
-      onClose: () => undefined,
-      onOpenLocalThread: () => undefined,
-      onFocusLocalInstance: () => undefined,
-    };
-    const { rerender } = render(<StarMapScreen {...props} floating />);
-    const region = screen.getByRole("region", { name: "Star Map" });
-    // While the float is up, focus lives in the thread view — simulate it
-    // being elsewhere, then close the float.
-    (document.activeElement as HTMLElement | null)?.blur?.();
-    expect(document.activeElement).not.toBe(region);
-    rerender(<StarMapScreen {...props} floating={false} />);
-    expect(document.activeElement).toBe(region);
-  });
-
-  it("offers a visible exit because the map covers the header toggle", async () => {
-    const onClose = vi.fn();
+  it("focuses the layer on mount so the camera keys work immediately", () => {
     render(
       <StarMapScreen
         desktopApi={buildDesktopApi()}
         localThreads={[]}
         sessionKeys={{}}
-        floating={false}
-        onClose={onClose}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Close Star Map" }));
-    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(
+      screen.getByRole("region", { name: "Star Map" }),
+    );
+  });
+
+  it("carries no in-map close affordance — the map lives in its own window", () => {
+    render(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={[]}
+        sessionKeys={{}}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "Close Star Map" }),
+    ).toBeNull();
   });
 
   it("disambiguates two profiles on one machine, local included", async () => {
@@ -864,8 +837,6 @@ describe("StarMapScreen", () => {
         desktopApi={desktopApi}
         localThreads={[]}
         sessionKeys={{}}
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -928,8 +899,6 @@ describe("StarMapScreen", () => {
         desktopApi={desktopApi}
         localThreads={[]}
         sessionKeys={{}}
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -985,8 +954,6 @@ describe("StarMapScreen", () => {
           } as unknown as NavigationThreadSummary,
         ]}
         sessionKeys={{}}
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -1025,8 +992,6 @@ describe("StarMapScreen", () => {
         desktopApi={buildDesktopApi()}
         localThreads={[thread]}
         sessionKeys={{}}
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -1072,8 +1037,6 @@ describe("StarMapScreen", () => {
         desktopApi={desktopApi}
         localThreads={[]}
         sessionKeys={{}}
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -1104,8 +1067,6 @@ describe("StarMapScreen", () => {
         localThreads={[unreadThread("t1")]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
         onRefreshLocalThreads={onRefreshLocalThreads}
@@ -1142,8 +1103,6 @@ describe("StarMapScreen", () => {
         localThreads={[unreadThread("t1")]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -1171,8 +1130,6 @@ describe("StarMapScreen", () => {
         localThreads={[unreadThread("t1")]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -1206,8 +1163,6 @@ describe("StarMapScreen", () => {
           localThreads={[unreadThread("t1")]}
           sessionKeys={{}}
           localInstanceLabel="Mac-Mini-M4"
-          floating={false}
-          onClose={() => undefined}
           onOpenLocalThread={() => undefined}
           onFocusLocalInstance={() => undefined}
         />,
@@ -1260,6 +1215,10 @@ describe("StarMapScreen", () => {
     // property of the cloud, not of where a card happens to start. Drives
     // it through the real wiring, so a per-card radius would fail here
     // even though the pure geometry tests pass.
+    // The expected drop coordinates were computed under the lanes
+    // geometry; the default lens is orbit now, so pin the layout the
+    // numbers assume rather than inheriting whatever the default is.
+    seedLayout("lanes");
     const committed = new Map<string, { dx: number; dy: number }>();
     const setStarMapCardPosition = vi.fn(
       async (request: {
@@ -1282,8 +1241,6 @@ describe("StarMapScreen", () => {
         localThreads={[unreadThread("t1"), unreadThread("t2")]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -1355,8 +1312,6 @@ describe("StarMapScreen", () => {
         localThreads={[unreadThread("t1")]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -1393,8 +1348,6 @@ describe("StarMapScreen", () => {
         localThreads={[unreadThread("t1")]}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -1416,8 +1369,6 @@ describe("StarMapScreen", () => {
         desktopApi={buildDesktopApi()}
         localThreads={[unreadThread("t9")]}
         sessionKeys={{}}
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -1445,8 +1396,6 @@ describe("StarMapScreen", () => {
         desktopApi={buildDesktopApi()}
         localThreads={[unreadThread("t10")]}
         sessionKeys={{}}
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -1479,8 +1428,6 @@ describe("StarMapScreen", () => {
         desktopApi={buildDesktopApi()}
         localThreads={[]}
         sessionKeys={{}}
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -1525,8 +1472,6 @@ describe("StarMapScreen", () => {
         desktopApi={desktopApi}
         localThreads={[]}
         sessionKeys={{}}
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,
@@ -1552,8 +1497,6 @@ describe("StarMapScreen", () => {
         desktopApi={buildDesktopApi()}
         localThreads={[]}
         sessionKeys={{}}
-        floating={false}
-        onClose={() => undefined}
         onOpenLocalThread={() => undefined}
         onFocusLocalInstance={() => undefined}
       />,

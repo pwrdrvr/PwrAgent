@@ -33,6 +33,8 @@ export type QuitBlockerItem = {
   target?: FederationRemoteTarget;
   /** Resolved just before the dialog opens; falls back to the thread id. */
   title?: string;
+  /** The active turn belongs to a worker owned by this thread. */
+  isSubAgent?: boolean;
   /** Secondary line — the owning peer, or an action's command and pid. */
   detail?: string;
   /** Start time for live elapsed/completion reporting in the quit prompt. */
@@ -552,7 +554,10 @@ function buildQuitItemListHtml(options: {
         const label = item.title?.trim() || item.threadId;
         const detail = item.detail?.trim();
         return `<a class="row" href="${escapeHtml(href)}">
-          <span class="row__label">${escapeHtml(label)}</span>
+          <span class="row__heading">
+            <span class="row__label">${escapeHtml(label)}</span>
+            ${item.isSubAgent ? '<span class="row__chip">Sub-agent</span>' : ""}
+          </span>
           ${detail ? `<span class="row__detail">${escapeHtml(detail)}</span>` : ""}
         </a>`;
       })
@@ -718,11 +723,29 @@ export function buildQuitConfirmationHtml(options: {
         outline-offset: 1px;
       }
       .row__label {
+        min-width: 0;
         font-size: 13px;
         font-weight: 500;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+      }
+      .row__heading {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        min-width: 0;
+      }
+      .row__chip {
+        flex: 0 0 auto;
+        padding: 1px 5px;
+        border: 1px solid var(--accent-border);
+        border-radius: 8px;
+        background: var(--row-active);
+        color: var(--accent-bright);
+        font-size: 10px;
+        font-weight: 600;
+        line-height: 1.35;
       }
       .row__detail {
         color: var(--text-muted);

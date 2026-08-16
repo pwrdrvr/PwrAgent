@@ -75,9 +75,12 @@ import { DirectoriesList } from "./DirectoriesList";
 import { RecentsList } from "./RecentsList";
 import {
   formatActiveThreadCount,
+  formatLocalActiveThreadCount,
+  formatRemoteActiveThreadCount,
   formatReviewThreadCount,
   isThreadActive,
   isThreadNeedingAttention,
+  isThreadRemoteWork,
 } from "./ThreadRowStatus";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 
@@ -302,13 +305,15 @@ const browseModeIcons = {
 
 // Nothing on the tab spells out what the lens shows now that the labels are
 // gone, so the viewport tooltip carries both the name and the explanation.
+// Attention is absent for the same reason it is absent from `browseModeIcons`:
+// it reports state rather than just naming a lens, so it hovers a structured
+// card (`AttentionLensTab`) instead of a line of text.
 const browseModeTooltips = {
-  attention: "Attention — threads in progress or waiting to be reviewed",
   drafts: "Drafts — threads with a reply you started and never sent",
   inbox: "Updated — all threads, most recently updated first",
   recents: "Created — all threads, newest created first",
   directories: "Directories — threads grouped by linked Git directory",
-} satisfies Record<BrowseMode, string>;
+} satisfies Record<Exclude<BrowseMode, "attention">, string>;
 
 /**
  * The Drafts tab's count, for the tooltip and the accessible name.
@@ -495,25 +500,39 @@ export function Sidebar(props: SidebarProps) {
           ? props.recentThreads ?? props.threads
           : updatedOrderThreads;
   /**
-   * The two numbers on the Attention tab. Counted over the very rows the lens
+   * The numbers on the Attention tab. Counted over the very rows the lens
    * renders, not over `props.threads`, so the tab and the list cannot report
-   * different populations — `active + review` is the queue's length by
+   * different populations — the counts sum to the queue's length by
    * construction. A live turn wins over "to review" so one thread is never
    * counted twice; membership already guarantees a row that is not active is
    * awaiting review, which is the same split the directory headers use.
+   *
+   * Live turns split again by where they run. Only this instance's turns hold
+   * shutdown open, so "can I quit now?" is answerable from the tab alone —
+   * which it is not while one number mixes work on two machines.
    */
+  const federationWindowTarget = useMemo(
+    () => readRendererFederationTarget(),
+    [],
+  );
   const attentionCounts = useMemo(() => {
-    let active = 0;
+    let activeLocal = 0;
+    let activeRemote = 0;
     let review = 0;
     for (const thread of attentionThreads) {
-      if (isThreadActive(thread, props.thinkingThreadKeys)) {
-        active += 1;
-      } else {
+      if (!isThreadActive(thread, props.thinkingThreadKeys)) {
         review += 1;
+      } else if (isThreadRemoteWork(thread, federationWindowTarget)) {
+        activeRemote += 1;
+      } else {
+        activeLocal += 1;
       }
     }
-    return { active, review };
-  }, [attentionThreads, props.thinkingThreadKeys]);
+    return { activeLocal, activeRemote, review };
+  }, [attentionThreads, federationWindowTarget, props.thinkingThreadKeys]);
+  const remoteSignalVisible = useLingeringRemoteActiveSignal(
+    attentionCounts.activeRemote,
+  );
   const revealSelectedThreadRequest = props.revealSelectedThreadRequest;
   const selectedItemKey = props.selectedItemKey;
   const navigationThreads = props.threads;
@@ -1827,7 +1846,10 @@ export function Sidebar(props: SidebarProps) {
               <AttentionLensTab
                 key={mode}
                 active={props.browseMode === mode}
-                activeThreadCount={attentionCounts.active}
+                activeThreadCount={attentionCounts.activeLocal}
+                remoteActiveThreadCount={
+                  remoteSignalVisible ? attentionCounts.activeRemote : undefined
+                }
                 reviewThreadCount={attentionCounts.review}
                 onSelect={() => props.onBrowseModeChange(mode)}
               />
@@ -2136,18 +2158,32 @@ export function Sidebar(props: SidebarProps) {
                         </button>
                       </>
                     ) : (
-                      <button
-                        role="menuitem"
-                        type="button"
-                        onClick={() =>
-                          createSubthreadFromContextMenu(
-                            contextMenu.thread,
-                            "local",
-                          )
-                        }
-                      >
-                        Sub-thread in Local
-                      </button>
+                      <>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            createSubthreadFromContextMenu(
+                              contextMenu.thread,
+                              "local",
+                            )
+                          }
+                        >
+                          Sub-thread in Local
+                        </button>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            createSubthreadFromContextMenu(
+                              contextMenu.thread,
+                              "new-worktree",
+                            )
+                          }
+                        >
+                          Sub-thread in New Worktree
+                        </button>
+                      </>
                     )
                   ) : null}
                   {contextMenuCanFork ? (
@@ -2179,18 +2215,32 @@ export function Sidebar(props: SidebarProps) {
                         </button>
                       </>
                     ) : (
-                      <button
-                        role="menuitem"
-                        type="button"
-                        onClick={() =>
-                          forkThreadFromContextMenu(
-                            contextMenu.thread,
-                            "local",
-                          )
-                        }
-                      >
-                        Fork in Local
-                      </button>
+                      <>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            forkThreadFromContextMenu(
+                              contextMenu.thread,
+                              "local",
+                            )
+                          }
+                        >
+                          Fork in Local
+                        </button>
+                        <button
+                          role="menuitem"
+                          type="button"
+                          onClick={() =>
+                            forkThreadFromContextMenu(
+                              contextMenu.thread,
+                              "new-worktree",
+                            )
+                          }
+                        >
+                          Fork into New Worktree
+                        </button>
+                      </>
                     )
                   ) : null}
                 </div>
@@ -2782,10 +2832,52 @@ function ProfileIdentityButton(props: {
 }
 
 /**
+ * How long the remote-turn readout stays up after the last peer turn ends.
+ *
+ * The row is not a permanent fixture — an operator with no federation, or none
+ * of a peer's work running, gets exactly the tab they had before. But dropping
+ * it the instant the count hits zero would take the answer away at the moment
+ * it becomes interesting: "the peer just finished" is worth half a minute of
+ * a visible 0, and a row that vanishes mid-glance reads as a glitch.
+ */
+const REMOTE_ACTIVE_SIGNAL_LINGER_MS = 30_000;
+
+/**
+ * Whether the Attention tab shows its remote-turn readout: any peer turn
+ * running, or one that ended inside the linger window.
+ */
+function useLingeringRemoteActiveSignal(count: number): boolean {
+  const [visible, setVisible] = useState(count > 0);
+  useEffect(() => {
+    if (count > 0) {
+      setVisible(true);
+      return;
+    }
+    if (!visible) {
+      return;
+    }
+    const timer = setTimeout(
+      () => setVisible(false),
+      REMOTE_ACTIVE_SIGNAL_LINGER_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [count, visible]);
+  return visible;
+}
+
+/**
  * The Attention tab. Where the other three lenses show a static icon, this one
- * shows the two numbers it exists for: threads with a live turn, and threads
+ * shows the numbers it exists for: threads with a live turn, and threads
  * waiting to be reviewed. Each pairs the same indicator its thread rows use —
  * the scanner and the orange cookie.
+ *
+ * Live turns split in two once a peer is running work this window can see. The
+ * accent scanner counts turns on this machine, the neutral one below it counts
+ * turns on other instances, and the difference is the one that matters at
+ * quitting time: a local turn holds shutdown open and a peer's does not (see
+ * `isThreadRemoteWork`). Colour carries it because the question is asked at a
+ * glance — an operator should not have to open a tooltip to learn whether the
+ * app is safe to close.
  *
  * A zero count stays on the tab and goes grey rather than disappearing. That
  * is the point of the tab: "nothing running, nothing unread" has to be legible
@@ -2797,22 +2889,116 @@ function ProfileIdentityButton(props: {
 function AttentionLensTab(props: {
   active: boolean;
   activeThreadCount: number;
+  /**
+   * Peer turns this window can see. `undefined` means the readout is not on —
+   * no federated work has run recently — and the tab reads exactly as it does
+   * on an instance that has never federated.
+   */
+  remoteActiveThreadCount?: number;
   reviewThreadCount: number;
   onSelect: () => void;
 }) {
-  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
-  const tooltipText = [
-    browseModeTooltips.attention,
-    `${formatActiveThreadCount(props.activeThreadCount)} · ${formatReviewThreadCount(props.reviewThreadCount)}`,
-  ].join("\n");
+  // A card, not a text tooltip. Every other lens tab explains itself in one
+  // line; this one reports two or three counts, each with its own indicator
+  // and — once a peer is running work — a consequence. Run through
+  // `.viewport-tooltip` that became four stacked sentences with em-dashes
+  // doing the structural work. See "Structured hover cards" in AGENTS.md.
+  const tooltip = useViewportTooltip({ className: "attention-card" });
+  const remoteActiveThreadCount = props.remoteActiveThreadCount;
+  // Creating this element is not rendering it: it stays an inert object until
+  // `show` hands it to the portal on hover or focus.
+  const card = (
+    <>
+      <div className="attention-card__eyebrow">{browseModeLabels.attention}</div>
+      <div className="attention-card__caption">
+        Threads in progress or waiting to be reviewed
+      </div>
+      <div className="attention-card__section">
+        <AttentionCardRow
+          count={props.activeThreadCount}
+          indicator="turn"
+          // Only qualify the row once there is something to tell it apart
+          // from. "In progress" is the whole truth on an unfederated
+          // instance, and naming the machine would raise a question the
+          // operator does not have.
+          label={
+            remoteActiveThreadCount === undefined
+              ? "In progress"
+              : "In progress here"
+          }
+          note={
+            remoteActiveThreadCount === undefined
+              ? undefined
+              : "Quitting interrupts these"
+          }
+        />
+        {remoteActiveThreadCount === undefined ? null : (
+          <AttentionCardRow
+            count={remoteActiveThreadCount}
+            indicator="remote-turn"
+            label="In progress elsewhere"
+            note="Quitting leaves these running"
+          />
+        )}
+        <AttentionCardRow
+          count={props.reviewThreadCount}
+          indicator="review"
+          label="To review"
+        />
+      </div>
+    </>
+  );
+  const accessibleName = [
+    browseModeLabels.attention,
+    ...(remoteActiveThreadCount === undefined
+      ? [formatActiveThreadCount(props.activeThreadCount)]
+      : [
+        formatLocalActiveThreadCount(props.activeThreadCount),
+        formatRemoteActiveThreadCount(remoteActiveThreadCount),
+      ]),
+    formatReviewThreadCount(props.reviewThreadCount),
+  ].join(", ");
+
+  // Turns start and end while the pointer rests on the tab, so push fresh
+  // numbers into an already-open card rather than freezing it at hover-time
+  // values — the same thing `PrChip` does for a live PR status. Freezing is
+  // not cosmetic here: the card would keep claiming there is no peer work
+  // after a peer starts a turn, on the one surface that exists to answer
+  // "can I quit now?".
+  //
+  // The key guard is not optional: a React element is a new object on every
+  // render, so feeding one straight into `update` would set state on every
+  // render that very update caused. Compare the card's DATA and push only
+  // when it moved.
+  const latestCardRef = useRef(card);
+  latestCardRef.current = card;
+  const cardKey = [
+    props.activeThreadCount,
+    remoteActiveThreadCount ?? "off",
+    props.reviewThreadCount,
+  ].join("|");
+  const pushedCardKeyRef = useRef<string | undefined>(undefined);
+  const tooltipVisible = tooltip.visible;
+  const updateTooltip = tooltip.update;
+  useEffect(() => {
+    const moved = pushedCardKeyRef.current !== cardKey;
+    pushedCardKeyRef.current = cardKey;
+    if (!moved || !tooltipVisible) {
+      return;
+    }
+    updateTooltip(latestCardRef.current);
+  }, [cardKey, tooltipVisible, updateTooltip]);
 
   return (
     <>
       <button
         role="tab"
-        aria-label={`${browseModeLabels.attention}, ${formatActiveThreadCount(
-          props.activeThreadCount,
-        )}, ${formatReviewThreadCount(props.reviewThreadCount)}`}
+        aria-label={accessibleName}
+        // The card's consequence lines ("Quitting interrupts these") exist
+        // nowhere else — without this they are sighted-only, since the portal
+        // sits outside this button's subtree. Gated on `visible`: naming an
+        // absent element is a dangling reference.
+        aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
         aria-selected={props.active}
         className={`lens-switch__button lens-switch__button--attention${
           props.active ? " is-active" : ""
@@ -2823,31 +3009,33 @@ function AttentionLensTab(props: {
           tooltip.hide();
           props.onSelect();
         }}
-        onFocus={(event) => tooltip.show(event.currentTarget, tooltipText)}
-        onMouseEnter={(event) => tooltip.show(event.currentTarget, tooltipText)}
+        onFocus={(event) => tooltip.show(event.currentTarget, card)}
+        onMouseEnter={(event) => tooltip.show(event.currentTarget, card)}
         onMouseLeave={tooltip.hide}
       >
-        <span
-          aria-hidden="true"
-          className="lens-switch__signal lens-switch__signal--active"
-          data-attention-active-count={props.activeThreadCount}
-          data-zero={props.activeThreadCount === 0 ? "true" : undefined}
-        >
-          {props.activeThreadCount === 0 ? (
-            // A static stand-in, NOT a greyed-out `ThinkingScanner`. Killing
-            // the sweep with CSS on a mounted scanner is a desync trap:
-            // `data-zero` lives on this span, so React keeps the same scanner
-            // element across the flip, its ref never re-runs, and the restarted
-            // animation is never re-pinned to the shared epoch — leaving this
-            // tab drifting against every other scanner on screen. Swapping the
-            // element type guarantees a mount, so
-            // `syncThinkingScannerAnimation` runs and the beam comes back in
-            // phase. See ThinkingScanner.tsx and PR #1187.
-            <span className="lens-switch__dormant-scanner" />
-          ) : (
-            <ThinkingScanner compact />
+        {/* One column so the second readout stacks under the first instead of
+            widening the tab. The Attention tab already floors the switch's
+            narrowest track (see `.lens-switch`), and a third readout laid out
+            across would take that room from the four icon tabs. */}
+        <span aria-hidden="true" className="lens-switch__turns">
+          <span
+            className="lens-switch__signal lens-switch__signal--active"
+            data-attention-active-count={props.activeThreadCount}
+            data-zero={props.activeThreadCount === 0 ? "true" : undefined}
+          >
+            <AttentionTurnScanner count={props.activeThreadCount} />
+            <span>{props.activeThreadCount}</span>
+          </span>
+          {remoteActiveThreadCount === undefined ? null : (
+            <span
+              className="lens-switch__signal lens-switch__signal--remote-active"
+              data-attention-remote-active-count={remoteActiveThreadCount}
+              data-zero={remoteActiveThreadCount === 0 ? "true" : undefined}
+            >
+              <AttentionTurnScanner count={remoteActiveThreadCount} />
+              <span>{remoteActiveThreadCount}</span>
+            </span>
           )}
-          <span>{props.activeThreadCount}</span>
         </span>
         <span
           aria-hidden="true"
@@ -2861,6 +3049,77 @@ function AttentionLensTab(props: {
       </button>
       {tooltip.tooltipNode}
     </>
+  );
+}
+
+/**
+ * The sweeping bar next to one of the Attention tab's turn counts, or its idle
+ * stand-in.
+ *
+ * At zero this is a static element, NOT a greyed-out `ThinkingScanner`.
+ * Killing the sweep with CSS on a mounted scanner is a desync trap: `data-zero`
+ * lives on the parent span, so React would keep the same scanner element across
+ * the flip, its ref would never re-run, and the restarted animation would never
+ * be re-pinned to the shared epoch — leaving this tab drifting against every
+ * other scanner on screen. Swapping the element type guarantees a mount, so
+ * `syncThinkingScannerAnimation` runs and the beam comes back in phase. See
+ * ThinkingScanner.tsx and PR #1187.
+ *
+ * The remote readout's beam is neutral rather than accent, but it is the same
+ * untouched component tinted by its parent's tokens — a peer's turn is running
+ * for real, so it sweeps for real, on the same epoch as the rest.
+ */
+function AttentionTurnScanner(props: { count: number }) {
+  return props.count === 0 ? (
+    <span className="lens-switch__dormant-scanner" />
+  ) : (
+    <ThinkingScanner compact />
+  );
+}
+
+/**
+ * One line of the Attention hover card: the tab's own indicator, what it
+ * counts, and the count. Repeating the indicator is what ties a row to the
+ * readout the operator just hovered — a card of bare labels would make them
+ * re-derive which number is which.
+ */
+function AttentionCardRow(props: {
+  count: number;
+  indicator: "turn" | "remote-turn" | "review";
+  label: string;
+  /** What quitting does to this row's work. Omitted when nothing is at stake. */
+  note?: string;
+}) {
+  return (
+    <div
+      className="attention-card__row"
+      data-zero={props.count === 0 ? "true" : undefined}
+    >
+      <span
+        aria-hidden="true"
+        className={`lens-switch__signal lens-switch__signal--${
+          props.indicator === "review"
+            ? "review"
+            : props.indicator === "remote-turn"
+              ? "remote-active"
+              : "active"
+        }`}
+        data-zero={props.count === 0 ? "true" : undefined}
+      >
+        {props.indicator === "review" ? (
+          <span className="thread-row__status-cookie" />
+        ) : (
+          <AttentionTurnScanner count={props.count} />
+        )}
+      </span>
+      <span className="attention-card__row-text">
+        <span className="attention-card__row-label">{props.label}</span>
+        {props.note ? (
+          <span className="attention-card__row-note">{props.note}</span>
+        ) : null}
+      </span>
+      <span className="attention-card__row-value">{props.count}</span>
+    </div>
   );
 }
 

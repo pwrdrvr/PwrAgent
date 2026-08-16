@@ -21,7 +21,31 @@ export const FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL =
 export const STAR_MAP_READ_ARRANGEMENT_CHANNEL = "star-map:read-arrangement";
 export const STAR_MAP_SET_CARD_POSITION_CHANNEL = "star-map:set-card-position";
 export const STAR_MAP_INTAKE_CHANNEL = "star-map:intake";
+/**
+ * Fire-and-forget IPC: opens the dedicated Federation Star Map window
+ * (or focuses it if already open). The map is a separate BrowserWindow
+ * with its own traffic lights and lifecycle — see `showStarMapWindow`
+ * in `apps/desktop/src/main/star-map-window.ts`.
+ */
+export const STAR_MAP_OPEN_WINDOW_CHANNEL = "star-map:open-window";
+/**
+ * Renderer → main invoke from the Star Map window: focus the primary
+ * (non-federation) main window and navigate it to a thread. The main
+ * process resolves the target window and relays the request over
+ * `WINDOW_SHOW_THREAD_CHANNEL`.
+ */
+export const STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL =
+  "star-map:open-thread-in-main";
+/**
+ * Renderer → main invoke from the Star Map window: focus the primary
+ * (non-federation) main window without navigating it anywhere — the
+ * local instance card's "open" action.
+ */
+export const STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL =
+  "star-map:focus-main-window";
 export const APP_SERVER_READ_THREAD_CHANNEL = "app-server:read-thread";
+export const APP_SERVER_ANALYZE_THREAD_TOOL_HISTORY_CHANNEL =
+  "app-server:analyze-thread-tool-history";
 export const APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL =
   "app-server:get-thread-file-diff";
 export const APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL =
@@ -77,6 +101,11 @@ export const CODEX_MCP_SERVER_REMOVE_CHANNEL = "codex-mcp-server:remove";
 export const AGENT_INTERRUPT_TURN_CHANNEL = "agent:interrupt-turn";
 export const AGENT_STOP_SUB_AGENT_CHANNEL = "agent:stop-sub-agent";
 export const AGENT_STEER_TURN_CHANNEL = "agent:steer-turn";
+export const AGENT_LIST_ACP_THREAD_REWIND_POINTS_CHANNEL =
+  "agent:list-acp-thread-rewind-points";
+export const AGENT_REWIND_ACP_THREAD_CHANNEL = "agent:rewind-acp-thread";
+export const AGENT_CONFIGURE_GROK_WORKFLOW_BUDGET_CHANNEL =
+  "agent:configure-grok-workflow-budget";
 export const AGENT_SET_THREAD_EXECUTION_MODE_CHANNEL = "agent:set-thread-execution-mode";
 export const AGENT_QUEUE_THREAD_EXECUTION_MODE_CHANNEL =
   "agent:queue-thread-execution-mode";
@@ -129,6 +158,8 @@ export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
 export const NAVIGATION_MARK_THREAD_SEEN_CHANNEL = "navigation:mark-thread-seen";
 export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
+export const NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL =
+  "navigation:set-thread-tool-incident-notice";
 export const NAVIGATION_SET_THREAD_PIN_CHANNEL =
   "navigation:set-thread-pin";
 export const NAVIGATION_SET_THREAD_AGENT_CHANNEL =
@@ -448,6 +479,12 @@ export const MARKDOWN_FILE_VIEWER_SNAPSHOT_CHANGED_CHANNEL =
   "markdown-file-viewer:snapshot-changed";
 export const SUB_AGENT_TRANSCRIPT_WINDOW_OPEN_CHANNEL =
   "sub-agent-transcript:open-window";
+export const TOOL_OUTPUT_INCIDENT_EXPLORER_WINDOW_OPEN_CHANNEL =
+  "tool-output-incident-explorer:open-window";
+export const TOOL_OUTPUT_INCIDENT_EXPLORER_REFRESH_EVENT_CHANNEL =
+  "tool-output-incident-explorer:refresh";
+export const TOOL_OUTPUT_INCIDENT_EXPLORER_SHOW_THREAD_CHANNEL =
+  "tool-output-incident-explorer:show-thread";
 export const INTEGRATED_TERMINAL_CREATE_CHANNEL =
   "integrated-terminal:create";
 export const INTEGRATED_TERMINAL_WRITE_CHANNEL = "integrated-terminal:write";
