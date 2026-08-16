@@ -4910,6 +4910,17 @@ textarea,
   height: 20px;
 }
 
+/* Same step for shared `.chip` primitives that land in the row's flow —
+   today the federation instance chip, which is `.chip.chip--instance` because
+   it is shared with the ⌘K palette and the Star Map, and so was never reached
+   by the `.thread-row__chip` rule above. A 24px pill among 20px siblings
+   reads as a different kind of chip and pushes remote-owned rows taller than
+   the local rows beside them. */
+.thread-row__chips .chip {
+  height: 20px;
+  font-size: 11px;
+}
+
 /* Icon-only worktree/local location chip — square-ish so it reads as a
    marker, not a truncated word. The kind lives in the aria-label and
    the copy tooltip. */
