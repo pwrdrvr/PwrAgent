@@ -285,7 +285,7 @@ These variables are for development only.
 - Do not put scaffold narration in the user interface.
 - Do not put placeholder implementation text in the user interface.
 
-### Reuse existing chrome — copy tokens, don't pick new ones
+### Reuse existing chrome tokens
 
 Before you build new window chrome, open `apps/desktop/src/renderer/src/styles/app.css`.
 
@@ -435,28 +435,55 @@ Canonical primitives and the tokens they read:
 
 ## Dependency Boundary Enforcement
 
-**DO NOT, under any circumstances, loosen the dependency boundary rules.**
+Never weaken the dependency boundary rules.
 
-This repository enforces a strict layered dependency architecture via
-`dependency-cruiser` (`.dependency-cruiser.cjs`). These rules are load-bearing:
+- `.dependency-cruiser.cjs` defines the layered architecture.
+- Do not add an exception or allowlist to that file.
+- Do not add a `severity: "ignore"` override.
+- Do not import from a package above the current package layer.
+- Do not introduce a circular dependency.
+- Do not move code to bypass a boundary.
+- Do not restructure code to bypass a boundary.
+- If a boundary blocks a change, redesign the change.
 
-- **DO NOT** add exceptions, allowlists, or `severity: "ignore"` overrides to `.dependency-cruiser.cjs`
-- **DO NOT** add imports from packages above a package's layer in the dependency hierarchy
-- **DO NOT** introduce circular dependencies between any modules
-- **DO NOT** move or restructure code to circumvent boundary rules
-- If a rule blocks your change, the change is architecturally wrong — redesign it
+Use this dependency order from lowest to highest:
 
-The dependency hierarchy (bottom to top):
-- **Leaves** (import nothing internal): `packages/shared`
-- **Mid-tier**: `packages/messaging/interface` (→ shared only), `packages/messaging/providers/*` (→ messaging/interface only)
-- **Top**: `apps/desktop` (→ any package)
+- `packages/shared` imports no internal package.
+- `packages/messaging/interface` imports only `packages/shared`.
+- `packages/messaging/providers/*` imports only `packages/messaging/interface`.
+- `apps/desktop` can import any package.
 
-Additional renderer constraint: `apps/desktop/src/renderer/` may only import `@pwragent/shared`. All other package access crosses the IPC bridge via the main process.
+The renderer has an additional boundary.
 
-Enforcement runs via `pnpm lint:boundaries` and fails CI on any violation. Run it locally before pushing.
+- `apps/desktop/src/renderer/` can import only `@pwragent/shared` directly.
+- Access every other package through the main-process IPC bridge.
+- Run `pnpm lint:boundaries` before you push.
+- CI fails for every boundary violation.
 
 ## App-Specific Guidance
 
-- Additional desktop-app instructions live in [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
-- Messaging package boundary instructions live in [packages/messaging/AGENTS.md](packages/messaging/AGENTS.md). Review them before adding messaging integrations, changing messaging provider code, or deciding where messaging calls and workflow logic should live.
-- For messaging architecture (separation of concerns between interface, providers, and desktop orchestration; data-flow diagrams; the capability-profile system; callback delivery models; file map), read [docs/messaging-architecture.md](docs/messaging-architecture.md). For the formal per-adapter contract, [docs/messaging-adapter-contract.md](docs/messaging-adapter-contract.md). For a hands-on walkthrough when adding a new provider, [docs/messaging-adding-a-provider.md](docs/messaging-adding-a-provider.md). For operator setup, the command surface, and Cloudflare-Tunnel / Tailscale-Funnel deployment for HTTP-callback providers, [docs/messaging-platform-integration.md](docs/messaging-platform-integration.md). For the messaging RBAC capability layer (permission catalog, built-in roles, enforcement surfaces, audit), [docs/messaging-rbac.md](docs/messaging-rbac.md).
+- Before desktop application work, read [apps/desktop/AGENTS.md](apps/desktop/AGENTS.md).
+- Before messaging package work, read [packages/messaging/AGENTS.md](packages/messaging/AGENTS.md).
+- Read the messaging package guidance before you:
+  - Add a messaging integration.
+  - Change messaging provider code.
+  - Select the owner of messaging calls or workflow logic.
+- Read [messaging-architecture.md](docs/messaging-architecture.md) for:
+  - Package responsibilities.
+  - Data flow.
+  - Capability profiles.
+  - Callback delivery models.
+  - The messaging file map.
+- Read [messaging-adapter-contract.md](docs/messaging-adapter-contract.md) for the formal adapter contract.
+- Read [messaging-adding-a-provider.md](docs/messaging-adding-a-provider.md) before you add a provider.
+- Read [messaging-platform-integration.md](docs/messaging-platform-integration.md) for:
+  - Operator setup.
+  - Messaging commands.
+  - Cloudflare Tunnel deployment.
+  - Tailscale Funnel deployment.
+  - HTTP callback providers.
+- Read [messaging-rbac.md](docs/messaging-rbac.md) for:
+  - The permission catalog.
+  - Built-in roles.
+  - Enforcement points.
+  - Audit behavior.
