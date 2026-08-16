@@ -23,7 +23,7 @@ describe("usage spend alerts", () => {
 
   it("alerts independently for active-turn and total-thread spend", () => {
     const alerts = detectUsageSpendAlerts({
-      activeTurnId: "turn-2",
+      activeTurnIds: ["turn-2"],
       backend: "codex",
       now: 1_800_000_000_000,
       policy: POLICY,
@@ -53,9 +53,30 @@ describe("usage spend alerts", () => {
     ]);
   });
 
+  it("evaluates every active turn represented in one usage batch", () => {
+    const alerts = detectUsageSpendAlerts({
+      activeTurnIds: ["turn-1", "turn-2", "turn-1"],
+      backend: "codex",
+      policy: POLICY,
+      pricing: {
+        lines: [
+          usageLine({ turnId: "turn-1", totalCostMicros: 6_000_000 }),
+          usageLine({ turnId: "turn-2", totalCostMicros: 7_000_000 }),
+        ],
+        summaries: [pricingSummary(13_000_000)],
+      },
+      threadId: "thread-1",
+      triggeredAlertIds: new Set(),
+    });
+
+    expect(alerts.map((alert) => alert.kind === "active-turn-spend"
+      ? alert.turnId
+      : alert.kind)).toEqual(["turn-1", "turn-2"]);
+  });
+
   it("ignores disabled, unpriced, historical-summary, and non-USD rows", () => {
     const alerts = detectUsageSpendAlerts({
-      activeTurnId: "turn-2",
+      activeTurnIds: ["turn-2"],
       backend: "codex",
       policy: {
         ...POLICY,

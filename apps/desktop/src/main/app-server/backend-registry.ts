@@ -10879,7 +10879,7 @@ export class DesktopBackendRegistry {
   }
 
   private async emitThreadPricingUpdated(params: {
-    activeTurnId?: string;
+    activeTurnIds?: readonly string[];
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<void> {
@@ -10891,7 +10891,7 @@ export class DesktopBackendRegistry {
       threadId: params.threadId,
     });
     const triggeredSpendAlerts = detectUsageSpendAlerts({
-      ...(params.activeTurnId ? { activeTurnId: params.activeTurnId } : {}),
+      ...(params.activeTurnIds ? { activeTurnIds: params.activeTurnIds } : {}),
       backend: params.backend,
       policy: this.spendAlertPolicy,
       pricing,
@@ -20784,7 +20784,7 @@ export class DesktopBackendRegistry {
       }
       await this.emitThreadPricingUpdated({
         ...(line.parentThreadId === undefined && line.turnId
-          ? { activeTurnId: line.turnId }
+          ? { activeTurnIds: [line.turnId] }
           : {}),
         backend: event.backend,
         threadId: line.parentThreadId ?? line.threadId,
@@ -20864,29 +20864,35 @@ export class DesktopBackendRegistry {
     const pricingTargets = new Map<
       string,
       {
-        activeTurnId?: string;
+        activeTurnIds: Set<string>;
         backend: AppServerBackendKind;
         threadId: string;
       }
     >();
     for (const { backend, line } of pending) {
-      const target = {
-        ...(line.parentThreadId === undefined && line.turnId
-          ? { activeTurnId: line.turnId }
-          : {}),
+      const threadId = line.parentThreadId ?? line.threadId;
+      const key = JSON.stringify([backend, threadId]);
+      const target = pricingTargets.get(key) ?? {
+        activeTurnIds: new Set<string>(),
         backend,
-        threadId: line.parentThreadId ?? line.threadId,
+        threadId,
       };
-      pricingTargets.set(
-        JSON.stringify([target.backend, target.threadId]),
-        target,
-      );
+      if (line.parentThreadId === undefined && line.turnId) {
+        target.activeTurnIds.add(line.turnId);
+      }
+      pricingTargets.set(key, target);
     }
     for (const target of pricingTargets.values()) {
       try {
         // The notification embeds a fresh store read, so observers can never
         // receive pricing for a usage line that has not committed yet.
-        await this.emitThreadPricingUpdated(target);
+        await this.emitThreadPricingUpdated({
+          ...(target.activeTurnIds.size > 0
+            ? { activeTurnIds: [...target.activeTurnIds] }
+            : {}),
+          backend: target.backend,
+          threadId: target.threadId,
+        });
       } catch (error) {
         backendRegistryLog.warn("live thread pricing update failed", {
           backend: target.backend,

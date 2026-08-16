@@ -22,4 +22,11 @@ describe("isFlaggedToolInvocation", () => {
     expect(isFlaggedToolInvocation({ noisy: false, outputChars: 19_999 }))
       .toBe(false);
   });
+
+  it("uses the operator's effective large-output threshold", () => {
+    const invocation = { noisy: false, outputChars: 24_000 };
+
+    expect(isFlaggedToolInvocation(invocation, 30_000)).toBe(false);
+    expect(isFlaggedToolInvocation(invocation, 10_000)).toBe(true);
+  });
 });

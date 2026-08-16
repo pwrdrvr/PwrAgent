@@ -15,6 +15,7 @@ import {
   buildThreadIdentityKey,
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
+  DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   isRemoteFederationTarget,
   parseThreadIdentityKey,
   type AppServerBackendKind,
@@ -34,6 +35,7 @@ import {
   type ThreadUsageLineRecord,
   type SetThreadToolIncidentNoticeRequest,
   resolveToolIncidentVisibility,
+  toolOutputWarningChars,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { useThreadJump } from "./features/navigation/useThreadJump";
@@ -364,6 +366,12 @@ function DesktopAppShell(props: {
     readonly ThreadUsageLineRecord[]
   >());
   const showIncidentCostRef = useRef(false);
+  const largeOutputThresholdCharsRef = useRef(toolOutputWarningChars(
+    props.settings.snapshot?.general.toolOutputAlerts
+      ?.repeatedLargeOutputMinimumPercent.value
+      ?? DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT
+        .repeatedLargeOutputMinimumPercent,
+  ));
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
@@ -760,6 +768,7 @@ function DesktopAppShell(props: {
           ...(incidentState?.firstWarningAt !== undefined
             ? { firstWarningAt: incidentState.firstWarningAt }
             : {}),
+          largeOutputThresholdChars: largeOutputThresholdCharsRef.current,
           threadId: params.threadId,
           usageLines: threadUsageLinesRef.current.get(
             buildThreadIdentityKey(event.backend, params.threadId),
@@ -1197,6 +1206,14 @@ function DesktopAppShell(props: {
           ?.value ?? false)
       );
   }, [settings.snapshot?.experimental]);
+  useEffect(() => {
+    largeOutputThresholdCharsRef.current = toolOutputWarningChars(
+      settings.snapshot?.general.toolOutputAlerts
+        ?.repeatedLargeOutputMinimumPercent.value
+        ?? DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT
+          .repeatedLargeOutputMinimumPercent,
+    );
+  }, [settings.snapshot?.general.toolOutputAlerts]);
   const backendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
     federationTarget: activeFederationTarget,

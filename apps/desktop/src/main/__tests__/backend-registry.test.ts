@@ -19504,19 +19504,19 @@ command = "pnpm dev"
     });
     const emitPricing = (registry as unknown as {
       emitThreadPricingUpdated(params: {
-        activeTurnId?: string;
+        activeTurnIds?: readonly string[];
         backend: AppServerBackendKind;
         threadId: string;
       }): Promise<void>;
     }).emitThreadPricingUpdated.bind(registry);
 
     await emitPricing({
-      activeTurnId: "turn-2",
+      activeTurnIds: ["turn-2"],
       backend: "codex",
       threadId: "thread-1",
     });
     await emitPricing({
-      activeTurnId: "turn-2",
+      activeTurnIds: ["turn-2"],
       backend: "codex",
       threadId: "thread-1",
     });
@@ -19533,6 +19533,90 @@ command = "pnpm dev"
     expect(pricingEvents[1]?.notification.params).not.toHaveProperty(
       "triggeredSpendAlerts",
     );
+
+    await registry.close();
+  });
+
+  it("preserves every active turn while coalescing pricing updates", async () => {
+    const lines: ThreadUsageLineRecord[] = ["turn-a", "turn-b"].map(
+      (turnId, index) => ({
+        backend: "codex",
+        cachedInputCostMicros: 0,
+        cachedInputTokens: 0,
+        createdAt: 1_800_000_000_000 + index,
+        currency: "USD",
+        inputTokens: 0,
+        outputCostMicros: 0,
+        outputTokens: 0,
+        priceStatus: "priced",
+        provider: "openai",
+        reasoningOutputTokens: 0,
+        scope: "turn",
+        source: "live",
+        status: "pending",
+        threadId: "thread-1",
+        totalCostMicros: 6_000_000 + index * 1_000_000,
+        totalTokens: 0,
+        turnId,
+        turnUsageAttributed: true,
+        uncachedInputCostMicros: 0,
+        uncachedInputTokens: 0,
+        usageLineId: `usage-${turnId}`,
+      }),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadPricing: vi.fn(async () => ({
+        lines,
+        summaries: [],
+      })),
+      upsertThreadUsageLines: vi.fn(async () => ({
+        lines,
+        summaries: [],
+      })),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+      resolveSpendAlertPolicy: () => ({
+        activeTurnSpendEnabled: true,
+        activeTurnSpendThresholdUsd: 5,
+        threadSpendEnabled: false,
+        threadSpendThresholdUsd: 25,
+      }),
+    });
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    const usageBatch = registry as unknown as {
+      bufferLiveThreadUsageLine(params: {
+        backend: AppServerBackendKind;
+        line: ThreadUsageLineRecord;
+        observationSequence: number;
+      }): void;
+      writePendingLiveThreadUsageLines(): Promise<void>;
+    };
+    lines.forEach((line, index) => {
+      usageBatch.bufferLiveThreadUsageLine({
+        backend: "codex",
+        line,
+        observationSequence: index + 1,
+      });
+    });
+
+    await usageBatch.writePendingLiveThreadUsageLines();
+
+    const pricingEvents = events.filter(
+      (event) => event.notification.method === "thread/pricing/updated",
+    );
+    expect(pricingEvents).toHaveLength(1);
+    expect(pricingEvents[0]?.notification.params).toMatchObject({
+      triggeredSpendAlerts: [
+        { kind: "active-turn-spend", turnId: "turn-a" },
+        { kind: "active-turn-spend", turnId: "turn-b" },
+      ],
+    });
 
     await registry.close();
   });

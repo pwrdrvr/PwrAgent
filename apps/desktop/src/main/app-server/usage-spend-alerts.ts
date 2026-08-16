@@ -12,7 +12,7 @@ export function spendThresholdMicros(thresholdUsd: number): number {
 }
 
 export function detectUsageSpendAlerts(params: {
-  activeTurnId?: string;
+  activeTurnIds?: readonly string[];
   backend: string;
   policy: DesktopSpendAlertPolicy;
   pricing: {
@@ -26,44 +26,46 @@ export function detectUsageSpendAlerts(params: {
   const alerts: ThreadSpendAlert[] = [];
   const now = params.now ?? Date.now();
 
-  if (params.policy.activeTurnSpendEnabled && params.activeTurnId) {
+  if (params.policy.activeTurnSpendEnabled) {
     const thresholdMicros = spendThresholdMicros(
       params.policy.activeTurnSpendThresholdUsd,
     );
-    const alertId = [
-      "spend-alert",
-      "active-turn",
-      params.backend,
-      params.threadId,
-      params.activeTurnId,
-      thresholdMicros,
-    ].join(":");
-    const spendMicros = params.pricing.lines.reduce(
-      (total, line) =>
-        line.threadId === params.threadId
-        && line.turnId === params.activeTurnId
-        && line.scope === "turn"
-        && line.turnUsageAttributed !== false
-        && line.priceStatus === "priced"
-        && line.currency.toUpperCase() === "USD"
-          ? total + line.totalCostMicros
-          : total,
-      0,
-    );
-    if (
-      spendMicros >= thresholdMicros
-      && !params.triggeredAlertIds.has(alertId)
-    ) {
-      alerts.push({
-        alertId,
-        createdAt: now,
-        currency: "USD",
-        kind: "active-turn-spend",
-        spendMicros,
-        threadId: params.threadId,
+    for (const activeTurnId of new Set(params.activeTurnIds ?? [])) {
+      const alertId = [
+        "spend-alert",
+        "active-turn",
+        params.backend,
+        params.threadId,
+        activeTurnId,
         thresholdMicros,
-        turnId: params.activeTurnId,
-      });
+      ].join(":");
+      const spendMicros = params.pricing.lines.reduce(
+        (total, line) =>
+          line.threadId === params.threadId
+          && line.turnId === activeTurnId
+          && line.scope === "turn"
+          && line.turnUsageAttributed !== false
+          && line.priceStatus === "priced"
+          && line.currency.toUpperCase() === "USD"
+            ? total + line.totalCostMicros
+            : total,
+        0,
+      );
+      if (
+        spendMicros >= thresholdMicros
+        && !params.triggeredAlertIds.has(alertId)
+      ) {
+        alerts.push({
+          alertId,
+          createdAt: now,
+          currency: "USD",
+          kind: "active-turn-spend",
+          spendMicros,
+          threadId: params.threadId,
+          thresholdMicros,
+          turnId: activeTurnId,
+        });
+      }
     }
   }
 

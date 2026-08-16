@@ -59,8 +59,9 @@ export function toolOutputCapShare(outputChars: number): number {
  */
 export function isFlaggedToolInvocation(
   invocation: Pick<ThreadToolInvocationRecord, "noisy" | "outputChars">,
+  largeOutputThresholdChars = TOOL_OUTPUT_WARNING_CHARS,
 ): boolean {
-  return invocation.noisy || invocation.outputChars >= TOOL_OUTPUT_WARNING_CHARS;
+  return invocation.noisy || invocation.outputChars >= largeOutputThresholdChars;
 }
 
 /**
