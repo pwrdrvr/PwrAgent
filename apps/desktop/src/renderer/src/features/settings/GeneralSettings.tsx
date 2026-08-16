@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import type {
   DesktopSettingsSnapshot,
-  DesktopToolOutputAlertPolicy,
   DesktopUpdateChannel,
   DesktopUpdateTrain,
 } from "@pwragent/shared";
@@ -198,9 +197,6 @@ export function GeneralSettings(props: {
   onUpdateChannelChange: (value: DesktopUpdateChannel) => Promise<void>;
   onUpdateTrainChange: (value: DesktopUpdateTrain) => Promise<void>;
   onNotificationsEnabledChange: (value: boolean) => Promise<void>;
-  onToolOutputAlertsChange: (
-    patch: Partial<DesktopToolOutputAlertPolicy>,
-  ) => Promise<void>;
   onClearMessagingAcknowledgment: () => Promise<void>;
 }) {
   const [releaseVersions, setReleaseVersions] = useState<
@@ -225,7 +221,6 @@ export function GeneralSettings(props: {
     props.snapshot.general.attentionPromoteOnTurnEnd;
   const pdfAnalysisEnabled = props.snapshot.general.pdfAnalysisEnabled;
   const notificationsEnabled = props.snapshot.general.notificationsEnabled;
-  const toolOutputAlerts = props.snapshot.general.toolOutputAlerts;
   const updateChannel = props.snapshot.updates.channel;
   const updateTrain = props.snapshot.updates.train;
   const messagingAcknowledgment =
@@ -421,66 +416,6 @@ export function GeneralSettings(props: {
                 label="Move a thread to the top when its turn finishes"
                 onChange={(next) => {
                   void props.onAttentionPromoteOnTurnEndChange(next);
-                }}
-              />
-            }
-          />
-        </div>
-      </SettingsSection>
-
-      <SettingsSection
-        eyebrow="General"
-        title="Tool-use alerts"
-        chip={sourceBadge(toolOutputAlerts.repeatedLargeOutputsEnabled)}
-      >
-        <div className="settings-fields">
-          <SettingsField
-            label="Tool output reaches the cap"
-            sub="Alert immediately when one tool call reaches the model-visible output cap and is truncated."
-            source={sourceBadge(toolOutputAlerts.outputCapHitsEnabled)}
-            control={
-              <SettingsSwitch
-                checked={toolOutputAlerts.outputCapHitsEnabled.value}
-                disabled={props.saving}
-                label="Tool output reaches the cap"
-                onChange={(next) => {
-                  void props.onToolOutputAlertsChange({
-                    outputCapHitsEnabled: next,
-                  });
-                }}
-              />
-            }
-          />
-          <SettingsField
-            label="Repeated large tool outputs"
-            sub="Alert after five tool calls in one turn each produce at least 50% of the model-visible output cap."
-            source={sourceBadge(toolOutputAlerts.repeatedLargeOutputsEnabled)}
-            control={
-              <SettingsSwitch
-                checked={toolOutputAlerts.repeatedLargeOutputsEnabled.value}
-                disabled={props.saving}
-                label="Repeated large tool outputs"
-                onChange={(next) => {
-                  void props.onToolOutputAlertsChange({
-                    repeatedLargeOutputsEnabled: next,
-                  });
-                }}
-              />
-            }
-          />
-          <SettingsField
-            label="Repeated queued checks"
-            sub="Alert when repeated wait or polling calls keep waking the model and replaying the turn context."
-            source={sourceBadge(toolOutputAlerts.repeatedQueuedChecksEnabled)}
-            control={
-              <SettingsSwitch
-                checked={toolOutputAlerts.repeatedQueuedChecksEnabled.value}
-                disabled={props.saving}
-                label="Repeated queued checks"
-                onChange={(next) => {
-                  void props.onToolOutputAlertsChange({
-                    repeatedQueuedChecksEnabled: next,
-                  });
                 }}
               />
             }

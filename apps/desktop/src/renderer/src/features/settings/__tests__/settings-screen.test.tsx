@@ -843,22 +843,6 @@ describe("SettingsScreen", () => {
       });
     });
 
-    expect(
-      screen.getByRole("switch", { name: "Repeated large tool outputs" }),
-    ).toHaveAttribute("aria-checked", "true");
-    fireEvent.click(
-      screen.getByRole("switch", { name: "Repeated large tool outputs" }),
-    );
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        general: {
-          toolOutputAlerts: {
-            repeatedLargeOutputsEnabled: false,
-          },
-        },
-      });
-    });
-
     expect(await screen.findByText("v1.0.0-beta.7")).toBeInTheDocument();
     expect(screen.getByRole("radio", { name: /Stable/ })).toHaveAttribute(
       "aria-checked",
@@ -951,6 +935,24 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("heading", { name: "Usage & pricing" }),
     ).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: "Alerts" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("switch", { name: "Repeated large tool outputs" }),
+    ).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Repeated large tool outputs" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: {
+          toolOutputAlerts: {
+            repeatedLargeOutputsEnabled: false,
+          },
+        },
+      });
+    });
     fireEvent.click(
       screen.getByRole("switch", {
         name: "Show thread pricing",

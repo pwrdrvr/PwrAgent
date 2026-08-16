@@ -421,11 +421,6 @@ function SettingsSectionBody(props: {
             general: { notificationsEnabled },
           });
         }}
-        onToolOutputAlertsChange={async (toolOutputAlerts) => {
-          await props.settings.writeConfig({
-            general: { toolOutputAlerts },
-          });
-        }}
         onClearMessagingAcknowledgment={async () => {
           await props.settings.writeConfig({
             general: { messagingAcknowledgment: null },
@@ -506,6 +501,11 @@ function SettingsSectionBody(props: {
         onThreadPricingDisplayCodexCreditsChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { threadPricingDisplayCodexCredits: enabled },
+          });
+        }}
+        onToolOutputAlertsChange={async (toolOutputAlerts) => {
+          await props.settings.writeConfig({
+            general: { toolOutputAlerts },
           });
         }}
       />

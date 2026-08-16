@@ -1,4 +1,7 @@
-import type { DesktopSettingsSnapshot } from "@pwragent/shared";
+import type {
+  DesktopSettingsSnapshot,
+  DesktopToolOutputAlertPolicy,
+} from "@pwragent/shared";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -29,6 +32,9 @@ export function PricingSettings(props: {
   onThreadPricingSummaryChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayUsdChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayCodexCreditsChange: (enabled: boolean) => Promise<void>;
+  onToolOutputAlertsChange: (
+    patch: Partial<DesktopToolOutputAlertPolicy>,
+  ) => Promise<void>;
 }) {
   const threadPricingSummary =
     props.snapshot.experimental.threadPricingSummary ??
@@ -39,6 +45,7 @@ export function PricingSettings(props: {
   const threadPricingDisplayCodexCredits =
     props.snapshot.experimental.threadPricingDisplayCodexCredits ??
     DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS;
+  const toolOutputAlerts = props.snapshot.general.toolOutputAlerts;
   const displayControlsDisabled = props.saving || !threadPricingSummary.value;
 
   return (
@@ -46,7 +53,7 @@ export function PricingSettings(props: {
       <SettingsPanelHead
         eyebrow="Pricing"
         title="Usage & pricing"
-        help="Control how estimated thread usage costs are shown."
+        help="Control how thread usage costs are shown and which usage patterns raise alerts."
       />
 
       <SettingsSection
@@ -114,6 +121,67 @@ export function PricingSettings(props: {
                   Codex Credits
                 </button>
               </div>
+            }
+          />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Usage"
+        title="Alerts"
+        description="Choose which costly or lossy tool-use patterns should interrupt you."
+        chip={sourceBadge(toolOutputAlerts.repeatedLargeOutputsEnabled)}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Tool output reaches the cap"
+            sub="Alert immediately when one tool call reaches the model-visible output cap and is truncated."
+            source={sourceBadge(toolOutputAlerts.outputCapHitsEnabled)}
+            control={
+              <SettingsSwitch
+                checked={toolOutputAlerts.outputCapHitsEnabled.value}
+                disabled={props.saving}
+                label="Tool output reaches the cap"
+                onChange={(next) => {
+                  void props.onToolOutputAlertsChange({
+                    outputCapHitsEnabled: next,
+                  });
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Repeated large tool outputs"
+            sub="Alert after five tool calls in one turn each produce at least 50% of the model-visible output cap."
+            source={sourceBadge(toolOutputAlerts.repeatedLargeOutputsEnabled)}
+            control={
+              <SettingsSwitch
+                checked={toolOutputAlerts.repeatedLargeOutputsEnabled.value}
+                disabled={props.saving}
+                label="Repeated large tool outputs"
+                onChange={(next) => {
+                  void props.onToolOutputAlertsChange({
+                    repeatedLargeOutputsEnabled: next,
+                  });
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Repeated queued checks"
+            sub="Alert when repeated wait or polling calls keep waking the model and replaying the turn context."
+            source={sourceBadge(toolOutputAlerts.repeatedQueuedChecksEnabled)}
+            control={
+              <SettingsSwitch
+                checked={toolOutputAlerts.repeatedQueuedChecksEnabled.value}
+                disabled={props.saving}
+                label="Repeated queued checks"
+                onChange={(next) => {
+                  void props.onToolOutputAlertsChange({
+                    repeatedQueuedChecksEnabled: next,
+                  });
+                }}
+              />
             }
           />
         </div>
