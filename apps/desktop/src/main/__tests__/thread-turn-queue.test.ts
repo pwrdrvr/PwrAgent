@@ -151,14 +151,10 @@ describe("ThreadTurnQueue", () => {
     });
   });
 
-  it("drains a queued submission when an in-flight start rejects after release", async () => {
+  it("keeps queued submissions after an in-flight start rejects after release", async () => {
     let rejectStart!: (reason?: unknown) => void;
-    let resolveSecondStarted!: () => void;
     const starting = new Promise<never>((_resolve, reject) => {
       rejectStart = reject;
-    });
-    const secondStarted = new Promise<void>((resolve) => {
-      resolveSecondStarted = resolve;
     });
     const startedEntries: string[] = [];
     const queue = new ThreadTurnQueue({
@@ -167,7 +163,6 @@ describe("ThreadTurnQueue", () => {
           return await starting;
         }
         startedEntries.push(entry.id);
-        resolveSecondStarted();
         return {
           backend: entry.backend,
           threadId: entry.threadId,
@@ -188,10 +183,10 @@ describe("ThreadTurnQueue", () => {
     rejectStart(new Error("backend rejected start"));
 
     await expect(first).rejects.toThrow("backend rejected start");
-    await secondStarted;
-    expect(startedEntries).toEqual(["second"]);
+    await Promise.resolve();
+    expect(startedEntries).toEqual([]);
     expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
-      .toEqual([]);
+      .toMatchObject([{ id: "second" }]);
   });
 
   it("waits for a later release when a failed start leaves the thread active", async () => {
@@ -261,14 +256,16 @@ describe("ThreadTurnQueue", () => {
     expect(startedEntries).toEqual(["queued-1"]);
   });
 
-  it("starts later queued entries when one queued start fails", async () => {
+  it("retains a failed queued entry and retries it before later entries", async () => {
     let active = true;
+    let rejectBadEntry = true;
     const startedEntries: string[] = [];
+    const events: ThreadTurnQueueLifecycleEvent[] = [];
     const failed = new Error("backend rejected start");
     const queue = new ThreadTurnQueue({
       isThreadActive: () => active,
       startTurn: async (entry) => {
-        if (entry.id === "bad-entry") {
+        if (entry.id === "bad-entry" && rejectBadEntry) {
           throw failed;
         }
         startedEntries.push(entry.id);
@@ -278,7 +275,9 @@ describe("ThreadTurnQueue", () => {
           turnId: `turn-${entry.id}`,
         };
       },
-      onLifecycle: vi.fn(),
+      onLifecycle: (event) => {
+        events.push(event);
+      },
     });
 
     await queue.submit(buildEntry({ id: "bad-entry" }));
@@ -287,7 +286,24 @@ describe("ThreadTurnQueue", () => {
     active = false;
     await queue.releaseThread({ backend: "codex", threadId: "thread-1" });
 
-    expect(startedEntries).toEqual(["good-entry"]);
+    expect(startedEntries).toEqual([]);
+    expect(queue.getQueuedEntries({ backend: "codex", threadId: "thread-1" }))
+      .toMatchObject([{ id: "bad-entry" }, { id: "good-entry" }]);
+    expect(events.map((event) => event.type)).toEqual([
+      "queued",
+      "queued",
+      "blocked",
+    ]);
+
+    rejectBadEntry = false;
+    await queue.releaseThread({ backend: "codex", threadId: "thread-1" });
+    expect(startedEntries).toEqual(["bad-entry"]);
+    await queue.releaseThread({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-bad-entry",
+    });
+    expect(startedEntries).toEqual(["bad-entry", "good-entry"]);
   });
 
   it("cancels pending queue entries by id", async () => {

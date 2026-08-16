@@ -88,6 +88,16 @@ export type ThreadTurnQueueLifecycleEvent =
       error: Error;
     }
   | {
+      /**
+       * A queued entry could not start and remains at the front of its FIFO.
+       * A later terminal/idle signal may retry it; this is not a terminal
+       * failure of the queued request.
+       */
+      type: "blocked";
+      entry: ThreadTurnQueueEntry;
+      error: Error;
+    }
+  | {
       type: "cancelled";
       entry: ThreadTurnQueueEntry;
       reason?: string;
@@ -308,15 +318,25 @@ export class ThreadTurnQueue {
       this.queuedEntries.delete(key);
     }
     try {
-      await this.startEntry(next);
-    } catch {
-      await this.startNext(key);
+      await this.startEntry(next, { deferFailureEvent: true });
+    } catch (error) {
+      // A rejected start says nothing about whether this thread can safely
+      // accept a different queued request. Keep this entry at the FIFO head
+      // and wait for a later terminal/idle signal before another attempt.
+      this.queueFor(key).unshift(next);
+      await this.emit({
+        type: "blocked",
+        entry: next,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
     }
   }
 
-  private async startEntry(entry: ThreadTurnQueueEntry): Promise<ThreadTurnQueueStartResult> {
+  private async startEntry(
+    entry: ThreadTurnQueueEntry,
+    options?: { deferFailureEvent?: boolean },
+  ): Promise<ThreadTurnQueueStartResult> {
     const key = this.keyFor(entry);
-    let startFailed = false;
     this.startingKeys.add(key);
     this.rememberAdmittedEntry({ entryId: entry.id });
     try {
@@ -333,26 +353,15 @@ export class ThreadTurnQueue {
       await this.emit({ type: "started", entry, turnId: result.turnId });
       return result;
     } catch (error) {
-      startFailed = true;
       this.recentlyAdmittedEntries.delete(entry.id);
       const normalized = error instanceof Error ? error : new Error(String(error));
-      await this.emit({ type: "failed", entry, error: normalized });
+      if (!options?.deferFailureEvent) {
+        await this.emit({ type: "failed", entry, error: normalized });
+      }
       throw normalized;
     } finally {
       this.startingKeys.delete(key);
-      if (startFailed) {
-        void this.drainAfterFailedStart(entry);
-      }
     }
-  }
-
-  private async drainAfterFailedStart(entry: ThreadTurnQueueEntry): Promise<void> {
-    const params = {
-      backend: entry.backend,
-      threadId: entry.threadId,
-    };
-    if (this.options.isThreadActive?.(params) ?? false) return;
-    await this.startNext(this.keyFor(params));
   }
 
   private queueFor(key: string): ThreadTurnQueueEntry[] {

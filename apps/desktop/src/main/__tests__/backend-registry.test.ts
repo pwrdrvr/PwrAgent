@@ -16257,7 +16257,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("drains submissions queued behind a rejected in-flight Codex start", async () => {
+  it("retains submissions queued behind a rejected in-flight Codex start", async () => {
     const startTurnDelay = createDeferred<void>();
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
@@ -16286,12 +16286,15 @@ command = "pnpm dev"
     startTurnDelay.resolve();
 
     await expect(first).rejects.toThrow("first start failed");
-    await vi.waitFor(() => {
-      expect(codexClient.startTurnCallCount).toBe(2);
-    });
-    expect(codexClient.startTurnCalls[0]).toMatchObject({
-      threadId: "thread-1",
-      input: [{ type: "text", text: "second" }],
+    await Promise.resolve();
+    expect(codexClient.startTurnCallCount).toBe(1);
+    expect(registry.getQueuedTurnsSnapshot()).toEqual({
+      [buildThreadIdentityKey("codex", "thread-1")]: [
+        expect.objectContaining({
+          displayText: "second",
+          position: 0,
+        }),
+      ],
     });
 
     await registry.close();
@@ -25877,7 +25880,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("keeps failed workspace move state when failure continuation cannot start", async () => {
+  it("keeps failed workspace move state and queued work when failure continuation cannot start", async () => {
     const thread: AppServerThreadSummary = {
       id: "ordinary-thread",
       title: "Parent Thread",
@@ -25965,10 +25968,18 @@ script = "printf setup"
     expect(registry.canStartThreadTurnImmediately({
       backend: "codex",
       threadId: "ordinary-thread",
-    })).toBe(true);
+    })).toBe(false);
+    expect(registry.getQueuedTurnsSnapshot()).toEqual({
+      [buildThreadIdentityKey("codex", "ordinary-thread")]: [
+        expect.objectContaining({
+          displayText: "queued normal turn",
+          position: 0,
+        }),
+      ],
+    });
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
-      count: 0,
-      threadIds: [],
+      count: 1,
+      threadIds: [buildThreadIdentityKey("codex", "ordinary-thread")],
     });
 
     await registry.publishLocalEvent({
@@ -26016,7 +26027,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("releases queued turns when success continuation cannot start", async () => {
+  it("retains queued turns when success continuation cannot start", async () => {
     const thread: AppServerThreadSummary = {
       id: "ordinary-thread",
       title: "Parent Thread",
@@ -26120,10 +26131,18 @@ script = "printf setup"
     expect(registry.canStartThreadTurnImmediately({
       backend: "codex",
       threadId: "ordinary-thread",
-    })).toBe(true);
+    })).toBe(false);
+    expect(registry.getQueuedTurnsSnapshot()).toEqual({
+      [buildThreadIdentityKey("codex", "ordinary-thread")]: [
+        expect.objectContaining({
+          displayText: "queued normal turn",
+          position: 0,
+        }),
+      ],
+    });
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
-      count: 0,
-      threadIds: [],
+      count: 1,
+      threadIds: [buildThreadIdentityKey("codex", "ordinary-thread")],
     });
 
     await registry.publishLocalEvent({
