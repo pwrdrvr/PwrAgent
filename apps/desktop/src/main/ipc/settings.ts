@@ -675,6 +675,9 @@ export function installedAcpAgentSettingsEntry(
     ...(record.incompatibleInstances !== undefined
       ? { incompatibleInstances: record.incompatibleInstances }
       : {}),
+    ...(record.rejectedInstances !== undefined
+      ? { rejectedInstances: record.rejectedInstances }
+      : {}),
     ...(record.activeCommand !== undefined
       ? { activeCommand: record.activeCommand }
       : {}),
