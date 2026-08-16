@@ -19,6 +19,7 @@
 - Treat plans as decision records. Do not use them as implementation scripts.
 - Follow the active plan unless the user changes the scope.
 - Treat brainstorms, plans, and solutions as historical records.
+  - The record directories are `docs/brainstorms/`, `docs/plans/`, and `docs/solutions/`.
   - Do not delete or rewrite a record without explicit user authorization.
   - You may update the plan that the current branch implements.
   - Limit updates to progress, dependencies, and resolved implementation questions.
@@ -34,7 +35,7 @@
 - Keep model-visible command output bounded.
 - Tool output becomes thread context. Later turns can replay that output.
 - For broad discovery, start with `rg -l` or `rg --count-matches`.
-- Exclude tests from discovery unless tests are in scope.
+- Exclude `__tests__` from discovery unless tests are in scope.
 - After discovery, inspect only the files and line ranges that you need.
 - Use `rg -n -C` only with a selected file or a small file set.
 - Use the minimum context that supports the next decision.
@@ -151,7 +152,7 @@
 - The renderer also uses the classic React Hooks rules.
 - The ESLint configuration has no style rules.
 - Fix all ESLint errors.
-- Existing `no-explicit-any`, `exhaustive-deps`, and intentional patterns can produce warnings.
+- ESLint sets existing `no-explicit-any`, `exhaustive-deps`, and intentional patterns to `warn`.
 - CI blocks errors. CI does not block warnings.
 - Do not add style or whitespace rules to ESLint.
 - Do not use `eslint --fix` to format code.
@@ -162,7 +163,7 @@
 - Format code by hand.
 - Prettier is not a dependency.
 - The repository has no `.prettierrc`, `format` script, or CI formatting step.
-- Never run `npx prettier` or `prettier --write` on repository files.
+- Never run `npx prettier`, `npx prettier --write`, or `prettier --write` on repository files.
 - Without a local dependency, `npx` downloads Prettier and uses its default configuration.
 - Those defaults conflict with the hand-maintained repository style.
 - The defaults also reformat unchanged code.
@@ -203,7 +204,7 @@
 
 - Use Conventional Commit-style PR titles: `type(scope): short description`.
 - Select the scope that matches the changed area:
-  - Use `messaging` for adapters and messaging integrations.
+  - Use `messaging` for Telegram, Discord, adapters, and messaging integrations.
   - Use `desktop` for the desktop application.
   - Use `agent-core` for coding-agent backends and ACP integration.
   - Use `release` for packaging, signing, notarization, distribution, and automatic updates.
@@ -245,6 +246,7 @@
 
 These variables are for development only.
 
+- A build is packaged when `app.isPackaged === true`.
 - Production operators must not set these variables.
 - A packaged build ignores each variable.
 - If a packaged build finds one, startup writes a `mainLog.error` entry.
@@ -262,7 +264,7 @@ These variables are for development only.
 
 - Skip all `safeStorage` operations.
 - The wizard silently discards secrets that the operator enters.
-- Secret indicators on the Settings screen report `unavailable`.
+- Secret pills on the Settings screen report `unavailable`.
 - Use this workaround only for unsigned development builds on macOS.
 - Those builds can show a `Keychain Not Found` dialog because they have no stable signing identity.
 - Signed release builds do not have this problem.
@@ -383,7 +385,7 @@ Canonical primitives and the tokens they read:
   - Draft storage is machine-wide, but each window reads it only during mount.
   - A second window does not update its Draft chips until it restarts.
   - Launchpad composer text has no thread row.
-  - Therefore, the lens label refers to replies.
+  - Therefore, the lens label uses `replies`.
   - Its empty state is `No unsent replies.`
 
 ### Inbox, Recents, and Directories
@@ -438,6 +440,7 @@ Canonical primitives and the tokens they read:
 Never weaken the dependency boundary rules.
 
 - `.dependency-cruiser.cjs` defines the layered architecture.
+- `dependency-cruiser` reads this configuration.
 - Do not add an exception or allowlist to that file.
 - Do not add a `severity: "ignore"` override.
 - Do not import from a package above the current package layer.
