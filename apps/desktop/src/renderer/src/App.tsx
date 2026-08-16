@@ -27,7 +27,12 @@ import {
   type NavigationDirectorySummary,
   type NavigationThreadSummary,
   type PrAutoDispatchBudgetStatus,
+  type ThreadToolAccounting,
+  type ThreadToolIncidentNoticeState,
   type ThreadToolInvocationAlert,
+  type ThreadUsageLineRecord,
+  type SetThreadToolIncidentNoticeRequest,
+  resolveToolIncidentVisibility,
 } from "@pwragent/shared";
 import { Sidebar } from "./features/navigation/Sidebar";
 import { useThreadJump } from "./features/navigation/useThreadJump";
@@ -107,9 +112,11 @@ import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/git
 import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
 import {
   buildToolAccountingNotice,
-  resolveDismissedToolIncident,
-  toolAccountingNoticeId,
 } from "./features/notifications/tool-accounting-notice";
+import {
+  buildThreadIncidentSummary,
+  threadIncidentNoticeId,
+} from "./features/notifications/thread-incident-summary";
 import {
   buildHeapSnapshotHandoffMessage,
   describeHeapSnapshotResult,
@@ -339,10 +346,22 @@ function DesktopAppShell(props: {
   // effect below, once `navigation` is defined.
   const backendErrorThreadsRef = useRef<NavigationThreadSummary[]>([]);
   const backendErrorDirectoriesRef = useRef<NavigationDirectorySummary[]>([]);
-  const dismissedToolIncidentSeverityRef = useRef(new Map<
+  /* Per-thread incident disposition, keyed by notice id. Mirrors what the
+     overlay persists so a reply to a live notification does not need to wait
+     on a round trip to know whether the operator already silenced this. */
+  const toolIncidentStateRef = useRef(new Map<
     string,
-    ThreadToolInvocationAlert["severity"]
+    ThreadToolIncidentNoticeState
   >());
+  /* Usage rows for the loaded thread only — the renderer's pricing ledger is
+     session-scoped. A background thread's card therefore reports replayed
+     tokens and no money until the accounting notification carries a spend
+     figure of its own. */
+  const threadUsageLinesRef = useRef(new Map<
+    string,
+    readonly ThreadUsageLineRecord[]
+  >());
+  const showIncidentCostRef = useRef(false);
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
@@ -660,92 +679,156 @@ function DesktopAppShell(props: {
       if (event.notification.method === "thread/toolAccounting/updated") {
         const params = event.notification.params as {
           threadId: string;
+          incidentNotice?: ThreadToolIncidentNoticeState;
+          toolAccounting?: ThreadToolAccounting;
           triggeredAlerts?: ThreadToolInvocationAlert[];
         };
-        for (const alert of params.triggeredAlerts ?? []) {
-          const noticeId = toolAccountingNoticeId(alert);
-          const dismissedSeverity = dismissedToolIncidentSeverityRef.current.get(
-            noticeId,
-          );
-          const dismissalResolution = resolveDismissedToolIncident({
-            dismissedSeverity,
-            incomingSeverity: alert.severity,
+        /* One card per thread, folded from the whole accounting snapshot,
+           rather than one per triggered alert. The per-alert loop this
+           replaces minted a durable notice per turn — a busy thread reached
+           "1 of 41" in the stack with no way to clear them in bulk. */
+        if (!params.toolAccounting) return;
+        /* Only a freshly tripped threshold raises the card. Folding on every
+           accounting update would re-alert on last week's calls the first
+           time an old thread runs anything, which is history, not an
+           incident. The fold still summarizes the whole thread once a new
+           alert makes it worth showing. */
+        if (!params.triggeredAlerts?.length) return;
+        const noticeId = threadIncidentNoticeId({
+          backend: event.backend,
+          threadId: params.threadId,
+        });
+        /* Persisted disposition wins over anything this session inferred: it
+           may predate this renderer entirely. */
+        if (params.incidentNotice) {
+          toolIncidentStateRef.current.set(noticeId, {
+            ...toolIncidentStateRef.current.get(noticeId),
+            ...params.incidentNotice,
           });
-          if (dismissalResolution === "suppress") {
-            continue;
-          }
-          if (dismissalResolution === "escalate") {
-            dismissedToolIncidentSeverityRef.current.delete(noticeId);
-          }
-          const matchingThread = backendErrorThreadsRef.current.find(
-            (thread) =>
-              thread.source === event.backend
-              && thread.id === params.threadId
-              && federationTargetsEqual(
-                thread.federation?.ref.target,
-                event.federationTarget,
-              ),
-          );
-          const threadLink = matchingThread
-            ? {
-                backend: matchingThread.source,
-                inThreadList: true,
-                ...(instanceId ? { instanceId } : {}),
-                threadId: matchingThread.id,
-                title: matchingThread.title,
-                titleSource: matchingThread.titleSource,
-                gitBranch: matchingThread.gitBranch,
-                linkedDirectories: matchingThread.linkedDirectories,
-              }
-            : undefined;
-          const dismiss = (): void => {
-            dismissedToolIncidentSeverityRef.current.set(
-              noticeId,
-              alert.severity,
-            );
-            dispatchAppNotice({ type: "dismiss", id: noticeId });
+        }
+        const incidentState = toolIncidentStateRef.current.get(noticeId);
+        const summary = buildThreadIncidentSummary({
+          accounting: params.toolAccounting,
+          backend: event.backend,
+          ...(incidentState?.firstWarningAt !== undefined
+            ? { firstWarningAt: incidentState.firstWarningAt }
+            : {}),
+          threadId: params.threadId,
+          usageLines: threadUsageLinesRef.current.get(
+            buildThreadIdentityKey(event.backend, params.threadId),
+          ),
+        });
+        if (!summary) return;
+        if (
+          resolveToolIncidentVisibility({
+            severity: summary.severity,
+            ...(incidentState ? { state: incidentState } : {}),
+          }) === "suppress"
+        ) {
+          return;
+        }
+        const matchingThread = backendErrorThreadsRef.current.find(
+          (thread) =>
+            thread.source === event.backend
+            && thread.id === params.threadId
+            && federationTargetsEqual(
+              thread.federation?.ref.target,
+              event.federationTarget,
+            ),
+        );
+        const threadLink = matchingThread
+          ? {
+              backend: matchingThread.source,
+              inThreadList: true,
+              ...(instanceId ? { instanceId } : {}),
+              threadId: matchingThread.id,
+              title: matchingThread.title,
+              titleSource: matchingThread.titleSource,
+              gitBranch: matchingThread.gitBranch,
+              linkedDirectories: matchingThread.linkedDirectories,
+            }
+          : undefined;
+        const persistIncident = (
+          patch: Omit<SetThreadToolIncidentNoticeRequest, "backend" | "threadId">,
+        ): void => {
+          const next: ThreadToolIncidentNoticeState = {
+            ...toolIncidentStateRef.current.get(noticeId),
+            ...(summary.firstWarningAt !== undefined
+              ? { firstWarningAt: summary.firstWarningAt }
+              : {}),
+            ...(patch.dismissedSeverity
+              ? { dismissedSeverity: patch.dismissedSeverity }
+              : {}),
+            ...(patch.mutedSeverity ? { mutedSeverity: patch.mutedSeverity } : {}),
           };
-          const examine = (): void => {
-            const threadKey = buildThreadIdentityKey(
+          toolIncidentStateRef.current.set(noticeId, next);
+          void desktopApi?.setThreadToolIncidentNotice?.({
+            backend: event.backend,
+            ...(summary.firstWarningAt !== undefined
+              ? { firstWarningAt: summary.firstWarningAt }
+              : {}),
+            ...patch,
+            threadId: params.threadId,
+          }).catch(() => undefined);
+        };
+        const dismiss = (): void => {
+          persistIncident({ dismissedSeverity: summary.severity });
+          dispatchAppNotice({ type: "dismiss", id: noticeId });
+        };
+        const mute = (): void => {
+          persistIncident({
+            dismissedSeverity: summary.severity,
+            mutedSeverity: summary.severity,
+          });
+          dispatchAppNotice({ type: "dismiss", id: noticeId });
+        };
+        const examine = (): void => {
+          const threadKey = buildThreadIdentityKey(
+            event.backend,
+            params.threadId,
+          );
+          const matchingDirectory =
+            backendErrorDirectoriesRef.current.find(
+              (directory) =>
+                directory.kind === "directory"
+                && directory.threadKeys.includes(threadKey),
+            )
+            ?? backendErrorDirectoriesRef.current.find((directory) =>
+              directory.threadKeys.includes(threadKey)
+            );
+          const projectLabel =
+            matchingDirectory?.label
+            ?? matchingThread?.linkedDirectories[0]?.label;
+          void desktopApi?.openToolOutputIncidentExplorerWindow?.({
+            backend: event.backend,
+            ...(projectLabel ? { projectLabel } : {}),
+            threadId: params.threadId,
+            title: matchingThread?.title ?? labelForThread(
               event.backend,
               params.threadId,
-            );
-            const matchingDirectory =
-              backendErrorDirectoriesRef.current.find(
-                (directory) =>
-                  directory.kind === "directory"
-                  && directory.threadKeys.includes(threadKey),
-              )
-              ?? backendErrorDirectoriesRef.current.find((directory) =>
-                directory.threadKeys.includes(threadKey)
-              );
-            const projectLabel =
-              matchingDirectory?.label
-              ?? matchingThread?.linkedDirectories[0]?.label;
-            void desktopApi?.openToolOutputIncidentExplorerWindow?.({
-              backend: event.backend,
-              ...(projectLabel ? { projectLabel } : {}),
-              threadId: params.threadId,
-              title: matchingThread?.title ?? labelForThread(
-                event.backend,
-                params.threadId,
-              ),
-            });
-          };
-          const showNotice = (): void => {
-            const notice = buildToolAccountingNotice({
-              alert,
-              onExamine: examine,
-              onDismiss: dismiss,
-              threadLink,
-            });
-            dispatchAppNotice({
-              type: "show",
-              notice,
-            });
-          };
-          showNotice();
+            ),
+          });
+        };
+        /* Anchor the cost window the first time this thread warns. Recording
+           it only on dismissal would date the window to whenever the operator
+           happened to click, not to the first warning. */
+        if (
+          incidentState?.firstWarningAt === undefined
+          && summary.firstWarningAt !== undefined
+        ) {
+          persistIncident({});
         }
+        dispatchAppNotice({
+          type: "show",
+          notice: buildToolAccountingNotice({
+            onDismiss: dismiss,
+            onExamine: examine,
+            onMute: mute,
+            showCost: showIncidentCostRef.current,
+            summary,
+            threadLink,
+          }),
+        });
         return;
       }
       // Params are cast explicitly: the AppServerNotification union is too
@@ -1050,6 +1133,18 @@ function DesktopAppShell(props: {
     backendErrorThreadsRef.current = navigation.threads;
     backendErrorDirectoriesRef.current = navigation.directories;
   }, [navigation.directories, navigation.threads]);
+  /* Incident-notice inputs the live notification handler reads without
+     re-subscribing: which thread is on screen, whether the operator has
+     pricing display on, and the loaded thread's usage rows. */
+  useEffect(() => {
+    showIncidentCostRef.current =
+      (settings.snapshot?.experimental.threadPricingSummary?.value ?? true)
+      && (
+        (settings.snapshot?.experimental.threadPricingDisplayUsd?.value ?? true)
+        || (settings.snapshot?.experimental.threadPricingDisplayCodexCredits
+          ?.value ?? false)
+      );
+  }, [settings.snapshot?.experimental]);
   const backendSummaries = useBackendSummaries(desktopApi, {
     enabled: normalAppEnabled,
     federationTarget: activeFederationTarget,
@@ -1638,6 +1733,16 @@ function DesktopAppShell(props: {
           void desktopApi?.openStarMapWindow?.();
         },
       };
+  useEffect(() => {
+    const thread = navigation.selectedThread;
+    const lines = session.response?.pricing?.lines;
+    if (!thread || !lines) return;
+    threadUsageLinesRef.current.set(
+      buildThreadIdentityKey(thread.source, thread.id),
+      lines,
+    );
+  }, [navigation.selectedThread, session.response?.pricing?.lines]);
+
   const threadViewProps = {
     activeFederationOwnerLabel,
     activeFederationTarget,

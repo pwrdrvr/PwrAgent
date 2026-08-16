@@ -2,8 +2,12 @@ import type {
   AppServerBackendKind,
   ThreadToolAccounting,
   ThreadToolAnalysisCoverage,
+  ThreadToolInvocationAlert,
   ThreadToolInvocationRecord,
 } from "./normalized-app-server";
+import type { FederationTarget } from "./federation";
+
+type ThreadToolInvocationSeverity = ThreadToolInvocationAlert["severity"];
 
 /**
  * Characters per output token. A coarse estimate, but the same one the
@@ -47,6 +51,80 @@ export function isFlaggedToolInvocation(
 ): boolean {
   return invocation.noisy || invocation.outputChars >= TOOL_OUTPUT_WARNING_CHARS;
 }
+
+/**
+ * Per-thread state for the consolidated tool-output incident notice.
+ *
+ * One incident per thread, not one per turn. The alert stream is per-turn, so
+ * a busy thread minted a fresh durable notice every time it tripped a
+ * threshold — forty-one cards behind a pager, each needing its own dismissal.
+ * This is the state that lets a thread's incidents collapse into a single
+ * card that updates in place, and that survives a restart so an unread
+ * incident is still there when the operator comes back to the thread.
+ */
+export type ThreadToolIncidentNoticeState = {
+  /** When this thread first tripped a threshold. The cost baseline. */
+  firstWarningAt?: number;
+  /** Operator dismissed the card at this severity. */
+  dismissedSeverity?: ThreadToolInvocationSeverity;
+  dismissedAt?: number;
+  /**
+   * Operator asked not to be warned again at this severity. A strictly higher
+   * severity still breaks through — muting "the output is getting large" must
+   * not also mute "the output hit the cap and was truncated".
+   */
+  mutedSeverity?: ThreadToolInvocationSeverity;
+  mutedAt?: number;
+};
+
+export type ThreadToolIncidentSeverityRank = 0 | 1;
+
+/** Ordered so a comparison reads as "is this worse than what was silenced". */
+export function rankToolIncidentSeverity(
+  severity: ThreadToolInvocationSeverity,
+): ThreadToolIncidentSeverityRank {
+  return severity === "critical" ? 1 : 0;
+}
+
+/**
+ * Whether an incident at `severity` should surface, given what the operator
+ * already dismissed or muted for this thread.
+ */
+export function resolveToolIncidentVisibility(params: {
+  severity: ThreadToolInvocationSeverity;
+  state?: ThreadToolIncidentNoticeState;
+}): "show" | "suppress" {
+  const incoming = rankToolIncidentSeverity(params.severity);
+  const muted = params.state?.mutedSeverity;
+  if (muted !== undefined && incoming <= rankToolIncidentSeverity(muted)) {
+    return "suppress";
+  }
+  const dismissed = params.state?.dismissedSeverity;
+  if (dismissed !== undefined && incoming <= rankToolIncidentSeverity(dismissed)) {
+    return "suppress";
+  }
+  return "show";
+}
+
+export type SetThreadToolIncidentNoticeRequest = {
+  backend?: AppServerBackendKind;
+  federationTarget?: FederationTarget;
+  threadId: string;
+  /** Records a dismissal at this severity. */
+  dismissedSeverity?: ThreadToolInvocationSeverity;
+  /** Records a mute at this severity. Higher severities still surface. */
+  mutedSeverity?: ThreadToolInvocationSeverity;
+  /** First observed warning, recorded once so the cost baseline is stable. */
+  firstWarningAt?: number;
+  /** Clears dismissal and mute — the un-mute path. */
+  reset?: boolean;
+};
+
+export type SetThreadToolIncidentNoticeResponse = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  state: ThreadToolIncidentNoticeState;
+};
 
 export type OpenToolOutputIncidentExplorerWindowRequest = {
   backend: AppServerBackendKind;

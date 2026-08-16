@@ -2191,6 +2191,59 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return nextState;
   }
 
+  /**
+   * Records the operator's disposition of this thread's tool-output incident.
+   * `firstWarningAt` is written once and never moved forward, so the cost
+   * window the notice reports stays anchored to the first warning even after
+   * a restart drops the older accounting rows out of the live snapshot.
+   */
+  async setThreadToolIncidentNotice(params: {
+    backend: ThreadOverlayState["backend"];
+    dismissedAt?: number;
+    dismissedSeverity?: "critical" | "warning";
+    firstWarningAt?: number;
+    mutedAt?: number;
+    mutedSeverity?: "critical" | "warning";
+    reset?: boolean;
+    threadId: string;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const existing = current.toolIncidentNotice;
+    const firstWarningAt = existing?.firstWarningAt
+      ?? params.firstWarningAt;
+    const nextNotice = params.reset
+      ? (firstWarningAt !== undefined ? { firstWarningAt } : undefined)
+      : {
+          ...existing,
+          ...(firstWarningAt !== undefined ? { firstWarningAt } : {}),
+          ...(params.dismissedSeverity
+            ? {
+                dismissedSeverity: params.dismissedSeverity,
+                dismissedAt: params.dismissedAt ?? Date.now(),
+              }
+            : {}),
+          ...(params.mutedSeverity
+            ? {
+                mutedSeverity: params.mutedSeverity,
+                mutedAt: params.mutedAt ?? Date.now(),
+              }
+            : {}),
+        };
+    const nextState: ThreadOverlayState = {
+      ...current,
+      ...(nextNotice ? { toolIncidentNotice: nextNotice } : {}),
+    };
+    if (!nextNotice) delete nextState.toolIncidentNotice;
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async setThreadArchiveTombstone(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;

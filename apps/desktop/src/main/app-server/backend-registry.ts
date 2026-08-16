@@ -10758,6 +10758,12 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
     });
+    /* The operator's dismissal/mute for this thread, so a freshly launched
+       renderer honors a decision made in an earlier session. */
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
     await this.emit({
       backend: params.backend,
       notification: {
@@ -10765,6 +10771,9 @@ export class DesktopBackendRegistry {
         params: {
           threadId: params.threadId,
           toolAccounting,
+          ...(overlay?.toolIncidentNotice
+            ? { incidentNotice: overlay.toolIncidentNotice }
+            : {}),
           ...(params.triggeredAlerts?.length
             ? { triggeredAlerts: params.triggeredAlerts }
             : {}),

@@ -140,9 +140,11 @@ export function ToolOutputIncidentExplorerWindow() {
        safer failure than an unexplained empty list. */
     return entry ? new Set<RefinedToolCategory>(entry.members) : undefined;
   }, [category, composition]);
+  /* Counted over every recorded call, not just flagged ones: a command that
+     ran eight times and tripped the size test five times repeated eight. */
   const repeatedCommands = useMemo(
-    () => countRepeatedCommands(flagged),
-    [flagged],
+    () => countRepeatedCommands(allInvocations),
+    [allInvocations],
   );
   /* Every turn, not just the rows the strip had room for — a case in a turn
      that fell below the row limit still belongs to that turn. */
@@ -827,11 +829,11 @@ function TurnTimeline(props: {
               <span aria-hidden="true" className="incident-explorer__timeline-tokens">
                 <i
                   data-critical={row.overCapCount > 0}
-                  style={{ height: `${scaleWidth(row.estimatedOutputTokens, maxTokens)}%` }}
+                  style={{ height: `${scaleWidth(row.estimatedOutputTokens, maxTokens, 0)}%` }}
                 />
               </span>
               <span aria-hidden="true" className="incident-explorer__timeline-trips">
-                <i style={{ height: `${scaleWidth(row.callCount, maxCalls)}%` }} />
+                <i style={{ height: `${scaleWidth(row.callCount, maxCalls, 0)}%` }} />
               </span>
             </button>
           );
@@ -908,9 +910,16 @@ function Fact(props: {
   );
 }
 
-function scaleWidth(value: number, max: number): number {
+/**
+ * Strip bars floor at 2% so a small-but-real value stays visible and the row
+ * stays readable. `floor: 0` is for the spark, where a turn with genuinely no
+ * output must paint nothing — a floored bar there would read as low activity
+ * instead of none, blurring the contrast the polling band depends on.
+ */
+function scaleWidth(value: number, max: number, floor = 2): number {
   if (max <= 0) return 0;
-  return Math.max(2, Math.round(value / max * 100));
+  if (value <= 0) return floor === 0 ? 0 : floor;
+  return Math.max(floor, Math.round(value / max * 100));
 }
 
 function describeAvailability(invocation: ThreadToolInvocationRecord): string {

@@ -125,6 +125,8 @@ import {
   type SetThreadPinResponse,
   type SetThreadReactionRequest,
   type SetThreadReactionResponse,
+  type SetThreadToolIncidentNoticeRequest,
+  type SetThreadToolIncidentNoticeResponse,
   type SetNavigationBrowseModeRequest,
   type SetNavigationBrowseModeResponse,
   type ListThreadMigrationSourceThreadsRequest,
@@ -250,6 +252,7 @@ import {
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
+  NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL,
@@ -366,6 +369,7 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
     | "setRemoteThreadLocalPin"
     | "listRemoteThreadPins"
     | "updateRemoteThreadPinSnapshots"
+    | "setThreadToolIncidentNotice"
   >;
 
 type ThreadPrRefreshContext = {
@@ -5747,6 +5751,40 @@ class DesktopAppServerService {
     return await fetcher.getAuthStatus();
   }
 
+  async setThreadToolIncidentNotice(
+    request: SetThreadToolIncidentNoticeRequest,
+  ): Promise<SetThreadToolIncidentNoticeResponse> {
+    /* Deliberately not federated. Dismissing or muting a cost warning is the
+       viewer's own preference about what it wants to be told, the same
+       reasoning that keeps composer drafts machine-local — a peer should not
+       inherit this operator's decision to stop being warned. */
+    const backend = request.backend ?? "codex";
+    const overlay = await this.getOverlayStore().setThreadToolIncidentNotice({
+      backend,
+      ...(request.dismissedSeverity
+        ? { dismissedSeverity: request.dismissedSeverity }
+        : {}),
+      ...(request.firstWarningAt !== undefined
+        ? { firstWarningAt: request.firstWarningAt }
+        : {}),
+      ...(request.mutedSeverity ? { mutedSeverity: request.mutedSeverity } : {}),
+      ...(request.reset ? { reset: request.reset } : {}),
+      threadId: request.threadId,
+    });
+    logDebug("setThreadToolIncidentNotice", {
+      backend,
+      dismissedSeverity: request.dismissedSeverity,
+      mutedSeverity: request.mutedSeverity,
+      reset: request.reset === true,
+      threadId: request.threadId,
+    });
+    return {
+      backend,
+      state: overlay.toolIncidentNotice ?? {},
+      threadId: request.threadId,
+    };
+  }
+
   async setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> {
@@ -7631,6 +7669,16 @@ export function registerAppServerIpcHandlers(): void {
       request: SetThreadReactionRequest,
     ): Promise<SetThreadReactionResponse> => {
       return await appServerService.setThreadReaction(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
+    async (
+      _event,
+      request: SetThreadToolIncidentNoticeRequest,
+    ): Promise<SetThreadToolIncidentNoticeResponse> => {
+      return await appServerService.setThreadToolIncidentNotice(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_PIN_CHANNEL);
