@@ -195,6 +195,13 @@ jobs:
         uses: actions/checkout@v7
         timeout-minutes: 10
 
+      - name: Install Node.js
+        uses: pwrdrvr/configure-nodejs@v1
+        timeout-minutes: 10
+        with:
+          node-version: 24.18.0
+          cache-electron: "true"
+
       - name: Install Vale
         timeout-minutes: 10
         run: |
