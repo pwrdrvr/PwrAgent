@@ -197,8 +197,8 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     const cases = await screen.findByLabelText("Incident cases");
     const rows = within(cases).getAllByRole("button", { name: /chars/ });
     expect(rows[0]).toHaveAttribute("title", expect.stringContaining("wide-scan"));
-    expect(rows[0]).toHaveTextContent("50% of cap");
-    expect(rows[1]).toHaveTextContent("15% of cap");
+    expect(rows[0]).toHaveTextContent("75% of cap");
+    expect(rows[1]).toHaveTextContent("60% of cap");
   });
 
   it("reports round trips per turn, counting calls that were never flagged", async () => {
@@ -317,7 +317,7 @@ function buildResponse(
     ...buildInvocation(),
     invocationId: `invocation-${index + 1}`,
     itemId: `item-${index + 1}`,
-    outputChars: 8_000 + index * 1_000,
+    outputChars: 24_000 + index * 1_000,
   }));
   return {
     backend: "codex",
@@ -374,12 +374,12 @@ function buildMultiTurnResponse(): AppServerReadThreadResponse {
     {
       ...base,
       category: "shell",
-      estimatedOutputTokens: 5_000,
+      estimatedOutputTokens: 7_500,
       invocationId: "invocation-wide",
       itemId: "item-wide",
       normalizedCommand: "rg --files wide-scan",
       observedAt: 1_800_000_000_000,
-      outputChars: 20_000,
+      outputChars: 30_000,
       turnId: "turn-1",
     },
     {
@@ -409,12 +409,12 @@ function buildMultiTurnResponse(): AppServerReadThreadResponse {
     {
       ...base,
       category: "build-test",
-      estimatedOutputTokens: 1_500,
+      estimatedOutputTokens: 6_000,
       invocationId: "invocation-tests",
       itemId: "item-tests",
       normalizedCommand: "pnpm test",
       observedAt: 1_800_000_003_000,
-      outputChars: 6_000,
+      outputChars: 24_000,
       turnId: "turn-2",
     },
   ];
@@ -438,7 +438,7 @@ function buildInvocation(): ThreadToolInvocationRecord {
     category: "build-test",
     debugLines: 0,
     errorLines: 1,
-    estimatedOutputTokens: 2_000,
+    estimatedOutputTokens: 6_000,
     infoLines: 0,
     invocationId: "invocation-1",
     itemId: "item-1",
@@ -446,7 +446,7 @@ function buildInvocation(): ThreadToolInvocationRecord {
     noisyReason: "verbose-build-test",
     normalizedCommand: "pnpm test",
     observedAt: 1_800_000_000_000,
-    outputChars: 8_000,
+    outputChars: 24_000,
     outputLines: 200,
     outputState: "available",
     outputTruncated: false,
