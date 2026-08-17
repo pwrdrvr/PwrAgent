@@ -165,6 +165,12 @@ describe("CodexDiscoveryCoordinator", () => {
     const command = "C:\\nvm4w\\nodejs\\codex";
     const coordinator = new CodexDiscoveryCoordinator({
       discover: async () => unvalidatedSnapshot(command),
+      // Pin both seams: without them this test falls through to
+      // process.platform and the real sibling probe, which on a Windows box
+      // with this exact layout installed stats the filesystem and spawns a
+      // real `codex.cmd --version`.
+      discoverWindows: async () => [],
+      platform: "darwin",
       resolveEnv: async () => ({ PATH: "C:\\nvm4w\\nodejs" }),
     });
 
@@ -208,6 +214,7 @@ describe("CodexDiscoveryCoordinator", () => {
     };
     const coordinator = new CodexDiscoveryCoordinator({
       discover: async () => snapshot,
+      discoverWindows: async () => [],
       platform: "win32",
       resolveEnv: async () => ({ PATH: "C:\\nvm4w\\nodejs" }),
     });

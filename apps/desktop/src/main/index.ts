@@ -151,7 +151,11 @@ import {
   isAppStateInitialized,
   recordBootDecision,
 } from "./state/app-state";
-import { createMainWindow, syncHotCpuProfilersFromSettings } from "./window";
+import {
+  createMainWindow,
+  getRendererEntry,
+  syncHotCpuProfilersFromSettings,
+} from "./window";
 import { subscribersForChannel } from "./window-channels";
 import { requestOpenNewThread } from "./window-open-new-thread";
 import { requestOpenSettings } from "./window-open-settings";
@@ -284,7 +288,14 @@ function clearBootWatchdog(): void {
 }
 
 function resolveBootWatchdogMs(): number {
-  return app.isPackaged ? BOOT_WATCHDOG_PACKAGED_MS : BOOT_WATCHDOG_DEV_MS;
+  // Key on the renderer's actual load path, not the build mode. `isPackaged`
+  // is false for `pnpm test:desktop-e2e` and `pnpm start` too, both of which
+  // load a prebuilt bundle in about a second — giving those the dev budget
+  // silently disabled the watchdog in the one automated lane that would ever
+  // catch a boot hang.
+  return getRendererEntry().kind === "url"
+    ? BOOT_WATCHDOG_DEV_MS
+    : BOOT_WATCHDOG_PACKAGED_MS;
 }
 
 function startBootWatchdog(): void {

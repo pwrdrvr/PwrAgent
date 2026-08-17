@@ -7,7 +7,10 @@ import {
   type CodexDiscoverySnapshot,
   type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
-import { discoverWindowsCodexCandidates } from "./codex-windows-launch";
+import {
+  discoverWindowsCodexCandidates,
+  isValidatedCandidate,
+} from "./codex-windows-launch";
 
 export const CODEX_DISCOVERY_SUCCESS_TTL_MS = 5 * 60_000;
 export const CODEX_DISCOVERY_NOT_INSTALLED_TTL_MS = 15_000;
@@ -297,25 +300,18 @@ function normalizeCodexDiscoverySnapshot(
     }
     return candidate;
   });
-  const isValidated = (
-    candidate: (typeof normalizedCandidates)[number],
-  ): boolean =>
-    candidate.executable
-    && Boolean(candidate.version)
-    && !candidate.failureReason
-    && !candidate.versionFailureReason;
   const fixedIndex = normalizedCandidates.findIndex(
-    (candidate) => candidate.source === "env" && isValidated(candidate),
+    (candidate) => candidate.source === "env" && isValidatedCandidate(candidate),
   );
   const configuredIndex = normalizedCandidates.findIndex(
-    (candidate) => candidate.source === "config" && isValidated(candidate),
+    (candidate) => candidate.source === "config" && isValidatedCandidate(candidate),
   );
   const automaticIndex = normalizedCandidates
     .map((candidate, index) => ({ candidate, index }))
     .filter(
       ({ candidate }) =>
         (candidate.source === "path" || candidate.source === "application")
-        && isValidated(candidate),
+        && isValidatedCandidate(candidate),
     )
     .sort(
       (left, right) =>
@@ -372,22 +368,25 @@ function mergeCodexDiscoveryCandidates(
   if (platform !== "win32") {
     return merged;
   }
-  const isValidated = (
-    candidate: (typeof merged)[number],
-  ): boolean =>
-    candidate.executable
-    && Boolean(candidate.version)
-    && !candidate.failureReason
-    && !candidate.versionFailureReason;
   // npm writes `codex`, `codex.cmd`, and `codex.ps1` side by side. Once one
   // of them validates, its unusable twins are noise on the Settings screen
   // and would only invite the operator to select a broken launch path.
+  //
+  // Scoped to automatic sources on purpose. A candidate the operator set
+  // explicitly must keep its row even when a sibling validates: dropping it
+  // hides both the fact that their path was rejected and the reason, and
+  // leaves `configuredIndex` with nothing to select while the app quietly
+  // launches a different binary.
   const validatedBases = new Set(
-    merged.filter(isValidated).map((candidate) => stripExtension(candidate.command)),
+    merged
+      .filter(isValidatedCandidate)
+      .map((candidate) => stripExtension(candidate.command)),
   );
   return merged.filter(
     (candidate) =>
-      isValidated(candidate)
+      isValidatedCandidate(candidate)
+      || candidate.source === "env"
+      || candidate.source === "config"
       || !validatedBases.has(stripExtension(candidate.command)),
   );
 }

@@ -866,6 +866,7 @@ function GitCandidateRow(props: {
     <SettingsPathRow
       title={candidate.command}
       path={commandDiscoveryFailureDetail(candidate.failureReason)}
+      pathIsDetail
       chips={chips}
       selected={candidate.selected}
       disabled
@@ -884,11 +885,11 @@ function GhCandidateRow(props: {
     { label: candidate.source, tone: "muted" },
   ];
   if (candidate.executable) {
+    // Only a real version belongs in the version slot. Routing a failure
+    // label through here produced rows reading "Launch failed" next to
+    // "Available"; the reason now rides the detail line instead.
     chips.push({
-      label:
-        candidate.version
-        ?? describeCommandDiscoveryFailure(candidate.versionFailureReason)
-        ?? "version unknown",
+      label: candidate.version ?? "version unknown",
       tone: candidate.version ? "muted" : "err",
     });
   } else {
@@ -910,6 +911,7 @@ function GhCandidateRow(props: {
       path={commandDiscoveryFailureDetail(
         candidate.failureReason ?? candidate.versionFailureReason,
       )}
+      pathIsDetail
       chips={chips}
       selected={candidate.selected}
       disabled={props.disabled || !candidate.executable}

@@ -2912,6 +2912,49 @@ describe("SettingsScreen", () => {
     expect(getGhStatus).toHaveBeenCalledWith({ recheck: true });
   });
 
+  it("shows the installed version on a Codex rejected as too old", async () => {
+    // Upstream builds a codex_too_old candidate as executable:false WITH a
+    // version — the rejection is derived from parsing one. Gating the version
+    // chip on usability therefore hid the number on every platform, and
+    // commandDiscoveryFailureDetail returns undefined for a classified reason
+    // so the detail line could not recover it either.
+    const snapshot = createSnapshot();
+    snapshot.models.codex.discovery = {
+      selectedCommand: "",
+      selectedSource: "path",
+      candidates: [
+        {
+          command: "/usr/local/bin/codex",
+          executable: false,
+          failureReason: "codex_too_old",
+          selected: false,
+          source: "path",
+          version: "0.100.0",
+        },
+      ],
+    };
+
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    const chips = Array.from(
+      document.querySelectorAll(".settings-pathrow__chip"),
+    ).map((chip) => chip.textContent ?? "");
+    expect(chips).toContain("0.100.0");
+    expect(chips).toContain("Codex too old");
+
+    // Still unusable: no Use button on a rejected candidate.
+    const row = Array.from(document.querySelectorAll(".settings-pathrow")).find(
+      (candidate) => candidate.textContent?.includes("/usr/local/bin/codex"),
+    )!;
+    expect(within(row as HTMLElement).queryByRole("button")).toBeNull();
+  });
+
   it("keeps a raw Codex spawn error out of the status chips", async () => {
     // Regression: a failed Windows probe returns a whole command line as its
     // reason. The row used to render it as BOTH the version chip and the

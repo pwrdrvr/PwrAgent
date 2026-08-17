@@ -114,8 +114,17 @@ export function ModelsSettings(props: {
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const codex = props.snapshot.models.codex;
   const envForced = codex.path.source === "env";
+  // Automatic sources, plus any fixed candidate that failed. An operator who
+  // pins a path needs to see why it was rejected — filtering config/env rows
+  // out unconditionally hid the failure reason from the only person who could
+  // act on it, including the "PowerShell shim" diagnostic, which is only ever
+  // emitted for a path someone typed.
   const autoCandidates = codex.discovery.candidates.filter(
-    (candidate) => candidate.source === "path" || candidate.source === "application",
+    (candidate) =>
+      candidate.source === "path"
+      || candidate.source === "application"
+      || !candidate.executable
+      || Boolean(candidate.failureReason),
   );
   // Per-field source pill text — shows where the effective value
   // comes from (config / env override / default). Used on both the
@@ -224,6 +233,11 @@ export function ModelsSettings(props: {
                   disabled={props.saving || envForced}
                   placeholder="Auto discovery"
                   value={codexPath}
+                  // Blur still commits. Requiring Enter or the button meant
+                  // clicking Test, switching fields, or closing Settings threw
+                  // the typed path away with no feedback, and the effect that
+                  // syncs from the snapshot then reset the box.
+                  onBlur={() => saveCodexPath(codexPath)}
                   onChange={(event) => setCodexPath(event.currentTarget.value)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {
@@ -1352,15 +1366,25 @@ function CodexCandidateRow(props: {
   // reason it cannot be used. The old row emitted the failure twice — once as
   // the version and again as the status — which is what put `spawn EPERM`
   // on the same row two ways.
+  // `executable` is not a usability test on Windows: it comes from
+  // fs.access(X_OK), which succeeds for any existing file, so an sh shim
+  // scores true. Gate on the same predicate the main process selects with.
+  const usable =
+    candidate.executable
+    && Boolean(candidate.version)
+    && !candidate.failureReason
+    && !candidate.versionFailureReason;
+
   const chips: SettingsPathRowChip[] = [
     { key: "source", label: candidate.source, tone: "muted" },
   ];
-  if (candidate.executable) {
-    chips.push({
-      key: "version",
-      label: candidate.version ?? "version unknown",
-      tone: "muted",
-    });
+  // A version is worth showing whenever we have one, including on a rejected
+  // candidate — "Codex too old" without a number leaves the operator unable
+  // to tell how far behind they are.
+  if (candidate.version) {
+    chips.push({ key: "version", label: candidate.version, tone: "muted" });
+  }
+  if (usable) {
     if (!candidate.selected) {
       chips.push({ key: "status", label: "Available", tone: "muted" });
     }
@@ -1376,11 +1400,12 @@ function CodexCandidateRow(props: {
     <SettingsPathRow
       title={candidate.command}
       path={commandDiscoveryFailureDetail(reason)}
+      pathIsDetail
       chips={chips}
       selected={candidate.selected}
       selectedLabel="Using"
-      disabled={props.disabled || !candidate.executable}
-      onUse={candidate.executable ? () => props.onUse(candidate.command) : undefined}
+      disabled={props.disabled || !usable}
+      onUse={usable ? () => props.onUse(candidate.command) : undefined}
     />
   );
 }

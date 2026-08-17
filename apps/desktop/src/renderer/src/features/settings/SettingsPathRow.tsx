@@ -30,6 +30,11 @@ export function SettingsPathRow(props: {
   title?: ReactNode;
   /** Mono secondary path beneath the title. */
   path?: string;
+  /**
+   * Render `path` as wrapping prose rather than a single ellipsized line.
+   * Set it when the value is a failure reason instead of a filesystem path.
+   */
+  pathIsDetail?: boolean;
   /** Right-side status chips (source / version / state). */
   chips?: SettingsPathRowChip[];
   /** Whether this row is the currently-active selection. */
@@ -66,7 +71,12 @@ export function SettingsPathRow(props: {
           </span>
         ) : null}
         {props.path ? (
-          <span className="settings-pathrow__path" title={props.path}>
+          <span
+            className={`settings-pathrow__path${
+              props.pathIsDetail ? " settings-pathrow__path--detail" : ""
+            }`}
+            title={props.path}
+          >
             {props.path}
           </span>
         ) : null}

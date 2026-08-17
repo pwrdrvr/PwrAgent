@@ -19,7 +19,16 @@ const CLASSIFIED_FAILURE_LABELS: Record<string, string> = {
   not_found: "Missing",
   powershell_shim_unsupported: "PowerShell shim",
   version_not_reported: "Version unknown",
+  version_probe_timed_out: "Timed out",
 };
+
+function classifiedLabel(reason: string): string | undefined {
+  // Bracket access alone would resolve "constructor" / "toString" through the
+  // prototype and hand a Function to React as a chip label.
+  return Object.hasOwn(CLASSIFIED_FAILURE_LABELS, reason)
+    ? CLASSIFIED_FAILURE_LABELS[reason]
+    : undefined;
+}
 
 export function isClassifiedCommandDiscoveryFailure(reason: string): boolean {
   return Object.hasOwn(CLASSIFIED_FAILURE_LABELS, reason);
@@ -36,7 +45,7 @@ export function describeCommandDiscoveryFailure(
   extra?: (reason: string) => string | undefined,
 ): string | undefined {
   if (!reason) return undefined;
-  const classified = CLASSIFIED_FAILURE_LABELS[reason];
+  const classified = classifiedLabel(reason);
   if (classified) return classified;
   const domain = extra?.(reason);
   if (domain) return domain;
@@ -58,7 +67,7 @@ export function commandDiscoveryFailureDetail(
   extra?: (reason: string) => string | undefined,
 ): string | undefined {
   if (!reason) return undefined;
-  if (isClassifiedCommandDiscoveryFailure(reason) || extra?.(reason)) {
+  if (Object.hasOwn(CLASSIFIED_FAILURE_LABELS, reason) || extra?.(reason)) {
     return undefined;
   }
   return reason;

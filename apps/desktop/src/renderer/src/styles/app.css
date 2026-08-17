@@ -9768,6 +9768,21 @@ textarea,
   white-space: nowrap;
 }
 
+/*
+ * Discovery failure text is prose, not a path: a spawn error is a full command
+ * line, and clipping it to one nowrap line left about 24 of 170 characters
+ * readable, recoverable only by hovering a non-focusable span. Let it wrap to
+ * a couple of lines and stay selectable.
+ */
+.settings-pathrow__path--detail {
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: normal;
+  user-select: text;
+}
+
 .settings-pathrow.is-selected .settings-pathrow__title {
   color: var(--accent-bright);
 }

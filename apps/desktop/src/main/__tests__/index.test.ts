@@ -8,6 +8,10 @@ const processEventHandlers = new Map<string, (...args: unknown[]) => void>();
 // (quit-on-main-window-close).
 const mainWindowHandlers = new Map<string, (...args: unknown[]) => void>();
 const createMainWindowMock = vi.fn();
+const getRendererEntryMock = vi.fn(() => ({
+  kind: "file" as "file" | "url",
+  value: "/app/renderer/index.html",
+}));
 const registerAppServerIpcHandlersMock = vi.fn();
 const disposeAppServerIpcHandlersMock = vi.fn();
 const registerAgentIpcHandlersMock = vi.fn();
@@ -265,6 +269,11 @@ vi.mock("electron", () => ({
 
 vi.mock("../window", () => ({
   createMainWindow: createMainWindowMock,
+  // The boot watchdog budget keys on this: "url" means the renderer comes
+  // from the Vite dev server, "file" means a prebuilt bundle. The suite's
+  // default is the file path, so the packaged 25s budget applies unless a
+  // test overrides it.
+  getRendererEntry: getRendererEntryMock,
   syncHotCpuProfilersFromSettings: vi.fn(),
 }));
 
@@ -574,6 +583,12 @@ describe("bootstrapApp", () => {
     );
     mainWindowHandlers.clear();
     createMainWindowMock.mockReset();
+    // Default to the prebuilt-bundle renderer so the short watchdog budget
+    // applies unless a test opts into the dev-server path.
+    getRendererEntryMock.mockReturnValue({
+      kind: "file",
+      value: "/app/renderer/index.html",
+    });
     // createMainWindow returns the BrowserWindow; index.ts wraps each call in
     // quitAppOnMainWindowClose(window), which calls window.on("close", …).
     // Return a stub that records its listeners so tests can invoke them.
@@ -885,16 +900,9 @@ describe("bootstrapApp", () => {
 
     await import("../index");
     await flushMicrotasks();
-
-    // `app.isPackaged` is false in this suite, so the development budget
-    // applies. The packaged budget must not fire here: a Vite dev-server
-    // renderer legitimately takes longer than that to reach ready-to-show on
-    // slow hardware, and firing early puts a failure dialog in front of a
-    // healthy boot.
+    // Prebuilt-bundle renderer (the default here, and what both packaged
+    // builds and the E2E harness load), so the short budget applies.
     await vi.advanceTimersByTimeAsync(25_000);
-    expect(showMessageBoxSyncMock).not.toHaveBeenCalled();
-
-    await vi.advanceTimersByTimeAsync(155_000);
 
     expect(showMessageBoxSyncMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -904,6 +912,31 @@ describe("bootstrapApp", () => {
     expect(mainLogErrorMock).toHaveBeenCalledWith(
       "startup failed before the main window appeared",
       expect.objectContaining({ reason: "watchdog-timeout" }),
+    );
+  });
+
+  it("waits longer for a boot failure when the renderer is a dev server", async () => {
+    vi.useFakeTimers();
+    startupProfilerInstance.start.mockResolvedValue();
+    getRendererEntryMock.mockReturnValue({
+      kind: "url",
+      value: "http://localhost:5173",
+    });
+
+    await import("../index");
+    await flushMicrotasks();
+
+    // Vite transforms the whole app on the first request; on slow hardware
+    // that alone outlasts the prebuilt budget while boot is progressing
+    // normally, so the dialog must not fire yet.
+    await vi.advanceTimersByTimeAsync(25_000);
+    expect(showMessageBoxSyncMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(155_000);
+    expect(showMessageBoxSyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "PwrAgent failed to start",
+      }),
     );
   });
 

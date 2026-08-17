@@ -9,7 +9,18 @@ import {
   type CodexDiscoveryCandidate,
 } from "@pwrdrvr/codex-discovery";
 
-const CODEX_VERSION_PATTERN = /\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/;
+/**
+ * Anchored to Codex's own `--version` banner (`codex-cli 0.146.0`).
+ *
+ * A bare `\d+\.\d+\.\d+` matches anything in the combined output — a node
+ * deprecation notice, an npm warning, even a version-shaped directory in an
+ * error message. That was survivable while a junk version only mislabeled a
+ * row, but selection now ranks automatic candidates by version descending, so
+ * an unanchored match can outrank a genuine install and become the launched
+ * command.
+ */
+const CODEX_VERSION_PATTERN =
+  /\bcodex(?:-cli)?[\s/v]+(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/i;
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
 
 const POWERSHELL_SHIM_EXTENSION = ".ps1";
@@ -173,26 +184,62 @@ async function inspectCandidate(params: {
       ...(tooOld ? { failureReason: "codex_too_old" } : {}),
     };
   } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
     return {
       command: params.command,
       source: params.source,
       executable: false,
       selected: false,
-      failureReason:
-        code === "ENOENT" || code === "ENOTDIR"
-          ? "not_found"
-          : error instanceof Error
-            ? error.message
-            : String(error),
+      failureReason: classifyProbeFailure(error),
     };
   }
+}
+
+/**
+ * `execFile`'s error shape is not what the obvious `code === "ENOENT"` test
+ * expects here. A `.cmd` probe runs through the cmd.exe wrapper, and cmd.exe
+ * always exists, so `code` arrives as a numeric exit status (49, say) and a
+ * timeout arrives as `code: null` with `killed: true` and `signal: "SIGTERM"`.
+ * Classifying on the errno string alone left `not_found` unreachable and made
+ * every timeout render as a generic launch failure.
+ */
+function classifyProbeFailure(error: unknown): string {
+  const failure = error as NodeJS.ErrnoException & {
+    killed?: boolean;
+    signal?: string;
+  };
+  if (failure?.killed || failure?.signal === "SIGTERM") {
+    return "version_probe_timed_out";
+  }
+  const code = failure?.code;
+  if (code === "ENOENT" || code === "ENOTDIR") {
+    return "not_found";
+  }
+  return error instanceof Error ? error.message : String(error);
 }
 
 type SiblingTarget = {
   command: string;
   source: CodexDiscoveryCandidate["source"];
 };
+
+/**
+ * A candidate the desktop is willing to launch. `executable` alone is not
+ * that test: upstream derives it from `fs.access(X_OK)`, which succeeds for
+ * any existing file on Windows, so an sh shim scores `executable: true`.
+ */
+export function isValidatedCandidate(
+  candidate: Pick<
+    CodexDiscoveryCandidate,
+    "executable" | "failureReason" | "version" | "versionFailureReason"
+  >,
+): boolean {
+  return (
+    candidate.executable
+    && Boolean(candidate.version)
+    && !candidate.failureReason
+    && !candidate.versionFailureReason
+  );
+}
 
 /**
  * Supplements shared Codex discovery on Windows.
@@ -215,8 +262,17 @@ export async function discoverWindowsCodexCandidates(params: {
 }): Promise<CodexDiscoveryCandidate[]> {
   const runner = params.runner ?? runCodexOneShot;
   const exists = params.exists ?? defaultExists;
+  // Only a *validated* candidate should suppress a re-probe. Upstream probes
+  // with a 2s budget, and a `.cmd` shim needs ~1.5s warm, so a plain
+  // npm-global layout leaves its own `%APPDATA%\npm\codex.cmd` sitting in the
+  // candidate list as executable-but-versionless. Keying `known` on every
+  // command let that entry suppress the sibling lookup that would have
+  // re-probed the same path on this module's longer budget, and discovery
+  // still reported Missing.
   const known = new Set(
-    params.candidates.map((candidate) => candidate.command.toLowerCase()),
+    params.candidates
+      .filter(isValidatedCandidate)
+      .map((candidate) => candidate.command.toLowerCase()),
   );
   const fixedInputs: { command?: string; source: SiblingTarget["source"] }[] = [
     { command: params.env[CODEX_COMMAND_ENV]?.trim(), source: "env" },
@@ -239,8 +295,13 @@ export async function discoverWindowsCodexCandidates(params: {
     const sibling = resolveWindowsCodexSibling({ command: entry.command, exists });
     if (!sibling) {
       // A `.ps1` with no sibling is a launch dead end; say so rather than
-      // letting it look merely "not executable".
-      if (isPowerShellScript(entry.command)) {
+      // letting it look merely "not executable". Dedupe on the same key the
+      // sibling path uses: one `.ps1` reachable from both env and config must
+      // not emit two rows, because the merge matches by command and would
+      // rewrite one while leaving the other clickable.
+      const unsupportedKey = entry.command.trim().toLowerCase();
+      if (isPowerShellScript(entry.command) && !seen.has(unsupportedKey)) {
+        seen.add(unsupportedKey);
         unsupported.push({
           command: entry.command,
           source: entry.source,
