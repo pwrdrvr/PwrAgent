@@ -928,7 +928,13 @@ function installDockMenu(): void {
     .filter((profile) => materializedProfiles.has(profile.name));
   // Refresh this on every macOS run so an upgraded installation gets a Dock
   // menu even when its existing profiles registry did not otherwise change.
-  writeDockProfileSnapshot(snapshot);
+  try {
+    writeDockProfileSnapshot(snapshot);
+  } catch (error) {
+    mainLog.warn("failed to refresh Dock profile snapshot", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
   const template = buildDockProfileMenuTemplate(
     profiles,
     openProfileFromMenu,

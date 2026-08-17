@@ -624,14 +624,6 @@ function maybePrepareCodesignKeychain() {
     return;
   }
 
-  const existingIdentity = findDeveloperIdIdentity(null);
-  if (existingIdentity !== null) {
-    process.env.PWRAGENT_DOCK_PLUGIN_SIGN_IDENTITY ??= existingIdentity;
-    process.env.CSC_NAME ??=
-      stripDeveloperIdApplicationPrefix(existingIdentity);
-    return;
-  }
-
   const keychainPath = join(
     tmpdir(),
     `pwragent-codesign-${process.pid}-${Date.now()}.keychain-db`,
@@ -647,6 +639,15 @@ function maybePrepareCodesignKeychain() {
     keychainPassword,
     keychainPath,
   ]);
+  codesignKeychainCleanup = () => {
+    restoreCodesignKeychains(originalKeychains, keychainPath);
+  };
+  process.once("exit", () => {
+    if (codesignKeychainCleanup !== null) {
+      codesignKeychainCleanup();
+      codesignKeychainCleanup = null;
+    }
+  });
   runQuiet("security", [
     "set-keychain-settings",
     "-lut",
@@ -693,7 +694,6 @@ function maybePrepareCodesignKeychain() {
 
   const identity = findDeveloperIdIdentity(keychainPath);
   if (identity === null) {
-    restoreCodesignKeychains(originalKeychains, keychainPath);
     throw new Error(
       `imported ${pathToFileURL(certificatePath).href} into ${keychainPath}, `
         + "but no Developer ID Application identity was found",
@@ -703,15 +703,6 @@ function maybePrepareCodesignKeychain() {
   process.env.CSC_KEYCHAIN = keychainPath;
   process.env.PWRAGENT_DOCK_PLUGIN_SIGN_IDENTITY ??= identity;
   process.env.CSC_NAME ??= stripDeveloperIdApplicationPrefix(identity);
-  codesignKeychainCleanup = () => {
-    restoreCodesignKeychains(originalKeychains, keychainPath);
-  };
-  process.once("exit", () => {
-    if (codesignKeychainCleanup !== null) {
-      codesignKeychainCleanup();
-      codesignKeychainCleanup = null;
-    }
-  });
   console.log(`  imported CSC_LINK into temporary keychain for ${identity}`);
 }
 

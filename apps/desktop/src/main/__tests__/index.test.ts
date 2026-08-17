@@ -926,6 +926,26 @@ describe("bootstrapApp", () => {
     expect(dockSetIconMock).toHaveBeenCalledWith(nativeImageMock);
   });
 
+  it("continues startup when the Dock profile snapshot cannot be refreshed", async () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    startupProfilerInstance.start.mockResolvedValue();
+    writeDockProfileSnapshotMock.mockImplementation(() => {
+      throw new Error("cache is read-only");
+    });
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(mainLogWarnMock).toHaveBeenCalledWith(
+      "failed to refresh Dock profile snapshot",
+      { error: "cache is read-only" },
+    );
+    expect(dockSetMenuMock).toHaveBeenCalledOnce();
+    expect(createMainWindowMock).toHaveBeenCalledOnce();
+  });
+
   it("creates the first window without waiting for messaging startup", async () => {
     startupProfilerInstance.start.mockResolvedValue();
     messagingLeaseStartMock.mockReturnValue(new Promise(() => {}));
