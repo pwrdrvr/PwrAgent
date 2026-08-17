@@ -66,6 +66,10 @@ describe("desktop settings contracts", () => {
           value: false,
           source: "default",
         },
+        tokenMiserEnabled: {
+          value: false,
+          source: "default",
+        },
         toolOutputAlerts: {
           outputCapHitsEnabled: { value: true, source: "default" },
           repeatedLargeOutputsEnabled: { value: true, source: "default" },

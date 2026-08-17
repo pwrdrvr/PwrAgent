@@ -1,6 +1,6 @@
 # Token Miser implementation plan
 
-Status: Active
+Status: Implemented; awaiting operator hook approval and live trial
 
 ## Decisions
 
@@ -46,4 +46,12 @@ Status: Active
   feedback message before the parent model reads the random data.
 - 2026-08-17: Verified that the same hook is skipped without explicit hook
   trust or the unsafe bypass flag. The product will not use the bypass flag.
-
+- 2026-08-17: Added the authenticated profile-local bridge, atomic output
+  store, Luna-medium summary gate, thread-owned search/read/read-all tools,
+  seven-day and 512 MB retention bounds, and fail-open behavior.
+- 2026-08-17: Added the off-by-default Usage & Pricing switch and cumulative
+  parent-context accounting. The estimate subtracts summary and retrieved
+  tokens from the capped baseline and can report a negative saving.
+- 2026-08-17: Added and validated the isolated `pwragent-token-miser` plugin
+  source. Codex installation remains separate from exact-hook approval;
+  operators must review the installed hook with `/hooks`.

@@ -129,6 +129,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      tokenMiserEnabled: {
+        value: false,
+        source: "default",
+      },
       toolOutputAlerts: {
         outputCapHitsEnabled: { value: true, source: "default" },
         repeatedLargeOutputsEnabled: { value: true, source: "default" },
@@ -946,6 +950,16 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("heading", { name: "Alerts" }),
     ).toBeInTheDocument();
+    const tokenMiserSwitch = screen.getByRole("switch", {
+      name: "Intercept large Codex tool output",
+    });
+    expect(tokenMiserSwitch).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(tokenMiserSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { tokenMiserEnabled: true },
+      });
+    });
     expect(
       screen.getByRole("switch", { name: "Repeated large tool outputs" }),
     ).toHaveAttribute("aria-checked", "true");

@@ -781,6 +781,31 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("defaults Token Miser off and persists the opt-in", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).general.tokenMiserEnabled).toEqual({
+      value: false,
+      source: "default",
+    });
+    expect(service.resolveTokenMiserEnabled()).toBe(false);
+
+    await service.writeConfigPatch({
+      general: { tokenMiserEnabled: true },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "token_miser_enabled = true",
+    );
+    expect(service.resolveTokenMiserEnabled()).toBe(true);
+  });
+
   it("persists bounded active-turn and thread spend alerts", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

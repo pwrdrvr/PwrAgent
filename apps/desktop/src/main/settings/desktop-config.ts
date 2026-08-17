@@ -101,6 +101,7 @@ export type DesktopSettingsConfig = {
     hotCpuProfilingCaptureHeapSnapshot?: boolean;
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
+    tokenMiserEnabled?: boolean;
     toolOutputAlerts?: Partial<DesktopToolOutputAlertPolicy>;
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {
@@ -675,6 +676,9 @@ export function desktopSettingsPatchToEdits(
   }
   if (patch.general?.notificationsEnabled !== undefined) {
     set(["general", "notifications_enabled"], patch.general.notificationsEnabled);
+  }
+  if (patch.general?.tokenMiserEnabled !== undefined) {
+    set(["general", "token_miser_enabled"], patch.general.tokenMiserEnabled);
   }
   if (patch.general?.toolOutputAlerts?.outputCapHitsEnabled !== undefined) {
     set(
@@ -1703,6 +1707,7 @@ function normalizeDesktopConfig(
         general?.hot_cpu_profiling_heap_snapshot_limit,
       ),
       notificationsEnabled: readBoolean(general?.notifications_enabled),
+      tokenMiserEnabled: readBoolean(general?.token_miser_enabled),
       toolOutputAlerts: {
         outputCapHitsEnabled: readBoolean(
           generalToolOutputAlerts?.output_cap_hits_enabled,
@@ -2063,6 +2068,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
+  const tokenMiserEnabled = config.general?.tokenMiserEnabled;
   const toolOutputAlerts = config.general?.toolOutputAlerts;
   const toolOutputAlertsDefined =
     toolOutputAlerts && hasDefinedValue(toolOutputAlerts);
@@ -2084,6 +2090,7 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     attentionPromoteOnTurnEnd !== undefined ||
     pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
+    tokenMiserEnabled !== undefined ||
     toolOutputAlertsDefined ||
     spendAlertsDefined ||
     appearanceDefined ||
@@ -2127,6 +2134,9 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (notificationsEnabled !== undefined) {
       pruned.general.notificationsEnabled = notificationsEnabled;
+    }
+    if (tokenMiserEnabled !== undefined) {
+      pruned.general.tokenMiserEnabled = tokenMiserEnabled;
     }
     if (toolOutputAlertsDefined) {
       pruned.general.toolOutputAlerts = toolOutputAlerts;

@@ -33,6 +33,8 @@ import {
   type PwrAgentFederationHandler,
 } from "./pwragent-federation-agent-tools.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
+import { buildTokenMiserToolDefinitions } from "./token-miser-agent-tools.js";
+import type { TokenMiserStore } from "../token-miser/token-miser-store.js";
 
 export type ResolvedAgentToolCatalog = {
   id: AgentToolCatalogId;
@@ -49,6 +51,7 @@ export function resolveAgentToolCatalogs(params: {
   taskMonitorHandler?: PwrAgentTaskMonitorHandler;
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
   threadOrchestrationHandler?: PwrAgentThreadOrchestrationHandler;
+  tokenMiserStore?: TokenMiserStore;
 }, options?: {
   taskMonitorRole?: "parent" | "monitor" | "all";
 }): ResolvedAgentToolCatalog[] {
@@ -79,6 +82,10 @@ export function resolveAgentToolCatalogs(params: {
     params.federationHandler,
   );
   const federationDynamicTools = federationRouter.buildDynamicToolSpecs();
+  const tokenMiserRouter = new AgentToolRouter(
+    buildTokenMiserToolDefinitions(params.tokenMiserStore),
+  );
+  const tokenMiserDynamicTools = tokenMiserRouter.buildDynamicToolSpecs();
   return [
     {
       id: "automation_inspection",
@@ -173,6 +180,25 @@ export function resolveAgentToolCatalogs(params: {
           id: "federation",
           namespace: PWRAGENT_TOOL_NAMESPACE,
           tools: federationDynamicTools,
+        }),
+      },
+    },
+    {
+      id: "token_miser",
+      dynamicTools: tokenMiserDynamicTools,
+      router: tokenMiserRouter,
+      summary: {
+        id: "token_miser",
+        namespace: PWRAGENT_TOOL_NAMESPACE,
+        enabled: Boolean(params.tokenMiserStore),
+        toolCount: countDynamicTools(tokenMiserDynamicTools),
+        ...(!params.tokenMiserStore
+          ? { unavailableReason: "Token Miser is disabled." }
+          : {}),
+        fingerprint: buildCatalogFingerprint({
+          id: "token_miser",
+          namespace: PWRAGENT_TOOL_NAMESPACE,
+          tools: tokenMiserDynamicTools,
         }),
       },
     },

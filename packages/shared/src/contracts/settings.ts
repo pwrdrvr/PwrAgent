@@ -522,6 +522,11 @@ export type DesktopGeneralSettingsSnapshot = {
   hotCpuProfilingCaptureHeapSnapshot: DesktopSettingsValue<boolean>;
   hotCpuProfilingHeapSnapshotLimit: DesktopSettingsValue<number>;
   notificationsEnabled: DesktopSettingsValue<boolean>;
+  /**
+   * Replace oversized Codex tool results with a bounded summary and preserve
+   * the exact model-facing response for deliberate retrieval.
+   */
+  tokenMiserEnabled: DesktopSettingsValue<boolean>;
   toolOutputAlerts: {
     outputCapHitsEnabled: DesktopSettingsValue<boolean>;
     repeatedLargeOutputsEnabled: DesktopSettingsValue<boolean>;
@@ -739,6 +744,14 @@ export type DesktopSettingsSnapshot = {
   configPath: string;
   configError?: string;
   runtime: {
+    tokenMiser?: {
+      interceptionCount: number;
+      originalCharacters: number;
+      baselineParentTokens: number;
+      replacementTokens: number;
+      retrievedTokens: number;
+      estimatedParentTokensSaved: number;
+    };
     messaging: {
       disabled: boolean;
       disabledReason?: string;
@@ -1052,6 +1065,7 @@ export type DesktopSettingsConfigPatch = {
     hotCpuProfilingCaptureHeapSnapshot?: boolean;
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
+    tokenMiserEnabled?: boolean;
     toolOutputAlerts?: Partial<DesktopToolOutputAlertPolicy>;
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {

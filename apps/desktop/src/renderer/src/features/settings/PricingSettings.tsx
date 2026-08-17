@@ -36,12 +36,18 @@ const DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS = {
   source: "default" as const,
 };
 
+const DEFAULT_TOKEN_MISER_ENABLED = {
+  value: false,
+  source: "default" as const,
+};
+
 export function PricingSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onThreadPricingSummaryChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayUsdChange: (enabled: boolean) => Promise<void>;
   onThreadPricingDisplayCodexCreditsChange: (enabled: boolean) => Promise<void>;
+  onTokenMiserEnabledChange: (enabled: boolean) => Promise<void>;
   onSpendAlertsChange: (
     patch: Partial<DesktopSpendAlertPolicy>,
   ) => Promise<void>;
@@ -59,6 +65,9 @@ export function PricingSettings(props: {
     props.snapshot.experimental.threadPricingDisplayCodexCredits ??
     DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS;
   const toolOutputAlerts = props.snapshot.general.toolOutputAlerts;
+  const tokenMiserEnabled =
+    props.snapshot.general.tokenMiserEnabled ?? DEFAULT_TOKEN_MISER_ENABLED;
+  const tokenMiserUsage = props.snapshot.runtime.tokenMiser;
   const spendAlerts = props.snapshot.general.spendAlerts;
   const displayControlsDisabled = props.saving || !threadPricingSummary.value;
   const repeatedLargeOutputDescription =
@@ -139,6 +148,48 @@ export function PricingSettings(props: {
               </div>
             }
           />
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
+        eyebrow="Usage"
+        title="Token Miser"
+        description="Keep accidental walls of Codex tool output out of the parent thread while preserving the exact result for targeted retrieval."
+        chip={tokenMiserEnabled.value ? "On" : "Off"}
+        chipKind={tokenMiserEnabled.value ? "ok" : "default"}
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Intercept large Codex tool output"
+            sub="For results over 5,000 characters, use GPT-5.6-Luna at medium effort to return a compact summary plus search and line-range retrieval tools."
+            help="Off by default. Codex requires you to approve the exact PwrAgent hook with /hooks before it can run. New or reloaded Codex threads pick up the hook after approval. If the bridge or summarizer is unavailable, the original result passes through unchanged."
+            source={sourceBadge(tokenMiserEnabled)}
+            control={
+              <SettingsSwitch
+                checked={tokenMiserEnabled.value}
+                disabled={props.saving}
+                label="Intercept large Codex tool output"
+                onChange={(enabled) => {
+                  void props.onTokenMiserEnabledChange(enabled);
+                }}
+              />
+            }
+          />
+          {tokenMiserUsage && tokenMiserUsage.interceptionCount > 0 ? (
+            <SettingsField
+              label="Estimated parent-context savings"
+              sub={`${tokenMiserUsage.interceptionCount.toLocaleString()} intercepted results · ${tokenMiserUsage.baselineParentTokens.toLocaleString()} baseline tokens − ${tokenMiserUsage.replacementTokens.toLocaleString()} summary tokens − ${tokenMiserUsage.retrievedTokens.toLocaleString()} retrieved tokens.`}
+              help="This estimate measures tokens kept out of the parent thread after Codex's model-visible output cap. It is separate from the Luna helper's own token cost. Repeated retrievals count each time, so reading everything can make the savings negative."
+              control={
+                <span className="settings-field__value">
+                  {tokenMiserUsage.estimatedParentTokensSaved >= 0 ? "Saved " : "Added "}
+                  {Math.abs(
+                    tokenMiserUsage.estimatedParentTokensSaved,
+                  ).toLocaleString()} tokens
+                </span>
+              }
+            />
+          ) : null}
         </div>
       </SettingsSection>
 

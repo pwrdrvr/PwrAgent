@@ -174,6 +174,20 @@ describe("desktopSettingsPatchToEdits — general", () => {
     ]);
   });
 
+  it("writes the Token Miser opt-in", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        general: { tokenMiserEnabled: true },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["general", "token_miser_enabled"],
+        value: true,
+      },
+    ]);
+  });
+
   it("writes spend alert preferences", () => {
     const edits = desktopSettingsPatchToEdits({
       general: {
