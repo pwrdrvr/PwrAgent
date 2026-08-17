@@ -2153,6 +2153,7 @@ function applyThreadPrAutoDispatchUpdate(
   snapshot: NavigationSnapshot | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     enabled: boolean;
   },
@@ -2162,7 +2163,14 @@ function applyThreadPrAutoDispatchUpdate(
   }
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.threadId) {
+    if (
+      thread.source !== params.backend
+      || thread.id !== params.threadId
+      || !federationTargetsEqual(
+        thread.federation?.ref.target,
+        params.federationTarget,
+      )
+    ) {
       return thread;
     }
     changed = true;
@@ -2175,6 +2183,7 @@ function applyThreadPrAutoDispatchPendingUpdate(
   snapshot: NavigationSnapshot | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     pending: NavigationThreadSummary["prAutoDispatchPending"];
   },
@@ -2182,7 +2191,14 @@ function applyThreadPrAutoDispatchPendingUpdate(
   if (!snapshot) return snapshot;
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.threadId) {
+    if (
+      thread.source !== params.backend
+      || thread.id !== params.threadId
+      || !federationTargetsEqual(
+        thread.federation?.ref.target,
+        params.federationTarget,
+      )
+    ) {
       return thread;
     }
     changed = true;
@@ -3870,6 +3886,8 @@ export function useThreadNavigation(
         && (method === "pullRequest/status/updated"
           || method === "thread/pullRequests/updated"
           || method === "thread/reactions/updated"
+          || method === "thread/prAutoDispatch/pendingUpdated"
+          || method === "thread/prAutoDispatch/updated"
           || method === "thread/status/changed"
           || method === "turn/cancelled"
           || method === "turn/completed"
@@ -4385,11 +4403,12 @@ export function useThreadNavigation(
           ...current,
           response: applyThreadPrAutoDispatchUpdate(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             ...params,
           }),
         }));
         setOptimisticThread((current) =>
-          current?.source === event.backend && current.id === params.threadId
+          current && agentEventMatchesThread(event, current, params.threadId)
             ? { ...current, prAutoDispatchEnabled: params.enabled }
             : current
         );
@@ -4406,12 +4425,13 @@ export function useThreadNavigation(
           ...current,
           response: applyThreadPrAutoDispatchPendingUpdate(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId: params.threadId,
             pending,
           }),
         }));
         setOptimisticThread((current) =>
-          current?.source === event.backend && current.id === params.threadId
+          current && agentEventMatchesThread(event, current, params.threadId)
             ? { ...current, prAutoDispatchPending: pending }
             : current
         );
@@ -8114,7 +8134,8 @@ export function useThreadNavigation(
       }
       setSetThreadModelSettingsError(undefined);
       setOptimisticThread((current) =>
-        current && current.id === thread.id && current.source === thread.source
+        current
+        && threadSummaryIdentityKey(current) === threadSummaryIdentityKey(thread)
           ? { ...current, prAutoDispatchEnabled: enabled }
           : current
       );
@@ -8122,6 +8143,7 @@ export function useThreadNavigation(
         ...current,
         response: applyThreadPrAutoDispatchUpdate(current.response, {
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target,
           threadId: thread.id,
           enabled,
         }),
