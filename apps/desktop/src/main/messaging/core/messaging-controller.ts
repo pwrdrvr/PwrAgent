@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildReviewBranchOptions,
@@ -16968,11 +16969,11 @@ export class MessagingController {
     const variants: MessagingImagePart[][] = [params.images];
     for (const image of params.images) {
       variants.push([{ ...image, sourceUrl: undefined }]);
-      const aliases = [
+      const aliases = outboundImageClaimAliases([
         image.sourceUrl,
         image.url,
         ...(params.pathAliases ?? []),
-      ].filter((value): value is string => Boolean(value));
+      ]);
       for (const alias of aliases) {
         variants.push([{
           ...image,
@@ -19832,6 +19833,28 @@ function imageDataUrlSizeBytes(url: string): number | undefined {
 
 function assistantImageDeliverySignature(images: readonly MessagingImagePart[]): string {
   return `images:${images.map((image) => image.sourceUrl ?? image.url).join("\0")}`;
+}
+
+function outboundImageClaimAliases(
+  values: readonly (string | undefined)[],
+): string[] {
+  const aliases = new Set<string>();
+  for (const value of values) {
+    if (!value) {
+      continue;
+    }
+    aliases.add(value);
+    if (
+      value.startsWith("data:")
+      || /^https?:\/\//iu.test(value)
+    ) {
+      continue;
+    }
+    if (path.isAbsolute(value)) {
+      aliases.add(pathToFileURL(value).toString());
+    }
+  }
+  return [...aliases];
 }
 
 function automationTurnKey(params: {

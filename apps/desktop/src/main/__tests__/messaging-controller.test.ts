@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
@@ -22627,7 +22628,7 @@ describe("send_messaging_file agent tool", () => {
         url: dataUrl,
         alt: "shot.png",
         source: "assistant" as const,
-        sourceUrl: filePath,
+        sourceUrl: pathToFileURL(filePath).toString(),
       }],
     });
     await startMessagingTurn(harness);
@@ -22690,7 +22691,7 @@ describe("send_messaging_file agent tool", () => {
           url: sentUrl,
           alt: "shot.png",
           source: "assistant" as const,
-          sourceUrl: filePath,
+          sourceUrl: pathToFileURL(filePath).toString(),
         },
         {
           type: "image" as const,
