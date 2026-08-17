@@ -67,12 +67,17 @@ describe("SubAgentsPanel", () => {
               originalModel: "gpt-5.6-terra",
               baselineParentTokens: 6_000,
               baselineParentCostMicros: 15_000,
+              cachedReplayCount: 6,
+              cachedBaselineTokens: 36_000,
+              cachedBaselineCostMicros: 9_000,
               gateModel: "gpt-5.6-luna",
               gateTotalTokens: 2_100,
               gateCostMicros: 2_600,
               revealedParentTokens: 225,
               revealedParentCostMicros: 563,
-              savingsMicros: 11_837,
+              cachedRevealedTokens: 1_350,
+              cachedRevealedCostMicros: 338,
+              savingsMicros: 20_499,
             },
           }],
         }}
@@ -81,15 +86,19 @@ describe("SubAgentsPanel", () => {
 
     const savings = screen.getByLabelText("Token Miser savings");
     expect(within(savings).getByText("1 · Without gate")).toBeInTheDocument();
-    expect(savings).toHaveTextContent("$0.015");
-    expect(savings).toHaveTextContent("6,000 uncached · gpt-5.6-terra");
+    expect(savings).toHaveTextContent("$0.024");
+    expect(savings).toHaveTextContent(
+      "6,000 uncached + 36,000 cached across 6 replays · gpt-5.6-terra",
+    );
     expect(within(savings).getByText("2 · Gate model")).toBeInTheDocument();
     expect(savings).toHaveTextContent("2,100 total · gpt-5.6-luna");
     expect(within(savings).getByText("3 · Revealed to parent")).toBeInTheDocument();
-    expect(savings).toHaveTextContent("225 uncached · gpt-5.6-terra");
+    expect(savings).toHaveTextContent(
+      "225 uncached + 1,350 cached · gpt-5.6-terra",
+    );
     expect(within(savings).getByText("Savings · 1 − 2 − 3"))
       .toBeInTheDocument();
-    expect(savings).toHaveTextContent("$0.012");
+    expect(savings).toHaveTextContent("$0.021");
   });
 
   it("stops a running sub-agent and refreshes navigation", async () => {

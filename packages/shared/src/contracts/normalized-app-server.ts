@@ -1038,6 +1038,10 @@ export type ThreadTokenMiserAccounting = {
   replacementTokens: number;
   retrievedTokens: number;
   estimatedParentTokensSaved: number;
+  cachedReplayCount?: number;
+  cachedBaselineTokens?: number;
+  cachedRevealedTokens?: number;
+  estimatedCachedReplayTokensSaved?: number;
   interceptions?: ThreadTokenMiserInterceptionAccounting[];
 };
 
@@ -1052,6 +1056,11 @@ export type ThreadTokenMiserInterceptionAccounting = {
   replacementTokens: number;
   retrievedTokens: number;
   estimatedParentTokensSaved: number;
+  cachedReplayCount?: number;
+  cachedBaselineTokens?: number;
+  cachedRevealedTokens?: number;
+  estimatedCachedReplayTokensSaved?: number;
+  replayTrackingVersion?: 2;
 };
 
 export type ThreadToolAccounting = {

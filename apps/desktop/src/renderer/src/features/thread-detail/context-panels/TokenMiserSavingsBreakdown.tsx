@@ -6,6 +6,11 @@ export function TokenMiserSavingsBreakdown(props: {
 }) {
   const accounting = props.accounting;
   const savingsLabel = accounting.savingsMicros >= 0 ? "Savings" : "Net overhead";
+  const cachedReplayCount = accounting.cachedReplayCount ?? 0;
+  const cachedBaselineTokens = accounting.cachedBaselineTokens ?? 0;
+  const cachedBaselineCostMicros = accounting.cachedBaselineCostMicros ?? 0;
+  const cachedRevealedTokens = accounting.cachedRevealedTokens ?? 0;
+  const cachedRevealedCostMicros = accounting.cachedRevealedCostMicros ?? 0;
   return (
     <dl
       aria-label="Token Miser savings"
@@ -14,9 +19,17 @@ export function TokenMiserSavingsBreakdown(props: {
       <div>
         <dt>1 · Without gate</dt>
         <dd>
-          <strong>{formatTokenUsageMicrosAsUsd(accounting.baselineParentCostMicros)}</strong>
+          <strong>
+            {formatTokenUsageMicrosAsUsd(
+              accounting.baselineParentCostMicros + cachedBaselineCostMicros,
+            )}
+          </strong>
           <span>
-            {accounting.baselineParentTokens.toLocaleString()} uncached ·{" "}
+            {accounting.baselineParentTokens.toLocaleString()} uncached
+            {cachedBaselineTokens > 0
+              ? ` + ${cachedBaselineTokens.toLocaleString()} cached across ${cachedReplayCount.toLocaleString()} ${cachedReplayCount === 1 ? "replay" : "replays"}`
+              : ""}
+            {" · "}
             {accounting.originalModel}
           </span>
         </dd>
@@ -33,9 +46,17 @@ export function TokenMiserSavingsBreakdown(props: {
       <div>
         <dt>3 · Revealed to parent</dt>
         <dd>
-          <strong>{formatTokenUsageMicrosAsUsd(accounting.revealedParentCostMicros)}</strong>
+          <strong>
+            {formatTokenUsageMicrosAsUsd(
+              accounting.revealedParentCostMicros + cachedRevealedCostMicros,
+            )}
+          </strong>
           <span>
-            {accounting.revealedParentTokens.toLocaleString()} uncached ·{" "}
+            {accounting.revealedParentTokens.toLocaleString()} uncached
+            {cachedRevealedTokens > 0
+              ? ` + ${cachedRevealedTokens.toLocaleString()} cached`
+              : ""}
+            {" · "}
             {accounting.originalModel}
           </span>
         </dd>

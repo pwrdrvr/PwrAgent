@@ -256,11 +256,16 @@ export type TokenMiserSubAgentAccounting = {
   originalServiceTier?: string;
   baselineParentTokens: number;
   baselineParentCostMicros: number;
+  cachedReplayCount?: number;
+  cachedBaselineTokens?: number;
+  cachedBaselineCostMicros?: number;
   gateModel: string;
   gateTotalTokens: number;
   gateCostMicros: number;
   revealedParentTokens: number;
   revealedParentCostMicros: number;
+  cachedRevealedTokens?: number;
+  cachedRevealedCostMicros?: number;
   savingsMicros: number;
 };
 

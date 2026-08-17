@@ -2292,6 +2292,9 @@ describe("ThreadContextPanel", () => {
             tokenMiserAccounting: {
               baselineParentCostMicros: 15_000,
               baselineParentTokens: 6_000,
+              cachedReplayCount: 6,
+              cachedBaselineTokens: 36_000,
+              cachedBaselineCostMicros: 9_000,
               currency: "USD",
               gateCostMicros: 2_600,
               gateModel: "gpt-5.6-luna",
@@ -2299,7 +2302,9 @@ describe("ThreadContextPanel", () => {
               originalModel: "gpt-5.6-terra",
               revealedParentCostMicros: 563,
               revealedParentTokens: 225,
-              savingsMicros: 11_837,
+              cachedRevealedTokens: 1_350,
+              cachedRevealedCostMicros: 338,
+              savingsMicros: 20_499,
             },
             updatedAt: 1_800_000_000_100,
           },
@@ -2319,13 +2324,14 @@ describe("ThreadContextPanel", () => {
 
     const savings = screen.getByLabelText("Token Miser savings");
     expect(within(savings).getByText("1 · Without gate")).toBeInTheDocument();
-    expect(savings).toHaveTextContent("$0.015");
+    expect(savings).toHaveTextContent("$0.024");
+    expect(savings).toHaveTextContent("36,000 cached across 6 replays");
     expect(within(savings).getByText("2 · Gate model")).toBeInTheDocument();
     expect(within(savings).getByText("3 · Revealed to parent"))
       .toBeInTheDocument();
     expect(within(savings).getByText("Savings · 1 − 2 − 3"))
       .toBeInTheDocument();
-    expect(savings).toHaveTextContent("$0.012");
+    expect(savings).toHaveTextContent("$0.021");
   });
 
   it("keeps a completed sub-agent duration on its pricing card", () => {

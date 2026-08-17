@@ -60,6 +60,7 @@ export type TokenMiserServiceOptions = {
   onInterceptionStored?: (
     metadata: TokenMiserObjectMetadata,
   ) => void | Promise<void>;
+  getParentCumulativeInputTokens?: (threadId: string) => number | undefined;
   thresholdCharacters?: number;
   summaryTimeoutMs?: number;
 };
@@ -125,6 +126,8 @@ export class TokenMiserService {
         serviceTier: generated.serviceTier,
         tokenUsage: generated.tokenUsage,
       },
+      parentCumulativeInputTokens:
+        this.options.getParentCumulativeInputTokens?.(payload.session_id),
     });
     await this.options.onInterceptionStored?.(metadata);
 
