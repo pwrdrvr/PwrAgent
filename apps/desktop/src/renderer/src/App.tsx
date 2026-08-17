@@ -319,6 +319,7 @@ function DesktopAppShell(props: {
     "auto" | "replay" | null
   >(null);
   const [autoOpenSeen, setAutoOpenSeen] = useState(false);
+  const postOnboardingWorkspaceOpenStartedRef = useRef(false);
   // Boot info is fetched once on mount and is stable across the
   // renderer's lifetime (the main process recorded it before this
   // window opened — see `recordBootDecision` in app-state.ts). The
@@ -1263,6 +1264,7 @@ function DesktopAppShell(props: {
   }, [mainView, navigation.selectedLaunchpad, navigation.selectedThreadKey]);
   const showThread = navigation.showThread;
   const selectDirectoryLaunchpad = navigation.selectDirectoryLaunchpad;
+  const openWorkspaceLaunchpad = navigation.openWorkspaceLaunchpad;
   const queueMessageLinkRequest = useCallback((request: {
     backend: AppServerBackendKind;
     messageId?: string;
@@ -1701,6 +1703,36 @@ function DesktopAppShell(props: {
     autoOpenSeen,
     onboardingOpen,
     settings.snapshot?.onboarding?.completed.value,
+  ]);
+  useEffect(() => {
+    const onboarding = settings.snapshot?.onboarding;
+    const workspaceLaunchpadExists = navigation.directories.some(
+      (directory) => directory.kind === "workspace",
+    );
+    if (
+      onboarding?.completed.value !== true
+      || onboarding?.completedSource?.value !== "wizard"
+      || onboardingOpen !== null
+      || !navigation.loaded
+      || workspaceLaunchpadExists
+      || postOnboardingWorkspaceOpenStartedRef.current
+    ) {
+      return;
+    }
+
+    // The wizard's real profile may be this window or a freshly spawned one.
+    // Its first directory-less launchpad is therefore the durable signal that
+    // the post-wizard landing has not happened yet. Opening it persists that
+    // launchpad, so later app launches keep the operator's normal selection.
+    postOnboardingWorkspaceOpenStartedRef.current = true;
+    setMainView("thread");
+    void openWorkspaceLaunchpad();
+  }, [
+    navigation.directories,
+    navigation.loaded,
+    onboardingOpen,
+    openWorkspaceLaunchpad,
+    settings.snapshot?.onboarding,
   ]);
   const loadThreadDetail = threadViewReady && mainView === "thread";
   const session = useThreadSessionState({
