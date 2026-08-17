@@ -20607,6 +20607,17 @@ export class DesktopBackendRegistry {
       ) {
         return false;
       }
+      // A handoff overlay is the authoritative workspace selection, so a
+      // relationship derived from the provider's projectKey can never be
+      // persisted — `shouldRepairCachedDirectoryRelationship` refuses every
+      // thread whose overlay carries one. Enriching it anyway is guaranteed
+      // wasted work, and when the provider still reports a pre-handoff
+      // worktree that has since been removed, enrichment resolves nothing and
+      // the miss below logs a phantom "no worktree relationship" warning for a
+      // thread whose directory is already correct in the overlay.
+      if (overlayHasHandoffWorkspace(params.overlaysByThreadId[thread.id])) {
+        return false;
+      }
       const projectKey = thread.projectKey?.trim();
       if (!isLikelyToolManagedWorktreePath(projectKey)) {
         return false;

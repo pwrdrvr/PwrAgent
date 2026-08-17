@@ -322,6 +322,20 @@ export function createThreadDirectoryEnricher(params?: {
 
     const inFlight = loadThreadDirectoryEnrichment(normalizedKey)
       .then((value) => {
+        // A miss is deliberately left uncached, matching the ACP worktree
+        // resolver. `loadThreadDirectoryEnrichment` yields no directories
+        // only when the path does not exist — every other outcome, including
+        // a git probe that fails or times out, still returns one. Absence is
+        // transient: a scratch project root and a worktree are both created
+        // moments after a thread first refers to them. Caching it pins the
+        // thread to "no linked project" for the rest of the TTL after the
+        // directory appears, which is long enough on a slow machine to show
+        // a workspace warning for a directory that exists by the time anyone
+        // reads it. Recomputing costs one `access()` and never spawns git.
+        if (value.linkedDirectories.length === 0) {
+          cache.delete(normalizedKey);
+          return value;
+        }
         cache.set(normalizedKey, {
           expiresAt: Date.now() + cacheTtlMs,
           value,

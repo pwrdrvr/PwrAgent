@@ -2777,11 +2777,16 @@ describe("ThreadView", () => {
       />
     );
 
+    // The predicate behind this banner is "projectKey set, linkedDirectories
+    // empty" — it never stats the path. An empty list also happens for a cwd
+    // that is not a git checkout and for a git probe that failed, so the copy
+    // must not claim the directory was deleted. A false positive shipped for
+    // exactly that reason: the banner named an existing directory.
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "This thread is linked to a directory that no longer exists: /Users/example/.codex/worktrees/tree-epsilon/catalog-portal"
+      "This thread's recorded working directory is not linked to a project: /Users/example/.codex/worktrees/tree-epsilon/catalog-portal"
     );
 
-    expect(screen.getByText("Recorded working directory is no longer available.")).toBeInTheDocument();
+    expect(screen.getByText("Recorded working directory is not linked to a project.")).toBeInTheDocument();
     expect(screen.getByText("catalog-portal")).toBeInTheDocument();
 
     fireEvent.click(

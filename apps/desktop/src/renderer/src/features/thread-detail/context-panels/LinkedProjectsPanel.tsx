@@ -250,13 +250,16 @@ export function LinkedProjectsPanel(props: LinkedProjectsPanelProps) {
               <dl className="linked-project__facts">
                 <div>
                   <dt>Kind</dt>
-                  <dd>Missing directory</dd>
+                  <dd>Unlinked directory</dd>
                 </div>
               </dl>
             </li>
           </ul>
+          {/* Nothing here stats the path: an empty `linkedDirectories` means
+              no project was resolved, which is not the same as the directory
+              being gone. Keep this limited to what the summary proves. */}
           <p className="context-empty">
-            Recorded working directory is no longer available.
+            Recorded working directory is not linked to a project.
           </p>
         </>
       ) : (
