@@ -19,8 +19,11 @@ export type TokenMiserSummary = {
 };
 
 export type TokenMiserHelperUsage = {
+  helperThreadId?: string;
+  helperTurnId?: string;
   model?: string;
   reasoningEffort?: string;
+  serviceTier?: string;
   tokenUsage?: unknown;
 };
 

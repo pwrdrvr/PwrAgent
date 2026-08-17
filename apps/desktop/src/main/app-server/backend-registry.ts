@@ -428,6 +428,7 @@ import { TokenMiserHookBridge } from "../token-miser/token-miser-hook-bridge";
 import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
 import { TokenMiserService } from "../token-miser/token-miser-service";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
+import type { TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
 import {
   AgentToolMcpServer,
   type AgentToolMcpClientContext,
@@ -6662,6 +6663,7 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     | "reconcileOrphanedThreadSubAgents"
     | "markThreadToolInvocationsNoisy"
     | "persistThreadToolInvocationBoundary"
+    | "upsertThreadSubAgents"
     | "upsertThreadUsageLines"
     | "writeThreadGitWorkingStateCacheEntry"
   >
@@ -6973,6 +6975,11 @@ export class DesktopBackendRegistry {
     string,
     PendingLiveThreadUsageLine
   >();
+  private readonly pendingTokenMiserInterceptions = new Map<
+    string,
+    TokenMiserObjectMetadata
+  >();
+  private tokenMiserLedgerReconciliation: Promise<void> = Promise.resolve();
   private liveThreadUsageObservationSequence = 0;
   /**
    * Usage notifications overlap at the JSON-RPC transport. Register each one
@@ -7571,6 +7578,9 @@ export class DesktopBackendRegistry {
               && typeof record.suggestedNextStep === "string",
           });
         },
+        onInterceptionStored: (metadata) => {
+          this.pendingTokenMiserInterceptions.set(metadata.objectId, metadata);
+        },
       });
       this.tokenMiserHookBridge = new TokenMiserHookBridge({
         stateDir: tokenMiserStateDir,
@@ -7596,6 +7606,15 @@ export class DesktopBackendRegistry {
       options?.acpAvailableCommandProbeBudgetMs
       ?? ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS;
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
+    if (this.tokenMiserStore) {
+      this.tokenMiserLedgerReconciliation = Promise.resolve()
+        .then(async () => await this.reconcileTokenMiserLedger())
+        .catch((error) => {
+          backendRegistryLog.warn("Token Miser ledger reconciliation failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+    }
     this.gitDirectoryService =
       options?.gitDirectoryService ??
       new GitDirectoryService({
@@ -18529,6 +18548,7 @@ export class DesktopBackendRegistry {
     // in memory. `closed` prevents either drain from re-arming its timer; the
     // serialized flush chains ensure no write survives close().
     await liveThreadUsageEmitBarrier;
+    await this.tokenMiserLedgerReconciliation;
     this.completedTaskMonitorsByThread.clear();
     await this.flushLiveThreadUsageLines();
     // A command streaming at quit time has accounting worth up to one flush
@@ -25029,6 +25049,173 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: line.parentThreadId ?? line.threadId,
       });
+    }
+  }
+
+  private async reconcileTokenMiserLedger(): Promise<void> {
+    if (!this.tokenMiserStore) {
+      return;
+    }
+    const metadata = await this.tokenMiserStore.listMetadata();
+    await this.persistTokenMiserLedgerEntries(metadata);
+  }
+
+  private async flushPendingTokenMiserLedger(params: {
+    threadId: string;
+    turnId?: string;
+  }): Promise<void> {
+    await this.tokenMiserLedgerReconciliation;
+    const metadata = Array.from(this.pendingTokenMiserInterceptions.values())
+      .filter((entry) =>
+        entry.threadId === params.threadId
+        && (!params.turnId || entry.turnId === params.turnId),
+      );
+    await this.persistTokenMiserLedgerEntries(metadata);
+  }
+
+  private async persistTokenMiserLedgerEntries(
+    metadata: readonly TokenMiserObjectMetadata[],
+  ): Promise<void> {
+    const byThread = new Map<string, TokenMiserObjectMetadata[]>();
+    for (const entry of metadata) {
+      const entries = byThread.get(entry.threadId) ?? [];
+      entries.push(entry);
+      byThread.set(entry.threadId, entries);
+    }
+
+    for (const [threadId, entries] of byThread) {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId,
+      });
+      const pricing = typeof this.overlayStore.readThreadPricing === "function"
+        ? await this.overlayStore.readThreadPricing({
+            backend: "codex",
+            threadId,
+          })
+        : undefined;
+      const knownMonitorIds = new Set(
+        overlay?.subAgents?.map((subAgent) => subAgent.monitorId) ?? [],
+      );
+      const knownUsageLineIds = new Set(
+        pricing?.lines.map((line) => line.usageLineId) ?? [],
+      );
+      const subAgents: ThreadSubAgentSummary[] = [];
+      const usageLines: ThreadUsageLineRecord[] = [];
+
+      for (const entry of entries) {
+        const monitorId = `system:token-miser:${entry.objectId}`;
+        const usage = entry.helperUsage?.tokenUsage
+          ? buildTaskMonitorUsageSnapshot({
+              model: entry.helperUsage.model,
+              serviceTier: entry.helperUsage.serviceTier,
+              tokenUsage: entry.helperUsage.tokenUsage,
+            })
+          : undefined;
+        if (!knownMonitorIds.has(monitorId)) {
+          subAgents.push({
+            monitorId,
+            task: `Gate ${entry.toolName} output`,
+            status: "success",
+            createdAt: entry.createdAt,
+            updatedAt: entry.createdAt,
+            ownerRuntimeInstanceId: this.runtimeInstanceId,
+            ownerRegistrySessionId: this.registrySessionId,
+            backend: "codex",
+            agentName: "Token Miser",
+            ...(entry.helperUsage?.model
+              ? { preferredModel: entry.helperUsage.model }
+              : {}),
+            ...(entry.helperUsage?.reasoningEffort
+              ? {
+                  preferredReasoningEffort:
+                    entry.helperUsage.reasoningEffort,
+                }
+              : {}),
+            ...(entry.helperUsage?.helperThreadId
+              ? { monitorThreadId: entry.helperUsage.helperThreadId }
+              : {}),
+            ...(entry.helperUsage?.helperTurnId
+              ? { monitorTurnId: entry.helperUsage.helperTurnId }
+              : {}),
+            lastMessage:
+              `Compressed ${entry.originalCharacters.toLocaleString()} characters `
+              + `from ${entry.toolName} before they entered the parent context.`,
+            outcome: "success",
+            completedAt: entry.createdAt,
+            completionSource: {
+              type: "pwragent_fallback",
+              reason: "system_token_miser_gate",
+              recoveryAttempted: false,
+              terminalStatus: "completed",
+            },
+            ...(usage ? { monitorUsage: usage } : {}),
+          });
+        }
+        if (usage) {
+          const line = buildTaskMonitorUsageLine({
+            backend: "codex",
+            model: entry.helperUsage?.model,
+            monitorId,
+            monitorThreadId:
+              entry.helperUsage?.helperThreadId ?? `token-miser:${entry.objectId}`,
+            monitorTurnId:
+              entry.helperUsage?.helperTurnId ?? entry.turnId,
+            parentThreadId: entry.threadId,
+            reasoningEffort: entry.helperUsage?.reasoningEffort,
+            serviceTier: entry.helperUsage?.serviceTier,
+            source: "monitor",
+            usage,
+          });
+          line.createdAt = entry.createdAt;
+          if (!knownUsageLineIds.has(line.usageLineId)) {
+            logUnpricedThreadUsageLine(line);
+            usageLines.push(line);
+          }
+        }
+      }
+
+      if (subAgents.length > 0) {
+        if (typeof this.overlayStore.upsertThreadSubAgents === "function") {
+          await this.overlayStore.upsertThreadSubAgents({
+            backend: "codex",
+            threadId,
+            subAgents,
+          });
+        } else {
+          for (const subAgent of subAgents) {
+            await this.overlayStore.upsertThreadSubAgent({
+              backend: "codex",
+              threadId,
+              subAgent,
+            });
+          }
+        }
+        this.invalidateThreadListCache("codex");
+        await this.emit({
+          backend: "codex",
+          notification: {
+            method: "thread/subAgents/updated",
+            params: { threadId },
+          },
+        });
+      }
+      if (usageLines.length > 0) {
+        if (typeof this.overlayStore.upsertThreadUsageLines === "function") {
+          await this.overlayStore.upsertThreadUsageLines({ lines: usageLines });
+        } else {
+          for (const line of usageLines) {
+            await this.overlayStore.upsertThreadUsageLine({ line });
+          }
+        }
+        await this.emitThreadPricingUpdated({
+          backend: "codex",
+          threadId,
+        });
+      }
+      for (const entry of entries) {
+        this.pendingTokenMiserInterceptions.delete(entry.objectId);
+      }
     }
   }
 
@@ -31803,6 +31990,12 @@ export class DesktopBackendRegistry {
         };
       };
       const turnId = turnIdFromTerminalNotification(notification);
+      if (event.backend === "codex") {
+        await this.flushPendingTokenMiserLedger({
+          threadId: notification.params.threadId,
+          ...(turnId ? { turnId } : {}),
+        });
+      }
       if (turnId) {
         this.pdfAttachmentStore.releaseTurn({
           backend: event.backend,

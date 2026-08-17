@@ -94,9 +94,12 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(accounting).toHaveTextContent(
       "18k estimated parent-context tokens avoided",
     );
-    expect(accounting).toHaveTextContent(
-      "2 gated calls · 20k baseline · 700 summaries · 1.3k retrieved",
-    );
+    expect(accounting).toHaveTextContent("Actual parent tool context2k");
+    expect(accounting).toHaveTextContent("Avoided18k");
+    expect(accounting).toHaveTextContent("Without Token Miser20k");
+    expect(accounting).toHaveTextContent("2 gated calls");
+    expect(accounting).toHaveTextContent("700 summaries + 1.3k retrieved");
+    expect(accounting).toHaveTextContent("Gate compute awaiting pricing ledger");
     expect(screen.getByText("Gated by Token Miser")).toBeInTheDocument();
     expect(screen.getByText("6k baseline → 225 summary")).toBeInTheDocument();
     expect(screen.getByText(/5.8k estimated parent-context tokens avoided/))

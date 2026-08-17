@@ -1,6 +1,7 @@
 import type {
   ThreadToolInvocationCategory,
   ThreadToolInvocationRecord,
+  ThreadToolAccounting,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
@@ -50,6 +51,47 @@ export type IncidentSummary = {
   turnCount: number;
   worstChars: number;
 };
+
+export type TokenMiserContextComparison = {
+  actualParentTokens: number;
+  avoidedParentTokens: number;
+  withoutTokenMiserTokens: number;
+};
+
+export function buildTokenMiserContextComparison(
+  invocations: readonly ThreadToolInvocationRecord[],
+  tokenMiser: ThreadToolAccounting["tokenMiser"],
+): TokenMiserContextComparison | undefined {
+  if (!tokenMiser || tokenMiser.interceptionCount === 0) {
+    return undefined;
+  }
+  const interceptedToolUseIds = new Set(
+    (tokenMiser.interceptions ?? []).map((entry) => entry.toolUseId),
+  );
+  const modelVisibleTokens = (invocation: ThreadToolInvocationRecord): number =>
+    Math.ceil(Math.min(invocation.outputChars, TOOL_OUTPUT_CAP_CHARS) / 4);
+  const accountedTokens = invocations.reduce(
+    (total, invocation) => total + modelVisibleTokens(invocation),
+    0,
+  );
+  const accountedGatedTokens = invocations.reduce((total, invocation) => {
+    const isGated = Boolean(
+      (invocation.itemId && interceptedToolUseIds.has(invocation.itemId))
+      || Array.from(interceptedToolUseIds).some((toolUseId) =>
+        invocation.invocationId.endsWith(`:${toolUseId}`),
+      ),
+    );
+    return total + (isGated ? modelVisibleTokens(invocation) : 0);
+  }, 0);
+  const withoutTokenMiserTokens =
+    accountedTokens - accountedGatedTokens + tokenMiser.baselineParentTokens;
+  return {
+    actualParentTokens:
+      withoutTokenMiserTokens - tokenMiser.estimatedParentTokensSaved,
+    avoidedParentTokens: tokenMiser.estimatedParentTokensSaved,
+    withoutTokenMiserTokens,
+  };
+}
 
 export type TurnCostRow = {
   callCount: number;

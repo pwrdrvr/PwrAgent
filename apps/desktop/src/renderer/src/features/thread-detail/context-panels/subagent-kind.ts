@@ -10,11 +10,20 @@ export function isSystemTitleHelperSubAgent(
   return subAgent.monitorId.startsWith("system:title-helper:");
 }
 
+export function isTokenMiserSubAgent(
+  subAgent: ThreadSubAgentSummary,
+): boolean {
+  return subAgent.monitorId.startsWith("system:token-miser:");
+}
+
 export function subAgentOriginLabel(
   subAgent: ThreadSubAgentSummary,
 ): string | undefined {
   if (isSystemTitleHelperSubAgent(subAgent)) {
     return "PwrAgent system helper";
+  }
+  if (isTokenMiserSubAgent(subAgent)) {
+    return "PwrAgent Token Miser gate";
   }
   if (isCodexNativeSubAgent(subAgent)) {
     return "Codex native spawnAgent";
@@ -36,6 +45,9 @@ export function subAgentUsageLabel(subAgent: ThreadSubAgentSummary): string {
   if (isSystemTitleHelperSubAgent(subAgent)) {
     return "System";
   }
+  if (isTokenMiserSubAgent(subAgent)) {
+    return "Gate";
+  }
   if (isCodexNativeSubAgent(subAgent)) {
     return "Codex";
   }
@@ -50,6 +62,9 @@ export function subAgentPricingUsageTitle(
 ): string {
   if (isSystemTitleHelperSubAgent(subAgent)) {
     return "Thread naming";
+  }
+  if (isTokenMiserSubAgent(subAgent)) {
+    return "Token Miser gate";
   }
   if (isCodexNativeSubAgent(subAgent)) {
     return "Codex sub-agent usage";

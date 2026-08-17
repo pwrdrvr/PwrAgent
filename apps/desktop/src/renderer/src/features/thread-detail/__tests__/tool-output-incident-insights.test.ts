@@ -2,6 +2,7 @@ import type { ThreadToolInvocationRecord } from "@pwragent/shared";
 import { describe, expect, it } from "vitest";
 import {
   buildCategoryComposition,
+  buildTokenMiserContextComparison,
   buildTurnCostStrip,
   capMeterWidth,
   formatCapShare,
@@ -48,6 +49,40 @@ describe("summarizeIncidents", () => {
     expect(summarizeIncidents(records, {
       largeOutputThresholdChars: 10_000,
     }).caseCount).toBe(1);
+  });
+});
+
+describe("buildTokenMiserContextComparison", () => {
+  it("compares actual parent tool context with the no-gate counterfactual", () => {
+    const gated = invocation({ outputChars: 24_000 });
+    gated.itemId = "tool-1";
+    const quiet = invocation({ outputChars: 400 });
+    quiet.itemId = "tool-2";
+
+    expect(buildTokenMiserContextComparison([gated, quiet], {
+      interceptionCount: 1,
+      originalCharacters: 24_000,
+      baselineParentTokens: 6_000,
+      replacementTokens: 225,
+      retrievedTokens: 100,
+      estimatedParentTokensSaved: 5_675,
+      interceptions: [{
+        objectId: "gate-1",
+        turnId: "turn-1",
+        toolUseId: "tool-1",
+        toolName: "commandExecution",
+        createdAt: 1,
+        originalCharacters: 24_000,
+        baselineParentTokens: 6_000,
+        replacementTokens: 225,
+        retrievedTokens: 100,
+        estimatedParentTokensSaved: 5_675,
+      }],
+    })).toEqual({
+      actualParentTokens: 425,
+      avoidedParentTokens: 5_675,
+      withoutTokenMiserTokens: 6_100,
+    });
   });
 });
 

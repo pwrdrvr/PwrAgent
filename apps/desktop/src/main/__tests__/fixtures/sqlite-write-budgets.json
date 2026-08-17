@@ -146,6 +146,13 @@
     "rowsChanged": 27,
     "statements": 27
   },
+  "token-miser-turn-ledger": {
+    "commits": 2,
+    "note": "nine Token Miser gate helpers from one parent turn, batched into one parent overlay write and one pricing-ledger transaction",
+    "observedWalBytes": 82400,
+    "rowsChanged": 20,
+    "statements": 20
+  },
   "tool-output-history-analysis": {
     "commits": 1,
     "note": "replace 25 deterministic history findings plus coverage metadata in one explicit analysis transaction",
