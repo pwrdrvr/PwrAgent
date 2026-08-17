@@ -114,34 +114,66 @@ function hydrateHoverStableSidebarSnapshot(
       thread,
     ]),
   );
+  const frozenDirectoryKeys = new Set(
+    frozen.directories.map((directory) => directory.key),
+  );
+  const frozenThreadKeys = new Set(
+    frozen.threads.map((thread) =>
+      buildThreadIdentityKey(thread.source, thread.id),
+    ),
+  );
 
   return {
-    directories: frozen.directories.map((directory) => {
-      const latestDirectory = latestDirectoriesByKey.get(directory.key);
-      return latestDirectory
-        ? {
-            ...latestDirectory,
-            pinnedRank: directory.pinnedRank,
-            threadKeys: directory.threadKeys,
-          }
-        : directory;
-    }),
-    threads: frozen.threads.map((thread) => {
-      const latestThread = latestThreadsByKey.get(
-        buildThreadIdentityKey(thread.source, thread.id),
-      );
-      return latestThread
-        ? {
-            ...latestThread,
-            createdAt: thread.createdAt,
-            parentThreadBackend: thread.parentThreadBackend,
-            parentThreadId: thread.parentThreadId,
-            parentThreadInstanceId: thread.parentThreadInstanceId,
-            pinnedRank: thread.pinnedRank,
-            subthreadOrder: thread.subthreadOrder,
-          }
-        : thread;
-    }),
+    directories: [
+      ...frozen.directories.map((directory) => {
+        const latestDirectory = latestDirectoriesByKey.get(directory.key);
+        if (!latestDirectory) return directory;
+        const frozenDirectoryThreadKeys = new Set(directory.threadKeys);
+        return {
+          ...latestDirectory,
+          pinnedRank: directory.pinnedRank,
+          threadKeys: [
+            ...directory.threadKeys,
+            ...latestDirectory.threadKeys.filter(
+              (threadKey) => !frozenDirectoryThreadKeys.has(threadKey),
+            ),
+          ],
+        };
+      }),
+      ...latest.directories
+        .filter((directory) => !frozenDirectoryKeys.has(directory.key))
+        .map((directory) => ({ ...directory, pinnedRank: undefined })),
+    ],
+    threads: [
+      ...frozen.threads.map((thread) => {
+        const latestThread = latestThreadsByKey.get(
+          buildThreadIdentityKey(thread.source, thread.id),
+        );
+        return latestThread
+          ? {
+              ...latestThread,
+              createdAt: thread.createdAt,
+              parentThreadBackend: thread.parentThreadBackend,
+              parentThreadId: thread.parentThreadId,
+              parentThreadInstanceId: thread.parentThreadInstanceId,
+              pinnedRank: thread.pinnedRank,
+              subthreadOrder: thread.subthreadOrder,
+            }
+          : thread;
+      }),
+      ...latest.threads
+        .filter((thread) => !frozenThreadKeys.has(
+          buildThreadIdentityKey(thread.source, thread.id),
+        ))
+        .map((thread) => ({
+          ...thread,
+          createdAt: 0,
+          parentThreadBackend: undefined,
+          parentThreadId: undefined,
+          parentThreadInstanceId: undefined,
+          pinnedRank: undefined,
+        })),
+    ],
   };
 }
 

@@ -44,6 +44,12 @@ const bravo = thread({
   title: "Bravo thread",
   updatedAt: 1,
 });
+const charlie = thread({
+  createdAt: 3,
+  id: "charlie",
+  title: "Charlie thread",
+  updatedAt: 3,
+});
 
 const directory: NavigationDirectorySummary = {
   key: "directory:/repo",
@@ -186,6 +192,31 @@ describe("Sidebar hover-stable thread ordering", () => {
     expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
   });
 
+  it("appends newly visible threads until hover ends", () => {
+    const view = render(renderSidebar({
+      browseMode: "inbox",
+      threads: [alpha, bravo],
+    }));
+    hoverFirstThread();
+
+    view.rerender(renderSidebar({
+      browseMode: "inbox",
+      threads: [charlie, alpha, bravo],
+    }));
+
+    expect(threadTitles()).toEqual([
+      "Alpha thread",
+      "Bravo thread",
+      "Charlie thread",
+    ]);
+    leaveThreadBrowser();
+    expect(threadTitles()).toEqual([
+      "Charlie thread",
+      "Alpha thread",
+      "Bravo thread",
+    ]);
+  });
+
   it.each([
     { browseMode: "drafts" as const, label: "Drafts" },
     { browseMode: "recents" as const, label: "Recents" },
@@ -224,15 +255,27 @@ describe("Sidebar hover-stable thread ordering", () => {
     hoverFirstThread();
 
     const pinnedBravo = { ...bravo, pinnedRank: "1024" };
+    const expandedDirectory = {
+      ...directory,
+      threadKeys: ["codex:charlie", ...directory.threadKeys],
+    };
     view.rerender(renderSidebar({
       browseMode: "directories",
-      directories: [directory],
+      directories: [expandedDirectory],
       selectedItemKey: "codex:alpha",
-      threads: [alpha, pinnedBravo],
+      threads: [charlie, alpha, pinnedBravo],
     }));
 
-    expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread"]);
+    expect(threadTitles()).toEqual([
+      "Alpha thread",
+      "Bravo thread",
+      "Charlie thread",
+    ]);
     leaveThreadBrowser();
-    expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
+    expect(threadTitles()).toEqual([
+      "Bravo thread",
+      "Charlie thread",
+      "Alpha thread",
+    ]);
   });
 });
