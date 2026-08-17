@@ -100,6 +100,50 @@ describe("TokenMiserStore", () => {
     });
   });
 
+  // The registry owns the request boundary now, holding one cursor per thread
+  // so every gate is offered the same events. This per-gate mark stays as a
+  // backstop, and the two can never disagree: the thread cursor is seeded from
+  // the highest gate mark and only moves above it, so anything the registry
+  // accepts already clears every gate's own mark.
+  it("ignores a request that does not advance the gate's own mark", async () => {
+    const store = await createStore();
+    const metadata = await store.store({
+      threadId: "thread-owner",
+      turnId: "turn-1",
+      toolUseId: "tool-1",
+      toolName: "Bash",
+      output: "x".repeat(24_000),
+      replacementCharacters: 400,
+      parentCumulativeInputTokens: 5_000,
+      summary: {
+        summary: "Large output.",
+        usefulDetails: [],
+        suggestedNextStep: "None.",
+      },
+    });
+
+    expect(await store.recordParentModelRequest({
+      cumulativeInputTokens: 4_000,
+      objectId: metadata.objectId,
+    })).toBeUndefined();
+    expect(await store.recordParentModelRequest({
+      cumulativeInputTokens: 5_000,
+      objectId: metadata.objectId,
+    })).toBeUndefined();
+    expect(await store.readMetadata(metadata.objectId)).toMatchObject({
+      parentRequestsObservedAfterGate: 0,
+      lastParentCumulativeInputTokens: 5_000,
+    });
+
+    expect(await store.recordParentModelRequest({
+      cumulativeInputTokens: 6_000,
+      objectId: metadata.objectId,
+    })).toBeDefined();
+    expect(await store.readMetadata(metadata.objectId)).toMatchObject({
+      parentRequestsObservedAfterGate: 1,
+    });
+  });
+
   it("tracks cached parent replays after the first request until compaction", async () => {
     const store = await createStore();
     const metadata = await store.store({
