@@ -4,7 +4,6 @@ import {
 } from "node:child_process";
 import readline from "node:readline";
 import {
-  createCommandInvocation,
   type JsonRpcTransport,
 } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
@@ -15,6 +14,7 @@ import {
   resolveCodexCommand,
   type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
+import { createCodexCommandInvocation } from "../codex-powershell";
 
 const codexTransportLog = getMainLogger("pwragent:codex-transport");
 
@@ -128,7 +128,7 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     });
     this.assertCurrentGeneration(generation);
     const childEnv = buildPwrAgentChildProcessEnv(commandEnv);
-    const invocation = createCommandInvocation({
+    const invocation = createCodexCommandInvocation({
       command: command.command,
       args: ["app-server", ...args],
       env: childEnv,

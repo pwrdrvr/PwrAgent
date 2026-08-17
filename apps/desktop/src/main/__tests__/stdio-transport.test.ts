@@ -337,4 +337,47 @@ describe("StdioJsonRpcTransport", () => {
 
     await transport.close();
   });
+
+  it("launches a resolved Windows PowerShell shim through powershell.exe", async () => {
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    const command = "C:\\nvm4w\\nodejs\\codex.ps1";
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      args: ["--feature", "value & whoami"],
+      env: {
+        PATH: "C:\\nvm4w\\nodejs",
+        SystemRoot: "C:\\Windows",
+      },
+      platform: "win32",
+      resolveCommand: async () => ({
+        command,
+        source: "path",
+        version: "0.144.0",
+      }),
+    });
+
+    await transport.connect();
+
+    expect(spawnMock).toHaveBeenCalledWith(
+      "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+      [
+        "-NoLogo",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        command,
+        "app-server",
+        "--feature",
+        "value & whoami",
+      ],
+      expect.objectContaining({
+        stdio: ["pipe", "pipe", "pipe"],
+      }),
+    );
+
+    await transport.close();
+  });
 });

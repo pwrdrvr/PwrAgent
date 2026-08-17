@@ -13,6 +13,7 @@ import {
   compareCodexCliVersions,
   MINIMUM_CODEX_CLI_VERSION,
 } from "@pwrdrvr/codex-discovery";
+import { createCodexCommandInvocation } from "../codex-powershell";
 
 const execFileAsync = promisify(execFile);
 
@@ -398,10 +399,21 @@ function clipError(error: unknown): string {
 async function defaultRunCodexVersion(
   command: string,
 ): Promise<{ stdout: string; stderr: string }> {
-  const { stdout, stderr } = await execFileAsync(command, ["--version"], {
-    env: buildPwrAgentChildProcessEnv(process.env),
-    timeout: DEFAULT_PROBE_TIMEOUT_MS,
+  const env = buildPwrAgentChildProcessEnv(process.env);
+  const invocation = createCodexCommandInvocation({
+    command,
+    args: ["--version"],
+    env,
   });
+  const { stdout, stderr } = await execFileAsync(
+    invocation.command,
+    invocation.args,
+    {
+      env,
+      timeout: DEFAULT_PROBE_TIMEOUT_MS,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    },
+  );
   return {
     stdout: stdout?.toString?.() ?? "",
     stderr: stderr?.toString?.() ?? "",

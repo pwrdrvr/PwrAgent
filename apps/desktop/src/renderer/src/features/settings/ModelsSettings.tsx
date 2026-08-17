@@ -30,8 +30,6 @@ import {
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { SettingsSwitch } from "./SettingsSwitch";
 
-type CodexPathMode = "auto" | "specified";
-
 const UNSPECIFIED_SOURCE_MODEL_KEY = "\0unspecified";
 
 type ThreadMigrationSourceGroup = {
@@ -105,9 +103,6 @@ export function ModelsSettings(props: {
   onManagedGrokBuildsChange?: (enabled: boolean) => Promise<boolean>;
 }) {
   const [codexPath, setCodexPath] = useState(props.snapshot.models.codex.path.value);
-  const [codexMode, setCodexMode] = useState<CodexPathMode>(
-    props.snapshot.models.codex.path.value.trim() ? "specified" : "auto",
-  );
   const [backends, setBackends] = useState<BackendSummary[]>(
     props.cachedBackends ?? [],
   );
@@ -130,7 +125,6 @@ export function ModelsSettings(props: {
 
   useEffect(() => {
     setCodexPath(codex.path.value);
-    setCodexMode(codex.path.value.trim() || envForced ? "specified" : "auto");
   }, [codex.path.value, envForced]);
 
   useEffect(() => {
@@ -215,68 +209,63 @@ export function ModelsSettings(props: {
       <SettingsSection eyebrow="Models" title="Codex">
         <div className="settings-fields">
           <SettingsField
-            label="Codex selection"
-            sub="Pick the Codex binary to invoke for new threads."
+            label="Codex path"
+            sub="Enter an absolute path, including .ps1 on Windows. Leave blank to use auto discovery."
             source={codexSource}
             control={
-              <div
-                className="settings-segmented"
-                role="radiogroup"
-                aria-label="Codex selection mode"
-              >
-                <button
-                  aria-checked={codexMode === "auto" && !envForced}
-                  className={`settings-segmented__button${
-                    codexMode === "auto" && !envForced ? " is-active" : ""
-                  }`}
-                  disabled={props.saving || envForced}
-                  role="radio"
-                  type="button"
-                  onClick={() => {
-                    setCodexMode("auto");
-                    setCodexPath("");
-                    saveCodexPath("");
-                  }}
-                >
-                  Auto Discovery - Use Newest
-                </button>
-                <button
-                  aria-checked={codexMode === "specified" || envForced}
-                  className={`settings-segmented__button${
-                    codexMode === "specified" || envForced ? " is-active" : ""
-                  }`}
-                  disabled={props.saving || envForced}
-                  role="radio"
-                  type="button"
-                  onClick={() => setCodexMode("specified")}
-                >
-                  Specified Path
-                </button>
-              </div>
-            }
-          />
-
-          {codexMode === "specified" || envForced ? (
-            <SettingsField
-              label="Codex path"
-              sub="Absolute path to the Codex binary to invoke."
-              control={
+              <>
                 <input
                   aria-label="Codex path"
                   className="settings-input"
                   disabled={props.saving || envForced}
-                  placeholder="Path to codex"
+                  placeholder="Auto discovery"
                   value={codexPath}
-                  onBlur={() => saveCodexPath(codexPath)}
                   onChange={(event) => setCodexPath(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      saveCodexPath(codexPath);
+                    }
+                  }}
                 />
-              }
-            />
-          ) : null}
+                <div className="settings-inline-actions">
+                  <button
+                    className="button button--primary"
+                    disabled={
+                      props.saving
+                      || envForced
+                      || codexPath.trim() === codex.path.value.trim()
+                    }
+                    type="button"
+                    onClick={() => saveCodexPath(codexPath)}
+                  >
+                    Save path
+                  </button>
+                  <button
+                    className="button button--secondary"
+                    disabled={
+                      props.saving || envForced || !codex.path.value.trim()
+                    }
+                    type="button"
+                    onClick={() => {
+                      setCodexPath("");
+                      saveCodexPath("");
+                    }}
+                  >
+                    Use auto discovery
+                  </button>
+                </div>
+              </>
+            }
+            help={
+              envForced
+                ? "PWRDRVR_CODEX_COMMAND controls this path for the current process."
+                : undefined
+            }
+          />
 
           <SettingsField
             label="Available paths"
-            sub="Detected on this machine. The first listed will be used."
+            sub="Detected on this machine. The newest supported version is used automatically."
             source={codexSource}
             control={
               <div
@@ -292,7 +281,6 @@ export function ModelsSettings(props: {
                       candidate={candidate}
                       disabled={props.saving || envForced}
                       onUse={(command) => {
-                        setCodexMode("specified");
                         setCodexPath(command);
                         saveCodexPath(command);
                       }}

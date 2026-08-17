@@ -74,6 +74,30 @@ describe("CodexDiscoveryCoordinator", () => {
     });
   });
 
+  it("selects a Codex PowerShell shim resolved from Windows PATH", async () => {
+    const command = "C:\\nvm4w\\nodejs\\codex.ps1";
+    const coordinator = new CodexDiscoveryCoordinator({
+      discover: async () => notInstalledSnapshot(),
+      discoverPowerShell: async () => [
+        {
+          command,
+          executable: true,
+          selected: false,
+          source: "path",
+          version: "0.144.0",
+        },
+      ],
+      platform: "win32",
+      resolveEnv: async () => ({ Path: "C:\\nvm4w\\nodejs" }),
+    });
+
+    await expect(coordinator.resolve()).resolves.toEqual({
+      command,
+      source: "path",
+      version: "0.144.0",
+    });
+  });
+
   it("rejects executable-looking candidates whose Codex version did not validate", async () => {
     const command = "C:\\nvm4w\\nodejs\\codex";
     const coordinator = new CodexDiscoveryCoordinator({

@@ -1251,9 +1251,21 @@ describe("SettingsScreen", () => {
     // default name (it shows the path the Test button would invoke).
     // Both are correct.
     expect(screen.getAllByText("/usr/local/bin/codex").length).toBeGreaterThanOrEqual(2);
-    expect(
-      screen.getByRole("radio", { name: "Auto Discovery - Use Newest" }),
-    ).toHaveAttribute("aria-checked", "true");
+    const codexPathInput = screen.getByRole("textbox", { name: "Codex path" });
+    expect(codexPathInput).toBeEnabled();
+    fireEvent.change(codexPathInput, {
+      target: { value: "C:\\nvm4w\\nodejs\\codex.ps1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save path" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        models: {
+          codex: {
+            path: "C:\\nvm4w\\nodejs\\codex.ps1",
+          },
+        },
+      });
+    });
     expect(screen.getByText("0.130.0")).toBeInTheDocument();
     // Source pills on the Codex fields show the effective config
     // source (the redundant `Using /path/to/binary` label was

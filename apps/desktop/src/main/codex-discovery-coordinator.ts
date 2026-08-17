@@ -1,10 +1,12 @@
 import {
   CodexCliNotInstalledError,
+  compareCodexCliVersions,
   MINIMUM_CODEX_CLI_VERSION,
   discoverCodexCommands,
   type CodexDiscoverySnapshot,
   type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
+import { discoverCodexPowerShellCandidates } from "./codex-powershell";
 
 export const CODEX_DISCOVERY_SUCCESS_TTL_MS = 5 * 60_000;
 export const CODEX_DISCOVERY_NOT_INSTALLED_TTL_MS = 15_000;
@@ -33,6 +35,7 @@ type InFlightDiscovery = {
 
 export type CodexDiscoveryCoordinatorOptions = {
   discover?: typeof discoverCodexCommands;
+  discoverPowerShell?: typeof discoverCodexPowerShellCandidates;
   failureTtlMs?: number;
   forceReuseTtlMs?: number;
   notInstalledTtlMs?: number;
@@ -232,7 +235,24 @@ export class CodexDiscoveryCoordinator {
         env,
         ...(this.options.platform ? { platform: this.options.platform } : {}),
       });
-      const snapshot = normalizeCodexDiscoverySnapshot(discovered);
+      const platform = this.options.platform ?? process.platform;
+      const powerShellCandidates = platform === "win32"
+          ? await (
+            this.options.discoverPowerShell ?? discoverCodexPowerShellCandidates
+          )({
+            configuredCommand,
+            env,
+            includePath: !discovered.selectedCommand,
+          })
+        : [];
+      const snapshot = normalizeCodexDiscoverySnapshot({
+        ...discovered,
+        candidates: mergeCodexDiscoveryCandidates(
+          discovered.candidates,
+          powerShellCandidates,
+          platform,
+        ),
+      });
       if (generation === this.generation) {
         this.cache.set(configuredCommand?.trim() ?? "", {
           cachedAt: this.now(),
@@ -283,13 +303,31 @@ function normalizeCodexDiscoverySnapshot(
     && Boolean(candidate.version)
     && !candidate.failureReason
     && !candidate.versionFailureReason;
-  const selectedIndex = normalizedCandidates.findIndex(
-    (candidate) => candidate.selected && isValidated(candidate),
+  const fixedIndex = normalizedCandidates.findIndex(
+    (candidate) => candidate.source === "env" && isValidated(candidate),
   );
-  const fallbackIndex =
-    selectedIndex >= 0
-      ? selectedIndex
-      : normalizedCandidates.findIndex(isValidated);
+  const configuredIndex = normalizedCandidates.findIndex(
+    (candidate) => candidate.source === "config" && isValidated(candidate),
+  );
+  const automaticIndex = normalizedCandidates
+    .map((candidate, index) => ({ candidate, index }))
+    .filter(
+      ({ candidate }) =>
+        (candidate.source === "path" || candidate.source === "application")
+        && isValidated(candidate),
+    )
+    .sort(
+      (left, right) =>
+        compareCodexCliVersions(
+          right.candidate.version,
+          left.candidate.version,
+        ),
+    )[0]?.index ?? -1;
+  const fallbackIndex = fixedIndex >= 0
+    ? fixedIndex
+    : configuredIndex >= 0
+      ? configuredIndex
+      : automaticIndex;
   const candidates = normalizedCandidates.map((candidate, index) => {
     const selected = index === fallbackIndex;
     return candidate.selected === selected
@@ -310,4 +348,25 @@ function normalizeCodexDiscoverySnapshot(
         selectedSource: selected.source,
       }
     : { ...rest, candidates };
+}
+
+function mergeCodexDiscoveryCandidates(
+  discovered: CodexDiscoverySnapshot["candidates"],
+  additional: CodexDiscoverySnapshot["candidates"],
+  platform: NodeJS.Platform,
+): CodexDiscoverySnapshot["candidates"] {
+  const merged = [...discovered];
+  for (const candidate of additional) {
+    const existingIndex = merged.findIndex((existing) =>
+      platform === "win32"
+        ? existing.command.toLowerCase() === candidate.command.toLowerCase()
+        : existing.command === candidate.command,
+    );
+    if (existingIndex >= 0) {
+      merged[existingIndex] = candidate;
+    } else {
+      merged.push(candidate);
+    }
+  }
+  return merged;
 }
