@@ -10243,6 +10243,138 @@ describe("useThreadNavigation", () => {
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("applies PR auto-dispatch events to the matching mounted remote thread", async () => {
+    const firstOwner = {
+      scope: "remote" as const,
+      instanceId: "first-owner",
+    };
+    const secondOwner = {
+      scope: "remote" as const,
+      instanceId: "second-owner",
+    };
+    const listeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const pending = (fingerprint: string) => ({
+      fingerprint,
+      prKey: "github.com/pwrdrvr/PwrAgent#1105",
+      prNumber: 1105,
+      prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/1105",
+      headSha: "a".repeat(40),
+      eventKinds: ["ci-failure" as const],
+      createdAt: 1_000,
+      scheduledAt: 31_000,
+    });
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "shared-thread-id",
+          title: "Local thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          prAutoDispatchEnabled: true,
+          prAutoDispatchPending: pending("local-pending"),
+          inbox: { inInbox: false },
+        },
+        {
+          id: "shared-thread-id",
+          title: "First remote thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          prAutoDispatchEnabled: true,
+          prAutoDispatchPending: pending("first-owner-pending"),
+          inbox: { inInbox: false },
+          federation: {
+            ref: {
+              backend: "codex" as const,
+              target: firstOwner,
+              threadId: "shared-thread-id",
+            },
+          },
+        },
+        {
+          id: "shared-thread-id",
+          title: "Second remote thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          prAutoDispatchEnabled: true,
+          prAutoDispatchPending: pending("second-owner-pending"),
+          inbox: { inInbox: false },
+          federation: {
+            ref: {
+              backend: "codex" as const,
+              target: secondOwner,
+              threadId: "shared-thread-id",
+            },
+          },
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => listeners.delete(callback);
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(3);
+    });
+
+    act(() => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          federationTarget: firstOwner,
+          notification: {
+            method: "thread/prAutoDispatch/updated",
+            params: { threadId: "shared-thread-id", enabled: false },
+          },
+        });
+        listener({
+          backend: "codex",
+          federationTarget: firstOwner,
+          notification: {
+            method: "thread/prAutoDispatch/pendingUpdated",
+            params: { threadId: "shared-thread-id", pending: null },
+          },
+        });
+      }
+    });
+
+    const localThread = result.current.threads.find(
+      (thread) => !thread.federation,
+    );
+    const firstRemoteThread = result.current.threads.find(
+      (thread) => thread.federation?.ref.target.instanceId === "first-owner",
+    );
+    const secondRemoteThread = result.current.threads.find(
+      (thread) => thread.federation?.ref.target.instanceId === "second-owner",
+    );
+    expect(firstRemoteThread?.prAutoDispatchEnabled).toBe(false);
+    expect(firstRemoteThread?.prAutoDispatchPending).toBeUndefined();
+    expect(localThread?.prAutoDispatchEnabled).toBe(true);
+    expect(localThread?.prAutoDispatchPending?.fingerprint).toBe("local-pending");
+    expect(secondRemoteThread?.prAutoDispatchEnabled).toBe(true);
+    expect(secondRemoteThread?.prAutoDispatchPending?.fingerprint).toBe(
+      "second-owner-pending",
+    );
+  });
+
   it("reconciles a primary workspace repository resolved after an earlier refresh", async () => {
     const snapshotState: { primaryGitRepository?: string } = {};
     const getNavigationSnapshot = vi.fn(async () => ({
