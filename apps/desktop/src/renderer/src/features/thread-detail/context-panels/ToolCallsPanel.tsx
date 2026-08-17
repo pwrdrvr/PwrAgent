@@ -6,6 +6,7 @@ import type {
   ThreadToolInvocationRecord,
   ThreadToolInvocationSummary,
 } from "@pwragent/shared";
+import type { ThreadLinkSource } from "../../../lib/thread-links";
 import { TranscriptCommandOutput } from "../TranscriptCommandOutput";
 import { detailMatchesInvocationItem } from "../tool-call-details";
 import { formatTokenCount } from "./subagent-format";
@@ -22,6 +23,7 @@ type ToolCallsPanelProps = {
   onOpenIncidentExplorer?: () => void;
   onRequestInvocationDetails?: (invocation: ThreadToolInvocationRecord) => void;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
+  threadLinkSource?: ThreadLinkSource;
   toolAccounting?: ThreadToolAccounting;
 };
 
@@ -180,6 +182,7 @@ export function ToolCallsPanel(props: ToolCallsPanelProps) {
                       onExpandedInvocationChange={setExpandedInvocation}
                       onRequestInvocationDetails={props.onRequestInvocationDetails}
                       onScrollToTurn={props.onScrollToTurn}
+                      threadLinkSource={props.threadLinkSource}
                       totalCount={summary.invocationCount}
                     />
                   ) : null}
@@ -201,6 +204,7 @@ function ToolInvocationList(props: {
   onExpandedInvocationChange: (invocationId: string | undefined) => void;
   onRequestInvocationDetails?: (invocation: ThreadToolInvocationRecord) => void;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
+  threadLinkSource?: ThreadLinkSource;
   totalCount: number;
 }) {
   if (props.invocations.length === 0) {
@@ -272,7 +276,10 @@ function ToolInvocationList(props: {
               {expanded ? (
                 <div className="tool-call-instance__detail">
                   {transcriptDetail ? (
-                    <TranscriptCommandOutput detail={transcriptDetail} />
+                    <TranscriptCommandOutput
+                      detail={transcriptDetail}
+                      threadLinkSource={props.threadLinkSource}
+                    />
                   ) : (
                     <p
                       className="tool-call-instance__detail-status"

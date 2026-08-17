@@ -4,6 +4,7 @@ import type {
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import { formatBackendLabel } from "../../../lib/backend-label";
+import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { useSubAgents } from "./useSubAgents";
 import {
   formatSubAgentUsageSummary,
@@ -225,6 +226,10 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
       {detailsFor ? (
         <SubAgentDetailsModal
           defaultBackend={props.thread.source}
+          federationTarget={
+            props.thread.federation?.ref.target
+            ?? readRendererFederationTarget()
+          }
           parentThreadId={props.thread.id}
           pricingDisplayOptions={props.pricingDisplayOptions}
           subAgent={detailsFor}

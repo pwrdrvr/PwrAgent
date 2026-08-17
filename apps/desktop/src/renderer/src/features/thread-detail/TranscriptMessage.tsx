@@ -257,6 +257,14 @@ export const TranscriptMessage = memo(function TranscriptMessage(props: Transcri
               ?? props.message.origin.sourceThread?.backend
               ?? "codex"
             }
+            federationTarget={
+              props.threadLinkSource
+                ? {
+                    scope: "remote",
+                    instanceId: props.threadLinkSource.instanceId,
+                  }
+                : readRendererFederationTarget()
+            }
             parentThreadId={props.parentThreadId}
             subAgent={monitorSubAgent}
             onClose={() => setMonitorDetailsOpen(false)}

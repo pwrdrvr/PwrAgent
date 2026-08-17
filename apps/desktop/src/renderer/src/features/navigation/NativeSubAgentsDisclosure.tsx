@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { SubAgentsIcon } from "../../icons";
 import { useDesktopApi } from "../../lib/desktop-api";
+import { readRendererFederationTarget } from "../../lib/federation-window";
 
 type NativeSubAgentsDisclosureProps = {
   compact?: boolean;
@@ -85,6 +86,9 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
                   }
                   void openSubAgentTranscriptWindow({
                     backend: "codex",
+                    federationTarget:
+                      props.thread.federation?.ref.target
+                      ?? readRendererFederationTarget(),
                     threadId: subAgent.threadId,
                     title: label,
                   });

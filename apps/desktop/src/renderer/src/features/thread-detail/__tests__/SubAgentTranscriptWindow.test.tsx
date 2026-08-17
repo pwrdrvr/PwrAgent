@@ -54,4 +54,39 @@ describe("SubAgentTranscriptWindow", () => {
     expect(screen.getByRole("heading", { name: "Bacon" })).toBeInTheDocument();
     expect(screen.getByText("The child transcript is available.")).toBeInTheDocument();
   });
+
+  it("reads a federated native child from the instance that owns it", async () => {
+    const readThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      fetchedAt: 123,
+      threadId: "019ea380-6595-7cf0-8519-58dca9762bfb",
+      threadStatus: "idle" as const,
+      replay: {
+        entries: [],
+        messages: [],
+        pagination: {
+          supportsPagination: false,
+          hasPreviousPage: false,
+        },
+      },
+    }));
+    (window as Window & { pwragent?: unknown }).pwragent = { readThread };
+    window.location.hash =
+      "#sub-agent/codex/019ea380-6595-7cf0-8519-58dca9762bfb/Epicurus/pwr_remote";
+
+    render(<SubAgentTranscriptWindow />);
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledWith({
+        backend: "codex",
+        federationTarget: {
+          scope: "remote",
+          instanceId: "pwr_remote",
+        },
+        threadId: "019ea380-6595-7cf0-8519-58dca9762bfb",
+        limit: THREAD_HISTORY_PAGE_LIMIT,
+        viewOnly: true,
+      });
+    });
+  });
 });

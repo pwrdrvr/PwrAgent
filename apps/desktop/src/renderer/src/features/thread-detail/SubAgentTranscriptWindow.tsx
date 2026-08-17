@@ -4,6 +4,8 @@ import type {
   AppServerReadThreadResponse,
   AppServerThreadEntry,
   AppServerThreadMessage,
+  FederationInstanceId,
+  FederationTarget,
 } from "@pwragent/shared";
 import { CloseIcon } from "../../icons";
 import { formatBackendLabel } from "../../lib/backend-label";
@@ -15,6 +17,7 @@ const LIVE_TRANSCRIPT_REFRESH_MS = 2_000;
 
 type SubAgentTranscriptTarget = {
   backend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   threadId: string;
   title: string;
 };
@@ -36,7 +39,11 @@ type LoadState = {
 export function SubAgentTranscriptWindow() {
   const desktopApi = useDesktopApi();
   const target = useMemo(() => subAgentTranscriptTargetFromHash(), []);
-  const targetKey = target ? `${target.backend}:${target.threadId}` : undefined;
+  const targetKey = target
+    ? `${target.federationTarget?.scope === "remote"
+      ? target.federationTarget.instanceId
+      : "local"}:${target.backend}:${target.threadId}`
+    : undefined;
   const [state, setState] = useState<LoadState>({
     loading: Boolean(target),
     loadingMore: false,
@@ -68,6 +75,9 @@ export function SubAgentTranscriptWindow() {
       try {
         const response = await reader({
           backend: target.backend,
+          ...(target.federationTarget
+            ? { federationTarget: target.federationTarget }
+            : {}),
           threadId: target.threadId,
           limit: THREAD_HISTORY_PAGE_LIMIT,
           viewOnly: true,
@@ -110,6 +120,9 @@ export function SubAgentTranscriptWindow() {
     try {
       const olderResponse = await reader({
         backend: target.backend,
+        ...(target.federationTarget
+          ? { federationTarget: target.federationTarget }
+          : {}),
         threadId: target.threadId,
         before: cursor,
         limit: THREAD_HISTORY_PAGE_LIMIT,
@@ -206,6 +219,14 @@ export function SubAgentTranscriptWindow() {
             pagination={state.response?.replay.pagination}
             parentThreadId={target?.threadId}
             threadId={targetKey}
+            threadLinkSource={
+              target?.federationTarget?.scope === "remote"
+                ? {
+                    backend: target.backend,
+                    instanceId: target.federationTarget.instanceId,
+                  }
+                : undefined
+            }
             onLoadOlder={loadOlder}
           />
         </main>
@@ -280,7 +301,8 @@ function mergeOlderTranscriptResponse(params: {
 
 function subAgentTranscriptTargetFromHash(): SubAgentTranscriptTarget | undefined {
   const hash = window.location.hash.replace(/^#/, "");
-  const [kind, backendPart, threadIdPart, titlePart] = hash.split("/");
+  const [kind, backendPart, threadIdPart, titlePart, instanceIdPart] =
+    hash.split("/");
   if (
     kind !== "sub-agent" ||
     !backendPart ||
@@ -294,10 +316,25 @@ function subAgentTranscriptTargetFromHash(): SubAgentTranscriptTarget | undefine
     const backend = decodeURIComponent(backendPart);
     const threadId = decodeURIComponent(threadIdPart).trim();
     const title = decodeURIComponent(titlePart).trim();
+    const instanceId = instanceIdPart
+      ? decodeURIComponent(instanceIdPart).trim()
+      : "";
     if (!isAppServerBackendKind(backend) || !threadId || !title) {
       return undefined;
     }
-    return { backend, threadId, title };
+    return {
+      backend,
+      ...(instanceId
+        ? {
+            federationTarget: {
+              scope: "remote" as const,
+              instanceId: instanceId as FederationInstanceId,
+            },
+          }
+        : {}),
+      threadId,
+      title,
+    };
   } catch {
     return undefined;
   }

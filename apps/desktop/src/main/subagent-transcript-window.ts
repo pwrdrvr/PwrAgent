@@ -57,7 +57,10 @@ export function showSubAgentTranscriptWindow(
     throw new Error("Sub-agent transcript requires a thread id.");
   }
   const title = request.title.trim() || "Sub-agent transcript";
-  const windowKey = buildThreadIdentityKey(request.backend, threadId);
+  const ownerKey = request.federationTarget?.scope === "remote"
+    ? request.federationTarget.instanceId
+    : "local";
+  const windowKey = `${ownerKey}:${buildThreadIdentityKey(request.backend, threadId)}`;
   const current = transcriptWindows.get(windowKey);
   if (current && !current.isDestroyed()) {
     positionWindowForSourceDisplay(current, source);
@@ -102,6 +105,9 @@ export function showSubAgentTranscriptWindow(
     encodeURIComponent(request.backend),
     encodeURIComponent(threadId),
     encodeURIComponent(title.slice(0, SUB_AGENT_TRANSCRIPT_HASH_TITLE_MAX_LENGTH)),
+    ...(request.federationTarget?.scope === "remote"
+      ? [encodeURIComponent(request.federationTarget.instanceId)]
+      : []),
   ].join("/");
   const rendererEntry = getRendererEntry();
   if (rendererEntry.kind === "url") {
