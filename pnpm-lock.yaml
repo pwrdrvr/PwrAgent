@@ -155,7 +155,7 @@ importers:
         version: 6.8.9
       katex:
         specifier: ^0.18.1
-        version: 0.18.3
+        version: 0.18.4
       mdast-util-from-markdown:
         specifier: ^2.0.3
         version: 2.0.3
@@ -277,8 +277,8 @@ importers:
   packages/messaging/providers/feishu:
     dependencies:
       '@larksuiteoapi/node-sdk':
-        specifier: 1.72.0
-        version: 1.72.0
+        specifier: 1.73.0
+        version: 1.73.0
       '@pwragent/messaging-interface':
         specifier: workspace:*
         version: link:../../interface
@@ -857,8 +857,8 @@ packages:
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
 
-  '@larksuiteoapi/node-sdk@1.72.0':
-    resolution: {integrity: sha512-8oKnaTxRFRNPQfeeG69yafdLzWvvrvXlIqX3QRvozR1/6kvZyi9iMhp6lwC+hMgJA/GCFwMZRadkJzlUE+kyvQ==}
+  '@larksuiteoapi/node-sdk@1.73.0':
+    resolution: {integrity: sha512-gs4EiupJ6RdYAEJGtuYrCVsB7wSMBwtUDK+ilpmOHD6RTvbtciW6AWciQO9coOQVuBZfh7hvAi25dPfCsny/nA==}
 
   '@line/bot-sdk@11.2.0':
     resolution: {integrity: sha512-JKYFa3jaPYWqgI4hnc0ls+7tMmUEgnFF0Jb48kscKcGOO8qh4hddJyiq8/TFqaTWWxXQeSgYd1o5zrHjt6FrpQ==}
@@ -2935,8 +2935,8 @@ packages:
     resolution: {integrity: sha512-Eeo8Ys1doU1z+x8AZsPpQu+p/QcZBI5PeOo7QGQdy2x2m0MU/hYagBbGOmXwr5KVbEfVuWv9LpnQWeehogurjg==}
     hasBin: true
 
-  katex@0.18.3:
-    resolution: {integrity: sha512-6kbPr8KiYZpRfNNIw+8Td33njnFzK/ELcw6bI9FzIHysYPatAUdepQimfCX1vG2VCD/5Lv+Gu6P5YA58k8HHmw==}
+  katex@0.18.4:
+    resolution: {integrity: sha512-IMPntbRLOU+eu88XDiFKqQ8Akhr9Tv7jDMXqPhjG9SI1JMA4DIgXk4x9k4skJz2NZJXBRbC+2pYBLj9olqcZow==}
     hasBin: true
 
   keyv@4.5.4:
@@ -4959,7 +4959,7 @@ snapshots:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.5.5
 
-  '@larksuiteoapi/node-sdk@1.72.0':
+  '@larksuiteoapi/node-sdk@1.73.0':
     dependencies:
       axios: 1.19.0
       lodash.identity: 3.0.0
@@ -7253,7 +7253,7 @@ snapshots:
     dependencies:
       commander: 8.3.0
 
-  katex@0.18.3:
+  katex@0.18.4:
     dependencies:
       commander: 8.3.0
 
