@@ -1514,10 +1514,8 @@ describe("Composer", () => {
   });
 
   it("does not offer the controller's disk picker in a remote launchpad", () => {
-    (window as unknown as {
-      __pwragentFederationTarget?: unknown;
-    }).__pwragentFederationTarget = {
-      scope: "remote",
+    const federationTarget = {
+      scope: "remote" as const,
       instanceId: "remote-instance",
     };
     const onPickAndRegisterDirectory = vi.fn();
@@ -1544,6 +1542,7 @@ describe("Composer", () => {
           executionMode: "default",
           prompt: "",
           workMode: "local",
+          federationTarget,
           createdAt: 1,
           updatedAt: 1,
         }}
@@ -1565,14 +1564,11 @@ describe("Composer", () => {
     expect(onPickAndRegisterDirectory).not.toHaveBeenCalled();
   });
 
-  it("routes remote recent files to the owner and disables every native add path", async () => {
+  it("routes mounted remote launchpad files to the owner and disables native add paths", async () => {
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "remote-instance",
     };
-    (window as unknown as {
-      __pwragentFederationTarget?: unknown;
-    }).__pwragentFederationTarget = federationTarget;
     const listRecentFileReferences = vi.fn(async () => ({
       files: [{ label: "owner.md", path: "/owner/notes/owner.md" }],
     }));
@@ -1585,7 +1581,6 @@ describe("Composer", () => {
       label: "viewer",
       path: "/viewer/project",
     }));
-    const onPickAndAttachDirectoryToThread = vi.fn();
 
     render(
       <Composer
@@ -1605,37 +1600,21 @@ describe("Composer", () => {
           needsAttentionCount: 0,
         }]}
         disabled={false}
-        onPickAndAttachDirectoryToThread={onPickAndAttachDirectoryToThread}
         onPickDirectoryForReference={onPickDirectoryForReference}
         skills={[]}
-        thread={{
-          id: "thread-1",
-          title: "Remote thread",
-          titleSource: "explicit",
-          source: "codex",
+        launchpad={{
+          directoryKey: "workspace:new-thread",
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          backend: "codex",
           executionMode: "default",
-          federation: {
-            ref: {
-              backend: "codex",
-              target: federationTarget,
-              threadId: "thread-1",
-            },
-            instanceLabel: "Remote",
-            peerStatus: "connected",
-          },
-          linkedDirectories: [],
-          inbox: { inInbox: false },
+          prompt: "",
+          workMode: "local",
+          federationTarget,
+          createdAt: 1,
+          updatedAt: 1,
         }}
       />,
-    );
-
-    const existingThreadAdd = screen.getByRole("button", {
-      name: "Add directory",
-    });
-    expect(existingThreadAdd).toBeDisabled();
-    expect(existingThreadAdd).toHaveAttribute(
-      "title",
-      REMOTE_NATIVE_PICKER_TOOLTIP,
     );
 
     fireEvent.change(screen.getByLabelText("Reply"), {
@@ -1675,7 +1654,6 @@ describe("Composer", () => {
     });
     expect(pickFileFromDisk).not.toHaveBeenCalled();
     expect(onPickDirectoryForReference).not.toHaveBeenCalled();
-    expect(onPickAndAttachDirectoryToThread).not.toHaveBeenCalled();
   });
 
   it("clears recent files when filesystem authority changes and the new read fails", async () => {

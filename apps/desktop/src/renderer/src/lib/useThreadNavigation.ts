@@ -3050,6 +3050,10 @@ export function useThreadNavigation(
   const [federatedLaunchpad, setFederatedLaunchpad] = useState<
     FederatedLaunchpadSession
   >();
+  // A peer snapshot and the subsequent launchpad ensure both cross the
+  // network. Keep only the most recent launch intent so a slow prior peer or
+  // project selection cannot replace the launchpad the operator just chose.
+  const federatedLaunchpadOpenRevisionRef = useRef(0);
   const [createThreadError, setCreateThreadError] = useState<string>();
   const [launchpadError, setLaunchpadError] = useState<string>();
   const [archiveThreadError, setArchiveThreadError] = useState<string>();
@@ -5740,9 +5744,14 @@ export function useThreadNavigation(
       target: FederationRemoteTarget,
       directory: NavigationDirectorySummary,
       remoteDirectories?: NavigationDirectorySummary[],
+      requestRevision?: number,
     ): Promise<void> => {
+      const openRevision =
+        requestRevision ?? ++federatedLaunchpadOpenRevisionRef.current;
       if (!desktopApi?.ensureDirectoryLaunchpad) {
-        setLaunchpadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
+        if (federatedLaunchpadOpenRevisionRef.current === openRevision) {
+          setLaunchpadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
+        }
         return;
       }
 
@@ -5763,6 +5772,9 @@ export function useThreadNavigation(
           currentBranch: directory.gitStatus?.currentBranch,
           preferredBackend: directory.launchpad?.backend,
         });
+        if (federatedLaunchpadOpenRevisionRef.current !== openRevision) {
+          return;
+        }
         const launchpad = {
           ...response.launchpad,
           federationTarget: target,
@@ -5798,7 +5810,9 @@ export function useThreadNavigation(
         });
         setSelectedItemKey(buildFederatedLaunchpadSelectionKey(target));
       } catch (error) {
-        setLaunchpadError(error instanceof Error ? error.message : String(error));
+        if (federatedLaunchpadOpenRevisionRef.current === openRevision) {
+          setLaunchpadError(error instanceof Error ? error.message : String(error));
+        }
       }
     },
     [desktopApi, federatedLaunchpad],
@@ -5806,8 +5820,11 @@ export function useThreadNavigation(
 
   const openFederatedWorkspaceLaunchpad = useCallback(
     async (target: FederationRemoteTarget): Promise<void> => {
+      const openRevision = ++federatedLaunchpadOpenRevisionRef.current;
       if (!desktopApi?.getNavigationSnapshot) {
-        setLaunchpadError("Desktop bridge is missing navigation snapshot support.");
+        if (federatedLaunchpadOpenRevisionRef.current === openRevision) {
+          setLaunchpadError("Desktop bridge is missing navigation snapshot support.");
+        }
         return;
       }
 
@@ -5816,6 +5833,9 @@ export function useThreadNavigation(
         const snapshot = await desktopApi.getNavigationSnapshot({
           federationTarget: target,
         });
+        if (federatedLaunchpadOpenRevisionRef.current !== openRevision) {
+          return;
+        }
         const workspaceDirectory = snapshot.directories.find(
           (directory) => directory.kind === "workspace",
         ) ?? {
@@ -5829,9 +5849,12 @@ export function useThreadNavigation(
           target,
           workspaceDirectory,
           snapshot.directories,
+          openRevision,
         );
       } catch (error) {
-        setLaunchpadError(error instanceof Error ? error.message : String(error));
+        if (federatedLaunchpadOpenRevisionRef.current === openRevision) {
+          setLaunchpadError(error instanceof Error ? error.message : String(error));
+        }
       }
     },
     [desktopApi, openFederatedDirectoryLaunchpad],

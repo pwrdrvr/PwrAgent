@@ -7,6 +7,7 @@ import {
 } from "@pwragent/shared";
 import type {
   AgentEvent,
+  FederationRemoteTarget,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
@@ -4933,6 +4934,117 @@ describe("useThreadNavigation", () => {
           target: federationTarget,
         },
       },
+    });
+  });
+
+  it("keeps the newest remote launchpad request selected", async () => {
+    const firstTarget = { scope: "remote" as const, instanceId: "first-owner" };
+    const secondTarget = { scope: "remote" as const, instanceId: "second-owner" };
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const firstEnsure = createDeferred<{
+      defaults: NavigationLaunchpadDefaults;
+      launchpad: NavigationLaunchpadDraft;
+    }>();
+    const secondEnsure = createDeferred<{
+      defaults: NavigationLaunchpadDefaults;
+      launchpad: NavigationLaunchpadDraft;
+    }>();
+    const makeSnapshot = (target: FederationRemoteTarget): NavigationSnapshot => ({
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [{
+        key: "workspace:new-thread",
+        kind: "workspace",
+        label: "Workspaces",
+        threadKeys: [],
+        needsAttentionCount: 0,
+      }],
+      launchpadDefaults: defaults,
+      federationTarget: target,
+    });
+    const launchpadResponse = (target: FederationRemoteTarget) => ({
+      launchpad: {
+        directoryKey: "workspace:new-thread",
+        directoryKind: "workspace" as const,
+        directoryLabel: "Workspaces",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: target.instanceId,
+        workMode: "local" as const,
+        federationTarget: target,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      defaults,
+    });
+    const getNavigationSnapshot: NonNullable<DesktopApi["getNavigationSnapshot"]> = vi.fn(
+      async (request) => {
+        const target = request?.federationTarget;
+        if (!target || target.scope !== "remote") {
+          return {
+            backend: "all" as const,
+            fetchedAt: 1,
+            unchanged: false,
+            inboxThreadKeys: [],
+            threads: [],
+            directories: [],
+            launchpadDefaults: defaults,
+          };
+        }
+        return makeSnapshot(target);
+      },
+    );
+    const ensureDirectoryLaunchpad: NonNullable<
+      DesktopApi["ensureDirectoryLaunchpad"]
+    > = vi.fn((request) => request.federationTarget?.scope === "remote"
+      && request.federationTarget.instanceId === firstTarget.instanceId
+      ? firstEnsure.promise
+      : secondEnsure.promise);
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      void result.current.openFederatedWorkspaceLaunchpad(firstTarget);
+    });
+    await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({ federationTarget: firstTarget }),
+    ));
+
+    act(() => {
+      void result.current.openFederatedWorkspaceLaunchpad(secondTarget);
+    });
+    await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({ federationTarget: secondTarget }),
+    ));
+
+    await act(async () => {
+      secondEnsure.resolve(launchpadResponse(secondTarget));
+      await secondEnsure.promise;
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      federationTarget: secondTarget,
+      prompt: secondTarget.instanceId,
+    });
+
+    await act(async () => {
+      firstEnsure.resolve(launchpadResponse(firstTarget));
+      await firstEnsure.promise;
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      federationTarget: secondTarget,
+      prompt: secondTarget.instanceId,
     });
   });
 

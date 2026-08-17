@@ -2890,7 +2890,9 @@ export function Composer(props: ComposerProps) {
   const threadLinks = useThreadLinks();
   const rendererFederationTarget = readRendererFederationTarget();
   const filesystemFederationTarget =
-    props.thread?.federation?.ref.target ?? rendererFederationTarget;
+    props.thread?.federation?.ref.target
+    ?? props.launchpad?.federationTarget
+    ?? rendererFederationTarget;
   const filesystemAuthorityKey = filesystemFederationTarget?.scope === "remote"
     ? `remote:${filesystemFederationTarget.instanceId}`
     : "local";
