@@ -7,6 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TOOLTIP_HOVER_DELAY_MS,
@@ -49,6 +50,7 @@ function DelayedTooltipFixture() {
       <div data-testid="sidebar-scroll-region">
         <button
           type="button"
+          aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
           onMouseEnter={(event) =>
             tooltip.showAfterDelay(event.currentTarget, "Branch details")
           }
@@ -57,6 +59,47 @@ function DelayedTooltipFixture() {
           agent/delay-tooltip
         </button>
       </div>
+      {tooltip.tooltipNode}
+    </div>
+  );
+}
+
+function AnchorLifecycleFixture(props: {
+  anchorKey?: string;
+  anchorLabel?: string;
+  anchorStatus?: string;
+  anchorTop?: number;
+  showAnchor?: boolean;
+  tooltipContent?: string;
+  unrelatedLabel?: string;
+}) {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const tooltipContent = props.tooltipContent ?? "Branch details";
+  const updateTooltip = tooltip.update;
+
+  useEffect(() => {
+    updateTooltip(tooltipContent);
+  }, [tooltipContent, updateTooltip]);
+
+  return (
+    <div>
+      <div data-testid="anchor-layout" data-anchor-top={props.anchorTop ?? 80}>
+        {props.showAnchor === false ? null : (
+          <button
+            key={props.anchorKey ?? "anchor"}
+            aria-label={`Branch status: ${props.anchorStatus ?? "pending"}`}
+            className={`branch-status--${props.anchorStatus ?? "pending"}`}
+            type="button"
+            onMouseEnter={(event) =>
+              tooltip.show(event.currentTarget, tooltipContent)
+            }
+            onMouseLeave={tooltip.hide}
+          >
+            {props.anchorLabel ?? "agent/lifecycle-tooltip"}
+          </button>
+        )}
+      </div>
+      <div data-testid="unrelated-update">{props.unrelatedLabel ?? "Idle"}</div>
       {tooltip.tooltipNode}
     </div>
   );
@@ -112,6 +155,23 @@ describe("useViewportTooltip", () => {
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
 
+  it("shows a delayed tooltip when its accessibility relationship is added", async () => {
+    vi.useFakeTimers();
+    render(<DelayedTooltipFixture />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    await act(async () => {
+      vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS);
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Branch details");
+    expect(screen.getByRole("button")).toHaveAttribute(
+      "aria-describedby",
+      screen.getByRole("tooltip").id,
+    );
+  });
+
   it("cancels a pending tooltip when scrolling moves its anchor", () => {
     vi.useFakeTimers();
     render(<DelayedTooltipFixture />);
@@ -119,6 +179,112 @@ describe("useViewportTooltip", () => {
     fireEvent.mouseEnter(screen.getByRole("button"));
     fireEvent.scroll(screen.getByTestId("sidebar-scroll-region"));
     act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
+
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("closes a tooltip when a refresh removes its anchor", async () => {
+    const { rerender } = render(<AnchorLifecycleFixture />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Branch details");
+
+    rerender(<AnchorLifecycleFixture showAnchor={false} />);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    });
+  });
+
+  it("closes a tooltip when React replaces its anchor", async () => {
+    const { rerender } = render(<AnchorLifecycleFixture anchorKey="first" />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    rerender(<AnchorLifecycleFixture anchorKey="second" />);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    });
+  });
+
+  it("closes a tooltip when its connected anchor moves", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function getBoundingClientRect(this: HTMLElement) {
+        if (this.getAttribute("role") === "tooltip") {
+          return rectangle({ width: 240, height: 40 });
+        }
+        if (this.tagName === "BUTTON") {
+          const top = Number(
+            this.closest("[data-anchor-top]")?.getAttribute("data-anchor-top"),
+          );
+          return rectangle({ left: 20, top, width: 160, height: 26 });
+        }
+        return rectangle({});
+      },
+    );
+    vi.stubGlobal("innerWidth", 1200);
+    vi.stubGlobal("innerHeight", 800);
+    const { rerender } = render(<AnchorLifecycleFixture anchorTop={80} />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    rerender(<AnchorLifecycleFixture anchorTop={180} />);
+
+    await waitFor(() => {
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+    });
+  });
+
+  it("keeps a tooltip open through unrelated DOM updates", async () => {
+    const { rerender } = render(<AnchorLifecycleFixture unrelatedLabel="Idle" />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    rerender(<AnchorLifecycleFixture unrelatedLabel="Streaming" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Branch details");
+  });
+
+  it("keeps a live tooltip open when its anchor attributes and card content update", async () => {
+    const { rerender } = render(
+      <AnchorLifecycleFixture
+        anchorStatus="pending"
+        tooltipContent="Checks pending"
+      />,
+    );
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    rerender(
+      <AnchorLifecycleFixture
+        anchorStatus="success"
+        tooltipContent="Checks passed"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Checks passed");
+    });
+    expect(screen.getByRole("button")).toHaveAccessibleName(
+      "Branch status: success",
+    );
+    expect(screen.getByRole("button")).toHaveClass("branch-status--success");
+  });
+
+  it("closes a tooltip on Escape", () => {
+    render(<AnchorLifecycleFixture />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("closes a tooltip when the operator clicks elsewhere", () => {
+    render(<AnchorLifecycleFixture />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    fireEvent.pointerDown(screen.getByTestId("unrelated-update"));
 
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
   });
