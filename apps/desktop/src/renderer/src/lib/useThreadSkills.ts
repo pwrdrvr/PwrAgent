@@ -64,11 +64,14 @@ export function useThreadSkills(params: {
     // the `/` menu instead of falling back to PwrAgent's own commands alone.
     if (launchpad) {
       const cwds = launchpad.directoryPath?.trim() ? [launchpad.directoryPath.trim()] : [];
+      const targetKey = launchpad.federationTarget?.scope === "remote"
+        ? `${launchpad.federationTarget.instanceId}:`
+        : "";
       return {
         backend: launchpad.backend,
         cwds,
-        federationTarget: undefined,
-        key: `launchpad:${launchpad.backend}:${launchpad.directoryKey}`,
+        federationTarget: launchpad.federationTarget,
+        key: `launchpad:${launchpad.backend}:${targetKey}${launchpad.directoryKey}`,
         threadId: undefined,
       };
     }
