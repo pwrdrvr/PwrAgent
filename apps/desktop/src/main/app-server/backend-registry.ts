@@ -6910,6 +6910,8 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     SqliteOverlayStore,
     | "readThreadGitWorkingStateCache"
     | "listRemoteThreadPins"
+    | "listThreadCompactions"
+    | "recordThreadCompaction"
     | "reconcileOrphanedThreadSubAgents"
     | "markThreadToolInvocationsNoisy"
     | "persistThreadToolInvocationBoundary"
@@ -25396,11 +25398,69 @@ export class DesktopBackendRegistry {
     if (!this.tokenMiserStore) {
       return;
     }
-    const metadata = await this.tokenMiserStore.listMetadata();
+    const restored = await this.tokenMiserStore.listMetadata();
+    const stoppedCount =
+      await this.stopTokenMiserGatesCompactedWhileClosed(restored);
+    // Re-read after closing gates: `restored` was captured before the stop, so
+    // registering from it would put the just-stopped gates straight back into
+    // the active set and publish a stale ledger.
+    const metadata = stoppedCount > 0
+      ? await this.tokenMiserStore.listMetadata()
+      : restored;
     for (const entry of metadata) {
       this.rememberActiveTokenMiserReplayEntry(entry);
     }
     await this.persistTokenMiserLedgerEntries(metadata);
+  }
+
+  /**
+   * Close out gates whose thread compacted while this instance was not running.
+   *
+   * Restore re-registers every unstopped gate, so without this a gate created
+   * before a compaction stays active forever and keeps counting cached replays
+   * against content the compaction already removed from context. The live
+   * `thread/compacted` handler cannot cover this: the event fired when nobody
+   * was listening. Persisted markers are what make the boundary survive.
+   */
+  private async stopTokenMiserGatesCompactedWhileClosed(
+    metadata: readonly TokenMiserObjectMetadata[],
+  ): Promise<number> {
+    const active = metadata.filter((entry) =>
+      entry.replayTrackingVersion === 2
+      && entry.replayTrackingStoppedAt === undefined
+    );
+    if (active.length === 0) {
+      return 0;
+    }
+    const compactedAtByThread = new Map<string, number>();
+    for (const threadId of new Set(active.map((entry) => entry.threadId))) {
+      const compactions = await this.overlayStore.listThreadCompactions?.({
+        backend: "codex",
+        threadId,
+      });
+      const latest = compactions?.at(-1);
+      if (latest) {
+        compactedAtByThread.set(threadId, latest.observedAt);
+      }
+    }
+    let stopped = 0;
+    for (const entry of active) {
+      const compactedAt = compactedAtByThread.get(entry.threadId);
+      // Only a compaction that happened after the gate bounds it; an earlier
+      // one belongs to context the gate never entered.
+      if (compactedAt === undefined || compactedAt <= entry.createdAt) {
+        continue;
+      }
+      if (
+        await this.tokenMiserStore!.stopReplayTracking({
+          objectId: entry.objectId,
+          stoppedAt: compactedAt,
+        })
+      ) {
+        stopped += 1;
+      }
+    }
+    return stopped;
   }
 
   private rememberActiveTokenMiserReplayEntry(
@@ -25546,6 +25606,66 @@ export class DesktopBackendRegistry {
         threadId: params.threadId,
       });
     });
+  }
+
+  /**
+   * Persist one observed compaction.
+   *
+   * Compaction bounds how long a preserved payload can still be replayed, and
+   * it used to be live-only: a compaction seen while the app was closed stopped
+   * nothing, and historical accounting had no boundary at all. The marker is
+   * keyed on the backend's own item id when it reports one, so a re-emitted
+   * notification does not become a second compaction.
+   */
+  private async recordThreadCompaction(event: AgentEvent): Promise<void> {
+    if (event.notification.method !== "thread/compacted") {
+      return;
+    }
+    const threadId = event.notification.params.threadId;
+    const itemId = typeof event.notification.params.itemId === "string"
+      ? event.notification.params.itemId
+      : undefined;
+    const observedAt = Date.now();
+    const turnId = this.findActiveTurnIdForThread(event.backend, threadId);
+    const compactionId = itemId
+      ? [event.backend, threadId, itemId].join(":")
+      : [event.backend, threadId, turnId ?? "unknown", observedAt].join(":");
+    try {
+      await this.overlayStore.recordThreadCompaction?.({
+        compaction: {
+          backend: event.backend,
+          compactionId,
+          observedAt,
+          threadId,
+          updatedAt: observedAt,
+          ...(itemId ? { itemId } : {}),
+          ...(turnId ? { turnId } : {}),
+        },
+      });
+    } catch (error) {
+      backendRegistryLog.warn("compaction marker write failed", {
+        backend: event.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId,
+      });
+    }
+  }
+
+  // The compaction notification carries no turn id, so recover it from the
+  // active-turn set: compaction happens inside a turn, and attributing the
+  // marker to that turn is what lets the pricing view group it under the work
+  // that caused it.
+  private findActiveTurnIdForThread(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): string | undefined {
+    const prefix = `${backend}:${threadId}:`;
+    for (const key of this.activeTurnKeys) {
+      if (key.startsWith(prefix)) {
+        return key.slice(prefix.length);
+      }
+    }
+    return undefined;
   }
 
   private async stopTokenMiserReplayTrackingAtCompaction(
@@ -33037,6 +33157,7 @@ export class DesktopBackendRegistry {
       liveThreadUsageWork,
     );
     await this.recordTokenMiserParentModelRequest(event);
+    await this.recordThreadCompaction(event);
     await this.stopTokenMiserReplayTrackingAtCompaction(event);
     await this.recordToolInvocationAccounting(event);
     this.forgetCompletedTurnReplayObservations(event);

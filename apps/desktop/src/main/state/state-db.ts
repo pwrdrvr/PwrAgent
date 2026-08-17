@@ -14,7 +14,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 52;
+export const CURRENT_STATE_DB_USER_VERSION = 53;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -386,6 +386,29 @@ CREATE TABLE IF NOT EXISTS acp_available_commands (
 );
 CREATE INDEX IF NOT EXISTS idx_acp_available_commands_observed
   ON acp_available_commands(observed_at DESC);
+`;
+
+// One row per observed `thread/compacted`. Compaction is the only event that
+// bounds how long a preserved tool payload can still be replayed, and it was
+// previously live-only: a compaction seen while the app was closed stopped
+// nothing, and historical accounting had no boundary at all. Persisting it
+// gives Token Miser a durable stop and gives the pricing ledger a name for the
+// cold replay that follows — the whole surviving context re-sent uncached.
+const THREAD_COMPACTION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS thread_compactions (
+  compaction_id          TEXT PRIMARY KEY,
+  backend                TEXT NOT NULL,
+  thread_id              TEXT NOT NULL,
+  turn_id                TEXT,
+  item_id                TEXT,
+  observed_at            INTEGER NOT NULL,
+  cold_usage_line_id     TEXT,
+  cold_uncached_tokens   INTEGER,
+  cold_cost_micros       INTEGER,
+  updated_at             INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_thread_compactions_thread
+  ON thread_compactions(backend, thread_id, observed_at DESC);
 `;
 
 const AUTOMATION_SCHEMA = `
@@ -1500,6 +1523,14 @@ LEFT JOIN federation_peers
     if ((db.pragma("user_version", { simple: true }) as number) < 52) {
       db.transaction(() => {
         repairCodexTurnUsageFromCumulativeSnapshots(db);
+        db.pragma("user_version = 52");
+      })();
+    }
+    if ((db.pragma("user_version", { simple: true }) as number) < 53) {
+      db.transaction(() => {
+        // Additive table, no data migration; the same DDL also lives in
+        // `ensureCurrentSchema` so re-instantiated dbs converge.
+        db.exec(THREAD_COMPACTION_SCHEMA);
         db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
       })();
     }
@@ -1961,6 +1992,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     db.exec(ACP_AGENT_SCHEMA);
     db.exec(ACP_SESSION_SCHEMA);
     db.exec(ACP_AVAILABLE_COMMANDS_SCHEMA);
+    db.exec(THREAD_COMPACTION_SCHEMA);
     db.exec(AUTOMATION_SCHEMA);
     db.exec(SCHEDULED_THREAD_ACTION_SCHEMA);
     ensureScheduledThreadActionMetadataColumns(db);

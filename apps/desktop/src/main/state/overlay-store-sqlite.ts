@@ -1,5 +1,6 @@
 import path from "node:path";
 import type {
+  AppServerBackendKind,
   AppServerBackendScope,
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
@@ -26,6 +27,7 @@ import type {
   ThreadToolAccounting,
   ThreadToolAnalysisCoverage,
   ThreadToolInvocationAlert,
+  ThreadCompactionRecord,
   ThreadToolInvocationRecord,
   ThreadToolInvocationStatus,
   ThreadToolInvocationSummary,
@@ -171,6 +173,38 @@ export type PrStatusWatchRegistrationResult = {
   status: "watching" | "duplicate";
   watch: ThreadPullRequestWatchSummary;
 };
+
+type ThreadCompactionRow = {
+  backend: string;
+  cold_cost_micros: number | null;
+  cold_uncached_tokens: number | null;
+  cold_usage_line_id: string | null;
+  compaction_id: string;
+  item_id: string | null;
+  observed_at: number;
+  thread_id: string;
+  turn_id: string | null;
+  updated_at: number;
+};
+
+function readThreadCompactionRow(row: ThreadCompactionRow): ThreadCompactionRecord {
+  return {
+    backend: row.backend as AppServerBackendKind,
+    compactionId: row.compaction_id,
+    observedAt: row.observed_at,
+    threadId: row.thread_id,
+    updatedAt: row.updated_at,
+    ...(row.cold_cost_micros !== null ? { coldCostMicros: row.cold_cost_micros } : {}),
+    ...(row.cold_uncached_tokens !== null
+      ? { coldUncachedTokens: row.cold_uncached_tokens }
+      : {}),
+    ...(row.cold_usage_line_id !== null
+      ? { coldUsageLineId: row.cold_usage_line_id }
+      : {}),
+    ...(row.item_id !== null ? { itemId: row.item_id } : {}),
+    ...(row.turn_id !== null ? { turnId: row.turn_id } : {}),
+  };
+}
 
 type PrAutoDispatchClaimRow = {
   payload: string;
@@ -1704,6 +1738,103 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         this.recomputeThreadPricingSummarySync(target);
       }
     })();
+  }
+
+  /**
+   * Record one observed compaction. Idempotent on `compactionId`, so a
+   * re-emitted notification is a no-op rather than a second marker: the
+   * marker's whole job is to bound replay accounting, and a duplicate would
+   * make a single compaction look like two.
+   *
+   * Returns true only when a new marker was written, so callers can skip the
+   * downstream reconciliation and event emission on a duplicate.
+   */
+  async recordThreadCompaction(params: {
+    compaction: ThreadCompactionRecord;
+  }): Promise<boolean> {
+    const compaction = params.compaction;
+    const result = this.stateDb.raw
+      .prepare(
+        `INSERT INTO thread_compactions (
+          compaction_id,
+          backend,
+          thread_id,
+          turn_id,
+          item_id,
+          observed_at,
+          cold_usage_line_id,
+          cold_uncached_tokens,
+          cold_cost_micros,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(compaction_id) DO NOTHING`,
+      )
+      .run(
+        compaction.compactionId,
+        compaction.backend,
+        compaction.threadId,
+        compaction.turnId ?? null,
+        compaction.itemId ?? null,
+        compaction.observedAt,
+        compaction.coldUsageLineId ?? null,
+        compaction.coldUncachedTokens ?? null,
+        compaction.coldCostMicros ?? null,
+        compaction.updatedAt,
+      );
+    return result.changes > 0;
+  }
+
+  async listThreadCompactions(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadCompactionRecord[]> {
+    return (
+      this.stateDb.raw
+        .prepare(
+          `SELECT * FROM thread_compactions
+           WHERE backend = ? AND thread_id = ?
+           ORDER BY observed_at ASC`,
+        )
+        .all(params.backend, params.threadId) as ThreadCompactionRow[]
+    ).map(readThreadCompactionRow);
+  }
+
+  /**
+   * Name the cold replay a compaction caused. Applied to the newest marker that
+   * has no attribution yet, because the first priced request after a compaction
+   * is the one that re-sent the surviving context uncached.
+   */
+  async attributeThreadCompactionColdReplay(params: {
+    backend: AppServerBackendKind;
+    costMicros: number;
+    threadId: string;
+    uncachedTokens: number;
+    usageLineId: string;
+    updatedAt: number;
+  }): Promise<boolean> {
+    const result = this.stateDb.raw
+      .prepare(
+        `UPDATE thread_compactions
+         SET cold_usage_line_id = ?,
+             cold_uncached_tokens = ?,
+             cold_cost_micros = ?,
+             updated_at = ?
+         WHERE compaction_id = (
+           SELECT compaction_id FROM thread_compactions
+           WHERE backend = ? AND thread_id = ? AND cold_usage_line_id IS NULL
+           ORDER BY observed_at DESC
+           LIMIT 1
+         )`,
+      )
+      .run(
+        params.usageLineId,
+        params.uncachedTokens,
+        params.costMicros,
+        params.updatedAt,
+        params.backend,
+        params.threadId,
+      );
+    return result.changes > 0;
   }
 
   async upsertThreadToolInvocation(params: {
