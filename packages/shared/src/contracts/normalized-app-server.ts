@@ -1074,7 +1074,40 @@ export type ThreadToolAnalysisCoverage = {
   explanation?: string;
 };
 
+/**
+ * Thread-level dollar accounting for the gate, aggregated from the same
+ * per-gate terms the Pricing rail shows so the two views cannot disagree.
+ *
+ * A gate is only priced once its own usage line lands and the parent turn has a
+ * known model and rate, so `pricedGateCount` can trail `gateCount` — the token
+ * counts are always available, the dollars are not.
+ */
+export type ThreadTokenMiserSavings = {
+  currency: "USD";
+  /** Gates whose dollar terms are complete; the rest contribute tokens only. */
+  pricedGateCount: number;
+  gateCount: number;
+  /** 1 — the gated payloads at parent rates, uncached once plus later replays. */
+  withoutGateCostMicros: number;
+  /** 2 — what the helper actually charged. */
+  gateCostMicros: number;
+  /** 3 — summaries and retrievals the parent did receive, and their replays. */
+  revealedCostMicros: number;
+  /** 1 − 2 − 3. Negative when the gate cost more than it saved. */
+  savingsMicros: number;
+  /** Replays counted at an observed request boundary. */
+  directlyObservedReplayCount: number;
+  /**
+   * Replays inferred from later tool invocations on pre-v2 gates. Cannot see
+   * cross-turn replays or compaction boundaries, so it is a floor, not a count.
+   */
+  reconstructedReplayCount: number;
+  gateModel?: string;
+  parentModel?: string;
+};
+
 export type ThreadTokenMiserAccounting = {
+  savings?: ThreadTokenMiserSavings;
   interceptionCount: number;
   originalCharacters: number;
   baselineParentTokens: number;

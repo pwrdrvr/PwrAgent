@@ -7,6 +7,7 @@ import type {
   AppServerThreadActivityDetail,
   ThreadToolAccounting,
   ThreadToolAnalysisCoverage,
+  ThreadTokenMiserSavings,
   ThreadToolInvocationRecord,
 } from "@pwragent/shared";
 import {
@@ -226,6 +227,12 @@ export function ToolOutputIncidentExplorerWindow() {
     (total, line) => total + line.totalCostMicros,
     0,
   );
+  // The thread's own billed total, for "cost X, would have cost Y". Provider
+  // summaries are the same rows the Pricing rail totals.
+  const threadCostMicros = latest?.pricing?.summaries.reduce(
+    (total, provider) => total + provider.totalCostMicros,
+    0,
+  ) ?? 0;
   const turnStrip = useMemo(
     () => buildTurnCostStrip(allInvocations, {
       largeOutputThresholdChars,
@@ -512,6 +519,7 @@ export function ToolOutputIncidentExplorerWindow() {
           gateCostMicros={tokenMiserGateCostMicros}
           gateTokens={tokenMiserGateTokens}
           roughEdges={roughEdges}
+          threadCostMicros={threadCostMicros}
           tokenMiser={activeTokenMiser}
         />
       ) : (
@@ -895,12 +903,45 @@ function describeTokenMiserOutcome(estimatedTokensSaved: number): string {
  * the parent model's rates, which live with the thread's pricing ledger. The
  * gate's compute cost is real money and is shown as such.
  */
+/**
+ * How much of the replay count was actually observed.
+ *
+ * Directly-observed replays were counted at a request boundary. Reconstructed
+ * ones were inferred from later tool invocations on pre-v2 gates, which cannot
+ * see cross-turn replays or compaction boundaries — a floor, not a count. The
+ * distinction has to survive into the UI, because the two are summed into one
+ * savings figure and only one of them is exact.
+ */
+function SavingsConfidence(props: { savings: ThreadTokenMiserSavings }) {
+  const { directlyObservedReplayCount, reconstructedReplayCount } = props.savings;
+  const total = directlyObservedReplayCount + reconstructedReplayCount;
+  const reconstructed = reconstructedReplayCount > 0;
+  const unpriced = props.savings.gateCount - props.savings.pricedGateCount;
+  return (
+    <p
+      className="incident-explorer__confidence"
+      data-kind={reconstructed ? "reconstructed" : "observed"}
+    >
+      <span aria-hidden="true" />
+      {reconstructed
+        ? `Partly reconstructed · ${reconstructedReplayCount.toLocaleString()} of `
+          + `${total.toLocaleString()} replays inferred from later tool calls`
+        : `Directly observed · ${directlyObservedReplayCount.toLocaleString()} of `
+          + `${total.toLocaleString()} replays tracked at the request boundary`}
+      {unpriced > 0
+        ? ` · ${unpriced.toLocaleString()} ${unpriced === 1 ? "gate is" : "gates are"} not priced yet`
+        : ""}
+    </p>
+  );
+}
+
 function TokenMiserSavingsLens(props: {
   comparison?: TokenMiserContextComparison;
   currency?: string;
   gateCostMicros: number;
   gateTokens: number;
   roughEdges: TokenMiserRoughEdge[];
+  threadCostMicros: number;
   tokenMiser?: ThreadToolAccounting["tokenMiser"];
 }) {
   const tokenMiser = props.tokenMiser;
@@ -914,49 +955,126 @@ function TokenMiserSavingsLens(props: {
       </div>
     );
   }
+  const savings = tokenMiser.savings;
   const cachedReplayTokens = tokenMiser.estimatedCachedReplayTokensSaved ?? 0;
   const cachedReplayCount = tokenMiser.cachedReplayCount ?? 0;
   return (
     <div className="incident-explorer__savings">
       <div className="incident-explorer__savings-hero">
         <div>
-          <p className="incident-explorer__eyebrow">Kept out of the parent's context</p>
-          <p className="incident-explorer__savings-figure">
-            <strong>
-              {formatCompactTokens(props.comparison.avoidedParentTokens)}
-            </strong>
-            <span>
-              tokens, once · {formatCompactTokens(cachedReplayTokens)} more across{" "}
-              {cachedReplayCount.toLocaleString()}{" "}
-              {cachedReplayCount === 1 ? "replay" : "replays"}
-            </span>
-          </p>
-        </div>
-        <dl className="incident-explorer__savings-terms">
-          <div>
-            <dt>Without the gate</dt>
-            <dd>{formatCompactTokens(props.comparison.withoutTokenMiserTokens)}</dd>
-          </div>
-          <div>
-            <dt>Actual parent context</dt>
-            <dd>{formatCompactTokens(props.comparison.actualParentTokens)}</dd>
-          </div>
-          <div>
-            <dt>Gate compute</dt>
-            <dd>
-              {props.gateTokens > 0
-                ? formatCompactTokens(props.gateTokens)
-                : "—"}
-              {props.gateCostMicros > 0 ? (
+          {savings ? (
+            <>
+              <p className="incident-explorer__eyebrow">
+                {savings.savingsMicros >= 0
+                  ? "Net saved on this thread"
+                  : "Net overhead on this thread"}
+              </p>
+              <p className="incident-explorer__savings-figure">
+                <strong>
+                  {formatMicrosCurrency(
+                    Math.abs(savings.savingsMicros),
+                    savings.currency,
+                  )}
+                </strong>
+              </p>
+              {props.threadCostMicros > 0 ? (
+                <p className="incident-explorer__savings-compare">
+                  This thread cost{" "}
+                  <b>
+                    {formatMicrosCurrency(props.threadCostMicros, savings.currency)}
+                  </b>
+                  {" · about "}
+                  <b>
+                    {formatMicrosCurrency(
+                      props.threadCostMicros + savings.savingsMicros,
+                      savings.currency,
+                    )}
+                  </b>
+                  {" without Token Miser"}
+                </p>
+              ) : null}
+              <SavingsConfidence savings={savings} />
+            </>
+          ) : (
+            <>
+              <p className="incident-explorer__eyebrow">Kept out of the parent's context</p>
+              <p className="incident-explorer__savings-figure">
+                <strong>
+                  {formatCompactTokens(props.comparison.avoidedParentTokens)}
+                </strong>
                 <span>
-                  {formatMicrosCurrency(props.gateCostMicros, props.currency ?? "USD")}
+                  tokens, once · {formatCompactTokens(cachedReplayTokens)} more across{" "}
+                  {cachedReplayCount.toLocaleString()}{" "}
+                  {cachedReplayCount === 1 ? "replay" : "replays"}
                 </span>
-              ) : (
-                <span>awaiting the pricing ledger</span>
-              )}
-            </dd>
-          </div>
-        </dl>
+              </p>
+              <p className="incident-explorer__savings-compare">
+                Dollar terms appear once the gate's usage line is priced.
+              </p>
+            </>
+          )}
+        </div>
+        {savings ? (
+          <dl className="incident-explorer__savings-terms" data-terms="3">
+            <div>
+              <dt>1 · Without the gate</dt>
+              <dd>
+                {formatMicrosCurrency(savings.withoutGateCostMicros, savings.currency)}
+                <span>
+                  {formatCompactTokens(props.comparison.withoutTokenMiserTokens)}{" "}
+                  of tool output at{" "}
+                  {savings.parentModel ?? "the parent model"} rates
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt>2 · Gate compute</dt>
+              <dd>
+                {formatMicrosCurrency(savings.gateCostMicros, savings.currency)}
+                <span>
+                  {formatCompactTokens(props.gateTokens)} total ·{" "}
+                  {savings.gateModel ?? "helper"}
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt>3 · Revealed to parent</dt>
+              <dd>
+                {formatMicrosCurrency(savings.revealedCostMicros, savings.currency)}
+                <span>
+                  {formatCompactTokens(props.comparison.actualParentTokens)}{" "}
+                  of summaries and retrievals
+                </span>
+              </dd>
+            </div>
+          </dl>
+        ) : (
+          <dl className="incident-explorer__savings-terms">
+            <div>
+              <dt>Without the gate</dt>
+              <dd>{formatCompactTokens(props.comparison.withoutTokenMiserTokens)}</dd>
+            </div>
+            <div>
+              <dt>Actual parent context</dt>
+              <dd>{formatCompactTokens(props.comparison.actualParentTokens)}</dd>
+            </div>
+            <div>
+              <dt>Gate compute</dt>
+              <dd>
+                {props.gateTokens > 0
+                  ? formatCompactTokens(props.gateTokens)
+                  : "—"}
+                {props.gateCostMicros > 0 ? (
+                  <span>
+                    {formatMicrosCurrency(props.gateCostMicros, props.currency ?? "USD")}
+                  </span>
+                ) : (
+                  <span>awaiting the pricing ledger</span>
+                )}
+              </dd>
+            </div>
+          </dl>
+        )}
       </div>
 
       <p className="incident-explorer__savings-caption">

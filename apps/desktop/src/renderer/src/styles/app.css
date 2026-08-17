@@ -17102,6 +17102,52 @@ a.transcript-message__messaging-origin:focus-visible {
   font-weight: 400;
 }
 
+.incident-explorer__savings-compare {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__savings-compare b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Confidence marker. Semantic, not accent: this reports how much of the figure
+   was measured versus inferred, which is a different axis from emphasis. */
+.incident-explorer__confidence {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 0 0;
+  padding: 5px 10px;
+  border: 1px solid var(--success-border);
+  border-radius: 4px;
+  background: var(--success-soft);
+  color: var(--success-text);
+  font-size: 11.5px;
+}
+
+.incident-explorer__confidence[data-kind="reconstructed"] {
+  border-color: color-mix(in srgb, var(--status-warning) 34%, transparent);
+  background: color-mix(in srgb, var(--status-warning) 12%, transparent);
+  color: var(--status-warning);
+}
+
+.incident-explorer__confidence span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.incident-explorer__savings-terms[data-terms="3"] dd {
+  font-size: 17px;
+}
+
 .incident-explorer__savings-caption {
   margin: 0;
   color: var(--text-muted);
