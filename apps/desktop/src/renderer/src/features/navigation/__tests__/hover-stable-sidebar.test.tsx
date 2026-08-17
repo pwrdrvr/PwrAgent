@@ -1,0 +1,216 @@
+import "@testing-library/jest-dom/vitest";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import type {
+  NavigationDirectorySummary,
+  NavigationThreadSummary,
+} from "@pwragent/shared";
+import type { BrowseMode } from "../../../lib/useThreadNavigation";
+import { Sidebar } from "../Sidebar";
+
+function thread(params: {
+  createdAt?: number;
+  id: string;
+  inbox?: NavigationThreadSummary["inbox"];
+  pinnedRank?: string;
+  status?: NavigationThreadSummary["threadStatus"];
+  title: string;
+  updatedAt?: number;
+}): NavigationThreadSummary {
+  return {
+    id: params.id,
+    title: params.title,
+    titleSource: "explicit",
+    source: "codex",
+    executionMode: "default",
+    createdAt: params.createdAt ?? params.updatedAt ?? 1,
+    updatedAt: params.updatedAt ?? 1,
+    inbox: params.inbox ?? { inInbox: true, reason: "new-thread" },
+    linkedDirectories: [],
+    pinnedRank: params.pinnedRank,
+    threadStatus: params.status,
+  };
+}
+
+const alpha = thread({
+  createdAt: 2,
+  id: "alpha",
+  title: "Alpha thread",
+  updatedAt: 2,
+});
+const bravo = thread({
+  createdAt: 1,
+  id: "bravo",
+  title: "Bravo thread",
+  updatedAt: 1,
+});
+
+const directory: NavigationDirectorySummary = {
+  key: "directory:/repo",
+  kind: "directory",
+  label: "Repo",
+  path: "/repo",
+  threadKeys: ["codex:alpha", "codex:bravo"],
+  needsAttentionCount: 0,
+  latestUpdatedAt: 2,
+};
+
+function renderSidebar(params: {
+  browseMode: BrowseMode;
+  directories?: NavigationDirectorySummary[];
+  draftThreadKeys?: Record<string, boolean>;
+  inboxThreads?: NavigationThreadSummary[];
+  onSelectThread?: (thread: NavigationThreadSummary) => void;
+  recentThreads?: NavigationThreadSummary[];
+  selectedItemKey?: string;
+  threads: NavigationThreadSummary[];
+}) {
+  return (
+    <Sidebar
+      backends={[]}
+      browseMode={params.browseMode}
+      directories={params.directories ?? []}
+      draftThreadKeys={params.draftThreadKeys}
+      inboxThreads={params.inboxThreads ?? params.threads}
+      loading={false}
+      recentThreads={params.recentThreads}
+      selectedItemKey={params.selectedItemKey}
+      threads={params.threads}
+      onBrowseModeChange={() => undefined}
+      onCreateThread={async () => undefined}
+      onOpenLaunchpad={async () => undefined}
+      onSelectThread={params.onSelectThread ?? (() => undefined)}
+    />
+  );
+}
+
+function threadTitles(): string[] {
+  const browser = screen.getByRole("region", { name: "Thread browser" });
+  return within(browser)
+    .getAllByRole("listitem")
+    .map((row) => row.querySelector(".thread-row__title")?.textContent ?? "");
+}
+
+function hoverFirstThread(): HTMLElement {
+  const firstRow = screen.getAllByRole("listitem")[0];
+  fireEvent.pointerOver(firstRow, { pointerType: "mouse" });
+  return firstRow;
+}
+
+function leaveThreadBrowser(): void {
+  const scrollRegion = document.querySelector(".sidebar__scroll-region");
+  if (!(scrollRegion instanceof HTMLElement)) {
+    throw new Error("Expected the sidebar scroll region");
+  }
+  fireEvent.pointerLeave(scrollRegion, { pointerType: "mouse" });
+}
+
+describe("Sidebar hover-stable thread ordering", () => {
+  it("keeps an Inbox click aimed at the row that was under the pointer", () => {
+    const onSelectThread = vi.fn<(thread: NavigationThreadSummary) => void>();
+    const initial = [alpha, bravo];
+    const view = render(renderSidebar({
+      browseMode: "inbox",
+      onSelectThread,
+      threads: initial,
+    }));
+    const firstRow = hoverFirstThread();
+
+    const resorted = [bravo, alpha];
+    view.rerender(renderSidebar({
+      browseMode: "inbox",
+      onSelectThread,
+      threads: resorted,
+    }));
+
+    expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread"]);
+    fireEvent.click(within(firstRow).getByRole("button", { name: /^Alpha thread/ }));
+    expect(onSelectThread).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "alpha" }),
+    );
+
+    leaveThreadBrowser();
+    expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
+  });
+
+  it("defers a legitimate Attention turn-boundary promotion until hover ends", () => {
+    const activeAlpha = { ...alpha, threadStatus: "active" as const };
+    const unreadBravo = {
+      ...bravo,
+      inbox: {
+        inInbox: true,
+        reason: "updated-since-seen" as const,
+        lastSeenUpdatedAt: 0,
+      },
+    };
+    const view = render(renderSidebar({
+      browseMode: "attention",
+      threads: [activeAlpha, unreadBravo],
+    }));
+    hoverFirstThread();
+
+    const startedBravo = {
+      ...unreadBravo,
+      threadStatus: "active" as const,
+      updatedAt: 3,
+    };
+    view.rerender(renderSidebar({
+      browseMode: "attention",
+      threads: [startedBravo, activeAlpha],
+    }));
+
+    expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread"]);
+    leaveThreadBrowser();
+    expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
+  });
+
+  it.each([
+    { browseMode: "drafts" as const, label: "Drafts" },
+    { browseMode: "recents" as const, label: "Recents" },
+  ])("defers a $label resort until hover ends", ({ browseMode }) => {
+    const draftThreadKeys = {
+      "codex:alpha": true,
+      "codex:bravo": true,
+    };
+    const view = render(renderSidebar({
+      browseMode,
+      draftThreadKeys,
+      recentThreads: [alpha, bravo],
+      threads: [alpha, bravo],
+    }));
+    hoverFirstThread();
+
+    view.rerender(renderSidebar({
+      browseMode,
+      draftThreadKeys,
+      recentThreads: [bravo, alpha],
+      threads: [bravo, alpha],
+    }));
+
+    expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread"]);
+    leaveThreadBrowser();
+    expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
+  });
+
+  it("defers a Directories pin promotion until hover ends", () => {
+    const view = render(renderSidebar({
+      browseMode: "directories",
+      directories: [directory],
+      selectedItemKey: "codex:alpha",
+      threads: [alpha, bravo],
+    }));
+    hoverFirstThread();
+
+    const pinnedBravo = { ...bravo, pinnedRank: "1024" };
+    view.rerender(renderSidebar({
+      browseMode: "directories",
+      directories: [directory],
+      selectedItemKey: "codex:alpha",
+      threads: [alpha, pinnedBravo],
+    }));
+
+    expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread"]);
+    leaveThreadBrowser();
+    expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
+  });
+});

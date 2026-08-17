@@ -73,6 +73,7 @@ import {
 import { useAttentionOrderedThreads } from "./attention-order";
 import { DirectoriesList } from "./DirectoriesList";
 import { RecentsList } from "./RecentsList";
+import { useHoverStableSnapshot } from "./useHoverStableSnapshot";
 import {
   formatActiveThreadCount,
   formatLocalActiveThreadCount,
@@ -499,6 +500,16 @@ export function Sidebar(props: SidebarProps) {
         : props.browseMode === "recents"
           ? props.recentThreads ?? props.threads
           : updatedOrderThreads;
+  const hoverStableSnapshot = useHoverStableSnapshot({
+    scope: props.browseMode,
+    value: {
+      directories: props.directories,
+      threads:
+        props.browseMode === "directories" ? props.threads : visibleThreads,
+    },
+  });
+  const renderedDirectories = hoverStableSnapshot.value.directories;
+  const renderedThreads = hoverStableSnapshot.value.threads;
   /**
    * The numbers on the Attention tab. Counted over the very rows the lens
    * renders, not over `props.threads`, so the tab and the list cannot report
@@ -1890,7 +1901,13 @@ export function Sidebar(props: SidebarProps) {
           )}
         </div>
 
-        <div className="sidebar__scroll-region">
+        <div
+          className="sidebar__scroll-region"
+          onPointerCancel={hoverStableSnapshot.onPointerCancel}
+          onPointerLeave={hoverStableSnapshot.onPointerLeave}
+          onPointerOut={hoverStableSnapshot.onPointerOut}
+          onPointerOver={hoverStableSnapshot.onPointerOver}
+        >
           {props.loading ? (
             <p className="sidebar-empty">Loading threads…</p>
           ) : props.error && !props.loaded ? (
@@ -1903,13 +1920,13 @@ export function Sidebar(props: SidebarProps) {
               queuedMessageThreadKeys={props.queuedMessageThreadKeys}
               draftThreadKeys={props.draftThreadKeys}
               composerSourceThreadKey={props.composerSourceThreadKey}
-              directories={props.directories}
+              directories={renderedDirectories}
               revealSelectedThreadRequest={directoryRevealRequest}
               selectedItemKey={props.selectedItemKey}
               selectedDirectoryKeys={selectedDirectoryKeys}
               selectedThreadKeys={selectedThreadKeys}
               thinkingThreadKeys={props.thinkingThreadKeys}
-              threads={props.threads}
+              threads={renderedThreads}
               onOpenThreadContextMenu={openThreadContextMenu}
               onOpenLaunchpad={props.onOpenLaunchpad}
               onOpenFederationTargetMenu={
@@ -1947,7 +1964,7 @@ export function Sidebar(props: SidebarProps) {
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
             />
           ) : (
-            visibleThreads.length === 0 ? (
+            renderedThreads.length === 0 ? (
               <p className="sidebar-empty">
                 {props.browseMode === "attention"
                   ? "Nothing running, nothing to review."
@@ -1971,7 +1988,7 @@ export function Sidebar(props: SidebarProps) {
                 selectedThreadKey={props.selectedItemKey}
                 selectedThreadKeys={selectedThreadKeys}
                 thinkingThreadKeys={props.thinkingThreadKeys}
-                threads={visibleThreads}
+                threads={renderedThreads}
                 onOpenThreadContextMenu={openThreadContextMenu}
                 onOpenPullRequestContextMenu={openPullRequestContextMenu}
                 onPrefetchPullRequests={props.onPrefetchPullRequests}
