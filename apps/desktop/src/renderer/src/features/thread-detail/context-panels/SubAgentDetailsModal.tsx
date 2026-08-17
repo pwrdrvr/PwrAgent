@@ -1,6 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import type { AppServerBackendKind, ThreadSubAgentSummary } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  FederationTarget,
+  ThreadSubAgentSummary,
+} from "@pwragent/shared";
 import { CloseIcon } from "../../../icons";
 import { formatBackendLabel } from "../../../lib/backend-label";
 import { copyText } from "../../../lib/copy-text";
@@ -22,6 +26,7 @@ import { isCodexNativeSubAgent, subAgentOriginLabel } from "./subagent-kind";
 
 type SubAgentDetailsModalProps = {
   defaultBackend: AppServerBackendKind;
+  federationTarget?: FederationTarget;
   parentThreadId: string;
   pricingDisplayOptions?: PricingDisplayOptions;
   subAgent: ThreadSubAgentSummary;
@@ -197,6 +202,9 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
                 onClick={() => {
                   void openSubAgentTranscriptWindow({
                     backend: subAgent.backend ?? props.defaultBackend,
+                    ...(props.federationTarget
+                      ? { federationTarget: props.federationTarget }
+                      : {}),
                     threadId: transcriptThreadId,
                     title: subAgent.agentName ?? subAgent.task,
                   });

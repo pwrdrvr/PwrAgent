@@ -1,3 +1,4 @@
+import type { FederationTarget } from "./federation";
 import type { AppServerBackendKind } from "./normalized-app-server";
 
 /**
@@ -10,6 +11,12 @@ import type { AppServerBackendKind } from "./normalized-app-server";
  */
 export type OpenSubAgentTranscriptWindowRequest = {
   backend: AppServerBackendKind;
+  /**
+   * The instance that owns the parent and its native child. Without this, a
+   * federation viewer asks its local backend to read a child loaded only on
+   * the peer that spawned it.
+   */
+  federationTarget?: FederationTarget;
   threadId: string;
   title: string;
 };

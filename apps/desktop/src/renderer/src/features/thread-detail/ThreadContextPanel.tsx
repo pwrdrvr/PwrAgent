@@ -38,6 +38,7 @@ import {
   type IconProps,
 } from "../../icons";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { readRendererFederationTarget } from "../../lib/federation-window";
 import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-path";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
 import { ThreadInfoPanel } from "./context-panels/ThreadInfoPanel";
@@ -751,8 +752,11 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             threadReasoningEffort={props.thread.reasoningEffort}
           />
         );
-      case "tool-calls":
+      case "tool-calls": {
         if (!props.thread) return null;
+        const toolCallsFederationTarget =
+          props.thread.federation?.ref.target
+          ?? readRendererFederationTarget();
         return (
           <ToolCallsPanel
             entries={props.toolCallEntries}
@@ -761,9 +765,18 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             onOpenIncidentExplorer={props.onOpenToolOutputIncidentExplorer}
             onRequestInvocationDetails={props.onRequestToolCallDetails}
             onScrollToTurn={props.onScrollToTurn}
+            threadLinkSource={
+              toolCallsFederationTarget?.scope === "remote"
+                ? {
+                    backend: props.thread.source,
+                    instanceId: toolCallsFederationTarget.instanceId,
+                  }
+                : undefined
+            }
             toolAccounting={props.toolAccounting}
           />
         );
+      }
       case "actions":
         if (!props.thread) return null;
         return (

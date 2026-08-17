@@ -67,6 +67,10 @@ describe("TranscriptCommandOutput", () => {
     };
     render(
       <TranscriptCommandOutput
+        threadLinkSource={{
+          backend: "codex",
+          instanceId: "pwr_remote",
+        }}
         detail={{
           id: "agent-wait-1",
           kind: "command",
@@ -109,6 +113,10 @@ describe("TranscriptCommandOutput", () => {
 
     expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
       backend: "codex",
+      federationTarget: {
+        scope: "remote",
+        instanceId: "pwr_remote",
+      },
       threadId: "019fb3d1-28e0-7a30-b964-e93d7a1f3435",
       title: "Kieregaard",
     });

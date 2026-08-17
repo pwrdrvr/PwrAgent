@@ -5,7 +5,9 @@ import type { ThreadSubAgentSummary } from "@pwragent/shared";
 import { SubAgentDetailsModal } from "../SubAgentDetailsModal";
 
 afterEach(() => {
+  delete (window as Window & { pwragent?: unknown }).pwragent;
   cleanup();
+  vi.restoreAllMocks();
 });
 
 const LONG_TASK = [
@@ -132,5 +134,37 @@ describe("SubAgentDetailsModal", () => {
     expect(screen.getByText("Failed")).toBeInTheDocument();
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
     expect(screen.getByText("gpt-5.6-luna · medium")).toBeInTheDocument();
+  });
+
+  it("opens a native child transcript on the instance that owns it", () => {
+    const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true as const }));
+    (window as Window & { pwragent?: unknown }).pwragent = {
+      openSubAgentTranscriptWindow,
+    };
+    render(
+      <SubAgentDetailsModal
+        defaultBackend="codex"
+        federationTarget={{ scope: "remote", instanceId: "pwr_remote" }}
+        parentThreadId="parent-thread"
+        subAgent={{
+          ...subAgent,
+          agentName: "Epicurus",
+          monitorId: "codex-native:monitor-1",
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open transcript" }));
+
+    expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
+      backend: "codex",
+      federationTarget: {
+        scope: "remote",
+        instanceId: "pwr_remote",
+      },
+      threadId: "monitor-thread",
+      title: "Epicurus",
+    });
   });
 });

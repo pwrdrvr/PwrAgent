@@ -5,9 +5,11 @@ import type {
 } from "@pwragent/shared";
 import { copyText } from "../../lib/copy-text";
 import { useDesktopApi } from "../../lib/desktop-api";
+import type { ThreadLinkSource } from "../../lib/thread-links";
 
 type TranscriptSubAgentCallProps = {
   detail: AppServerThreadActivityDetail;
+  threadLinkSource?: ThreadLinkSource;
 };
 
 /**
@@ -71,6 +73,14 @@ export function TranscriptSubAgentCall(props: TranscriptSubAgentCallProps) {
                   onClick={() => {
                     void openSubAgentTranscriptWindow({
                       backend: call.backend,
+                      ...(props.threadLinkSource
+                        ? {
+                            federationTarget: {
+                              scope: "remote" as const,
+                              instanceId: props.threadLinkSource.instanceId,
+                            },
+                          }
+                        : {}),
                       threadId: agent.threadId,
                       title: agentLabel,
                     });

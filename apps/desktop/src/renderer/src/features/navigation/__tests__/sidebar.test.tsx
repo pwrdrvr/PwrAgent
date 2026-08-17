@@ -1137,6 +1137,15 @@ describe("Sidebar", () => {
       ...sharedThread,
       id: "thread-native-parent",
       title: "Coordinate the launch",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "pwr_remote" },
+          threadId: "thread-native-parent",
+        },
+        instanceLabel: "Remote fixture",
+        peerStatus: "connected",
+      },
       codexNativeSubAgents: [
         {
           threadId: "thread-native-worker",
@@ -1203,6 +1212,10 @@ describe("Sidebar", () => {
     );
     expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
       backend: "codex",
+      federationTarget: {
+        scope: "remote",
+        instanceId: "pwr_remote",
+      },
       threadId: "thread-native-worker-child",
       title: "link-checker",
     });
