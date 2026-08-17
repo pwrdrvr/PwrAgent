@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildHookCommand,
   TokenMiserPluginManager,
@@ -77,5 +77,53 @@ describe("TokenMiserPluginManager", () => {
         platform: "win32",
       }),
     ).toContain('set "ELECTRON_RUN_AS_NODE=1"');
+  });
+
+  it("registers and installs the plugin in the active Codex profile once", async () => {
+    const stateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-token-miser-install-"),
+    );
+    temporaryDirectories.push(stateDir);
+    const runCodexCommand = vi.fn(async () => undefined);
+    const manager = new TokenMiserPluginManager({
+      stateDir,
+      executablePath: "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
+      hookEntryPath: "/Applications/PwrAgent.app/Contents/Resources/token-miser-hook.js",
+      platform: "darwin",
+      runCodexCommand,
+    });
+    const codexEnv = {
+      CODEX_HOME: "/Users/operator/.codex/profiles/dev",
+      PATH: "/usr/bin",
+    };
+
+    await Promise.all([
+      manager.ensureInstalled({ codexCommand: "/usr/bin/codex", codexEnv }),
+      manager.ensureInstalled({ codexCommand: "/usr/bin/codex", codexEnv }),
+    ]);
+    await manager.ensureInstalled({ codexCommand: "/usr/bin/codex", codexEnv });
+
+    expect(runCodexCommand).toHaveBeenCalledTimes(2);
+    expect(runCodexCommand).toHaveBeenNthCalledWith(1, {
+      command: "/usr/bin/codex",
+      args: [
+        "plugin",
+        "marketplace",
+        "add",
+        path.join(stateDir, "marketplace"),
+        "--json",
+      ],
+      env: codexEnv,
+    });
+    expect(runCodexCommand).toHaveBeenNthCalledWith(2, {
+      command: "/usr/bin/codex",
+      args: [
+        "plugin",
+        "add",
+        "pwragent-token-miser@pwragent-local",
+        "--json",
+      ],
+      env: codexEnv,
+    });
   });
 });

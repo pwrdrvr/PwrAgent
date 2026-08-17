@@ -142,6 +142,12 @@ export function ToolOutputIncidentExplorerWindow() {
     [allInvocations, largeOutputThresholdChars],
   );
   const usageLines = latest?.pricing?.lines;
+  const tokenMiser = accounting?.tokenMiser;
+  const activeTokenMiser = tokenMiser && tokenMiser.interceptionCount > 0
+    ? tokenMiser
+    : undefined;
+  const tokenMiserEnabled =
+    settings.snapshot?.general.tokenMiserEnabled.value ?? false;
   const turnStrip = useMemo(
     () => buildTurnCostStrip(allInvocations, {
       largeOutputThresholdChars,
@@ -454,6 +460,35 @@ export function ToolOutputIncidentExplorerWindow() {
         </div>
       </div>
 
+      {tokenMiserEnabled || activeTokenMiser ? (
+        <section
+          aria-label="Token Miser accounting"
+          className="incident-explorer__token-miser"
+          data-state={activeTokenMiser ? "active" : "inactive"}
+        >
+          <div>
+            <p className="incident-explorer__eyebrow">Token Miser</p>
+            <strong>
+              {activeTokenMiser
+                ? describeTokenMiserOutcome(
+                    activeTokenMiser.estimatedParentTokensSaved,
+                  )
+                : "No output intercepted in this thread"}
+            </strong>
+          </div>
+          <p>
+            {activeTokenMiser
+              ? [
+                  `${activeTokenMiser.interceptionCount.toLocaleString()} gated ${activeTokenMiser.interceptionCount === 1 ? "call" : "calls"}`,
+                  `${formatCompactTokens(activeTokenMiser.baselineParentTokens)} baseline`,
+                  `${formatCompactTokens(activeTokenMiser.replacementTokens)} summaries`,
+                  `${formatCompactTokens(activeTokenMiser.retrievedTokens)} retrieved`,
+                ].join(" · ")
+              : "The replay-cost figures on this screen are unmitigated; the Codex hook did not gate any result."}
+          </p>
+        </section>
+      ) : null}
+
       <TurnStrip
         {...(currency ? { currency } : {})}
         now={renderedAt}
@@ -692,6 +727,12 @@ export function ToolOutputIncidentExplorerWindow() {
       </div>
     </div>
   );
+}
+
+function describeTokenMiserOutcome(estimatedTokensSaved: number): string {
+  return estimatedTokensSaved >= 0
+    ? `${formatCompactTokens(estimatedTokensSaved)} estimated parent-context tokens avoided`
+    : `${formatCompactTokens(Math.abs(estimatedTokensSaved))} estimated net parent-context token overhead`;
 }
 
 function CompositionBar(props: { composition: CategoryShare[] }) {

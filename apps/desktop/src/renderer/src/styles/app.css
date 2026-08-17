@@ -15436,6 +15436,38 @@ a.transcript-message__messaging-origin:focus-visible {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+.incident-explorer__token-miser {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.incident-explorer__token-miser[data-state="inactive"] {
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+
+.incident-explorer__token-miser .incident-explorer__eyebrow {
+  margin-bottom: 2px;
+}
+
+.incident-explorer__token-miser strong {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.incident-explorer__token-miser p:last-child {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-align: right;
+}
+
 .incident-explorer__hero {
   display: flex;
   align-items: baseline;

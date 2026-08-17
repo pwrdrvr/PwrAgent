@@ -41,8 +41,8 @@ export type TokenMiserObjectMetadata = {
 };
 
 export type TokenMiserHookOutput = {
-  decision: "block";
-  reason: string;
+  continue: false;
+  stopReason: string;
   hookSpecificOutput: {
     hookEventName: "PostToolUse";
     additionalContext: string;

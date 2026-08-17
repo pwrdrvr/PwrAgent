@@ -1,9 +1,21 @@
 import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { createCommandInvocation } from "@pwrdrvr/agent-transport";
 
 export const TOKEN_MISER_PLUGIN_NAME = "pwragent-token-miser";
 export const TOKEN_MISER_MARKETPLACE_NAME = "pwragent-local";
+
+const CODEX_PLUGIN_COMMAND_TIMEOUT_MS = 30_000;
+const CODEX_PLUGIN_COMMAND_OUTPUT_LIMIT = 64 * 1024;
+
+type CodexPluginCommand = {
+  command: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+};
 
 export class TokenMiserPluginManager {
   constructor(
@@ -12,8 +24,12 @@ export class TokenMiserPluginManager {
       executablePath: string;
       hookEntryPath: string;
       platform?: NodeJS.Platform;
+      runCodexCommand?: (command: CodexPluginCommand) => Promise<void>;
     },
   ) {}
+
+  private readonly installedRuntimeKeys = new Set<string>();
+  private readonly installationPromises = new Map<string, Promise<void>>();
 
   async ensurePluginSource(): Promise<{
     marketplacePath: string;
@@ -110,6 +126,65 @@ export class TokenMiserPluginManager {
       pluginPath,
     };
   }
+
+  async ensureInstalled(params: {
+    codexCommand: string;
+    codexEnv: NodeJS.ProcessEnv;
+  }): Promise<void> {
+    const source = await this.ensurePluginSource();
+    const codexHome = params.codexEnv.CODEX_HOME?.trim()
+      || path.join(os.homedir(), ".codex");
+    const runtimeKey = `${path.resolve(codexHome)}\0${params.codexCommand}`;
+    if (this.installedRuntimeKeys.has(runtimeKey)) {
+      return;
+    }
+    const pending = this.installationPromises.get(runtimeKey);
+    if (pending) {
+      await pending;
+      return;
+    }
+    const installation = this.installForRuntime({
+      ...params,
+      marketplaceRoot: source.marketplaceRoot,
+    });
+    this.installationPromises.set(runtimeKey, installation);
+    try {
+      await installation;
+      this.installedRuntimeKeys.add(runtimeKey);
+    } finally {
+      this.installationPromises.delete(runtimeKey);
+    }
+  }
+
+  private async installForRuntime(params: {
+    codexCommand: string;
+    codexEnv: NodeJS.ProcessEnv;
+    marketplaceRoot: string;
+  }): Promise<void> {
+    const run = this.options.runCodexCommand ?? ((command) =>
+      runCodexPluginCommand(command, this.options.platform ?? process.platform));
+    await run({
+      command: params.codexCommand,
+      args: [
+        "plugin",
+        "marketplace",
+        "add",
+        params.marketplaceRoot,
+        "--json",
+      ],
+      env: params.codexEnv,
+    });
+    await run({
+      command: params.codexCommand,
+      args: [
+        "plugin",
+        "add",
+        `${TOKEN_MISER_PLUGIN_NAME}@${TOKEN_MISER_MARKETPLACE_NAME}`,
+        "--json",
+      ],
+      env: params.codexEnv,
+    });
+  }
 }
 
 export function buildHookCommand(params: {
@@ -144,6 +219,55 @@ async function writePrivateJsonAtomic(
     mode: 0o600,
   });
   await fs.rename(temporaryPath, filePath);
+}
+
+async function runCodexPluginCommand(
+  command: CodexPluginCommand,
+  platform: NodeJS.Platform,
+): Promise<void> {
+  const invocation = createCommandInvocation({
+    command: command.command,
+    args: command.args,
+    env: command.env,
+    platform,
+  });
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(invocation.command, invocation.args, {
+      env: command.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    });
+    let output = "";
+    const appendOutput = (chunk: Buffer | string): void => {
+      if (output.length >= CODEX_PLUGIN_COMMAND_OUTPUT_LIMIT) {
+        return;
+      }
+      output += chunk.toString().slice(
+        0,
+        CODEX_PLUGIN_COMMAND_OUTPUT_LIMIT - output.length,
+      );
+    };
+    child.stdout?.on("data", appendOutput);
+    child.stderr?.on("data", appendOutput);
+    const timeout = setTimeout(() => {
+      child.kill();
+      reject(new Error("Codex plugin activation timed out."));
+    }, CODEX_PLUGIN_COMMAND_TIMEOUT_MS);
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timeout);
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      reject(new Error(
+        `Codex plugin activation failed with exit code ${code ?? "unknown"}: ${output.trim()}`,
+      ));
+    });
+  });
 }
 
 function quotePosix(value: string): string {

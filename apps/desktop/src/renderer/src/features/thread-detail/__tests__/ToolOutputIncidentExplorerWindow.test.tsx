@@ -64,6 +64,29 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       .not.toBeInTheDocument();
   });
 
+  it("shows Token Miser savings beside gross tool-output exposure", async () => {
+    const response = buildResponse();
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 2,
+      originalCharacters: 80_000,
+      baselineParentTokens: 20_000,
+      replacementTokens: 700,
+      retrievedTokens: 1_300,
+      estimatedParentTokensSaved: 18_000,
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const accounting = await screen.findByLabelText("Token Miser accounting");
+    expect(accounting).toHaveTextContent(
+      "18k estimated parent-context tokens avoided",
+    );
+    expect(accounting).toHaveTextContent(
+      "2 gated calls · 20k baseline · 700 summaries · 1.3k retrieved",
+    );
+  });
+
   it("shows historical output using the analyzer's normalized detail identity", async () => {
     const response = buildResponse();
     response.toolAccounting!.invocations[0]!.itemId = "historical-detail";

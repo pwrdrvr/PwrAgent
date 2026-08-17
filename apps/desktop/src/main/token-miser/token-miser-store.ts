@@ -204,8 +204,13 @@ export class TokenMiserStore {
       .sort((left, right) => right.createdAt - left.createdAt);
   }
 
-  async summarizeUsage(): Promise<TokenMiserUsageSummary> {
-    const metadata = await this.listMetadata();
+  async summarizeUsage(params?: {
+    threadId?: string;
+  }): Promise<TokenMiserUsageSummary> {
+    const allMetadata = await this.listMetadata();
+    const metadata = params?.threadId
+      ? allMetadata.filter((entry) => entry.threadId === params.threadId)
+      : allMetadata;
     const baselineParentTokens = metadata.reduce(
       (total, entry) => total + entry.baselineParentTokens,
       0,
