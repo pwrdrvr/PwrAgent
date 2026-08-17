@@ -12,7 +12,7 @@ import {
 const CODEX_VERSION_PATTERN = /\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/;
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
 
-export const POWERSHELL_SHIM_EXTENSION = ".ps1";
+const POWERSHELL_SHIM_EXTENSION = ".ps1";
 
 /**
  * Extensions Windows can start directly, or through the cmd.exe wrapper that
@@ -33,9 +33,9 @@ export const POWERSHELL_SHIM_EXTENSION = ".ps1";
  *
  * So `.ps1` is a discovery signal, never a launch target.
  */
-export const WINDOWS_SPAWNABLE_EXTENSIONS = [".exe", ".com", ".cmd", ".bat"];
+const WINDOWS_SPAWNABLE_EXTENSIONS = [".exe", ".com", ".cmd", ".bat"];
 
-export type CodexCommandRunner = (
+type CodexCommandRunner = (
   command: string,
   args: string[],
   options: {
@@ -46,7 +46,7 @@ export type CodexCommandRunner = (
   },
 ) => Promise<{ stderr?: string | Buffer; stdout?: string | Buffer }>;
 
-export function isPowerShellScript(command: string): boolean {
+function isPowerShellScript(command: string): boolean {
   return path.win32.extname(command).toLowerCase() === POWERSHELL_SHIM_EXTENSION;
 }
 
