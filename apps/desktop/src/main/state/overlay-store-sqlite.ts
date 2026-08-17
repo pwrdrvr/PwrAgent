@@ -1587,6 +1587,21 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         threadId: line.parentThreadId ?? line.threadId,
         updatedAt: now,
       });
+      // A cold replay is a full uncached context re-read, which is what a
+      // compaction forces. Claim it for the compaction that preceded it so the
+      // cost has a cause; rides this transaction, so it adds no commit.
+      if ((line.observedColdReplayCount ?? 0) > 0) {
+        this.attributeThreadCompactionColdReplaySync({
+          backend: line.backend as AppServerBackendKind,
+          costMicros: line.uncachedInputCostMicros,
+          observedAt: line.createdAt,
+          threadId: line.threadId,
+          uncachedTokens: line.observedColdReplayUncachedTokens
+            ?? line.uncachedInputTokens,
+          usageLineId: line.usageLineId,
+          updatedAt: now,
+        });
+      }
       return line;
     };
 
@@ -1844,18 +1859,27 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }
 
   /**
-   * Name the cold replay a compaction caused. Applied to the newest marker that
-   * has no attribution yet, because the first priced request after a compaction
-   * is the one that re-sent the surviving context uncached.
+   * Name the cold replay a compaction caused.
+   *
+   * Applied to the newest marker that precedes the request and has no
+   * attribution yet, because the first priced request after a compaction is the
+   * one that re-sent the surviving context uncached. This is what separates a
+   * compaction-caused cold replay from one caused by prompt-cache expiry or a
+   * long gap between turns — the fold classifies both identically.
+   *
+   * The `NOT EXISTS` guard makes the write idempotent: usage lines are
+   * re-emitted with the same cumulative tally, and without it a re-emission
+   * would walk backwards and credit an older, unrelated compaction.
    */
-  async attributeThreadCompactionColdReplay(params: {
+  attributeThreadCompactionColdReplaySync(params: {
     backend: AppServerBackendKind;
     costMicros: number;
+    observedAt: number;
     threadId: string;
     uncachedTokens: number;
     usageLineId: string;
     updatedAt: number;
-  }): Promise<boolean> {
+  }): boolean {
     const result = this.stateDb.raw
       .prepare(
         `UPDATE thread_compactions
@@ -1865,9 +1889,16 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
              updated_at = ?
          WHERE compaction_id = (
            SELECT compaction_id FROM thread_compactions
-           WHERE backend = ? AND thread_id = ? AND cold_usage_line_id IS NULL
+           WHERE backend = ? AND thread_id = ?
+             AND cold_usage_line_id IS NULL
+             AND observed_at <= ?
            ORDER BY observed_at DESC
            LIMIT 1
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM thread_compactions existing
+           WHERE existing.backend = ? AND existing.thread_id = ?
+             AND existing.cold_usage_line_id = ?
          )`,
       )
       .run(
@@ -1877,8 +1908,24 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         params.updatedAt,
         params.backend,
         params.threadId,
+        params.observedAt,
+        params.backend,
+        params.threadId,
+        params.usageLineId,
       );
     return result.changes > 0;
+  }
+
+  async attributeThreadCompactionColdReplay(params: {
+    backend: AppServerBackendKind;
+    costMicros: number;
+    observedAt: number;
+    threadId: string;
+    uncachedTokens: number;
+    usageLineId: string;
+    updatedAt: number;
+  }): Promise<boolean> {
+    return this.attributeThreadCompactionColdReplaySync(params);
   }
 
   async upsertThreadToolInvocation(params: {
