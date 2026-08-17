@@ -3332,7 +3332,10 @@ textarea,
   position: absolute;
   /* Follow the user-adjustable title's first-line midpoint. */
   top: round(calc(4px + (var(--sidebar-title-size) * 1.25 + 2px) / 2 - 12px), 1px);
-  right: 9px;
+  /* Align the action cluster with the row's 10px content inset plus its
+     1px border. Keeping it 2px inside made its rounded edge read as if it
+     touched the card's 8px corner. */
+  right: 11px;
   z-index: 3;
   display: flex;
   align-items: center;
@@ -3362,9 +3365,9 @@ textarea,
 }
 
 .thread-row__overflow-button {
+  /* Slightly wider than the square add-reaction button, so the vertical
+     menu mark gets the same visual weight as its neighbour. */
   width: 26px;
-  font-size: 13px;
-  font-weight: 700;
 }
 
 .thread-row__actions .thread-row__chip--add-reaction {
@@ -3390,14 +3393,14 @@ textarea,
 
 /* A long pinned title otherwise docks its in-title unpin control under
    the reaction/kebab cluster when that cluster is revealed. Reserve the
-   cluster's 44px title-lane footprint for every reveal path: pointer,
+   cluster's 46px title-lane footprint for every reveal path: pointer,
    keyboard focus, and the open reaction picker. Short titles do not
    reach this boundary, so their layout remains unchanged. */
 .thread-row-shell:hover .thread-row--pinned .thread-row__heading,
 .thread-row-shell:has(.thread-row__overflow-button:focus-visible) .thread-row--pinned .thread-row__heading,
 .thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,
 .thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading {
-  padding-right: 44px;
+  padding-right: 46px;
 }
 
 .thread-row__pin-button:hover,
@@ -4586,7 +4589,10 @@ textarea,
   /* Lateral inset: 4px on the left sits before the disclosure chevron
      and folder icon; 10px on the right gives the meta block (attention
      count pill) breathing room from the selected-row border. */
-  padding: 4px 10px 4px 4px;
+  /* The 24px minimum height still provides the WCAG target floor. Reducing
+     only the block inset closes the remaining blank band between collapsed
+     directory labels without shrinking that target or its selection state. */
+  padding: 2px 10px 2px 4px;
 }
 
 .directory-row__summary:focus,
@@ -4744,7 +4750,11 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 8px 0 10px 0;
+  /* Match the denser 4px seam below an expanded directory. The 1.0 list has
+     no zero-height pin append target, so keep a 6px top guard: a thread row's
+     2px focus outline at a 2px offset reaches 4px outside the card, leaving
+     2px clear of the sticky directory header. */
+  padding: 6px 0 4px 0;
 }
 
 .directory-row__threads {
@@ -4766,8 +4776,10 @@ textarea,
   background: transparent;
   font-family: inherit;
   cursor: pointer;
-  margin-top: 4px;
-  margin-bottom: 2px;
+  /* The shared divider already contributes 2px above and below. With this
+     branch's ordinary 2px list gap on both sides, that yields symmetric 4px
+     bands around the DIRECTORY THREADS label. A zero-height pin append target
+     would cancel that leading gap; this renderer does not render one. */
 }
 
 .directory-row__thread-divider:hover:not(:disabled) {

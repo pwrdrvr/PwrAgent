@@ -12,7 +12,7 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import { buildThreadIdentityKey } from "@pwragent/shared";
-import { PinIcon, SmileyIcon } from "../../icons";
+import { MoreVerticalIcon, PinIcon, SmileyIcon } from "../../icons";
 import {
   formatMessagingPlatformName,
   MESSAGING_PLATFORM_ICONS,
@@ -411,7 +411,7 @@ export function ThreadRow(props: ThreadRowProps) {
             });
           }}
         >
-          ...
+          <MoreVerticalIcon size={14} aria-hidden="true" />
         </button>
       </div>
 
