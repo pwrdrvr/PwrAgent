@@ -211,6 +211,14 @@ export function createLocalAcpAgentDiscovery(params?: {
   };
 }
 
+/**
+ * Inert discovery: reports no installed ACP agents and touches nothing outside
+ * this process. This is what a `DesktopBackendRegistry` gets unless its caller
+ * opts in to machine discovery, so a registry test that injects no stub fails
+ * by finding no agents rather than by installing a Grok runtime.
+ */
+export const noLocalAcpAgentDiscovery: LocalAcpDiscovery = async () => [];
+
 export type AcpSessionStoreLike =
   Pick<AcpSessionStoreContract, "getSession" | "listSessions"> &
   Partial<Pick<AcpSessionStoreContract, "upsertSession">>;

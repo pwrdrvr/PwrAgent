@@ -4268,6 +4268,46 @@ describe("DesktopBackendRegistry", () => {
     await registry.close();
   });
 
+  // Machine discovery reads the operator's config, may fetch a GitHub release
+  // list, install a managed Grok build under the PwrAgent root, and then probe
+  // that binary — 5-16s per lookup. A registry test must never reach it, and
+  // must not have to remember to opt out. These two cases pin both directions
+  // of the gate: default off, and still wired when production asks for it.
+  it("does not reach machine ACP discovery without an explicit opt-in", async () => {
+    localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockClear();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+    });
+
+    await registry.listBackends({ includeUnavailable: true });
+
+    expect(
+      localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
+    ).not.toHaveBeenCalled();
+
+    await registry.close();
+  });
+
+  it("reaches machine ACP discovery when the caller opts in", async () => {
+    localAcpDiscoveryMock.discoverLocalAcpAgentRecords.mockClear();
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({}),
+      overlayStore: createOverlayStoreMock(),
+      acpAgentStore: createAcpAgentStoreMock([]),
+      useMachineAcpDiscovery: true,
+    });
+
+    await registry.listBackends({ includeUnavailable: true });
+
+    expect(
+      localAcpDiscoveryMock.discoverLocalAcpAgentRecords,
+    ).toHaveBeenCalled();
+
+    await registry.close();
+  });
+
   it("filters disabled ACP agents before default backend discovery", async () => {
     const tempRoot = await mkdtemp(
       path.join(os.tmpdir(), "pwragent-backend-registry-"),
@@ -4293,6 +4333,10 @@ describe("DesktopBackendRegistry", () => {
       codexClient: new MockBackendClient({}),
       overlayStore: createOverlayStoreMock(),
       acpAgentStore: createAcpAgentStoreMock([]),
+      // This case asserts on what machine discovery is asked for, so it opts in
+      // deliberately. `../acp/acp-instance-discovery` is mocked file-wide, so
+      // opting in here stays inside the process.
+      useMachineAcpDiscovery: true,
     });
 
     try {
