@@ -360,6 +360,12 @@ export class TokenMiserStore {
     objectId: string;
   }): Promise<TokenMiserObjectMetadata | undefined> {
     return await this.updateMetadata(params.objectId, (metadata) => {
+      // The caller owns the request boundary: it holds one cursor for the whole
+      // thread, so every gate is offered the same events. This per-gate mark
+      // stays as a backstop against a caller that has no cursor, and it can
+      // never disagree with one that does — the thread cursor is seeded from
+      // the highest gate mark and only ever moves above it, so anything the
+      // caller accepts is already above every gate's own mark.
       if (
         metadata.replayTrackingVersion !== 2
         || metadata.replayTrackingStoppedAt !== undefined

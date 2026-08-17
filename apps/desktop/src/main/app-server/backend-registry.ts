@@ -7237,6 +7237,17 @@ export class DesktopBackendRegistry {
     string,
     Map<string, TokenMiserObjectMetadata>
   >();
+  /**
+   * Per-thread request boundary for Token Miser (key: backend:threadId): the
+   * high-water mark of the thread's cumulative `total.inputTokens`.
+   *
+   * One cursor per thread, not one per gate. The cumulative total is a property
+   * of the thread's request sequence, so deciding "is this a new request?" once
+   * keeps every gate on the same answer; per-gate marks made the answer depend
+   * on when each gate was created. Seeded from stored gate metadata at startup,
+   * which is why the mark is still persisted per gate.
+   */
+  private readonly liveTokenMiserRequestCursor = new Map<string, number>();
   private readonly liveTokenMiserSubAgents = new Map<
     string,
     Map<string, ThreadSubAgentSummary>
@@ -25418,6 +25429,7 @@ export class DesktopBackendRegistry {
       : restored;
     for (const entry of metadata) {
       this.rememberActiveTokenMiserReplayEntry(entry);
+      this.seedTokenMiserRequestCursor(entry);
     }
     await this.persistTokenMiserLedgerEntries(metadata);
   }
@@ -25472,6 +25484,26 @@ export class DesktopBackendRegistry {
     return stopped;
   }
 
+  /**
+   * Restore the thread's request boundary from stored gate marks.
+   *
+   * Codex reports `total.inputTokens` cumulatively for the thread, so it
+   * survives a restart — but the in-memory cursor does not. Without seeding,
+   * the first usage event after a relaunch would look like a new request to
+   * every gate and credit a replay that already happened.
+   */
+  private seedTokenMiserRequestCursor(metadata: TokenMiserObjectMetadata): void {
+    const mark = metadata.lastParentCumulativeInputTokens;
+    if (mark === undefined) {
+      return;
+    }
+    const key = ["codex", metadata.threadId].join(":");
+    const current = this.liveTokenMiserRequestCursor.get(key);
+    if (current === undefined || mark > current) {
+      this.liveTokenMiserRequestCursor.set(key, mark);
+    }
+  }
+
   private rememberActiveTokenMiserReplayEntry(
     metadata: TokenMiserObjectMetadata,
   ): void {
@@ -25521,6 +25553,21 @@ export class DesktopBackendRegistry {
       this.logTokenMiserReplaySkip("no-cumulative-input", threadId);
       return;
     }
+    // One request boundary per thread, decided here.
+    //
+    // Each gate used to compare this cumulative high-water mark against its own
+    // copy, which made the answer depend on when the gate was created: an
+    // out-of-order or replayed usage event can sit above an older gate's mark
+    // and below a newer one's, so the same event advanced some gates and not
+    // others and their replay counts drifted apart. The thread has exactly one
+    // request sequence, so it gets exactly one cursor.
+    const cursorKey = [event.backend, threadId].join(":");
+    const priorCursor = this.liveTokenMiserRequestCursor.get(cursorKey);
+    if (priorCursor !== undefined && cumulativeInputTokens <= priorCursor) {
+      this.logTokenMiserReplaySkip("no-advance", threadId);
+      return;
+    }
+    this.liveTokenMiserRequestCursor.set(cursorKey, cumulativeInputTokens);
     const observed = [...entries.entries()];
     const updated = await Promise.all(
       observed.map(([objectId]) =>
