@@ -26,14 +26,19 @@ describe("TokenMiserService", () => {
         usefulDetails: ["The final record is 4000."],
         suggestedNextStep: "Search for the specific record needed.",
       },
+      helperThreadId: "helper-thread-1",
+      helperTurnId: "helper-turn-1",
       model: "gpt-5.6-luna",
       reasoningEffort: "medium",
+      serviceTier: "priority",
       tokenUsage: { inputTokens: 2_000, outputTokens: 80 },
     }));
+    const onInterceptionStored = vi.fn();
     const service = new TokenMiserService({
       store,
       isEnabled: () => true,
       generateSummary,
+      onInterceptionStored,
       thresholdCharacters: 9,
     });
 
@@ -55,10 +60,14 @@ describe("TokenMiserService", () => {
       toolUseId: "tool-1",
       originalCharacters: 10,
       helperUsage: {
+        helperThreadId: "helper-thread-1",
+        helperTurnId: "helper-turn-1",
         model: "gpt-5.6-luna",
         reasoningEffort: "medium",
+        serviceTier: "priority",
       },
     });
+    expect(onInterceptionStored).toHaveBeenCalledWith(metadata);
     expect(result?.stopReason).toContain(metadata!.objectId);
   });
 

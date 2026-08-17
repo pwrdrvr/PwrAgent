@@ -30,6 +30,7 @@ import type {
 } from "./tool-output-incident-insights";
 import {
   buildCategoryComposition,
+  buildTokenMiserContextComparison,
   buildTurnCostStrip,
   capMeterWidth,
   countRepeatedCommands,
@@ -128,6 +129,12 @@ export function ToolOutputIncidentExplorerWindow() {
         return;
       }
       const notification = event.notification;
+      if (notification.method === "thread/pricing/updated") {
+        if (notification.params.threadId === route.threadId) {
+          void refresh();
+        }
+        return;
+      }
       if (notification.method !== "thread/toolAccounting/updated") {
         return;
       }
@@ -143,7 +150,7 @@ export function ToolOutputIncidentExplorerWindow() {
       }
       setAccounting(params.toolAccounting);
     });
-  }, [desktopApi, route]);
+  }, [desktopApi, refresh, route]);
 
   const allInvocations = useMemo(
     () => accounting?.invocations ?? [],
@@ -172,6 +179,33 @@ export function ToolOutputIncidentExplorerWindow() {
     : undefined;
   const tokenMiserEnabled =
     settings.snapshot?.general.tokenMiserEnabled.value ?? false;
+  const tokenMiserComparison = useMemo(
+    () => buildTokenMiserContextComparison(allInvocations, activeTokenMiser),
+    [activeTokenMiser, allInvocations],
+  );
+  const tokenMiserUsageLines = useMemo(
+    () => (usageLines ?? []).filter((line) =>
+      line.scope === "monitor"
+      && line.sourceItemId?.startsWith("system:token-miser:"),
+    ),
+    [usageLines],
+  );
+  const tokenMiserGateTokens = tokenMiserUsageLines.reduce(
+    (total, line) => total + line.totalTokens,
+    0,
+  );
+  const tokenMiserGateCostMicros = tokenMiserUsageLines.reduce(
+    (total, line) => total + line.totalCostMicros,
+    0,
+  );
+  const providerUsageTokens = latest?.pricing?.summaries.reduce(
+    (total, provider) => total + provider.totalTokens,
+    0,
+  ) ?? 0;
+  const providerUsageCostMicros = latest?.pricing?.summaries.reduce(
+    (total, provider) => total + provider.totalCostMicros,
+    0,
+  ) ?? 0;
   const turnStrip = useMemo(
     () => buildTurnCostStrip(allInvocations, {
       largeOutputThresholdChars,
@@ -506,16 +540,38 @@ export function ToolOutputIncidentExplorerWindow() {
                 : "No output intercepted in this thread"}
             </strong>
           </div>
-          <p>
-            {activeTokenMiser
-              ? [
-                  `${activeTokenMiser.interceptionCount.toLocaleString()} gated ${activeTokenMiser.interceptionCount === 1 ? "call" : "calls"}`,
-                  `${formatCompactTokens(activeTokenMiser.baselineParentTokens)} baseline`,
-                  `${formatCompactTokens(activeTokenMiser.replacementTokens)} summaries`,
-                  `${formatCompactTokens(activeTokenMiser.retrievedTokens)} retrieved`,
-                ].join(" · ")
-              : "No Token Miser gate records are available for this thread."}
-          </p>
+          {tokenMiserComparison ? (
+            <div className="incident-explorer__token-miser-accounting">
+              <dl>
+                <div>
+                  <dt>Actual parent tool context</dt>
+                  <dd>{formatCompactTokens(tokenMiserComparison.actualParentTokens)}</dd>
+                </div>
+                <div>
+                  <dt>{tokenMiserComparison.avoidedParentTokens >= 0 ? "Avoided" : "Added"}</dt>
+                  <dd>{formatCompactTokens(Math.abs(tokenMiserComparison.avoidedParentTokens))}</dd>
+                </div>
+                <div>
+                  <dt>Without Token Miser</dt>
+                  <dd>{formatCompactTokens(tokenMiserComparison.withoutTokenMiserTokens)}</dd>
+                </div>
+              </dl>
+              <p>
+                {[
+                  `${activeTokenMiser?.interceptionCount.toLocaleString()} gated ${activeTokenMiser?.interceptionCount === 1 ? "call" : "calls"}`,
+                  `${formatCompactTokens(activeTokenMiser?.replacementTokens ?? 0)} summaries + ${formatCompactTokens(activeTokenMiser?.retrievedTokens ?? 0)} retrieved`,
+                  tokenMiserGateTokens > 0
+                    ? `${formatCompactTokens(tokenMiserGateTokens)} gate-compute tokens${tokenMiserGateCostMicros > 0 ? ` · ${formatMicrosCurrency(tokenMiserGateCostMicros, currency ?? "USD")}` : ""}`
+                    : "Gate compute awaiting pricing ledger",
+                  providerUsageTokens > 0
+                    ? `${formatCompactTokens(providerUsageTokens)} provider tokens overall${providerUsageCostMicros > 0 ? ` · ${formatMicrosCurrency(providerUsageCostMicros, currency ?? "USD")}` : ""}`
+                    : undefined,
+                ].filter(Boolean).join(" · ")}
+              </p>
+            </div>
+          ) : (
+            <p>No Token Miser gate records are available for this thread.</p>
+          )}
         </section>
       ) : null}
 

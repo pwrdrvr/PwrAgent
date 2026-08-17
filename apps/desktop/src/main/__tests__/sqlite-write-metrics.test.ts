@@ -77,6 +77,64 @@ describe("sqlite write metrics", () => {
     ).toMatchObject({ commits: 2, rowsChanged: 2, statements: 2 });
   });
 
+  it("persists one turn of Token Miser helpers in two boundary commits", async () => {
+    const threadId = "thread-token-miser";
+    const subAgents = Array.from({ length: 9 }, (_, index) => ({
+      monitorId: `system:token-miser:gate-${index}`,
+      task: "Gate command output",
+      status: "success" as const,
+      createdAt: 1_800_000_000_000 + index,
+      updatedAt: 1_800_000_000_000 + index,
+      backend: "codex" as const,
+      agentName: "Token Miser",
+      outcome: "success" as const,
+      completedAt: 1_800_000_000_000 + index,
+    }));
+    const lines: ThreadUsageLineRecord[] = subAgents.map((subAgent, index) => ({
+      backend: "codex",
+      cachedInputCostMicros: 0,
+      cachedInputTokens: 0,
+      createdAt: subAgent.createdAt,
+      currency: "USD",
+      inputTokens: 1_000,
+      model: "gpt-5.6-luna",
+      outputCostMicros: 0,
+      outputTokens: 100,
+      parentThreadId: threadId,
+      priceStatus: "unpriced",
+      provider: "openai",
+      reasoningOutputTokens: 0,
+      scope: "monitor",
+      source: "monitor",
+      sourceItemId: subAgent.monitorId,
+      status: "finalized",
+      threadId: `helper-thread-${index}`,
+      totalCostMicros: 0,
+      totalTokens: 1_100,
+      turnId: `helper-turn-${index}`,
+      uncachedInputCostMicros: 0,
+      uncachedInputTokens: 1_000,
+      usageLineId: `token-miser-line-${index}`,
+    }));
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.upsertThreadSubAgents({
+        backend: "codex",
+        threadId,
+        subAgents,
+      });
+      await store.upsertThreadUsageLines({ lines });
+    });
+
+    expectSqliteWriteBudget({
+      note:
+        "nine Token Miser gate helpers from one parent turn, batched into "
+        + "one parent overlay write and one pricing-ledger transaction",
+      scenario: "token-miser-turn-ledger",
+      writes,
+    });
+  });
+
   it("counts a batched transaction as one commit, not one per statement", () => {
     // Write amplification tracks commits, not statements: each implicit
     // transaction flushes its dirty pages plus every index they moved. A

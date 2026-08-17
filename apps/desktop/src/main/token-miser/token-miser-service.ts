@@ -5,6 +5,7 @@ import {
   serializeToolResponse,
   type TokenMiserHelperUsage,
   type TokenMiserHookOutput,
+  type TokenMiserObjectMetadata,
   type TokenMiserPostToolUsePayload,
   type TokenMiserSummary,
 } from "./token-miser-types.js";
@@ -56,6 +57,9 @@ export type TokenMiserServiceOptions = {
     schema: Record<string, unknown>;
     timeoutMs: number;
   }) => Promise<TokenMiserStructuredGenerationResult>;
+  onInterceptionStored?: (
+    metadata: TokenMiserObjectMetadata,
+  ) => void | Promise<void>;
   thresholdCharacters?: number;
   summaryTimeoutMs?: number;
 };
@@ -104,7 +108,7 @@ export class TokenMiserService {
       outputCharacters: output.length,
       summary,
     });
-    await this.options.store.store({
+    const metadata = await this.options.store.store({
       objectId,
       threadId: payload.session_id,
       turnId: payload.turn_id,
@@ -114,11 +118,15 @@ export class TokenMiserService {
       replacementCharacters: replacement.length,
       summary,
       helperUsage: {
+        helperThreadId: generated.helperThreadId,
+        helperTurnId: generated.helperTurnId,
         model: generated.model,
         reasoningEffort: generated.reasoningEffort,
+        serviceTier: generated.serviceTier,
         tokenUsage: generated.tokenUsage,
       },
     });
+    await this.options.onInterceptionStored?.(metadata);
 
     return {
       continue: false,

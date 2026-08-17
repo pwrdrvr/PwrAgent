@@ -2326,6 +2326,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     threadId: string;
     subAgent: ThreadSubAgentSummary;
   }): Promise<ThreadOverlayState> {
+    return await this.upsertThreadSubAgents({
+      backend: params.backend,
+      threadId: params.threadId,
+      subAgents: [params.subAgent],
+    });
+  }
+
+  async upsertThreadSubAgents(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    subAgents: ThreadSubAgentSummary[];
+  }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.getThread(threadKey) ?? {
       backend: params.backend,
@@ -2333,10 +2345,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
+    const replacements = new Map(
+      params.subAgents.map((subAgent) => [subAgent.monitorId, subAgent]),
+    );
     const nextSubAgents = [
-      params.subAgent,
+      ...replacements.values(),
       ...(current.subAgents ?? []).filter(
-        (subAgent) => subAgent.monitorId !== params.subAgent.monitorId,
+        (subAgent) => !replacements.has(subAgent.monitorId),
       ),
     ].sort((left, right) => right.createdAt - left.createdAt);
     const nextState: ThreadOverlayState = {

@@ -16973,6 +16973,38 @@ a.transcript-message__messaging-origin:focus-visible {
   text-align: right;
 }
 
+.incident-explorer__token-miser-accounting {
+  min-width: min(660px, 68vw);
+}
+
+.incident-explorer__token-miser-accounting dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0 0 5px;
+  background: var(--border-subtle);
+}
+
+.incident-explorer__token-miser-accounting dl div {
+  padding: 5px 9px;
+  background: var(--bg-panel);
+}
+
+.incident-explorer__token-miser-accounting dt {
+  color: var(--text-muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.incident-explorer__token-miser-accounting dd {
+  margin: 2px 0 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .incident-explorer__token-miser-call {
   display: flex;
   align-items: center;
