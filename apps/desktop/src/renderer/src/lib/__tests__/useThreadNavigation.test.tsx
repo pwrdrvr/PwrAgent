@@ -10291,6 +10291,7 @@ describe("useThreadNavigation", () => {
           prAutoDispatchPending: pending("first-owner-pending"),
           inbox: { inInbox: false },
           federation: {
+            instanceLabel: "First owner",
             ref: {
               backend: "codex" as const,
               target: firstOwner,
@@ -10308,6 +10309,7 @@ describe("useThreadNavigation", () => {
           prAutoDispatchPending: pending("second-owner-pending"),
           inbox: { inInbox: false },
           federation: {
+            instanceLabel: "Second owner",
             ref: {
               backend: "codex" as const,
               target: secondOwner,
@@ -10360,10 +10362,14 @@ describe("useThreadNavigation", () => {
       (thread) => !thread.federation,
     );
     const firstRemoteThread = result.current.threads.find(
-      (thread) => thread.federation?.ref.target.instanceId === "first-owner",
+      (thread) =>
+        thread.federation?.ref.target.scope === "remote"
+        && thread.federation.ref.target.instanceId === "first-owner",
     );
     const secondRemoteThread = result.current.threads.find(
-      (thread) => thread.federation?.ref.target.instanceId === "second-owner",
+      (thread) =>
+        thread.federation?.ref.target.scope === "remote"
+        && thread.federation.ref.target.instanceId === "second-owner",
     );
     expect(firstRemoteThread?.prAutoDispatchEnabled).toBe(false);
     expect(firstRemoteThread?.prAutoDispatchPending).toBeUndefined();
