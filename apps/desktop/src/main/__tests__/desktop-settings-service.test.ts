@@ -10,6 +10,18 @@ import {
 } from "../settings/desktop-secret-store";
 import { readBootstrapAppearance } from "../settings/appearance-bootstrap";
 
+// `DesktopSettingsService` builds a real `CodexDiscoveryCoordinator` unless the
+// test injects one, and the kit's probe runs `codex --version` against every
+// install location on this machine. See the stub for what it reproduces.
+vi.mock("@pwrdrvr/codex-discovery", async (importOriginal) => {
+  const { stubbedCodexDiscovery } = await import(
+    "./helpers/codex-discovery-stub"
+  );
+  return stubbedCodexDiscovery(
+    await importOriginal<typeof import("@pwrdrvr/codex-discovery")>(),
+  );
+});
+
 const tempRoots: string[] = [];
 
 afterEach(() => {

@@ -670,6 +670,46 @@ The desktop app sits at the **top** of the dependency hierarchy and may import a
 
 Enforcement runs via `pnpm lint:boundaries` and fails CI on any violation.
 
+## No Real Agent CLIs in Vitest
+
+The `desktop-main` project loads
+[`src/main/__tests__/setup/agent-cli-spawn-guard.ts`](src/main/__tests__/setup/agent-cli-spawn-guard.ts)
+as a setup file. It fails any test that spawns a `codex` / `gemini` / `grok` /
+`kimi` / `qwen` executable from outside the OS temp dir.
+
+It exists because **sandboxing `PATH` does not sandbox discovery**. The ACP kit
+also scans well-known `$HOME` bin dirs (`~/.local/bin`, `~/.bun/bin`, every
+installed nvm node bin) and each strategy's absolute fallback candidates
+(`~/.kimi-code/bin/kimi`, `~/.grok/bin/grok`); Codex discovery probes its own
+install locations, including the `codex` inside ChatGPT.app. Before #1740 the
+suite ran ~169 real agent processes per run and asserted against whatever
+versions the developer had installed.
+
+**CI cannot catch this on its own.** CI machines have none of those binaries, so
+the probe fails, discovery finds nothing, and the assertions still pass — the
+tests take a different code path locally than on CI. The guard makes both the
+same failure.
+
+The hook is `ChildProcess.prototype.spawn`, not the `child_process` exports:
+it is the one chokepoint every async spawn path funnels through, and a
+prototype patch survives however a module imported `child_process` — including
+externally bundled dependencies vitest never transforms, which `vi.mock` cannot
+reach. It records **and** throws; the recording is what fails the test, because
+discovery probes run inside `try/catch` and swallow a bare throw. Sync spawns
+(`spawnSync` / `execFileSync`) are not covered — all agent discovery is async.
+
+Fix a failure by injecting the seam, never by widening the guard's allowed
+roots:
+
+| Surface | Seam |
+|---|---|
+| ACP discovery | `listExecutables` + `fallbackRootDir` (+ `bundledGrokCommand: null`) to confine candidates to the fixture, or inject `discover` / `readVersionOutput` |
+| Codex discovery | inject `codexDiscoveryCoordinator`, or `vi.mock("@pwrdrvr/codex-discovery")` via [`__tests__/helpers/codex-discovery-stub.ts`](src/main/__tests__/helpers/codex-discovery-stub.ts) |
+| Anything else | `vi.mock` the discovery module, as `settings-ipc` and `backend-registry` already do |
+
+`acp-runtime-override-launch.test.ts` is the worked example of the ACP seams,
+and `acp-instance-discovery.test.ts` of plain probe injection.
+
 ## Sqlite Write-Volume Instrumentation
 
 PR #1406 fixed tool accounting running one implicit transaction per streamed

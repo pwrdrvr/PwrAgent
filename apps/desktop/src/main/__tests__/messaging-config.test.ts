@@ -35,6 +35,18 @@ import {
 import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 
+// These tests build a real `DesktopSettingsService`, whose default
+// `CodexDiscoveryCoordinator` runs `codex --version` against every install
+// location on this machine. Messaging config has no stake in the result.
+vi.mock("@pwrdrvr/codex-discovery", async (importOriginal) => {
+  const { stubbedCodexDiscovery } = await import(
+    "./helpers/codex-discovery-stub"
+  );
+  return stubbedCodexDiscovery(
+    await importOriginal<typeof import("@pwrdrvr/codex-discovery")>(),
+  );
+});
+
 const messagingLog = vi.hoisted(() => ({
   error: vi.fn(),
   info: vi.fn(),
