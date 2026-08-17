@@ -29,6 +29,10 @@ import {
 } from "./CodexAuthProfileSelect";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { SettingsSwitch } from "./SettingsSwitch";
+import {
+  commandDiscoveryFailureDetail,
+  describeCommandDiscoveryFailure,
+} from "./command-discovery-failure";
 
 const UNSPECIFIED_SOURCE_MODEL_KEY = "\0unspecified";
 
@@ -210,7 +214,7 @@ export function ModelsSettings(props: {
         <div className="settings-fields">
           <SettingsField
             label="Codex path"
-            sub="Enter an absolute path, including .ps1 on Windows. Leave blank to use auto discovery."
+            sub="Absolute path to the Codex binary. Leave blank to use auto discovery."
             source={codexSource}
             control={
               <>
@@ -1342,46 +1346,41 @@ function CodexCandidateRow(props: {
   onUse: (command: string) => void;
 }) {
   const candidate = props.candidate;
-  const unavailableLabel = describeCommandDiscoveryFailure(candidate.failureReason);
-  const status = !candidate.executable
-    ? (unavailableLabel ?? "Not executable")
-    : candidate.selected
-      ? "Using"
-      : "Available";
-  const version =
-    candidate.version
-    ?? describeCommandDiscoveryFailure(candidate.versionFailureReason)
-    ?? unavailableLabel
-    ?? "version unknown";
+  const reason = candidate.failureReason ?? candidate.versionFailureReason;
 
+  // One chip per fact: where it came from, and either its version or the one
+  // reason it cannot be used. The old row emitted the failure twice — once as
+  // the version and again as the status — which is what put `spawn EPERM`
+  // on the same row two ways.
   const chips: SettingsPathRowChip[] = [
-    { label: candidate.source, tone: "muted" },
-    { label: version, tone: "muted" },
+    { key: "source", label: candidate.source, tone: "muted" },
   ];
-  if (!candidate.selected) {
+  if (candidate.executable) {
     chips.push({
-      label: status,
-      tone: candidate.executable ? "muted" : "err",
+      key: "version",
+      label: candidate.version ?? "version unknown",
+      tone: "muted",
+    });
+    if (!candidate.selected) {
+      chips.push({ key: "status", label: "Available", tone: "muted" });
+    }
+  } else {
+    chips.push({
+      key: "status",
+      label: describeCommandDiscoveryFailure(reason) ?? "Not executable",
+      tone: "err",
     });
   }
 
   return (
     <SettingsPathRow
       title={candidate.command}
+      path={commandDiscoveryFailureDetail(reason)}
       chips={chips}
       selected={candidate.selected}
       selectedLabel="Using"
       disabled={props.disabled || !candidate.executable}
-      onUse={() => props.onUse(candidate.command)}
+      onUse={candidate.executable ? () => props.onUse(candidate.command) : undefined}
     />
   );
-}
-
-function describeCommandDiscoveryFailure(reason?: string): string | undefined {
-  if (!reason) return undefined;
-  if (reason === "not_found") return "Missing";
-  if (reason === "not_executable") return "Not executable";
-  if (reason === "version_not_reported") return "Version unknown";
-  if (reason === "codex_too_old") return "Codex too old";
-  return reason;
 }

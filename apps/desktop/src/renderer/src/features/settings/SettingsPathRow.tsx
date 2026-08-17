@@ -56,10 +56,19 @@ export function SettingsPathRow(props: {
       ) : null}
       <div className="settings-pathrow__body">
         {props.title ? (
-          <span className="settings-pathrow__title">{props.title}</span>
+          <span
+            className="settings-pathrow__title"
+            // Titles are ellipsized (a Windows MSIX path runs well past the
+            // row), so keep the full value reachable on hover.
+            title={typeof props.title === "string" ? props.title : undefined}
+          >
+            {props.title}
+          </span>
         ) : null}
         {props.path ? (
-          <span className="settings-pathrow__path">{props.path}</span>
+          <span className="settings-pathrow__path" title={props.path}>
+            {props.path}
+          </span>
         ) : null}
       </div>
       {props.chips && props.chips.length > 0 ? (

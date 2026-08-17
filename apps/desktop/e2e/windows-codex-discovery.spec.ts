@@ -104,8 +104,22 @@ test("PATH discovery launches one version probe and starts a real thread", async
   }
 });
 
-test("PowerShell PATH discovery starts a real thread through codex.ps1", async () => {
+/**
+ * npm installs three shims side by side: `codex` (sh), `codex.cmd`, and
+ * `codex.ps1`. The shared PATH scan walks `[name, ...PATHEXT]` in that order,
+ * so it stops on the extensionless sh shim — unusable on Windows — and never
+ * reaches codex.cmd. That is why a working nvm-windows install reported
+ * "Missing", and why the .ps1 was tempting as a substitute: it version-probes
+ * fine (stdin closed) but cannot host the app-server (stdin held open sends
+ * npm's shim down its `$input | & node …` branch, and `initialize` never
+ * returns).
+ *
+ * This is that exact directory layout. Discovery must land on codex.cmd and
+ * the .ps1 must never be invoked.
+ */
+test("npm shim trio discovers and launches through codex.cmd", async () => {
   let invocationLogPath = "";
+  let powerShellLogPath = "";
   let protocolLogPath = "";
   const pathKey = envKey("PATH");
   const pathExtKey = envKey("PATHEXT");
@@ -116,10 +130,10 @@ test("PowerShell PATH discovery starts a real thread through codex.ps1", async (
     requiresReplayDriver: false,
     env: launchEnv,
     preLaunchHook: async (homeRoot) => {
-      const binDir = path.join(homeRoot, "codex-powershell-bin");
+      const binDir = path.join(homeRoot, "codex-shim-trio-bin");
       const scriptPath = path.join(binDir, "codex.js");
-      const commandPath = path.join(binDir, "codex.ps1");
       invocationLogPath = path.join(binDir, "invocations.log");
+      powerShellLogPath = path.join(binDir, "powershell-invocations.log");
       protocolLogPath = path.join(binDir, "protocol.jsonl");
       const launchMarkerPath = path.join(binDir, "app-server.launched");
       await writeFakeCodexExecutable({
@@ -127,11 +141,28 @@ test("PowerShell PATH discovery starts a real thread through codex.ps1", async (
         protocolLogPath,
         launchMarkerPath,
       });
+
+      // The sh shim npm writes for Git Bash. Windows cannot run it, and it is
+      // what the shared PATH scan finds first.
       await writeFile(
-        commandPath,
+        path.join(binDir, "codex"),
+        ['#!/bin/sh', 'echo "sh shim is not usable on Windows" >&2', "exit 1", ""].join("\n"),
+        "utf8",
+      );
+      await writeFile(
+        path.join(binDir, "codex.cmd"),
         [
-          `$argsLine = $args -join ' '`,
-          `Add-Content -LiteralPath ${powerShellLiteral(invocationLogPath)} -Value $argsLine`,
+          "@echo off",
+          `echo %*>>"${invocationLogPath}"`,
+          `"${process.execPath}" "${scriptPath}" %*`,
+          "",
+        ].join("\r\n"),
+        "utf8",
+      );
+      await writeFile(
+        path.join(binDir, "codex.ps1"),
+        [
+          `Add-Content -LiteralPath ${powerShellLiteral(powerShellLogPath)} -Value ($args -join ' ')`,
           `& ${powerShellLiteral(process.execPath)} ${powerShellLiteral(scriptPath)} @args`,
           "exit $LASTEXITCODE",
           "",
@@ -153,7 +184,7 @@ test("PowerShell PATH discovery starts a real thread through codex.ps1", async (
 
     await app.window.getByRole("button", { name: "New thread" }).click();
     const prompt = app.window.getByRole("textbox", { name: "New thread" });
-    await prompt.fill("Windows PowerShell Codex discovery works");
+    await prompt.fill("Windows npm shim discovery works");
     await app.window.getByRole("button", { name: "Start thread" }).click();
 
     await expect.poll(async () => {
@@ -167,6 +198,8 @@ test("PowerShell PATH discovery starts a real thread through codex.ps1", async (
         version: invocations.filter((args) => args.includes("--version")).length,
       };
     }).toEqual({ appServer: 1, version: 1 });
+
+    expect(await readInvocationArgs(powerShellLogPath)).toEqual([]);
   } finally {
     await app.close();
   }

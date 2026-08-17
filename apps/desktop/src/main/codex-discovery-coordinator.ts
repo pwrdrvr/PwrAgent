@@ -7,7 +7,7 @@ import {
   type CodexDiscoverySnapshot,
   type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
-import { discoverCodexPowerShellCandidates } from "./codex-powershell";
+import { discoverWindowsCodexCandidates } from "./codex-windows-launch";
 
 export const CODEX_DISCOVERY_SUCCESS_TTL_MS = 5 * 60_000;
 export const CODEX_DISCOVERY_NOT_INSTALLED_TTL_MS = 15_000;
@@ -36,7 +36,7 @@ type InFlightDiscovery = {
 
 export type CodexDiscoveryCoordinatorOptions = {
   discover?: typeof discoverCodexCommands;
-  discoverPowerShell?: typeof discoverCodexPowerShellCandidates;
+  discoverWindows?: typeof discoverWindowsCodexCandidates;
   failureTtlMs?: number;
   forceReuseTtlMs?: number;
   notInstalledTtlMs?: number;
@@ -237,20 +237,20 @@ export class CodexDiscoveryCoordinator {
         ...(this.options.platform ? { platform: this.options.platform } : {}),
       });
       const platform = this.options.platform ?? process.platform;
-      const powerShellCandidates = platform === "win32"
-          ? await (
-            this.options.discoverPowerShell ?? discoverCodexPowerShellCandidates
-          )({
-            configuredCommand,
-            env,
-            includePath: !hasValidatedSelectedCommand(discovered),
-          })
+      const windowsCandidates = platform === "win32"
+        ? await (
+          this.options.discoverWindows ?? discoverWindowsCodexCandidates
+        )({
+          candidates: discovered.candidates,
+          configuredCommand,
+          env,
+        })
         : [];
       const snapshot = normalizeCodexDiscoverySnapshot({
         ...discovered,
         candidates: mergeCodexDiscoveryCandidates(
           discovered.candidates,
-          powerShellCandidates,
+          windowsCandidates,
           platform,
         ),
       });
@@ -271,20 +271,6 @@ export class CodexDiscoveryCoordinator {
       throw error;
     }
   }
-}
-
-function hasValidatedSelectedCommand(
-  snapshot: CodexDiscoverySnapshot,
-): boolean {
-  return snapshot.candidates.some(
-    (candidate) =>
-      candidate.selected
-      && candidate.command === snapshot.selectedCommand
-      && candidate.executable
-      && Boolean(candidate.version)
-      && !candidate.failureReason
-      && !candidate.versionFailureReason,
-  );
 }
 
 function normalizeCodexDiscoverySnapshot(
@@ -393,18 +379,23 @@ function mergeCodexDiscoveryCandidates(
     && Boolean(candidate.version)
     && !candidate.failureReason
     && !candidate.versionFailureReason;
-  const validatedCommands = new Set(
-    merged
-      .filter(isValidated)
-      .map((candidate) => candidate.command.toLowerCase()),
+  // npm writes `codex`, `codex.cmd`, and `codex.ps1` side by side. Once one
+  // of them validates, its unusable twins are noise on the Settings screen
+  // and would only invite the operator to select a broken launch path.
+  const validatedBases = new Set(
+    merged.filter(isValidated).map((candidate) => stripExtension(candidate.command)),
   );
-  return merged.filter((candidate) => {
-    if (isValidated(candidate) || path.win32.extname(candidate.command)) {
-      return true;
-    }
-    const command = candidate.command.toLowerCase();
-    return !validatedCommands.has(`${command}.ps1`)
-      && !validatedCommands.has(`${command}.cmd`)
-      && !validatedCommands.has(`${command}.exe`);
-  });
+  return merged.filter(
+    (candidate) =>
+      isValidated(candidate)
+      || !validatedBases.has(stripExtension(candidate.command)),
+  );
+}
+
+function stripExtension(command: string): string {
+  const normalized = path.win32.normalize(command.trim()).toLowerCase();
+  const extension = path.win32.extname(normalized);
+  return extension
+    ? normalized.slice(0, normalized.length - extension.length)
+    : normalized;
 }

@@ -9727,10 +9727,13 @@ textarea,
 
 .settings-pathrow__title {
   display: block;
+  overflow: hidden;
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
   line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-pathrow__title-line {
@@ -9777,6 +9780,8 @@ textarea,
 }
 
 .settings-pathrow__chip {
+  max-width: 180px;
+  overflow: hidden;
   padding: 3px 7px;
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
@@ -9786,6 +9791,8 @@ textarea,
   font-size: 10px;
   font-weight: 500;
   line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-pathrow__chip--ok {

@@ -74,11 +74,11 @@ describe("CodexDiscoveryCoordinator", () => {
     });
   });
 
-  it("selects a Codex PowerShell shim resolved from Windows PATH", async () => {
-    const command = "C:\\nvm4w\\nodejs\\codex.ps1";
+  it("selects a Codex .cmd shim resolved beside the Windows PATH hit", async () => {
+    const command = "C:\\nvm4w\\nodejs\\codex.cmd";
     const coordinator = new CodexDiscoveryCoordinator({
       discover: async () => notInstalledSnapshot(),
-      discoverPowerShell: async () => [
+      discoverWindows: async () => [
         {
           command,
           executable: true,
@@ -98,12 +98,12 @@ describe("CodexDiscoveryCoordinator", () => {
     });
   });
 
-  it("falls back to PowerShell when shared Windows discovery selects an unvalidated command", async () => {
+  it("replaces an unvalidated Windows PATH hit with its spawnable sibling", async () => {
     const unresolvedCommand = "C:\\nvm4w\\nodejs\\codex";
-    const powerShellCommand = `${unresolvedCommand}.ps1`;
-    const discoverPowerShell = vi.fn(async () => [
+    const siblingCommand = `${unresolvedCommand}.cmd`;
+    const discoverWindows = vi.fn(async () => [
       {
-        command: powerShellCommand,
+        command: siblingCommand,
         executable: true,
         selected: false,
         source: "path" as const,
@@ -112,28 +112,53 @@ describe("CodexDiscoveryCoordinator", () => {
     ]);
     const coordinator = new CodexDiscoveryCoordinator({
       discover: async () => unvalidatedSnapshot(unresolvedCommand),
-      discoverPowerShell,
+      discoverWindows,
       platform: "win32",
       resolveEnv: async () => ({ Path: "C:\\nvm4w\\nodejs" }),
     });
 
+    // The shared PATH scan stops on the extensionless sh shim, so the
+    // unusable original must not survive alongside the validated sibling.
     await expect(coordinator.discover()).resolves.toMatchObject({
       candidates: [
         expect.objectContaining({
-          command: powerShellCommand,
+          command: siblingCommand,
           executable: true,
           selected: true,
           version: "0.144.0",
         }),
       ],
-      selectedCommand: powerShellCommand,
+      selectedCommand: siblingCommand,
       selectedSource: "path",
     });
-    expect(discoverPowerShell).toHaveBeenCalledWith({
+    expect(discoverWindows).toHaveBeenCalledWith({
+      candidates: [expect.objectContaining({ command: unresolvedCommand })],
       configuredCommand: undefined,
       env: { Path: "C:\\nvm4w\\nodejs" },
-      includePath: true,
     });
+  });
+
+  it("drops a PowerShell shim once its .cmd sibling validates", async () => {
+    const base = "C:\\nvm4w\\nodejs\\codex";
+    const coordinator = new CodexDiscoveryCoordinator({
+      discover: async () => unvalidatedSnapshot(`${base}.ps1`),
+      discoverWindows: async () => [
+        {
+          command: `${base}.cmd`,
+          executable: true,
+          selected: false,
+          source: "path" as const,
+          version: "0.146.0",
+        },
+      ],
+      platform: "win32",
+      resolveEnv: async () => ({ Path: "C:\\nvm4w\\nodejs" }),
+    });
+
+    const snapshot = await coordinator.discover();
+    expect(snapshot.candidates.map((candidate) => candidate.command)).toEqual([
+      `${base}.cmd`,
+    ]);
   });
 
   it("rejects executable-looking candidates whose Codex version did not validate", async () => {

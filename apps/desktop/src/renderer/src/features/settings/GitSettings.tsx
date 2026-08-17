@@ -29,6 +29,10 @@ import {
 } from "./SettingsPathRow";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { sourceBadge } from "./settings-fields";
+import {
+  commandDiscoveryFailureDetail as sharedCommandDiscoveryFailureDetail,
+  describeCommandDiscoveryFailure as describeSharedCommandDiscoveryFailure,
+} from "./command-discovery-failure";
 
 const DEFAULT_BACKGROUND_PR_POLLING_VALUE = {
   value: DEFAULT_BACKGROUND_PR_POLLING,
@@ -861,6 +865,7 @@ function GitCandidateRow(props: {
   return (
     <SettingsPathRow
       title={candidate.command}
+      path={commandDiscoveryFailureDetail(candidate.failureReason)}
       chips={chips}
       selected={candidate.selected}
       disabled
@@ -902,6 +907,9 @@ function GhCandidateRow(props: {
   return (
     <SettingsPathRow
       title={candidate.command}
+      path={commandDiscoveryFailureDetail(
+        candidate.failureReason ?? candidate.versionFailureReason,
+      )}
       chips={chips}
       selected={candidate.selected}
       disabled={props.disabled || !candidate.executable}
@@ -938,13 +946,16 @@ function describeGitCandidateSource(
   return source;
 }
 
+function describeXcodeLicenseFailure(reason: string): string | undefined {
+  return isXcodeLicenseFailure(reason) ? "Xcode license" : undefined;
+}
+
 function describeCommandDiscoveryFailure(reason?: string): string | undefined {
-  if (!reason) return undefined;
-  if (reason === "not_found") return "Missing";
-  if (reason === "not_executable") return "Not executable";
-  if (reason === "version_not_reported") return "Version unknown";
-  if (isXcodeLicenseFailure(reason)) return "Xcode license";
-  return reason;
+  return describeSharedCommandDiscoveryFailure(reason, describeXcodeLicenseFailure);
+}
+
+function commandDiscoveryFailureDetail(reason?: string): string | undefined {
+  return sharedCommandDiscoveryFailureDetail(reason, describeXcodeLicenseFailure);
 }
 
 function isXcodeLicenseCandidate(

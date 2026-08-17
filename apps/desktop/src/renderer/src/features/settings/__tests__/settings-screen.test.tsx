@@ -2912,6 +2912,74 @@ describe("SettingsScreen", () => {
     expect(getGhStatus).toHaveBeenCalledWith({ recheck: true });
   });
 
+  it("keeps a raw Codex spawn error out of the status chips", async () => {
+    // Regression: a failed Windows probe returns a whole command line as its
+    // reason. The row used to render it as BOTH the version chip and the
+    // status chip; chips are `flex: 0 0 auto`, so the path beside them
+    // collapsed to "C:" and the row overflowed.
+    const rawFailure =
+      "Command failed: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0"
+      + "\\powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy"
+      + " Bypass -File C:\\nvm4w\\nodejs\\codex.ps1 --version";
+    const snapshot = createSnapshot();
+    snapshot.models.codex.discovery = {
+      selectedCommand: "C:\\nvm4w\\nodejs\\codex.cmd",
+      selectedSource: "path",
+      candidates: [
+        {
+          command: "C:\\nvm4w\\nodejs\\codex.cmd",
+          executable: true,
+          selected: true,
+          source: "path",
+          version: "0.146.0",
+        },
+        {
+          command: "C:\\nvm4w\\nodejs\\codex.ps1",
+          executable: false,
+          selected: false,
+          source: "path",
+          failureReason: rawFailure,
+        },
+        {
+          command:
+            "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.810.7004.0_x64"
+            + "\\app\\resources\\codex.exe",
+          executable: false,
+          selected: false,
+          source: "application",
+          failureReason: "spawn EPERM",
+        },
+      ],
+    };
+
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    const chips = Array.from(
+      document.querySelectorAll(".settings-pathrow__chip"),
+    ).map((chip) => chip.textContent ?? "");
+    expect(chips).toContain("Launch failed");
+    expect(chips).toContain("Blocked");
+    expect(chips.some((chip) => chip.includes("powershell.exe"))).toBe(false);
+    // "spawn EPERM" previously rendered twice on the same row.
+    expect(chips.filter((chip) => chip === "Blocked")).toHaveLength(1);
+
+    // The full reason stays reachable on the row's mono detail line.
+    expect(screen.getByText(rawFailure)).toBeInTheDocument();
+
+    // An unusable candidate must not offer to become the selection.
+    const rows = Array.from(document.querySelectorAll(".settings-pathrow"));
+    const failingRow = rows.find((row) =>
+      row.textContent?.includes("codex.ps1"),
+    )!;
+    expect(within(failingRow as HTMLElement).queryByRole("button")).toBeNull();
+  });
+
   it("shows Git discovery and Xcode license remediation", async () => {
     const snapshot = createSnapshot();
     snapshot.applications.git = {

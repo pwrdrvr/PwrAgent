@@ -11,10 +11,11 @@ import {
   compareCodexCliVersions,
   MINIMUM_CODEX_CLI_VERSION,
 } from "@pwrdrvr/codex-discovery";
+import { createCommandInvocation } from "@pwrdrvr/agent-transport";
 import {
-  createCodexCommandInvocation,
+  resolveWindowsCodexLaunchCommand,
   runCodexOneShot,
-} from "../codex-powershell";
+} from "../codex-windows-launch";
 
 const log = getMainLogger("pwragent:credential-tester");
 
@@ -399,8 +400,10 @@ async function defaultRunCodexVersion(
   command: string,
 ): Promise<{ stdout: string; stderr: string }> {
   const env = buildPwrAgentChildProcessEnv(process.env);
-  const invocation = createCodexCommandInvocation({
-    command,
+  // Probe the command that would actually be launched, so a `.ps1` in config
+  // cannot report Connected while the app-server launch resolves elsewhere.
+  const invocation = createCommandInvocation({
+    command: resolveWindowsCodexLaunchCommand({ command }),
     args: ["--version"],
     env,
   });
