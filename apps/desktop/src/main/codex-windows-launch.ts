@@ -1,27 +1,17 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { createCommandInvocation } from "@pwrdrvr/agent-transport";
 import {
   CODEX_COMMAND_ENV,
   compareCodexCliVersions,
   MINIMUM_CODEX_CLI_VERSION,
   type CodexDiscoveryCandidate,
 } from "@pwrdrvr/codex-discovery";
-
-/**
- * Anchored to Codex's own `--version` banner (`codex-cli 0.146.0`).
- *
- * A bare `\d+\.\d+\.\d+` matches anything in the combined output — a node
- * deprecation notice, an npm warning, even a version-shaped directory in an
- * error message. That was survivable while a junk version only mislabeled a
- * row, but selection now ranks automatic candidates by version descending, so
- * an unanchored match can outrank a genuine install and become the launched
- * command.
- */
-const CODEX_VERSION_PATTERN =
-  /\bcodex(?:-cli)?[\s/v]+(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/i;
-const VERSION_PROBE_TIMEOUT_MS = 10_000;
+import {
+  CODEX_VERSION_PROBE_TIMEOUT_MS,
+  probeCodexVersion,
+  runCodexOneShot,
+  type CodexCommandRunner,
+} from "./codex-version-probe";
 
 const POWERSHELL_SHIM_EXTENSION = ".ps1";
 
@@ -45,17 +35,6 @@ const POWERSHELL_SHIM_EXTENSION = ".ps1";
  * So `.ps1` is a discovery signal, never a launch target.
  */
 const WINDOWS_SPAWNABLE_EXTENSIONS = [".exe", ".com", ".cmd", ".bat"];
-
-type CodexCommandRunner = (
-  command: string,
-  args: string[],
-  options: {
-    env: NodeJS.ProcessEnv;
-    timeout: number;
-    windowsHide: boolean;
-    windowsVerbatimArguments?: boolean;
-  },
-) => Promise<{ stderr?: string | Buffer; stdout?: string | Buffer }>;
 
 function isPowerShellScript(command: string): boolean {
   return path.win32.extname(command).toLowerCase() === POWERSHELL_SHIM_EXTENSION;
@@ -127,94 +106,49 @@ export function resolveWindowsCodexLaunchCommand(params: {
   );
 }
 
-export async function runCodexOneShot(
-  command: string,
-  args: string[],
-  options: Parameters<CodexCommandRunner>[2],
-): Promise<{ stderr?: string | Buffer; stdout?: string | Buffer }> {
-  return await new Promise((resolve, reject) => {
-    const child = execFile(command, args, options, (error, stdout, stderr) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve({ stderr, stdout });
-    });
-    // A `--version` probe reads to EOF and never writes, so close stdin.
-    if (child.stdin) {
-      child.stdin.on("error", () => undefined);
-      child.stdin.end();
-    }
-  });
-}
-
 async function inspectCandidate(params: {
   command: string;
   env: NodeJS.ProcessEnv;
   runner: CodexCommandRunner;
   source: CodexDiscoveryCandidate["source"];
 }): Promise<CodexDiscoveryCandidate> {
-  try {
-    const invocation = createCommandInvocation({
-      command: params.command,
-      args: ["--version"],
-      env: params.env,
-      platform: "win32",
-    });
-    const result = await params.runner(invocation.command, invocation.args, {
-      env: params.env,
-      timeout: VERSION_PROBE_TIMEOUT_MS,
-      windowsHide: true,
-      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
-    });
-    const output = `${result.stdout?.toString() ?? ""}\n${
-      result.stderr?.toString() ?? ""
-    }`;
-    const version = output.match(CODEX_VERSION_PATTERN)?.[1];
-    const tooOld =
-      version && compareCodexCliVersions(version, MINIMUM_CODEX_CLI_VERSION) < 0;
-    return {
-      command: params.command,
-      source: params.source,
-      executable: Boolean(version) && !tooOld,
-      selected: false,
-      ...(version
-        ? { version }
-        : { versionFailureReason: "version_not_reported" }),
-      ...(tooOld ? { failureReason: "codex_too_old" } : {}),
-    };
-  } catch (error) {
-    return {
-      command: params.command,
-      source: params.source,
-      executable: false,
-      selected: false,
-      failureReason: classifyProbeFailure(error),
-    };
+  const probe = await probeCodexVersion({
+    command: params.command,
+    env: params.env,
+    platform: "win32",
+    runner: params.runner,
+    timeoutMs: CODEX_VERSION_PROBE_TIMEOUT_MS,
+  });
+  if (!probe.version) {
+    // `version_not_reported` means the command answered but said nothing we
+    // recognize; anything else (including `version_probe_timed_out`) means it
+    // could not be run to completion.
+    return probe.failureReason === "version_not_reported"
+      ? {
+          command: params.command,
+          source: params.source,
+          executable: false,
+          selected: false,
+          versionFailureReason: "version_not_reported",
+        }
+      : {
+          command: params.command,
+          source: params.source,
+          executable: false,
+          selected: false,
+          failureReason: probe.failureReason ?? "version_not_reported",
+        };
   }
-}
-
-/**
- * `execFile`'s error shape is not what the obvious `code === "ENOENT"` test
- * expects here. A `.cmd` probe runs through the cmd.exe wrapper, and cmd.exe
- * always exists, so `code` arrives as a numeric exit status (49, say) and a
- * timeout arrives as `code: null` with `killed: true` and `signal: "SIGTERM"`.
- * Classifying on the errno string alone left `not_found` unreachable and made
- * every timeout render as a generic launch failure.
- */
-function classifyProbeFailure(error: unknown): string {
-  const failure = error as NodeJS.ErrnoException & {
-    killed?: boolean;
-    signal?: string;
+  const tooOld =
+    compareCodexCliVersions(probe.version, MINIMUM_CODEX_CLI_VERSION) < 0;
+  return {
+    command: params.command,
+    source: params.source,
+    executable: !tooOld,
+    selected: false,
+    version: probe.version,
+    ...(tooOld ? { failureReason: "codex_too_old" } : {}),
   };
-  if (failure?.killed || failure?.signal === "SIGTERM") {
-    return "version_probe_timed_out";
-  }
-  const code = failure?.code;
-  if (code === "ENOENT" || code === "ENOTDIR") {
-    return "not_found";
-  }
-  return error instanceof Error ? error.message : String(error);
 }
 
 type SiblingTarget = {

@@ -11,6 +11,10 @@ import {
   discoverWindowsCodexCandidates,
   isValidatedCandidate,
 } from "./codex-windows-launch";
+import {
+  CODEX_VERSION_PROBE_TIMEOUT_MS,
+  probeCodexVersion,
+} from "./codex-version-probe";
 
 export const CODEX_DISCOVERY_SUCCESS_TTL_MS = 5 * 60_000;
 export const CODEX_DISCOVERY_NOT_INSTALLED_TTL_MS = 15_000;
@@ -45,6 +49,8 @@ export type CodexDiscoveryCoordinatorOptions = {
   notInstalledTtlMs?: number;
   now?: () => number;
   platform?: NodeJS.Platform;
+  /** Test seam for the desktop-owned `--version` re-probe. */
+  probeVersion?: typeof probeCodexVersion;
   resolveEnv: () => Promise<NodeJS.ProcessEnv>;
   staleSuccessTtlMs?: number;
   successTtlMs?: number;
@@ -224,6 +230,105 @@ export class CodexDiscoveryCoordinator {
     }
   }
 
+  /**
+   * Give a command that failed only its `--version` probe one more chance,
+   * on a desktop-owned budget, before we report Codex as missing.
+   *
+   * `@pwrdrvr/codex-discovery` probes with a hard 2s timeout on every
+   * platform. A timed-out probe is not surfaced as "slow" — it yields a
+   * candidate with no version, which `normalizeCodexDiscoverySnapshot`
+   * demotes (a version is required for protocol-compatibility gating), so
+   * the snapshot reads exactly like "no Codex installed" and `resolve()`
+   * throws `CodexCliNotInstalledError`. Nothing else retries: the app then
+   * sits with Codex reported missing until the operator forces a refresh
+   * from Settings.
+   *
+   * That is not hypothetical on a Windows shim chain (`cmd.exe -> node ->
+   * codex.cmd` measures ~1.5s warm on the lab guest, against a 2s ceiling),
+   * and it is not Windows-specific — the timeout is unconditional.
+   * `e2e/codex-slow-version-probe.spec.ts` pins the behavior on any platform.
+   *
+   * "Reported missing" is the visible half on a machine with nothing else
+   * installed. The quieter half shows up when there IS something else: the
+   * timed-out command is demoted, and selection falls through to a
+   * lower-priority candidate — so an operator's explicitly configured
+   * `[models.codex] path` is silently replaced by whatever Codex happens to
+   * be on the machine. Both are the same event, so the rule is keyed on
+   * PRIORITY rather than on "nothing was selected":
+   *
+   * - A candidate is re-probed only if no candidate of equal or higher
+   *   priority already validated (env > config > automatic, matching
+   *   `normalizeCodexDiscoverySnapshot`). A healthy scan therefore
+   *   re-probes nothing, which is what keeps
+   *   `windows-codex-discovery.spec.ts`'s "exactly one version probe"
+   *   assertion — and #1720's coalescing — true.
+   * - Only candidates whose version could not be READ are eligible. A
+   *   command that is absent (`not_found`), genuinely too old
+   *   (`codex_too_old`), or a `.ps1` we refuse to launch is a settled
+   *   answer and is left alone.
+   * - One extra probe per eligible candidate, never a loop.
+   *
+   * The cost lands only on the path that was about to get the answer wrong.
+   */
+  private async reprobeUnreadVersions(
+    snapshot: CodexDiscoverySnapshot,
+    context: { env: NodeJS.ProcessEnv; platform: NodeJS.Platform },
+  ): Promise<CodexDiscoverySnapshot> {
+    const bestValidatedRank = snapshot.candidates.reduce(
+      (best, candidate) =>
+        isValidatedCandidate(candidate)
+          ? Math.min(best, codexCandidateRank(candidate))
+          : best,
+      Number.POSITIVE_INFINITY,
+    );
+    const eligible = snapshot.candidates.filter(
+      (candidate) =>
+        isUnreadVersionCandidate(candidate)
+        && codexCandidateRank(candidate) < bestValidatedRank,
+    );
+    if (eligible.length === 0) {
+      return snapshot;
+    }
+
+    const probe = this.options.probeVersion ?? probeCodexVersion;
+    const reprobed = new Map<
+      string,
+      CodexDiscoverySnapshot["candidates"][number]
+    >();
+    await Promise.all(
+      eligible.map(async (candidate) => {
+        const result = await probe({
+          command: candidate.command,
+          env: context.env,
+          platform: context.platform,
+          timeoutMs: CODEX_VERSION_PROBE_TIMEOUT_MS,
+        });
+        if (!result.version) {
+          return;
+        }
+        const tooOld =
+          compareCodexCliVersions(result.version, MINIMUM_CODEX_CLI_VERSION) < 0;
+        reprobed.set(candidate.command, {
+          command: candidate.command,
+          source: candidate.source,
+          executable: !tooOld,
+          selected: false,
+          version: result.version,
+          ...(tooOld ? { failureReason: "codex_too_old" } : {}),
+        });
+      }),
+    );
+    if (reprobed.size === 0) {
+      return snapshot;
+    }
+    return normalizeCodexDiscoverySnapshot({
+      ...snapshot,
+      candidates: snapshot.candidates.map(
+        (candidate) => reprobed.get(candidate.command) ?? candidate,
+      ),
+    });
+  }
+
   private async runProbe(
     configuredCommand: string | undefined,
     generation: number,
@@ -249,14 +354,17 @@ export class CodexDiscoveryCoordinator {
           env,
         })
         : [];
-      const snapshot = normalizeCodexDiscoverySnapshot({
-        ...discovered,
-        candidates: mergeCodexDiscoveryCandidates(
-          discovered.candidates,
-          windowsCandidates,
-          platform,
-        ),
-      });
+      const snapshot = await this.reprobeUnreadVersions(
+        normalizeCodexDiscoverySnapshot({
+          ...discovered,
+          candidates: mergeCodexDiscoveryCandidates(
+            discovered.candidates,
+            windowsCandidates,
+            platform,
+          ),
+        }),
+        { env, platform },
+      );
       if (generation === this.generation) {
         this.cache.set(configuredCommand?.trim() ?? "", {
           cachedAt: this.now(),
@@ -274,6 +382,58 @@ export class CodexDiscoveryCoordinator {
       throw error;
     }
   }
+}
+
+/**
+ * Failure reasons that are a settled answer about a command, not a probe
+ * that failed to get one. Re-probing these would only spawn a process to
+ * learn what we already know.
+ */
+const SETTLED_CODEX_FAILURE_REASONS = new Set([
+  "codex_too_old",
+  "not_executable",
+  "not_found",
+  "powershell_shim_unsupported",
+]);
+
+/**
+ * Selection priority, matching the fallback order
+ * `normalizeCodexDiscoverySnapshot` applies: a fixed `PWRDRVR_CODEX_COMMAND`
+ * beats a configured `[models.codex] path`, which beats anything found on
+ * PATH or in a known install location. Lower is preferred.
+ */
+function codexCandidateRank(
+  candidate: CodexDiscoverySnapshot["candidates"][number],
+): number {
+  switch (candidate.source) {
+    case "env":
+      return 0;
+    case "config":
+      return 1;
+    default:
+      return 2;
+  }
+}
+
+/**
+ * Whether this candidate's version is unknown *because the probe did not
+ * report one* — a timeout, a killed child, an unparseable answer — rather
+ * than because the command itself is unusable.
+ *
+ * `version_probe_timed_out` (from `classifyProbeFailure`) is the explicit
+ * form of exactly the case this exists for, and is deliberately absent from
+ * the settled set. The shared upstream probe reports its own timeout as a raw
+ * `execFile` message instead, which lands here the same way: unrecognized
+ * means unsettled.
+ */
+function isUnreadVersionCandidate(
+  candidate: CodexDiscoverySnapshot["candidates"][number],
+): boolean {
+  if (candidate.version) {
+    return false;
+  }
+  const reason = candidate.failureReason ?? candidate.versionFailureReason;
+  return reason === undefined || !SETTLED_CODEX_FAILURE_REASONS.has(reason);
 }
 
 function normalizeCodexDiscoverySnapshot(

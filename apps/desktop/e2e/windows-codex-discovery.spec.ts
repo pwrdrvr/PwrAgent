@@ -13,6 +13,30 @@ test.skip(
   "This regression exercises native Windows shim discovery and launch.",
 );
 
+/**
+ * How long the app gets to reach its first Codex app-server spawn.
+ *
+ * Playwright's 5s `expect.poll` default is not enough, and the reason is a
+ * bounded piece of app behavior rather than machine slowness. Measured on the
+ * PwrSuiteLab Windows guest, warm, this whole window is 323-579ms across five
+ * runs — but the first `--version` probe belongs to `@pwrdrvr/codex-discovery`
+ * and carries a hard 2s timeout, and a `cmd.exe -> node -> codex.cmd` chain
+ * measures ~1.5s warm on that guest. When the guest is cold that probe blows
+ * its budget, and `CodexDiscoveryCoordinator` then spends a second,
+ * desktop-owned probe recovering it before the transport can spawn anything.
+ *
+ * So the cold budget is one 2s timeout + one re-probe + the spawn, and this
+ * covers it with margin while still failing well inside the 30s test timeout.
+ *
+ * Do NOT read this as "the guest is slow, give it longer". A cold guest used
+ * to fail here with ZERO launches at ANY budget: the timed-out probe left no
+ * validated candidate, `resolve()` threw `CodexCliNotInstalledError`, and
+ * nothing retried. That is fixed on the discovery path, not here —
+ * `e2e/codex-slow-version-probe.spec.ts` is what pins it. This constant only
+ * pays for the recovery the app now performs.
+ */
+const CODEX_APP_SERVER_LAUNCH_TIMEOUT_MS = 15_000;
+
 function envKey(name: string): string {
   return Object.keys(process.env).find(
     (candidate) => candidate.toLowerCase() === name.toLowerCase(),
@@ -81,7 +105,7 @@ test("PATH discovery launches one version probe and starts a real thread", async
     await expect.poll(async () => {
       const log = await readFakeCodexProtocolLog(protocolLogPath);
       return findFakeCodexRequests(log, "__launch__").length;
-    }).toBe(1);
+    }, { timeout: CODEX_APP_SERVER_LAUNCH_TIMEOUT_MS }).toBe(1);
 
     await app.window.getByRole("button", { name: "New thread" }).click();
     const prompt = app.window.getByRole("textbox", { name: "New thread" });
@@ -94,11 +118,17 @@ test("PATH discovery launches one version probe and starts a real thread", async
     }).toBeGreaterThanOrEqual(1);
     await expect.poll(async () => {
       const invocations = await readInvocationArgs(invocationLogPath);
-      return {
-        appServer: invocations.filter((args) => args.includes("app-server")).length,
-        version: invocations.filter((args) => args.includes("--version")).length,
-      };
-    }).toEqual({ appServer: 1, version: 1 });
+      return invocations.filter((args) => args.includes("app-server")).length;
+    }).toBe(1);
+    // One `--version` is the coalescing #1720 introduced, and a cold guest may
+    // add exactly one more: the shared 2s probe times out and the coordinator
+    // re-probes to recover it. Anything beyond that is the per-consumer probe
+    // stampede coming back. The exact-one guard for the healthy path lives in
+    // `codex-slow-version-probe.spec.ts`, where it is deterministic.
+    const versionProbes = (await readInvocationArgs(invocationLogPath))
+      .filter((args) => args.includes("--version"));
+    expect(versionProbes.length).toBeGreaterThanOrEqual(1);
+    expect(versionProbes.length).toBeLessThanOrEqual(2);
   } finally {
     await app.close();
   }
@@ -180,7 +210,7 @@ test("npm shim trio discovers and launches through codex.cmd", async () => {
     await expect.poll(async () => {
       const log = await readFakeCodexProtocolLog(protocolLogPath);
       return findFakeCodexRequests(log, "__launch__").length;
-    }).toBe(1);
+    }, { timeout: CODEX_APP_SERVER_LAUNCH_TIMEOUT_MS }).toBe(1);
 
     await app.window.getByRole("button", { name: "New thread" }).click();
     const prompt = app.window.getByRole("textbox", { name: "New thread" });
@@ -193,11 +223,17 @@ test("npm shim trio discovers and launches through codex.cmd", async () => {
     }).toBeGreaterThanOrEqual(1);
     await expect.poll(async () => {
       const invocations = await readInvocationArgs(invocationLogPath);
-      return {
-        appServer: invocations.filter((args) => args.includes("app-server")).length,
-        version: invocations.filter((args) => args.includes("--version")).length,
-      };
-    }).toEqual({ appServer: 1, version: 1 });
+      return invocations.filter((args) => args.includes("app-server")).length;
+    }).toBe(1);
+    // One `--version` is the coalescing #1720 introduced, and a cold guest may
+    // add exactly one more: the shared 2s probe times out and the coordinator
+    // re-probes to recover it. Anything beyond that is the per-consumer probe
+    // stampede coming back. The exact-one guard for the healthy path lives in
+    // `codex-slow-version-probe.spec.ts`, where it is deterministic.
+    const versionProbes = (await readInvocationArgs(invocationLogPath))
+      .filter((args) => args.includes("--version"));
+    expect(versionProbes.length).toBeGreaterThanOrEqual(1);
+    expect(versionProbes.length).toBeLessThanOrEqual(2);
 
     expect(await readInvocationArgs(powerShellLogPath)).toEqual([]);
   } finally {

@@ -38,6 +38,35 @@ function unvalidatedSnapshot(command: string): CodexDiscoverySnapshot {
   };
 }
 
+type VersionProbe = (params: {
+  command: string;
+  env: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+  timeoutMs?: number;
+}) => Promise<{ failureReason?: string; version?: string }>;
+
+/**
+ * What the shared scan returns when its 2s `--version` timeout fires: the
+ * command is present and executable, but no version was read, so the desktop
+ * has nothing to gate protocol compatibility on.
+ */
+function timedOutProbeSnapshot(command: string): CodexDiscoverySnapshot {
+  return {
+    candidates: [
+      {
+        command,
+        executable: true,
+        selected: true,
+        source: "path",
+        versionFailureReason:
+          `Command failed: ${command} --version\nterminated by SIGTERM`,
+      },
+    ],
+    selectedCommand: command,
+    selectedSource: "path",
+  };
+}
+
 function deferred<T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -447,5 +476,138 @@ describe("CodexDiscoveryCoordinator", () => {
       command: "/changed/codex",
     });
     expect(discover).toHaveBeenCalledTimes(2);
+  });
+
+  describe("unread version re-probe", () => {
+    it("recovers a command whose shared version probe timed out", async () => {
+      const discover = vi.fn(async () => timedOutProbeSnapshot("/slow/codex"));
+      const probeVersion = vi.fn<VersionProbe>(async () => ({
+        version: "0.130.0",
+      }));
+      const coordinator = new CodexDiscoveryCoordinator({
+        discover,
+        probeVersion,
+        resolveEnv: async () => ({ PATH: "/bin" }),
+      });
+
+      await expect(coordinator.resolve()).resolves.toMatchObject({
+        command: "/slow/codex",
+        version: "0.130.0",
+      });
+      expect(probeVersion).toHaveBeenCalledOnce();
+      expect(probeVersion.mock.calls[0]?.[0]).toMatchObject({
+        command: "/slow/codex",
+      });
+    });
+
+    it("keeps a configured command that a lower-priority install would have replaced", async () => {
+      // The quiet half of the same failure: the machine HAS another Codex, so
+      // a timed-out probe on `[models.codex] path` does not read as "missing"
+      // — selection just falls through to whatever else is installed, and the
+      // operator's explicit choice is silently ignored.
+      const probeVersion = vi.fn<VersionProbe>(async () => ({
+        version: "0.130.0",
+      }));
+      const coordinator = new CodexDiscoveryCoordinator({
+        discover: async () => ({
+          candidates: [
+            {
+              command: "/configured/codex",
+              executable: true,
+              selected: false,
+              source: "config" as const,
+              versionFailureReason:
+                "Command failed: /configured/codex --version\n",
+            },
+            {
+              command: "/usr/local/bin/codex",
+              executable: true,
+              selected: true,
+              source: "application" as const,
+              version: "0.146.1",
+            },
+          ],
+          selectedCommand: "/usr/local/bin/codex",
+          selectedSource: "application" as const,
+        }),
+        probeVersion,
+        resolveEnv: async () => ({ PATH: "/bin" }),
+      });
+
+      await expect(coordinator.resolve("/configured/codex")).resolves
+        .toMatchObject({
+          command: "/configured/codex",
+          source: "config",
+          version: "0.130.0",
+        });
+      expect(probeVersion).toHaveBeenCalledOnce();
+    });
+
+    it("re-probes nothing when the shared scan already selected a command", async () => {
+      const probeVersion = vi.fn<VersionProbe>(async () => ({
+        version: "0.130.0",
+      }));
+      const coordinator = new CodexDiscoveryCoordinator({
+        discover: async () => selectedSnapshot("/fast/codex"),
+        probeVersion,
+        resolveEnv: async () => ({ PATH: "/bin" }),
+      });
+
+      await expect(coordinator.resolve()).resolves.toMatchObject({
+        command: "/fast/codex",
+      });
+      // #1720 coalesced provider probes; a re-probe on the healthy path would
+      // reintroduce exactly the duplicate `--version` spawn it removed.
+      expect(probeVersion).not.toHaveBeenCalled();
+    });
+
+    it("leaves settled failures alone", async () => {
+      const probeVersion = vi.fn<VersionProbe>(async () => ({
+        version: "0.130.0",
+      }));
+      const coordinator = new CodexDiscoveryCoordinator({
+        discover: async () => ({
+          candidates: [
+            {
+              command: "/absent/codex",
+              executable: false,
+              failureReason: "not_found",
+              selected: false,
+              source: "path" as const,
+            },
+            {
+              command: "/old/codex",
+              executable: false,
+              failureReason: "codex_too_old",
+              selected: false,
+              source: "config" as const,
+              version: "0.100.0",
+            },
+          ],
+        }),
+        probeVersion,
+        resolveEnv: async () => ({ PATH: "/bin" }),
+      });
+
+      const snapshot = await coordinator.discover();
+      expect(snapshot.selectedCommand).toBeUndefined();
+      expect(probeVersion).not.toHaveBeenCalled();
+    });
+
+    it("still reports missing when the re-probe cannot read a version either", async () => {
+      const probeVersion = vi.fn<VersionProbe>(async () => ({
+        failureReason: "version_not_reported",
+      }));
+      const coordinator = new CodexDiscoveryCoordinator({
+        discover: async () => timedOutProbeSnapshot("/slow/codex"),
+        probeVersion,
+        resolveEnv: async () => ({ PATH: "/bin" }),
+      });
+
+      await expect(coordinator.resolve()).rejects.toThrow(
+        /codex CLI not found/i,
+      );
+      expect(probeVersion).toHaveBeenCalledOnce();
+    });
   });
 });

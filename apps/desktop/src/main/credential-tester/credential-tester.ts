@@ -12,10 +12,8 @@ import {
   MINIMUM_CODEX_CLI_VERSION,
 } from "@pwrdrvr/codex-discovery";
 import { createCommandInvocation } from "@pwrdrvr/agent-transport";
-import {
-  resolveWindowsCodexLaunchCommand,
-  runCodexOneShot,
-} from "../codex-windows-launch";
+import { resolveWindowsCodexLaunchCommand } from "../codex-windows-launch";
+import { runCodexOneShot } from "../codex-version-probe";
 
 const log = getMainLogger("pwragent:credential-tester");
 
