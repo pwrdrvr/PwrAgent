@@ -67,6 +67,10 @@ function renderSidebar(params: {
   draftThreadKeys?: Record<string, boolean>;
   inboxThreads?: NavigationThreadSummary[];
   onSelectThread?: (thread: NavigationThreadSummary) => void;
+  onSetSubthreadsCollapsed?: (
+    parent: NavigationThreadSummary,
+    collapsed: boolean,
+  ) => Promise<void>;
   recentThreads?: NavigationThreadSummary[];
   selectedItemKey?: string;
   threads: NavigationThreadSummary[];
@@ -86,6 +90,7 @@ function renderSidebar(params: {
       onCreateThread={async () => undefined}
       onOpenLaunchpad={async () => undefined}
       onSelectThread={params.onSelectThread ?? (() => undefined)}
+      onSetSubthreadsCollapsed={params.onSetSubthreadsCollapsed}
     />
   );
 }
@@ -215,6 +220,102 @@ describe("Sidebar hover-stable thread ordering", () => {
       "Alpha thread",
       "Bravo thread",
     ]);
+  });
+
+  it("freezes fields that add or remove subthread rows while hovered", () => {
+    const parent = thread({
+      id: "parent",
+      title: "Parent thread",
+      updatedAt: 3,
+    });
+    const child: NavigationThreadSummary = {
+      ...thread({ id: "child", title: "Child thread", updatedAt: 2 }),
+      parentThreadId: parent.id,
+    };
+    const tail = thread({ id: "tail", title: "Tail thread", updatedAt: 1 });
+    const onSetSubthreadsCollapsed = vi.fn(async () => undefined);
+    const view = render(renderSidebar({
+      browseMode: "inbox",
+      onSetSubthreadsCollapsed,
+      threads: [parent, child, tail],
+    }));
+    const tailRow = screen.getByRole("button", { name: /^Tail thread/ })
+      .closest("[data-hover-stable-row]");
+    if (!(tailRow instanceof HTMLElement)) {
+      throw new Error("Expected the tail thread row");
+    }
+    fireEvent.pointerOver(tailRow, { pointerType: "mouse" });
+
+    const latestParent: NavigationThreadSummary = {
+      ...parent,
+      codexNativeSubAgents: [
+        {
+          threadId: "native-worker",
+          title: "Native worker",
+          depth: 1,
+          agentNickname: "worker",
+          agentRole: "reviewer",
+          threadStatus: "active",
+        },
+      ],
+      subthreadsCollapsed: true,
+    };
+    view.rerender(renderSidebar({
+      browseMode: "inbox",
+      onSetSubthreadsCollapsed,
+      threads: [latestParent, child, tail],
+    }));
+
+    expect(screen.getByRole("button", { name: "Child thread" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", {
+      name: "Collapse sub-threads for Parent thread",
+    })).toBeInTheDocument();
+    expect(screen.queryByText("Sub-agents")).not.toBeInTheDocument();
+
+    leaveThreadBrowser();
+    expect(screen.queryByRole("button", { name: "Child thread" }))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("button", {
+      name: "Expand sub-threads for Parent thread",
+    })).toBeInTheDocument();
+  });
+
+  it("releases the frozen snapshot for an explicit subthread toggle", () => {
+    const parent = thread({
+      id: "parent",
+      title: "Parent thread",
+      updatedAt: 3,
+    });
+    const child: NavigationThreadSummary = {
+      ...thread({ id: "child", title: "Child thread", updatedAt: 2 }),
+      parentThreadId: parent.id,
+    };
+    const tail = thread({ id: "tail", title: "Tail thread", updatedAt: 1 });
+    const onSetSubthreadsCollapsed = vi.fn(async () => undefined);
+    const view = render(renderSidebar({
+      browseMode: "inbox",
+      onSetSubthreadsCollapsed,
+      threads: [parent, child, tail],
+    }));
+    const collapseButton = screen.getByRole("button", {
+      name: "Collapse sub-threads for Parent thread",
+    });
+    fireEvent.pointerOver(collapseButton, { pointerType: "mouse" });
+    fireEvent.click(collapseButton);
+    expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(parent, true);
+
+    view.rerender(renderSidebar({
+      browseMode: "inbox",
+      onSetSubthreadsCollapsed,
+      threads: [{ ...parent, subthreadsCollapsed: true }, child, tail],
+    }));
+
+    expect(screen.queryByRole("button", { name: "Child thread" }))
+      .not.toBeInTheDocument();
+    expect(screen.getByRole("button", {
+      name: "Expand sub-threads for Parent thread",
+    })).toBeInTheDocument();
   });
 
   it.each([

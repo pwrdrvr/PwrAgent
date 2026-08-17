@@ -287,6 +287,7 @@ export function ThreadRow(props: ThreadRowProps) {
           className={`thread-row__subthread-toggle${
             props.subthreadsCollapsed ? "" : " is-open"
           }`}
+          data-hover-stable-release="subthreads"
           type="button"
           onClick={(event) => {
             event.stopPropagation();

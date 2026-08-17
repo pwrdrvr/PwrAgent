@@ -157,6 +157,8 @@ function hydrateHoverStableSidebarSnapshot(
               parentThreadId: thread.parentThreadId,
               parentThreadInstanceId: thread.parentThreadInstanceId,
               pinnedRank: thread.pinnedRank,
+              codexNativeSubAgents: thread.codexNativeSubAgents,
+              subthreadsCollapsed: thread.subthreadsCollapsed,
               subthreadOrder: thread.subthreadOrder,
             }
           : thread;
@@ -1990,6 +1992,7 @@ export function Sidebar(props: SidebarProps) {
 
         <div
           className="sidebar__scroll-region"
+          onClickCapture={hoverStableSnapshot.onClickCapture}
           onPointerCancel={hoverStableSnapshot.onPointerCancel}
           onPointerLeave={hoverStableSnapshot.onPointerLeave}
           onPointerOut={hoverStableSnapshot.onPointerOut}

@@ -1,11 +1,18 @@
 import { useCallback, useReducer, useRef } from "react";
-import type { PointerEventHandler } from "react";
+import type { MouseEventHandler, PointerEventHandler } from "react";
 
 const HOVER_STABLE_ROW_SELECTOR = "[data-hover-stable-row]";
+const HOVER_STABLE_RELEASE_SELECTOR = "[data-hover-stable-release]";
 
 function closestHoverStableRow(target: EventTarget | null): Element | null {
   return target instanceof Element
     ? target.closest(HOVER_STABLE_ROW_SELECTOR)
+    : null;
+}
+
+function closestHoverStableRelease(target: EventTarget | null): Element | null {
+  return target instanceof Element
+    ? target.closest(HOVER_STABLE_RELEASE_SELECTOR)
     : null;
 }
 
@@ -24,6 +31,7 @@ export function useHoverStableSnapshot<T>(params: {
   scope: string;
   value: T;
 }): {
+  onClickCapture: MouseEventHandler<HTMLDivElement>;
   onPointerCancel: PointerEventHandler<HTMLDivElement>;
   onPointerLeave: PointerEventHandler<HTMLDivElement>;
   onPointerOut: PointerEventHandler<HTMLDivElement>;
@@ -78,7 +86,17 @@ export function useHoverStableSnapshot<T>(params: {
     [release],
   );
 
+  const onClickCapture = useCallback<MouseEventHandler<HTMLDivElement>>(
+    (event) => {
+      if (closestHoverStableRelease(event.target)) {
+        release();
+      }
+    },
+    [release],
+  );
+
   return {
+    onClickCapture,
     onPointerCancel: release,
     onPointerLeave: release,
     onPointerOut,
