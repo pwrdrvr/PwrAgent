@@ -270,8 +270,7 @@ function createDeferred<T>(): {
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", args, {
-    cwd,
+  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
     maxBuffer: 1024 * 1024 * 10,
   });
@@ -39923,7 +39922,7 @@ script = "printf setup"
 
       await registry.close();
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, { recursive: true, force: true });
     }
   });
 
