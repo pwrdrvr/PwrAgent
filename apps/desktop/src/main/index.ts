@@ -260,7 +260,17 @@ let startupCpuProfilerForNewWindows:
 // written by a newer build threw during startup reconciliation, rejected the
 // whenReady promise, and silently aborted the rest of boot — no window, no
 // dialog, not even a log line.
-const BOOT_WATCHDOG_MS = 25_000;
+// A packaged build loads a prebuilt renderer bundle, so 25s is a generous
+// budget for "a window should exist by now". A development build loads the
+// renderer from the Vite dev server, which transforms the whole app on the
+// first request — on slow hardware that single step outlasts the entire
+// packaged budget while boot is progressing perfectly normally. Measured on
+// the Windows lab guest: watchdog fired at 25s, `ready-to-show` landed at
+// ~75s, so a "PwrAgent failed to start" dialog sat in front of an app that
+// went on to work. This widens only the unpackaged budget; production failure
+// detection is unchanged.
+const BOOT_WATCHDOG_PACKAGED_MS = 25_000;
+const BOOT_WATCHDOG_DEV_MS = 180_000;
 let mainWindowEverShown = false;
 let bootFailureSurfaced = false;
 let bootWatchdogTimer: NodeJS.Timeout | undefined;
@@ -273,11 +283,15 @@ function clearBootWatchdog(): void {
   }
 }
 
+function resolveBootWatchdogMs(): number {
+  return app.isPackaged ? BOOT_WATCHDOG_PACKAGED_MS : BOOT_WATCHDOG_DEV_MS;
+}
+
 function startBootWatchdog(): void {
   clearBootWatchdog();
   bootWatchdogTimer = setTimeout(() => {
     surfaceBootFailure("watchdog-timeout");
-  }, BOOT_WATCHDOG_MS);
+  }, resolveBootWatchdogMs());
   // Never let the watchdog itself keep the process alive.
   bootWatchdogTimer.unref?.();
 }

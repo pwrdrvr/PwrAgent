@@ -870,7 +870,7 @@ describe("bootstrapApp", () => {
 
     await import("../index");
     await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(25_000);
+    await vi.advanceTimersByTimeAsync(180_000);
 
     expect(showMessageBoxSyncMock).not.toHaveBeenCalled();
     expect(mainLogErrorMock).not.toHaveBeenCalledWith(
@@ -885,7 +885,16 @@ describe("bootstrapApp", () => {
 
     await import("../index");
     await flushMicrotasks();
+
+    // `app.isPackaged` is false in this suite, so the development budget
+    // applies. The packaged budget must not fire here: a Vite dev-server
+    // renderer legitimately takes longer than that to reach ready-to-show on
+    // slow hardware, and firing early puts a failure dialog in front of a
+    // healthy boot.
     await vi.advanceTimersByTimeAsync(25_000);
+    expect(showMessageBoxSyncMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(155_000);
 
     expect(showMessageBoxSyncMock).toHaveBeenCalledWith(
       expect.objectContaining({
