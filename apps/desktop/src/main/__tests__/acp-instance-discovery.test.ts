@@ -81,7 +81,10 @@ describe("discoverAcpAgentInstances", () => {
       group("kimi", [instance("/Users/me/.kimi-code/bin/kimi", "fallback", "0.11.0")]),
     ]);
 
-    const result = await discoverAcpAgentInstances({ discover });
+    const result = await discoverAcpAgentInstances({
+      discover,
+      readVersionOutput: async () => "kimi-code 0.11.0",
+    });
 
     expect(result.get("qwen")).toEqual({
       instances: [
@@ -142,6 +145,7 @@ describe("discoverAcpAgentInstances", () => {
     await discoverAcpAgentInstances({
       discover,
       enabledRegistryIds: ["kimi", "qwen"],
+      readVersionOutput: async () => "kimi-code 0.30.0",
     });
 
     const options = discover.mock.calls[0]?.[0];
@@ -207,6 +211,7 @@ describe("discoverAcpAgentInstances", () => {
     const result = await discoverAcpAgentInstances({
       discover,
       bundledGrokCommand: "/app/resources/agents/grok/grok",
+      readVersionOutput: async () => undefined,
     });
 
     expect(result.get("grok")).toEqual({
@@ -531,6 +536,7 @@ describe("discoverLocalAcpAgentRecords", () => {
       discover,
       bundledGrokCommand: "/app/resources/agents/grok/grok",
       preferences: { grok: { overridePath: "/custom/grok" } },
+      readVersionOutput: async () => undefined,
     });
 
     expect(record?.activeCommand).toBe("/custom/grok");

@@ -13,10 +13,13 @@ import {
   discoverLocalAcpAgentInstances,
   strategyById,
   type AcpAgentStrategy,
+  type AcpPathExecutableLister,
   type DiscoveredAcpAgentGroup,
   type LocalAcpDiscoveryOptions,
 } from "@pwrdrvr/agent-acp";
 import { execFile as execFileCallback } from "node:child_process";
+import { homedir } from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 import type {
   AcpAgentInstance,
@@ -109,6 +112,22 @@ export type DiscoverAcpAgentInstancesOptions = {
     checkMode: ManagedGrokCheckMode,
     requirePlatformSignature: boolean,
   ) => Promise<string | undefined>;
+  /**
+   * Injectable `PATH` executable lister (tests), forwarded to the kit. The
+   * kit's default lister enumerates `env.PATH` *plus* well-known `$HOME` bin
+   * dirs (`~/.local/bin`, `~/.bun/bin`, every installed nvm node bin, …), so
+   * an `env.PATH` override alone does not confine discovery to a fixture.
+   */
+  listExecutables?: AcpPathExecutableLister;
+  /**
+   * Root for each strategy's absolute fallback candidates (tests). Every
+   * `$HOME`-relative fallback (`~/.kimi-code/bin/kimi`, `~/.grok/bin/grok`, …)
+   * is rebased under this directory and the system prefixes
+   * (`/opt/homebrew/bin`, `/usr/local/bin`) are dropped, so discovery cannot
+   * version-probe an agent CLI the operator happens to have installed.
+   * Production leaves this undefined and keeps the real fallbacks.
+   */
+  fallbackRootDir?: string;
 };
 
 /**
@@ -122,7 +141,10 @@ export async function discoverAcpAgentInstances(
   options?: DiscoverAcpAgentInstancesOptions,
 ): Promise<Map<string, AcpInstanceDiscovery>> {
   const preferences = options?.preferences ?? {};
-  const strategies = strategiesForEnabledRegistryIds(options?.enabledRegistryIds);
+  const strategies = strategiesForEnabledRegistryIds(
+    options?.enabledRegistryIds,
+    options?.fallbackRootDir,
+  );
 
   const overrides: Record<string, string> = {};
   for (const [registryId, pref] of Object.entries(preferences)) {
@@ -139,6 +161,9 @@ export async function discoverAcpAgentInstances(
       ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
       ...(options?.env ? { env: options.env } : {}),
       ...(options?.now ? { now: options.now } : {}),
+      ...(options?.listExecutables
+        ? { listExecutables: options.listExecutables }
+        : {}),
       includeRejectedCandidates: true,
     }),
     resolveManagedGrokCommand(options, strategies),
@@ -193,7 +218,10 @@ export async function discoverLocalAcpAgentRecords(
   options?: DiscoverAcpAgentInstancesOptions,
 ): Promise<AcpInstalledAgentRecord[]> {
   const preferences = options?.preferences ?? {};
-  const strategies = strategiesForEnabledRegistryIds(options?.enabledRegistryIds);
+  const strategies = strategiesForEnabledRegistryIds(
+    options?.enabledRegistryIds,
+    options?.fallbackRootDir,
+  );
 
   const overrides: Record<string, string> = {};
   for (const [registryId, pref] of Object.entries(preferences)) {
@@ -210,6 +238,9 @@ export async function discoverLocalAcpAgentRecords(
       ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
       ...(options?.env ? { env: options.env } : {}),
       ...(options?.now ? { now: options.now } : {}),
+      ...(options?.listExecutables
+        ? { listExecutables: options.listExecutables }
+        : {}),
       includeRejectedCandidates: true,
     }),
     resolveManagedGrokCommand(options, strategies),
@@ -525,12 +556,47 @@ function rejectedAcpCandidateMessage(
 
 function strategiesForEnabledRegistryIds(
   enabledRegistryIds: readonly string[] | undefined,
+  fallbackRootDir: string | undefined,
 ): readonly AcpAgentStrategy[] | undefined {
-  if (enabledRegistryIds === undefined) {
-    return ACP_DISCOVERY_STRATEGIES;
+  let strategies = ACP_DISCOVERY_STRATEGIES;
+  if (enabledRegistryIds !== undefined) {
+    const enabled = new Set(enabledRegistryIds);
+    strategies = strategies.filter((strategy) => enabled.has(strategy.id));
   }
-  const enabled = new Set(enabledRegistryIds);
-  return ACP_DISCOVERY_STRATEGIES.filter((strategy) => enabled.has(strategy.id));
+  return fallbackRootDir === undefined
+    ? strategies
+    : strategies.map((strategy) =>
+        withRebasedFallbackCommands(strategy, fallbackRootDir),
+      );
+}
+
+/**
+ * Rebases a strategy's `$HOME`-relative fallback candidates under `rootDir`
+ * and drops the absolute system prefixes. See `fallbackRootDir`: this is how a
+ * test confines candidate enumeration to its fixture instead of probing the
+ * operator's real installations.
+ */
+function withRebasedFallbackCommands(
+  strategy: AcpAgentStrategy,
+  rootDir: string,
+): AcpAgentStrategy {
+  const home = homedir();
+  return {
+    ...strategy,
+    discoveryProbe: {
+      ...strategy.discoveryProbe,
+      fallbackCommands: (strategy.discoveryProbe.fallbackCommands ?? []).flatMap(
+        (command) => {
+          const relative = path.relative(home, command);
+          return relative.length === 0
+            || relative.startsWith("..")
+            || path.isAbsolute(relative)
+            ? []
+            : [path.join(rootDir, relative)];
+        },
+      ),
+    },
+  };
 }
 
 async function resolveManagedGrokCommand(

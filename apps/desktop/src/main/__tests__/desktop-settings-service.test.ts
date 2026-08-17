@@ -10,6 +10,21 @@ import {
 } from "../settings/desktop-secret-store";
 import { readBootstrapAppearance } from "../settings/appearance-bootstrap";
 
+// `DesktopSettingsService` builds a real `CodexDiscoveryCoordinator` unless the
+// test injects one, and the kit's probe runs `codex --version` against every
+// install location on this machine (ChatGPT.app ships a `codex`). Stub the
+// probe to the shape a machine with no Codex CLI produces, so the suite reads
+// the same here as on CI. Tests that assert on discovery inject their own
+// coordinator and are unaffected.
+vi.mock("@pwrdrvr/codex-discovery", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@pwrdrvr/codex-discovery")>();
+  return {
+    ...actual,
+    discoverCodexCommands: vi.fn(async () => ({ candidates: [] })),
+  };
+});
+
 const tempRoots: string[] = [];
 
 afterEach(() => {

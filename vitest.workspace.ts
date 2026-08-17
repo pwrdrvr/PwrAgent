@@ -43,9 +43,14 @@ export default defineConfig({
             "apps/desktop/src/preload/__tests__/**/*.test.ts",
             "apps/desktop/src/shared/__tests__/**/*.test.ts"
           ],
-          // Inert unless PWRAGENT_DEV_SQLITE_WRITE_METRICS is set; see
-          // `pnpm test:sqlite-writes`.
-          setupFiles: ["apps/desktop/src/main/state/sqlite-write-metrics-setup.ts"],
+          setupFiles: [
+            // Inert unless PWRAGENT_DEV_SQLITE_WRITE_METRICS is set; see
+            // `pnpm test:sqlite-writes`.
+            "apps/desktop/src/main/state/sqlite-write-metrics-setup.ts",
+            // Fails a test that probes an agent CLI installed on the machine
+            // running the suite instead of its own fixtures.
+            "apps/desktop/src/main/__tests__/setup/agent-cli-spawn-guard.ts",
+          ],
           // Inline @pwrdrvr/codex-discovery so vitest transforms it. Without
           // this, the kit's bundled `import { spawn } from "child_process"`
           // is loaded raw by Node and bypasses the tests'
