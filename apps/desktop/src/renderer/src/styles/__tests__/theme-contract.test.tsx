@@ -222,13 +222,36 @@ describe("Tangerine Terminal theme contract", () => {
           + ".thread-row-shell:has(.thread-row__chip--add-reaction:focus-visible) .thread-row--pinned .thread-row__heading,\n"
           + ".thread-row-shell:has(.thread-row__chip--add-reaction.is-open) .thread-row--pinned .thread-row__heading",
       ),
-    ).toMatch(/padding-right:\s*44px;/);
+    ).toMatch(/padding-right:\s*46px;/);
     expect(extractRuleBody(css, ".thread-row__actions")).toMatch(
-      /right:\s*9px;[\s\S]*gap:\s*4px;/,
+      /right:\s*11px;[\s\S]*gap:\s*4px;/,
+    );
+    expect(extractRuleBody(css, ".thread-row")).toMatch(
+      /padding:\s*4px 10px;/,
     );
     expect(css).toMatch(
       /(?:^|\n)\.thread-row__overflow-button \{[^}]*width:\s*26px;/,
     );
+    expect(extractRuleBody(css, ".directory-row__summary")).toMatch(
+      /min-height:\s*24px;/,
+    );
+  });
+
+  it("keeps the first directory thread focus ring clear of the sticky header", () => {
+    const rowRing = css.match(
+      /\.thread-row:has\(\.thread-row__open:focus\),[\s\S]*?outline:\s*(?<width>\d+)px\s+solid\s+var\(--focus-ring\);[\s\S]*?outline-offset:\s*(?<offset>\d+)px;/,
+    );
+    const directoryDetails = extractRuleBody(css, ".directory-row__details");
+    const ringWidth = Number(rowRing?.groups?.width);
+    const ringOffset = Number(rowRing?.groups?.offset);
+    const detailsTopPadding = Number(
+      directoryDetails.match(/padding:\s*(?<top>\d+)px\s/)?.groups?.top,
+    );
+
+    expect(ringWidth).toBeGreaterThan(0);
+    expect(ringOffset).toBeGreaterThanOrEqual(0);
+    expect(detailsTopPadding).toBeGreaterThan(ringWidth + ringOffset);
+    expect(css).not.toContain("directory-row__pin-drop-boundary");
   });
 
   it("keeps transcript bottom reserve close to the thinking indicator height", () => {

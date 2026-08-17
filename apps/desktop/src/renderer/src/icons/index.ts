@@ -18,6 +18,7 @@ export { InfoIcon } from "./InfoIcon";
 export { LightningIcon } from "./LightningIcon";
 export { MattermostIcon } from "./MattermostIcon";
 export { LineIcon } from "./LineIcon";
+export { MoreVerticalIcon } from "./MoreVerticalIcon";
 export { NewThreadIcon } from "./NewThreadIcon";
 export { PinIcon } from "./PinIcon";
 export { PlanIcon } from "./PlanIcon";

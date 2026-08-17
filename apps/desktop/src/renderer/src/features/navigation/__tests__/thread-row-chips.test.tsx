@@ -111,6 +111,15 @@ describe("ThreadRow chip flow", () => {
     expect(actionChildren[1]).toHaveClass("thread-row__overflow-button");
   });
 
+  it("uses the vertical menu icon for the overflow action", () => {
+    const { container } = renderRow();
+    const overflow = container.querySelector(".thread-row__overflow-button");
+
+    expect(overflow).not.toBeNull();
+    expect(overflow).not.toHaveTextContent("...");
+    expect(overflow?.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+  });
+
   it("uses span[role=button] for the binding chip (not nested <button>)", () => {
     const { container } = renderRow();
     const bindingChip = container.querySelector(".thread-row__chip--binding");
