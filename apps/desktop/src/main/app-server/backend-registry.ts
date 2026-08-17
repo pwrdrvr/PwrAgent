@@ -25428,13 +25428,20 @@ export class DesktopBackendRegistry {
     if (
       event.backend !== "codex"
       || event.notification.method !== "thread/tokenUsage/updated"
-      || !this.tokenMiserStore
     ) {
       return;
     }
     const threadId = event.notification.params.threadId;
+    // Past this point every observation is logged in development, either as a
+    // skip reason or as a per-gate decision, so a live run can tell "the
+    // handler never ran" apart from "it ran and declined".
+    if (!this.tokenMiserStore) {
+      this.logTokenMiserReplaySkip("no-store", threadId);
+      return;
+    }
     const entries = this.activeTokenMiserReplayEntries.get(threadId);
     if (!entries || entries.size === 0) {
+      this.logTokenMiserReplaySkip("no-active-gates", threadId);
       return;
     }
     const totalUsage = readTaskMonitorTokenUsageRecords(
@@ -25442,22 +25449,102 @@ export class DesktopBackendRegistry {
     )?.totalUsage;
     const cumulativeInputTokens = totalUsage?.inputTokens;
     if (typeof cumulativeInputTokens !== "number") {
+      this.logTokenMiserReplaySkip("no-cumulative-input", threadId);
       return;
     }
+    const observed = [...entries.entries()];
     const updated = await Promise.all(
-      [...entries.keys()].map((objectId) =>
+      observed.map(([objectId]) =>
         this.tokenMiserStore!.recordParentModelRequest({
           cumulativeInputTokens,
           objectId,
         })
       ),
     );
+    this.logTokenMiserReplayDecision({
+      cumulativeInputTokens,
+      observed,
+      threadId,
+      tokenUsage: event.notification.params.tokenUsage,
+      updated,
+    });
     if (!updated.some(Boolean)) {
       return;
     }
     await this.emitThreadToolAccountingUpdated({
       backend: "codex",
       threadId,
+    });
+  }
+
+  private logTokenMiserReplaySkip(reason: string, threadId: string): void {
+    if (!isDevelopment) {
+      return;
+    }
+    logDebug("tokenMiser:replay", { decision: `skip:${reason}`, threadId });
+  }
+
+  // Dev-only diagnostic for the Token Miser replay heuristic: one line per
+  // active gate per observed `thread/tokenUsage/updated`, recording the
+  // warm-up state machine's decision beside what the thread-level observed
+  // context-replay fold made of the same event. The two derive request
+  // boundaries independently — the gate from its own per-object cumulative
+  // high-water mark, the fold from the per-thread cursor — so logging them
+  // together is what lets a live run prove or disprove the two-observation
+  // assumption instead of inspecting end-state metadata that cannot show
+  // ordering. Runs after `recordLiveThreadUsage`, so the fold has already
+  // folded this event: an unadvanced cursor means the fold rejected it.
+  // Gated on isDevelopment, so packaged builds do no parsing work here.
+  private logTokenMiserReplayDecision(params: {
+    cumulativeInputTokens: number;
+    observed: readonly (readonly [string, TokenMiserObjectMetadata])[];
+    threadId: string;
+    tokenUsage: unknown;
+    updated: readonly (TokenMiserObjectMetadata | undefined)[];
+  }): void {
+    if (!isDevelopment) {
+      return;
+    }
+    const last = readTaskMonitorTokenUsageRecords(params.tokenUsage)?.latestUsage;
+    const cursor = this.liveThreadReplayInputCursor.get(
+      ["codex", params.threadId].join(":"),
+    );
+    const turnPrefix = ["codex", params.threadId, ""].join(":");
+    const fold = [...this.liveThreadReplayObservations.entries()]
+      .filter(([key]) => key.startsWith(turnPrefix))
+      .reduce(
+        (totals, [, tally]) => ({
+          cold: totals.cold + tally.coldReplayCount,
+          hot: totals.hot + tally.hotReplayCount,
+        }),
+        { cold: 0, hot: 0 },
+      );
+    params.observed.forEach(([objectId, before], index) => {
+      const after = params.updated[index];
+      const decision = !after
+        ? "no-advance"
+        : (after.cachedReplayCount ?? 0) > (before.cachedReplayCount ?? 0)
+          ? "counted"
+          : "warmup-skipped";
+      logDebug("tokenMiser:replay", {
+        cachedReplayCount: after?.cachedReplayCount ?? before.cachedReplayCount ?? 0,
+        cumulativeInput: params.cumulativeInputTokens,
+        decision,
+        // The fold's per-thread high-water mark after this same event. Equal to
+        // `cumulativeInput` means both mechanisms accepted this as a new
+        // request; a lower value means only the gate did.
+        foldCursorInput: cursor?.cumulativeInputTokens,
+        foldColdCount: fold.cold,
+        foldHotCount: fold.hot,
+        lastCached: last?.cachedInputTokens,
+        lastInput: last?.inputTokens,
+        objectId,
+        observationIndex: after?.parentRequestsObservedAfterGate
+          ?? before.parentRequestsObservedAfterGate
+          ?? 0,
+        priorCumulativeInput: before.lastParentCumulativeInputTokens,
+        threadId: params.threadId,
+      });
     });
   }
 
