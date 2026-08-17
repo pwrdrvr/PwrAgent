@@ -651,6 +651,38 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("names the active PwrAgent Codex path environment override", () => {
+    const base = createSnapshot();
+    const snapshot = createSnapshot({
+      models: {
+        ...base.models,
+        codex: {
+          ...base.models.codex,
+          path: {
+            value: "C:\\nvm4w\\nodejs\\codex.ps1",
+            source: "env",
+          },
+        },
+      },
+    });
+
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("textbox", { name: "Codex path" })).toBeDisabled();
+    expect(
+      screen.getByText(
+        "PWRAGENT_CODEX_COMMAND controls this path for the current process.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/PWRDRVR_CODEX_COMMAND/)).not.toBeInTheDocument();
+  });
+
   it("clamps accidental document scroll while mounted", async () => {
     Object.defineProperty(window, "scrollX", {
       configurable: true,

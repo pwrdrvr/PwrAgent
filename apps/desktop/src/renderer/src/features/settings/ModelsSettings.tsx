@@ -258,7 +258,7 @@ export function ModelsSettings(props: {
             }
             help={
               envForced
-                ? "PWRDRVR_CODEX_COMMAND controls this path for the current process."
+                ? "PWRAGENT_CODEX_COMMAND controls this path for the current process."
                 : undefined
             }
           />
