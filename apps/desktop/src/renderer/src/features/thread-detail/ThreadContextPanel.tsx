@@ -16,6 +16,7 @@ import type {
   EditGroupCommitState,
   NavigationThreadSummary,
   CodexEnvironmentActionRun,
+  ThreadCompactionRecord,
   ThreadPricingSummary,
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
@@ -109,6 +110,7 @@ type ThreadContextPanelProps = {
   pinned: boolean;
   platform?: string;
   pricing?: {
+    compactions?: ThreadCompactionRecord[];
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };

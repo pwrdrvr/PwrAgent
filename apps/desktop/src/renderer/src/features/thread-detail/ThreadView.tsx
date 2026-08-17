@@ -42,6 +42,7 @@ import type {
   NavigationThreadSummary,
   PendingRequestAction,
   ThreadExecutionMode,
+  ThreadCompactionRecord,
   ThreadPricingSummary,
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
@@ -903,6 +904,7 @@ export type ThreadViewProps = {
   messageCount: number;
   contextWindow?: ThreadContextWindowState;
   pricing?: {
+    compactions?: ThreadCompactionRecord[];
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };

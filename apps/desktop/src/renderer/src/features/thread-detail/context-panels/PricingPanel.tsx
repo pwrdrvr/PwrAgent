@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  ThreadCompactionRecord,
   ThreadPricingSummary,
   ThreadSubAgentSummary,
   ThreadUsageLineRecord,
@@ -9,7 +10,7 @@ import {
   estimateTokenUsageCost,
   formatTokenUsageMicrosAsUsd,
 } from "@pwragent/shared";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   ChipContextMenu,
   type ChipContextMenuItem,
@@ -38,6 +39,7 @@ type PricingPanelProps = {
   displayOptions?: PricingDisplayOptions;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   pricing?: {
+    compactions?: ThreadCompactionRecord[];
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
@@ -100,6 +102,10 @@ export function PricingPanel(props: PricingPanelProps) {
   // Tick while any row is live — the main turn or any still-running sub-agent —
   // so completed threads render static and never spin a 1s interval.
   const now = useNowWhileActive(hasActiveRow);
+  const compactionsByRow = useMemo(
+    () => groupCompactionsByRow(props.pricing?.compactions ?? []),
+    [props.pricing?.compactions],
+  );
 
   return (
     <section className="context-panel__section">
@@ -219,6 +225,7 @@ export function PricingPanel(props: PricingPanelProps) {
               displayOptions,
               line,
             });
+            const rowCompactions = selectRowCompactions(compactionsByRow, line);
             const runningTokens = formatUsageLineRunningTokens(line);
             const subAgent =
               line.scope === "monitor" && line.sourceItemId
@@ -310,6 +317,9 @@ export function PricingPanel(props: PricingPanelProps) {
                     accounting={subAgent.tokenMiserAccounting}
                   />
                 ) : null}
+                {rowCompactions.length > 0 ? (
+                  <CompactionBreakdown compactions={rowCompactions} />
+                ) : null}
                 {runningTokens ? (
                   <details className="pricing-running-total">
                     <summary className="pricing-running-total__summary">
@@ -367,6 +377,105 @@ function formatServiceTierLabel(line: ThreadUsageLineRecord): string {
     return "";
   }
   return ` · ${line.serviceTier}`;
+}
+
+const COMPACTION_TURN_KEY_PREFIX = "turn:";
+
+/**
+ * Bucket compactions by the usage row that should show them.
+ *
+ * A compaction whose cold replay has been claimed belongs to that exact row —
+ * that request is the one that re-sent the surviving context uncached. One that
+ * has not been claimed yet falls back to its turn, so a compaction observed
+ * mid-turn is still visible before the request after it is priced.
+ */
+function groupCompactionsByRow(
+  compactions: readonly ThreadCompactionRecord[],
+): Map<string, ThreadCompactionRecord[]> {
+  const grouped = new Map<string, ThreadCompactionRecord[]>();
+  for (const compaction of compactions) {
+    const key = compaction.coldUsageLineId
+      ?? (compaction.turnId
+        ? `${COMPACTION_TURN_KEY_PREFIX}${compaction.turnId}`
+        : undefined);
+    if (!key) {
+      continue;
+    }
+    const bucket = grouped.get(key);
+    if (bucket) {
+      bucket.push(compaction);
+    } else {
+      grouped.set(key, [compaction]);
+    }
+  }
+  return grouped;
+}
+
+// A row claims its directly-attributed compactions plus any of its turn's
+// still-unattributed ones. Sub-agent rows are excluded: compaction is a
+// property of the parent thread's context, not of a monitor's own usage.
+function selectRowCompactions(
+  grouped: Map<string, ThreadCompactionRecord[]>,
+  line: PricingUsageLine,
+): ThreadCompactionRecord[] {
+  if (grouped.size === 0 || line.scope === "monitor") {
+    return [];
+  }
+  const attributed = grouped.get(line.usageLineId) ?? [];
+  const pending = line.turnId
+    ? (grouped.get(`${COMPACTION_TURN_KEY_PREFIX}${line.turnId}`) ?? [])
+    : [];
+  return [...attributed, ...pending];
+}
+
+/**
+ * What a turn's compactions cost. A compaction forces the whole surviving
+ * context to be re-sent uncached on the next request, which is invisible in the
+ * turn's own token counts — it reads as ordinary input.
+ */
+function CompactionBreakdown(props: {
+  compactions: readonly ThreadCompactionRecord[];
+}) {
+  const count = props.compactions.length;
+  const uncachedTokens = props.compactions.reduce(
+    (total, entry) => total + (entry.coldUncachedTokens ?? 0),
+    0,
+  );
+  const costMicros = props.compactions.reduce(
+    (total, entry) => total + (entry.coldCostMicros ?? 0),
+    0,
+  );
+  const measured = props.compactions.some(
+    (entry) => entry.coldUsageLineId !== undefined,
+  );
+  return (
+    <details className="pricing-compactions">
+      <summary className="pricing-compactions__summary">
+        Compacted {count.toLocaleString()} time{count === 1 ? "" : "s"}
+        {measured
+          ? ` · ${formatTokenCount(uncachedTokens)} re-read uncached`
+            + (costMicros > 0
+              ? ` · ${formatTokenUsageMicrosAsUsd(costMicros)}`
+              : "")
+          : " · cost not observed yet"}
+      </summary>
+      <ul className="pricing-compactions__list">
+        {props.compactions.map((entry) => (
+          <li key={entry.compactionId}>
+            <span>{formatTimestamp(entry.observedAt)}</span>
+            <span>
+              {entry.coldUncachedTokens !== undefined
+                ? `${formatTokenCount(entry.coldUncachedTokens)} uncached`
+                  + (entry.coldCostMicros
+                    ? ` · ${formatTokenUsageMicrosAsUsd(entry.coldCostMicros)}`
+                    : "")
+                : "awaiting the next request"}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
 }
 
 function buildPricingDisplayLines(lines: ThreadUsageLineRecord[]): PricingUsageLine[] {

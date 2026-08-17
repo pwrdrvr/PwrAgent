@@ -928,6 +928,8 @@ export type AppServerReadThreadResponse = {
    */
   pendingRequest?: AppServerPendingRequestNotification;
   pricing?: {
+    /** Observed context compactions, oldest first. */
+    compactions?: ThreadCompactionRecord[];
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
@@ -1480,6 +1482,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         pricing: {
+          /** Observed context compactions, oldest first. */
+          compactions?: ThreadCompactionRecord[];
           lines: ThreadUsageLineRecord[];
           summaries: ThreadPricingSummary[];
         };
