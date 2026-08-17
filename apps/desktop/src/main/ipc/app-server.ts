@@ -2239,7 +2239,7 @@ class DesktopAppServerService {
 
     const remotePins = await this.mergePinnedRemoteThreads();
 
-    const response = {
+    const responseWithoutLiveTokenMiser = {
       ...snapshot,
       threads: [...threadsWithWorkingState, ...remotePins.threads],
       // One unified ranking over local + remote rows: the local keys were
@@ -2265,6 +2265,13 @@ class DesktopAppServerService {
         && !primaryGitRepositoriesChanged
         && !remotePins.changed,
     };
+    const registry = getDesktopBackendRegistry();
+    const response = typeof registry.withLiveTokenMiserNavigationSnapshot
+      === "function"
+      ? registry.withLiveTokenMiserNavigationSnapshot(
+          responseWithoutLiveTokenMiser,
+        )
+      : responseWithoutLiveTokenMiser;
     if (
       backend === "all"
       && !request.filter?.trim()

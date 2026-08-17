@@ -1,6 +1,11 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type {
+  AgentEvent,
+  NavigationSnapshot,
+  ThreadUsageLineRecord,
+} from "@pwragent/shared";
 import type { TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -119,6 +124,149 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     await persist([metadata("gate-1", "helper-1"), metadata("gate-2", "helper-2")]);
     expect(upsertSubAgents).toHaveBeenCalledTimes(1);
     expect(upsertUsageLines).toHaveBeenCalledTimes(1);
+  });
+
+  it("publishes live gate cards and pricing without writing the terminal ledger", async () => {
+    await store.upsertThreadUsageLine({
+      line: {
+        backend: "codex",
+        cachedInputCostMicros: 0,
+        cachedInputTokens: 0,
+        createdAt: 1_800_000_000_000,
+        currency: "USD",
+        inputTokens: 10_000,
+        model: "gpt-5.6-terra",
+        outputCostMicros: 0,
+        outputTokens: 100,
+        priceStatus: "unpriced",
+        provider: "openai",
+        reasoningOutputTokens: 0,
+        scope: "turn",
+        source: "live",
+        sourceItemId: "thread-token-usage",
+        status: "finalized",
+        threadId: "thread-parent",
+        totalCostMicros: 0,
+        totalTokens: 10_100,
+        turnId: "turn-parent",
+        uncachedInputCostMicros: 0,
+        uncachedInputTokens: 10_000,
+        usageLineId: "parent-turn-usage",
+      },
+    });
+    const upsertSubAgents = vi.spyOn(store, "upsertThreadSubAgents");
+    const upsertUsageLines = vi.spyOn(store, "upsertThreadUsageLines");
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    const publish = (
+      registry as unknown as {
+        publishLiveTokenMiserLedgerEntry(
+          entry: TokenMiserObjectMetadata,
+        ): Promise<void>;
+      }
+    ).publishLiveTokenMiserLedgerEntry.bind(registry);
+
+    await publish(metadata("gate-live", "helper-live"));
+
+    expect(upsertSubAgents).not.toHaveBeenCalled();
+    expect(upsertUsageLines).not.toHaveBeenCalled();
+    const storedOverlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(storedOverlay?.subAgents ?? []).toEqual([]);
+    const subAgentEvent = events.find(
+      (event) => event.notification.method === "thread/subAgents/updated",
+    );
+    expect(subAgentEvent?.notification.params).toMatchObject({
+      threadId: "thread-parent",
+      subAgents: [
+        {
+          agentName: "Token Miser",
+          monitorId: "system:token-miser:gate-live",
+          tokenMiserAccounting: {
+            savingsMicros: 11_030,
+          },
+        },
+      ],
+    });
+    const pricingEvent = events.find(
+      (event) => event.notification.method === "thread/pricing/updated",
+    );
+    expect(pricingEvent?.notification.params).toMatchObject({
+      threadId: "thread-parent",
+      pricing: {
+        lines: expect.arrayContaining([
+          expect.objectContaining({
+            sourceItemId: "system:token-miser:gate-live",
+          }),
+        ]),
+      },
+    });
+    const snapshot = registry.withLiveTokenMiserNavigationSnapshot({
+      backend: "all",
+      directories: [],
+      fetchedAt: 1,
+      inboxThreadKeys: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+      threads: [
+        {
+          id: "thread-parent",
+          inbox: { inInbox: false },
+          linkedDirectories: [],
+          source: "codex",
+          summary: "Parent",
+          title: "Parent",
+          titleSource: "explicit",
+          updatedAt: 1,
+        },
+      ],
+      unchanged: false,
+    } satisfies NavigationSnapshot);
+    expect(snapshot.threads[0]?.subAgents?.[0]?.monitorId).toBe(
+      "system:token-miser:gate-live",
+    );
+
+    const retrieved = {
+      ...metadata("gate-live", "helper-live"),
+      retrievedCharacters: 4_000,
+    };
+    await publish(retrieved);
+    const updatedSubAgentEvents = events.filter(
+      (event) => event.notification.method === "thread/subAgents/updated",
+    );
+    expect(updatedSubAgentEvents.at(-1)?.notification.params).toMatchObject({
+      subAgents: [
+        {
+          tokenMiserAccounting: {
+            revealedParentTokens: 1_225,
+            savingsMicros: 9_030,
+          },
+        },
+      ],
+    });
+    const updatedPricingEvents = events.filter(
+      (event) => event.notification.method === "thread/pricing/updated",
+    );
+    const updatedPricingParams = updatedPricingEvents.at(-1)?.notification.params;
+    expect(updatedPricingParams).toMatchObject({
+      pricing: {
+        lines: expect.any(Array),
+      },
+    });
+    const updatedPricing = updatedPricingParams as {
+      pricing: { lines: ThreadUsageLineRecord[] };
+    };
+    expect(
+      updatedPricing.pricing.lines.filter((line) =>
+        line.sourceItemId === "system:token-miser:gate-live"
+      ),
+    ).toHaveLength(1);
   });
 });
 

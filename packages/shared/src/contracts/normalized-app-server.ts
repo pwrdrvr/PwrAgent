@@ -15,6 +15,7 @@ import type {
   PrSummary,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
+  ThreadSubAgentSummary,
 } from "./navigation";
 import type {
   ThreadPricingSummary,
@@ -1721,6 +1722,7 @@ export type AppServerNotification =
       method: "thread/subAgents/updated";
       params: {
         threadId: string;
+        subAgents?: ThreadSubAgentSummary[];
       };
     }
   | {
