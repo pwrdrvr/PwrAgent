@@ -21795,6 +21795,63 @@ a.transcript-message__messaging-origin:focus-visible {
   margin-top: 4px;
 }
 
+/* Compaction breakdown — same disclosure primitive as the running total, but
+   carrying a warning tone: a compaction is real spend the turn's own token
+   counts cannot show, because the re-read arrives as ordinary uncached input. */
+.pricing-compactions {
+  margin: 6px 0 0;
+  padding: 5px 8px;
+  border-left: 2px solid var(--status-warning);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--status-warning) 8%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.pricing-compactions__summary {
+  cursor: pointer;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.pricing-compactions__summary::-webkit-details-marker {
+  display: none;
+}
+
+.pricing-compactions__summary::before {
+  content: "›";
+  display: inline-block;
+  margin-right: 4px;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+
+.pricing-compactions[open] .pricing-compactions__summary::before {
+  transform: rotate(90deg);
+}
+
+.pricing-compactions__list {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pricing-compactions__list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
 /* Sub-agent Details modal — a centered, in-window dialog (mirrors the
    transcript image lightbox) portaled to the body so it escapes the rail's
    clipping. Opened from the card's Details button. */

@@ -1791,6 +1791,152 @@ describe("ThreadContextPanel", () => {
     expect(screen.queryByText(/Estimated hot context replays/)).not.toBeInTheDocument();
   });
 
+  it("shows what a turn's compactions cost to re-read", () => {
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-compaction",
+      threadId: "thread-1",
+      turnId: "turn-compaction",
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 200_000,
+      uncachedInputTokens: 135_236,
+      cachedInputTokens: 64_764,
+      outputTokens: 1_000,
+      reasoningOutputTokens: 0,
+      totalTokens: 201_000,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 680_000,
+      cachedInputCostMicros: 0,
+      outputCostMicros: 0,
+      totalCostMicros: 680_000,
+      observedColdReplayCount: 1,
+      observedColdReplayUncachedTokens: 135_236,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        compactions: [
+          {
+            backend: "codex",
+            compactionId: "codex:thread-1:item-1",
+            observedAt: 1_799_999_000_000,
+            threadId: "thread-1",
+            turnId: "turn-compaction",
+            updatedAt: 1_800_000_000_000,
+            coldUsageLineId: "line-compaction",
+            coldUncachedTokens: 135_236,
+            coldCostMicros: 680_000,
+          },
+        ],
+        lines: [line],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(
+      screen.getByText("Compacted 1 time · 135,236 re-read uncached · $0.68"),
+    ).toBeInTheDocument();
+  });
+
+  // A compaction observed mid-turn has no cold replay to claim until the next
+  // request is priced. It still has to be visible, or the operator sees the
+  // context reset with nothing in the ledger acknowledging it.
+  it("shows an unattributed compaction against its turn", () => {
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-pending-compaction",
+      threadId: "thread-1",
+      turnId: "turn-pending",
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 1_000,
+      uncachedInputTokens: 1_000,
+      cachedInputTokens: 0,
+      outputTokens: 100,
+      reasoningOutputTokens: 0,
+      totalTokens: 1_100,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 5_000,
+      cachedInputCostMicros: 0,
+      outputCostMicros: 0,
+      totalCostMicros: 5_000,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        compactions: [
+          {
+            backend: "codex",
+            compactionId: "codex:thread-1:item-2",
+            observedAt: 1_800_000_500_000,
+            threadId: "thread-1",
+            turnId: "turn-pending",
+            updatedAt: 1_800_000_500_000,
+          },
+        ],
+        lines: [line],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(
+      screen.getByText("Compacted 1 time · cost not observed yet"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows no compaction disclosure when the thread never compacted", () => {
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-no-compaction",
+      threadId: "thread-1",
+      turnId: "turn-no-compaction",
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 1_000,
+      uncachedInputTokens: 1_000,
+      cachedInputTokens: 0,
+      outputTokens: 100,
+      reasoningOutputTokens: 0,
+      totalTokens: 1_100,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 5_000,
+      cachedInputCostMicros: 0,
+      outputCostMicros: 0,
+      totalCostMicros: 5_000,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: { lines: [line], summaries: [] },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.queryByText(/^Compacted /)).not.toBeInTheDocument();
+  });
+
   it("honors pricing display options for observed replay costs", () => {
     const line: ThreadUsageLineRecord = {
       backend: "codex",

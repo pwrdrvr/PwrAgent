@@ -268,6 +268,7 @@ import {
   type ThreadTokenMiserAccounting,
   type ThreadToolInvocationAlert,
   type ThreadToolInvocationRecord,
+  type ThreadCompactionRecord,
   type ThreadPricingSummary,
   type ThreadUsageLineRecord,
   type PrSummary,
@@ -4290,6 +4291,7 @@ function withLegacyTokenMiserReplayAccounting(
 }
 
 type ThreadPricingLedger = {
+  compactions?: ThreadCompactionRecord[];
   lines: ThreadUsageLineRecord[];
   summaries: ThreadPricingSummary[];
 };
@@ -11676,11 +11678,18 @@ export class DesktopBackendRegistry {
     const pricing = typeof this.overlayStore.readThreadPricing === "function"
       ? await this.overlayStore.readThreadPricing(params)
       : { lines: [], summaries: [] };
+    // Compactions ride the pricing payload rather than a channel of their own:
+    // their whole purpose here is to explain a cold replay already in `lines`,
+    // and splitting them would let the two arrive out of step.
+    const compactions = await this.overlayStore.listThreadCompactions?.(params);
+    const withCompactions = compactions?.length
+      ? { ...pricing, compactions }
+      : pricing;
     if (params.backend !== "codex") {
-      return pricing;
+      return withCompactions;
     }
     return mergeThreadPricingLines(
-      pricing,
+      withCompactions,
       [
         ...(this.liveTokenMiserUsageLines.get(params.threadId)?.values() ?? []),
       ],
