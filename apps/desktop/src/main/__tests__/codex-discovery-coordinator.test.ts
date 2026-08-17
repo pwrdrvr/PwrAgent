@@ -98,6 +98,49 @@ describe("CodexDiscoveryCoordinator", () => {
     });
   });
 
+  it("falls back to PowerShell when shared Windows discovery selects an unvalidated command", async () => {
+    const unresolvedCommand = "C:\\nvm4w\\nodejs\\codex";
+    const powerShellCommand = `${unresolvedCommand}.ps1`;
+    const discoverPowerShell = vi.fn(async () => [
+      {
+        command: powerShellCommand,
+        executable: true,
+        selected: false,
+        source: "path" as const,
+        version: "0.144.0",
+      },
+    ]);
+    const coordinator = new CodexDiscoveryCoordinator({
+      discover: async () => unvalidatedSnapshot(unresolvedCommand),
+      discoverPowerShell,
+      platform: "win32",
+      resolveEnv: async () => ({ Path: "C:\\nvm4w\\nodejs" }),
+    });
+
+    await expect(coordinator.discover()).resolves.toMatchObject({
+      candidates: [
+        expect.objectContaining({
+          command: unresolvedCommand,
+          executable: false,
+          selected: false,
+        }),
+        expect.objectContaining({
+          command: powerShellCommand,
+          executable: true,
+          selected: true,
+          version: "0.144.0",
+        }),
+      ],
+      selectedCommand: powerShellCommand,
+      selectedSource: "path",
+    });
+    expect(discoverPowerShell).toHaveBeenCalledWith({
+      configuredCommand: undefined,
+      env: { Path: "C:\\nvm4w\\nodejs" },
+      includePath: true,
+    });
+  });
+
   it("rejects executable-looking candidates whose Codex version did not validate", async () => {
     const command = "C:\\nvm4w\\nodejs\\codex";
     const coordinator = new CodexDiscoveryCoordinator({

@@ -242,7 +242,7 @@ export class CodexDiscoveryCoordinator {
           )({
             configuredCommand,
             env,
-            includePath: !discovered.selectedCommand,
+            includePath: !hasValidatedSelectedCommand(discovered),
           })
         : [];
       const snapshot = normalizeCodexDiscoverySnapshot({
@@ -270,6 +270,20 @@ export class CodexDiscoveryCoordinator {
       throw error;
     }
   }
+}
+
+function hasValidatedSelectedCommand(
+  snapshot: CodexDiscoverySnapshot,
+): boolean {
+  return snapshot.candidates.some(
+    (candidate) =>
+      candidate.selected
+      && candidate.command === snapshot.selectedCommand
+      && candidate.executable
+      && Boolean(candidate.version)
+      && !candidate.failureReason
+      && !candidate.versionFailureReason,
+  );
 }
 
 function normalizeCodexDiscoverySnapshot(
