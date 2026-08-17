@@ -6,12 +6,12 @@ import {
 
 /**
  * Capabilities a peer must advertise before this window can start a thread on
- * it. `remote_window` opens the scoped window, `thread_navigation` lets that
- * window reach its own launchpad, and `environment_actions` covers the
- * environment/script work the launchpad runs once composition begins.
+ * it. `thread_navigation` supplies the peer-owned project picker, and
+ * `environment_actions` covers the environment/script work the launchpad runs
+ * once composition begins. A remote viewer window is deliberately not part of
+ * this flow: the resulting remote thread is mounted in the current window.
  */
 const REQUIRED_TARGET_CAPABILITIES: readonly FederationCapability[] = [
-  "remote_window",
   "thread_navigation",
   "environment_actions",
 ];

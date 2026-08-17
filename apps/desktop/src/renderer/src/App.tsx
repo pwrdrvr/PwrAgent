@@ -384,13 +384,17 @@ function DesktopAppShell(props: {
   });
   const newThreadFederationTargets = useMemo(
     () =>
-      desktopApi?.openFederationWindow
+      desktopApi?.getNavigationSnapshot && desktopApi?.ensureDirectoryLaunchpad
         ? buildFederationThreadTargets(
             liveFederationHealth,
             readRendererFederationTarget()?.instanceId,
           )
         : [],
-    [desktopApi?.openFederationWindow, liveFederationHealth],
+    [
+      desktopApi?.ensureDirectoryLaunchpad,
+      desktopApi?.getNavigationSnapshot,
+      liveFederationHealth,
+    ],
   );
   useEffect(() => {
     return desktopApi?.onWindowFocus?.(() => {
@@ -1149,11 +1153,16 @@ function DesktopAppShell(props: {
   });
   const selectedThreadFederationTarget =
     navigation.selectedThread?.federation?.ref.target;
+  const selectedLaunchpadFederationTarget =
+    navigation.selectedLaunchpad?.federationTarget;
   const navigationFederationTarget = navigation.federationTarget;
   const remoteApplicationInstanceId =
     selectedThreadFederationTarget
     && isRemoteFederationTarget(selectedThreadFederationTarget)
       ? selectedThreadFederationTarget.instanceId
+      : selectedLaunchpadFederationTarget
+        && isRemoteFederationTarget(selectedLaunchpadFederationTarget)
+        ? selectedLaunchpadFederationTarget.instanceId
       : navigationFederationTarget
         && isRemoteFederationTarget(navigationFederationTarget)
         ? navigationFederationTarget.instanceId
@@ -1250,7 +1259,17 @@ function DesktopAppShell(props: {
     if (mainView === "search") {
       return { view: "search" };
     }
-    if (mainView === "thread" && navigation.selectedLaunchpad) {
+    if (
+      mainView === "thread"
+      && navigation.selectedLaunchpad
+      // This short-lived session owns a peer's directories and cannot be
+      // restored by the local directory-key history entry. Its materialized
+      // thread is tracked normally once it is mounted below.
+      && (
+        !navigation.selectedLaunchpad.federationTarget
+        || !isRemoteFederationTarget(navigation.selectedLaunchpad.federationTarget)
+      )
+    ) {
       return {
         view: "launchpad",
         directoryKey: navigation.selectedLaunchpad.directoryKey,
@@ -1745,20 +1764,11 @@ function DesktopAppShell(props: {
   const createThreadOnFederationTarget = async (
     instanceId: string,
   ): Promise<void> => {
-    try {
-      await desktopApi?.openFederationWindow?.({
-        target: { scope: "remote", instanceId },
-        initialLaunchpad: true,
-      });
-    } catch (error) {
-      showAppNotice({
-        id: `new-thread-federation-target:${instanceId}`,
-        title: "Could not open new thread",
-        message: error instanceof Error ? error.message : String(error),
-        tone: "error",
-        transientSlot: "new-thread-federation-target",
-      });
-    }
+    setMainView("thread");
+    await navigation.openFederatedWorkspaceLaunchpad({
+      scope: "remote",
+      instanceId,
+    });
   };
   const mastheadActions = {
     addingProjectDirectory: navigation.pickingDirectory,
@@ -1891,7 +1901,7 @@ function DesktopAppShell(props: {
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
     suppressBranchDriftDialog: mainView === "settings",
-    directories: navigation.directories,
+    directories: navigation.launchpadDirectories,
     fullAccessRiskWarningDismissed:
       settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
     backgroundPrPollingEnabled:
@@ -1907,9 +1917,22 @@ function DesktopAppShell(props: {
     pickDirectoryError: navigation.pickDirectoryError,
     pickingDirectory: navigation.pickingDirectory,
     onSelectDirectoryFromPicker: (directory) => {
+      const federationTarget = navigation.selectedLaunchpad?.federationTarget;
+      if (federationTarget && isRemoteFederationTarget(federationTarget)) {
+        void navigation.openFederatedDirectoryLaunchpad(
+          federationTarget,
+          directory,
+        );
+        return;
+      }
       void navigation.openDirectoryLaunchpad(directory);
     },
     onSelectNoDirectoryFromPicker: () => {
+      const federationTarget = navigation.selectedLaunchpad?.federationTarget;
+      if (federationTarget && isRemoteFederationTarget(federationTarget)) {
+        void navigation.openFederatedWorkspaceLaunchpad(federationTarget);
+        return;
+      }
       void navigation.openWorkspaceLaunchpad();
     },
     onPickAndRegisterDirectory: () => {

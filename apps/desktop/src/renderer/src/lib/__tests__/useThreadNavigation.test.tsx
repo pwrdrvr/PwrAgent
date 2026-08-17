@@ -4792,6 +4792,150 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad).toBeUndefined();
   });
 
+  it("creates a mounted remote thread from a peer-populated launchpad", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const workspace = {
+      key: "workspace:new-thread",
+      kind: "workspace" as const,
+      label: "Workspaces",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+    const project = {
+      key: "directory:/remote/PwrAgent",
+      kind: "directory" as const,
+      label: "PwrAgent",
+      path: "/remote/PwrAgent",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const remoteSnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 2,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [workspace, project],
+      launchpadDefaults: defaults,
+      federationTarget,
+    };
+    const localSnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: defaults,
+    };
+    const getNavigationSnapshot: NonNullable<DesktopApi["getNavigationSnapshot"]> = vi.fn(
+      async (request) => request?.federationTarget ? remoteSnapshot : localSnapshot,
+    );
+    const ensureDirectoryLaunchpad: NonNullable<
+      DesktopApi["ensureDirectoryLaunchpad"]
+    > = vi.fn(async (request) => ({
+      launchpad: {
+        directoryKey: request.directoryKey,
+        directoryKind: request.directoryKind,
+        directoryLabel: request.directoryLabel,
+        directoryPath: request.directoryPath,
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "Start a remote thread",
+        workMode: "local" as const,
+        federationTarget: request.federationTarget,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults,
+    }));
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "remote-thread-new",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+    }));
+    const resetDirectoryLaunchpad = vi.fn(async () => ({
+      directoryKey: project.key,
+      defaults,
+    }));
+    const addRemoteThreadPin = vi.fn(async (request: Parameters<
+      NonNullable<DesktopApi["addRemoteThreadPin"]>
+    >[0]) => ({
+      pin: {
+        ref: request.ref,
+        instanceLabel: request.instanceLabel ?? federationTarget.instanceId,
+        pinnedVia: "explicit" as const,
+        addedAt: 1,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      addRemoteThreadPin,
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+      resetDirectoryLaunchpad,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.openFederatedWorkspaceLaunchpad(federationTarget);
+    });
+
+    expect(getNavigationSnapshot).toHaveBeenCalledWith({ federationTarget });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      directoryKey: workspace.key,
+      federationTarget,
+    });
+    expect(result.current.launchpadDirectories).toEqual(expect.arrayContaining([
+      expect.objectContaining(project),
+    ]));
+
+    await act(async () => {
+      await result.current.openFederatedDirectoryLaunchpad(federationTarget, project);
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      directoryKey: project.key,
+      federationTarget,
+    });
+
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(project.key);
+    });
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: project.key,
+        federationTarget,
+      }),
+    );
+    expect(addRemoteThreadPin).toHaveBeenCalledWith(expect.objectContaining({
+      ref: {
+        backend: "codex",
+        target: federationTarget,
+        threadId: "remote-thread-new",
+      },
+    }));
+    expect(result.current.selectedThread).toMatchObject({
+      id: "remote-thread-new",
+      federation: {
+        ref: {
+          target: federationTarget,
+        },
+      },
+    });
+  });
+
   it("scopes a remote optimistic thread before its owner snapshot arrives", async () => {
     const federationTarget = {
       scope: "remote" as const,

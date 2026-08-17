@@ -14,9 +14,10 @@ import type {
   CreateScheduledThreadActionRequest,
   DesktopPwrAgentProfileSummary,
   DesktopSettingsSnapshot,
+  EnsureDirectoryLaunchpadRequest,
   FederationPeerSummary,
+  FederationTarget,
   NavigationSnapshot,
-  OpenFederationWindowRequest,
   StartTurnRequest,
   StartTurnResponse,
 } from "@pwragent/shared";
@@ -320,11 +321,65 @@ describe("App", () => {
 
   it("starts a new thread on a selected federation machine and profile", async () => {
     const federationListeners = new Set<(event: AgentEvent) => void>();
-    const openFederationWindow = vi.fn(async (request: OpenFederationWindowRequest) => ({
-      opened: true,
-      target: request.target,
-      windowId: 7,
-    }));
+    const remoteTarget = { scope: "remote" as const, instanceId: "studio-work" };
+    const remoteWorkspace = {
+      key: "workspace:new-thread",
+      kind: "workspace" as const,
+      label: "Workspaces",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+    const remoteProject = {
+      key: "directory:/Users/harold/src/PwrAgent",
+      kind: "directory" as const,
+      label: "PwrAgent",
+      path: "/Users/harold/src/PwrAgent",
+      threadKeys: [],
+      needsAttentionCount: 0,
+      latestUpdatedAt: 1,
+    };
+    const getNavigationSnapshot = vi.fn(
+      async (request?: { federationTarget?: FederationTarget }) => ({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [],
+        directories: request?.federationTarget
+          ? [remoteWorkspace, remoteProject]
+          : [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+        ...(request?.federationTarget
+          ? { federationTarget: request.federationTarget }
+          : {}),
+      }),
+    );
+    const ensureDirectoryLaunchpad = vi.fn(
+      async (request: EnsureDirectoryLaunchpadRequest) => ({
+        launchpad: {
+          directoryKey: request.directoryKey,
+          directoryKind: request.directoryKind,
+          directoryLabel: request.directoryLabel,
+          directoryPath: request.directoryPath,
+          backend: "codex" as const,
+          executionMode: "default" as const,
+          prompt: "",
+          workMode: "local" as const,
+          ...(request.federationTarget
+            ? { federationTarget: request.federationTarget }
+            : {}),
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        defaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      }),
+    );
     let peers: FederationPeerSummary[] = [
       {
         id: "studio-work",
@@ -333,7 +388,6 @@ describe("App", () => {
         role: "client" as const,
         status: "connected" as const,
         capabilities: [
-          "remote_window",
           "thread_navigation",
           "environment_actions",
         ] as const,
@@ -360,25 +414,14 @@ describe("App", () => {
     Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
-        getNavigationSnapshot: async () => ({
-          backend: "all" as const,
-          fetchedAt: Date.now(),
-          unchanged: false,
-          inboxThreadKeys: [],
-          threads: [],
-          directories: [],
-          launchpadDefaults: {
-            backend: "codex" as const,
-            executionMode: "default" as const,
-          },
-        }),
+        getNavigationSnapshot,
+        ensureDirectoryLaunchpad,
         listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
         onAgentEvent: (listener: (event: AgentEvent) => void) => {
           federationListeners.add(listener);
           return () => federationListeners.delete(listener);
         },
         onWindowFocus: () => () => undefined,
-        openFederationWindow,
         readFederationHealth,
       },
     });
@@ -398,11 +441,37 @@ describe("App", () => {
       name: "Studio Mac / work",
     }));
 
-    expect(openFederationWindow).toHaveBeenCalledWith({
-      target: { scope: "remote", instanceId: "studio-work" },
-      initialLaunchpad: true,
-    });
+    await waitFor(() => expect(getNavigationSnapshot).toHaveBeenCalledWith({
+      federationTarget: remoteTarget,
+    }));
+    await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "workspace:new-thread",
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: undefined,
+      federationTarget: remoteTarget,
+      preferredBackend: undefined,
+    }));
+    expect(await screen.findByRole("textbox", { name: "New thread" }))
+      .toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
+    expect(await screen.findByRole("option", { name: /PwrAgent/ }))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: /PwrAgent/ }));
+
+    await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: remoteProject.key,
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/Users/harold/src/PwrAgent",
+      federationTarget: remoteTarget,
+      preferredBackend: undefined,
+    }));
+    expect(screen.getByRole("button", { name: "Project: PwrAgent" }))
+      .toBeInTheDocument();
+
+    const healthReadCount = readFederationHealth.mock.calls.length;
     peers = [
       {
         id: "laptop-default",
@@ -410,7 +479,6 @@ describe("App", () => {
         role: "client" as const,
         status: "connected" as const,
         capabilities: [
-          "remote_window",
           "thread_navigation",
           "environment_actions",
         ] as const,
@@ -430,7 +498,9 @@ describe("App", () => {
         });
       }
     });
-    await waitFor(() => expect(readFederationHealth).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(readFederationHealth.mock.calls.length).toBeGreaterThan(healthReadCount);
+    });
 
     fireEvent.mouseEnter(button.parentElement as HTMLElement);
     expect(await screen.findByRole("menuitem", {
@@ -484,6 +554,23 @@ describe("App", () => {
     Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
+        ensureDirectoryLaunchpad: async () => ({
+          launchpad: {
+            directoryKey: "workspace:new-thread",
+            directoryKind: "workspace" as const,
+            directoryLabel: "Workspaces",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            prompt: "",
+            workMode: "local" as const,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          defaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
         getNavigationSnapshot: async () => ({
           backend: "all" as const,
           fetchedAt: Date.now(),
