@@ -31,6 +31,7 @@ import {
 import { RailStatusChip } from "./RailStatusChip";
 import { subAgentPricingUsageTitle } from "./subagent-kind";
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
+import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
 
 type PricingPanelProps = {
   activeTurnId?: string;
@@ -304,6 +305,11 @@ export function PricingPanel(props: PricingPanelProps) {
                     {replayLine}
                   </p>
                 ))}
+                {subAgent?.tokenMiserAccounting ? (
+                  <TokenMiserSavingsBreakdown
+                    accounting={subAgent.tokenMiserAccounting}
+                  />
+                ) : null}
                 {runningTokens ? (
                   <details className="pricing-running-total">
                     <summary className="pricing-running-total__summary">
