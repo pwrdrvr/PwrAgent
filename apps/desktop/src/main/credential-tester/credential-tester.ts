@@ -410,6 +410,7 @@ async function defaultRunCodexVersion(
     {
       env,
       timeout: DEFAULT_PROBE_TIMEOUT_MS,
+      windowsHide: true,
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
     },
   );

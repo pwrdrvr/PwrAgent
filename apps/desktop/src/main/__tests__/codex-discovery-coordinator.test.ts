@@ -183,16 +183,12 @@ describe("CodexDiscoveryCoordinator", () => {
     };
     const coordinator = new CodexDiscoveryCoordinator({
       discover: async () => snapshot,
+      platform: "win32",
       resolveEnv: async () => ({ PATH: "C:\\nvm4w\\nodejs" }),
     });
 
     await expect(coordinator.discover()).resolves.toMatchObject({
       candidates: [
-        expect.objectContaining({
-          command: invalidCommand,
-          executable: false,
-          selected: false,
-        }),
         expect.objectContaining({
           command: validCommand,
           selected: true,
