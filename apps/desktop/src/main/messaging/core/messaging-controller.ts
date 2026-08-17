@@ -16201,6 +16201,7 @@ export class MessagingController {
         bindingId: binding.id,
         createdAt: this.now(),
         role: "assistant",
+        attribution: await this.responseAttributionForBinding(binding),
         parts: [{ type: "text", text: latest.text, markdown: "markdown" }],
       },
       binding,

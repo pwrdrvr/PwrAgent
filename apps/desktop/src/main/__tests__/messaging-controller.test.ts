@@ -17768,6 +17768,11 @@ describe("MessagingController", () => {
     expect(proseIndex).toBeGreaterThanOrEqual(0);
     expect(questionnaireIndex).toBeGreaterThanOrEqual(0);
     expect(proseIndex).toBeLessThan(questionnaireIndex);
+    expect(harness.delivered[proseIndex]).toMatchObject({
+      attribution: { label: "Bound thread: Thread one" },
+      kind: "message",
+      role: "assistant",
+    });
   });
 
   it("only flushes setup prose captured under the elicitation's own turn", async () => {
