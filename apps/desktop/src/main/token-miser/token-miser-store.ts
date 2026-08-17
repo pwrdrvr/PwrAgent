@@ -56,10 +56,19 @@ export type TokenMiserThreadUsageSummary = TokenMiserUsageSummary & {
   }>;
 };
 
+export type TokenMiserStoreOptions = {
+  onMetadataUpdated?: (
+    metadata: TokenMiserObjectMetadata,
+  ) => void | Promise<void>;
+};
+
 export class TokenMiserStore {
   private readonly updateLocks = new Map<string, Promise<void>>();
 
-  constructor(private readonly rootDir: string) {}
+  constructor(
+    private readonly rootDir: string,
+    private readonly options: TokenMiserStoreOptions = {},
+  ) {}
 
   async store(params: {
     objectId?: string;
@@ -98,6 +107,7 @@ export class TokenMiserStore {
     };
     await writePrivateFileAtomic(this.outputPath(objectId), params.output);
     await this.writeMetadata(metadata);
+    await this.options.onMetadataUpdated?.(metadata);
     return metadata;
   }
 
@@ -317,6 +327,7 @@ export class TokenMiserStore {
       }
       metadata.retrievedCharacters += characters;
       await this.writeMetadata(metadata);
+      await this.options.onMetadataUpdated?.(metadata);
     });
     this.updateLocks.set(objectId, next);
     try {

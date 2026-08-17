@@ -135,6 +135,56 @@ describe("sqlite write metrics", () => {
     });
   });
 
+  it("updates retrieved Token Miser savings in one turn-boundary commit", async () => {
+    const threadId = "thread-token-miser-retrieval";
+    const subAgent = {
+      monitorId: "system:token-miser:gate-retrieved",
+      task: "Gate command output",
+      status: "success" as const,
+      createdAt: 1_800_000_000_000,
+      updatedAt: 1_800_000_000_000,
+      backend: "codex" as const,
+      agentName: "Token Miser",
+      outcome: "success" as const,
+      completedAt: 1_800_000_000_000,
+    };
+    await store.upsertThreadSubAgent({
+      backend: "codex",
+      threadId,
+      subAgent,
+    });
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.upsertThreadSubAgents({
+        backend: "codex",
+        threadId,
+        subAgents: [{
+          ...subAgent,
+          tokenMiserAccounting: {
+            currency: "USD",
+            originalModel: "gpt-5.6-terra",
+            baselineParentTokens: 6_000,
+            baselineParentCostMicros: 12_000,
+            gateModel: "gpt-5.6-luna",
+            gateTotalTokens: 2_100,
+            gateCostMicros: 520,
+            revealedParentTokens: 1_225,
+            revealedParentCostMicros: 2_450,
+            savingsMicros: 9_030,
+          },
+        }],
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note:
+        "one previously gated output retrieved in a later parent turn, "
+        + "updating its savings equation at the turn boundary",
+      scenario: "token-miser-retrieval-ledger",
+      writes,
+    });
+  });
+
   it("counts a batched transaction as one commit, not one per statement", () => {
     // Write amplification tracks commits, not statements: each implicit
     // transaction flushes its dirty pages plus every index they moved. A

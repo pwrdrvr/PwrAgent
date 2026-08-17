@@ -265,6 +265,20 @@ export type ThreadSubAgentStatus =
   | "failure"
   | "cancelled";
 
+export type TokenMiserSubAgentAccounting = {
+  currency: "USD";
+  originalModel: string;
+  originalServiceTier?: string;
+  baselineParentTokens: number;
+  baselineParentCostMicros: number;
+  gateModel: string;
+  gateTotalTokens: number;
+  gateCostMicros: number;
+  revealedParentTokens: number;
+  revealedParentCostMicros: number;
+  savingsMicros: number;
+};
+
 export type ThreadSubAgentSummary = {
   monitorId: string;
   task: string;
@@ -301,6 +315,7 @@ export type ThreadSubAgentSummary = {
   completedAt?: number;
   completionSource?: TaskMonitorCompletionSource;
   monitorUsage?: TaskMonitorUsageSnapshot;
+  tokenMiserAccounting?: TokenMiserSubAgentAccounting;
   pollIntervalSeconds?: number;
   heartbeatIntervalSeconds?: number;
   startupTimeoutSeconds?: number;
