@@ -3629,6 +3629,128 @@ function buildTaskMonitorUsageSnapshot(params: {
   };
 }
 
+type PersistedCodexNativeUsageBackfill = {
+  completedAt?: number;
+  monitorTurnId?: string;
+  usage: TaskMonitorUsageSnapshot;
+};
+
+function readFormattedTokenCount(
+  value: string,
+  pattern: RegExp,
+): number | undefined {
+  const match = value.match(pattern);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  const parsed = Number(match[1].replaceAll(",", ""));
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+/**
+ * Final turn usage is persisted as transcript metadata even when PwrAgent did
+ * not observe the native spawn event that would have created a parent card.
+ * The activity summary is PwrAgent-owned, deterministic copy; reading it here
+ * lets thread-list discovery repair both the card and its parent pricing row.
+ */
+function buildPersistedCodexNativeUsageBackfill(params: {
+  fastMode?: boolean;
+  model?: string;
+  overlay?: ThreadOverlayState;
+  serviceTier?: string;
+}): PersistedCodexNativeUsageBackfill | undefined {
+  const activities = (params.overlay?.immutableUsageActivities ?? []).filter(
+    (activity) =>
+      activity.status === "completed"
+      && (
+        activity.id.startsWith("live-turn-usage-")
+        || activity.summary.startsWith("Turn usage:")
+      ),
+  );
+  if (activities.length === 0) {
+    return undefined;
+  }
+
+  const seenTurnIds = new Set<string>();
+  let cachedInputTokens = 0;
+  let inputTokens = 0;
+  let outputTokens = 0;
+  let reasoningOutputTokens = 0;
+  let completedAt: number | undefined;
+  let monitorTurnId: string | undefined;
+  let observed = false;
+
+  for (const activity of activities) {
+    const turnId = activity.turn?.id;
+    if (turnId && seenTurnIds.has(turnId)) {
+      continue;
+    }
+    if (turnId) {
+      seenTurnIds.add(turnId);
+    }
+
+    const line = activity.usageLine;
+    const uncached = line?.uncachedInputTokens ?? readFormattedTokenCount(
+      activity.summary,
+      /([\d,]+)\s+uncached in/i,
+    );
+    const cached = line?.cachedInputTokens ?? readFormattedTokenCount(
+      activity.summary,
+      /([\d,]+)\s+cached/i,
+    );
+    const output = line?.outputTokens ?? readFormattedTokenCount(
+      activity.summary,
+      /([\d,]+)\s+out/i,
+    );
+    const reasoning = line?.reasoningOutputTokens ?? readFormattedTokenCount(
+      activity.summary,
+      /\(([\d,]+)\s+reasoning\)/i,
+    ) ?? 0;
+    if (uncached === undefined || cached === undefined || output === undefined) {
+      continue;
+    }
+
+    observed = true;
+    cachedInputTokens += cached;
+    inputTokens += uncached + cached;
+    outputTokens += output;
+    reasoningOutputTokens += reasoning;
+    const activityCompletedAt = activity.turn?.completedAt ?? activity.createdAt;
+    if (
+      typeof activityCompletedAt === "number"
+      && (completedAt === undefined || activityCompletedAt >= completedAt)
+    ) {
+      completedAt = activityCompletedAt;
+      monitorTurnId = turnId ?? monitorTurnId;
+    }
+  }
+
+  if (!observed) {
+    return undefined;
+  }
+  const usage = buildTaskMonitorUsageSnapshot({
+    fastMode: params.fastMode,
+    model: params.model,
+    serviceTier: params.serviceTier,
+    tokenUsage: {
+      total: {
+        cachedInputTokens,
+        inputTokens,
+        outputTokens,
+        reasoningOutputTokens,
+        totalTokens: inputTokens + outputTokens + reasoningOutputTokens,
+      },
+    },
+  });
+  return usage
+    ? {
+        usage,
+        ...(completedAt !== undefined ? { completedAt } : {}),
+        ...(monitorTurnId ? { monitorTurnId } : {}),
+      }
+    : undefined;
+}
+
 function normalizeTaskMonitorTokenUsage(
   tokenUsage: unknown,
 ): TaskMonitorTokenUsageBreakdown | undefined {
@@ -20070,16 +20192,20 @@ export class DesktopBackendRegistry {
             return [];
           })
         : [];
-    for (const thread of nativeSubAgentThreads) {
-      const parentThreadId = thread.codexNativeSubAgent?.parentThreadId.trim();
-      if (parentThreadId && parentThreadId !== thread.id) {
-        this.codexNativeSubAgentParents.set(thread.id, parentThreadId);
-      }
-    }
-    const allThreads = groupCodexNativeSubAgents({
+    const groupedThreads = groupCodexNativeSubAgents({
       nativeThreads: nativeSubAgentThreads,
       parentThreads: defaultThreads,
-    }).map((thread) => ({
+    });
+    // The sidebar deliberately flattens nested native workers below their
+    // nearest ordinary thread. Keep accounting and the right-rail cards on
+    // that same visible owner instead of writing them to a hidden worker's
+    // overlay.
+    for (const parent of groupedThreads) {
+      for (const subAgent of parent.codexNativeSubAgents ?? []) {
+        this.codexNativeSubAgentParents.set(subAgent.threadId, parent.id);
+      }
+    }
+    const allThreads = groupedThreads.map((thread) => ({
       ...thread,
       executionMode: "default" as const,
     }));
@@ -20091,7 +20217,17 @@ export class DesktopBackendRegistry {
 
     const overlaysByThreadId = await this.overlayStore.getThreadOverlayStates({
       backend: "codex",
-      threadIds: threadsWithPending.map((thread) => thread.id),
+      threadIds: [
+        ...new Set([
+          ...threadsWithPending.map((thread) => thread.id),
+          ...nativeSubAgentThreads.map((thread) => thread.id),
+        ]),
+      ],
+    });
+    await this.reconcileDiscoveredCodexNativeSubAgents({
+      nativeThreads: nativeSubAgentThreads,
+      overlaysByThreadId,
+      parentThreads: threadsWithPending,
     });
     const visibleThreads = threadsWithPending.filter(
       (thread) => overlaysByThreadId[thread.id]?.archiveTombstonedAt === undefined,
@@ -20161,6 +20297,220 @@ export class DesktopBackendRegistry {
     return filteredThreads.sort(
       (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
     );
+  }
+
+  private async reconcileDiscoveredCodexNativeSubAgents(params: {
+    nativeThreads: AppServerThreadSummary[];
+    overlaysByThreadId: Record<string, ThreadOverlayState | undefined>;
+    parentThreads: AppServerThreadSummary[];
+  }): Promise<void> {
+    if (params.nativeThreads.length === 0) {
+      return;
+    }
+    const nativeThreadsById = new Map(
+      params.nativeThreads.map((thread) => [thread.id, thread]),
+    );
+
+    for (const parent of params.parentThreads) {
+      let parentPricingSettings: ThreadUsageLineRecord | undefined;
+      let parentPricingSettingsLoaded = false;
+      for (const discovered of parent.codexNativeSubAgents ?? []) {
+        const nativeThread = nativeThreadsById.get(discovered.threadId);
+        if (!nativeThread) {
+          continue;
+        }
+        const monitorId = codexNativeSubAgentId(nativeThread.id);
+        const parentOverlay = params.overlaysByThreadId[parent.id];
+        const existing = parentOverlay?.subAgents?.find(
+          (subAgent) => subAgent.monitorId === monitorId,
+        );
+        let preferredModel =
+          nativeThread.model
+          ?? existing?.preferredModel
+          ?? parent.model;
+        let preferredReasoningEffort =
+          nativeThread.reasoningEffort
+          ?? existing?.preferredReasoningEffort
+          ?? parent.reasoningEffort;
+        let preferredFastMode =
+          nativeThread.fastMode
+          ?? existing?.preferredFastMode
+          ?? parent.fastMode;
+        let serviceTier = nativeThread.serviceTier ?? parent.serviceTier;
+        const childOverlay = params.overlaysByThreadId[nativeThread.id];
+        const hasPersistedTurnUsage = Boolean(
+          !existing?.monitorUsage
+          && childOverlay?.immutableUsageActivities?.some(
+            (activity) =>
+              activity.status === "completed"
+              && (
+                activity.id.startsWith("live-turn-usage-")
+                || activity.summary.startsWith("Turn usage:")
+              ),
+          ),
+        );
+        if (
+          hasPersistedTurnUsage
+          && (
+            !preferredModel
+            || !preferredReasoningEffort
+            || preferredFastMode === undefined
+            || !serviceTier
+          )
+          && typeof this.overlayStore.readThreadPricing === "function"
+        ) {
+          if (!parentPricingSettingsLoaded) {
+            parentPricingSettingsLoaded = true;
+            const pricing = await this.overlayStore.readThreadPricing({
+              backend: "codex",
+              threadId: parent.id,
+            });
+            parentPricingSettings = pricing.lines.find(
+              (line) => line.threadId === parent.id && Boolean(line.model),
+            );
+          }
+          preferredModel ??= parentPricingSettings?.model;
+          preferredReasoningEffort ??= parentPricingSettings?.reasoningEffort;
+          preferredFastMode ??= parentPricingSettings?.fastMode;
+          serviceTier ??= parentPricingSettings?.serviceTier;
+        }
+        const usageBackfill = existing?.monitorUsage
+          ? undefined
+          : buildPersistedCodexNativeUsageBackfill({
+              fastMode: preferredFastMode,
+              model: preferredModel,
+              overlay: childOverlay,
+              serviceTier,
+            });
+        const discoveredStatus =
+          nativeThread.threadStatus === "active"
+            ? "running"
+            : nativeThread.threadStatus === "idle" || usageBackfill
+              ? "success"
+              : existing?.status ?? "running";
+        const status =
+          existing && codexNativeSubAgentIsTerminal(existing.status)
+            ? existing.status
+            : discoveredStatus;
+        const agentName =
+          nativeThread.codexNativeSubAgent?.agentNickname
+          ?? existing?.agentName;
+        const completedAt =
+          status === "success"
+            ? existing?.completedAt
+              ?? usageBackfill?.completedAt
+              ?? nativeThread.updatedAt
+              ?? Date.now()
+            : existing?.completedAt;
+        const needsCardWrite =
+          !existing
+          || Boolean(usageBackfill)
+          || Boolean(agentName && !existing.agentName)
+          || Boolean(preferredModel && !existing.preferredModel)
+          || Boolean(
+            preferredReasoningEffort
+            && !existing.preferredReasoningEffort,
+          )
+          || Boolean(
+            preferredFastMode !== undefined
+            && existing.preferredFastMode === undefined,
+          )
+          || (
+            !codexNativeSubAgentIsTerminal(existing.status)
+            && status !== existing.status
+          );
+        if (!needsCardWrite) {
+          continue;
+        }
+
+        try {
+          const monitorTurnId =
+            existing?.monitorTurnId
+            ?? usageBackfill?.monitorTurnId;
+          const subAgent: ThreadSubAgentSummary = {
+            monitorId,
+            task:
+              existing?.task
+              ?? nativeThread.title,
+            status,
+            createdAt:
+              existing?.createdAt
+              ?? nativeThread.createdAt
+              ?? nativeThread.updatedAt
+              ?? Date.now(),
+            updatedAt: Math.max(
+              existing?.updatedAt ?? 0,
+              nativeThread.updatedAt ?? 0,
+              usageBackfill?.completedAt ?? 0,
+              Date.now(),
+            ),
+            ownerRuntimeInstanceId:
+              existing?.ownerRuntimeInstanceId ?? this.runtimeInstanceId,
+            ownerRegistrySessionId:
+              existing?.ownerRegistrySessionId ?? this.registrySessionId,
+            backend: "codex",
+            monitorThreadId: nativeThread.id,
+            lastMessage:
+              existing?.lastMessage
+              ?? (status === "success"
+                ? "Codex native sub-agent completed."
+                : "Discovered from Codex native thread metadata."),
+            ...(agentName ? { agentName } : {}),
+            ...(preferredModel ? { preferredModel } : {}),
+            ...(preferredReasoningEffort ? { preferredReasoningEffort } : {}),
+            ...(preferredFastMode !== undefined ? { preferredFastMode } : {}),
+            ...(monitorTurnId ? { monitorTurnId } : {}),
+            ...(status === "success" ? { outcome: "success" as const } : {}),
+            ...(completedAt !== undefined ? { completedAt } : {}),
+            ...(usageBackfill ? { monitorUsage: usageBackfill.usage } : {}),
+          };
+
+          // Persist pricing first. If the process exits between these two
+          // one-time writes, the still-missing card makes the next discovery
+          // retry the same stable usage-line id instead of stranding pricing.
+          if (usageBackfill && this.overlayStore.upsertThreadUsageLine) {
+            const line = buildTaskMonitorUsageLine({
+              backend: "codex",
+              fastMode: preferredFastMode,
+              model: preferredModel,
+              monitorId,
+              monitorThreadId: nativeThread.id,
+              monitorTurnId,
+              parentThreadId: parent.id,
+              reasoningEffort: preferredReasoningEffort,
+              serviceTier,
+              source: "monitor",
+              usage: usageBackfill.usage,
+            });
+            logUnpricedThreadUsageLine(line);
+            await this.overlayStore.upsertThreadUsageLine({ line });
+          }
+
+          params.overlaysByThreadId[parent.id] =
+            await this.overlayStore.upsertThreadSubAgent({
+              backend: "codex",
+              threadId: parent.id,
+              subAgent,
+            });
+          if (!codexNativeSubAgentIsTerminal(status)) {
+            this.scheduleCodexNativeSubAgentReconciliation({
+              delayMs: CODEX_NATIVE_SUBAGENT_INITIAL_STATUS_DELAY_MS,
+              parentThreadId: parent.id,
+              receiverThreadId: nativeThread.id,
+            });
+          }
+        } catch (error) {
+          backendRegistryLog.warn(
+            "native Codex sub-agent discovery reconciliation failed",
+            {
+              error: error instanceof Error ? error.message : String(error),
+              parentThreadId: parent.id,
+              receiverThreadId: nativeThread.id,
+            },
+          );
+        }
+      }
+    }
   }
 
   private async reconcileCodexDirectoryRelationshipsFromSource(params: {

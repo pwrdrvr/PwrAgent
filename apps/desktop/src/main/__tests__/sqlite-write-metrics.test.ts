@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   AgentEvent,
   AppServerThreadReplay,
+  AppServerThreadSummary,
   TaskMonitorUsageSnapshot,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
@@ -304,6 +305,85 @@ describe("sqlite write metrics", () => {
     ]);
 
     await registry.close();
+  });
+
+  it("backfills one discovered native sub-agent in two boundary writes", async () => {
+    const nativeThreadId = "thread-epicurus";
+    await store.persistThreadUsageActivity({
+      backend: "codex",
+      threadId: nativeThreadId,
+      activity: {
+        type: "activity",
+        id: "live-turn-usage-turn-epicurus",
+        createdAt: 1_800_000_000_000,
+        summary:
+          "Turn usage: 106,640 uncached in · 2,811,136 cached · 11,224 out (4,269 reasoning)",
+        status: "completed",
+        details: [],
+        turn: {
+          id: "turn-epicurus",
+          status: "completed",
+          completedAt: 1_800_000_000_000,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient({
+        threads: [
+          {
+            id: "thread-parent",
+            title: "Investigate the regression",
+            titleSource: "explicit",
+            linkedDirectories: [],
+            source: "codex",
+            updatedAt: 1_800_000_000_000,
+            model: "gpt-5.6-sol",
+          },
+        ],
+        nativeSubAgentThreads: [
+          {
+            id: nativeThreadId,
+            title: "Audit settings discovery calls",
+            titleSource: "explicit",
+            linkedDirectories: [],
+            source: "codex",
+            createdAt: 1_799_999_900_000,
+            updatedAt: 1_800_000_000_000,
+            threadStatus: "idle",
+            codexNativeSubAgent: {
+              parentThreadId: "thread-parent",
+              agentNickname: "Epicurus",
+            },
+          },
+        ],
+      }),
+      overlayStore: store as never,
+    });
+
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.listThreads({ backend: "codex" });
+      });
+      expectSqliteWriteBudget({
+        // The repair happens once per native child: one parent pricing row and
+        // one parent overlay card. At 100 repaired children/day, the measured
+        // WAL projects to only a few MB/day and later snapshots write nothing.
+        note:
+          "one missing native child pricing row and parent sub-agent card discovered from the thread list",
+        scenario: "native-subagent-discovery-backfill",
+        writes,
+      });
+
+      const repeated = await measureSqliteWrites(async () => {
+        await registry.listThreads({
+          backend: "codex",
+          forceRefresh: true,
+        });
+      });
+      expect(repeated.writes.commits).toBe(0);
+    } finally {
+      await registry.close();
+    }
   });
 
   it("holds five deferred checks and their first alert to one commit", async () => {
@@ -1753,13 +1833,20 @@ function buildUnpricedGrokUsageLine(index: number): ThreadUsageLineRecord {
   });
 
 function createStubBackendClient(options?: {
+  nativeSubAgentThreads?: AppServerThreadSummary[];
   replay?: AppServerThreadReplay;
+  threads?: AppServerThreadSummary[];
 }) {
   return {
     close: async () => {},
     getInitializeResult: async () => ({
-      methods: options?.replay ? ["thread/read"] : [],
+      methods: [
+        ...(options?.replay ? ["thread/read"] : []),
+        ...(options?.threads ? ["thread/list"] : []),
+      ],
     }),
+    listNativeSubAgentThreads: async () => options?.nativeSubAgentThreads ?? [],
+    listThreads: async () => options?.threads ?? [],
     onNotification: () => () => {},
     onPendingRequest: () => () => {},
     readThread: async () =>

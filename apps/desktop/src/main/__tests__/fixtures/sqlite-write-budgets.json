@@ -90,6 +90,13 @@
     "rowsChanged": 30,
     "statements": 30
   },
+  "native-subagent-discovery-backfill": {
+    "commits": 2,
+    "note": "one missing native child pricing row and parent sub-agent card discovered from the thread list",
+    "observedWalBytes": 82400,
+    "rowsChanged": 4,
+    "statements": 4
+  },
   "runtime-lease-dead-owner-takeover": {
     "commits": 5,
     "note": "observe one dead owner, wait one minute, replace both runtime leases",
