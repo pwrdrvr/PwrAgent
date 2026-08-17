@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCategoryComposition,
   buildTokenMiserContextComparison,
+  buildTokenMiserRoughEdges,
   buildTurnCostStrip,
   capMeterWidth,
   formatCapShare,
@@ -690,5 +691,91 @@ describe("turn strip scope and ranking", () => {
 
     expect(strip.rankedBy).toBe("estimate");
     expect(strip.rows[0]?.key).toBe("turn-a");
+  });
+});
+
+describe("buildTokenMiserRoughEdges", () => {
+  const gate = (overrides: Record<string, unknown>) => ({
+    objectId: "obj-1",
+    turnId: "turn-1",
+    toolUseId: "item-1",
+    toolName: "shell",
+    createdAt: 1_000,
+    originalCharacters: 40_000,
+    baselineParentTokens: 10_000,
+    replacementTokens: 300,
+    retrievedTokens: 0,
+    estimatedParentTokensSaved: 9_700,
+    ...overrides,
+  }) as never;
+
+  it("returns nothing when no gate went wrong", () => {
+    expect(buildTokenMiserRoughEdges([], {
+      interceptionCount: 1,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementTokens: 300,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 9_700,
+      interceptions: [gate({})],
+    })).toEqual([]);
+  });
+
+  it("flags a gate that cost more than it saved", () => {
+    const edges = buildTokenMiserRoughEdges([], {
+      interceptionCount: 1,
+      originalCharacters: 10_000,
+      baselineParentTokens: 2_500,
+      replacementTokens: 2_600,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: -100,
+      interceptions: [gate({
+        baselineParentTokens: 2_500,
+        replacementTokens: 2_600,
+        estimatedParentTokensSaved: -100,
+      })],
+    });
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.kind).toBe("cost");
+    expect(edges[0]?.label).toBe("Cost more than it saved");
+  });
+
+  // Retrieval is the gate's escape hatch, so a gate that hands most of the
+  // payload back is worth surfacing even though its saving stays positive.
+  it("flags a gate whose payload was mostly retrieved back", () => {
+    const edges = buildTokenMiserRoughEdges([], {
+      interceptionCount: 1,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementTokens: 300,
+      retrievedTokens: 6_000,
+      estimatedParentTokensSaved: 3_700,
+      interceptions: [gate({
+        retrievedTokens: 6_000,
+        estimatedParentTokensSaved: 3_700,
+      })],
+    });
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.kind).toBe("leak");
+  });
+
+  it("collapses repeated gates on one command into a single finding", () => {
+    const edges = buildTokenMiserRoughEdges([], {
+      interceptionCount: 3,
+      originalCharacters: 120_000,
+      baselineParentTokens: 30_000,
+      replacementTokens: 900,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 29_100,
+      interceptions: [
+        gate({ objectId: "obj-1", toolUseId: "item-1" }),
+        gate({ objectId: "obj-2", toolUseId: "item-2" }),
+        gate({ objectId: "obj-3", toolUseId: "item-3" }),
+      ],
+    });
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.kind).toBe("repeat");
+    expect(edges[0]?.label).toBe("Gated 3×");
+    expect(edges[0]?.value).toBe("2 redundant");
   });
 });

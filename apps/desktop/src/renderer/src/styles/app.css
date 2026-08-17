@@ -15436,70 +15436,284 @@ a.transcript-message__messaging-origin:focus-visible {
   border-bottom: 1px solid var(--border-subtle);
 }
 
-.incident-explorer__token-miser {
+/* Lens switch — the Explorer answers two questions (what did tool output cost,
+   and what did gating buy) and they do not belong in one column. */
+.incident-explorer__lenses {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 20px;
-  padding: 10px 18px;
+  gap: 22px;
+  padding: 0 18px;
   border-bottom: 1px solid var(--border-subtle);
-  background: color-mix(in srgb, var(--accent) 6%, transparent);
 }
 
-.incident-explorer__token-miser[data-state="inactive"] {
-  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
-}
-
-.incident-explorer__token-miser .incident-explorer__eyebrow {
-  margin-bottom: 2px;
-}
-
-.incident-explorer__token-miser strong {
-  font-family: var(--font-mono);
+.incident-explorer__lens {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 2px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
   font-size: 13px;
-  font-weight: 600;
+  cursor: pointer;
 }
 
-.incident-explorer__token-miser p:last-child {
-  margin: 0;
+.incident-explorer__lens[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.incident-explorer__lens span {
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 11px;
-  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
-.incident-explorer__token-miser-accounting {
-  min-width: min(660px, 68vw);
+.incident-explorer__lens[aria-selected="true"] span {
+  color: var(--text-secondary);
 }
 
-.incident-explorer__token-miser-accounting dl {
+/* Cross-link on the incidents lens: one line, below the headline, never the
+   headline itself. */
+.incident-explorer__token-miser-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.incident-explorer__token-miser-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-ok);
+  flex: none;
+}
+
+.incident-explorer__token-miser-strip[data-state="inactive"]
+  .incident-explorer__token-miser-dot {
+  background: var(--text-muted);
+}
+
+.incident-explorer__token-miser-spacer {
+  flex: 1 1 auto;
+}
+
+.incident-explorer__token-miser-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* Savings lens. */
+.incident-explorer__savings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px 20px;
+}
+
+.incident-explorer__savings-empty,
+.incident-explorer__edges-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.incident-explorer__savings-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px 32px;
+}
+
+.incident-explorer__savings-figure {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 6px 0 0;
+}
+
+.incident-explorer__savings-figure strong {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__savings-figure span {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.incident-explorer__savings-terms {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1px;
-  margin: 0 0 5px;
+  margin: 0;
+  min-width: min(560px, 62vw);
   background: var(--border-subtle);
 }
 
-.incident-explorer__token-miser-accounting dl div {
-  padding: 5px 9px;
+.incident-explorer__savings-terms div {
+  padding: 6px 10px;
   background: var(--bg-panel);
 }
 
-.incident-explorer__token-miser-accounting dt {
+.incident-explorer__savings-terms dt {
   color: var(--text-muted);
   font-size: 10px;
-  text-transform: uppercase;
   letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
-.incident-explorer__token-miser-accounting dd {
+.incident-explorer__savings-terms dd {
+  display: flex;
+  flex-direction: column;
   margin: 2px 0 0;
   color: var(--text-primary);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
 }
 
+.incident-explorer__savings-terms dd span {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 400;
+}
+
+.incident-explorer__savings-caption {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__edges-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.incident-explorer__edges-head span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.incident-explorer__edge-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.incident-explorer__edge {
+  display: grid;
+  grid-template-columns: 3px minmax(0, 1fr) auto;
+  gap: 0 14px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-panel-elevated);
+}
+
+.incident-explorer__edge-stripe {
+  align-self: stretch;
+  background: var(--border-strong);
+}
+
+.incident-explorer__edge[data-kind="cost"] .incident-explorer__edge-stripe {
+  background: var(--danger-text);
+}
+
+.incident-explorer__edge[data-kind="leak"] .incident-explorer__edge-stripe,
+.incident-explorer__edge[data-kind="truncated"] .incident-explorer__edge-stripe {
+  background: var(--status-warning);
+}
+
+.incident-explorer__edge[data-kind="repeat"] .incident-explorer__edge-stripe {
+  background: var(--info-text);
+}
+
+.incident-explorer__edge > div:nth-child(2) {
+  min-width: 0;
+  padding: 10px 0;
+}
+
+.incident-explorer__edge code {
+  display: block;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.incident-explorer__edge p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.incident-explorer__edge-verdict {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  padding: 10px 14px 10px 0;
+  white-space: nowrap;
+}
+
+.incident-explorer__edge-verdict span {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.incident-explorer__edge[data-kind="cost"] .incident-explorer__edge-verdict span {
+  color: var(--danger-text);
+}
+
+.incident-explorer__edge[data-kind="leak"] .incident-explorer__edge-verdict span,
+.incident-explorer__edge[data-kind="truncated"] .incident-explorer__edge-verdict span {
+  color: var(--status-warning);
+}
+
+.incident-explorer__edge[data-kind="repeat"] .incident-explorer__edge-verdict span {
+  color: var(--info-text);
+}
+
+.incident-explorer__edge-verdict b {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Per-invocation gate box in the incidents lens: this call's own before/after,
+   shown beside the raw-output budget it replaced. */
 .incident-explorer__token-miser-call {
   display: flex;
   align-items: center;
@@ -15515,10 +15729,10 @@ a.transcript-message__messaging-origin:focus-visible {
 .incident-explorer__token-miser-call span {
   display: block;
   margin-bottom: 2px;
-  color: var(--accent);
+  color: var(--text-muted);
   font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.06em;
+  font-weight: 600;
+  letter-spacing: 0.05em;
   text-transform: uppercase;
 }
 

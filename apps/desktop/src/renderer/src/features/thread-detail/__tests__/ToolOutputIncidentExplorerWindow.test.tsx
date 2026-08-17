@@ -98,19 +98,27 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
     render(<ToolOutputIncidentExplorerWindow />);
 
-    const accounting = await screen.findByLabelText("Token Miser accounting");
-    expect(accounting).toHaveTextContent(
-      "18k estimated parent-context footprint avoided",
-    );
-    expect(accounting).toHaveTextContent("Actual parent tool context2k");
-    expect(accounting).toHaveTextContent("Avoided footprint18k");
-    expect(accounting).toHaveTextContent("Without Token Miser20k");
-    expect(accounting).toHaveTextContent("2 gated calls");
-    expect(accounting).toHaveTextContent("700 summaries + 1.3k retrieved");
-    expect(accounting).toHaveTextContent(
-      "34.6k cached replay tokens avoided across 6 replays",
-    );
-    expect(accounting).toHaveTextContent("Gate compute awaiting pricing ledger");
+    // Gating happened, so the savings lens opens first rather than the
+    // raw-output view: the question the operator has here is what it bought.
+    const savings = await screen.findByRole("tab", { name: /Savings/ });
+    expect(savings).toHaveAttribute("aria-selected", "true");
+    expect(savings).toHaveTextContent("18k avoided");
+
+    expect(screen.getByText("Without the gate")).toBeInTheDocument();
+    expect(screen.getByText("20k")).toBeInTheDocument();
+    expect(screen.getByText("Actual parent context")).toBeInTheDocument();
+    expect(screen.getByText("2k")).toBeInTheDocument();
+    expect(
+      screen.getByText(/34.6k more across 6 replays/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/2 gated calls · 700 of summaries · 1.3k read back later/),
+    ).toBeInTheDocument();
+    expect(screen.getByText("awaiting the pricing ledger")).toBeInTheDocument();
+
+    // The per-call gate box belongs to the incidents lens, beside the raw
+    // output it replaced.
+    fireEvent.click(screen.getByRole("tab", { name: /Incidents/ }));
     expect(screen.getByText("Gated by Token Miser")).toBeInTheDocument();
     expect(screen.getByText("6k baseline → 225 summary")).toBeInTheDocument();
     expect(screen.getByText(/5.8k estimated parent-context footprint avoided/))
@@ -291,9 +299,15 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       },
     } as never));
 
+    // The lens stays where the operator left it when a gate lands mid-turn, so
+    // the per-call box is still the one place this call's outcome is stated.
     expect(await screen.findByText("Gated by Token Miser")).toBeInTheDocument();
     expect(screen.getAllByText(/5.8k estimated parent-context footprint avoided/))
-      .toHaveLength(2);
+      .toHaveLength(1);
+    expect(screen.getByRole("tab", { name: /Savings/ }))
+      .toHaveAttribute("aria-selected", "false");
+    expect(screen.getByRole("button", { name: /See the breakdown/ }))
+      .toBeInTheDocument();
   });
 
   it("ranks cases by output size and measures each against the output cap", async () => {
