@@ -862,6 +862,8 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("3 invocations")).toBeInTheDocument();
     expect(screen.getByText("6k est. tokens")).toBeInTheDocument();
     expect(screen.getByText("Diagnostics")).toBeInTheDocument();
+    expect(screen.getByText("Warning-like lines")).toBeInTheDocument();
+    expect(screen.getByText("Error-like lines")).toBeInTheDocument();
     expect(screen.getByText("Repeated queued checks")).toBeInTheDocument();
     expect(screen.getByText(/Repeated write_stdin polling/)).toBeInTheDocument();
     expect(screen.getByText("write_stdin · polling")).toBeInTheDocument();

@@ -6110,6 +6110,49 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("recognizes Codex hook lifecycle notifications", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => []
+    });
+
+    await client.getInitializeResult();
+
+    const transport = MockTransport.instances.at(-1);
+    expect(transport).toBeDefined();
+
+    codexClientLogWarn.mockClear();
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "hook/started",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-1",
+        toolUseId: "tool-1"
+      }
+    });
+    transport!.emitInbound({
+      jsonrpc: "2.0",
+      method: "hook/completed",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-1",
+        toolUseId: "tool-1"
+      }
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(codexClientLogWarn).not.toHaveBeenCalledWith(
+      "unknown codex notification",
+      expect.anything()
+    );
+
+    await client.close();
+  });
+
   it("normalizes Codex thread settings service tier notifications", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

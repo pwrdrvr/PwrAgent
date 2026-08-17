@@ -86,11 +86,11 @@ export function ToolCallsPanel(props: ToolCallsPanelProps) {
           <div className="rail-summary-card__section">
             <span className="rail-summary-card__section-title">Diagnostics</span>
             <RailSummaryRow
-              label="Warnings"
+              label="Warning-like lines"
               value={totals.warningLines.toLocaleString()}
             />
             <RailSummaryRow
-              label="Errors"
+              label="Error-like lines"
               value={totals.errorLines.toLocaleString()}
             />
             {totals.noisyInvocationCount > 0 ? (

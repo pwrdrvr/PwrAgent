@@ -11373,7 +11373,12 @@ export class DesktopBackendRegistry {
     if (typeof this.overlayStore.readThreadToolAccounting !== "function") {
       return;
     }
-    const toolAccounting = await this.overlayStore.readThreadToolAccounting({
+    const storedToolAccounting = await this.overlayStore.readThreadToolAccounting({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const toolAccounting = await this.withTokenMiserAccounting({
+      accounting: storedToolAccounting,
       backend: params.backend,
       threadId: params.threadId,
     });
@@ -11420,9 +11425,9 @@ export class DesktopBackendRegistry {
     try {
       return {
         ...params.accounting,
-        tokenMiser: await this.tokenMiserStore.summarizeUsage({
-          threadId: params.threadId,
-        }),
+        tokenMiser: await this.tokenMiserStore.summarizeThreadUsage(
+          params.threadId,
+        ),
       };
     } catch (error) {
       backendRegistryLog.warn("failed to read Token Miser thread accounting", {

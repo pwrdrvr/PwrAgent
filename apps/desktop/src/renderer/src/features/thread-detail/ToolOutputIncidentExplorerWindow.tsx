@@ -121,6 +121,30 @@ export function ToolOutputIncidentExplorerWindow() {
     });
   }, [desktopApi, refresh]);
 
+  useEffect(() => {
+    if (!desktopApi?.onAgentEvent || !route) return;
+    return desktopApi.onAgentEvent((event) => {
+      if (event.backend !== route.backend) {
+        return;
+      }
+      const notification = event.notification;
+      if (notification.method !== "thread/toolAccounting/updated") {
+        return;
+      }
+      if (!notification.params || typeof notification.params !== "object") {
+        return;
+      }
+      const params = notification.params as {
+        threadId?: unknown;
+        toolAccounting?: ThreadToolAccounting;
+      };
+      if (params.threadId !== route.threadId || !params.toolAccounting) {
+        return;
+      }
+      setAccounting(params.toolAccounting);
+    });
+  }, [desktopApi, route]);
+
   const allInvocations = useMemo(
     () => accounting?.invocations ?? [],
     [accounting?.invocations],
@@ -196,6 +220,12 @@ export function ToolOutputIncidentExplorerWindow() {
   }, [flagged, search, selectedCategories, sortMode, turnFilter]);
   const selected = invocations.find((invocation) => invocation.invocationId === selectedId)
     ?? invocations[0];
+  const selectedTokenMiser = selected
+    ? tokenMiser?.interceptions?.find((interception) =>
+        interception.toolUseId === selected.itemId
+        || selected.invocationId.endsWith(`:${interception.toolUseId}`)
+      )
+    : undefined;
 
   useEffect(() => {
     setPrompt(selected
@@ -389,7 +419,7 @@ export function ToolOutputIncidentExplorerWindow() {
 
       <div className="incident-explorer__summary" aria-label="Incident metrics">
         <div className="incident-explorer__headline">
-          <p className="incident-explorer__eyebrow">Replay cost from flagged calls</p>
+          <p className="incident-explorer__eyebrow">Raw output from flagged calls</p>
           <p className="incident-explorer__hero">
             <strong>{formatCompactTokens(summary.incidentTokens)}</strong>
             <span>
@@ -484,7 +514,7 @@ export function ToolOutputIncidentExplorerWindow() {
                   `${formatCompactTokens(activeTokenMiser.replacementTokens)} summaries`,
                   `${formatCompactTokens(activeTokenMiser.retrievedTokens)} retrieved`,
                 ].join(" · ")
-              : "The replay-cost figures on this screen are unmitigated; the Codex hook did not gate any result."}
+              : "No Token Miser gate records are available for this thread."}
           </p>
         </section>
       ) : null}
@@ -636,7 +666,9 @@ export function ToolOutputIncidentExplorerWindow() {
 
                 <div className="incident-explorer__budget">
                   <div className="incident-explorer__budget-head">
-                    <strong>{selected.estimatedOutputTokens.toLocaleString()} tokens</strong>
+                    <strong>
+                      {selected.estimatedOutputTokens.toLocaleString()} raw-output tokens
+                    </strong>
                     <span>{formatCapShare(selected.outputChars)}</span>
                   </div>
                   <span aria-hidden="true" className="incident-explorer__meter">
@@ -646,7 +678,7 @@ export function ToolOutputIncidentExplorerWindow() {
                     />
                   </span>
                   <p className="incident-explorer__caption">
-                    {selected.outputChars.toLocaleString()} chars ·{" "}
+                    {selected.outputChars.toLocaleString()} raw chars emitted ·{" "}
                     {laterTripsInTurn > 0
                       ? `replayed on the ${laterTripsInTurn.toLocaleString()} later round ${laterTripsInTurn === 1 ? "trip" : "trips"} in this turn`
                       : "no later round trips in this turn replayed it"}
@@ -655,6 +687,26 @@ export function ToolOutputIncidentExplorerWindow() {
                     {selected.noisyReason ?? "large output"}
                   </p>
                 </div>
+                {selectedTokenMiser ? (
+                  <div className="incident-explorer__token-miser-call">
+                    <div>
+                      <span>Gated by Token Miser</span>
+                      <strong>
+                        {formatCompactTokens(selectedTokenMiser.baselineParentTokens)} baseline
+                        {" → "}
+                        {formatCompactTokens(selectedTokenMiser.replacementTokens)} summary
+                      </strong>
+                    </div>
+                    <p>
+                      {describeTokenMiserOutcome(
+                        selectedTokenMiser.estimatedParentTokensSaved,
+                      )}
+                      {selectedTokenMiser.retrievedTokens > 0
+                        ? ` · ${formatCompactTokens(selectedTokenMiser.retrievedTokens)} retrieved later`
+                        : " · nothing retrieved later"}
+                    </p>
+                  </div>
+                ) : null}
               </section>
 
               <section className="incident-explorer__prompt">

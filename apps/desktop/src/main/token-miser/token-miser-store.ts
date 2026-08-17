@@ -41,6 +41,21 @@ export type TokenMiserUsageSummary = {
   estimatedParentTokensSaved: number;
 };
 
+export type TokenMiserThreadUsageSummary = TokenMiserUsageSummary & {
+  interceptions: Array<{
+    objectId: string;
+    turnId: string;
+    toolUseId: string;
+    toolName: string;
+    createdAt: number;
+    originalCharacters: number;
+    baselineParentTokens: number;
+    replacementTokens: number;
+    retrievedTokens: number;
+    estimatedParentTokensSaved: number;
+  }>;
+};
+
 export class TokenMiserStore {
   private readonly updateLocks = new Map<string, Promise<void>>();
 
@@ -211,29 +226,36 @@ export class TokenMiserStore {
     const metadata = params?.threadId
       ? allMetadata.filter((entry) => entry.threadId === params.threadId)
       : allMetadata;
-    const baselineParentTokens = metadata.reduce(
-      (total, entry) => total + entry.baselineParentTokens,
-      0,
-    );
-    const replacementTokens = metadata.reduce(
-      (total, entry) => total + estimateTokenCount(entry.replacementCharacters),
-      0,
-    );
-    const retrievedTokens = metadata.reduce(
-      (total, entry) => total + estimateTokenCount(entry.retrievedCharacters),
-      0,
+    return summarizeMetadata(metadata);
+  }
+
+  async summarizeThreadUsage(
+    threadId: string,
+  ): Promise<TokenMiserThreadUsageSummary> {
+    const metadata = (await this.listMetadata()).filter(
+      (entry) => entry.threadId === threadId,
     );
     return {
-      interceptionCount: metadata.length,
-      originalCharacters: metadata.reduce(
-        (total, entry) => total + entry.originalCharacters,
-        0,
-      ),
-      baselineParentTokens,
-      replacementTokens,
-      retrievedTokens,
-      estimatedParentTokensSaved:
-        baselineParentTokens - replacementTokens - retrievedTokens,
+      ...summarizeMetadata(metadata),
+      interceptions: metadata.map((entry) => {
+        const replacementTokens = estimateTokenCount(
+          entry.replacementCharacters,
+        );
+        const retrievedTokens = estimateTokenCount(entry.retrievedCharacters);
+        return {
+          objectId: entry.objectId,
+          turnId: entry.turnId,
+          toolUseId: entry.toolUseId,
+          toolName: entry.toolName,
+          createdAt: entry.createdAt,
+          originalCharacters: entry.originalCharacters,
+          baselineParentTokens: entry.baselineParentTokens,
+          replacementTokens,
+          retrievedTokens,
+          estimatedParentTokensSaved:
+            entry.baselineParentTokens - replacementTokens - retrievedTokens,
+        };
+      }),
     };
   }
 
@@ -337,6 +359,35 @@ async function writePrivateFileAtomic(filePath: string, contents: string): Promi
   const temporaryPath = `${filePath}.${randomUUID()}.tmp`;
   await fs.writeFile(temporaryPath, contents, { encoding: "utf8", mode: 0o600 });
   await fs.rename(temporaryPath, filePath);
+}
+
+function summarizeMetadata(
+  metadata: TokenMiserObjectMetadata[],
+): TokenMiserUsageSummary {
+  const baselineParentTokens = metadata.reduce(
+    (total, entry) => total + entry.baselineParentTokens,
+    0,
+  );
+  const replacementTokens = metadata.reduce(
+    (total, entry) => total + estimateTokenCount(entry.replacementCharacters),
+    0,
+  );
+  const retrievedTokens = metadata.reduce(
+    (total, entry) => total + estimateTokenCount(entry.retrievedCharacters),
+    0,
+  );
+  return {
+    interceptionCount: metadata.length,
+    originalCharacters: metadata.reduce(
+      (total, entry) => total + entry.originalCharacters,
+      0,
+    ),
+    baselineParentTokens,
+    replacementTokens,
+    retrievedTokens,
+    estimatedParentTokensSaved:
+      baselineParentTokens - replacementTokens - retrievedTokens,
+  };
 }
 
 function isSafeObjectId(value: string): boolean {

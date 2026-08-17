@@ -377,6 +377,8 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "item/commandExecution/outputDelta",
   "item/commandExecution/terminalInteraction",
   "item/fileChange/outputDelta",
+  "hook/started",
+  "hook/completed",
   "mcpServer/oauthLogin/completed",
   "mcpServer/startupStatus/updated",
 ]);
