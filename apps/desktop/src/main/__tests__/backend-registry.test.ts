@@ -37905,6 +37905,116 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("repairs missing native Codex pricing from an existing card usage snapshot", async () => {
+    const nativeThreadId = "thread-epicurus";
+    const monitorId = `codex-native:${nativeThreadId}`;
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "thread-parent",
+          title: "Investigate the regression",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          updatedAt: 100,
+        },
+      ],
+      nativeSubAgentThreads: [
+        {
+          id: nativeThreadId,
+          title: "Audit settings discovery calls",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          createdAt: 20,
+          updatedAt: 40,
+          threadStatus: "idle",
+          codexNativeSubAgent: {
+            parentThreadId: "thread-parent",
+            depth: 1,
+            agentNickname: "Epicurus",
+          },
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.upsertThreadSubAgent({
+      backend: "codex",
+      threadId: "thread-parent",
+      subAgent: {
+        monitorId,
+        task: "Audit settings discovery calls",
+        status: "success",
+        createdAt: 20,
+        updatedAt: 40,
+        backend: "codex",
+        monitorThreadId: nativeThreadId,
+        monitorTurnId: "turn-epicurus",
+        agentName: "Epicurus",
+        preferredModel: "gpt-5.6-sol",
+        preferredReasoningEffort: "high",
+        preferredFastMode: false,
+        outcome: "success",
+        completedAt: 35,
+        monitorUsage: {
+          model: "gpt-5.6-sol",
+          fastMode: false,
+          summary:
+            "106,640 uncached in · 2,811,136 cached · 11,224 out (4,269 reasoning)",
+          tokenUsage: {
+            cachedInputTokens: 2_811_136,
+            inputTokens: 2_917_776,
+            outputTokens: 11_224,
+            reasoningOutputTokens: 4_269,
+            totalTokens: 2_933_269,
+            uncachedInputTokens: 106_640,
+          },
+        },
+      },
+    });
+    const upsertThreadSubAgent = vi.spyOn(
+      overlayStore,
+      "upsertThreadSubAgent",
+    );
+    const upsertThreadUsageLine = vi.spyOn(
+      overlayStore,
+      "upsertThreadUsageLine",
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+    });
+
+    await registry.listThreads({ backend: "codex" });
+    await registry.listThreads({ backend: "codex", forceRefresh: true });
+
+    expect(upsertThreadSubAgent).not.toHaveBeenCalled();
+    expect(upsertThreadUsageLine).toHaveBeenCalledTimes(1);
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      parentThreadId: "thread-parent",
+      threadId: nativeThreadId,
+      turnId: "turn-epicurus",
+      source: "monitor",
+      sourceItemId: monitorId,
+      scope: "monitor",
+      status: "finalized",
+      model: "gpt-5.6-sol",
+      cachedInputTokens: 2_811_136,
+      uncachedInputTokens: 106_640,
+      outputTokens: 11_224,
+      reasoningOutputTokens: 4_269,
+    });
+    expect(pricing.lines[0]?.totalCostMicros).toBeGreaterThan(0);
+
+    await registry.close();
+  });
+
   it("snapshots and removes linked worktrees when archiving a thread", async () => {
     const thread: AppServerThreadSummary = {
       id: "thread-1",

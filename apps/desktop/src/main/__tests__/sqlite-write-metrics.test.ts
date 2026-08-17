@@ -386,6 +386,97 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it("repairs missing native sub-agent pricing in one boundary write", async () => {
+    const nativeThreadId = "thread-epicurus-partial";
+    await store.upsertThreadSubAgent({
+      backend: "codex",
+      threadId: "thread-parent-partial",
+      subAgent: {
+        monitorId: `codex-native:${nativeThreadId}`,
+        task: "Audit partial pricing persistence",
+        status: "success",
+        createdAt: 1_799_999_900_000,
+        updatedAt: 1_800_000_000_000,
+        backend: "codex",
+        monitorThreadId: nativeThreadId,
+        monitorTurnId: "turn-epicurus-partial",
+        agentName: "Epicurus",
+        preferredModel: "gpt-5.6-sol",
+        preferredReasoningEffort: "high",
+        preferredFastMode: false,
+        outcome: "success",
+        completedAt: 1_800_000_000_000,
+        monitorUsage: {
+          model: "gpt-5.6-sol",
+          fastMode: false,
+          summary:
+            "106,640 uncached in · 2,811,136 cached · 11,224 out (4,269 reasoning)",
+          tokenUsage: {
+            cachedInputTokens: 2_811_136,
+            inputTokens: 2_917_776,
+            outputTokens: 11_224,
+            reasoningOutputTokens: 4_269,
+            totalTokens: 2_933_269,
+            uncachedInputTokens: 106_640,
+          },
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient({
+        threads: [
+          {
+            id: "thread-parent-partial",
+            title: "Investigate the partial write",
+            titleSource: "explicit",
+            linkedDirectories: [],
+            source: "codex",
+            updatedAt: 1_800_000_000_000,
+          },
+        ],
+        nativeSubAgentThreads: [
+          {
+            id: nativeThreadId,
+            title: "Audit partial pricing persistence",
+            titleSource: "explicit",
+            linkedDirectories: [],
+            source: "codex",
+            createdAt: 1_799_999_900_000,
+            updatedAt: 1_800_000_000_000,
+            threadStatus: "idle",
+            codexNativeSubAgent: {
+              parentThreadId: "thread-parent-partial",
+              agentNickname: "Epicurus",
+            },
+          },
+        ],
+      }),
+      overlayStore: store as never,
+    });
+
+    try {
+      const { writes } = await measureSqliteWrites(async () => {
+        await registry.listThreads({ backend: "codex" });
+      });
+      expectSqliteWriteBudget({
+        note:
+          "one missing native child pricing row repaired from its existing parent sub-agent card",
+        scenario: "native-subagent-pricing-repair",
+        writes,
+      });
+
+      const repeated = await measureSqliteWrites(async () => {
+        await registry.listThreads({
+          backend: "codex",
+          forceRefresh: true,
+        });
+      });
+      expect(repeated.writes.commits).toBe(0);
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("holds five deferred checks and their first alert to one commit", async () => {
     vi.useFakeTimers();
     const registry = new DesktopBackendRegistry({

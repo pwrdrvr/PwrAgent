@@ -20312,8 +20312,26 @@ export class DesktopBackendRegistry {
     );
 
     for (const parent of params.parentThreads) {
+      let parentPricingLines: ThreadUsageLineRecord[] = [];
       let parentPricingSettings: ThreadUsageLineRecord | undefined;
-      let parentPricingSettingsLoaded = false;
+      let parentPricingLoaded = false;
+      const readParentPricingLines = async (): Promise<ThreadUsageLineRecord[]> => {
+        if (
+          !parentPricingLoaded
+          && typeof this.overlayStore.readThreadPricing === "function"
+        ) {
+          parentPricingLoaded = true;
+          const pricing = await this.overlayStore.readThreadPricing({
+            backend: "codex",
+            threadId: parent.id,
+          });
+          parentPricingLines = pricing.lines;
+          parentPricingSettings = pricing.lines.find(
+            (line) => line.threadId === parent.id && Boolean(line.model),
+          );
+        }
+        return parentPricingLines;
+      };
       for (const discovered of parent.codexNativeSubAgents ?? []) {
         const nativeThread = nativeThreadsById.get(discovered.threadId);
         if (!nativeThread) {
@@ -20327,6 +20345,8 @@ export class DesktopBackendRegistry {
         let preferredModel =
           nativeThread.model
           ?? existing?.preferredModel
+          ?? existing?.monitorUsage?.model
+          ?? existing?.monitorUsage?.cost?.model
           ?? parent.model;
         let preferredReasoningEffort =
           nativeThread.reasoningEffort
@@ -20335,12 +20355,15 @@ export class DesktopBackendRegistry {
         let preferredFastMode =
           nativeThread.fastMode
           ?? existing?.preferredFastMode
+          ?? existing?.monitorUsage?.fastMode
           ?? parent.fastMode;
-        let serviceTier = nativeThread.serviceTier ?? parent.serviceTier;
+        let serviceTier =
+          nativeThread.serviceTier
+          ?? existing?.monitorUsage?.serviceTier
+          ?? parent.serviceTier;
         const childOverlay = params.overlaysByThreadId[nativeThread.id];
         const hasPersistedTurnUsage = Boolean(
-          !existing?.monitorUsage
-          && childOverlay?.immutableUsageActivities?.some(
+          childOverlay?.immutableUsageActivities?.some(
             (activity) =>
               activity.status === "completed"
               && (
@@ -20359,29 +20382,53 @@ export class DesktopBackendRegistry {
           )
           && typeof this.overlayStore.readThreadPricing === "function"
         ) {
-          if (!parentPricingSettingsLoaded) {
-            parentPricingSettingsLoaded = true;
-            const pricing = await this.overlayStore.readThreadPricing({
-              backend: "codex",
-              threadId: parent.id,
-            });
-            parentPricingSettings = pricing.lines.find(
-              (line) => line.threadId === parent.id && Boolean(line.model),
-            );
-          }
+          await readParentPricingLines();
           preferredModel ??= parentPricingSettings?.model;
           preferredReasoningEffort ??= parentPricingSettings?.reasoningEffort;
           preferredFastMode ??= parentPricingSettings?.fastMode;
           serviceTier ??= parentPricingSettings?.serviceTier;
         }
+        const persistedUsageBackfill = buildPersistedCodexNativeUsageBackfill({
+          fastMode: preferredFastMode,
+          model: preferredModel,
+          overlay: childOverlay,
+          serviceTier,
+        });
         const usageBackfill = existing?.monitorUsage
           ? undefined
-          : buildPersistedCodexNativeUsageBackfill({
+          : persistedUsageBackfill;
+        const monitorTurnId =
+          existing?.monitorTurnId
+          ?? persistedUsageBackfill?.monitorTurnId;
+        const pricingUsage =
+          existing?.monitorUsage
+          ?? persistedUsageBackfill?.usage;
+        const pricingLine = pricingUsage
+          ? buildTaskMonitorUsageLine({
+              backend: "codex",
               fastMode: preferredFastMode,
               model: preferredModel,
-              overlay: childOverlay,
+              monitorId,
+              monitorThreadId: nativeThread.id,
+              monitorTurnId,
+              parentThreadId: parent.id,
+              reasoningEffort: preferredReasoningEffort,
               serviceTier,
-            });
+              source: "monitor",
+              usage: pricingUsage,
+            })
+          : undefined;
+        const needsPricingWrite = pricingLine
+          ? usageBackfill
+            ? true
+            : typeof this.overlayStore.readThreadPricing === "function"
+              && !(await readParentPricingLines()).some(
+                (line) =>
+                  line.sourceItemId === monitorId
+                  && line.threadId === nativeThread.id
+                  && line.scope === "monitor",
+              )
+          : false;
         const discoveredStatus =
           nativeThread.threadStatus === "active"
             ? "running"
@@ -20419,14 +20466,11 @@ export class DesktopBackendRegistry {
             !codexNativeSubAgentIsTerminal(existing.status)
             && status !== existing.status
           );
-        if (!needsCardWrite) {
+        if (!needsCardWrite && !needsPricingWrite) {
           continue;
         }
 
         try {
-          const monitorTurnId =
-            existing?.monitorTurnId
-            ?? usageBackfill?.monitorTurnId;
           const subAgent: ThreadSubAgentSummary = {
             monitorId,
             task:
@@ -20465,33 +20509,23 @@ export class DesktopBackendRegistry {
             ...(usageBackfill ? { monitorUsage: usageBackfill.usage } : {}),
           };
 
-          // Persist pricing first. If the process exits between these two
-          // one-time writes, the still-missing card makes the next discovery
-          // retry the same stable usage-line id instead of stranding pricing.
-          if (usageBackfill && this.overlayStore.upsertThreadUsageLine) {
-            const line = buildTaskMonitorUsageLine({
-              backend: "codex",
-              fastMode: preferredFastMode,
-              model: preferredModel,
-              monitorId,
-              monitorThreadId: nativeThread.id,
-              monitorTurnId,
-              parentThreadId: parent.id,
-              reasoningEffort: preferredReasoningEffort,
-              serviceTier,
-              source: "monitor",
-              usage: usageBackfill.usage,
-            });
-            logUnpricedThreadUsageLine(line);
-            await this.overlayStore.upsertThreadUsageLine({ line });
+          // Pricing and the card are independently repairable. Persist pricing
+          // first for a missing card, while an already-present card can supply
+          // its durable usage snapshot if a prior pricing write failed.
+          if (needsPricingWrite && pricingLine) {
+            logUnpricedThreadUsageLine(pricingLine);
+            await this.overlayStore.upsertThreadUsageLine({ line: pricingLine });
+            parentPricingLines.push(pricingLine);
           }
 
-          params.overlaysByThreadId[parent.id] =
-            await this.overlayStore.upsertThreadSubAgent({
-              backend: "codex",
-              threadId: parent.id,
-              subAgent,
-            });
+          if (needsCardWrite) {
+            params.overlaysByThreadId[parent.id] =
+              await this.overlayStore.upsertThreadSubAgent({
+                backend: "codex",
+                threadId: parent.id,
+                subAgent,
+              });
+          }
           if (!codexNativeSubAgentIsTerminal(status)) {
             this.scheduleCodexNativeSubAgentReconciliation({
               delayMs: CODEX_NATIVE_SUBAGENT_INITIAL_STATUS_DELAY_MS,
