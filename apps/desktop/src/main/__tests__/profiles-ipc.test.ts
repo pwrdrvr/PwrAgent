@@ -11,6 +11,7 @@ import {
   startProfileRuntimeHeartbeat,
 } from "../profile";
 import { SECRET_STORAGE_DISABLED_ENV } from "../settings/desktop-secret-store";
+import { PROFILES_SET_DEFAULT_CHANNEL } from "../../shared/ipc";
 
 const spawnMock = vi.fn(() => ({
   unref: vi.fn(),
@@ -21,11 +22,13 @@ const safeStorageDecryptMock = vi.fn((buf: Buffer) =>
   buf.toString("utf8").replace(/^enc:/, ""),
 );
 const safeStorageIsAvailableMock = vi.fn(() => true);
+const ipcMainHandleMock = vi.fn();
+const ipcMainRemoveHandlerMock = vi.fn();
 
 vi.mock("electron", () => ({
   ipcMain: {
-    handle: vi.fn(),
-    removeHandler: vi.fn(),
+    handle: ipcMainHandleMock,
+    removeHandler: ipcMainRemoveHandlerMock,
   },
   shell: {
     trashItem: vi.fn(async () => undefined),
@@ -74,6 +77,8 @@ afterEach(() => {
   resetCachedActiveProfileNameForTests();
   getAppStateModeMock.mockReset();
   getAppStateModeMock.mockReturnValue("active-profile");
+  ipcMainHandleMock.mockReset();
+  ipcMainRemoveHandlerMock.mockReset();
   vi.unstubAllEnvs();
   spawnMock.mockClear();
   for (const root of roots.splice(0)) {
@@ -167,6 +172,35 @@ describe("profile IPC helpers", () => {
       listDesktopPwrAgentProfiles().profiles.find((profile) => profile.name === "work")
         ?.default,
     ).toBe(true);
+  });
+
+  it("notifies profile listeners after changing the default profile", async () => {
+    const root = createRoot();
+    const env = {
+      [PWRAGENT_HOME_ENV]: root,
+      [PWRAGENT_PROFILE_ENV]: "dev",
+    } as NodeJS.ProcessEnv;
+    ensureNamedProfileExists("dev", { env });
+    ensureNamedProfileExists("work", { env });
+    vi.stubEnv(PWRAGENT_HOME_ENV, root);
+    vi.stubEnv(PWRAGENT_PROFILE_ENV, "dev");
+    const { registerProfilesIpcHandlers } = await import("../ipc/profiles");
+    const onProfilesChanged = vi.fn();
+
+    registerProfilesIpcHandlers({ onProfilesChanged });
+    const handler = ipcMainHandleMock.mock.calls.find(
+      ([channel]) => channel === PROFILES_SET_DEFAULT_CHANNEL,
+    )?.[1] as
+      | ((event: unknown, request: { profile: string }) => Promise<unknown>)
+      | undefined;
+    if (handler === undefined) {
+      throw new Error("profiles:set-default handler was not registered");
+    }
+
+    await expect(handler({}, { profile: "work" })).resolves.toEqual({
+      profile: "work",
+    });
+    expect(onProfilesChanged).toHaveBeenCalledOnce();
   });
 
   it("replaces inherited profile launch arguments when opening another profile", async () => {

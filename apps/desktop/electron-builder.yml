@@ -2,6 +2,10 @@ appId: com.pwrdrvr.pwragent
 productName: PwrAgent
 copyright: "Copyright © 2026 PwrDrvr LLC."
 
+# Dock tile plug-ins are nested code. Sign the staged bundle before
+# electron-builder seals the parent PwrAgent.app for notarization.
+afterPack: "scripts/afterpack-sign-dock-tile-plugin.mjs"
+
 # Pinned so `pnpm deploy --prod` works — electron lives in devDependencies
 # and is therefore not present in the deploy stage's node_modules.
 # Keep this in sync with the apps/desktop Electron version resolved in
@@ -115,11 +119,15 @@ mac:
   helperRendererBundleId: com.pwrdrvr.pwragent.helper.Renderer
   helperGPUBundleId: com.pwrdrvr.pwragent.helper.GPU
   helperPluginBundleId: com.pwrdrvr.pwragent.helper.Plugin
+  extraFiles:
+    - from: build/native/PwrAgentDockTilePlugin.plugin
+      to: PlugIns/PwrAgentDockTilePlugin.plugin
   extendInfo:
     NSHumanReadableCopyright: "Copyright © 2026 PwrDrvr LLC."
     NSUserNotificationAlertStyle: alert
     LSMinimumSystemVersion: "12.0"
     LSApplicationCategoryType: public.app-category.developer-tools
+    NSDockTilePlugIn: PwrAgentDockTilePlugin.plugin
   target:
     - target: dmg
       arch: [universal]

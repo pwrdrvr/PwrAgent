@@ -504,8 +504,11 @@ export function registerProfilesIpcHandlers(
     async (
       _event,
       request: SetDefaultDesktopPwrAgentProfileRequest,
-    ): Promise<SetDefaultDesktopPwrAgentProfileResponse> =>
-      setDefaultDesktopPwrAgentProfile(request),
+    ): Promise<SetDefaultDesktopPwrAgentProfileResponse> => {
+      const response = setDefaultDesktopPwrAgentProfile(request);
+      options.onProfilesChanged?.();
+      return response;
+    },
   );
 
   ipcMain.removeHandler(PROFILES_DELETE_CHANNEL);
