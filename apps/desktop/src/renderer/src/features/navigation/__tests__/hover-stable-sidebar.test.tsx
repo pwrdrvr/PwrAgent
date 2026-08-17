@@ -116,21 +116,43 @@ describe("Sidebar hover-stable thread ordering", () => {
     }));
     const firstRow = hoverFirstThread();
 
-    const resorted = [bravo, alpha];
+    const offlineAlpha: NavigationThreadSummary = {
+      ...alpha,
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "remote-instance" },
+          threadId: alpha.id,
+        },
+        instanceLabel: "Remote fixture",
+        peerStatus: "disconnected",
+      },
+    };
+    const refreshedBravo = { ...bravo, title: "Bravo thread refreshed" };
+    const resorted = [refreshedBravo, offlineAlpha];
     view.rerender(renderSidebar({
       browseMode: "inbox",
       onSelectThread,
       threads: resorted,
     }));
 
-    expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread"]);
+    expect(threadTitles()).toEqual([
+      "Alpha thread",
+      "Bravo thread refreshed",
+    ]);
+    expect(firstRow.querySelector(".thread-row")).toHaveClass(
+      "is-remote-offline",
+    );
     fireEvent.click(within(firstRow).getByRole("button", { name: /^Alpha thread/ }));
     expect(onSelectThread).toHaveBeenCalledWith(
       expect.objectContaining({ id: "alpha" }),
     );
 
     leaveThreadBrowser();
-    expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
+    expect(threadTitles()).toEqual([
+      "Bravo thread refreshed",
+      "Alpha thread",
+    ]);
   });
 
   it("defers a legitimate Attention turn-boundary promotion until hover ends", () => {

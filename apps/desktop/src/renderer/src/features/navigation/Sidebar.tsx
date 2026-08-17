@@ -91,6 +91,60 @@ type ThreadContextMenuPosition = {
   anchorTop?: number;
 };
 
+type HoverStableSidebarSnapshot = {
+  directories: NavigationDirectorySummary[];
+  threads: NavigationThreadSummary[];
+};
+
+/**
+ * Refresh row content without accepting structural fields that can move a row
+ * while the pointer is resting on it. Live state such as federation health,
+ * turn status, PRs, and unread markers still reaches the stationary card.
+ */
+function hydrateHoverStableSidebarSnapshot(
+  frozen: HoverStableSidebarSnapshot,
+  latest: HoverStableSidebarSnapshot,
+): HoverStableSidebarSnapshot {
+  const latestDirectoriesByKey = new Map(
+    latest.directories.map((directory) => [directory.key, directory]),
+  );
+  const latestThreadsByKey = new Map(
+    latest.threads.map((thread) => [
+      buildThreadIdentityKey(thread.source, thread.id),
+      thread,
+    ]),
+  );
+
+  return {
+    directories: frozen.directories.map((directory) => {
+      const latestDirectory = latestDirectoriesByKey.get(directory.key);
+      return latestDirectory
+        ? {
+            ...latestDirectory,
+            pinnedRank: directory.pinnedRank,
+            threadKeys: directory.threadKeys,
+          }
+        : directory;
+    }),
+    threads: frozen.threads.map((thread) => {
+      const latestThread = latestThreadsByKey.get(
+        buildThreadIdentityKey(thread.source, thread.id),
+      );
+      return latestThread
+        ? {
+            ...latestThread,
+            createdAt: thread.createdAt,
+            parentThreadBackend: thread.parentThreadBackend,
+            parentThreadId: thread.parentThreadId,
+            parentThreadInstanceId: thread.parentThreadInstanceId,
+            pinnedRank: thread.pinnedRank,
+            subthreadOrder: thread.subthreadOrder,
+          }
+        : thread;
+    }),
+  };
+}
+
 type SidebarProps = {
   backends: BackendSummary[];
   browseMode: BrowseMode;
@@ -501,6 +555,7 @@ export function Sidebar(props: SidebarProps) {
           ? props.recentThreads ?? props.threads
           : updatedOrderThreads;
   const hoverStableSnapshot = useHoverStableSnapshot({
+    hydrateFrozenValue: hydrateHoverStableSidebarSnapshot,
     scope: props.browseMode,
     value: {
       directories: props.directories,

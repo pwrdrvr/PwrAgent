@@ -15,9 +15,12 @@ function closestHoverStableRow(target: EventTarget | null): Element | null {
  * Every lens keeps computing its authoritative order in the parent. This hook
  * only delays when that newest snapshot becomes visible, so an update cannot
  * replace the card under a stationary pointer between pointer-down and click.
- * Leaving the row area reveals the latest snapshot in one render.
+ * A caller can hydrate non-positional fields from the latest value while the
+ * structure is frozen. Leaving the row area reveals the latest snapshot in
+ * one render.
  */
 export function useHoverStableSnapshot<T>(params: {
+  hydrateFrozenValue?: (frozenValue: T, latestValue: T) => T;
   scope: string;
   value: T;
 }): {
@@ -80,6 +83,9 @@ export function useHoverStableSnapshot<T>(params: {
     onPointerLeave: release,
     onPointerOut,
     onPointerOver,
-    value: hoveringRowRef.current ? frozenValueRef.current : params.value,
+    value: hoveringRowRef.current
+      ? params.hydrateFrozenValue?.(frozenValueRef.current, params.value)
+        ?? frozenValueRef.current
+      : params.value,
   };
 }
