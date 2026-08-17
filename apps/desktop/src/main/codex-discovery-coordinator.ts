@@ -1,3 +1,4 @@
+import path from "node:path";
 import {
   CodexCliNotInstalledError,
   compareCodexCliVersions,
@@ -382,5 +383,28 @@ function mergeCodexDiscoveryCandidates(
       merged.push(candidate);
     }
   }
-  return merged;
+  if (platform !== "win32") {
+    return merged;
+  }
+  const isValidated = (
+    candidate: (typeof merged)[number],
+  ): boolean =>
+    candidate.executable
+    && Boolean(candidate.version)
+    && !candidate.failureReason
+    && !candidate.versionFailureReason;
+  const validatedCommands = new Set(
+    merged
+      .filter(isValidated)
+      .map((candidate) => candidate.command.toLowerCase()),
+  );
+  return merged.filter((candidate) => {
+    if (isValidated(candidate) || path.win32.extname(candidate.command)) {
+      return true;
+    }
+    const command = candidate.command.toLowerCase();
+    return !validatedCommands.has(`${command}.ps1`)
+      && !validatedCommands.has(`${command}.cmd`)
+      && !validatedCommands.has(`${command}.exe`);
+  });
 }

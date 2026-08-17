@@ -1,6 +1,5 @@
 import { execFile } from "node:child_process";
 import path from "node:path";
-import { promisify } from "node:util";
 import {
   createCommandInvocation,
   type CommandInvocation,
@@ -12,7 +11,6 @@ import {
   type CodexDiscoveryCandidate,
 } from "@pwrdrvr/codex-discovery";
 
-const execFileAsync = promisify(execFile);
 const CODEX_VERSION_PATTERN = /\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/;
 const POWERSHELL_SHIM_EXTENSION = ".ps1";
 const POWERSHELL_ARGS = [
@@ -28,6 +26,15 @@ const POWERSHELL_DISCOVERY_COMMAND = [
   "-ErrorAction SilentlyContinue",
   "| Select-Object -First 1;",
   "if ($null -ne $resolved) { [Console]::Out.Write($resolved.Source) }",
+].join(" ");
+const POWERSHELL_CODEX_DESKTOP_DISCOVERY_COMMAND = [
+  "Get-AppxPackage -Name OpenAI.Codex -ErrorAction SilentlyContinue",
+  "| ForEach-Object {",
+  "$candidate = Join-Path $_.InstallLocation 'app\\resources\\codex.exe';",
+  "if (Test-Path -LiteralPath $candidate -PathType Leaf) {",
+  "[Console]::Out.WriteLine($candidate)",
+  "}",
+  "}",
 ].join(" ");
 
 export type CodexPowerShellCommandRunner = (
@@ -96,7 +103,27 @@ async function defaultCommandRunner(
   args: string[],
   options: Parameters<CodexPowerShellCommandRunner>[2],
 ): Promise<{ stderr?: string | Buffer; stdout?: string | Buffer }> {
-  return await execFileAsync(command, args, options);
+  return await runCodexOneShot(command, args, options);
+}
+
+export async function runCodexOneShot(
+  command: string,
+  args: string[],
+  options: Parameters<CodexPowerShellCommandRunner>[2],
+): Promise<{ stderr?: string | Buffer; stdout?: string | Buffer }> {
+  return await new Promise((resolve, reject) => {
+    const child = execFile(command, args, options, (error, stdout, stderr) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve({ stderr, stdout });
+    });
+    if (child.stdin) {
+      child.stdin.on("error", () => undefined);
+      child.stdin.end();
+    }
+  });
 }
 
 async function inspectPowerShellCandidate(params: {
@@ -171,11 +198,47 @@ async function resolvePowerShellPathCommand(params: {
   }
 }
 
+function isCodexDesktopCliPath(command: string): boolean {
+  const normalized = path.win32.normalize(command.trim());
+  return (
+    path.win32.isAbsolute(normalized)
+    && normalized.toLowerCase().endsWith("\\app\\resources\\codex.exe")
+  );
+}
+
+async function resolveCodexDesktopCliCommands(params: {
+  env: NodeJS.ProcessEnv;
+  runner: CodexPowerShellCommandRunner;
+}): Promise<string[]> {
+  const powershell = resolveWindowsPowerShellExecutable(params.env);
+  try {
+    const result = await params.runner(
+      powershell,
+      [
+        ...POWERSHELL_ARGS,
+        "-Command",
+        POWERSHELL_CODEX_DESKTOP_DISCOVERY_COMMAND,
+      ],
+      {
+        env: params.env,
+        timeout: 5_000,
+        windowsHide: true,
+      },
+    );
+    return (result.stdout?.toString() ?? "")
+      .split(/\r?\n/)
+      .map((command) => command.trim())
+      .filter(isCodexDesktopCliPath);
+  } catch {
+    return [];
+  }
+}
+
 /**
- * Supplements shared Codex discovery for npm/nvm-windows installations that
- * expose only a PowerShell shim. PowerShell's own command resolver is the
- * source of truth for PATH precedence; fixed env/config paths retain their
- * normal priority ahead of automatic discovery.
+ * Supplements shared Codex discovery for npm/nvm-windows PowerShell shims and
+ * the current user's Codex Desktop MSIX package. PowerShell and AppX are the
+ * Windows sources of truth; fixed env/config paths retain their normal
+ * priority ahead of automatic discovery.
  */
 export async function discoverCodexPowerShellCandidates(params: {
   configuredCommand?: string;
@@ -207,12 +270,32 @@ export async function discoverCodexPowerShellCandidates(params: {
     ),
   );
   if (params.includePath === false) {
+    const desktopCommands = await resolveCodexDesktopCliCommands({
+      env: params.env,
+      runner,
+    });
+    candidates.push(...await Promise.all(
+      desktopCommands.map(async (command) =>
+        await inspectPowerShellCandidate({
+          command,
+          env: params.env,
+          runner,
+          source: "application",
+        }),
+      ),
+    ));
     return candidates;
   }
-  const resolvedPathCommand = await resolvePowerShellPathCommand({
-    env: params.env,
-    runner,
-  });
+  const [resolvedPathCommand, desktopCommands] = await Promise.all([
+    resolvePowerShellPathCommand({
+      env: params.env,
+      runner,
+    }),
+    resolveCodexDesktopCliCommands({
+      env: params.env,
+      runner,
+    }),
+  ]);
   if (
     resolvedPathCommand
     && !fixedCandidates.some(
@@ -226,9 +309,22 @@ export async function discoverCodexPowerShellCandidates(params: {
       runner,
       source: "path",
     });
-    if (pathCandidate.executable) {
-      candidates.push(pathCandidate);
-    }
+    candidates.push(pathCandidate);
   }
+  const knownCommands = new Set(
+    candidates.map((candidate) => candidate.command.toLowerCase()),
+  );
+  candidates.push(...await Promise.all(
+    desktopCommands
+      .filter((command) => !knownCommands.has(command.toLowerCase()))
+      .map(async (command) =>
+        await inspectPowerShellCandidate({
+          command,
+          env: params.env,
+          runner,
+          source: "application",
+        }),
+      ),
+  ));
   return candidates;
 }

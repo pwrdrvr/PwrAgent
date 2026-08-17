@@ -1,5 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { MessagingCredentialValidationResult } from "@pwragent/messaging-interface";
 import type {
   SettingsCredentialTestKind,
@@ -13,9 +11,10 @@ import {
   compareCodexCliVersions,
   MINIMUM_CODEX_CLI_VERSION,
 } from "@pwrdrvr/codex-discovery";
-import { createCodexCommandInvocation } from "../codex-powershell";
-
-const execFileAsync = promisify(execFile);
+import {
+  createCodexCommandInvocation,
+  runCodexOneShot,
+} from "../codex-powershell";
 
 const log = getMainLogger("pwragent:credential-tester");
 
@@ -405,7 +404,7 @@ async function defaultRunCodexVersion(
     args: ["--version"],
     env,
   });
-  const { stdout, stderr } = await execFileAsync(
+  const { stdout, stderr } = await runCodexOneShot(
     invocation.command,
     invocation.args,
     {

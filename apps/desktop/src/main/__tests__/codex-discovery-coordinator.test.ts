@@ -120,11 +120,6 @@ describe("CodexDiscoveryCoordinator", () => {
     await expect(coordinator.discover()).resolves.toMatchObject({
       candidates: [
         expect.objectContaining({
-          command: unresolvedCommand,
-          executable: false,
-          selected: false,
-        }),
-        expect.objectContaining({
           command: powerShellCommand,
           executable: true,
           selected: true,

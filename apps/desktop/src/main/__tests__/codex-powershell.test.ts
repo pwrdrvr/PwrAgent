@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createCodexCommandInvocation,
   discoverCodexPowerShellCandidates,
+  runCodexOneShot,
 } from "../codex-powershell";
 
 describe("Codex PowerShell support", () => {
@@ -52,6 +53,57 @@ describe("Codex PowerShell support", () => {
         version: "0.144.0",
       },
     ]);
-    expect(runner).toHaveBeenCalledTimes(2);
+    expect(runner).toHaveBeenCalledTimes(3);
+  });
+
+  it("closes stdin for a one-shot Codex probe", async () => {
+    const result = await runCodexOneShot(
+      process.execPath,
+      [
+        "-e",
+        "process.stdin.on('end', () => process.stdout.write('codex-cli 0.146.0')); process.stdin.resume();",
+      ],
+      {
+        env: process.env,
+        timeout: 2_000,
+        windowsHide: true,
+      },
+    );
+
+    expect(result.stdout?.toString()).toBe("codex-cli 0.146.0");
+  });
+
+  it("discovers the current user's Codex Desktop MSIX CLI", async () => {
+    const command = [
+      "C:\\Program Files\\WindowsApps",
+      "OpenAI.Codex_26.810.7004.0_x64__2p2nqsd0c76g0",
+      "app\\resources\\codex.exe",
+    ].join("\\");
+    const runner = vi.fn(async (_executable: string, args: string[]) => {
+      const script = args.at(-1) ?? "";
+      if (script.includes("Get-AppxPackage")) {
+        return { stdout: `${command}\r\n` };
+      }
+      if (script.includes("Get-Command")) {
+        return { stdout: "" };
+      }
+      return { stdout: "codex-cli 0.146.0" };
+    });
+
+    await expect(
+      discoverCodexPowerShellCandidates({
+        env: { SystemRoot: "C:\\Windows" },
+        includePath: false,
+        runner,
+      }),
+    ).resolves.toEqual([
+      {
+        command,
+        executable: true,
+        selected: false,
+        source: "application",
+        version: "0.146.0",
+      },
+    ]);
   });
 });
