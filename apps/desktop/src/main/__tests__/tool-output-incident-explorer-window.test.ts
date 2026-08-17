@@ -73,6 +73,11 @@ vi.mock("../window-show-thread", () => ({
 
 describe("tool-output incident explorer window", () => {
   beforeEach(() => {
+    /* The module keeps its open-window and owner maps in module scope, and
+       clearing `mocks.windows` restarts web-contents id allocation at 1. Reset
+       the module too, or a later test inherits an earlier test's entries under
+       ids that have since been handed to a different window. */
+    vi.resetModules();
     mocks.BrowserWindow.mockClear();
     mocks.windows.length = 0;
     mocks.applyWindowSecurityHardening.mockClear();
@@ -178,17 +183,23 @@ describe("tool-output incident explorer window", () => {
     )).toThrow("can only open its own thread");
   });
 
-  it("cleans up after Electron destroys the closed window", async () => {
-    const { showToolOutputIncidentExplorerWindow } = await import(
-      "../tool-output-incident-explorer-window"
-    );
+  it("retires the owner route after Electron destroys the closed window", async () => {
+    const {
+      showThreadFromToolOutputIncidentExplorer,
+      showToolOutputIncidentExplorerWindow,
+    } = await import("../tool-output-incident-explorer-window");
+    const sourceWindow = {
+      isDestroyed: vi.fn(() => false),
+      webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
+    };
     const request = {
       backend: "codex" as const,
       threadId: "thread-destroyed",
       title: "Destroyed window",
     };
-    showToolOutputIncidentExplorerWindow(request);
+    showToolOutputIncidentExplorerWindow(request, { sourceWindow } as never);
     const window = mocks.windows[0]!;
+    const sender = window.webContents;
     const closedHandler = window.on.mock.calls.find(
       ([event]) => event === "closed",
     )?.[1] as (() => void) | undefined;
@@ -202,7 +213,55 @@ describe("tool-output incident explorer window", () => {
     });
 
     expect(() => closedHandler?.()).not.toThrow();
+    /* Surviving the close is only half of it: the owner entry has to be gone.
+       A retained entry would keep routing chip clicks through a window the
+       operator already closed. */
+    expect(() => showThreadFromToolOutputIncidentExplorer(
+      sender as never,
+      { backend: "codex", threadId: "thread-destroyed" },
+    )).toThrow("no active owner window");
     showToolOutputIncidentExplorerWindow(request);
+    expect(mocks.BrowserWindow).toHaveBeenCalledTimes(2);
+  });
+
+  it("retires only its own registrations when a replaced window closes", async () => {
+    const {
+      showThreadFromToolOutputIncidentExplorer,
+      showToolOutputIncidentExplorerWindow,
+    } = await import("../tool-output-incident-explorer-window");
+    const sourceWindow = {
+      isDestroyed: vi.fn(() => false),
+      webContents: { isDestroyed: vi.fn(() => false), send: vi.fn() },
+    };
+    const request = {
+      backend: "codex" as const,
+      threadId: "thread-replaced",
+      title: "Replaced window",
+    };
+    showToolOutputIncidentExplorerWindow(request, { sourceWindow } as never);
+    const stale = mocks.windows[0]!;
+    stale.isDestroyed.mockReturnValue(true);
+    showToolOutputIncidentExplorerWindow(request, { sourceWindow } as never);
+    const replacement = mocks.windows[1]!;
+    expect(mocks.BrowserWindow).toHaveBeenCalledTimes(2);
+
+    const staleClosedHandler = stale.on.mock.calls.find(
+      ([event]) => event === "closed",
+    )?.[1] as (() => void) | undefined;
+    expect(staleClosedHandler).toBeDefined();
+    staleClosedHandler?.();
+
+    /* The late close retires the id the stale window held, never the id its
+       replacement now holds, so the thread stays routable. */
+    showThreadFromToolOutputIncidentExplorer(
+      replacement.webContents as never,
+      { backend: "codex", threadId: "thread-replaced" },
+    );
+    expect(mocks.requestShowThread).toHaveBeenCalledWith(
+      { backend: "codex", threadId: "thread-replaced" },
+      { preferWebContents: sourceWindow.webContents },
+    );
+    showToolOutputIncidentExplorerWindow(request, { sourceWindow } as never);
     expect(mocks.BrowserWindow).toHaveBeenCalledTimes(2);
   });
 });
