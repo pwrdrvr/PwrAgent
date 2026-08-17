@@ -2511,13 +2511,13 @@ describe("App", () => {
     });
   });
 
-  it("opens a directory-less composer after the wizard completes", async () => {
+  it("opens a directory-less composer on startup with a usable ACP backend", async () => {
     const ensureDirectoryLaunchpad = vi.fn(async () => ({
       launchpad: {
         directoryKey: "workspace:new-thread",
         directoryKind: "workspace" as const,
         directoryLabel: "Workspaces",
-        backend: "codex" as const,
+        backend: "acp:grok" as const,
         executionMode: "default" as const,
         prompt: "",
         workMode: "local" as const,
@@ -2545,7 +2545,7 @@ describe("App", () => {
             },
             onboarding: {
               completed: { value: true, source: "config" },
-              completedSource: { value: "wizard", source: "config" },
+              completedSource: { value: "migrated", source: "default" },
             },
             imageUploads: {
               pastedImageMaxPatches: { value: 1536, source: "default" },
@@ -2557,6 +2557,126 @@ describe("App", () => {
               },
             },
           } as DesktopSettingsSnapshot,
+        }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "acp:grok" as const,
+              source: "acp" as const,
+              label: "Grok",
+              available: true,
+              methods: ["thread/start", "turn/start"],
+              capabilities: {
+                listThreads: true,
+                createThread: true,
+                resumeThread: true,
+                renameThread: true,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: true,
+                steerTurn: true,
+                transcriptPagination: false,
+                toolUse: true,
+                approvalRequests: true,
+                multiDirectoryThreads: true,
+              },
+              executionModes: [],
+            },
+          ],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:thread-existing"],
+          threads: [
+            {
+              id: "thread-existing",
+              title: "Existing thread",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread" as const,
+              },
+              updatedAt: 1,
+            },
+          ],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        ensureDirectoryLaunchpad,
+        onAgentEvent: () => () => undefined,
+      },
+    });
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("textbox", { name: "New thread" }),
+    ).toBeInTheDocument();
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "workspace:new-thread",
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: undefined,
+      preferredBackend: "acp:grok",
+    });
+    await flushReactUpdates();
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+  });
+
+  it("reopens onboarding on startup when no backend can create a thread", async () => {
+    const ensureDirectoryLaunchpad = vi.fn();
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        readSettings: async () => ({
+          snapshot: {
+            general: {
+              appearance: {
+                theme: { value: "system", source: "default" },
+                density: { value: "mission-control", source: "default" },
+                sidebarTextSize: { value: "md", source: "default" },
+                transcriptTextSize: { value: "md", source: "default" },
+              },
+              codexProfileModel: { value: "shared", source: "default" },
+            },
+            onboarding: {
+              completed: { value: true, source: "config" },
+              completedSource: { value: "migrated", source: "default" },
+            },
+            imageUploads: {
+              pastedImageMaxPatches: { value: 1536, source: "default" },
+            },
+            models: {
+              codex: {
+                path: { value: "", source: "default" },
+                profile: { value: "", source: "default" },
+                discovery: {
+                  selectedCommand: undefined,
+                  candidates: [],
+                },
+                profiles: {
+                  profileRoot: "/home/example/.codex/profiles",
+                  effectiveCodexHome: "/home/example/.codex",
+                  profiles: [],
+                },
+              },
+            },
+            experimental: {
+              fullAccessRiskWarningDismissed: {
+                value: false,
+                source: "default",
+              },
+            },
+          } as unknown as DesktopSettingsSnapshot,
         }),
         listBackends: async () => ({
           fetchedAt: Date.now(),
@@ -2582,17 +2702,9 @@ describe("App", () => {
     render(<App />);
 
     expect(
-      await screen.findByRole("textbox", { name: "New thread" }),
+      await screen.findByRole("heading", { name: /A few short choices/i }),
     ).toBeInTheDocument();
-    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
-      directoryKey: "workspace:new-thread",
-      directoryKind: "workspace",
-      directoryLabel: "Workspaces",
-      directoryPath: undefined,
-      preferredBackend: undefined,
-    });
-    await flushReactUpdates();
-    expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+    expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
   });
 
   it("routes the new-thread menu push into the existing launchpad flow", async () => {
@@ -2642,10 +2754,9 @@ describe("App", () => {
             },
           } as DesktopSettingsSnapshot,
         }),
-        listBackends: async () => ({
-          fetchedAt: Date.now(),
-          backends: [],
-        }),
+        listBackends: async () => {
+          throw new Error("Backend discovery is temporarily unavailable.");
+        },
         getNavigationSnapshot: async () => ({
           backend: "all" as const,
           fetchedAt: Date.now(),

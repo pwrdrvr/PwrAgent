@@ -18,6 +18,7 @@ import {
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   isRemoteFederationTarget,
   parseThreadIdentityKey,
+  resolveNewThreadBackend,
   type AppServerBackendKind,
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
@@ -319,7 +320,9 @@ function DesktopAppShell(props: {
     "auto" | "replay" | null
   >(null);
   const [autoOpenSeen, setAutoOpenSeen] = useState(false);
-  const postOnboardingWorkspaceOpenStartedRef = useRef(false);
+  const startupLandingStateRef = useRef<
+    "pending" | "onboarding-opened" | "complete"
+  >("pending");
   // Boot info is fetched once on mount and is stable across the
   // renderer's lifetime (the main process recorded it before this
   // window opened — see `recordBootDecision` in app-state.ts). The
@@ -1220,6 +1223,10 @@ function DesktopAppShell(props: {
     federationTarget: activeFederationTarget,
     suspended: !peerConnectivity.connected,
   });
+  const startupBackend = useMemo(
+    () => resolveNewThreadBackend(backendSummaries.backends),
+    [backendSummaries.backends],
+  );
   const refreshAcpAgents = backendSummaries.refreshAcpAgents;
   const refreshSelectedAcpProvider = useCallback(
     async (
@@ -1705,35 +1712,44 @@ function DesktopAppShell(props: {
     settings.snapshot?.onboarding?.completed.value,
   ]);
   useEffect(() => {
-    const onboarding = settings.snapshot?.onboarding;
-    const workspaceLaunchpadExists = navigation.directories.some(
-      (directory) => directory.kind === "workspace",
-    );
     if (
-      onboarding?.completed.value !== true
-      || onboarding?.completedSource?.value !== "wizard"
+      settings.snapshot?.onboarding?.completed.value !== true
       || onboardingOpen !== null
       || Boolean(readRendererFederationTarget())
       || !navigation.loaded
-      || workspaceLaunchpadExists
-      || postOnboardingWorkspaceOpenStartedRef.current
+      || !backendSummaries.loaded
+      || !desktopApi?.listBackends
+      || startupLandingStateRef.current === "complete"
     ) {
       return;
     }
 
-    // The wizard's real profile may be this window or a freshly spawned one.
-    // Its first directory-less launchpad is therefore the durable signal that
-    // the post-wizard landing has not happened yet. Opening it persists that
-    // launchpad, so later app launches keep the operator's normal selection.
-    postOnboardingWorkspaceOpenStartedRef.current = true;
+    if (!startupBackend) {
+      // A discovery failure is not proof that the profile has no configured
+      // provider. Let a later refresh make the startup decision instead of
+      // sending the operator through setup because of a transient outage.
+      if (backendSummaries.error) {
+        return;
+      }
+      if (startupLandingStateRef.current === "pending") {
+        startupLandingStateRef.current = "onboarding-opened";
+        setOnboardingOpen("replay");
+      }
+      return;
+    }
+
+    startupLandingStateRef.current = "complete";
     setMainView("thread");
-    void openWorkspaceLaunchpad();
+    void openWorkspaceLaunchpad(startupBackend.kind);
   }, [
-    navigation.directories,
+    backendSummaries.error,
+    backendSummaries.loaded,
+    desktopApi,
     navigation.loaded,
     onboardingOpen,
     openWorkspaceLaunchpad,
-    settings.snapshot?.onboarding,
+    settings.snapshot?.onboarding?.completed.value,
+    startupBackend,
   ]);
   const loadThreadDetail = threadViewReady && mainView === "thread";
   const session = useThreadSessionState({
