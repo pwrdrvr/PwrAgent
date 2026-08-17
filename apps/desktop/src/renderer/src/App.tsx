@@ -1713,6 +1713,7 @@ function DesktopAppShell(props: {
       onboarding?.completed.value !== true
       || onboarding?.completedSource?.value !== "wizard"
       || onboardingOpen !== null
+      || Boolean(readRendererFederationTarget())
       || !navigation.loaded
       || workspaceLaunchpadExists
       || postOnboardingWorkspaceOpenStartedRef.current
