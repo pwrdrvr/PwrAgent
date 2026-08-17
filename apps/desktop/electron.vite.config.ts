@@ -52,6 +52,10 @@ export default defineConfig(({ command }) => {
             "mcp-connection-bridge": resolve(
               __dirname,
               "src/main/mcp-connections/mcp-connection-bridge-entry.ts"
+            ),
+            "token-miser-hook": resolve(
+              __dirname,
+              "src/main/token-miser/token-miser-hook-entry.ts"
             )
           },
           output: {
