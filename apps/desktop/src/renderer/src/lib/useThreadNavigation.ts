@@ -355,9 +355,23 @@ function upsertLaunchpadDirectory(
   },
 ): NavigationSnapshot["directories"] {
   let foundDirectory = false;
-  const existingDirectory = directories.find(
+  const exactDirectory = directories.find(
     (directory) => directory.key === launchpad.directoryKey,
   );
+  // A viewer can open a directory-less draft before its first owner snapshot
+  // arrives. Once the path-backed workspace appears, the temporary
+  // `workspace:new-thread` key is an alias for that row, not another project.
+  const canonicalWorkspaceDirectory =
+    launchpad.directoryKind === "workspace"
+    && launchpad.directoryKey === ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY
+      ? directories.find(
+          (directory) =>
+            directory.kind === "workspace"
+            && directory.key !== ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY
+            && Boolean(directory.path),
+        )
+      : undefined;
+  const existingDirectory = canonicalWorkspaceDirectory ?? exactDirectory;
   const displayLabel = options?.preserveExistingDirectoryAuthority
     && existingDirectory
     ? existingDirectory.label
@@ -382,8 +396,10 @@ function upsertLaunchpadDirectory(
       : launchpad.branchName;
   const normalizedLaunchpad = {
     ...launchpad,
-    ...(options?.preserveExistingDirectoryAuthority && existingDirectory
+    ...((options?.preserveExistingDirectoryAuthority || canonicalWorkspaceDirectory)
+      && existingDirectory
       ? {
+          directoryKey: existingDirectory.key,
           directoryKind: existingDirectory.kind,
           directoryLabel: existingDirectory.label,
           directoryPath: existingDirectory.path,
@@ -401,9 +417,25 @@ function upsertLaunchpadDirectory(
   const inheritedGitStatus = hasGitStatusOverride
     ? options.gitStatus ?? undefined
     : sourceDirectory?.gitStatus;
-  const nextDirectories = directories.map((directory) => {
+  const fallbackWorkspaceDirectory =
+    normalizedLaunchpad.directoryKind === "workspace"
+    && normalizedLaunchpad.directoryKey !== ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY
+      ? directories.find(
+          (directory) =>
+            directory.kind === "workspace"
+            && directory.key === ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY,
+        )
+      : undefined;
+  const nextDirectories = directories.flatMap((directory) => {
+    if (
+      fallbackWorkspaceDirectory
+      && directory.key === fallbackWorkspaceDirectory.key
+    ) {
+      return [];
+    }
+
     if (directory.key !== normalizedLaunchpad.directoryKey) {
-      return directory;
+      return [directory];
     }
 
     foundDirectory = true;
@@ -414,6 +446,22 @@ function upsertLaunchpadDirectory(
       path: normalizedLaunchpad.directoryPath ?? directory.path,
       launchpad: normalizedLaunchpad,
     };
+    if (fallbackWorkspaceDirectory) {
+      next.threadKeys = [
+        ...new Set([
+          ...directory.threadKeys,
+          ...fallbackWorkspaceDirectory.threadKeys,
+        ]),
+      ];
+      next.needsAttentionCount = Math.max(
+        directory.needsAttentionCount,
+        fallbackWorkspaceDirectory.needsAttentionCount,
+      );
+      next.latestUpdatedAt = Math.max(
+        directory.latestUpdatedAt ?? 0,
+        fallbackWorkspaceDirectory.latestUpdatedAt ?? 0,
+      ) || undefined;
+    }
     if (hasGitStatusOverride) {
       if (inheritedGitStatus) {
         next.gitStatus = inheritedGitStatus;
@@ -423,7 +471,7 @@ function upsertLaunchpadDirectory(
     } else if (!directory.gitStatus && inheritedGitStatus) {
       next.gitStatus = inheritedGitStatus;
     }
-    return next;
+    return [next];
   });
 
   return sortNavigationDirectories(
@@ -432,12 +480,14 @@ function upsertLaunchpadDirectory(
       : [
           ...nextDirectories,
           {
+            ...(fallbackWorkspaceDirectory ?? {}),
             key: normalizedLaunchpad.directoryKey,
             kind: normalizedLaunchpad.directoryKind,
             label: displayLabel,
             path: normalizedLaunchpad.directoryPath,
-            threadKeys: [],
-            needsAttentionCount: 0,
+            threadKeys: fallbackWorkspaceDirectory?.threadKeys ?? [],
+            needsAttentionCount:
+              fallbackWorkspaceDirectory?.needsAttentionCount ?? 0,
             ...(inheritedGitStatus
               ? { gitStatus: inheritedGitStatus }
               : {}),
@@ -4698,6 +4748,49 @@ export function useThreadNavigation(
       rendererFederationTarget,
     ]
   );
+
+  useEffect(() => {
+    // Move the renderer-local fallback draft and its selection onto the
+    // authoritative workspace key. Keeping the alias in localLaunchpads would
+    // reintroduce it after every snapshot refresh.
+    const canonicalWorkspace = state.response?.directories.find(
+      (directory) =>
+        directory.kind === "workspace"
+        && directory.key !== ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY
+        && Boolean(directory.path),
+    );
+    if (!canonicalWorkspace) {
+      return;
+    }
+
+    setLocalLaunchpads((current) => {
+      const fallbackLaunchpad = current[ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY];
+      if (!fallbackLaunchpad) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY];
+      const canonicalLaunchpad =
+        current[canonicalWorkspace.key]
+        ?? fallbackLaunchpad
+        ?? canonicalWorkspace.launchpad;
+      next[canonicalWorkspace.key] = {
+        ...canonicalLaunchpad,
+        directoryKey: canonicalWorkspace.key,
+        directoryKind: "workspace",
+        directoryLabel: canonicalWorkspace.label,
+        directoryPath: canonicalWorkspace.path,
+      };
+      return next;
+    });
+
+    setSelectedItemKey((current) =>
+      current === buildLaunchpadSelectionKey(ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY)
+        ? buildLaunchpadSelectionKey(canonicalWorkspace.key)
+        : current
+    );
+  }, [state.response?.directories]);
 
   const inboxThreads = threads;
   const recentThreads = useMemo(

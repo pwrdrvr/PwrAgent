@@ -6950,6 +6950,120 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("rebases a loading fallback launchpad without duplicating it or losing viewer input", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "owner-mini",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
+    const initialSnapshot = createDeferred<NavigationSnapshot>();
+    const workspaceKey = "workspace:/Users/test/.pwragent/profiles/default/projects";
+    const canonicalSnapshot: NavigationSnapshot = {
+      backend: "all",
+      federationTarget,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [{
+        key: workspaceKey,
+        kind: "workspace",
+        label: "Workspaces",
+        path: "/Users/test/.pwragent/profiles/default/projects",
+        threadKeys: ["codex:scratch-thread"],
+        needsAttentionCount: 1,
+        pinnedRank: "6144",
+        launchpad: {
+          directoryKey: workspaceKey,
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: "/Users/test/.pwragent/profiles/default/projects",
+          backend: "codex",
+          executionMode: "default",
+          model: "owner-model",
+          prompt: "Owner snapshot draft",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      }],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const fallbackLaunchpad: NavigationLaunchpadDraft = {
+      directoryKey: "workspace:new-thread",
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      backend: "codex",
+      executionMode: "default",
+      model: "viewer-model",
+      prompt: "Viewer unsent draft",
+      workMode: "local",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: fallbackLaunchpad,
+      defaults: canonicalSnapshot.launchpadDefaults,
+    }));
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockReturnValueOnce(initialSnapshot.promise)
+      .mockResolvedValue(canonicalSnapshot);
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    let create!: Promise<void>;
+    act(() => {
+      create = result.current.createThread(undefined, "default", {
+        forceWorkspace: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+        federationTarget,
+        directoryKey: "workspace:new-thread",
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+        directoryPath: undefined,
+        preferredBackend: undefined,
+      });
+    });
+
+    await act(async () => {
+      initialSnapshot.resolve(canonicalSnapshot);
+      await create;
+    });
+
+    await waitFor(() => {
+      expect(result.current.directories).toHaveLength(1);
+      expect(result.current.directories[0]).toMatchObject({
+        key: workspaceKey,
+        path: "/Users/test/.pwragent/profiles/default/projects",
+        threadKeys: ["codex:scratch-thread"],
+        needsAttentionCount: 1,
+        pinnedRank: "6144",
+        launchpad: {
+          directoryKey: workspaceKey,
+          directoryPath: "/Users/test/.pwragent/profiles/default/projects",
+          model: "viewer-model",
+          prompt: "Viewer unsent draft",
+        },
+      });
+      expect(result.current.selectedItemKey).toBe(`launchpad:${workspaceKey}`);
+      expect(result.current.selectedDirectory?.key).toBe(workspaceKey);
+    });
+  });
+
   it("creates a new thread in the selected thread's project directory", async () => {
     const directoryKey = "directory:/Users/test/PwrAgent";
     const ensureDirectoryLaunchpad = vi.fn(async () => ({
