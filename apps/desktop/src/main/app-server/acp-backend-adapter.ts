@@ -154,6 +154,63 @@ export type AcpTransportFactory = (
 ) => AcpJsonRpcTransport;
 export type LocalAcpDiscovery = () => Promise<AcpInstalledAgentRecord[]>;
 
+/**
+ * Real local ACP discovery, and the only discovery that reaches outside this
+ * process: it reads the operator's PwrAgent config, scans their machine for
+ * installed CLIs, and may fetch a release listing from GitHub and install a
+ * managed Grok build under the PwrAgent root before probing it.
+ *
+ * `AcpBackendAdapter` never reaches for this on its own — `discoverLocalAcpAgents`
+ * is a required option, so the caller always says which discovery it wants. That
+ * is deliberate: while the adapter defaulted to this factory, any test that
+ * forgot to pass one silently inherited whatever the developer had installed,
+ * and a plain `pnpm test` would download a Grok runtime into `~/.pwragent`
+ * and then spend 5-16s per lookup probing it. Tests inject their own.
+ */
+export function createLocalAcpAgentDiscovery(params?: {
+  resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
+}): LocalAcpDiscovery {
+  return async () => {
+    // Chat-launch discovery runs through the kit's multi-install discovery
+    // (same as the settings path), so the binary that launches is the
+    // resolved active install (override → picked → first) and every agent's
+    // cliPath override is honored — consistent with what Settings shows.
+    // Read + parse the config once for all four agents (override + enabled),
+    // not once per lookup.
+    const config = readDesktopSettingsConfigSafe();
+    const preferences: Record<string, AcpAgentPreference> = {};
+    const enabledRegistryIds = ["gemini", "grok", "kimi", "qwen"].filter(
+      (registryId) => acpAgentEnabledFor(config, registryId),
+    );
+    for (const registryId of enabledRegistryIds) {
+      const override = acpCliPathOverrideFor(config, registryId);
+      if (override) {
+        preferences[registryId] = { overridePath: override };
+      }
+    }
+    const env = await params?.resolveEnv?.();
+    const records = await discoverLocalAcpAgentRecords({
+      enabledRegistryIds,
+      managedGrok: {
+        enabled:
+          acpAgentEnabledFor(config, "grok")
+          && managedGrokBuildsEnabledForRuntime(
+            config,
+            {
+              env: env ?? process.env,
+              isPackaged: app?.isPackaged === true,
+            },
+          ),
+        checkMode: app?.isPackaged === true ? "ttl" : "once-per-process",
+        requirePlatformSignature: app?.isPackaged === true,
+      },
+      ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
+      ...(env ? { env } : {}),
+    });
+    return records;
+  };
+}
+
 export type AcpSessionStoreLike =
   Pick<AcpSessionStoreContract, "getSession" | "listSessions"> &
   Partial<Pick<AcpSessionStoreContract, "upsertSession">>;
@@ -189,8 +246,11 @@ export type AcpBackendAdapterOptions = {
   automationInspectionMcpCommand?: string;
   createAcpClient?: AcpClientFactory;
   createAcpTransport?: AcpTransportFactory;
-  discoverLocalAcpAgents?: LocalAcpDiscovery;
-  resolveLocalAcpDiscoveryEnv?: () => Promise<NodeJS.ProcessEnv>;
+  /**
+   * Required so no caller can silently inherit machine-wide discovery.
+   * Production passes `createLocalAcpAgentDiscovery(...)`; tests pass a stub.
+   */
+  discoverLocalAcpAgents: LocalAcpDiscovery;
   isAcpAgentEnabled?: (registryId: string) => boolean;
   checkGrokCliUpdate?: typeof checkGrokCliUpdate | null;
   resolveMcpConnectionServers?: (context: {
@@ -1011,47 +1071,7 @@ export class AcpBackendAdapter {
           (isAppStateInitialized()
             ? new AcpRolloutStore(resolveDefaultAcpRolloutRoot())
             : undefined);
-    this.discoverLocalAcpAgents =
-      options.discoverLocalAcpAgents ??
-      (async () => {
-        // Chat-launch discovery runs through the kit's multi-install discovery
-        // (same as the settings path), so the binary that launches is the
-        // resolved active install (override → picked → first) and every agent's
-        // cliPath override is honored — consistent with what Settings shows.
-        // Read + parse the config once for all four agents (override + enabled),
-        // not once per lookup.
-        const config = readDesktopSettingsConfigSafe();
-        const preferences: Record<string, AcpAgentPreference> = {};
-        const enabledRegistryIds = ["gemini", "grok", "kimi", "qwen"].filter(
-          (registryId) => acpAgentEnabledFor(config, registryId),
-        );
-        for (const registryId of enabledRegistryIds) {
-          const override = acpCliPathOverrideFor(config, registryId);
-          if (override) {
-            preferences[registryId] = { overridePath: override };
-          }
-        }
-        const env = await options.resolveLocalAcpDiscoveryEnv?.();
-        const records = await discoverLocalAcpAgentRecords({
-          enabledRegistryIds,
-          managedGrok: {
-            enabled:
-              acpAgentEnabledFor(config, "grok")
-              && managedGrokBuildsEnabledForRuntime(
-                config,
-                {
-                  env: env ?? process.env,
-                  isPackaged: app?.isPackaged === true,
-                },
-              ),
-            checkMode: app?.isPackaged === true ? "ttl" : "once-per-process",
-            requirePlatformSignature: app?.isPackaged === true,
-          },
-          ...(Object.keys(preferences).length > 0 ? { preferences } : {}),
-          ...(env ? { env } : {}),
-        });
-        return records;
-      });
+    this.discoverLocalAcpAgents = options.discoverLocalAcpAgents;
     this.isAcpAgentEnabled = options.isAcpAgentEnabled;
     this.createAcpTransport = options.createAcpTransport;
     this.createAcpClient =

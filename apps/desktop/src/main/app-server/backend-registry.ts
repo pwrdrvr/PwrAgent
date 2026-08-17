@@ -317,6 +317,7 @@ import {
   acpRuntimeValueLooksPrivileged,
   acpSessionHasConversationHistory,
   acpSessionToThreadSummary,
+  createLocalAcpAgentDiscovery,
   findAcpModelConfigOption,
   findAcpThoughtLevelConfigOption,
   formatAcpRuntimeLabel,
@@ -7457,10 +7458,16 @@ export class DesktopBackendRegistry {
       agentToolMcpServer,
       captureStores: this.captureStores,
       createAcpClient: options?.createAcpClient,
-      discoverLocalAcpAgents: options?.discoverLocalAcpAgents,
-      resolveLocalAcpDiscoveryEnv: settingsService
-        ? async () => await settingsService.resolveTerminalSpawnEnvAsync()
-        : undefined,
+      discoverLocalAcpAgents:
+        options?.discoverLocalAcpAgents
+        ?? createLocalAcpAgentDiscovery(
+          settingsService
+            ? {
+                resolveEnv: async () =>
+                  await settingsService.resolveTerminalSpawnEnvAsync(),
+              }
+            : undefined,
+        ),
       isAcpAgentEnabled: options?.isAcpAgentEnabled,
       emit: async (event) => {
         this.rememberAcpAvailableCommands(event);
