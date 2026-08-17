@@ -11,6 +11,11 @@ import type {
 import { DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
+import {
+  invalidateDesktopSettingsRead,
+  readDesktopSettingsCoalesced,
+  rememberDesktopSettingsSnapshot,
+} from "../../lib/settings-read-coordinator";
 
 export type DesktopSettingsState = {
   composerImplementation: DesktopChatReplyComposer;
@@ -36,7 +41,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
 
-  const refresh = useCallback(async (): Promise<void> => {
+  const read = useCallback(async (force = false): Promise<void> => {
     if (!desktopApi?.readSettings) {
       return;
     }
@@ -44,7 +49,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
     setLoading(true);
     setError(undefined);
     try {
-      const response = await desktopApi.readSettings({});
+      const response = await readDesktopSettingsCoalesced(desktopApi, { force });
       setSnapshot(response.snapshot);
     } catch (readError) {
       setError(readError instanceof Error ? readError.message : String(readError));
@@ -53,9 +58,13 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
     }
   }, [desktopApi]);
 
+  const refresh = useCallback(async (): Promise<void> => {
+    await read(true);
+  }, [read]);
+
   useEffect(() => {
-    void refresh();
-  }, [refresh]);
+    void read();
+  }, [read]);
 
   const writeConfig = useCallback(
     async (patch: DesktopSettingsConfigPatch): Promise<boolean> => {
@@ -67,9 +76,11 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
       setSaving(true);
       setError(undefined);
       try {
+        invalidateDesktopSettingsRead(desktopApi);
         const request: WriteDesktopSettingsConfigRequest = { patch };
         const response = await desktopApi.writeSettingsConfig(request);
         setSnapshot(response.snapshot);
+        rememberDesktopSettingsSnapshot(desktopApi, response);
         if (
           patch.models?.codex?.path !== undefined
           || patch.acpAgents !== undefined
@@ -108,6 +119,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         const request: ReplaceDesktopSettingsSecretRequest = { secret, value };
         const response = await desktopApi.replaceSettingsSecret(request);
         setSnapshot(response.snapshot);
+        rememberDesktopSettingsSnapshot(desktopApi, response);
         return true;
       } catch (writeError) {
         setError(writeError instanceof Error ? writeError.message : String(writeError));
@@ -132,6 +144,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         const request: ClearDesktopSettingsSecretRequest = { secret };
         const response = await desktopApi.clearSettingsSecret(request);
         setSnapshot(response.snapshot);
+        rememberDesktopSettingsSnapshot(desktopApi, response);
         return true;
       } catch (writeError) {
         setError(writeError instanceof Error ? writeError.message : String(writeError));
@@ -143,9 +156,17 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
     [desktopApi],
   );
 
+  const applySnapshot = useCallback(
+    (nextSnapshot: DesktopSettingsSnapshot): void => {
+      setSnapshot(nextSnapshot);
+      rememberDesktopSettingsSnapshot(desktopApi, { snapshot: nextSnapshot });
+    },
+    [desktopApi],
+  );
+
   return useMemo(
     () => ({
-      applySnapshot: setSnapshot,
+      applySnapshot,
       clearSecret,
       composerImplementation: DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT,
       error,
@@ -157,6 +178,7 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
       writeConfig,
     }),
     [
+      applySnapshot,
       clearSecret,
       error,
       loading,

@@ -50,7 +50,7 @@ function deferred<T>(): {
 }
 
 describe("CodexDiscoveryCoordinator", () => {
-  it("prefers a Windows PATHEXT launcher over an extensionless npm shim", async () => {
+  it("delegates Windows PATHEXT resolution to shared Codex discovery", async () => {
     const windowsCommand = "C:\\nvm4w\\nodejs\\codex.CMD";
     const env = {
       Path: "C:\\nvm4w\\nodejs;C:\\Windows\\System32",
@@ -59,7 +59,6 @@ describe("CodexDiscoveryCoordinator", () => {
     const discover = vi.fn(async () => selectedSnapshot(windowsCommand));
     const coordinator = new CodexDiscoveryCoordinator({
       discover,
-      pathExists: async (candidate) => candidate === windowsCommand,
       platform: "win32",
       resolveEnv: async () => env,
     });
@@ -69,7 +68,7 @@ describe("CodexDiscoveryCoordinator", () => {
       version: "0.126.0",
     });
     expect(discover).toHaveBeenCalledWith({
-      configuredCommand: windowsCommand,
+      configuredCommand: undefined,
       env,
       platform: "win32",
     });
@@ -272,14 +271,18 @@ describe("CodexDiscoveryCoordinator", () => {
   });
 
   it("coalesces force refreshes and bypasses a fresh cache entry", async () => {
+    let now = 0;
     const discover = vi.fn()
       .mockResolvedValueOnce(selectedSnapshot("/old/codex"))
       .mockResolvedValueOnce(selectedSnapshot("/forced/codex"));
     const coordinator = new CodexDiscoveryCoordinator({
       discover,
+      forceReuseTtlMs: 5,
+      now: () => now,
       resolveEnv: async () => ({ PATH: "/bin" }),
     });
     await coordinator.discover();
+    now = 5;
 
     const [first, second] = await Promise.all([
       coordinator.discover(undefined, { force: true }),
@@ -288,6 +291,50 @@ describe("CodexDiscoveryCoordinator", () => {
 
     expect(first).toEqual(selectedSnapshot("/forced/codex"));
     expect(second).toEqual(first);
+    expect(discover).toHaveBeenCalledTimes(2);
+  });
+
+  it("reuses a just-finished result for sequential force requests", async () => {
+    let now = 0;
+    const discover = vi.fn(async () => selectedSnapshot("/bin/codex"));
+    const coordinator = new CodexDiscoveryCoordinator({
+      discover,
+      forceReuseTtlMs: 5_000,
+      now: () => now,
+      resolveEnv: async () => ({ PATH: "/bin" }),
+    });
+
+    const first = await coordinator.discover(undefined, { force: true });
+    now = 4_999;
+    const second = await coordinator.discover(undefined, { force: true });
+
+    expect(second).toEqual(first);
+    expect(discover).toHaveBeenCalledOnce();
+  });
+
+  it("serializes probes for different configured Codex targets", async () => {
+    const firstProbe = deferred<CodexDiscoverySnapshot>();
+    const discover = vi.fn()
+      .mockReturnValueOnce(firstProbe.promise)
+      .mockResolvedValueOnce(selectedSnapshot("/second/codex"));
+    const coordinator = new CodexDiscoveryCoordinator({
+      discover,
+      resolveEnv: async () => ({ PATH: "/bin" }),
+    });
+
+    const first = coordinator.discover("/first/codex");
+    const second = coordinator.discover("/second/codex");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(discover).toHaveBeenCalledOnce();
+
+    firstProbe.resolve(selectedSnapshot("/first/codex"));
+    await expect(first).resolves.toMatchObject({
+      selectedCommand: "/first/codex",
+    });
+    await expect(second).resolves.toMatchObject({
+      selectedCommand: "/second/codex",
+    });
     expect(discover).toHaveBeenCalledTimes(2);
   });
 

@@ -1288,11 +1288,13 @@ describe("settings ipc", () => {
       await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.({}, { refresh: true });
       expect(probe).toHaveBeenCalledTimes(2);
 
-      // Forced refresh ("Discover new"): re-probe regardless of freshness.
+      // A forced refresh arriving immediately after that probe reuses its
+      // result. "Discover new" may bypass older capability freshness, but it
+      // must not create a rapid-fire sequential launch.
       await handlers
         .get(ACP_AGENTS_LIST_CHANNEL)
         ?.({}, { refresh: true, force: true });
-      expect(probe).toHaveBeenCalledTimes(3);
+      expect(probe).toHaveBeenCalledTimes(2);
     } finally {
       disposeAppState();
     }
@@ -1366,18 +1368,29 @@ describe("settings ipc", () => {
         }),
       );
 
-      // A non-forced caller that arrives during a stronger forced pass must
-      // ride that pass instead of launching the same runtime in parallel.
-      const forced = handler?.({}, { refresh: true, force: true });
+      // Force bypasses an old cache, but a forced caller that arrives while
+      // the same ordinary probe is active must ride that pass instead of
+      // launching the same runtime in parallel.
+      const regular = handler?.({}, { refresh: true });
       await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
       const forcedFollower = handler?.({}, { refresh: true, force: true });
-      const regular = handler?.({}, { refresh: true });
+      const regularFollower = handler?.({}, { refresh: true });
       const targetedForced = handler?.(
         {},
         { refresh: true, force: true, registryIds: ["gemini"] },
       );
       releaseProbe?.();
-      await Promise.all([forced, forcedFollower, regular, targetedForced]);
+      await Promise.all([
+        regular,
+        forcedFollower,
+        regularFollower,
+        targetedForced,
+      ]);
+      expect(probe).toHaveBeenCalledTimes(1);
+
+      // A late duplicate that arrives just after the shared pass completed
+      // reuses that same result instead of starting a sequential second probe.
+      await handler?.({}, { refresh: true, force: true });
       expect(probe).toHaveBeenCalledTimes(1);
 
       // The reverse ordering also coordinates the actual per-provider probe:
