@@ -1,3 +1,5 @@
+import os from "node:os";
+import path from "node:path";
 import { defineConfig } from "vitest/config";
 
 // Windows CI runners are markedly slower at spawning child processes (git.exe,
@@ -5,6 +7,27 @@ import { defineConfig } from "vitest/config";
 // Give Windows more headroom; POSIX keeps the standard timeout.
 const TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 5_000;
 const HOOK_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 10_000;
+
+// Where the desktop suites resolve the PwrAgent root to. `resolvePwragentRoot`
+// falls back to `~/.pwragent` — the operator's live application state — and
+// only about a dozen main tests override it themselves, so every other test
+// that reaches a root-relative path reads and writes the real thing. That is
+// not hypothetical: `ensureManagedGrokRuntime` installed a ~353 MB Grok runtime
+// into `~/.pwragent/agents/grok/` from a plain `pnpm test`.
+//
+// Nothing pre-creates this directory. A run where the suites behave leaves no
+// trace at all; a run that writes leaves the evidence in the OS temp dir under
+// an obvious name instead of in the operator's home. The pid keeps concurrent
+// runs (several worktrees testing at once is normal here) off each other's
+// state, and is stable for the whole run because the config is evaluated once
+// in the vitest host process.
+//
+// A test that needs its own root still overrides this with `vi.stubEnv` or an
+// explicit `env` argument, both of which win over the value seeded here.
+const DISPOSABLE_PWRAGENT_HOME = path.join(
+  os.tmpdir(),
+  `pwragent-vitest-home-${process.pid}`,
+);
 
 export default defineConfig({
   test: {
@@ -34,6 +57,7 @@ export default defineConfig({
           testTimeout: TEST_TIMEOUT_MS,
           hookTimeout: HOOK_TIMEOUT_MS,
           environment: "node",
+          env: { PWRAGENT_HOME: DISPOSABLE_PWRAGENT_HOME },
           include: [
             "scripts/**/*.test.mjs",
             ".agents/skills/codex-rollout-forensics/tests/**/*.test.mjs",
@@ -50,6 +74,9 @@ export default defineConfig({
             // Fails a test that probes an agent CLI installed on the machine
             // running the suite instead of its own fixtures.
             "apps/desktop/src/main/__tests__/setup/agent-cli-spawn-guard.ts",
+            // Fails a test that makes a real outbound HTTP request — the step
+            // that runs *before* the probe the guard above catches.
+            "apps/desktop/src/test-setup/outbound-fetch-guard.ts",
           ],
           // Inline @pwrdrvr/codex-discovery so vitest transforms it. Without
           // this, the kit's bundled `import { spawn } from "child_process"`
@@ -65,8 +92,16 @@ export default defineConfig({
           globals: true,
           testTimeout: TEST_TIMEOUT_MS,
           environment: "jsdom",
+          env: { PWRAGENT_HOME: DISPOSABLE_PWRAGENT_HOME },
           include: ["apps/desktop/src/renderer/src/**/*.test.{ts,tsx}"],
-          setupFiles: ["apps/desktop/src/renderer/src/test/setup.ts"]
+          // The renderer reaches the network through IPC, so it has no `fetch`
+          // call site today — but `lint:boundaries` reads imports and cannot
+          // see a `globalThis.fetch`, and jsdom inherits a live one from Node,
+          // so the guard covers a violation nothing else here would catch.
+          setupFiles: [
+            "apps/desktop/src/test-setup/outbound-fetch-guard.ts",
+            "apps/desktop/src/renderer/src/test/setup.ts",
+          ]
         }
       }
     ]

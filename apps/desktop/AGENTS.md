@@ -710,6 +710,71 @@ roots:
 `acp-runtime-override-launch.test.ts` is the worked example of the ACP seams,
 and `acp-instance-discovery.test.ts` of plain probe injection.
 
+## No Network and No Operator State in Vitest
+
+Two more suite-wide guards, both pure test infrastructure. Production code has
+no test-awareness and behaves identically either way — the seams are in
+`vitest.workspace.ts`.
+
+**Where.** Both desktop projects set `PWRAGENT_HOME` to
+`<os.tmpdir()>/pwragent-vitest-home-<pid>`. `resolvePwragentRoot` otherwise
+falls back to `~/.pwragent`, and only about a dozen main tests override it
+themselves, so every other test that touches a root-relative path was reading
+and writing the operator's live application state. A plain `pnpm test` really
+did install a ~353 MB Grok runtime into `~/.pwragent/agents/grok/`, and the
+suite still writes a scratch projects directory and `state/image-inputs` —
+those now land in the temp root.
+
+Nothing pre-creates the directory, so a well-behaved run leaves no trace at
+all; anything that appears there is a test writing to the PwrAgent root. The
+pid keeps concurrent runs (several worktrees testing at once is normal) off
+each other's state. A test that needs its own root still wins with `vi.stubEnv`
+or an explicit `env` argument. `__tests__/disposable-pwragent-home.test.ts`
+pins both halves — that each project still declares the redirect, and that the
+value actually reaches a forked worker — so a config edit cannot quietly drop
+it. The one root path it does not cover is `userHomeWorktreesRoot`, which is
+deliberately `os.homedir()`-anchored; no test has ever created it, and
+`git-directory-service` takes an injected `homeDir`.
+
+**Whether.** [`src/test-setup/outbound-fetch-guard.ts`](src/test-setup/outbound-fetch-guard.ts)
+replaces `globalThis.fetch` and fails any test that makes a real outbound
+request. It hooks the global rather than taking an injected `fetch` per caller
+for the same reason the spawn guard hooks a prototype: it is the one chokepoint
+every request funnels through, so it also covers `acp-registry-service`,
+`pwrsnap-connection-service`, and `auto-updater` — none of which were given a
+seam — plus any network path added later. Injection is how you *fix* a failure
+(`fetchLatestCompatibleRelease` honors `options.fetch`, and
+`grok-managed-runtime.test.ts` passes one); it cannot be what enforces the
+rule, because a module with no seam is exactly the case that needs catching.
+
+Like the spawn guard it records **and** throws — every one of these callers
+degrades to a cached value or a logged warning inside its own `try`/`catch`, so
+a bare throw would be swallowed and the test would pass green having attempted
+the request anyway. Unlike the spawn guard's prototype patch, the global is
+routinely replaced by tests, so the guard reinstalls itself on every setup run
+rather than once per worker; a test that drives its own fake HTTP layer
+replaces it for its own duration, as `auto-updater.test.ts` does. Not covered:
+`http.request` / `https.request` / `net.connect`, which Node's undici `fetch`
+does not route through and nothing here uses directly.
+
+**Loopback goes through.** `localhost`, `127.0.0.0/8`, and `::1` cannot leave
+the machine, so they are not what the guard is for — that is a test talking to
+a server it started, the same category as the spawn guard's `os.tmpdir()`
+allowance. `agent-tool-mcp-server.test.ts` drives its MCP server's real HTTP
+surface (auth, CORS, thread binding) exactly this way. The allowance is pinned
+by the self-test, including that a remote host merely *containing* "localhost"
+is still blocked.
+
+The renderer project loads the fetch guard too. It has no `fetch` call site
+today and reaches the network through IPC, but `lint:boundaries` reads imports
+and cannot see a `globalThis.fetch`, and jsdom inherits a live one from Node —
+so this is the only thing here that would catch a renderer reaching a remote
+host directly. (A relative-URL fetch resolves against jsdom's `localhost` and
+is allowed through as loopback; the guard measures egress, not same-origin.)
+
+`__tests__/outbound-fetch-guard.test.ts` is the guard's self-test, in the same
+shape as `agent-cli-spawn-guard.test.ts`.
+
 ## Sqlite Write-Volume Instrumentation
 
 PR #1406 fixed tool accounting running one implicit transaction per streamed
