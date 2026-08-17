@@ -13,6 +13,7 @@ import {
   describeInstalledAcpBackend,
   isAcpSessionMissingForProjectError,
   withAcpModelRuntimeSelection,
+  type AcpBackendAdapterOptions,
   type AcpSessionMetadata,
 } from "../app-server/acp-backend-adapter";
 import type { AcpInstalledAgentRecord } from "../acp/acp-registry-types";
@@ -426,7 +427,7 @@ describe("AcpBackendAdapter", () => {
       dispose: vi.fn(async () => undefined),
       agent,
     }));
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => stored[0],
         listInstalledAgents: () => stored,
@@ -493,7 +494,7 @@ describe("AcpBackendAdapter", () => {
         lastDiscoveredAt: 1000,
       },
     ];
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => stored[0],
         listInstalledAgents: () => stored,
@@ -549,7 +550,7 @@ describe("AcpBackendAdapter", () => {
       update,
       updateCommand: "/app/resources/agents/grok/grok",
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => stored,
         listInstalledAgents: () => [stored],
@@ -608,7 +609,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -715,7 +716,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -861,7 +862,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -984,7 +985,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -1151,7 +1152,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -1224,7 +1225,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -1318,7 +1319,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -1502,7 +1503,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -1662,7 +1663,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -1815,7 +1816,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -1932,7 +1933,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -2008,7 +2009,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -2102,7 +2103,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -2189,7 +2190,7 @@ describe("AcpBackendAdapter", () => {
           env: {},
         },
       };
-      const adapter = new AcpBackendAdapter({
+      const adapter = createTestAcpBackendAdapter({
         acpAgentStore: {
           getInstalledAgent: () => agent,
           listInstalledAgents: () => [agent],
@@ -2286,7 +2287,7 @@ describe("AcpBackendAdapter", () => {
       },
     };
     const emit = vi.fn(async () => undefined);
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -2357,7 +2358,7 @@ describe("AcpBackendAdapter", () => {
     const readProviderStatus = vi.fn(
       async () => await new Promise<never>(() => undefined),
     );
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -2413,7 +2414,7 @@ describe("AcpBackendAdapter", () => {
       channel: "stable",
     }));
     const emit = vi.fn(async () => undefined);
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => stored,
         listInstalledAgents: () => [stored],
@@ -2468,7 +2469,7 @@ describe("AcpBackendAdapter", () => {
       },
     };
     const updateCheck = vi.fn();
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => stored,
         listInstalledAgents: () => [stored],
@@ -2535,7 +2536,7 @@ describe("AcpBackendAdapter", () => {
       error: "offline",
     }));
     const emit = vi.fn(async () => undefined);
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => stored,
         listInstalledAgents: () => [stored],
@@ -2593,7 +2594,7 @@ describe("AcpBackendAdapter", () => {
       }),
     );
     const emit = vi.fn(async () => undefined);
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => stored,
         listInstalledAgents: () => [stored],
@@ -2681,7 +2682,7 @@ describe("AcpBackendAdapter", () => {
         env: {},
       },
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -2791,7 +2792,7 @@ describe("AcpBackendAdapter", () => {
       threadStatus: "idle" as const,
     };
     const loadSession = vi.fn();
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -2935,7 +2936,7 @@ describe("AcpBackendAdapter", () => {
       },
       threadStatus: "idle" as const,
     }));
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -3079,7 +3080,7 @@ describe("AcpBackendAdapter", () => {
       threadStatus: "idle" as const,
     };
     const loadSession = vi.fn(async () => providerReplay);
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -3204,7 +3205,7 @@ describe("AcpBackendAdapter", () => {
       },
       threadStatus: "idle" as const,
     }));
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => agent,
         listInstalledAgents: () => [agent],
@@ -3256,7 +3257,7 @@ describe("AcpBackendAdapter", () => {
       const agent = buildInstalledAgent();
       const initialize = vi.fn(() => new Promise<void>(() => undefined));
       const dispose = vi.fn(async () => undefined);
-      const adapter = new AcpBackendAdapter({
+      const adapter = createTestAcpBackendAdapter({
         acpAgentStore: {
           getInstalledAgent: () => agent,
           listInstalledAgents: () => [agent],
@@ -3340,7 +3341,7 @@ describe("AcpBackendAdapter", () => {
       .fn()
       .mockReturnValueOnce(firstClient)
       .mockReturnValueOnce(secondClient);
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: null,
       captureStores: [],
       createAcpClient: createAcpClient as never,
@@ -3421,7 +3422,7 @@ describe("AcpBackendAdapter", () => {
       ownsSession: () => false,
       supportsSessionLoad: () => true,
     };
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: null,
       captureStores: [],
       createAcpClient: vi
@@ -3487,7 +3488,7 @@ describe("AcpBackendAdapter", () => {
       .fn()
       .mockReturnValueOnce(firstClient)
       .mockReturnValueOnce(secondClient);
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => firstAgent,
         listInstalledAgents: () => [firstAgent],
@@ -3576,7 +3577,7 @@ describe("AcpBackendAdapter", () => {
       .fn()
       .mockReturnValueOnce(firstClient)
       .mockReturnValueOnce(secondClient);
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: null,
       captureStores: [],
       createAcpClient: createAcpClient as never,
@@ -3641,7 +3642,7 @@ describe("AcpBackendAdapter", () => {
       return promise;
     });
     const upsertInstalledAgent = vi.fn();
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => undefined,
         listInstalledAgents: () => [],
@@ -3709,7 +3710,7 @@ describe("AcpBackendAdapter", () => {
       return promise;
     });
     const upsertInstalledAgent = vi.fn();
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => undefined,
         listInstalledAgents: () => [],
@@ -3765,7 +3766,7 @@ describe("AcpBackendAdapter", () => {
     const upsertInstalledAgent = vi.fn((record: AcpInstalledAgentRecord) => {
       cached = record;
     });
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => cached,
         listInstalledAgents: () => [cached],
@@ -3874,7 +3875,7 @@ describe("AcpBackendAdapter", () => {
       ],
     };
     const upsertInstalledAgent = vi.fn();
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: {
         getInstalledAgent: () => cached,
         listInstalledAgents: () => [cached],
@@ -3915,7 +3916,7 @@ describe("AcpBackendAdapter", () => {
       | ((agents: AcpInstalledAgentRecord[]) => void)
       | undefined;
     const createAcpClient = vi.fn();
-    const adapter = new AcpBackendAdapter({
+    const adapter = createTestAcpBackendAdapter({
       acpAgentStore: null,
       captureStores: [],
       createAcpClient,
@@ -3936,6 +3937,15 @@ describe("AcpBackendAdapter", () => {
     expect(createAcpClient).not.toHaveBeenCalled();
   });
 });
+
+function createTestAcpBackendAdapter(
+  options: AcpBackendAdapterOptions,
+): AcpBackendAdapter {
+  return new AcpBackendAdapter({
+    discoverLocalAcpAgents: async () => [],
+    ...options,
+  });
+}
 
 function buildInstalledAgent(): AcpInstalledAgentRecord {
   return {
