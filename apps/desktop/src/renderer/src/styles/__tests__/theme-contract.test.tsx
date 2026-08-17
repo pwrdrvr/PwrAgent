@@ -813,6 +813,42 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).not.toMatch(/\.star-map-card:focus-visible\s*\{/);
   });
 
+  it("does not pull an unpinned first directory thread under the sticky header", () => {
+    // An empty pinned lane still renders its zero-height append target before
+    // the first unpinned row. Its ordinary -2px margins cancel the 2px flex
+    // gaps on both sides, but at :first-child there is no leading gap. Letting
+    // that start margin survive reduced the row's 4px nominal clearance to
+    // 2px, so the z-index 5 header covered the focus ring's 4px outside reach.
+    const rowRing = extractRuleBody(
+      css,
+      ".thread-row:has(.thread-row__open:focus)",
+    );
+    const directoryDetails = extractRuleBody(css, ".directory-row__details");
+    const pinDropBoundary = extractRuleBody(
+      css,
+      ".directory-row__pin-drop-boundary",
+    );
+    const leadingPinDropBoundary = extractRuleBody(
+      css,
+      ".directory-row__pin-drop-boundary:first-child",
+    );
+    const ringWidth = Number(
+      rowRing.match(/outline:\s*(?<width>\d+)px\s+solid/)?.groups?.width,
+    );
+    const ringOffset = Number(
+      rowRing.match(/outline-offset:\s*(?<offset>\d+)px/)?.groups?.offset,
+    );
+    const detailsTopPadding = Number(
+      directoryDetails.match(/padding:\s*(?<top>\d+)px\s/)?.groups?.top,
+    );
+
+    expect(ringWidth).toBeGreaterThan(0);
+    expect(ringOffset).toBeGreaterThanOrEqual(0);
+    expect(detailsTopPadding).toBeGreaterThanOrEqual(ringWidth + ringOffset);
+    expect(pinDropBoundary).toContain("margin-block: -2px;");
+    expect(leadingPinDropBoundary).toContain("margin-block-start: 0;");
+  });
+
   // The three focusable controls in the Star Map "View" popover: the chip that
   // opens it, each button of the layout switch, and the "Reset view" action.
   // They are ordinary `<button>`s, so they are tab-reachable whether or not

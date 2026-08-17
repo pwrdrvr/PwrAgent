@@ -6121,6 +6121,17 @@ textarea,
   margin-block: -2px;
 }
 
+/* With no pinned threads the append target is the list's first child. There
+   is no preceding 2px flex gap to cancel in that position, so the shared
+   negative start margin pulled the first unpinned row 2px toward the sticky
+   header. That left only 2px for a focus outline that reaches 4px outside the
+   card, allowing the z-index 5 header to erase its horizontal top run. Keep
+   the end cancellation for the real following gap, but do not invent a gap
+   above a zero-height first child. */
+.directory-row__pin-drop-boundary:first-child {
+  margin-block-start: 0;
+}
+
 .directory-row__pin-drop-slot {
   position: absolute;
   /* Reach upward into the pinned lane while leaving a small guarded overlap
