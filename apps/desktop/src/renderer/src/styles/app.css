@@ -4656,12 +4656,15 @@ textarea,
 
 .thread-row:has(.thread-row__open:focus) {
   outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-  /* The ring paints 4px outside the card (2px width @ 2px offset), into
-     the inter-row gap. `.is-selected` lifts itself to z-index 1 so its
-     border survives neighbouring hover fills — which also buried THIS
-     ring's edge whenever the previously selected card sat directly
-     below the focused one. The focused card is the one being acted on,
+  /* Keep the ring inside the card's paint bounds. Packaged Electron at
+     devicePixelRatio 1 can drop the horizontal top run of an outside
+     outline for some row geometries while leaving the other three sides
+     intact. Live DevTools probes ruled out the sticky header: another 4px
+     of clearance and a z-index above the header both left the top missing,
+     while the same 2px ring rendered completely at this inset. */
+  outline-offset: -2px;
+  /* `.is-selected` lifts itself to z-index 1 so its border survives
+     neighbouring hover fills. The focused card is the one being acted on,
      so it wins the stack. */
   z-index: 2;
 }
@@ -6081,16 +6084,9 @@ textarea,
      row rhythm: 4px here + the next `.directory-row`'s 2px top pad =
      6px, the same band the thread cards keep between each other
      (`.directory-list` zeroes the sidebar-list gap, so the row pad is
-     the only other term).
-
-     Top is 6px: a focused thread's 2px outline at a 2px offset reaches 4px
-     outside the card, while the sticky header deliberately paints above
-     scrolling rows at z-index 5. Matching that reach with the old 4px pad
-     left both on the same subpixel boundary; at 1x, rows on the losing phase
-     handed that boundary to the header, erasing the focus ring's horizontal
-     top run. Two pixels of real clearance keep the ring intact without lifting
-     rows over the sticky header when they genuinely scroll underneath it. */
-  padding: 6px 0 4px 0;
+     the only other term). Top 8 → 4 for the mirror seam under the
+     sticky header. */
+  padding: 4px 0 4px 0;
 }
 
 .directory-row__threads {

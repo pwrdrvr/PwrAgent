@@ -782,8 +782,9 @@ describe("Tangerine Terminal theme contract", () => {
   // exactly where a brand token drifts unnoticed: nothing else renders these
   // rings, so a wrong token or offset ships looking plausible. Both must name
   // `--focus-ring` — the semantic token, `var(--accent)` in both themes — and
-  // each keeps its own offset: 2px on the sidebar row, 1px on the star-map
-  // card, whose cards shingle so a wider ring bleeds onto the neighbour.
+  // each keeps its own offset: -2px on the sidebar row keeps the whole ring
+  // inside the card's paint bounds (outside top edges can disappear at 1x),
+  // while 1px on the star-map card preserves that surface's shingled design.
   // Changing either is a design decision; change this test in the same commit
   // so it is reviewed rather than accidental.
   it("draws both card focus rings from the focus-ring token at their own offsets", () => {
@@ -797,7 +798,7 @@ describe("Tangerine Terminal theme contract", () => {
       ".thread-row:has(.thread-row__open:focus)",
     );
     expect(rowRing).toContain("outline: 2px solid var(--focus-ring);");
-    expect(rowRing).toContain("outline-offset: 2px;");
+    expect(rowRing).toContain("outline-offset: -2px;");
 
     const cardRing = extractRuleBody(
       css,
@@ -811,33 +812,6 @@ describe("Tangerine Terminal theme contract", () => {
     // for `.thread-row`: that class is still worn by a real `<button>` on
     // directory summaries, so a focus rule naming it is legitimate there.)
     expect(css).not.toMatch(/\.star-map-card:focus-visible\s*\{/);
-  });
-
-  it("keeps the first directory thread's focus ring clear of the sticky header", () => {
-    // The header deliberately paints above rows that scroll underneath it.
-    // A focused first row therefore needs more top clearance than the ring's
-    // full outside reach (outline width + outline offset). Equality is not
-    // enough at 1x: fractional row positions can hand the shared boundary
-    // pixel to the sticky header, erasing the ring's horizontal top run while
-    // leaving its sides and bottom intact.
-    const rowRing = extractRuleBody(
-      css,
-      ".thread-row:has(.thread-row__open:focus)",
-    );
-    const directoryDetails = extractRuleBody(css, ".directory-row__details");
-    const ringWidth = Number(
-      rowRing.match(/outline:\s*(?<width>\d+)px\s+solid/)?.groups?.width,
-    );
-    const ringOffset = Number(
-      rowRing.match(/outline-offset:\s*(?<offset>\d+)px/)?.groups?.offset,
-    );
-    const detailsTopPadding = Number(
-      directoryDetails.match(/padding:\s*(?<top>\d+)px\s/)?.groups?.top,
-    );
-
-    expect(ringWidth).toBeGreaterThan(0);
-    expect(ringOffset).toBeGreaterThanOrEqual(0);
-    expect(detailsTopPadding).toBeGreaterThan(ringWidth + ringOffset);
   });
 
   // The three focusable controls in the Star Map "View" popover: the chip that
