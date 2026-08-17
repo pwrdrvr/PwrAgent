@@ -47,6 +47,7 @@ import {
   sortSubthreadSummaries,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import type { ThreadActionErrorKind } from "../features/notifications/thread-action-error-notice";
 import { fileLabelFromPath } from "./directory-references";
 import {
   readRendererFederationLabel,
@@ -2844,6 +2845,19 @@ type UseThreadNavigationOptions = {
   enabled?: boolean;
   lightweightNavigationRefresh?: boolean;
   threadViewVisible?: boolean;
+  /**
+   * Publishes create / rename / archive failures to the app's notice stack.
+   * A `message` of `undefined` means the slot cleared — the next attempt
+   * started, or it succeeded — and the notice should come down.
+   *
+   * These actions used to render into a shared static slot at the top of the
+   * sidebar, which had no dismiss, no timeout, a fixed priority order that
+   * let one stale error mask the other four, and a permanent layout cost.
+   */
+  onThreadActionError?: (event: {
+    kind: ThreadActionErrorKind;
+    message?: string;
+  }) => void;
 };
 
 export function useThreadNavigation(
@@ -2868,7 +2882,6 @@ export function useThreadNavigation(
     parent: NavigationThreadSummary,
     mode: ThreadWorkspaceMode,
   ) => Promise<void>;
-  createThreadError?: string;
   creatingThread?: CreatingThreadState;
   directories: NavigationDirectorySummary[];
   error?: string;
@@ -2877,11 +2890,9 @@ export function useThreadNavigation(
   inboxThreads: NavigationThreadSummary[];
   recentThreads: NavigationThreadSummary[];
   launchpadError?: string;
-  archiveThreadError?: string;
   archiveThreadNotice?: ArchiveThreadNotice;
   dismissArchiveThreadNotice: () => void;
   worktreeArchiveError?: string;
-  renameThreadError?: string;
   loading: boolean;
   loaded: boolean;
   refreshing: boolean;
@@ -3120,12 +3131,40 @@ export function useThreadNavigation(
   // network. Keep only the most recent launch intent so a slow prior peer or
   // project selection cannot replace the launchpad the operator just chose.
   const federatedLaunchpadOpenRevisionRef = useRef(0);
+  // Create / rename / archive keep their single error slot here — every
+  // producer already clears it when the next attempt starts — but the slot
+  // is now published to the notice stack instead of rendered inline. See
+  // `onThreadActionError`.
   const [createThreadError, setCreateThreadError] = useState<string>();
   const [launchpadError, setLaunchpadError] = useState<string>();
   const [archiveThreadError, setArchiveThreadError] = useState<string>();
   const [archiveThreadNotice, setArchiveThreadNotice] = useState<ArchiveThreadNotice>();
   const [worktreeArchiveError, setWorktreeArchiveError] = useState<string>();
   const [renameThreadError, setRenameThreadError] = useState<string>();
+  // Held in a ref so a caller that rebuilds the callback every render cannot
+  // re-fire the publish effects below on an unchanged message.
+  const onThreadActionErrorRef = useRef(options.onThreadActionError);
+  useEffect(() => {
+    onThreadActionErrorRef.current = options.onThreadActionError;
+  }, [options.onThreadActionError]);
+  useEffect(() => {
+    onThreadActionErrorRef.current?.({
+      kind: "create-thread",
+      message: createThreadError,
+    });
+  }, [createThreadError]);
+  useEffect(() => {
+    onThreadActionErrorRef.current?.({
+      kind: "archive-thread",
+      message: archiveThreadError,
+    });
+  }, [archiveThreadError]);
+  useEffect(() => {
+    onThreadActionErrorRef.current?.({
+      kind: "rename-thread",
+      message: renameThreadError,
+    });
+  }, [renameThreadError]);
   const [updatingThreadExecutionMode, setUpdatingThreadExecutionMode] =
     useState<ThreadExecutionMode>();
   const [setThreadExecutionModeError, setSetThreadExecutionModeError] =
@@ -8282,7 +8321,6 @@ export function useThreadNavigation(
     createSubthread,
     discardLaunchpad,
     forkThread,
-    createThreadError,
     creatingThread,
     directories,
     error: state.error,
@@ -8291,11 +8329,9 @@ export function useThreadNavigation(
     inboxThreads,
     recentThreads,
     launchpadError,
-    archiveThreadError,
     archiveThreadNotice,
     dismissArchiveThreadNotice,
     worktreeArchiveError,
-    renameThreadError,
     loading: state.loading,
     loaded: Boolean(state.response),
     refreshing: state.refreshing,

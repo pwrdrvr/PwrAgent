@@ -2784,9 +2784,18 @@ describe("ThreadView", () => {
     // exactly that reason: the banner named an existing directory.
     // Polite, not assertive: an unresolved link is not a failure, and this
     // banner re-renders on every thread selection.
-    expect(screen.getByRole("status")).toHaveTextContent(
+    const unlinkedWorkspaceWarning = screen.getByRole("status");
+    expect(unlinkedWorkspaceWarning).toHaveTextContent(
       "This thread's recorded working directory is not linked to a project: /Users/example/.codex/worktrees/tree-epsilon/catalog-portal"
     );
+    // The context rail is absolutely positioned inside
+    // `.thread-view__layout`, the header's next sibling, so a conditional
+    // row inside the header slides the rail's icon strip down the pane.
+    // These banners belong to the chat column for that reason.
+    expect(unlinkedWorkspaceWarning.closest(".thread-header")).toBeNull();
+    expect(
+      unlinkedWorkspaceWarning.closest(".thread-view__primary"),
+    ).not.toBeNull();
 
     expect(screen.getByText("Recorded working directory is not linked to a project.")).toBeInTheDocument();
     expect(screen.getByText("catalog-portal")).toBeInTheDocument();
@@ -5408,9 +5417,15 @@ describe("ThreadView", () => {
     });
     expect(updateThreadExpectedBranch).not.toHaveBeenCalled();
     expect(retainThreadBranchDrift).not.toHaveBeenCalled();
-    expect(screen.getByRole("status")).toHaveTextContent(
+    const branchWarning = screen.getByRole("status");
+    expect(branchWarning).toHaveTextContent(
       "Branch warning: this thread expects feature/old, but the worktree is on main.",
     );
+    // Branch drift lands from a background poll, so a header row here would
+    // move the context rail under the operator's cursor. Keep it in the
+    // chat column — see `ThreadWarnings`.
+    expect(branchWarning.closest(".thread-header")).toBeNull();
+    expect(branchWarning.closest(".thread-view__primary")).not.toBeNull();
   });
 
   it("retains branch drift on the remote thread owner", async () => {

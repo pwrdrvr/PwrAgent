@@ -22,6 +22,23 @@ import {
 } from "../native-drag-interaction";
 import { useThreadNavigation } from "../useThreadNavigation";
 
+/**
+ * Create / rename / archive failures leave the hook through
+ * `onThreadActionError` instead of a returned string — they render as
+ * durable toasts now, not as a static slot in the sidebar. The hook
+ * republishes the slot on every change, including the clear that each new
+ * attempt performs, so the LAST call for a kind is the current state.
+ */
+function latestThreadActionError(
+  onThreadActionError: ReturnType<typeof vi.fn>,
+  kind: "archive-thread" | "create-thread" | "rename-thread",
+): string | undefined {
+  const calls = onThreadActionError.mock.calls.filter(
+    ([event]) => event?.kind === kind,
+  );
+  return calls.at(-1)?.[0]?.message;
+}
+
 describe("useThreadNavigation", () => {
   beforeEach(() => {
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -3429,7 +3446,10 @@ describe("useThreadNavigation", () => {
       onAgentEvent: () => () => undefined,
     };
 
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
 
     await waitFor(() => {
       expect(result.current.threads.map((thread) => thread.id)).toEqual([
@@ -3441,7 +3461,7 @@ describe("useThreadNavigation", () => {
       await result.current.archiveThread(result.current.threads[0]!);
     });
 
-    expect(result.current.archiveThreadError).toBeUndefined();
+    expect(latestThreadActionError(onThreadActionError, "archive-thread")).toBeUndefined();
     expect(result.current.archiveThreadNotice).toMatchObject({
       title: "Worktree cleanup skipped",
       message: "Thread archived. The worktree cleanup did not complete.",
@@ -3502,7 +3522,10 @@ describe("useThreadNavigation", () => {
       onAgentEvent: () => () => undefined,
     };
 
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
 
     await waitFor(() => {
       expect(result.current.threads.map((thread) => thread.id)).toEqual([
@@ -3514,7 +3537,7 @@ describe("useThreadNavigation", () => {
       await result.current.archiveThread(result.current.threads[0]!);
     });
 
-    expect(result.current.archiveThreadError).toBeUndefined();
+    expect(latestThreadActionError(onThreadActionError, "archive-thread")).toBeUndefined();
     expect(result.current.archiveThreadNotice).toMatchObject({
       title: "Worktree cleanup skipped",
       message: "Thread archived. The worktree cleanup did not complete.",
@@ -3572,7 +3595,10 @@ describe("useThreadNavigation", () => {
       onAgentEvent: () => () => undefined,
     };
 
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
 
     await waitFor(() => {
       expect(result.current.threads.map((thread) => thread.id)).toEqual([
@@ -3584,7 +3610,7 @@ describe("useThreadNavigation", () => {
       await result.current.archiveThread(result.current.threads[0]!);
     });
 
-    expect(result.current.archiveThreadError).toBeUndefined();
+    expect(latestThreadActionError(onThreadActionError, "archive-thread")).toBeUndefined();
     expect(result.current.archiveThreadNotice).toMatchObject({
       title: "Worktree kept",
       message:
@@ -4200,7 +4226,10 @@ describe("useThreadNavigation", () => {
       onAgentEvent: () => () => undefined,
     };
 
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
 
     await waitFor(() => {
       expect(result.current.selectedThread?.id).toBe("thread-archived");
@@ -4210,7 +4239,7 @@ describe("useThreadNavigation", () => {
       await result.current.archiveThread(result.current.threads[0]!);
     });
 
-    expect(result.current.archiveThreadError).toBe("Archive failed");
+    expect(latestThreadActionError(onThreadActionError, "archive-thread")).toBe("Archive failed");
     expect(result.current.threads.map((thread) => thread.id)).toEqual([
       "thread-archived",
       "thread-fallback",
@@ -7133,6 +7162,94 @@ describe("useThreadNavigation", () => {
     );
   });
 
+  it("publishes a create failure to the notice stack and clears it on retry", async () => {
+    // Regression: `Desktop backend registry is closed` pinned itself in the
+    // sidebar masthead with no dismiss, no timeout, and a permanent layout
+    // cost. It is a durable toast now, and the retry that clears the hook's
+    // slot has to take the toast down with it.
+    let attempt = 0;
+    const ensureDirectoryLaunchpad = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error("Desktop backend registry is closed");
+      }
+      return {
+        launchpad: {
+          directoryKey: "workspace:/Users/test/.pwragent/projects",
+          directoryKind: "workspace" as const,
+          directoryLabel: "Workspaces",
+          directoryPath: "/Users/test/.pwragent/projects",
+          backend: "codex" as const,
+          executionMode: "default" as const,
+          prompt: "",
+          workMode: "local" as const,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        defaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      };
+    });
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: "workspace:/Users/test/.pwragent/projects",
+          kind: "workspace" as const,
+          label: "Workspaces",
+          path: "/Users/test/.pwragent/projects",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.directories[0]?.label).toBe("Workspaces");
+    });
+
+    await act(async () => {
+      await result.current.createThread();
+    });
+
+    await waitFor(() => {
+      expect(latestThreadActionError(onThreadActionError, "create-thread")).toBe(
+        "Desktop backend registry is closed",
+      );
+    });
+
+    await act(async () => {
+      await result.current.createThread();
+    });
+
+    await waitFor(() => {
+      expect(
+        latestThreadActionError(onThreadActionError, "create-thread"),
+      ).toBeUndefined();
+    });
+  });
+
   it("opens masthead new-thread drafts while the initial navigation snapshot is loading", async () => {
     const initialSnapshot = createDeferred<NavigationSnapshot>();
     const emptySnapshot: NavigationSnapshot = {
@@ -9816,7 +9933,10 @@ describe("useThreadNavigation", () => {
       onAgentEvent: () => () => undefined,
     };
 
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
 
     await waitFor(() => {
       expect(result.current.selectedThread?.title).toBe("First thread");
@@ -9827,7 +9947,7 @@ describe("useThreadNavigation", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.renameThreadError).toBe("rename failed");
+      expect(latestThreadActionError(onThreadActionError, "rename-thread")).toBe("rename failed");
       expect(result.current.selectedThread?.title).toBe("First thread");
     });
   });

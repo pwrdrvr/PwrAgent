@@ -88,6 +88,7 @@ import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
 import { ThreadFindBar } from "./ThreadFindBar";
 import { ThreadHeader, type StarMapToggleControls } from "./ThreadHeader";
+import { ThreadWarnings } from "./ThreadWarnings";
 import { ThreadPlaceholderHeader } from "./ThreadPlaceholderHeader";
 import { ImageLightbox } from "./ImageLightbox";
 import { TranscriptCopyButton } from "./TranscriptCopyButton";
@@ -893,7 +894,6 @@ export type ThreadViewProps = {
   onProviderSelected?: (
     backend: NavigationLaunchpadDraft["backend"],
   ) => BackendSummary | undefined | Promise<BackendSummary | undefined>;
-  archiveThreadError?: string;
   loading: boolean;
   loadingMore: boolean;
   messageCount: number;
@@ -3413,6 +3413,10 @@ export function ThreadView(props: ThreadViewProps) {
       >
         <div className="thread-view__primary">
           <CelestialWatermark icon={celestialWatermarkIcon} />
+          {/* Inside the chat column, not the header: a conditional row in
+              the header moves `.thread-view__layout`, and the context rail
+              is anchored to it. See `ThreadWarnings`. */}
+          {selectedThread ? <ThreadWarnings thread={selectedThread} /> : null}
           {showSetupFailureChoice && selectedThread && selectedThreadKey ? (
             <EnvironmentSetupFailureChoice
               archiving={setupFailureArchiving}
@@ -3431,7 +3435,13 @@ export function ThreadView(props: ThreadViewProps) {
                 selectedThread.codexEnvironmentRuntime?.environmentName ??
                 "Environment"
               }
-              error={props.archiveThreadError ?? setupFailureContinueError}
+              error={
+                // Archive failures go to the durable notice stack (they can
+                // also originate from a context menu with nothing left on
+                // screen), so this slot reports only the Continue button's
+                // own failure — one surface per error.
+                setupFailureContinueError
+              }
               exitCode={
                 selectedThreadEnvironmentFailurePhase === "setup"
                   ? selectedThread.codexEnvironmentRuntime?.setupExitCode ??
