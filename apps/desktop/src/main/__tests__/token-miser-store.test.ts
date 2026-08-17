@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
 
 const temporaryDirectories: string[] = [];
@@ -15,6 +15,24 @@ afterEach(async () => {
 });
 
 describe("TokenMiserStore", () => {
+  it("reports new and retrieved metadata for turn-batched accounting", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-token-miser-"));
+    temporaryDirectories.push(root);
+    const onMetadataUpdated = vi.fn();
+    const store = new TokenMiserStore(root, { onMetadataUpdated });
+    const metadata = await createObject(store, "alpha\nbeta", 1);
+
+    expect(onMetadataUpdated).toHaveBeenLastCalledWith(metadata);
+    await store.readAll({
+      objectId: metadata.objectId,
+      threadId: "thread-owner",
+    });
+
+    expect(onMetadataUpdated).toHaveBeenCalledTimes(2);
+    expect(onMetadataUpdated.mock.calls[1]?.[0].retrievedCharacters)
+      .toBeGreaterThan(0);
+  });
+
   it("stores output, restricts reads to the owning thread, and accounts retrieval", async () => {
     const store = await createStore();
     const metadata = await store.store({

@@ -146,6 +146,13 @@
     "rowsChanged": 27,
     "statements": 27
   },
+  "token-miser-retrieval-ledger": {
+    "commits": 1,
+    "note": "one previously gated output retrieved in a later parent turn, updating its savings equation at the turn boundary",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "token-miser-turn-ledger": {
     "commits": 2,
     "note": "nine Token Miser gate helpers from one parent turn, batched into one parent overlay write and one pricing-ledger transaction",

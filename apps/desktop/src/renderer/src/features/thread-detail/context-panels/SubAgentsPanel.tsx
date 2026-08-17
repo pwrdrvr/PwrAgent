@@ -3,6 +3,7 @@ import type {
   NavigationThreadSummary,
   ThreadSubAgentSummary,
 } from "@pwragent/shared";
+import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared";
 import { formatBackendLabel } from "../../../lib/backend-label";
 import { readRendererFederationTarget } from "../../../lib/federation-window";
 import { useSubAgents } from "./useSubAgents";
@@ -189,6 +190,11 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                     })}
                   </p>
                 ) : null}
+                {subAgent.tokenMiserAccounting ? (
+                  <TokenMiserSavingsBreakdown
+                    accounting={subAgent.tokenMiserAccounting}
+                  />
+                ) : null}
                 <div className="context-list__actions rail-card__actions">
                   <button
                     className="context-list__action rail-card__details-action"
@@ -237,5 +243,56 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
         />
       ) : null}
     </section>
+  );
+}
+
+function TokenMiserSavingsBreakdown(props: {
+  accounting: NonNullable<ThreadSubAgentSummary["tokenMiserAccounting"]>;
+}) {
+  const accounting = props.accounting;
+  const savingsLabel = accounting.savingsMicros >= 0 ? "Savings" : "Net overhead";
+  return (
+    <dl
+      aria-label="Token Miser savings"
+      className="rail-card__token-miser-savings"
+    >
+      <div>
+        <dt>1 · Without gate</dt>
+        <dd>
+          <strong>{formatTokenUsageMicrosAsUsd(accounting.baselineParentCostMicros)}</strong>
+          <span>
+            {accounting.baselineParentTokens.toLocaleString()} uncached ·{" "}
+            {accounting.originalModel}
+          </span>
+        </dd>
+      </div>
+      <div>
+        <dt>2 · Gate model</dt>
+        <dd>
+          <strong>{formatTokenUsageMicrosAsUsd(accounting.gateCostMicros)}</strong>
+          <span>
+            {accounting.gateTotalTokens.toLocaleString()} total · {accounting.gateModel}
+          </span>
+        </dd>
+      </div>
+      <div>
+        <dt>3 · Revealed to parent</dt>
+        <dd>
+          <strong>{formatTokenUsageMicrosAsUsd(accounting.revealedParentCostMicros)}</strong>
+          <span>
+            {accounting.revealedParentTokens.toLocaleString()} uncached ·{" "}
+            {accounting.originalModel}
+          </span>
+        </dd>
+      </div>
+      <div data-total="true">
+        <dt>{savingsLabel} · 1 − 2 − 3</dt>
+        <dd>
+          <strong>
+            {formatTokenUsageMicrosAsUsd(Math.abs(accounting.savingsMicros))}
+          </strong>
+        </dd>
+      </div>
+    </dl>
   );
 }

@@ -428,7 +428,10 @@ import { TokenMiserHookBridge } from "../token-miser/token-miser-hook-bridge";
 import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
 import { TokenMiserService } from "../token-miser/token-miser-service";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
-import type { TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
+import {
+  estimateTokenCount,
+  type TokenMiserObjectMetadata,
+} from "../token-miser/token-miser-types";
 import {
   AgentToolMcpServer,
   type AgentToolMcpClientContext,
@@ -4107,6 +4110,65 @@ function buildTaskMonitorUsageLine(params: {
   };
 }
 
+function buildTokenMiserSubAgentAccounting(params: {
+  entry: TokenMiserObjectMetadata;
+  gateUsageLine?: ThreadUsageLineRecord;
+  parentUsageLine?: ThreadUsageLineRecord;
+}): ThreadSubAgentSummary["tokenMiserAccounting"] {
+  const originalModel = params.parentUsageLine?.model;
+  const gateModel = params.gateUsageLine?.model;
+  if (
+    !originalModel
+    || !gateModel
+    || params.gateUsageLine?.priceStatus !== "priced"
+    || params.gateUsageLine.currency !== "USD"
+  ) {
+    return undefined;
+  }
+  const pricingParams = {
+    at: params.entry.createdAt,
+    cachedInputTokens: 0,
+    fastMode: params.parentUsageLine?.fastMode,
+    model: originalModel,
+    outputTokens: 0,
+    serviceTier: params.parentUsageLine?.serviceTier,
+  };
+  const baselineCost = estimateTokenUsageCost({
+    ...pricingParams,
+    uncachedInputTokens: params.entry.baselineParentTokens,
+  });
+  const revealedParentTokens =
+    estimateTokenCount(params.entry.replacementCharacters)
+    + estimateTokenCount(params.entry.retrievedCharacters);
+  const revealedCost = estimateTokenUsageCost({
+    ...pricingParams,
+    uncachedInputTokens: revealedParentTokens,
+  });
+  if (!baselineCost || !revealedCost) {
+    return undefined;
+  }
+  const gateCostMicros = params.gateUsageLine.totalCostMicros;
+  const savingsMicros =
+    baselineCost.uncachedInputCostMicros
+    - gateCostMicros
+    - revealedCost.uncachedInputCostMicros;
+  return {
+    currency: "USD",
+    originalModel,
+    ...(params.parentUsageLine?.serviceTier
+      ? { originalServiceTier: params.parentUsageLine.serviceTier }
+      : {}),
+    baselineParentTokens: params.entry.baselineParentTokens,
+    baselineParentCostMicros: baselineCost.uncachedInputCostMicros,
+    gateModel,
+    gateTotalTokens: params.gateUsageLine.totalTokens,
+    gateCostMicros,
+    revealedParentTokens,
+    revealedParentCostMicros: revealedCost.uncachedInputCostMicros,
+    savingsMicros,
+  };
+}
+
 function findNestedUsageValue(value: unknown, keys: string[]): unknown {
   const record = readRecord(value);
   if (!record) {
@@ -7559,6 +7621,11 @@ export class DesktopBackendRegistry {
       const tokenMiserStateDir = resolveActiveProfilePath("state/token-miser");
       this.tokenMiserStore = new TokenMiserStore(
         path.join(tokenMiserStateDir, "objects"),
+        {
+          onMetadataUpdated: (metadata) => {
+            this.pendingTokenMiserInterceptions.set(metadata.objectId, metadata);
+          },
+        },
       );
       const tokenMiserService = new TokenMiserService({
         store: this.tokenMiserStore,
@@ -7577,9 +7644,6 @@ export class DesktopBackendRegistry {
               && Array.isArray(record.usefulDetails)
               && typeof record.suggestedNextStep === "string",
           });
-        },
-        onInterceptionStored: (metadata) => {
-          this.pendingTokenMiserInterceptions.set(metadata.objectId, metadata);
         },
       });
       this.tokenMiserHookBridge = new TokenMiserHookBridge({
@@ -25062,13 +25126,11 @@ export class DesktopBackendRegistry {
 
   private async flushPendingTokenMiserLedger(params: {
     threadId: string;
-    turnId?: string;
   }): Promise<void> {
     await this.tokenMiserLedgerReconciliation;
     const metadata = Array.from(this.pendingTokenMiserInterceptions.values())
       .filter((entry) =>
-        entry.threadId === params.threadId
-        && (!params.turnId || entry.turnId === params.turnId),
+        entry.threadId === params.threadId,
       );
     await this.persistTokenMiserLedgerEntries(metadata);
   }
@@ -25094,8 +25156,9 @@ export class DesktopBackendRegistry {
             threadId,
           })
         : undefined;
-      const knownMonitorIds = new Set(
-        overlay?.subAgents?.map((subAgent) => subAgent.monitorId) ?? [],
+      const existingSubAgents = new Map(
+        overlay?.subAgents?.map((subAgent) => [subAgent.monitorId, subAgent])
+          ?? [],
       );
       const knownUsageLineIds = new Set(
         pricing?.lines.map((line) => line.usageLineId) ?? [],
@@ -25112,48 +25175,9 @@ export class DesktopBackendRegistry {
               tokenUsage: entry.helperUsage.tokenUsage,
             })
           : undefined;
-        if (!knownMonitorIds.has(monitorId)) {
-          subAgents.push({
-            monitorId,
-            task: `Gate ${entry.toolName} output`,
-            status: "success",
-            createdAt: entry.createdAt,
-            updatedAt: entry.createdAt,
-            ownerRuntimeInstanceId: this.runtimeInstanceId,
-            ownerRegistrySessionId: this.registrySessionId,
-            backend: "codex",
-            agentName: "Token Miser",
-            ...(entry.helperUsage?.model
-              ? { preferredModel: entry.helperUsage.model }
-              : {}),
-            ...(entry.helperUsage?.reasoningEffort
-              ? {
-                  preferredReasoningEffort:
-                    entry.helperUsage.reasoningEffort,
-                }
-              : {}),
-            ...(entry.helperUsage?.helperThreadId
-              ? { monitorThreadId: entry.helperUsage.helperThreadId }
-              : {}),
-            ...(entry.helperUsage?.helperTurnId
-              ? { monitorTurnId: entry.helperUsage.helperTurnId }
-              : {}),
-            lastMessage:
-              `Compressed ${entry.originalCharacters.toLocaleString()} characters `
-              + `from ${entry.toolName} before they entered the parent context.`,
-            outcome: "success",
-            completedAt: entry.createdAt,
-            completionSource: {
-              type: "pwragent_fallback",
-              reason: "system_token_miser_gate",
-              recoveryAttempted: false,
-              terminalStatus: "completed",
-            },
-            ...(usage ? { monitorUsage: usage } : {}),
-          });
-        }
+        let gateUsageLine: ThreadUsageLineRecord | undefined;
         if (usage) {
-          const line = buildTaskMonitorUsageLine({
+          gateUsageLine = buildTaskMonitorUsageLine({
             backend: "codex",
             model: entry.helperUsage?.model,
             monitorId,
@@ -25167,11 +25191,74 @@ export class DesktopBackendRegistry {
             source: "monitor",
             usage,
           });
-          line.createdAt = entry.createdAt;
-          if (!knownUsageLineIds.has(line.usageLineId)) {
-            logUnpricedThreadUsageLine(line);
-            usageLines.push(line);
+          gateUsageLine.createdAt = entry.createdAt;
+          const existingGateUsageLine = pricing?.lines.find(
+            (line) => line.sourceItemId === monitorId,
+          );
+          if (existingGateUsageLine) {
+            gateUsageLine = existingGateUsageLine;
+          } else if (!knownUsageLineIds.has(gateUsageLine.usageLineId)) {
+            logUnpricedThreadUsageLine(gateUsageLine);
+            usageLines.push(gateUsageLine);
           }
+        }
+        const parentUsageLine = pricing?.lines.find((line) =>
+          line.scope !== "monitor"
+          && line.threadId === entry.threadId
+          && (line.turnId === entry.turnId || line.usageTurnId === entry.turnId)
+          && Boolean(line.model),
+        );
+        const tokenMiserAccounting = buildTokenMiserSubAgentAccounting({
+          entry,
+          gateUsageLine,
+          parentUsageLine,
+        });
+        const subAgent: ThreadSubAgentSummary = {
+          monitorId,
+          task: `Gate ${entry.toolName} output`,
+          status: "success",
+          createdAt: entry.createdAt,
+          updatedAt: entry.createdAt,
+          ownerRuntimeInstanceId: this.runtimeInstanceId,
+          ownerRegistrySessionId: this.registrySessionId,
+          backend: "codex",
+          agentName: "Token Miser",
+          ...(entry.helperUsage?.model
+            ? { preferredModel: entry.helperUsage.model }
+            : {}),
+          ...(entry.helperUsage?.reasoningEffort
+            ? {
+                preferredReasoningEffort:
+                  entry.helperUsage.reasoningEffort,
+              }
+            : {}),
+          ...(entry.helperUsage?.helperThreadId
+            ? { monitorThreadId: entry.helperUsage.helperThreadId }
+            : {}),
+          ...(entry.helperUsage?.helperTurnId
+            ? { monitorTurnId: entry.helperUsage.helperTurnId }
+            : {}),
+          lastMessage:
+            `Compressed ${entry.originalCharacters.toLocaleString()} characters `
+            + `from ${entry.toolName} before they entered the parent context.`,
+          outcome: "success",
+          completedAt: entry.createdAt,
+          completionSource: {
+            type: "pwragent_fallback",
+            reason: "system_token_miser_gate",
+            recoveryAttempted: false,
+            terminalStatus: "completed",
+          },
+          ...(usage ? { monitorUsage: usage } : {}),
+          ...(tokenMiserAccounting ? { tokenMiserAccounting } : {}),
+        };
+        const existingSubAgent = existingSubAgents.get(monitorId);
+        if (
+          !existingSubAgent
+          || JSON.stringify(existingSubAgent.tokenMiserAccounting)
+            !== JSON.stringify(subAgent.tokenMiserAccounting)
+        ) {
+          subAgents.push(subAgent);
         }
       }
 
@@ -31993,7 +32080,6 @@ export class DesktopBackendRegistry {
       if (event.backend === "codex") {
         await this.flushPendingTokenMiserLedger({
           threadId: notification.params.threadId,
-          ...(turnId ? { turnId } : {}),
         });
       }
       if (turnId) {

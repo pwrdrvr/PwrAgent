@@ -1,5 +1,12 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../../lib/desktop-api";
@@ -42,6 +49,49 @@ const thread: NavigationThreadSummary = {
 };
 
 describe("SubAgentsPanel", () => {
+  it("shows Token Miser's per-gate cost equation", () => {
+    render(
+      <SubAgentsPanel
+        thread={{
+          ...thread,
+          subAgents: [{
+            monitorId: "system:token-miser:gate-1",
+            task: "Gate Bash output",
+            status: "success",
+            createdAt: 1_800_000_000_000,
+            updatedAt: 1_800_000_000_100,
+            backend: "codex",
+            agentName: "Token Miser",
+            tokenMiserAccounting: {
+              currency: "USD",
+              originalModel: "gpt-5.6-terra",
+              baselineParentTokens: 6_000,
+              baselineParentCostMicros: 15_000,
+              gateModel: "gpt-5.6-luna",
+              gateTotalTokens: 2_100,
+              gateCostMicros: 2_600,
+              revealedParentTokens: 225,
+              revealedParentCostMicros: 563,
+              savingsMicros: 11_837,
+            },
+          }],
+        }}
+      />,
+    );
+
+    const savings = screen.getByLabelText("Token Miser savings");
+    expect(within(savings).getByText("1 · Without gate")).toBeInTheDocument();
+    expect(savings).toHaveTextContent("$0.015");
+    expect(savings).toHaveTextContent("6,000 uncached · gpt-5.6-terra");
+    expect(within(savings).getByText("2 · Gate model")).toBeInTheDocument();
+    expect(savings).toHaveTextContent("2,100 total · gpt-5.6-luna");
+    expect(within(savings).getByText("3 · Revealed to parent")).toBeInTheDocument();
+    expect(savings).toHaveTextContent("225 uncached · gpt-5.6-terra");
+    expect(within(savings).getByText("Savings · 1 − 2 − 3"))
+      .toBeInTheDocument();
+    expect(savings).toHaveTextContent("$0.012");
+  });
+
   it("stops a running sub-agent and refreshes navigation", async () => {
     const stopSubAgent = vi.fn(async () => ({
       backend: "codex" as const,

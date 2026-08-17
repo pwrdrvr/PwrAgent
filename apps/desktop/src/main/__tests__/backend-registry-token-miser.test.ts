@@ -36,6 +36,34 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
   });
 
   it("batches gate cards and Luna usage into the parent ledgers", async () => {
+    await store.upsertThreadUsageLine({
+      line: {
+        backend: "codex",
+        cachedInputCostMicros: 0,
+        cachedInputTokens: 0,
+        createdAt: 1_800_000_000_000,
+        currency: "USD",
+        inputTokens: 10_000,
+        model: "gpt-5.6-terra",
+        outputCostMicros: 0,
+        outputTokens: 100,
+        priceStatus: "unpriced",
+        provider: "openai",
+        reasoningOutputTokens: 0,
+        scope: "turn",
+        serviceTier: "standard",
+        source: "live",
+        sourceItemId: "thread-token-usage",
+        status: "finalized",
+        threadId: "thread-parent",
+        totalCostMicros: 0,
+        totalTokens: 10_100,
+        turnId: "turn-parent",
+        uncachedInputCostMicros: 0,
+        uncachedInputTokens: 10_000,
+        usageLineId: "parent-turn-usage",
+      },
+    });
     const upsertSubAgents = vi.spyOn(store, "upsertThreadSubAgents");
     const upsertUsageLines = vi.spyOn(store, "upsertThreadUsageLines");
     const persist = (
@@ -62,13 +90,25 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       preferredModel: "gpt-5.6-luna",
       preferredReasoningEffort: "medium",
       status: "success",
+      tokenMiserAccounting: {
+        baselineParentCostMicros: 12_000,
+        baselineParentTokens: 6_000,
+        gateCostMicros: 520,
+        gateModel: "gpt-5.6-luna",
+        gateTotalTokens: 2_100,
+        originalModel: "gpt-5.6-terra",
+        revealedParentCostMicros: 450,
+        revealedParentTokens: 225,
+        savingsMicros: 11_030,
+      },
     });
     const pricing = await store.readThreadPricing({
       backend: "codex",
       threadId: "thread-parent",
     });
-    expect(pricing.lines).toHaveLength(2);
-    expect(pricing.lines[0]).toMatchObject({
+    const gateLines = pricing.lines.filter((line) => line.scope === "monitor");
+    expect(gateLines).toHaveLength(2);
+    expect(gateLines[0]).toMatchObject({
       model: "gpt-5.6-luna",
       parentThreadId: "thread-parent",
       scope: "monitor",
