@@ -198,16 +198,18 @@ export function ToolOutputIncidentExplorerWindow() {
   // Latch the opening lens the first time accounting arrives, then leave it
   // alone. Re-deriving it from `activeTokenMiser` would yank the operator out
   // of the case they are reading the moment a gate lands mid-turn.
+  //
+  // Adjusted during render rather than in an effect: an effect commits one
+  // painted frame on the incidents lens before switching, so a thread that
+  // gated would open on the wrong lens and visibly flip. React discards this
+  // render and re-runs before painting.
   const lensLatched = useRef(false);
-  useEffect(() => {
-    if (lensLatched.current || !accounting) {
-      return;
-    }
+  if (!lensLatched.current && accounting) {
     lensLatched.current = true;
     if ((accounting.tokenMiser?.interceptionCount ?? 0) > 0) {
       setLens("savings");
     }
-  }, [accounting]);
+  }
   const lens: ExplorerLens = showSavingsLens ? lensChoice : "incidents";
   const tokenMiserUsageLines = useMemo(
     () => (usageLines ?? []).filter((line) =>
