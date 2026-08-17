@@ -18,6 +18,7 @@ import {
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   isRemoteFederationTarget,
   parseThreadIdentityKey,
+  resolveNewThreadBackend,
   type AppServerBackendKind,
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
@@ -319,6 +320,9 @@ function DesktopAppShell(props: {
     "auto" | "replay" | null
   >(null);
   const [autoOpenSeen, setAutoOpenSeen] = useState(false);
+  const startupLandingStateRef = useRef<
+    "pending" | "onboarding-opened" | "complete"
+  >("pending");
   // Boot info is fetched once on mount and is stable across the
   // renderer's lifetime (the main process recorded it before this
   // window opened — see `recordBootDecision` in app-state.ts). The
@@ -1219,6 +1223,10 @@ function DesktopAppShell(props: {
     federationTarget: activeFederationTarget,
     suspended: !peerConnectivity.connected,
   });
+  const startupBackend = useMemo(
+    () => resolveNewThreadBackend(backendSummaries.backends),
+    [backendSummaries.backends],
+  );
   const refreshAcpAgents = backendSummaries.refreshAcpAgents;
   const refreshSelectedAcpProvider = useCallback(
     async (
@@ -1263,6 +1271,7 @@ function DesktopAppShell(props: {
   }, [mainView, navigation.selectedLaunchpad, navigation.selectedThreadKey]);
   const showThread = navigation.showThread;
   const selectDirectoryLaunchpad = navigation.selectDirectoryLaunchpad;
+  const openWorkspaceLaunchpad = navigation.openWorkspaceLaunchpad;
   const queueMessageLinkRequest = useCallback((request: {
     backend: AppServerBackendKind;
     messageId?: string;
@@ -1701,6 +1710,47 @@ function DesktopAppShell(props: {
     autoOpenSeen,
     onboardingOpen,
     settings.snapshot?.onboarding?.completed.value,
+  ]);
+  useEffect(() => {
+    if (
+      settings.snapshot?.onboarding?.completed.value !== true
+      || onboardingOpen !== null
+      || Boolean(readRendererFederationTarget())
+      || desktopApi?.replayFixtureActive === true
+      || !navigation.loaded
+      || !backendSummaries.loaded
+      || !desktopApi?.listBackends
+      || startupLandingStateRef.current === "complete"
+    ) {
+      return;
+    }
+
+    if (!startupBackend) {
+      // A discovery failure is not proof that the profile has no configured
+      // provider. Let a later refresh make the startup decision instead of
+      // sending the operator through setup because of a transient outage.
+      if (backendSummaries.error) {
+        return;
+      }
+      if (startupLandingStateRef.current === "pending") {
+        startupLandingStateRef.current = "onboarding-opened";
+        setOnboardingOpen("replay");
+      }
+      return;
+    }
+
+    startupLandingStateRef.current = "complete";
+    setMainView("thread");
+    void openWorkspaceLaunchpad(startupBackend.kind);
+  }, [
+    backendSummaries.error,
+    backendSummaries.loaded,
+    desktopApi,
+    navigation.loaded,
+    onboardingOpen,
+    openWorkspaceLaunchpad,
+    settings.snapshot?.onboarding?.completed.value,
+    startupBackend,
   ]);
   const loadThreadDetail = threadViewReady && mainView === "thread";
   const session = useThreadSessionState({

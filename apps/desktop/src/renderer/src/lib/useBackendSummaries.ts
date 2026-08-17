@@ -6,6 +6,7 @@ import { federationTargetsEqual } from "./federated-thread-events";
 type BackendSummaryData = {
   backends: BackendSummary[];
   error?: string;
+  loaded: boolean;
 };
 
 type BackendSummaryState = BackendSummaryData & {
@@ -27,7 +28,8 @@ export function useBackendSummaries(
   const federationTarget = options.federationTarget;
   const suspended = options.suspended ?? false;
   const [state, setState] = useState<BackendSummaryData>({
-    backends: []
+    backends: [],
+    loaded: false,
   });
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -40,7 +42,8 @@ export function useBackendSummaries(
     if (!enabled) {
       setState({
         backends: [],
-        error: undefined
+        error: undefined,
+        loaded: false,
       });
       return [];
     }
@@ -52,7 +55,8 @@ export function useBackendSummaries(
     if (!desktopApi?.listBackends) {
       setState({
         backends: [],
-        error: undefined
+        error: undefined,
+        loaded: true,
       });
       return [];
     }
@@ -64,7 +68,8 @@ export function useBackendSummaries(
       });
       setState({
         backends: response.backends,
-        error: undefined
+        error: undefined,
+        loaded: true,
       });
       return response.backends;
     } catch (error) {
@@ -76,7 +81,8 @@ export function useBackendSummaries(
       }
       setState({
         backends: [],
-        error: error instanceof Error ? error.message : String(error)
+        error: error instanceof Error ? error.message : String(error),
+        loaded: true,
       });
       return [];
     }

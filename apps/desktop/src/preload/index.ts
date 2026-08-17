@@ -818,6 +818,7 @@ const subscribeToAgentEvent = createEventSubscriptionMultiplexer<AgentEvent>(
 
 const desktopApi = Object.freeze({
   ping: () => "pong",
+  replayFixtureActive: Boolean(process.env.PWRAGENT_REPLAY_FIXTURE_PATH),
   // Clipboard writes go through the main process: the sandboxed preload's
   // `electron` module does not expose `clipboard`.
   copyText: async (text: string): Promise<void> => {
