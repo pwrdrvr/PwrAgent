@@ -7,6 +7,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   TOOLTIP_HOVER_DELAY_MS,
@@ -66,11 +67,19 @@ function DelayedTooltipFixture() {
 function AnchorLifecycleFixture(props: {
   anchorKey?: string;
   anchorLabel?: string;
+  anchorStatus?: string;
   anchorTop?: number;
   showAnchor?: boolean;
+  tooltipContent?: string;
   unrelatedLabel?: string;
 }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const tooltipContent = props.tooltipContent ?? "Branch details";
+  const updateTooltip = tooltip.update;
+
+  useEffect(() => {
+    updateTooltip(tooltipContent);
+  }, [tooltipContent, updateTooltip]);
 
   return (
     <div>
@@ -78,9 +87,11 @@ function AnchorLifecycleFixture(props: {
         {props.showAnchor === false ? null : (
           <button
             key={props.anchorKey ?? "anchor"}
+            aria-label={`Branch status: ${props.anchorStatus ?? "pending"}`}
+            className={`branch-status--${props.anchorStatus ?? "pending"}`}
             type="button"
             onMouseEnter={(event) =>
-              tooltip.show(event.currentTarget, "Branch details")
+              tooltip.show(event.currentTarget, tooltipContent)
             }
             onMouseLeave={tooltip.hide}
           >
@@ -233,6 +244,31 @@ describe("useViewportTooltip", () => {
     });
 
     expect(screen.getByRole("tooltip")).toHaveTextContent("Branch details");
+  });
+
+  it("keeps a live tooltip open when its anchor attributes and card content update", async () => {
+    const { rerender } = render(
+      <AnchorLifecycleFixture
+        anchorStatus="pending"
+        tooltipContent="Checks pending"
+      />,
+    );
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+    rerender(
+      <AnchorLifecycleFixture
+        anchorStatus="success"
+        tooltipContent="Checks passed"
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("tooltip")).toHaveTextContent("Checks passed");
+    });
+    expect(screen.getByRole("button")).toHaveAccessibleName(
+      "Branch status: success",
+    );
+    expect(screen.getByRole("button")).toHaveClass("branch-status--success");
   });
 
   it("closes a tooltip on Escape", () => {

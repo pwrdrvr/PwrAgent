@@ -313,7 +313,9 @@ export function useViewportTooltip(options: {
   // replaces the hovered element, and moving a keyed row can leave the same
   // DOM element connected at a new position. Watch the document only while a
   // tooltip is armed or visible, and dismiss when its anchor disappears,
-  // changes identity/content, or moves from its recorded viewport rectangle.
+  // is replaced, or moves from its recorded viewport rectangle. Attribute and
+  // content updates alone are not replacement: live cards update both their
+  // trigger state and tooltip content while they remain open.
   // Unrelated mutations are intentionally ignored when the anchor stays put;
   // transcript streaming must not close a sidebar tooltip.
   const visible = state !== undefined;
@@ -336,26 +338,10 @@ export function useViewportTooltip(options: {
         hide();
       }
     };
-    const targetChanged = (records: MutationRecord[]): boolean => {
+    const targetChanged = (): boolean => {
       const target = targetRef.current;
       const rememberedRect = targetRectRef.current;
       if (!target || !rememberedRect || !target.isConnected) {
-        return true;
-      }
-      if (
-        records.some((record) => {
-          if (
-            record.type === "attributes"
-            && record.target === target
-            && record.attributeName === "aria-describedby"
-          ) {
-            // Consumers add this relationship when `visible` flips to true.
-            // It describes the tooltip; it is not a changed anchor identity.
-            return false;
-          }
-          return record.target === target || target.contains(record.target);
-        })
-      ) {
         return true;
       }
       const currentRect = target.getBoundingClientRect();
@@ -364,8 +350,8 @@ export function useViewportTooltip(options: {
         || currentRect.bottom !== rememberedRect.bottom
         || currentRect.left !== rememberedRect.left;
     };
-    const mutationObserver = new MutationObserver((records) => {
-      if (targetChanged(records)) {
+    const mutationObserver = new MutationObserver(() => {
+      if (targetChanged()) {
         hide();
       }
     });
