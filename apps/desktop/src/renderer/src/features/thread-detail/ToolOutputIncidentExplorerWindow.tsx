@@ -548,7 +548,7 @@ export function ToolOutputIncidentExplorerWindow() {
                   <dd>{formatCompactTokens(tokenMiserComparison.actualParentTokens)}</dd>
                 </div>
                 <div>
-                  <dt>{tokenMiserComparison.avoidedParentTokens >= 0 ? "Avoided" : "Added"}</dt>
+                  <dt>{tokenMiserComparison.avoidedParentTokens >= 0 ? "Avoided footprint" : "Added footprint"}</dt>
                   <dd>{formatCompactTokens(Math.abs(tokenMiserComparison.avoidedParentTokens))}</dd>
                 </div>
                 <div>
@@ -560,6 +560,9 @@ export function ToolOutputIncidentExplorerWindow() {
                 {[
                   `${activeTokenMiser?.interceptionCount.toLocaleString()} gated ${activeTokenMiser?.interceptionCount === 1 ? "call" : "calls"}`,
                   `${formatCompactTokens(activeTokenMiser?.replacementTokens ?? 0)} summaries + ${formatCompactTokens(activeTokenMiser?.retrievedTokens ?? 0)} retrieved`,
+                  (activeTokenMiser?.estimatedCachedReplayTokensSaved ?? 0) > 0
+                    ? `${formatCompactTokens(activeTokenMiser?.estimatedCachedReplayTokensSaved ?? 0)} cached replay tokens avoided across ${(activeTokenMiser?.cachedReplayCount ?? 0).toLocaleString()} replays`
+                    : undefined,
                   tokenMiserGateTokens > 0
                     ? `${formatCompactTokens(tokenMiserGateTokens)} gate-compute tokens${tokenMiserGateCostMicros > 0 ? ` · ${formatMicrosCurrency(tokenMiserGateCostMicros, currency ?? "USD")}` : ""}`
                     : "Gate compute awaiting pricing ledger",
@@ -839,7 +842,7 @@ export function ToolOutputIncidentExplorerWindow() {
 
 function describeTokenMiserOutcome(estimatedTokensSaved: number): string {
   return estimatedTokensSaved >= 0
-    ? `${formatCompactTokens(estimatedTokensSaved)} estimated parent-context tokens avoided`
+    ? `${formatCompactTokens(estimatedTokensSaved)} estimated parent-context footprint avoided`
     : `${formatCompactTokens(Math.abs(estimatedTokensSaved))} estimated net parent-context token overhead`;
 }
 

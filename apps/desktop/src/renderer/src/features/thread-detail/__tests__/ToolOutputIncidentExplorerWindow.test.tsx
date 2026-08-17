@@ -73,6 +73,10 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       replacementTokens: 700,
       retrievedTokens: 1_300,
       estimatedParentTokensSaved: 18_000,
+      cachedReplayCount: 6,
+      cachedBaselineTokens: 36_000,
+      cachedRevealedTokens: 1_350,
+      estimatedCachedReplayTokensSaved: 34_650,
       interceptions: [{
         objectId: "00000000-0000-0000-0000-000000000001",
         turnId: "turn-1",
@@ -84,6 +88,10 @@ describe("ToolOutputIncidentExplorerWindow", () => {
         replacementTokens: 225,
         retrievedTokens: 0,
         estimatedParentTokensSaved: 5_775,
+        cachedReplayCount: 6,
+        cachedBaselineTokens: 36_000,
+        cachedRevealedTokens: 1_350,
+        estimatedCachedReplayTokensSaved: 34_650,
       }],
     };
     installApi({ readThread: async () => response });
@@ -92,17 +100,20 @@ describe("ToolOutputIncidentExplorerWindow", () => {
 
     const accounting = await screen.findByLabelText("Token Miser accounting");
     expect(accounting).toHaveTextContent(
-      "18k estimated parent-context tokens avoided",
+      "18k estimated parent-context footprint avoided",
     );
     expect(accounting).toHaveTextContent("Actual parent tool context2k");
-    expect(accounting).toHaveTextContent("Avoided18k");
+    expect(accounting).toHaveTextContent("Avoided footprint18k");
     expect(accounting).toHaveTextContent("Without Token Miser20k");
     expect(accounting).toHaveTextContent("2 gated calls");
     expect(accounting).toHaveTextContent("700 summaries + 1.3k retrieved");
+    expect(accounting).toHaveTextContent(
+      "34.6k cached replay tokens avoided across 6 replays",
+    );
     expect(accounting).toHaveTextContent("Gate compute awaiting pricing ledger");
     expect(screen.getByText("Gated by Token Miser")).toBeInTheDocument();
     expect(screen.getByText("6k baseline → 225 summary")).toBeInTheDocument();
-    expect(screen.getByText(/5.8k estimated parent-context tokens avoided/))
+    expect(screen.getByText(/5.8k estimated parent-context footprint avoided/))
       .toBeInTheDocument();
   });
 
@@ -281,7 +292,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     } as never));
 
     expect(await screen.findByText("Gated by Token Miser")).toBeInTheDocument();
-    expect(screen.getAllByText(/5.8k estimated parent-context tokens avoided/))
+    expect(screen.getAllByText(/5.8k estimated parent-context footprint avoided/))
       .toHaveLength(2);
   });
 

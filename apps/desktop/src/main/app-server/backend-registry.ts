@@ -267,6 +267,7 @@ import {
   type ThreadWorkspaceHandoffStrategy,
   type ThreadSubAgentSummary,
   type ThreadToolAccounting,
+  type ThreadTokenMiserAccounting,
   type ThreadToolInvocationAlert,
   type ThreadToolInvocationRecord,
   type ThreadPricingSummary,
@@ -4118,6 +4119,7 @@ function buildTaskMonitorUsageLine(params: {
 function buildTokenMiserSubAgentAccounting(params: {
   entry: TokenMiserObjectMetadata;
   gateUsageLine?: ThreadUsageLineRecord;
+  legacyCachedReplayCount?: number;
   parentUsageLine?: ThreadUsageLineRecord;
 }): ThreadSubAgentSummary["tokenMiserAccounting"] {
   const originalModel = params.parentUsageLine?.model;
@@ -4149,14 +4151,40 @@ function buildTokenMiserSubAgentAccounting(params: {
     ...pricingParams,
     uncachedInputTokens: revealedParentTokens,
   });
-  if (!baselineCost || !revealedCost) {
+  const cachedReplayCount = params.entry.replayTrackingVersion === 2
+    ? params.entry.cachedReplayCount ?? 0
+    : params.legacyCachedReplayCount ?? 0;
+  const cachedBaselineTokens = params.entry.replayTrackingVersion === 2
+    ? params.entry.cachedBaselineTokens ?? 0
+    : params.entry.baselineParentTokens * cachedReplayCount;
+  const cachedRevealedTokens = params.entry.replayTrackingVersion === 2
+    ? params.entry.cachedRevealedTokens ?? 0
+    : revealedParentTokens * cachedReplayCount;
+  const cachedBaselineCost = estimateTokenUsageCost({
+    ...pricingParams,
+    cachedInputTokens: cachedBaselineTokens,
+    uncachedInputTokens: 0,
+  });
+  const cachedRevealedCost = estimateTokenUsageCost({
+    ...pricingParams,
+    cachedInputTokens: cachedRevealedTokens,
+    uncachedInputTokens: 0,
+  });
+  if (
+    !baselineCost
+    || !revealedCost
+    || !cachedBaselineCost
+    || !cachedRevealedCost
+  ) {
     return undefined;
   }
   const gateCostMicros = params.gateUsageLine.totalCostMicros;
   const savingsMicros =
     baselineCost.uncachedInputCostMicros
+    + cachedBaselineCost.cachedInputCostMicros
     - gateCostMicros
-    - revealedCost.uncachedInputCostMicros;
+    - revealedCost.uncachedInputCostMicros
+    - cachedRevealedCost.cachedInputCostMicros;
   return {
     currency: "USD",
     originalModel,
@@ -4165,12 +4193,103 @@ function buildTokenMiserSubAgentAccounting(params: {
       : {}),
     baselineParentTokens: params.entry.baselineParentTokens,
     baselineParentCostMicros: baselineCost.uncachedInputCostMicros,
+    cachedReplayCount,
+    cachedBaselineTokens,
+    cachedBaselineCostMicros: cachedBaselineCost.cachedInputCostMicros,
     gateModel,
     gateTotalTokens: params.gateUsageLine.totalTokens,
     gateCostMicros,
     revealedParentTokens,
     revealedParentCostMicros: revealedCost.uncachedInputCostMicros,
+    cachedRevealedTokens,
+    cachedRevealedCostMicros: cachedRevealedCost.cachedInputCostMicros,
     savingsMicros,
+  };
+}
+
+function countLegacyTokenMiserCachedReplays(params: {
+  entry: TokenMiserObjectMetadata;
+  invocations: readonly ThreadToolInvocationRecord[];
+}): number {
+  if (params.entry.replayTrackingVersion === 2) {
+    return 0;
+  }
+  return countCachedReplaysAfterInvocation({
+    invocations: params.invocations,
+    toolUseId: params.entry.toolUseId,
+    turnId: params.entry.turnId,
+  });
+}
+
+function countCachedReplaysAfterInvocation(params: {
+  invocations: readonly ThreadToolInvocationRecord[];
+  toolUseId: string;
+  turnId: string;
+}): number {
+  const ordered = [...params.invocations]
+    .filter((invocation) => invocation.turnId === params.turnId)
+    .sort((left, right) =>
+      left.observedAt - right.observedAt
+      || left.invocationId.localeCompare(right.invocationId)
+    );
+  const selectedIndex = ordered.findIndex(
+    (invocation) => invocation.itemId === params.toolUseId,
+  );
+  if (selectedIndex < 0) {
+    return 0;
+  }
+  // The first later round trip is the uncached request that initially receives
+  // the tool result. Cached replay begins with the following model request.
+  return Math.max(0, ordered.length - selectedIndex - 2);
+}
+
+function withLegacyTokenMiserReplayAccounting(
+  accounting: ThreadTokenMiserAccounting,
+  invocations: readonly ThreadToolInvocationRecord[],
+): ThreadTokenMiserAccounting {
+  if (!accounting.interceptions) {
+    return accounting;
+  }
+  const interceptions = accounting.interceptions.map((entry) => {
+    if (entry.replayTrackingVersion === 2) {
+      return entry;
+    }
+    const cachedReplayCount = countCachedReplaysAfterInvocation({
+      invocations,
+      toolUseId: entry.toolUseId,
+      turnId: entry.turnId,
+    });
+    const revealedTokens = entry.replacementTokens + entry.retrievedTokens;
+    const cachedBaselineTokens = entry.baselineParentTokens * cachedReplayCount;
+    const cachedRevealedTokens = revealedTokens * cachedReplayCount;
+    return {
+      ...entry,
+      cachedReplayCount,
+      cachedBaselineTokens,
+      cachedRevealedTokens,
+      estimatedCachedReplayTokensSaved:
+        cachedBaselineTokens - cachedRevealedTokens,
+    };
+  });
+  const cachedBaselineTokens = interceptions.reduce(
+    (total, entry) => total + (entry.cachedBaselineTokens ?? 0),
+    0,
+  );
+  const cachedRevealedTokens = interceptions.reduce(
+    (total, entry) => total + (entry.cachedRevealedTokens ?? 0),
+    0,
+  );
+  return {
+    ...accounting,
+    interceptions,
+    cachedReplayCount: interceptions.reduce(
+      (total, entry) => total + (entry.cachedReplayCount ?? 0),
+      0,
+    ),
+    cachedBaselineTokens,
+    cachedRevealedTokens,
+    estimatedCachedReplayTokensSaved:
+      cachedBaselineTokens - cachedRevealedTokens,
   };
 }
 
@@ -7178,6 +7297,10 @@ export class DesktopBackendRegistry {
     string,
     TokenMiserObjectMetadata
   >();
+  private readonly activeTokenMiserReplayEntries = new Map<
+    string,
+    Map<string, TokenMiserObjectMetadata>
+  >();
   private readonly liveTokenMiserSubAgents = new Map<
     string,
     Map<string, ThreadSubAgentSummary>
@@ -7779,6 +7902,7 @@ export class DesktopBackendRegistry {
         {
           onMetadataUpdated: async (metadata) => {
             this.pendingTokenMiserInterceptions.set(metadata.objectId, metadata);
+            this.rememberActiveTokenMiserReplayEntry(metadata);
             const publish = this.tokenMiserLivePublishChain.then(() =>
               this.publishLiveTokenMiserLedgerEntry(metadata),
             );
@@ -7798,6 +7922,10 @@ export class DesktopBackendRegistry {
       const tokenMiserService = new TokenMiserService({
         store: this.tokenMiserStore,
         isEnabled: () => this.resolveTokenMiserEnabledFn(),
+        getParentCumulativeInputTokens: (threadId) =>
+          this.liveThreadReplayInputCursor.get(
+            ["codex", threadId].join(":"),
+          )?.cumulativeInputTokens,
         generateSummary: async (params) => {
           if (!this.codexClient.generateStructuredObject) {
             return {
@@ -11765,10 +11893,14 @@ export class DesktopBackendRegistry {
       return params.accounting;
     }
     try {
+      const tokenMiser = await this.tokenMiserStore.summarizeThreadUsage(
+        params.threadId,
+      );
       return {
         ...params.accounting,
-        tokenMiser: await this.tokenMiserStore.summarizeThreadUsage(
-          params.threadId,
+        tokenMiser: withLegacyTokenMiserReplayAccounting(
+          tokenMiser,
+          params.accounting.invocations,
         ),
       };
     } catch (error) {
@@ -25658,12 +25790,104 @@ export class DesktopBackendRegistry {
       return;
     }
     const metadata = await this.tokenMiserStore.listMetadata();
+    for (const entry of metadata) {
+      this.rememberActiveTokenMiserReplayEntry(entry);
+    }
     await this.persistTokenMiserLedgerEntries(metadata);
+  }
+
+  private rememberActiveTokenMiserReplayEntry(
+    metadata: TokenMiserObjectMetadata,
+  ): void {
+    const active = this.activeTokenMiserReplayEntries.get(metadata.threadId);
+    if (
+      metadata.replayTrackingVersion !== 2
+      || metadata.replayTrackingStoppedAt !== undefined
+    ) {
+      active?.delete(metadata.objectId);
+      if (active?.size === 0) {
+        this.activeTokenMiserReplayEntries.delete(metadata.threadId);
+      }
+      return;
+    }
+    const entries = active ?? new Map<string, TokenMiserObjectMetadata>();
+    entries.set(metadata.objectId, metadata);
+    this.activeTokenMiserReplayEntries.set(metadata.threadId, entries);
+  }
+
+  private async recordTokenMiserParentModelRequest(
+    event: AgentEvent,
+  ): Promise<void> {
+    if (
+      event.backend !== "codex"
+      || event.notification.method !== "thread/tokenUsage/updated"
+      || !this.tokenMiserStore
+    ) {
+      return;
+    }
+    const threadId = event.notification.params.threadId;
+    const entries = this.activeTokenMiserReplayEntries.get(threadId);
+    if (!entries || entries.size === 0) {
+      return;
+    }
+    const totalUsage = readTaskMonitorTokenUsageRecords(
+      event.notification.params.tokenUsage,
+    )?.totalUsage;
+    const cumulativeInputTokens = totalUsage?.inputTokens;
+    if (typeof cumulativeInputTokens !== "number") {
+      return;
+    }
+    const updated = await Promise.all(
+      [...entries.keys()].map((objectId) =>
+        this.tokenMiserStore!.recordParentModelRequest({
+          cumulativeInputTokens,
+          objectId,
+        })
+      ),
+    );
+    if (!updated.some(Boolean)) {
+      return;
+    }
+    await this.emitThreadToolAccountingUpdated({
+      backend: "codex",
+      threadId,
+    });
+  }
+
+  private async stopTokenMiserReplayTrackingAtCompaction(
+    event: AgentEvent,
+  ): Promise<void> {
+    if (
+      event.backend !== "codex"
+      || event.notification.method !== "thread/compacted"
+      || !this.tokenMiserStore
+    ) {
+      return;
+    }
+    const entries = this.activeTokenMiserReplayEntries.get(
+      event.notification.params.threadId,
+    );
+    if (!entries || entries.size === 0) {
+      return;
+    }
+    const stopped = await Promise.all(
+      [...entries.keys()].map((objectId) =>
+        this.tokenMiserStore!.stopReplayTracking({ objectId })
+      ),
+    );
+    if (!stopped.some(Boolean)) {
+      return;
+    }
+    await this.emitThreadToolAccountingUpdated({
+      backend: "codex",
+      threadId: event.notification.params.threadId,
+    });
   }
 
   private buildTokenMiserLedgerArtifact(params: {
     entry: TokenMiserObjectMetadata;
     pricingLines: readonly ThreadUsageLineRecord[];
+    toolInvocations?: readonly ThreadToolInvocationRecord[];
   }): {
     gateUsageLine?: ThreadUsageLineRecord;
     subAgent: ThreadSubAgentSummary;
@@ -25705,6 +25929,10 @@ export class DesktopBackendRegistry {
     const tokenMiserAccounting = buildTokenMiserSubAgentAccounting({
       entry,
       gateUsageLine,
+      legacyCachedReplayCount: countLegacyTokenMiserCachedReplays({
+        entry,
+        invocations: params.toolInvocations ?? [],
+      }),
       parentUsageLine,
     });
     return {
@@ -25760,6 +25988,14 @@ export class DesktopBackendRegistry {
           threadId: entry.threadId,
         })
       : { lines: [], summaries: [] };
+    const toolAccounting =
+      typeof this.overlayStore.readThreadToolAccounting === "function"
+        ? await this.overlayStore.readThreadToolAccounting({
+            backend: "codex",
+            includeAllInvocations: true,
+            threadId: entry.threadId,
+          })
+        : undefined;
     const linesById = new Map(
       pricing.lines.map((line) => [line.usageLineId, line]),
     );
@@ -25776,6 +26012,7 @@ export class DesktopBackendRegistry {
     const artifact = this.buildTokenMiserLedgerArtifact({
       entry,
       pricingLines: [...linesById.values()],
+      toolInvocations: toolAccounting?.invocations,
     });
     const liveSubAgents = this.liveTokenMiserSubAgents.get(entry.threadId)
       ?? new Map<string, ThreadSubAgentSummary>();
@@ -25871,6 +26108,14 @@ export class DesktopBackendRegistry {
             threadId,
           })
         : undefined;
+      const toolAccounting =
+        typeof this.overlayStore.readThreadToolAccounting === "function"
+          ? await this.overlayStore.readThreadToolAccounting({
+              backend: "codex",
+              includeAllInvocations: true,
+              threadId,
+            })
+          : undefined;
       const existingSubAgents = new Map(
         overlay?.subAgents?.map((subAgent) => [subAgent.monitorId, subAgent])
           ?? [],
@@ -25885,6 +26130,7 @@ export class DesktopBackendRegistry {
         const artifact = this.buildTokenMiserLedgerArtifact({
           entry,
           pricingLines: pricing?.lines ?? [],
+          toolInvocations: toolAccounting?.invocations,
         });
         const existingSubAgent = existingSubAgents.get(
           artifact.subAgent.monitorId,
@@ -33131,6 +33377,8 @@ export class DesktopBackendRegistry {
       event,
       liveThreadUsageWork,
     );
+    await this.recordTokenMiserParentModelRequest(event);
+    await this.stopTokenMiserReplayTrackingAtCompaction(event);
     await this.recordToolInvocationAccounting(event);
     this.forgetCompletedTurnReplayObservations(event);
     await this.recordCodexNativeSubAgentActivity(event);

@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   AgentEvent,
   NavigationSnapshot,
+  ThreadToolInvocationRecord,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import type { TokenMiserObjectMetadata } from "../token-miser/token-miser-types";
@@ -69,6 +70,20 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
         usageLineId: "parent-turn-usage",
       },
     });
+    await Promise.all([
+      store.upsertThreadToolInvocation({
+        invocation: toolInvocation("tool-1", 1),
+      }),
+      store.upsertThreadToolInvocation({
+        invocation: toolInvocation("tool-2", 2),
+      }),
+      store.upsertThreadToolInvocation({
+        invocation: toolInvocation("tool-3", 3),
+      }),
+      store.upsertThreadToolInvocation({
+        invocation: toolInvocation("tool-4", 4),
+      }),
+    ]);
     const upsertSubAgents = vi.spyOn(store, "upsertThreadSubAgents");
     const upsertUsageLines = vi.spyOn(store, "upsertThreadUsageLines");
     const persist = (
@@ -98,15 +113,28 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       tokenMiserAccounting: {
         baselineParentCostMicros: 12_000,
         baselineParentTokens: 6_000,
+        cachedReplayCount: 1,
+        cachedBaselineTokens: 6_000,
         gateCostMicros: 520,
         gateModel: "gpt-5.6-luna",
         gateTotalTokens: 2_100,
         originalModel: "gpt-5.6-terra",
         revealedParentCostMicros: 450,
         revealedParentTokens: 225,
-        savingsMicros: 11_030,
+        cachedRevealedTokens: 225,
       },
     });
+    const accounting = overlay?.subAgents?.[0]?.tokenMiserAccounting;
+    expect(accounting?.cachedBaselineCostMicros).toBeGreaterThan(0);
+    expect(accounting?.cachedRevealedCostMicros).toBeGreaterThan(0);
+    expect(accounting?.savingsMicros).toBe(
+      accounting!.baselineParentCostMicros
+      + accounting!.cachedBaselineCostMicros!
+      - accounting!.gateCostMicros
+      - accounting!.revealedParentCostMicros
+      - accounting!.cachedRevealedCostMicros!,
+    );
+    expect(accounting?.savingsMicros).toBeGreaterThan(11_030);
     const pricing = await store.readThreadPricing({
       backend: "codex",
       threadId: "thread-parent",
@@ -303,5 +331,32 @@ function metadata(
         totalTokens: 2_100,
       },
     },
+  };
+}
+
+function toolInvocation(
+  itemId: string,
+  ordinal: number,
+): ThreadToolInvocationRecord {
+  return {
+    backend: "codex",
+    threadId: "thread-parent",
+    turnId: "turn-parent",
+    itemId,
+    invocationId: `invocation-${ordinal}`,
+    toolName: "commandExecution",
+    category: "search",
+    status: "completed",
+    observedAt: 1_800_000_000_000 + ordinal,
+    updatedAt: 1_800_000_000_000 + ordinal,
+    outputChars: 1_000,
+    outputLines: 10,
+    estimatedOutputTokens: 250,
+    warningLines: 0,
+    errorLines: 0,
+    infoLines: 0,
+    debugLines: 0,
+    outputTruncated: false,
+    noisy: false,
   };
 }

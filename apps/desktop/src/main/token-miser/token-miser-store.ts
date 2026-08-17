@@ -39,6 +39,10 @@ export type TokenMiserUsageSummary = {
   replacementTokens: number;
   retrievedTokens: number;
   estimatedParentTokensSaved: number;
+  cachedReplayCount: number;
+  cachedBaselineTokens: number;
+  cachedRevealedTokens: number;
+  estimatedCachedReplayTokensSaved: number;
 };
 
 export type TokenMiserThreadUsageSummary = TokenMiserUsageSummary & {
@@ -53,6 +57,11 @@ export type TokenMiserThreadUsageSummary = TokenMiserUsageSummary & {
     replacementTokens: number;
     retrievedTokens: number;
     estimatedParentTokensSaved: number;
+    cachedReplayCount: number;
+    cachedBaselineTokens: number;
+    cachedRevealedTokens: number;
+    estimatedCachedReplayTokensSaved: number;
+    replayTrackingVersion?: 2;
   }>;
 };
 
@@ -80,6 +89,7 @@ export class TokenMiserStore {
     replacementCharacters: number;
     summary: TokenMiserSummary;
     helperUsage?: TokenMiserHelperUsage;
+    parentCumulativeInputTokens?: number;
     now?: number;
   }): Promise<TokenMiserObjectMetadata> {
     await this.ensureRoot();
@@ -102,6 +112,17 @@ export class TokenMiserStore {
       ),
       replacementCharacters: params.replacementCharacters,
       retrievedCharacters: 0,
+      replayTrackingVersion: 2,
+      parentRequestsObservedAfterGate: 0,
+      cachedReplayCount: 0,
+      cachedBaselineTokens: 0,
+      cachedRevealedTokens: 0,
+      ...(params.parentCumulativeInputTokens !== undefined
+        ? {
+            lastParentCumulativeInputTokens:
+              params.parentCumulativeInputTokens,
+          }
+        : {}),
       summary: params.summary,
       ...(params.helperUsage ? { helperUsage: params.helperUsage } : {}),
     };
@@ -264,6 +285,15 @@ export class TokenMiserStore {
           retrievedTokens,
           estimatedParentTokensSaved:
             entry.baselineParentTokens - replacementTokens - retrievedTokens,
+          cachedReplayCount: entry.cachedReplayCount ?? 0,
+          cachedBaselineTokens: entry.cachedBaselineTokens ?? 0,
+          cachedRevealedTokens: entry.cachedRevealedTokens ?? 0,
+          estimatedCachedReplayTokensSaved:
+            (entry.cachedBaselineTokens ?? 0)
+            - (entry.cachedRevealedTokens ?? 0),
+          ...(entry.replayTrackingVersion
+            ? { replayTrackingVersion: entry.replayTrackingVersion }
+            : {}),
         };
       }),
     };
@@ -319,15 +349,77 @@ export class TokenMiserStore {
     if (characters <= 0) {
       return;
     }
+    await this.updateMetadata(objectId, (metadata) => {
+      metadata.retrievedCharacters += characters;
+      return true;
+    });
+  }
+
+  async recordParentModelRequest(params: {
+    cumulativeInputTokens: number;
+    objectId: string;
+  }): Promise<TokenMiserObjectMetadata | undefined> {
+    return await this.updateMetadata(params.objectId, (metadata) => {
+      if (
+        metadata.replayTrackingVersion !== 2
+        || metadata.replayTrackingStoppedAt !== undefined
+        || params.cumulativeInputTokens
+          <= (metadata.lastParentCumulativeInputTokens ?? -1)
+      ) {
+        return false;
+      }
+      metadata.lastParentCumulativeInputTokens = params.cumulativeInputTokens;
+      metadata.parentRequestsObservedAfterGate =
+        (metadata.parentRequestsObservedAfterGate ?? 0) + 1;
+      // The first completed request launched the tool whose output was gated.
+      // The second is the first request that receives the replacement summary,
+      // already priced as uncached input. Only later requests replay it from
+      // cache and would have replayed the original payload from cache too.
+      if (metadata.parentRequestsObservedAfterGate <= 2) {
+        return true;
+      }
+      metadata.cachedReplayCount = (metadata.cachedReplayCount ?? 0) + 1;
+      metadata.cachedBaselineTokens =
+        (metadata.cachedBaselineTokens ?? 0) + metadata.baselineParentTokens;
+      metadata.cachedRevealedTokens =
+        (metadata.cachedRevealedTokens ?? 0)
+        + estimateTokenCount(
+          metadata.replacementCharacters + metadata.retrievedCharacters,
+        );
+      return true;
+    });
+  }
+
+  async stopReplayTracking(params: {
+    objectId: string;
+    stoppedAt?: number;
+  }): Promise<TokenMiserObjectMetadata | undefined> {
+    return await this.updateMetadata(params.objectId, (metadata) => {
+      if (
+        metadata.replayTrackingVersion !== 2
+        || metadata.replayTrackingStoppedAt !== undefined
+      ) {
+        return false;
+      }
+      metadata.replayTrackingStoppedAt = params.stoppedAt ?? Date.now();
+      return true;
+    });
+  }
+
+  private async updateMetadata(
+    objectId: string,
+    update: (metadata: TokenMiserObjectMetadata) => boolean,
+  ): Promise<TokenMiserObjectMetadata | undefined> {
     const previous = this.updateLocks.get(objectId) ?? Promise.resolve();
+    let updated: TokenMiserObjectMetadata | undefined;
     const next = previous.then(async () => {
       const metadata = await this.readMetadata(objectId);
-      if (!metadata) {
+      if (!metadata || !update(metadata)) {
         return;
       }
-      metadata.retrievedCharacters += characters;
       await this.writeMetadata(metadata);
       await this.options.onMetadataUpdated?.(metadata);
+      updated = metadata;
     });
     this.updateLocks.set(objectId, next);
     try {
@@ -337,6 +429,7 @@ export class TokenMiserStore {
         this.updateLocks.delete(objectId);
       }
     }
+    return updated;
   }
 
   private async remove(objectId: string): Promise<void> {
@@ -387,6 +480,14 @@ function summarizeMetadata(
     (total, entry) => total + estimateTokenCount(entry.retrievedCharacters),
     0,
   );
+  const cachedBaselineTokens = metadata.reduce(
+    (total, entry) => total + (entry.cachedBaselineTokens ?? 0),
+    0,
+  );
+  const cachedRevealedTokens = metadata.reduce(
+    (total, entry) => total + (entry.cachedRevealedTokens ?? 0),
+    0,
+  );
   return {
     interceptionCount: metadata.length,
     originalCharacters: metadata.reduce(
@@ -398,6 +499,14 @@ function summarizeMetadata(
     retrievedTokens,
     estimatedParentTokensSaved:
       baselineParentTokens - replacementTokens - retrievedTokens,
+    cachedReplayCount: metadata.reduce(
+      (total, entry) => total + (entry.cachedReplayCount ?? 0),
+      0,
+    ),
+    cachedBaselineTokens,
+    cachedRevealedTokens,
+    estimatedCachedReplayTokensSaved:
+      cachedBaselineTokens - cachedRevealedTokens,
   };
 }
 

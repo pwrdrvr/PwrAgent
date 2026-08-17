@@ -100,6 +100,75 @@ describe("TokenMiserStore", () => {
     });
   });
 
+  it("tracks cached parent replays after the first request until compaction", async () => {
+    const store = await createStore();
+    const metadata = await store.store({
+      threadId: "thread-owner",
+      turnId: "turn-1",
+      toolUseId: "tool-1",
+      toolName: "Bash",
+      output: "x".repeat(24_000),
+      replacementCharacters: 400,
+      parentCumulativeInputTokens: 1_000,
+      summary: {
+        summary: "Large output.",
+        usefulDetails: [],
+        suggestedNextStep: "None.",
+      },
+    });
+
+    await store.recordParentModelRequest({
+      cumulativeInputTokens: 2_000,
+      objectId: metadata.objectId,
+    });
+    await store.recordParentModelRequest({
+      cumulativeInputTokens: 2_000,
+      objectId: metadata.objectId,
+    });
+    expect(await store.readMetadata(metadata.objectId)).toMatchObject({
+      parentRequestsObservedAfterGate: 1,
+      cachedReplayCount: 0,
+    });
+
+    await store.recordParentModelRequest({
+      cumulativeInputTokens: 3_000,
+      objectId: metadata.objectId,
+    });
+    expect(await store.readMetadata(metadata.objectId)).toMatchObject({
+      parentRequestsObservedAfterGate: 2,
+      cachedReplayCount: 0,
+    });
+    await store.recordParentModelRequest({
+      cumulativeInputTokens: 4_000,
+      objectId: metadata.objectId,
+    });
+    await store.recordParentModelRequest({
+      cumulativeInputTokens: 5_000,
+      objectId: metadata.objectId,
+    });
+    await store.stopReplayTracking({
+      objectId: metadata.objectId,
+      stoppedAt: 6_000,
+    });
+    await store.recordParentModelRequest({
+      cumulativeInputTokens: 6_000,
+      objectId: metadata.objectId,
+    });
+
+    expect(await store.readMetadata(metadata.objectId)).toMatchObject({
+      cachedReplayCount: 2,
+      cachedBaselineTokens: 12_000,
+      cachedRevealedTokens: 200,
+      replayTrackingStoppedAt: 6_000,
+    });
+    expect(await store.summarizeThreadUsage("thread-owner")).toMatchObject({
+      cachedReplayCount: 2,
+      cachedBaselineTokens: 12_000,
+      cachedRevealedTokens: 200,
+      estimatedCachedReplayTokensSaved: 11_800,
+    });
+  });
+
   it("prunes expired and over-budget outputs oldest first", async () => {
     const store = await createStore();
     const expired = await createObject(store, "expired", 1);

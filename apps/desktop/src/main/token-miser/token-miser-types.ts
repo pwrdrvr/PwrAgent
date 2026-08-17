@@ -39,6 +39,14 @@ export type TokenMiserObjectMetadata = {
   baselineParentTokens: number;
   replacementCharacters: number;
   retrievedCharacters: number;
+  /** Versioned opt-in so pre-replay-accounting objects are not tracked forever. */
+  replayTrackingVersion?: 2;
+  parentRequestsObservedAfterGate?: number;
+  lastParentCumulativeInputTokens?: number;
+  cachedReplayCount?: number;
+  cachedBaselineTokens?: number;
+  cachedRevealedTokens?: number;
+  replayTrackingStoppedAt?: number;
   summary: TokenMiserSummary;
   helperUsage?: TokenMiserHelperUsage;
 };

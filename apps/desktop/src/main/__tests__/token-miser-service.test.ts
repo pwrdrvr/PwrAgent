@@ -37,6 +37,7 @@ describe("TokenMiserService", () => {
     const service = new TokenMiserService({
       store,
       isEnabled: () => true,
+      getParentCumulativeInputTokens: () => 12_345,
       generateSummary,
       onInterceptionStored,
       thresholdCharacters: 9,
@@ -59,6 +60,8 @@ describe("TokenMiserService", () => {
       turnId: "turn-1",
       toolUseId: "tool-1",
       originalCharacters: 10,
+      replayTrackingVersion: 2,
+      lastParentCumulativeInputTokens: 12_345,
       helperUsage: {
         helperThreadId: "helper-thread-1",
         helperTurnId: "helper-turn-1",
