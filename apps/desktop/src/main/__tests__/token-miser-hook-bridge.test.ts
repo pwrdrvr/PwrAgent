@@ -59,7 +59,14 @@ describe("TokenMiserHookBridge", () => {
     expect(handlePostToolUse).toHaveBeenCalledOnce();
 
     const descriptorStats = await fs.stat(path.join(stateDir, "bridge.json"));
-    expect(descriptorStats.mode & 0o077).toBe(0);
+    // The descriptor carries the bridge's bearer token, so it is written 0o600.
+    // Windows does not map POSIX mode bits onto NTFS ACLs — Node reports 0o666
+    // whatever mode was requested — so this assertion can only hold off win32.
+    // There the token is covered by the ACL inherited from the user profile,
+    // which is not something the code sets or this test can observe.
+    if (process.platform !== "win32") {
+      expect(descriptorStats.mode & 0o077).toBe(0);
+    }
   });
 });
 
