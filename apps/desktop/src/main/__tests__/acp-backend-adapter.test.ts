@@ -631,7 +631,6 @@ describe("AcpBackendAdapter", () => {
       },
       captureStores: [],
       createAcpTransport: () => transport,
-      discoverLocalAcpAgents: async () => [],
       emit: async (event) => {
         events.push(event);
       },
@@ -739,7 +738,6 @@ describe("AcpBackendAdapter", () => {
       },
       captureStores: [],
       createAcpTransport: () => transport,
-      discoverLocalAcpAgents: async () => [],
       emit: async (event) => {
         events.push(event);
       },
@@ -886,7 +884,6 @@ describe("AcpBackendAdapter", () => {
       },
       captureStores: [],
       createAcpTransport: () => transport,
-      discoverLocalAcpAgents: async () => [],
       emit: async (event) => {
         events.push(event);
       },
@@ -1010,7 +1007,6 @@ describe("AcpBackendAdapter", () => {
       },
       captureStores: [],
       createAcpTransport: () => transport,
-      discoverLocalAcpAgents: async () => [],
       emit: async (event) => {
         events.push(event);
       },
@@ -1178,7 +1174,6 @@ describe("AcpBackendAdapter", () => {
       },
       captureStores: [],
       createAcpTransport: () => transport,
-      discoverLocalAcpAgents: async () => [],
       emit: async (event) => {
         events.push(event);
       },
@@ -1252,7 +1247,6 @@ describe("AcpBackendAdapter", () => {
       },
       captureStores: [],
       createAcpTransport: () => transport,
-      discoverLocalAcpAgents: async () => [],
       emit: async (event) => {
         events.push(event);
       },
@@ -1347,7 +1341,6 @@ describe("AcpBackendAdapter", () => {
       },
       captureStores: [],
       createAcpTransport: () => transport,
-      discoverLocalAcpAgents: async () => [],
       emit: async (event) => {
         events.push(event);
       },
@@ -1532,7 +1525,6 @@ describe("AcpBackendAdapter", () => {
       },
       captureStores: [],
       createAcpTransport: () => transport,
-      discoverLocalAcpAgents: async () => [],
       emit: async (event) => {
         events.push(event);
       },
@@ -1693,7 +1685,6 @@ describe("AcpBackendAdapter", () => {
       },
       captureStores: [],
       createAcpTransport: () => transport,
-      discoverLocalAcpAgents: async () => [],
       emit: async (event) => {
         events.push(event);
       },
@@ -1847,7 +1838,6 @@ describe("AcpBackendAdapter", () => {
       },
       captureStores: [],
       createAcpTransport: () => transport,
-      discoverLocalAcpAgents: async () => [],
       emit: async (event) => {
         events.push(event);
       },
@@ -1955,7 +1945,6 @@ describe("AcpBackendAdapter", () => {
       },
       captureStores: [],
       createAcpTransport: () => transport,
-      discoverLocalAcpAgents: async () => [],
       emit: async (event) => {
         events.push(event);
       },
@@ -2052,7 +2041,6 @@ describe("AcpBackendAdapter", () => {
         onNotification: (listener) => transport.onNotification(listener),
         onRequest: (listener) => transport.onRequest(listener),
       }),
-      discoverLocalAcpAgents: async () => [],
       emit: vi.fn(async () => undefined),
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
@@ -2154,7 +2142,6 @@ describe("AcpBackendAdapter", () => {
         onNotification: (listener) => transport.onNotification(listener),
         onRequest: (listener) => transport.onRequest(listener),
       }),
-      discoverLocalAcpAgents: async () => [],
       emit: async (event) => {
         events.push(event);
       },
@@ -2714,7 +2701,6 @@ describe("AcpBackendAdapter", () => {
       },
       captureStores: [],
       createAcpTransport: () => transport,
-      discoverLocalAcpAgents: async () => [],
       emit: vi.fn(async () => undefined),
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
@@ -2836,7 +2822,6 @@ describe("AcpBackendAdapter", () => {
             threadStatus: "idle",
           })),
         }) as never,
-      discoverLocalAcpAgents: async () => [],
       emit: vi.fn(async () => undefined),
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
@@ -2983,7 +2968,6 @@ describe("AcpBackendAdapter", () => {
           dispose: vi.fn(async () => undefined),
           refreshSession: vi.fn(async () => undefined),
         }) as never,
-      discoverLocalAcpAgents: async () => [],
       emit: vi.fn(async () => undefined),
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
@@ -3129,7 +3113,6 @@ describe("AcpBackendAdapter", () => {
           })),
           refreshSession: vi.fn(async () => undefined),
         }) as never,
-      discoverLocalAcpAgents: async () => [],
       emit: vi.fn(async () => undefined),
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
@@ -3254,7 +3237,6 @@ describe("AcpBackendAdapter", () => {
           dispose: vi.fn(async () => undefined),
           refreshSession: vi.fn(async () => undefined),
         }) as never,
-      discoverLocalAcpAgents: async () => [],
       emit: vi.fn(async () => undefined),
       handleServerRequest: vi.fn(async () => ({ decision: "accept" })),
     });
