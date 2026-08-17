@@ -1054,6 +1054,20 @@ export type ThreadTokenMiserAccounting = {
   replacementTokens: number;
   retrievedTokens: number;
   estimatedParentTokensSaved: number;
+  interceptions?: ThreadTokenMiserInterceptionAccounting[];
+};
+
+export type ThreadTokenMiserInterceptionAccounting = {
+  objectId: string;
+  turnId: string;
+  toolUseId: string;
+  toolName: string;
+  createdAt: number;
+  originalCharacters: number;
+  baselineParentTokens: number;
+  replacementTokens: number;
+  retrievedTokens: number;
+  estimatedParentTokensSaved: number;
 };
 
 export type ThreadToolAccounting = {

@@ -16973,6 +16973,40 @@ a.transcript-message__messaging-origin:focus-visible {
   text-align: right;
 }
 
+.incident-explorer__token-miser-call {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border-subtle));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.incident-explorer__token-miser-call span {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.incident-explorer__token-miser-call strong,
+.incident-explorer__token-miser-call p {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.incident-explorer__token-miser-call p {
+  margin: 0;
+  color: var(--text-muted);
+  text-align: right;
+}
+
 .incident-explorer__hero {
   display: flex;
   align-items: baseline;

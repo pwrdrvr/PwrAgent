@@ -71,6 +71,15 @@ describe("TokenMiserStore", () => {
         interceptionCount: 0,
         estimatedParentTokensSaved: 0,
       });
+    expect(await store.summarizeThreadUsage("thread-owner")).toMatchObject({
+      interceptionCount: 1,
+      interceptions: [{
+        objectId: metadata.objectId,
+        toolUseId: "tool-1",
+        turnId: "turn-1",
+        baselineParentTokens: metadata.baselineParentTokens,
+      }],
+    });
   });
 
   it("prunes expired and over-budget outputs oldest first", async () => {

@@ -73,6 +73,18 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       replacementTokens: 700,
       retrievedTokens: 1_300,
       estimatedParentTokensSaved: 18_000,
+      interceptions: [{
+        objectId: "00000000-0000-0000-0000-000000000001",
+        turnId: "turn-1",
+        toolUseId: "item-1",
+        toolName: "commandExecution",
+        createdAt: 1_800_000_000_000,
+        originalCharacters: 24_000,
+        baselineParentTokens: 6_000,
+        replacementTokens: 225,
+        retrievedTokens: 0,
+        estimatedParentTokensSaved: 5_775,
+      }],
     };
     installApi({ readThread: async () => response });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
@@ -85,6 +97,10 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(accounting).toHaveTextContent(
       "2 gated calls · 20k baseline · 700 summaries · 1.3k retrieved",
     );
+    expect(screen.getByText("Gated by Token Miser")).toBeInTheDocument();
+    expect(screen.getByText("6k baseline → 225 summary")).toBeInTheDocument();
+    expect(screen.getByText(/5.8k estimated parent-context tokens avoided/))
+      .toBeInTheDocument();
   });
 
   it("shows historical output using the analyzer's normalized detail identity", async () => {
@@ -210,6 +226,60 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     await act(async () => refreshListener?.());
     await waitFor(() => expect(within(metrics).getByText("2")).toBeInTheDocument());
     expect(readCount).toBe(2);
+  });
+
+  it("updates Token Miser accounting from live tool-accounting events", async () => {
+    let agentEventListener: ((event: never) => void) | undefined;
+    const initial = buildResponse();
+    installApi({
+      onAgentEvent: (callback: (event: never) => void) => {
+        agentEventListener = callback;
+        return () => {
+          agentEventListener = undefined;
+        };
+      },
+      readThread: async () => initial,
+    });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+    expect(await screen.findByText("Raw output from flagged calls"))
+      .toBeInTheDocument();
+
+    const updated = buildResponse();
+    updated.toolAccounting!.tokenMiser = {
+      interceptionCount: 1,
+      originalCharacters: 24_000,
+      baselineParentTokens: 6_000,
+      replacementTokens: 225,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 5_775,
+      interceptions: [{
+        objectId: "00000000-0000-0000-0000-000000000001",
+        turnId: "turn-1",
+        toolUseId: "item-1",
+        toolName: "commandExecution",
+        createdAt: 1_800_000_000_000,
+        originalCharacters: 24_000,
+        baselineParentTokens: 6_000,
+        replacementTokens: 225,
+        retrievedTokens: 0,
+        estimatedParentTokensSaved: 5_775,
+      }],
+    };
+    await act(async () => agentEventListener?.({
+      backend: "codex",
+      notification: {
+        method: "thread/toolAccounting/updated",
+        params: {
+          threadId: "thread-1",
+          toolAccounting: updated.toolAccounting!,
+        },
+      },
+    } as never));
+
+    expect(await screen.findByText("Gated by Token Miser")).toBeInTheDocument();
+    expect(screen.getAllByText(/5.8k estimated parent-context tokens avoided/))
+      .toHaveLength(2);
   });
 
   it("ranks cases by output size and measures each against the output cap", async () => {
