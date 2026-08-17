@@ -804,8 +804,9 @@ type BackendRegistryForkThreadRequest = ForkThreadRequest & {
  *
  * Worktree threads must run from LinkedDirectorySummary.worktreePath; Local
  * threads run from LinkedDirectorySummary.path. A handoff overlay projects the
- * committed workspace change immediately and remains authoritative until Codex
- * reports that same workspace, acknowledging the provider-side synchronization.
+ * committed workspace change immediately. The selected workspace remains
+ * authoritative across provider-side synchronization so a later stale
+ * provider snapshot cannot silently restore the pre-handoff workspace.
  */
 function resolveThreadWorkspaceCwd(
   thread: AppServerThreadSummary | undefined,
@@ -1214,24 +1215,10 @@ function shouldRepairCachedDirectoryRelationship(params: {
   directory: LinkedDirectorySummary;
   overlay: ThreadOverlayState | undefined;
 }): boolean {
-  const handoffDirectory = params.overlay?.extraLinkedDirectories.find(
-    isHandoffDirectory,
-  );
-  if (
-    handoffDirectory
-    && linkedDirectoriesHaveSameWorkspaceIdentity(
-      handoffDirectory,
-      params.directory,
-    )
-  ) {
-    // Matching provider metadata acknowledges the CWD synchronization. Replace
-    // the temporary handoff identity with Codex's normal directory identity.
-    return true;
-  }
-
-  // The handoff overlay is also the durable retry marker. Older PwrAgent
-  // versions can leave one paired with the pre-handoff Codex CWD, so preserve
-  // it until provider metadata explicitly acknowledges the target workspace.
+  // The handoff overlay is both the authoritative workspace selection and the
+  // durable retry marker. Keep it after Codex acknowledges the target: native
+  // review can later restore the thread's original CWD in provider metadata,
+  // and replacing this marker would let that stale snapshot win permanently.
   if (overlayHasHandoffWorkspace(params.overlay)) {
     return false;
   }
