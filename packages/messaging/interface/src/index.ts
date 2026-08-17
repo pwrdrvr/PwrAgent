@@ -828,23 +828,27 @@ export type MessagingBaseSurfaceIntent = {
   targetSurface?: MessagingSurfaceRef;
 };
 
+export type MessagingResponseAttribution = {
+  label: string;
+  hint?: string;
+};
+
 export type MessagingMessageIntent = MessagingBaseSurfaceIntent & {
   kind: "message";
   /**
-   * Optional source identity and delivery context for a response routed away
-   * from its bound conversation. Routine replies should omit this when their
-   * destination already makes the source identity unambiguous.
+   * Optional bound Agent or thread identity plus secondary delivery context.
    */
-  attribution?: {
-    label: string;
-    hint?: string;
-  };
+  attribution?: MessagingResponseAttribution;
   parts: MessagingContentPart[];
   role?: "assistant" | "user" | "system";
 };
 
 export type MessagingStreamUpdateIntent = MessagingBaseSurfaceIntent & {
   kind: "stream_update";
+  /**
+   * Optional bound Agent or thread identity on the durable streamed response.
+   */
+  attribution?: MessagingResponseAttribution;
   stream: {
     isFinal: boolean;
     key: string;

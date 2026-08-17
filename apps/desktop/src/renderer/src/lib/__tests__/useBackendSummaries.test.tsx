@@ -8,6 +8,29 @@ import {
 } from "../useBackendSummaries";
 
 describe("useBackendSummaries", () => {
+  it("distinguishes pending discovery from a completed empty result", async () => {
+    let resolveBackends!: (value: {
+      fetchedAt: number;
+      backends: [];
+    }) => void;
+    const listBackends = vi.fn<NonNullable<DesktopApi["listBackends"]>>(
+      async () => await new Promise((resolve) => {
+        resolveBackends = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useBackendSummaries({ listBackends }));
+
+    expect(result.current.loaded).toBe(false);
+
+    await act(async () => {
+      resolveBackends({ fetchedAt: 1, backends: [] });
+    });
+
+    await waitFor(() => {
+      expect(result.current.loaded).toBe(true);
+    });
+  });
+
   it("refreshes cached ACP models only when explicitly requested", async () => {
     const listAcpAgents = vi
       .fn<NonNullable<DesktopApi["listAcpAgents"]>>()

@@ -18,6 +18,7 @@ import {
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   isRemoteFederationTarget,
   parseThreadIdentityKey,
+  resolveNewThreadBackend,
   type AppServerBackendKind,
   type DesktopBootInfo,
   type DesktopCodexProfileModel,
@@ -319,6 +320,9 @@ function DesktopAppShell(props: {
     "auto" | "replay" | null
   >(null);
   const [autoOpenSeen, setAutoOpenSeen] = useState(false);
+  const startupLandingStateRef = useRef<
+    "pending" | "onboarding-opened" | "complete"
+  >("pending");
   // Boot info is fetched once on mount and is stable across the
   // renderer's lifetime (the main process recorded it before this
   // window opened — see `recordBootDecision` in app-state.ts). The
@@ -384,13 +388,17 @@ function DesktopAppShell(props: {
   });
   const newThreadFederationTargets = useMemo(
     () =>
-      desktopApi?.openFederationWindow
+      desktopApi?.getNavigationSnapshot && desktopApi?.ensureDirectoryLaunchpad
         ? buildFederationThreadTargets(
             liveFederationHealth,
             readRendererFederationTarget()?.instanceId,
           )
         : [],
-    [desktopApi?.openFederationWindow, liveFederationHealth],
+    [
+      desktopApi?.ensureDirectoryLaunchpad,
+      desktopApi?.getNavigationSnapshot,
+      liveFederationHealth,
+    ],
   );
   useEffect(() => {
     return desktopApi?.onWindowFocus?.(() => {
@@ -1149,11 +1157,16 @@ function DesktopAppShell(props: {
   });
   const selectedThreadFederationTarget =
     navigation.selectedThread?.federation?.ref.target;
+  const selectedLaunchpadFederationTarget =
+    navigation.selectedLaunchpad?.federationTarget;
   const navigationFederationTarget = navigation.federationTarget;
   const remoteApplicationInstanceId =
     selectedThreadFederationTarget
     && isRemoteFederationTarget(selectedThreadFederationTarget)
       ? selectedThreadFederationTarget.instanceId
+      : selectedLaunchpadFederationTarget
+        && isRemoteFederationTarget(selectedLaunchpadFederationTarget)
+        ? selectedLaunchpadFederationTarget.instanceId
       : navigationFederationTarget
         && isRemoteFederationTarget(navigationFederationTarget)
         ? navigationFederationTarget.instanceId
@@ -1219,6 +1232,10 @@ function DesktopAppShell(props: {
     federationTarget: activeFederationTarget,
     suspended: !peerConnectivity.connected,
   });
+  const startupBackend = useMemo(
+    () => resolveNewThreadBackend(backendSummaries.backends),
+    [backendSummaries.backends],
+  );
   const refreshAcpAgents = backendSummaries.refreshAcpAgents;
   const refreshSelectedAcpProvider = useCallback(
     async (
@@ -1250,7 +1267,17 @@ function DesktopAppShell(props: {
     if (mainView === "search") {
       return { view: "search" };
     }
-    if (mainView === "thread" && navigation.selectedLaunchpad) {
+    if (
+      mainView === "thread"
+      && navigation.selectedLaunchpad
+      // This short-lived session owns a peer's directories and cannot be
+      // restored by the local directory-key history entry. Its materialized
+      // thread is tracked normally once it is mounted below.
+      && (
+        !navigation.selectedLaunchpad.federationTarget
+        || !isRemoteFederationTarget(navigation.selectedLaunchpad.federationTarget)
+      )
+    ) {
       return {
         view: "launchpad",
         directoryKey: navigation.selectedLaunchpad.directoryKey,
@@ -1263,6 +1290,7 @@ function DesktopAppShell(props: {
   }, [mainView, navigation.selectedLaunchpad, navigation.selectedThreadKey]);
   const showThread = navigation.showThread;
   const selectDirectoryLaunchpad = navigation.selectDirectoryLaunchpad;
+  const openWorkspaceLaunchpad = navigation.openWorkspaceLaunchpad;
   const queueMessageLinkRequest = useCallback((request: {
     backend: AppServerBackendKind;
     messageId?: string;
@@ -1702,6 +1730,47 @@ function DesktopAppShell(props: {
     onboardingOpen,
     settings.snapshot?.onboarding?.completed.value,
   ]);
+  useEffect(() => {
+    if (
+      settings.snapshot?.onboarding?.completed.value !== true
+      || onboardingOpen !== null
+      || Boolean(readRendererFederationTarget())
+      || desktopApi?.replayFixtureActive === true
+      || !navigation.loaded
+      || !backendSummaries.loaded
+      || !desktopApi?.listBackends
+      || startupLandingStateRef.current === "complete"
+    ) {
+      return;
+    }
+
+    if (!startupBackend) {
+      // A discovery failure is not proof that the profile has no configured
+      // provider. Let a later refresh make the startup decision instead of
+      // sending the operator through setup because of a transient outage.
+      if (backendSummaries.error) {
+        return;
+      }
+      if (startupLandingStateRef.current === "pending") {
+        startupLandingStateRef.current = "onboarding-opened";
+        setOnboardingOpen("replay");
+      }
+      return;
+    }
+
+    startupLandingStateRef.current = "complete";
+    setMainView("thread");
+    void openWorkspaceLaunchpad(startupBackend.kind);
+  }, [
+    backendSummaries.error,
+    backendSummaries.loaded,
+    desktopApi,
+    navigation.loaded,
+    onboardingOpen,
+    openWorkspaceLaunchpad,
+    settings.snapshot?.onboarding?.completed.value,
+    startupBackend,
+  ]);
   const loadThreadDetail = threadViewReady && mainView === "thread";
   const session = useThreadSessionState({
     desktopApi,
@@ -1745,20 +1814,11 @@ function DesktopAppShell(props: {
   const createThreadOnFederationTarget = async (
     instanceId: string,
   ): Promise<void> => {
-    try {
-      await desktopApi?.openFederationWindow?.({
-        target: { scope: "remote", instanceId },
-        initialLaunchpad: true,
-      });
-    } catch (error) {
-      showAppNotice({
-        id: `new-thread-federation-target:${instanceId}`,
-        title: "Could not open new thread",
-        message: error instanceof Error ? error.message : String(error),
-        tone: "error",
-        transientSlot: "new-thread-federation-target",
-      });
-    }
+    setMainView("thread");
+    await navigation.openFederatedWorkspaceLaunchpad({
+      scope: "remote",
+      instanceId,
+    });
   };
   const mastheadActions = {
     addingProjectDirectory: navigation.pickingDirectory,
@@ -1891,7 +1951,7 @@ function DesktopAppShell(props: {
     selectedThread: navigation.selectedThread,
     threads: navigation.threads,
     suppressBranchDriftDialog: mainView === "settings",
-    directories: navigation.directories,
+    directories: navigation.launchpadDirectories,
     fullAccessRiskWarningDismissed:
       settings.snapshot?.experimental.fullAccessRiskWarningDismissed.value ?? false,
     backgroundPrPollingEnabled:
@@ -1907,9 +1967,22 @@ function DesktopAppShell(props: {
     pickDirectoryError: navigation.pickDirectoryError,
     pickingDirectory: navigation.pickingDirectory,
     onSelectDirectoryFromPicker: (directory) => {
+      const federationTarget = navigation.selectedLaunchpad?.federationTarget;
+      if (federationTarget && isRemoteFederationTarget(federationTarget)) {
+        void navigation.openFederatedDirectoryLaunchpad(
+          federationTarget,
+          directory,
+        );
+        return;
+      }
       void navigation.openDirectoryLaunchpad(directory);
     },
     onSelectNoDirectoryFromPicker: () => {
+      const federationTarget = navigation.selectedLaunchpad?.federationTarget;
+      if (federationTarget && isRemoteFederationTarget(federationTarget)) {
+        void navigation.openFederatedWorkspaceLaunchpad(federationTarget);
+        return;
+      }
       void navigation.openWorkspaceLaunchpad();
     },
     onPickAndRegisterDirectory: () => {

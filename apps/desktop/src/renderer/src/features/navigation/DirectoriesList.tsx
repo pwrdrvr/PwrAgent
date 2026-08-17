@@ -1361,6 +1361,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       <section
         key={directory.key}
         className="directory-row"
+        data-hover-stable-row="directory"
         onDragOver={
           directoryDragEnabled
             ? (event) => {

@@ -16,6 +16,8 @@ export { normalizeProfileName };
 
 export const PWRAGENT_PROFILE_ENV = "PWRAGENT_PROFILE";
 export const PWRAGENT_HOME_ENV = "PWRAGENT_HOME";
+export const DOCK_PROFILE_SNAPSHOT_FILENAME = "dock-profiles.json";
+export const DOCK_PROFILE_SNAPSHOT_CACHE_DIR = "com.pwrdrvr.pwragent";
 /**
  * Bypass the wizard for missing-profile boot decisions. Intended for
  * E2E fixtures and replay tests where the test harness wants to spin
@@ -70,6 +72,16 @@ export type ProfileEntry = {
 export type ProfilesRegistry = {
   default_profile?: string;
   profiles: ProfileEntry[];
+};
+
+export type DockProfileSnapshot = {
+  schemaVersion: 2;
+  pwragentHome: string;
+  defaultProfile: string;
+  profiles: Array<{
+    name: string;
+    displayName?: string;
+  }>;
 };
 
 export type ProfileRuntimeHeartbeat = {
@@ -403,6 +415,22 @@ export function resolveProfilesRegistryPath(options?: {
   return path.join(resolvePwragentRoot(options), "profiles.toml");
 }
 
+export function resolveDockProfileSnapshotPath(options?: {
+  homeDir?: string;
+}): string {
+  // The Dock process does not inherit PWRAGENT_HOME. This is a derived cache,
+  // not authoritative configuration: it records the last-run root so the
+  // native plug-in can locate profiles and pass that root into a new launch.
+  const homeDir = options?.homeDir ?? os.homedir();
+  return path.join(
+    homeDir,
+    "Library",
+    "Caches",
+    DOCK_PROFILE_SNAPSHOT_CACHE_DIR,
+    DOCK_PROFILE_SNAPSHOT_FILENAME,
+  );
+}
+
 export function readProfilesRegistry(options?: {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
@@ -423,6 +451,53 @@ export function writeProfilesRegistry(
   const tmpPath = `${registryPath}.${process.pid}.tmp`;
   fs.writeFileSync(tmpPath, stringifyProfilesToml(registry), "utf8");
   fs.renameSync(tmpPath, registryPath);
+}
+
+export function writeDockProfileSnapshot(
+  snapshot: DockProfileSnapshot,
+  options?: { homeDir?: string },
+): void {
+  const snapshotPath = resolveDockProfileSnapshotPath(options);
+  fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+  writeJsonAtomic(snapshotPath, snapshot);
+}
+
+export function buildDockProfileSnapshot(
+  options?: { env?: NodeJS.ProcessEnv; homeDir?: string },
+): DockProfileSnapshot {
+  const pwragentHome = resolvePwragentRoot(options);
+  const registry = readProfilesRegistry(options);
+  const profileEntries = new Map(
+    registry.profiles
+      .filter((entry) => isValidProfileName(entry.name))
+      .map((entry) => [entry.name, entry]),
+  );
+  const profilesDir = path.join(pwragentHome, "profiles");
+  let materializedProfileNames: string[] = [];
+  try {
+    materializedProfileNames = fs.readdirSync(profilesDir, {
+      withFileTypes: true,
+    })
+      .filter((entry) => entry.isDirectory() && isValidProfileName(entry.name))
+      .map((entry) => entry.name);
+  } catch {
+    // A fresh install has no profiles directory yet.
+  }
+
+  return {
+    schemaVersion: 2,
+    pwragentHome,
+    defaultProfile: registry.default_profile ?? "default",
+    profiles: materializedProfileNames
+      .sort((left, right) => left.localeCompare(right))
+      .map((name) => {
+        const displayName = profileEntries.get(name)?.display_name;
+        return {
+          name,
+          ...(displayName ? { displayName } : {}),
+        };
+      }),
+  };
 }
 
 export function ensureProfileExists(options?: {

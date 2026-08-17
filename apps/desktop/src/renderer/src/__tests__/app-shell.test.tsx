@@ -14,9 +14,10 @@ import type {
   CreateScheduledThreadActionRequest,
   DesktopPwrAgentProfileSummary,
   DesktopSettingsSnapshot,
+  EnsureDirectoryLaunchpadRequest,
   FederationPeerSummary,
+  FederationTarget,
   NavigationSnapshot,
-  OpenFederationWindowRequest,
   StartTurnRequest,
   StartTurnResponse,
 } from "@pwragent/shared";
@@ -320,11 +321,65 @@ describe("App", () => {
 
   it("starts a new thread on a selected federation machine and profile", async () => {
     const federationListeners = new Set<(event: AgentEvent) => void>();
-    const openFederationWindow = vi.fn(async (request: OpenFederationWindowRequest) => ({
-      opened: true,
-      target: request.target,
-      windowId: 7,
-    }));
+    const remoteTarget = { scope: "remote" as const, instanceId: "studio-work" };
+    const remoteWorkspace = {
+      key: "workspace:new-thread",
+      kind: "workspace" as const,
+      label: "Workspaces",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+    const remoteProject = {
+      key: "directory:/Users/harold/src/PwrAgent",
+      kind: "directory" as const,
+      label: "PwrAgent",
+      path: "/Users/harold/src/PwrAgent",
+      threadKeys: [],
+      needsAttentionCount: 0,
+      latestUpdatedAt: 1,
+    };
+    const getNavigationSnapshot = vi.fn(
+      async (request?: { federationTarget?: FederationTarget }) => ({
+        backend: "all" as const,
+        fetchedAt: Date.now(),
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [],
+        directories: request?.federationTarget
+          ? [remoteWorkspace, remoteProject]
+          : [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+        ...(request?.federationTarget
+          ? { federationTarget: request.federationTarget }
+          : {}),
+      }),
+    );
+    const ensureDirectoryLaunchpad = vi.fn(
+      async (request: EnsureDirectoryLaunchpadRequest) => ({
+        launchpad: {
+          directoryKey: request.directoryKey,
+          directoryKind: request.directoryKind,
+          directoryLabel: request.directoryLabel,
+          directoryPath: request.directoryPath,
+          backend: "codex" as const,
+          executionMode: "default" as const,
+          prompt: "",
+          workMode: "local" as const,
+          ...(request.federationTarget
+            ? { federationTarget: request.federationTarget }
+            : {}),
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        defaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      }),
+    );
     let peers: FederationPeerSummary[] = [
       {
         id: "studio-work",
@@ -333,7 +388,6 @@ describe("App", () => {
         role: "client" as const,
         status: "connected" as const,
         capabilities: [
-          "remote_window",
           "thread_navigation",
           "environment_actions",
         ] as const,
@@ -360,25 +414,14 @@ describe("App", () => {
     Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
-        getNavigationSnapshot: async () => ({
-          backend: "all" as const,
-          fetchedAt: Date.now(),
-          unchanged: false,
-          inboxThreadKeys: [],
-          threads: [],
-          directories: [],
-          launchpadDefaults: {
-            backend: "codex" as const,
-            executionMode: "default" as const,
-          },
-        }),
+        getNavigationSnapshot,
+        ensureDirectoryLaunchpad,
         listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
         onAgentEvent: (listener: (event: AgentEvent) => void) => {
           federationListeners.add(listener);
           return () => federationListeners.delete(listener);
         },
         onWindowFocus: () => () => undefined,
-        openFederationWindow,
         readFederationHealth,
       },
     });
@@ -398,11 +441,37 @@ describe("App", () => {
       name: "Studio Mac / work",
     }));
 
-    expect(openFederationWindow).toHaveBeenCalledWith({
-      target: { scope: "remote", instanceId: "studio-work" },
-      initialLaunchpad: true,
-    });
+    await waitFor(() => expect(getNavigationSnapshot).toHaveBeenCalledWith({
+      federationTarget: remoteTarget,
+    }));
+    await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "workspace:new-thread",
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: undefined,
+      federationTarget: remoteTarget,
+      preferredBackend: undefined,
+    }));
+    expect(await screen.findByRole("textbox", { name: "New thread" }))
+      .toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: "Choose a project" }));
+    expect(await screen.findByRole("option", { name: /PwrAgent/ }))
+      .toBeInTheDocument();
+    fireEvent.click(screen.getByRole("option", { name: /PwrAgent/ }));
+
+    await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: remoteProject.key,
+      directoryKind: "directory",
+      directoryLabel: "PwrAgent",
+      directoryPath: "/Users/harold/src/PwrAgent",
+      federationTarget: remoteTarget,
+      preferredBackend: undefined,
+    }));
+    expect(screen.getByRole("button", { name: "Project: PwrAgent" }))
+      .toBeInTheDocument();
+
+    const healthReadCount = readFederationHealth.mock.calls.length;
     peers = [
       {
         id: "laptop-default",
@@ -410,7 +479,6 @@ describe("App", () => {
         role: "client" as const,
         status: "connected" as const,
         capabilities: [
-          "remote_window",
           "thread_navigation",
           "environment_actions",
         ] as const,
@@ -430,7 +498,9 @@ describe("App", () => {
         });
       }
     });
-    await waitFor(() => expect(readFederationHealth).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      expect(readFederationHealth.mock.calls.length).toBeGreaterThan(healthReadCount);
+    });
 
     fireEvent.mouseEnter(button.parentElement as HTMLElement);
     expect(await screen.findByRole("menuitem", {
@@ -484,6 +554,23 @@ describe("App", () => {
     Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
+        ensureDirectoryLaunchpad: async () => ({
+          launchpad: {
+            directoryKey: "workspace:new-thread",
+            directoryKind: "workspace" as const,
+            directoryLabel: "Workspaces",
+            backend: "codex" as const,
+            executionMode: "default" as const,
+            prompt: "",
+            workMode: "local" as const,
+            createdAt: 1,
+            updatedAt: 1,
+          },
+          defaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
         getNavigationSnapshot: async () => ({
           backend: "all" as const,
           fetchedAt: Date.now(),
@@ -2511,6 +2598,301 @@ describe("App", () => {
     });
   });
 
+  it("opens a directory-less composer on startup with a usable ACP backend", async () => {
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey: "workspace:new-thread",
+        directoryKind: "workspace" as const,
+        directoryLabel: "Workspaces",
+        backend: "acp:grok" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        workMode: "local" as const,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        readSettings: async () => ({
+          snapshot: {
+            general: {
+              appearance: {
+                theme: { value: "system", source: "default" },
+                density: { value: "mission-control", source: "default" },
+                sidebarTextSize: { value: "md", source: "default" },
+                transcriptTextSize: { value: "md", source: "default" },
+              },
+            },
+            onboarding: {
+              completed: { value: true, source: "config" },
+              completedSource: { value: "migrated", source: "default" },
+            },
+            imageUploads: {
+              pastedImageMaxPatches: { value: 1536, source: "default" },
+            },
+            experimental: {
+              fullAccessRiskWarningDismissed: {
+                value: false,
+                source: "default",
+              },
+            },
+          } as DesktopSettingsSnapshot,
+        }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "acp:grok" as const,
+              source: "acp" as const,
+              label: "Grok",
+              available: true,
+              methods: ["thread/start", "turn/start"],
+              capabilities: {
+                listThreads: true,
+                createThread: true,
+                resumeThread: true,
+                renameThread: true,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: true,
+                steerTurn: true,
+                transcriptPagination: false,
+                toolUse: true,
+                approvalRequests: true,
+                multiDirectoryThreads: true,
+              },
+              executionModes: [],
+            },
+          ],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:thread-existing"],
+          threads: [
+            {
+              id: "thread-existing",
+              title: "Existing thread",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread" as const,
+              },
+              updatedAt: 1,
+            },
+          ],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        ensureDirectoryLaunchpad,
+        onAgentEvent: () => () => undefined,
+      },
+    });
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("textbox", { name: "New thread" }),
+    ).toBeInTheDocument();
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "workspace:new-thread",
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: undefined,
+      preferredBackend: "acp:grok",
+    });
+    await flushReactUpdates();
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves replay fixture navigation instead of opening the startup composer", async () => {
+    const ensureDirectoryLaunchpad = vi.fn();
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        replayFixtureActive: true,
+        readSettings: async () => ({
+          snapshot: {
+            general: {
+              appearance: {
+                theme: { value: "system", source: "default" },
+                density: { value: "mission-control", source: "default" },
+                sidebarTextSize: { value: "md", source: "default" },
+                transcriptTextSize: { value: "md", source: "default" },
+              },
+            },
+            onboarding: {
+              completed: { value: true, source: "config" },
+              completedSource: { value: "migrated", source: "default" },
+            },
+            imageUploads: {
+              pastedImageMaxPatches: { value: 1536, source: "default" },
+            },
+            experimental: {
+              fullAccessRiskWarningDismissed: {
+                value: false,
+                source: "default",
+              },
+            },
+          } as DesktopSettingsSnapshot,
+        }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex" as const,
+              source: "codex" as const,
+              label: "Codex",
+              available: true,
+              methods: ["thread/start", "turn/start"],
+              capabilities: {
+                listThreads: true,
+                createThread: true,
+                resumeThread: true,
+                renameThread: true,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: true,
+                steerTurn: true,
+                transcriptPagination: true,
+                toolUse: true,
+                approvalRequests: true,
+                multiDirectoryThreads: true,
+              },
+              executionModes: [],
+            },
+          ],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:thread-replay"],
+          threads: [
+            {
+              id: "thread-replay",
+              title: "Existing replay thread",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread" as const,
+              },
+              updatedAt: 1,
+            },
+          ],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        ensureDirectoryLaunchpad,
+        onAgentEvent: () => () => undefined,
+      },
+    });
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("button", { name: "Existing replay thread" }),
+    ).toBeInTheDocument();
+    await flushReactUpdates();
+    expect(screen.queryByRole("textbox", { name: "New thread" })).not.toBeInTheDocument();
+    expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
+  });
+
+  it("reopens onboarding on startup when no backend can create a thread", async () => {
+    const ensureDirectoryLaunchpad = vi.fn();
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        readSettings: async () => ({
+          snapshot: {
+            general: {
+              appearance: {
+                theme: { value: "system", source: "default" },
+                density: { value: "mission-control", source: "default" },
+                sidebarTextSize: { value: "md", source: "default" },
+                transcriptTextSize: { value: "md", source: "default" },
+              },
+              codexProfileModel: { value: "shared", source: "default" },
+            },
+            onboarding: {
+              completed: { value: true, source: "config" },
+              completedSource: { value: "migrated", source: "default" },
+            },
+            imageUploads: {
+              pastedImageMaxPatches: { value: 1536, source: "default" },
+            },
+            models: {
+              codex: {
+                path: { value: "", source: "default" },
+                profile: { value: "", source: "default" },
+                discovery: {
+                  selectedCommand: undefined,
+                  candidates: [],
+                },
+                profiles: {
+                  profileRoot: "/home/example/.codex/profiles",
+                  effectiveCodexHome: "/home/example/.codex",
+                  profiles: [],
+                },
+              },
+            },
+            experimental: {
+              fullAccessRiskWarningDismissed: {
+                value: false,
+                source: "default",
+              },
+            },
+          } as unknown as DesktopSettingsSnapshot,
+        }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        ensureDirectoryLaunchpad,
+        onAgentEvent: () => () => undefined,
+      },
+    });
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("heading", { name: /A few short choices/i }),
+    ).toBeInTheDocument();
+    expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
+  });
+
   it("routes the new-thread menu push into the existing launchpad flow", async () => {
     let openNewThreadListener: (() => void) | undefined;
     const ensureDirectoryLaunchpad = vi.fn(async () => ({
@@ -2558,10 +2940,9 @@ describe("App", () => {
             },
           } as DesktopSettingsSnapshot,
         }),
-        listBackends: async () => ({
-          fetchedAt: Date.now(),
-          backends: [],
-        }),
+        listBackends: async () => {
+          throw new Error("Backend discovery is temporarily unavailable.");
+        },
         getNavigationSnapshot: async () => ({
           backend: "all" as const,
           fetchedAt: Date.now(),

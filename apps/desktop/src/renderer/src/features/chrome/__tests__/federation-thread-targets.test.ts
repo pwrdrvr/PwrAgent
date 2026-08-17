@@ -6,7 +6,6 @@ import type {
 import { buildFederationThreadTargets } from "../federation-thread-targets";
 
 const ALL_CAPABILITIES: FederationCapability[] = [
-  "remote_window",
   "thread_navigation",
   "environment_actions",
 ];
@@ -73,12 +72,26 @@ describe("buildFederationThreadTargets", () => {
         peer({
           id: "a",
           label: "Attic Mini",
-          capabilities: ["remote_window", "thread_navigation"],
+          capabilities: ["thread_navigation"],
         }),
       ]),
     );
 
     expect(targets[0]?.availability).toBe("unsupported");
+  });
+
+  it("does not require remote-viewer capability for a mounted launchpad", () => {
+    const targets = buildFederationThreadTargets(
+      health([
+        peer({
+          id: "a",
+          label: "Attic Mini",
+          capabilities: ["thread_navigation", "environment_actions"],
+        }),
+      ]),
+    );
+
+    expect(targets[0]?.availability).toBe("available");
   });
 
   it("drops revoked peers, which are dead entries rather than offline ones", () => {

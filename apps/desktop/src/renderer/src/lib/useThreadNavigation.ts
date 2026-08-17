@@ -8,6 +8,7 @@ import type {
   AppServerTurnInputItem,
   ArchiveThreadCleanupResult,
   CodexThreadEnvironmentRuntime,
+  FederationRemoteTarget,
   FederationTarget,
   HandoffThreadWorkspaceRequest,
   LinkedDirectorySummary,
@@ -102,6 +103,7 @@ export type CreatingThreadState = {
 
 const ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY = "workspace:new-thread";
 const ROOT_NEW_THREAD_WORKSPACE_LABEL = "Workspaces";
+const FEDERATED_LAUNCHPAD_SELECTION_PREFIX = "federated-launchpad:";
 const NAVIGATION_BACKGROUND_REFRESH_INTERVAL_MS = 5 * 60_000;
 const NAVIGATION_BACKGROUND_REFRESH_IDLE_AFTER_MS = 30 * 60_000;
 const NAVIGATION_FOCUS_REFRESH_MIN_INTERVAL_MS = 60_000;
@@ -179,6 +181,13 @@ type NavigationRefreshOptions = {
   refreshMode?: "active-recent" | "full";
 };
 
+type FederatedLaunchpadSession = {
+  directories: NavigationDirectorySummary[];
+  directory: NavigationDirectorySummary;
+  launchpad: NavigationLaunchpadDraft;
+  target: FederationRemoteTarget;
+};
+
 type ThreadStatusObservation = {
   sequence: number;
   threadStatus: AppServerThreadStatus;
@@ -200,6 +209,16 @@ type PrChipLocationIndex = {
 
 function buildLaunchpadSelectionKey(directoryKey: string): string {
   return `launchpad:${directoryKey}`;
+}
+
+function buildFederatedLaunchpadSelectionKey(
+  target: FederationRemoteTarget,
+): string {
+  return `${FEDERATED_LAUNCHPAD_SELECTION_PREFIX}${target.instanceId}`;
+}
+
+function isFederatedLaunchpadSelectionKey(selectionKey?: string): boolean {
+  return selectionKey?.startsWith(FEDERATED_LAUNCHPAD_SELECTION_PREFIX) === true;
 }
 
 function getDirectoryKeyFromLaunchpadSelection(selectionKey?: string): string | undefined {
@@ -355,9 +374,23 @@ function upsertLaunchpadDirectory(
   },
 ): NavigationSnapshot["directories"] {
   let foundDirectory = false;
-  const existingDirectory = directories.find(
+  const exactDirectory = directories.find(
     (directory) => directory.key === launchpad.directoryKey,
   );
+  // A viewer can open a directory-less draft before its first owner snapshot
+  // arrives. Once the path-backed workspace appears, the temporary
+  // `workspace:new-thread` key is an alias for that row, not another project.
+  const canonicalWorkspaceDirectory =
+    launchpad.directoryKind === "workspace"
+    && launchpad.directoryKey === ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY
+      ? directories.find(
+          (directory) =>
+            directory.kind === "workspace"
+            && directory.key !== ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY
+            && Boolean(directory.path),
+        )
+      : undefined;
+  const existingDirectory = canonicalWorkspaceDirectory ?? exactDirectory;
   const displayLabel = options?.preserveExistingDirectoryAuthority
     && existingDirectory
     ? existingDirectory.label
@@ -382,8 +415,10 @@ function upsertLaunchpadDirectory(
       : launchpad.branchName;
   const normalizedLaunchpad = {
     ...launchpad,
-    ...(options?.preserveExistingDirectoryAuthority && existingDirectory
+    ...((options?.preserveExistingDirectoryAuthority || canonicalWorkspaceDirectory)
+      && existingDirectory
       ? {
+          directoryKey: existingDirectory.key,
           directoryKind: existingDirectory.kind,
           directoryLabel: existingDirectory.label,
           directoryPath: existingDirectory.path,
@@ -401,9 +436,25 @@ function upsertLaunchpadDirectory(
   const inheritedGitStatus = hasGitStatusOverride
     ? options.gitStatus ?? undefined
     : sourceDirectory?.gitStatus;
-  const nextDirectories = directories.map((directory) => {
+  const fallbackWorkspaceDirectory =
+    normalizedLaunchpad.directoryKind === "workspace"
+    && normalizedLaunchpad.directoryKey !== ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY
+      ? directories.find(
+          (directory) =>
+            directory.kind === "workspace"
+            && directory.key === ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY,
+        )
+      : undefined;
+  const nextDirectories = directories.flatMap((directory) => {
+    if (
+      fallbackWorkspaceDirectory
+      && directory.key === fallbackWorkspaceDirectory.key
+    ) {
+      return [];
+    }
+
     if (directory.key !== normalizedLaunchpad.directoryKey) {
-      return directory;
+      return [directory];
     }
 
     foundDirectory = true;
@@ -414,6 +465,22 @@ function upsertLaunchpadDirectory(
       path: normalizedLaunchpad.directoryPath ?? directory.path,
       launchpad: normalizedLaunchpad,
     };
+    if (fallbackWorkspaceDirectory) {
+      next.threadKeys = [
+        ...new Set([
+          ...directory.threadKeys,
+          ...fallbackWorkspaceDirectory.threadKeys,
+        ]),
+      ];
+      next.needsAttentionCount = Math.max(
+        directory.needsAttentionCount,
+        fallbackWorkspaceDirectory.needsAttentionCount,
+      );
+      next.latestUpdatedAt = Math.max(
+        directory.latestUpdatedAt ?? 0,
+        fallbackWorkspaceDirectory.latestUpdatedAt ?? 0,
+      ) || undefined;
+    }
     if (hasGitStatusOverride) {
       if (inheritedGitStatus) {
         next.gitStatus = inheritedGitStatus;
@@ -423,7 +490,7 @@ function upsertLaunchpadDirectory(
     } else if (!directory.gitStatus && inheritedGitStatus) {
       next.gitStatus = inheritedGitStatus;
     }
-    return next;
+    return [next];
   });
 
   return sortNavigationDirectories(
@@ -432,12 +499,14 @@ function upsertLaunchpadDirectory(
       : [
           ...nextDirectories,
           {
+            ...(fallbackWorkspaceDirectory ?? {}),
             key: normalizedLaunchpad.directoryKey,
             kind: normalizedLaunchpad.directoryKind,
             label: displayLabel,
             path: normalizedLaunchpad.directoryPath,
-            threadKeys: [],
-            needsAttentionCount: 0,
+            threadKeys: fallbackWorkspaceDirectory?.threadKeys ?? [],
+            needsAttentionCount:
+              fallbackWorkspaceDirectory?.needsAttentionCount ?? 0,
             ...(inheritedGitStatus
               ? { gitStatus: inheritedGitStatus }
               : {}),
@@ -2084,6 +2153,7 @@ function applyThreadPrAutoDispatchUpdate(
   snapshot: NavigationSnapshot | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     enabled: boolean;
   },
@@ -2093,7 +2163,14 @@ function applyThreadPrAutoDispatchUpdate(
   }
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.threadId) {
+    if (
+      thread.source !== params.backend
+      || thread.id !== params.threadId
+      || !federationTargetsEqual(
+        thread.federation?.ref.target,
+        params.federationTarget,
+      )
+    ) {
       return thread;
     }
     changed = true;
@@ -2106,6 +2183,7 @@ function applyThreadPrAutoDispatchPendingUpdate(
   snapshot: NavigationSnapshot | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     pending: NavigationThreadSummary["prAutoDispatchPending"];
   },
@@ -2113,7 +2191,14 @@ function applyThreadPrAutoDispatchPendingUpdate(
   if (!snapshot) return snapshot;
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.threadId) {
+    if (
+      thread.source !== params.backend
+      || thread.id !== params.threadId
+      || !federationTargetsEqual(
+        thread.federation?.ref.target,
+        params.federationTarget,
+      )
+    ) {
       return thread;
     }
     changed = true;
@@ -2812,13 +2897,24 @@ export function useThreadNavigation(
   ) => Promise<void>;
   /** Directory the New Thread button resolves to by default, or undefined for the directory-less workspace. */
   newThreadDirectoryLabel?: string;
+  /** Directories available to the project picker for the active launchpad. */
+  launchpadDirectories: NavigationDirectorySummary[];
   openDirectoryLaunchpad: (
     directory: NavigationDirectorySummary,
     preferredBackend?: AppServerBackendKind
   ) => Promise<void>;
+  /** Open a project launchpad addressed to a remote federation instance. */
+  openFederatedDirectoryLaunchpad: (
+    target: FederationRemoteTarget,
+    directory: NavigationDirectorySummary,
+  ) => Promise<void>;
   /** Switch the composer to the directory-less ("workspace") launchpad. */
   openWorkspaceLaunchpad: (
     preferredBackend?: AppServerBackendKind
+  ) => Promise<void>;
+  /** Open a directory-free launchpad and populate its picker from a peer. */
+  openFederatedWorkspaceLaunchpad: (
+    target: FederationRemoteTarget,
   ) => Promise<void>;
   /** Project-directory picker (issue #223): OS dialog → validate → seed launchpad → focus it. */
   pickAndRegisterDirectory: (
@@ -3017,6 +3113,13 @@ export function useThreadNavigation(
   const [localLaunchpads, setLocalLaunchpads] = useState<
     Record<string, NavigationLaunchpadDraft>
   >({});
+  const [federatedLaunchpad, setFederatedLaunchpad] = useState<
+    FederatedLaunchpadSession
+  >();
+  // A peer snapshot and the subsequent launchpad ensure both cross the
+  // network. Keep only the most recent launch intent so a slow prior peer or
+  // project selection cannot replace the launchpad the operator just chose.
+  const federatedLaunchpadOpenRevisionRef = useRef(0);
   const [createThreadError, setCreateThreadError] = useState<string>();
   const [launchpadError, setLaunchpadError] = useState<string>();
   const [archiveThreadError, setArchiveThreadError] = useState<string>();
@@ -3783,6 +3886,8 @@ export function useThreadNavigation(
         && (method === "pullRequest/status/updated"
           || method === "thread/pullRequests/updated"
           || method === "thread/reactions/updated"
+          || method === "thread/prAutoDispatch/pendingUpdated"
+          || method === "thread/prAutoDispatch/updated"
           || method === "thread/status/changed"
           || method === "turn/cancelled"
           || method === "turn/completed"
@@ -4298,11 +4403,12 @@ export function useThreadNavigation(
           ...current,
           response: applyThreadPrAutoDispatchUpdate(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             ...params,
           }),
         }));
         setOptimisticThread((current) =>
-          current?.source === event.backend && current.id === params.threadId
+          current && agentEventMatchesThread(event, current, params.threadId)
             ? { ...current, prAutoDispatchEnabled: params.enabled }
             : current
         );
@@ -4319,12 +4425,13 @@ export function useThreadNavigation(
           ...current,
           response: applyThreadPrAutoDispatchPendingUpdate(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId: params.threadId,
             pending,
           }),
         }));
         setOptimisticThread((current) =>
-          current?.source === event.backend && current.id === params.threadId
+          current && agentEventMatchesThread(event, current, params.threadId)
             ? { ...current, prAutoDispatchPending: pending }
             : current
         );
@@ -4699,14 +4806,70 @@ export function useThreadNavigation(
     ]
   );
 
+  useEffect(() => {
+    // Move the renderer-local fallback draft and its selection onto the
+    // authoritative workspace key. Keeping the alias in localLaunchpads would
+    // reintroduce it after every snapshot refresh.
+    const canonicalWorkspace = state.response?.directories.find(
+      (directory) =>
+        directory.kind === "workspace"
+        && directory.key !== ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY
+        && Boolean(directory.path),
+    );
+    if (!canonicalWorkspace) {
+      return;
+    }
+
+    setLocalLaunchpads((current) => {
+      const fallbackLaunchpad = current[ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY];
+      if (!fallbackLaunchpad) {
+        return current;
+      }
+
+      const next = { ...current };
+      delete next[ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY];
+      const canonicalLaunchpad =
+        current[canonicalWorkspace.key]
+        ?? fallbackLaunchpad
+        ?? canonicalWorkspace.launchpad;
+      next[canonicalWorkspace.key] = {
+        ...canonicalLaunchpad,
+        directoryKey: canonicalWorkspace.key,
+        directoryKind: "workspace",
+        directoryLabel: canonicalWorkspace.label,
+        directoryPath: canonicalWorkspace.path,
+      };
+      return next;
+    });
+
+    setSelectedItemKey((current) =>
+      current === buildLaunchpadSelectionKey(ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY)
+        ? buildLaunchpadSelectionKey(canonicalWorkspace.key)
+        : current
+    );
+  }, [state.response?.directories]);
+
   const inboxThreads = threads;
   const recentThreads = useMemo(
     () => [...threads].sort(compareThreadsByCreatedAtDesc),
     [threads],
   );
 
+  const activeFederatedLaunchpad =
+    federatedLaunchpad
+    && selectedItemKey === buildFederatedLaunchpadSelectionKey(
+      federatedLaunchpad.target,
+    )
+      ? federatedLaunchpad
+      : undefined;
+  const launchpadDirectories = activeFederatedLaunchpad?.directories ?? directories;
+
   const selectedThreadKey = useMemo(() => {
-    if (selectedItemKey && !getDirectoryKeyFromLaunchpadSelection(selectedItemKey)) {
+    if (
+      selectedItemKey
+      && !getDirectoryKeyFromLaunchpadSelection(selectedItemKey)
+      && !isFederatedLaunchpadSelectionKey(selectedItemKey)
+    ) {
       return selectedItemKey;
     }
 
@@ -4725,6 +4888,10 @@ export function useThreadNavigation(
   );
 
   const selectedDirectory = useMemo(() => {
+    if (activeFederatedLaunchpad) {
+      return activeFederatedLaunchpad.directory;
+    }
+
     const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
     if (launchpadDirectoryKey) {
       return directories.find((directory) => directory.key === launchpadDirectoryKey);
@@ -4737,8 +4904,12 @@ export function useThreadNavigation(
     return directories.find((directory) =>
       directory.threadKeys.includes(selectedThreadKey)
     );
-  }, [directories, selectedItemKey, selectedThreadKey]);
+  }, [activeFederatedLaunchpad, directories, selectedItemKey, selectedThreadKey]);
   const selectedLaunchpad = useMemo(() => {
+    if (activeFederatedLaunchpad) {
+      return activeFederatedLaunchpad.launchpad;
+    }
+
     const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
     if (!launchpadDirectoryKey) {
       return undefined;
@@ -4746,7 +4917,7 @@ export function useThreadNavigation(
 
     return directories.find((directory) => directory.key === launchpadDirectoryKey)
       ?.launchpad;
-  }, [directories, selectedItemKey]);
+  }, [activeFederatedLaunchpad, directories, selectedItemKey]);
 
   // The directory label the New Thread button would resolve to with its
   // default (context-aware) behavior, or undefined when that resolves to the
@@ -4756,11 +4927,11 @@ export function useThreadNavigation(
   const newThreadDirectoryLabel = useMemo(() => {
     const target = resolveCreateThreadTargetDirectory({
       directories,
-      selectedDirectory,
+      selectedDirectory: activeFederatedLaunchpad ? undefined : selectedDirectory,
       selectedThreadKey,
     });
     return target.directoryKind === "directory" ? target.directoryLabel : undefined;
-  }, [directories, selectedDirectory, selectedThreadKey]);
+  }, [activeFederatedLaunchpad, directories, selectedDirectory, selectedThreadKey]);
   // The thread card to render as the orange "composing" source while a
   // sub-thread launchpad is open. Plain new-thread launchpads have no source.
   const composerSourceThreadKey = useMemo(() => {
@@ -5118,7 +5289,9 @@ export function useThreadNavigation(
       try {
         const targetDirectory = resolveCreateThreadTargetDirectory({
           directories,
-          selectedDirectory,
+          selectedDirectory: activeFederatedLaunchpad
+            ? undefined
+            : selectedDirectory,
           selectedThreadKey,
           forceWorkspace: options?.forceWorkspace,
         });
@@ -5198,7 +5371,9 @@ export function useThreadNavigation(
       } finally {
         const targetDirectory = resolveCreateThreadTargetDirectory({
           directories,
-          selectedDirectory,
+          selectedDirectory: activeFederatedLaunchpad
+            ? undefined
+            : selectedDirectory,
           selectedThreadKey,
           forceWorkspace: options?.forceWorkspace,
         });
@@ -5210,6 +5385,7 @@ export function useThreadNavigation(
       desktopApi,
       directories,
       refresh,
+      activeFederatedLaunchpad,
       selectedDirectory,
       selectedThreadKey,
       takePendingDirectoryGitStatus,
@@ -5676,6 +5852,127 @@ export function useThreadNavigation(
     ],
   );
 
+  const openFederatedDirectoryLaunchpad = useCallback(
+    async (
+      target: FederationRemoteTarget,
+      directory: NavigationDirectorySummary,
+      remoteDirectories?: NavigationDirectorySummary[],
+      requestRevision?: number,
+    ): Promise<void> => {
+      const openRevision =
+        requestRevision ?? ++federatedLaunchpadOpenRevisionRef.current;
+      if (!desktopApi?.ensureDirectoryLaunchpad) {
+        if (federatedLaunchpadOpenRevisionRef.current === openRevision) {
+          setLaunchpadError("Desktop bridge is missing ensureDirectoryLaunchpad().");
+        }
+        return;
+      }
+
+      setLaunchpadError(undefined);
+      setCreateThreadError(undefined);
+      setArchiveThreadError(undefined);
+      setSetThreadExecutionModeError(undefined);
+      setSetThreadModelSettingsError(undefined);
+
+      try {
+        const response = await desktopApi.ensureDirectoryLaunchpad({
+          federationTarget: target,
+          directoryKey: directory.key,
+          directoryKind: directory.kind,
+          directoryLabel: directory.label,
+          directoryPath: directory.path,
+          ...(directory.gitStatus ? { gitStatus: directory.gitStatus } : {}),
+          currentBranch: directory.gitStatus?.currentBranch,
+          preferredBackend: directory.launchpad?.backend,
+        });
+        if (federatedLaunchpadOpenRevisionRef.current !== openRevision) {
+          return;
+        }
+        const launchpad = {
+          ...response.launchpad,
+          federationTarget: target,
+        };
+        const sourceDirectories = remoteDirectories
+          ?? (
+            federatedLaunchpad
+            && federationTargetsEqual(federatedLaunchpad.target, target)
+              ? federatedLaunchpad.directories
+              : [directory]
+          );
+        const directoriesWithLaunchpad = upsertLaunchpadDirectory(
+          sourceDirectories,
+          launchpad,
+          {
+            ...(response.gitStatus !== undefined
+              ? { gitStatus: response.gitStatus }
+              : {}),
+          },
+        );
+        const launchpadDirectory = directoriesWithLaunchpad.find(
+          (candidate) => candidate.key === launchpad.directoryKey,
+        );
+        if (!launchpadDirectory) {
+          throw new Error("Could not resolve the remote launchpad directory.");
+        }
+
+        setFederatedLaunchpad({
+          directories: directoriesWithLaunchpad,
+          directory: launchpadDirectory,
+          launchpad,
+          target,
+        });
+        setSelectedItemKey(buildFederatedLaunchpadSelectionKey(target));
+      } catch (error) {
+        if (federatedLaunchpadOpenRevisionRef.current === openRevision) {
+          setLaunchpadError(error instanceof Error ? error.message : String(error));
+        }
+      }
+    },
+    [desktopApi, federatedLaunchpad],
+  );
+
+  const openFederatedWorkspaceLaunchpad = useCallback(
+    async (target: FederationRemoteTarget): Promise<void> => {
+      const openRevision = ++federatedLaunchpadOpenRevisionRef.current;
+      if (!desktopApi?.getNavigationSnapshot) {
+        if (federatedLaunchpadOpenRevisionRef.current === openRevision) {
+          setLaunchpadError("Desktop bridge is missing navigation snapshot support.");
+        }
+        return;
+      }
+
+      setLaunchpadError(undefined);
+      try {
+        const snapshot = await desktopApi.getNavigationSnapshot({
+          federationTarget: target,
+        });
+        if (federatedLaunchpadOpenRevisionRef.current !== openRevision) {
+          return;
+        }
+        const workspaceDirectory = snapshot.directories.find(
+          (directory) => directory.kind === "workspace",
+        ) ?? {
+          key: ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY,
+          kind: "workspace" as const,
+          label: ROOT_NEW_THREAD_WORKSPACE_LABEL,
+          threadKeys: [],
+          needsAttentionCount: 0,
+        };
+        await openFederatedDirectoryLaunchpad(
+          target,
+          workspaceDirectory,
+          snapshot.directories,
+          openRevision,
+        );
+      } catch (error) {
+        if (federatedLaunchpadOpenRevisionRef.current === openRevision) {
+          setLaunchpadError(error instanceof Error ? error.message : String(error));
+        }
+      }
+    },
+    [desktopApi, openFederatedDirectoryLaunchpad],
+  );
+
   const openDirectoryLaunchpad = useCallback(
     async (
       directory: NavigationDirectorySummary,
@@ -6027,9 +6324,75 @@ export function useThreadNavigation(
       }
 
       setLaunchpadError(undefined);
+      const federatedSelection =
+        activeFederatedLaunchpad
+        && activeFederatedLaunchpad.launchpad.directoryKey === directoryKey
+          ? activeFederatedLaunchpad
+          : undefined;
+      const launchpadUpdateKey = federatedSelection
+        ? `${federatedSelection.target.instanceId}:${directoryKey}`
+        : directoryKey;
       const revision =
-        (launchpadUpdateRevisionRef.current.get(directoryKey) ?? 0) + 1;
-      launchpadUpdateRevisionRef.current.set(directoryKey, revision);
+        (launchpadUpdateRevisionRef.current.get(launchpadUpdateKey) ?? 0) + 1;
+      launchpadUpdateRevisionRef.current.set(launchpadUpdateKey, revision);
+
+      if (federatedSelection) {
+        const applyFederatedPatch = (
+          launchpad: NavigationLaunchpadDraft,
+        ): NavigationLaunchpadDraft => ({
+          ...applyNavigationLaunchpadProviderSettingsPatch<NavigationLaunchpadDraft>(
+            launchpad,
+            patch,
+          ),
+          directoryKey,
+          federationTarget: federatedSelection.target,
+          updatedAt: Date.now(),
+        });
+        setFederatedLaunchpad((current) =>
+          current
+          && federationTargetsEqual(current.target, federatedSelection.target)
+          && current.launchpad.directoryKey === directoryKey
+            ? {
+                ...current,
+                launchpad: applyFederatedPatch(current.launchpad),
+              }
+            : current,
+        );
+
+        try {
+          const response = await desktopApi.updateDirectoryLaunchpad({
+            directoryKey,
+            patch,
+            stickySettingsChanged: options?.stickySettingsChanged,
+          });
+          if (launchpadUpdateRevisionRef.current.get(launchpadUpdateKey) !== revision) {
+            return;
+          }
+          setFederatedLaunchpad((current) =>
+            current
+            && federationTargetsEqual(current.target, federatedSelection.target)
+            && current.launchpad.directoryKey === directoryKey
+              ? {
+                  ...current,
+                  launchpad: {
+                    ...mergeLaunchpadUpdateResponse(
+                      current.launchpad,
+                      response.launchpad,
+                      patch,
+                    ),
+                    federationTarget: federatedSelection.target,
+                  },
+                }
+              : current,
+          );
+        } catch (error) {
+          if (launchpadUpdateRevisionRef.current.get(launchpadUpdateKey) !== revision) {
+            return;
+          }
+          setLaunchpadError(error instanceof Error ? error.message : String(error));
+        }
+        return;
+      }
 
       setState((current) => {
         const currentResponse = current.response;
@@ -6091,7 +6454,7 @@ export function useThreadNavigation(
           patch,
           stickySettingsChanged: options?.stickySettingsChanged,
         });
-        if (launchpadUpdateRevisionRef.current.get(directoryKey) !== revision) {
+        if (launchpadUpdateRevisionRef.current.get(launchpadUpdateKey) !== revision) {
           return;
         }
         setLocalLaunchpads((current) =>
@@ -6145,13 +6508,13 @@ export function useThreadNavigation(
           );
         }
       } catch (error) {
-        if (launchpadUpdateRevisionRef.current.get(directoryKey) !== revision) {
+        if (launchpadUpdateRevisionRef.current.get(launchpadUpdateKey) !== revision) {
           return;
         }
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [desktopApi, isRendererFederationWindow]
+    [activeFederatedLaunchpad, desktopApi, isRendererFederationWindow]
   );
 
   const resetDirectoryLaunchpad = useCallback(
@@ -6164,6 +6527,21 @@ export function useThreadNavigation(
       setLaunchpadError(undefined);
 
       try {
+        if (
+          activeFederatedLaunchpad
+          && activeFederatedLaunchpad.launchpad.directoryKey === directoryKey
+        ) {
+          await desktopApi.resetDirectoryLaunchpad({ directoryKey });
+          setFederatedLaunchpad(undefined);
+          setSelectedItemKey((current) =>
+            current === buildFederatedLaunchpadSelectionKey(
+              activeFederatedLaunchpad.target,
+            )
+              ? undefined
+              : current,
+          );
+          return;
+        }
         const response = await desktopApi.resetDirectoryLaunchpad({ directoryKey });
         setLocalLaunchpads((current) => {
           if (!current[directoryKey]) {
@@ -6205,7 +6583,14 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [desktopApi, directories, optimisticThread, state.response, threads]
+    [
+      activeFederatedLaunchpad,
+      desktopApi,
+      directories,
+      optimisticThread,
+      state.response,
+      threads,
+    ]
   );
 
   /**
@@ -6300,8 +6685,14 @@ export function useThreadNavigation(
         return;
       }
 
-      const directory = directories.find((candidate) => candidate.key === directoryKey);
-      const launchpad = directory?.launchpad;
+      const federatedSelection =
+        activeFederatedLaunchpad
+        && activeFederatedLaunchpad.launchpad.directoryKey === directoryKey
+          ? activeFederatedLaunchpad
+          : undefined;
+      const directory = federatedSelection?.directory
+        ?? directories.find((candidate) => candidate.key === directoryKey);
+      const launchpad = federatedSelection?.launchpad ?? directory?.launchpad;
       if (!launchpad) {
         setLaunchpadError(`No launchpad found for ${directoryKey}.`);
         return;
@@ -6312,7 +6703,9 @@ export function useThreadNavigation(
       // The draft carries the group root (sub-threading a child re-parents to
       // the root); prefer it over the key-parsed source so the new thread links
       // to the root and renders one level deep.
-      const launchpadSelectionKey = buildLaunchpadSelectionKey(directoryKey);
+      const launchpadSelectionKey = federatedSelection
+        ? buildFederatedLaunchpadSelectionKey(federatedSelection.target)
+        : buildLaunchpadSelectionKey(directoryKey);
       const selectionKeyAtMaterializationStart = selectedItemKeyRef.current;
       const materializeParentThreadId =
         parentThreadId ??
@@ -6481,14 +6874,24 @@ export function useThreadNavigation(
           subthreadOrderTarget,
         );
       }
-      setLocalLaunchpads((current) => {
-        if (!current[directoryKey]) {
-          return current;
-        }
-        const next = { ...current };
-        delete next[directoryKey];
-        return next;
-      });
+      if (federatedSelection) {
+        setFederatedLaunchpad((current) =>
+          current
+          && federationTargetsEqual(current.target, federatedSelection.target)
+          && current.launchpad.directoryKey === directoryKey
+            ? undefined
+            : current,
+        );
+      } else {
+        setLocalLaunchpads((current) => {
+          if (!current[directoryKey]) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[directoryKey];
+          return next;
+        });
+      }
       const shouldSelectMaterializedThread =
         selectionKeyAtMaterializationStart !== launchpadSelectionKey ||
         selectedItemKeyRef.current === launchpadSelectionKey;
@@ -6536,16 +6939,18 @@ export function useThreadNavigation(
           }
         }
       }
-      setState((current) => ({
-        ...current,
-        response: current.response
-          ? applyLaunchpadReset(
-              current.response,
-              directoryKey,
-              current.response.launchpadDefaults
-            )
-          : current.response,
-      }));
+      if (!federatedSelection) {
+        setState((current) => ({
+          ...current,
+          response: current.response
+            ? applyLaunchpadReset(
+                current.response,
+                directoryKey,
+                current.response.launchpadDefaults
+              )
+            : current.response,
+        }));
+      }
       try {
         await refresh(
           shouldSelectMaterializedThread ? nextThreadKey : undefined,
@@ -6557,7 +6962,13 @@ export function useThreadNavigation(
         setLaunchpadError(error instanceof Error ? error.message : String(error));
       }
     },
-    [desktopApi, directories, insertSubthreadBelowSource, refresh]
+    [
+      activeFederatedLaunchpad,
+      desktopApi,
+      directories,
+      insertSubthreadBelowSource,
+      refresh,
+    ]
   );
 
   /**
@@ -6566,6 +6977,39 @@ export function useThreadNavigation(
    * selection to the source card the user invoked it from.
    */
   const discardLaunchpad = useCallback((directoryKey: string): boolean => {
+    if (
+      activeFederatedLaunchpad
+      && activeFederatedLaunchpad.launchpad.directoryKey === directoryKey
+    ) {
+      const isRegisteredDirectory =
+        activeFederatedLaunchpad.launchpad.registeredAt !== undefined;
+      setFederatedLaunchpad(undefined);
+      setSelectedItemKey((current) =>
+        current === buildFederatedLaunchpadSelectionKey(
+          activeFederatedLaunchpad.target,
+        )
+          ? undefined
+          : current,
+      );
+
+      const handleDiscardError = (error: unknown): void => {
+        setLaunchpadError(error instanceof Error ? error.message : String(error));
+      };
+      if (isRegisteredDirectory) {
+        void desktopApi
+          ?.updateDirectoryLaunchpad?.({
+            directoryKey,
+            patch: { prompt: "", imageAttachments: [], editorDocument: undefined },
+          })
+          .catch(handleDiscardError);
+      } else {
+        void desktopApi
+          ?.resetDirectoryLaunchpad?.({ directoryKey })
+          .catch(handleDiscardError);
+      }
+      return false;
+    }
+
     // Read from the merged `directories` memo, not the raw snapshot: the
     // main-process snapshot deliberately omits sub-thread launchpads, so after
     // an authoritative refresh they exist only in `localLaunchpads`. Sourcing
@@ -6631,7 +7075,7 @@ export function useThreadNavigation(
         .catch(handleDiscardError);
     }
     return restoresSourceThread;
-  }, [desktopApi, directories]);
+  }, [activeFederatedLaunchpad, desktopApi, directories]);
 
   const archiveThread = useCallback(
     async (
@@ -7690,7 +8134,8 @@ export function useThreadNavigation(
       }
       setSetThreadModelSettingsError(undefined);
       setOptimisticThread((current) =>
-        current && current.id === thread.id && current.source === thread.source
+        current
+        && threadSummaryIdentityKey(current) === threadSummaryIdentityKey(thread)
           ? { ...current, prAutoDispatchEnabled: enabled }
           : current
       );
@@ -7698,6 +8143,7 @@ export function useThreadNavigation(
         ...current,
         response: applyThreadPrAutoDispatchUpdate(current.response, {
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target,
           threadId: thread.id,
           enabled,
         }),
@@ -7840,7 +8286,8 @@ export function useThreadNavigation(
     creatingThread,
     directories,
     error: state.error,
-    federationTarget: state.response?.federationTarget,
+    federationTarget:
+      activeFederatedLaunchpad?.target ?? state.response?.federationTarget,
     inboxThreads,
     recentThreads,
     launchpadError,
@@ -7855,8 +8302,11 @@ export function useThreadNavigation(
     refresh: refreshNavigation,
     materializeDirectoryLaunchpad,
     newThreadDirectoryLabel,
+    launchpadDirectories,
     openDirectoryLaunchpad,
+    openFederatedDirectoryLaunchpad,
     openWorkspaceLaunchpad,
+    openFederatedWorkspaceLaunchpad,
     pickAndRegisterDirectory,
     addProjectDirectory,
     pickAndAttachDirectoryToSelectedThread,

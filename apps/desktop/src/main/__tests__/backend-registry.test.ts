@@ -270,8 +270,7 @@ function createDeferred<T>(): {
 }
 
 async function git(cwd: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", args, {
-    cwd,
+  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
     maxBuffer: 1024 * 1024 * 10,
   });
@@ -10801,7 +10800,7 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("promotes a handoff overlay after Codex acknowledges the same workspace", async () => {
+  it("retains a handoff overlay after Codex acknowledges the same workspace", async () => {
     const projectA = "/Users/huntharo/projects/ProjectA";
     const handoffWorktreePath = "/Users/huntharo/projects/ProjectA/.worktrees/thread-1";
     const worktreeThread: AppServerThreadSummary = {
@@ -10854,13 +10853,107 @@ script = "echo setup"
     ).resolves.toMatchObject({
       extraLinkedDirectories: [
         {
-          id: expectedDir(handoffWorktreePath),
+          id: "pwragent-handoff:codex:thread-1",
           label: "ProjectA",
-          path: expectedDir(projectA),
-          worktreePath: expectedDir(handoffWorktreePath),
+          path: projectA,
+          worktreePath: handoffWorktreePath,
           kind: "worktree",
         },
       ],
+    });
+
+    await registry.close();
+  });
+
+  it("keeps an acknowledged handoff worktree authoritative when native review restores stale local metadata", async () => {
+    const projectA = "/Users/huntharo/projects/ProjectA";
+    const handoffWorktreePath = "/Users/huntharo/.codex/worktrees/thread-1/ProjectA";
+    const handoffDirectory: ThreadOverlayState["extraLinkedDirectories"][number] = {
+      id: "pwragent-handoff:codex:thread-1",
+      label: "ProjectA",
+      path: projectA,
+      worktreePath: handoffWorktreePath,
+      kind: "worktree",
+    };
+    const worktreeThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "ProjectA worktree",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: handoffWorktreePath,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      linkedDirectories: [
+        {
+          id: projectA,
+          label: "ProjectA",
+          path: projectA,
+          worktreePath: handoffWorktreePath,
+          kind: "worktree",
+        },
+      ],
+    };
+    const localThread: AppServerThreadSummary = {
+      ...worktreeThread,
+      projectKey: projectA,
+      updatedAt: 2_000,
+      linkedDirectories: [
+        {
+          id: projectA,
+          label: "ProjectA",
+          path: projectA,
+          kind: "local",
+        },
+      ],
+    };
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["review/start"] },
+      threads: [worktreeThread],
+    });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [handoffDirectory],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "startup-prewarm",
+    });
+    await registry.startReview({
+      backend: "codex",
+      threadId: "thread-1",
+      target: { type: "baseBranch", branch: "main" },
+    });
+
+    expect(codexClient.lastStartReviewParams).toMatchObject({
+      threadId: "thread-1",
+      cwd: handoffWorktreePath,
+    });
+
+    codexClient.setThreads([localThread]);
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "navigation-snapshot",
+      forceRefresh: true,
+    });
+
+    await vi.waitFor(() => {
+      expect(codexClient.lastUpdateThreadWorkspaceParams).toEqual({
+        threadId: "thread-1",
+        cwd: handoffWorktreePath,
+      });
+    });
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      extraLinkedDirectories: [handoffDirectory],
     });
 
     await registry.close();
@@ -37680,9 +37773,10 @@ script = "printf setup"
         },
       ],
     });
+    const overlayStore = createOverlayStoreMock({ executionMode: "default" });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      overlayStore: createOverlayStoreMock({ executionMode: "default" }),
+      overlayStore,
     });
 
     const threads = await registry.listThreads({ backend: "codex" });
@@ -37722,6 +37816,294 @@ script = "printf setup"
     ]);
     expect(codexClient.listNativeSubAgentThreadsCallCount).toBe(1);
     expect(codexClient.lastListNativeSubAgentThreadsParams).toEqual({});
+    expect(
+      (
+        await overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-parent",
+        })
+      )?.subAgents,
+    ).toEqual([
+      expect.objectContaining({
+        monitorId: "codex-native:thread-worker-b",
+        monitorThreadId: "thread-worker-b",
+        agentName: "release-reviewer",
+        status: "success",
+      }),
+      expect.objectContaining({
+        monitorId: "codex-native:thread-worker-a-child",
+        monitorThreadId: "thread-worker-a-child",
+        agentName: "link-checker",
+        status: "running",
+      }),
+      expect.objectContaining({
+        monitorId: "codex-native:thread-worker-a",
+        monitorThreadId: "thread-worker-a",
+        agentName: "release-writer",
+        status: "success",
+      }),
+    ]);
+
+    await registry.close();
+  });
+
+  it("backfills native Codex cards and pricing from durable child turn usage", async () => {
+    const nativeThreadId = "thread-epicurus";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "thread-parent",
+          title: "Investigate the regression",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          updatedAt: 100,
+        },
+      ],
+      nativeSubAgentThreads: [
+        {
+          id: nativeThreadId,
+          title: "Audit settings discovery calls",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          createdAt: 20,
+          updatedAt: 40,
+          threadStatus: "idle",
+          codexNativeSubAgent: {
+            parentThreadId: "thread-parent",
+            depth: 1,
+            agentNickname: "Epicurus",
+          },
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.upsertThreadUsageLine({
+      line: {
+        usageLineId: "codex:thread-parent:turn-parent:live-token-usage",
+        backend: "codex",
+        provider: "openai",
+        threadId: "thread-parent",
+        turnId: "turn-parent",
+        source: "live",
+        scope: "turn",
+        status: "finalized",
+        createdAt: 25,
+        model: "gpt-5.6-sol",
+        reasoningEffort: "high",
+        fastMode: false,
+        settingsSource: "event",
+        settingsConfidence: "exact",
+        inputTokens: 1_000,
+        cachedInputTokens: 800,
+        uncachedInputTokens: 200,
+        outputTokens: 50,
+        reasoningOutputTokens: 10,
+        totalTokens: 1_060,
+        priceStatus: "priced",
+        currency: "USD",
+        uncachedInputCostMicros: 0,
+        cachedInputCostMicros: 0,
+        outputCostMicros: 0,
+        totalCostMicros: 0,
+      },
+    });
+    await overlayStore.persistThreadUsageActivity({
+      backend: "codex",
+      threadId: nativeThreadId,
+      activity: {
+        type: "activity",
+        id: "live-turn-usage-turn-epicurus",
+        createdAt: 35,
+        summary:
+          "Turn usage: 106,640 uncached in · 2,811,136 cached · 11,224 out (4,269 reasoning)",
+        status: "completed",
+        details: [],
+        turn: {
+          id: "turn-epicurus",
+          status: "completed",
+          completedAt: 35,
+        },
+      },
+    });
+    const upsertThreadSubAgent = vi.spyOn(
+      overlayStore,
+      "upsertThreadSubAgent",
+    );
+    const upsertThreadUsageLine = vi.spyOn(
+      overlayStore,
+      "upsertThreadUsageLine",
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+    });
+
+    await registry.listThreads({ backend: "codex" });
+    await registry.listThreads({ backend: "codex", forceRefresh: true });
+
+    const parentOverlay = await overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(parentOverlay?.subAgents).toHaveLength(1);
+    expect(parentOverlay?.subAgents?.[0]).toMatchObject({
+      monitorId: `codex-native:${nativeThreadId}`,
+      monitorThreadId: nativeThreadId,
+      monitorTurnId: "turn-epicurus",
+      agentName: "Epicurus",
+      task: "Audit settings discovery calls",
+      status: "success",
+      outcome: "success",
+      preferredModel: "gpt-5.6-sol",
+      preferredReasoningEffort: "high",
+      preferredFastMode: false,
+      monitorUsage: {
+        tokenUsage: {
+          cachedInputTokens: 2_811_136,
+          inputTokens: 2_917_776,
+          outputTokens: 11_224,
+          reasoningOutputTokens: 4_269,
+          uncachedInputTokens: 106_640,
+        },
+      },
+    });
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(pricing.lines).toHaveLength(2);
+    const nativePricing = pricing.lines.find(
+      (line) => line.sourceItemId === `codex-native:${nativeThreadId}`,
+    );
+    expect(nativePricing).toMatchObject({
+      parentThreadId: "thread-parent",
+      threadId: nativeThreadId,
+      turnId: "turn-epicurus",
+      source: "monitor",
+      scope: "monitor",
+      status: "finalized",
+      model: "gpt-5.6-sol",
+      cachedInputTokens: 2_811_136,
+      uncachedInputTokens: 106_640,
+      outputTokens: 11_224,
+      reasoningOutputTokens: 4_269,
+    });
+    expect(nativePricing?.totalCostMicros).toBeGreaterThan(0);
+    expect(upsertThreadSubAgent).toHaveBeenCalledTimes(1);
+    expect(upsertThreadUsageLine).toHaveBeenCalledTimes(1);
+
+    await registry.close();
+  });
+
+  it("repairs missing native Codex pricing from an existing card usage snapshot", async () => {
+    const nativeThreadId = "thread-epicurus";
+    const monitorId = `codex-native:${nativeThreadId}`;
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/list"] },
+      threads: [
+        {
+          id: "thread-parent",
+          title: "Investigate the regression",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          updatedAt: 100,
+        },
+      ],
+      nativeSubAgentThreads: [
+        {
+          id: nativeThreadId,
+          title: "Audit settings discovery calls",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+          createdAt: 20,
+          updatedAt: 40,
+          threadStatus: "idle",
+          codexNativeSubAgent: {
+            parentThreadId: "thread-parent",
+            depth: 1,
+            agentNickname: "Epicurus",
+          },
+        },
+      ],
+    });
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.upsertThreadSubAgent({
+      backend: "codex",
+      threadId: "thread-parent",
+      subAgent: {
+        monitorId,
+        task: "Audit settings discovery calls",
+        status: "success",
+        createdAt: 20,
+        updatedAt: 40,
+        backend: "codex",
+        monitorThreadId: nativeThreadId,
+        monitorTurnId: "turn-epicurus",
+        agentName: "Epicurus",
+        preferredModel: "gpt-5.6-sol",
+        preferredReasoningEffort: "high",
+        preferredFastMode: false,
+        outcome: "success",
+        completedAt: 35,
+        monitorUsage: {
+          model: "gpt-5.6-sol",
+          fastMode: false,
+          summary:
+            "106,640 uncached in · 2,811,136 cached · 11,224 out (4,269 reasoning)",
+          tokenUsage: {
+            cachedInputTokens: 2_811_136,
+            inputTokens: 2_917_776,
+            outputTokens: 11_224,
+            reasoningOutputTokens: 4_269,
+            totalTokens: 2_933_269,
+            uncachedInputTokens: 106_640,
+          },
+        },
+      },
+    });
+    const upsertThreadSubAgent = vi.spyOn(
+      overlayStore,
+      "upsertThreadSubAgent",
+    );
+    const upsertThreadUsageLine = vi.spyOn(
+      overlayStore,
+      "upsertThreadUsageLine",
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+    });
+
+    await registry.listThreads({ backend: "codex" });
+    await registry.listThreads({ backend: "codex", forceRefresh: true });
+
+    expect(upsertThreadSubAgent).not.toHaveBeenCalled();
+    expect(upsertThreadUsageLine).toHaveBeenCalledTimes(1);
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      parentThreadId: "thread-parent",
+      threadId: nativeThreadId,
+      turnId: "turn-epicurus",
+      source: "monitor",
+      sourceItemId: monitorId,
+      scope: "monitor",
+      status: "finalized",
+      model: "gpt-5.6-sol",
+      cachedInputTokens: 2_811_136,
+      uncachedInputTokens: 106_640,
+      outputTokens: 11_224,
+      reasoningOutputTokens: 4_269,
+    });
+    expect(pricing.lines[0]?.totalCostMicros).toBeGreaterThan(0);
 
     await registry.close();
   });
@@ -39540,7 +39922,7 @@ script = "printf setup"
 
       await registry.close();
     } finally {
-      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      await rm(root, { recursive: true, force: true });
     }
   });
 

@@ -7,6 +7,7 @@ import {
 } from "@pwragent/shared";
 import type {
   AgentEvent,
+  FederationRemoteTarget,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
   NavigationSnapshot,
@@ -4792,6 +4793,261 @@ describe("useThreadNavigation", () => {
     expect(result.current.selectedLaunchpad).toBeUndefined();
   });
 
+  it("creates a mounted remote thread from a peer-populated launchpad", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const workspace = {
+      key: "workspace:new-thread",
+      kind: "workspace" as const,
+      label: "Workspaces",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+    const project = {
+      key: "directory:/remote/PwrAgent",
+      kind: "directory" as const,
+      label: "PwrAgent",
+      path: "/remote/PwrAgent",
+      threadKeys: [],
+      needsAttentionCount: 0,
+    };
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const remoteSnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 2,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [workspace, project],
+      launchpadDefaults: defaults,
+      federationTarget,
+    };
+    const localSnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: defaults,
+    };
+    const getNavigationSnapshot: NonNullable<DesktopApi["getNavigationSnapshot"]> = vi.fn(
+      async (request) => request?.federationTarget ? remoteSnapshot : localSnapshot,
+    );
+    const ensureDirectoryLaunchpad: NonNullable<
+      DesktopApi["ensureDirectoryLaunchpad"]
+    > = vi.fn(async (request) => ({
+      launchpad: {
+        directoryKey: request.directoryKey,
+        directoryKind: request.directoryKind,
+        directoryLabel: request.directoryLabel,
+        directoryPath: request.directoryPath,
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "Start a remote thread",
+        workMode: "local" as const,
+        federationTarget: request.federationTarget,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults,
+    }));
+    const materializeDirectoryLaunchpad = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "remote-thread-new",
+      executionMode: "default" as const,
+      workMode: "local" as const,
+    }));
+    const resetDirectoryLaunchpad = vi.fn(async () => ({
+      directoryKey: project.key,
+      defaults,
+    }));
+    const addRemoteThreadPin = vi.fn(async (request: Parameters<
+      NonNullable<DesktopApi["addRemoteThreadPin"]>
+    >[0]) => ({
+      pin: {
+        ref: request.ref,
+        instanceLabel: request.instanceLabel ?? federationTarget.instanceId,
+        pinnedVia: "explicit" as const,
+        addedAt: 1,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      addRemoteThreadPin,
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      materializeDirectoryLaunchpad,
+      onAgentEvent: () => () => undefined,
+      resetDirectoryLaunchpad,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.openFederatedWorkspaceLaunchpad(federationTarget);
+    });
+
+    expect(getNavigationSnapshot).toHaveBeenCalledWith({ federationTarget });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      directoryKey: workspace.key,
+      federationTarget,
+    });
+    expect(result.current.launchpadDirectories).toEqual(expect.arrayContaining([
+      expect.objectContaining(project),
+    ]));
+
+    await act(async () => {
+      await result.current.openFederatedDirectoryLaunchpad(federationTarget, project);
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      directoryKey: project.key,
+      federationTarget,
+    });
+
+    await act(async () => {
+      await result.current.materializeDirectoryLaunchpad(project.key);
+    });
+
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: project.key,
+        federationTarget,
+      }),
+    );
+    expect(addRemoteThreadPin).toHaveBeenCalledWith(expect.objectContaining({
+      ref: {
+        backend: "codex",
+        target: federationTarget,
+        threadId: "remote-thread-new",
+      },
+    }));
+    expect(result.current.selectedThread).toMatchObject({
+      id: "remote-thread-new",
+      federation: {
+        ref: {
+          target: federationTarget,
+        },
+      },
+    });
+  });
+
+  it("keeps the newest remote launchpad request selected", async () => {
+    const firstTarget = { scope: "remote" as const, instanceId: "first-owner" };
+    const secondTarget = { scope: "remote" as const, instanceId: "second-owner" };
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const firstEnsure = createDeferred<{
+      defaults: NavigationLaunchpadDefaults;
+      launchpad: NavigationLaunchpadDraft;
+    }>();
+    const secondEnsure = createDeferred<{
+      defaults: NavigationLaunchpadDefaults;
+      launchpad: NavigationLaunchpadDraft;
+    }>();
+    const makeSnapshot = (target: FederationRemoteTarget): NavigationSnapshot => ({
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [{
+        key: "workspace:new-thread",
+        kind: "workspace",
+        label: "Workspaces",
+        threadKeys: [],
+        needsAttentionCount: 0,
+      }],
+      launchpadDefaults: defaults,
+      federationTarget: target,
+    });
+    const launchpadResponse = (target: FederationRemoteTarget) => ({
+      launchpad: {
+        directoryKey: "workspace:new-thread",
+        directoryKind: "workspace" as const,
+        directoryLabel: "Workspaces",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: target.instanceId,
+        workMode: "local" as const,
+        federationTarget: target,
+        createdAt: 1,
+        updatedAt: 1,
+      },
+      defaults,
+    });
+    const getNavigationSnapshot: NonNullable<DesktopApi["getNavigationSnapshot"]> = vi.fn(
+      async (request) => {
+        const target = request?.federationTarget;
+        if (!target || target.scope !== "remote") {
+          return {
+            backend: "all" as const,
+            fetchedAt: 1,
+            unchanged: false,
+            inboxThreadKeys: [],
+            threads: [],
+            directories: [],
+            launchpadDefaults: defaults,
+          };
+        }
+        return makeSnapshot(target);
+      },
+    );
+    const ensureDirectoryLaunchpad: NonNullable<
+      DesktopApi["ensureDirectoryLaunchpad"]
+    > = vi.fn((request) => request.federationTarget?.scope === "remote"
+      && request.federationTarget.instanceId === firstTarget.instanceId
+      ? firstEnsure.promise
+      : secondEnsure.promise);
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    act(() => {
+      void result.current.openFederatedWorkspaceLaunchpad(firstTarget);
+    });
+    await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({ federationTarget: firstTarget }),
+    ));
+
+    act(() => {
+      void result.current.openFederatedWorkspaceLaunchpad(secondTarget);
+    });
+    await waitFor(() => expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({ federationTarget: secondTarget }),
+    ));
+
+    await act(async () => {
+      secondEnsure.resolve(launchpadResponse(secondTarget));
+      await secondEnsure.promise;
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      federationTarget: secondTarget,
+      prompt: secondTarget.instanceId,
+    });
+
+    await act(async () => {
+      firstEnsure.resolve(launchpadResponse(firstTarget));
+      await firstEnsure.promise;
+    });
+    expect(result.current.selectedLaunchpad).toMatchObject({
+      federationTarget: secondTarget,
+      prompt: secondTarget.instanceId,
+    });
+  });
+
   it("scopes a remote optimistic thread before its owner snapshot arrives", async () => {
     const federationTarget = {
       scope: "remote" as const,
@@ -6947,6 +7203,120 @@ describe("useThreadNavigation", () => {
         "workspace:new-thread"
       );
       expect(result.current.selectedDirectory?.kind).toBe("workspace");
+    });
+  });
+
+  it("rebases a loading fallback launchpad without duplicating it or losing viewer input", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "owner-mini",
+    };
+    (window as unknown as {
+      __pwragentFederationTarget?: unknown;
+    }).__pwragentFederationTarget = federationTarget;
+    const initialSnapshot = createDeferred<NavigationSnapshot>();
+    const workspaceKey = "workspace:/Users/test/.pwragent/profiles/default/projects";
+    const canonicalSnapshot: NavigationSnapshot = {
+      backend: "all",
+      federationTarget,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [{
+        key: workspaceKey,
+        kind: "workspace",
+        label: "Workspaces",
+        path: "/Users/test/.pwragent/profiles/default/projects",
+        threadKeys: ["codex:scratch-thread"],
+        needsAttentionCount: 1,
+        pinnedRank: "6144",
+        launchpad: {
+          directoryKey: workspaceKey,
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: "/Users/test/.pwragent/profiles/default/projects",
+          backend: "codex",
+          executionMode: "default",
+          model: "owner-model",
+          prompt: "Owner snapshot draft",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 1,
+        },
+      }],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const fallbackLaunchpad: NavigationLaunchpadDraft = {
+      directoryKey: "workspace:new-thread",
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      backend: "codex",
+      executionMode: "default",
+      model: "viewer-model",
+      prompt: "Viewer unsent draft",
+      workMode: "local",
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: fallbackLaunchpad,
+      defaults: canonicalSnapshot.launchpadDefaults,
+    }));
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockReturnValueOnce(initialSnapshot.promise)
+      .mockResolvedValue(canonicalSnapshot);
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    let create!: Promise<void>;
+    act(() => {
+      create = result.current.createThread(undefined, "default", {
+        forceWorkspace: true,
+      });
+    });
+
+    await waitFor(() => {
+      expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+        federationTarget,
+        directoryKey: "workspace:new-thread",
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+        directoryPath: undefined,
+        preferredBackend: undefined,
+      });
+    });
+
+    await act(async () => {
+      initialSnapshot.resolve(canonicalSnapshot);
+      await create;
+    });
+
+    await waitFor(() => {
+      expect(result.current.directories).toHaveLength(1);
+      expect(result.current.directories[0]).toMatchObject({
+        key: workspaceKey,
+        path: "/Users/test/.pwragent/profiles/default/projects",
+        threadKeys: ["codex:scratch-thread"],
+        needsAttentionCount: 1,
+        pinnedRank: "6144",
+        launchpad: {
+          directoryKey: workspaceKey,
+          directoryPath: "/Users/test/.pwragent/profiles/default/projects",
+          model: "viewer-model",
+          prompt: "Viewer unsent draft",
+        },
+      });
+      expect(result.current.selectedItemKey).toBe(`launchpad:${workspaceKey}`);
+      expect(result.current.selectedDirectory?.key).toBe(workspaceKey);
     });
   });
 
@@ -10127,6 +10497,144 @@ describe("useThreadNavigation", () => {
     });
     expect(result.current.selectedThread?.prAutoDispatchPending).toBeUndefined();
     expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies PR auto-dispatch events to the matching mounted remote thread", async () => {
+    const firstOwner = {
+      scope: "remote" as const,
+      instanceId: "first-owner",
+    };
+    const secondOwner = {
+      scope: "remote" as const,
+      instanceId: "second-owner",
+    };
+    const listeners = new Set<
+      Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+    >();
+    const pending = (fingerprint: string) => ({
+      fingerprint,
+      prKey: "github.com/pwrdrvr/PwrAgent#1105",
+      prNumber: 1105,
+      prUrl: "https://github.com/pwrdrvr/PwrAgent/pull/1105",
+      headSha: "a".repeat(40),
+      eventKinds: ["ci-failure" as const],
+      createdAt: 1_000,
+      scheduledAt: 31_000,
+    });
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "shared-thread-id",
+          title: "Local thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          prAutoDispatchEnabled: true,
+          prAutoDispatchPending: pending("local-pending"),
+          inbox: { inInbox: false },
+        },
+        {
+          id: "shared-thread-id",
+          title: "First remote thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          prAutoDispatchEnabled: true,
+          prAutoDispatchPending: pending("first-owner-pending"),
+          inbox: { inInbox: false },
+          federation: {
+            instanceLabel: "First owner",
+            ref: {
+              backend: "codex" as const,
+              target: firstOwner,
+              threadId: "shared-thread-id",
+            },
+          },
+        },
+        {
+          id: "shared-thread-id",
+          title: "Second remote thread",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          prAutoDispatchEnabled: true,
+          prAutoDispatchPending: pending("second-owner-pending"),
+          inbox: { inInbox: false },
+          federation: {
+            instanceLabel: "Second owner",
+            ref: {
+              backend: "codex" as const,
+              target: secondOwner,
+              threadId: "shared-thread-id",
+            },
+          },
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => listeners.delete(callback);
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(3);
+    });
+
+    act(() => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          federationTarget: firstOwner,
+          notification: {
+            method: "thread/prAutoDispatch/updated",
+            params: { threadId: "shared-thread-id", enabled: false },
+          },
+        });
+        listener({
+          backend: "codex",
+          federationTarget: firstOwner,
+          notification: {
+            method: "thread/prAutoDispatch/pendingUpdated",
+            params: { threadId: "shared-thread-id", pending: null },
+          },
+        });
+      }
+    });
+
+    const localThread = result.current.threads.find(
+      (thread) => !thread.federation,
+    );
+    const firstRemoteThread = result.current.threads.find(
+      (thread) =>
+        thread.federation?.ref.target.scope === "remote"
+        && thread.federation.ref.target.instanceId === "first-owner",
+    );
+    const secondRemoteThread = result.current.threads.find(
+      (thread) =>
+        thread.federation?.ref.target.scope === "remote"
+        && thread.federation.ref.target.instanceId === "second-owner",
+    );
+    expect(firstRemoteThread?.prAutoDispatchEnabled).toBe(false);
+    expect(firstRemoteThread?.prAutoDispatchPending).toBeUndefined();
+    expect(localThread?.prAutoDispatchEnabled).toBe(true);
+    expect(localThread?.prAutoDispatchPending?.fingerprint).toBe("local-pending");
+    expect(secondRemoteThread?.prAutoDispatchEnabled).toBe(true);
+    expect(secondRemoteThread?.prAutoDispatchPending?.fingerprint).toBe(
+      "second-owner-pending",
+    );
   });
 
   it("reconciles a primary workspace repository resolved after an earlier refresh", async () => {

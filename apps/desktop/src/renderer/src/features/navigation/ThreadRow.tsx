@@ -257,6 +257,7 @@ export function ThreadRow(props: ThreadRowProps) {
         props.subthreadCount ? " has-subthreads" : ""
       }`}
       draggable={props.draggable}
+      data-hover-stable-row="thread"
       data-thread-pin-key={props.threadPinState ? threadKey : undefined}
       data-thread-pin-state={props.threadPinState}
       role="listitem"
@@ -286,6 +287,7 @@ export function ThreadRow(props: ThreadRowProps) {
           className={`thread-row__subthread-toggle${
             props.subthreadsCollapsed ? "" : " is-open"
           }`}
+          data-hover-stable-release="subthreads"
           type="button"
           onClick={(event) => {
             event.stopPropagation();

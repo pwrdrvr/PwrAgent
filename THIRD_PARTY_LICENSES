@@ -245,7 +245,7 @@ MIT
 - json-with-bigint@3.5.10 | https://github.com/Ivan-Korolenko/json-with-bigint
 - jsonfile@6.2.1 | https://github.com/jprichardson/node-jsonfile
 - katex@0.16.47 | https://github.com/KaTeX/KaTeX
-- katex@0.18.3 | https://github.com/KaTeX/KaTeX
+- katex@0.18.4 | https://github.com/KaTeX/KaTeX
 - lazy-val@1.0.5 | develar/lazy-val
 - linkifyjs@4.3.3 | https://github.com/nfrasser/linkifyjs
 - lodash.escaperegexp@4.1.2 | lodash/lodash
@@ -4179,7 +4179,7 @@ katex@0.16.47 (MIT)
 
 Applies to:
 - katex@0.16.47 (MIT)
-- katex@0.18.3 (MIT)
+- katex@0.18.4 (MIT)
 
 Representative file: katex@0.16.47/LICENSE
 

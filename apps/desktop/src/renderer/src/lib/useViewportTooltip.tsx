@@ -102,6 +102,13 @@ type TooltipState = {
   top?: number;
 };
 
+type TooltipTargetRect = {
+  bottom: number;
+  left: number;
+  right: number;
+  top: number;
+};
+
 type DelayedTooltipContent = ReactNode | (() => ReactNode);
 
 /**
@@ -164,6 +171,7 @@ export function useViewportTooltip(options: {
 } {
   const tooltipRef = useRef<HTMLDivElement>(null);
   const targetRef = useRef<HTMLElement | null>(null);
+  const targetRectRef = useRef<TooltipTargetRect | null>(null);
   const hoverDelayTimerRef = useRef<number | null>(null);
   const tooltipId = useId();
   const [state, setState] = useState<TooltipState | undefined>(undefined);
@@ -175,6 +183,31 @@ export function useViewportTooltip(options: {
     }
     window.clearTimeout(hoverDelayTimerRef.current);
     hoverDelayTimerRef.current = null;
+  }, []);
+
+  const hide = useCallback((): void => {
+    clearHoverDelay();
+    setDelayPending(false);
+    targetRef.current = null;
+    targetRectRef.current = null;
+    setState(undefined);
+  }, [clearHoverDelay]);
+
+  const rememberTarget = useCallback((target: HTMLElement): DOMRect | undefined => {
+    if (!target.isConnected) {
+      targetRef.current = null;
+      targetRectRef.current = null;
+      return undefined;
+    }
+    const rect = target.getBoundingClientRect();
+    targetRef.current = target;
+    targetRectRef.current = {
+      bottom: rect.bottom,
+      left: rect.left,
+      right: rect.right,
+      top: rect.top,
+    };
+    return rect;
   }, []);
 
   // Measure the rendered tooltip and clamp position so it stays in the
@@ -231,18 +264,22 @@ export function useViewportTooltip(options: {
     setDelayPending(false);
     if (isNativeDragInteractionActive()) {
       targetRef.current = null;
+      targetRectRef.current = null;
       setState(undefined);
       return;
     }
-    const rect = target.getBoundingClientRect();
-    targetRef.current = target;
+    const rect = rememberTarget(target);
+    if (!rect) {
+      setState(undefined);
+      return;
+    }
     setState({
       content,
       targetTop: rect.top,
       targetBottom: rect.bottom,
       targetCenter: rect.left + rect.width / 2,
     });
-  }, [clearHoverDelay]);
+  }, [clearHoverDelay, rememberTarget]);
 
   const showAfterDelay = useCallback(
     (target: HTMLElement, content: DelayedTooltipContent): void => {
@@ -250,7 +287,11 @@ export function useViewportTooltip(options: {
         return;
       }
       clearHoverDelay();
-      targetRef.current = target;
+      if (!rememberTarget(target)) {
+        setDelayPending(false);
+        setState(undefined);
+        return;
+      }
       setDelayPending(true);
       hoverDelayTimerRef.current = window.setTimeout(() => {
         hoverDelayTimerRef.current = null;
@@ -258,30 +299,25 @@ export function useViewportTooltip(options: {
         show(target, typeof content === "function" ? content() : content);
       }, TOOLTIP_HOVER_DELAY_MS);
     },
-    [clearHoverDelay, show],
+    [clearHoverDelay, rememberTarget, show],
   );
 
   const update = useCallback((content: ReactNode): void => {
     setState((current) => (current ? { ...current, content } : current));
   }, []);
 
-  const hide = useCallback((): void => {
-    clearHoverDelay();
-    setDelayPending(false);
-    targetRef.current = null;
-    setState(undefined);
-  }, [clearHoverDelay]);
-
   useEffect(() => clearHoverDelay, [clearHoverDelay]);
 
-  // A hover tooltip is armed or shown on pointerenter/focus, but those handlers give
-  // us no dismissal signal when the window loses focus (cmd-tab away leaves
-  // the pointer "over" the chip, so no `mouseleave` fires) or when the list
-  // scrolls underneath the position:fixed portal (the tooltip detaches from
-  // its target and lingers). Tear it down when the viewport or an ancestor of
-  // the target scrolls. A captured scroll from an unrelated pane must not
-  // dismiss it — transcript auto-scrolls otherwise close sidebar tooltips.
-  // Keyed on activity so the measure pass doesn't resubscribe each render.
+  // A portal outlives its anchor unless the hook explicitly notices that the
+  // anchor changed. React does not fire `mouseleave` when a refresh removes or
+  // replaces the hovered element, and moving a keyed row can leave the same
+  // DOM element connected at a new position. Watch the document only while a
+  // tooltip is armed or visible, and dismiss when its anchor disappears,
+  // is replaced, or moves from its recorded viewport rectangle. Attribute and
+  // content updates alone are not replacement: live cards update both their
+  // trigger state and tooltip content while they remain open.
+  // Unrelated mutations are intentionally ignored when the anchor stays put;
+  // transcript streaming must not close a sidebar tooltip.
   const visible = state !== undefined;
   const active = delayPending || visible;
   useEffect(() => {
@@ -302,12 +338,47 @@ export function useViewportTooltip(options: {
         hide();
       }
     };
+    const targetChanged = (): boolean => {
+      const target = targetRef.current;
+      const rememberedRect = targetRectRef.current;
+      if (!target || !rememberedRect || !target.isConnected) {
+        return true;
+      }
+      const currentRect = target.getBoundingClientRect();
+      return currentRect.top !== rememberedRect.top
+        || currentRect.right !== rememberedRect.right
+        || currentRect.bottom !== rememberedRect.bottom
+        || currentRect.left !== rememberedRect.left;
+    };
+    const mutationObserver = new MutationObserver(() => {
+      if (targetChanged()) {
+        hide();
+      }
+    });
+    mutationObserver.observe(document.body, {
+      attributes: true,
+      characterData: true,
+      childList: true,
+      subtree: true,
+    });
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === "Escape") {
+        hide();
+      }
+    };
     window.addEventListener("blur", hide);
+    window.addEventListener("resize", hide);
     window.addEventListener("scroll", onScroll, { capture: true });
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", hide, { capture: true });
     return () => {
       unsubscribeNativeDrag();
+      mutationObserver.disconnect();
       window.removeEventListener("blur", hide);
+      window.removeEventListener("resize", hide);
       window.removeEventListener("scroll", onScroll, { capture: true });
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", hide, { capture: true });
     };
   }, [active, hide]);
 

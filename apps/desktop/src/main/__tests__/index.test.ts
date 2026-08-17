@@ -175,6 +175,7 @@ const whenReadyMock = vi.fn(() => Promise.resolve());
 const quitMock = vi.fn();
 const getAllWindowsMock = vi.fn<() => unknown[]>(() => []);
 const dockSetIconMock = vi.fn();
+const dockSetMenuMock = vi.fn();
 const protocolHandleMock = vi.fn();
 const protocolRegisterSchemesAsPrivilegedMock = vi.fn();
 const nativeImageMock = {
@@ -211,6 +212,13 @@ const resolveProfileBootDecisionMock = vi.fn<() => BootDecisionLike>(() => ({
   source: "migration",
 }));
 const cleanupBootstrapProfileMock = vi.fn();
+const buildDockProfileSnapshotMock = vi.fn(() => ({
+  schemaVersion: 2 as const,
+  pwragentHome: "/tmp/pwragent",
+  defaultProfile: "default",
+  profiles: [{ name: "default" }],
+}));
+const writeDockProfileSnapshotMock = vi.fn();
 
 vi.mock("electron", () => ({
   app: {
@@ -224,6 +232,7 @@ vi.mock("electron", () => ({
     whenReady: whenReadyMock,
     dock: {
       setIcon: dockSetIconMock,
+      setMenu: dockSetMenuMock,
     },
     on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       appEventHandlers.set(event, handler);
@@ -482,10 +491,12 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 }));
 
 vi.mock("../profile", () => ({
+  buildDockProfileSnapshot: buildDockProfileSnapshotMock,
   resolveActiveProfileName: resolveActiveProfileNameMock,
   startProfileFocusRequestWatcher: startProfileFocusRequestWatcherMock,
   resolveProfileBootDecision: resolveProfileBootDecisionMock,
   cleanupBootstrapProfile: cleanupBootstrapProfileMock,
+  writeDockProfileSnapshot: writeDockProfileSnapshotMock,
 }));
 
 const runtimeMessagingLeaseCoordinatorMock = {
@@ -741,6 +752,7 @@ describe("bootstrapApp", () => {
     isCodexBootstrapDeferredMock.mockReturnValue(false);
     getDesktopSettingsServiceMock.mockClear();
     dockSetIconMock.mockClear();
+    dockSetMenuMock.mockClear();
     nativeImageMock.isEmpty.mockReset();
     nativeImageMock.isEmpty.mockReturnValue(false);
     nativeImageCreateFromPathMock.mockClear();
@@ -762,6 +774,14 @@ describe("bootstrapApp", () => {
       source: "migration",
     });
     cleanupBootstrapProfileMock.mockReset();
+    buildDockProfileSnapshotMock.mockReset();
+    buildDockProfileSnapshotMock.mockReturnValue({
+      schemaVersion: 2,
+      pwragentHome: "/tmp/pwragent",
+      defaultProfile: "default",
+      profiles: [{ name: "default" }],
+    });
+    writeDockProfileSnapshotMock.mockReset();
     initializeAppStateMock.mockReset();
     startProfileFocusRequestWatcherMock.mockClear();
     startupProfilerInstance.start.mockReset();
@@ -904,6 +924,26 @@ describe("bootstrapApp", () => {
       "/test/app/build/icon.png",
     );
     expect(dockSetIconMock).toHaveBeenCalledWith(nativeImageMock);
+  });
+
+  it("continues startup when the Dock profile snapshot cannot be refreshed", async () => {
+    if (process.platform !== "darwin") {
+      return;
+    }
+    startupProfilerInstance.start.mockResolvedValue();
+    writeDockProfileSnapshotMock.mockImplementation(() => {
+      throw new Error("cache is read-only");
+    });
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(mainLogWarnMock).toHaveBeenCalledWith(
+      "failed to refresh Dock profile snapshot",
+      { error: "cache is read-only" },
+    );
+    expect(dockSetMenuMock).toHaveBeenCalledOnce();
+    expect(createMainWindowMock).toHaveBeenCalledOnce();
   });
 
   it("creates the first window without waiting for messaging startup", async () => {
@@ -1799,6 +1839,12 @@ describe("bootstrapApp", () => {
 
   it("initializes app state in bootstrap mode when boot decision is no-profile-configured", async () => {
     resolveProfileBootDecisionMock.mockReturnValue({ kind: "no-profile-configured" });
+    buildDockProfileSnapshotMock.mockReturnValue({
+      schemaVersion: 2,
+      pwragentHome: "/tmp/pwragent",
+      defaultProfile: "default",
+      profiles: [],
+    });
     startupProfilerInstance.start.mockResolvedValue();
 
     await import("../index");
@@ -1812,6 +1858,30 @@ describe("bootstrapApp", () => {
     // own that dir; cleanup happens at graduation in Task E.
     expect(initializeAppStateMock).toHaveBeenCalledWith("bootstrap");
     expect(cleanupBootstrapProfileMock).not.toHaveBeenCalled();
+    if (process.platform === "darwin") {
+      expect(writeDockProfileSnapshotMock).toHaveBeenCalledWith({
+        schemaVersion: 2,
+        pwragentHome: "/tmp/pwragent",
+        defaultProfile: "default",
+        profiles: [],
+      });
+      const dockTemplate = buildFromTemplateMock.mock.calls.at(-1)?.[0] as
+        Array<{ submenu?: Array<{ enabled?: boolean; label?: string }> }>;
+      expect(dockTemplate).toEqual([
+        {
+          label: "Open Profile",
+          submenu: [
+            {
+              enabled: false,
+              label: "No Profiles Found",
+            },
+          ],
+        },
+      ]);
+    } else {
+      expect(writeDockProfileSnapshotMock).not.toHaveBeenCalled();
+      expect(dockSetMenuMock).not.toHaveBeenCalled();
+    }
   });
 
   it("initializes app state in bootstrap mode when env names a missing profile", async () => {

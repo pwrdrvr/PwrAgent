@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useLayoutEffect,
   useRef,
   useState,
   type ComponentType,
@@ -10,7 +9,6 @@ import {
   type MouseEvent,
   type PointerEvent,
 } from "react";
-import { createPortal } from "react-dom";
 import type {
   BackendSummary,
   AppServerThreadEntry,
@@ -40,6 +38,7 @@ import {
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { resolveThreadWorkingStatePath } from "../../lib/thread-working-state-path";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThreadAutomationsPanel } from "../automations/ThreadAutomationsPanel";
 import { ThreadInfoPanel } from "./context-panels/ThreadInfoPanel";
 import { ProviderStatusPanel } from "./context-panels/ProviderStatusPanel";
@@ -165,7 +164,6 @@ const RAIL_MAX_WIDTH = 560;
 
 export function ThreadContextPanel(props: ThreadContextPanelProps) {
   const railRef = useRef<HTMLElement>(null);
-  const tooltipRef = useRef<HTMLDivElement>(null);
   const [revealed, setRevealed] = useState(false);
   // A modal portaled to document.body is outside the rail in DOM and pointer
   // geometry, but remains part of the same interaction. Keep the panel
@@ -176,14 +174,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
   // `--context-rail-effective` custom property. No local copy → no desync.
   const railWidth = props.width ?? 380;
   const [resizing, setResizing] = useState(false);
-  const [tooltip, setTooltip] = useState<{
-    left?: number;
-    text: string;
-    targetBottom: number;
-    targetCenter: number;
-    targetTop: number;
-    top?: number;
-  }>();
+  const railTooltip = useViewportTooltip({ className: "context-rail__tooltip" });
   const pinned = props.pinned;
   const open = pinned || revealed || portaledInteractionOpen;
   const hideTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -457,34 +448,6 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     revealed,
   ]);
 
-  useLayoutEffect(() => {
-    if (!tooltip || tooltip.left !== undefined) {
-      return;
-    }
-
-    const tooltipElement = tooltipRef.current;
-    if (!tooltipElement) {
-      return;
-    }
-
-    const tooltipRect = tooltipElement.getBoundingClientRect();
-    const viewportPadding = 12;
-    const left = Math.min(
-      window.innerWidth - tooltipRect.width - viewportPadding,
-      Math.max(viewportPadding, tooltip.targetCenter - tooltipRect.width / 2)
-    );
-    const top =
-      tooltip.targetTop - tooltipRect.height - 10 >= viewportPadding
-        ? tooltip.targetTop - 10
-        : tooltip.targetBottom + tooltipRect.height + 10;
-
-    setTooltip({
-      ...tooltip,
-      left,
-      top,
-    });
-  }, [tooltip]);
-
   const selectTab = (tab: ContextTabId): void => {
     props.onActiveTabChange(tab);
     if (!pinned) {
@@ -622,23 +585,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
         </div>
       </div>
 
-      {tooltip && typeof document !== "undefined"
-        ? createPortal(
-            <div
-              ref={tooltipRef}
-              className="context-rail__tooltip"
-              role="tooltip"
-              style={{
-                left: tooltip.left,
-                top: tooltip.top,
-                visibility: tooltip.left === undefined ? "hidden" : undefined,
-              }}
-            >
-              {tooltip.text}
-            </div>,
-            document.body
-          )
-        : null}
+      {railTooltip.tooltipNode}
     </aside>
   );
 
@@ -853,16 +800,13 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
     maxLength?: number,
     copyHint = true
   ): void {
-    const rect = event.currentTarget.getBoundingClientRect();
-    setTooltip({
-      text: buildRailTooltipText(path, maxLength, copyHint),
-      targetBottom: rect.bottom,
-      targetCenter: rect.left + rect.width / 2,
-      targetTop: rect.top,
-    });
+    railTooltip.show(
+      event.currentTarget,
+      buildRailTooltipText(path, maxLength, copyHint),
+    );
   }
 
   function hideRailTooltip(): void {
-    setTooltip(undefined);
+    railTooltip.hide();
   }
 }

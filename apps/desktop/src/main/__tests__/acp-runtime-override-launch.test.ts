@@ -1,4 +1,5 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import type { AcpPathExecutableLister } from "@pwrdrvr/agent-acp";
+import { mkdtempSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AcpBackendId } from "@pwragent/shared";
@@ -13,6 +14,7 @@ import {
 } from "../acp/testing/executable-acp-agent-fixture";
 import { AcpBackendAdapter } from "../app-server/acp-backend-adapter";
 import { installedAcpAgentSettingsEntry } from "../ipc/settings";
+import { isPathWithin } from "../../shared/path-within";
 import { StateDb } from "../state/state-db";
 
 type ProviderCase = {
@@ -64,17 +66,28 @@ describeExecutableAcp("ACP runtime path overrides", () => {
           agentStore,
           sessionStore,
           discover: async () => [
-            await discoverSingleProvider({ env, registryId }),
+            await discoverSingleProvider({ env, registryId, rootDir: tempDir }),
           ],
         });
         await adapter.listAvailableAgents();
         await adapter.close();
         adapter = undefined;
 
+        // The fixture's own version proves discovery resolved the fixture
+        // binary rather than an agent CLI installed on this machine.
         expect(
-          agentStore.getInstalledAgent(`acp:${registryId}` as AcpBackendId)
-            ?.activeCommand,
-        ).toBe(fixture.defaultCommand);
+          agentStore.getInstalledAgent(`acp:${registryId}` as AcpBackendId),
+        ).toMatchObject({
+          activeCommand: fixture.defaultCommand,
+          instances: [
+            {
+              command: fixture.defaultCommand,
+              source: "path",
+              version: "0.1.0-default",
+            },
+          ],
+          version: "0.1.0-default",
+        });
         const persistDiscovered = vi.spyOn(agentStore, "upsertInstalledAgent");
 
         adapter = createAdapter({
@@ -85,6 +98,7 @@ describeExecutableAcp("ACP runtime path overrides", () => {
               env,
               overridePath: fixture.overrideCommand,
               registryId,
+              rootDir: tempDir,
             }),
           ],
         });
@@ -108,18 +122,20 @@ describeExecutableAcp("ACP runtime path overrides", () => {
             args: expectedArgs,
           },
         });
-        expect(persisted?.instances).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              command: fixture.overrideCommand,
-              source: "override",
-            }),
-            expect.objectContaining({
-              command: fixture.defaultCommand,
-              source: "path",
-            }),
-          ]),
-        );
+        // Exact, not `arrayContaining`: an extra instance here means discovery
+        // reached outside the fixture and found a real installation.
+        expect(persisted?.instances).toEqual([
+          {
+            command: fixture.overrideCommand,
+            source: "override",
+            version: "0.2.0-override",
+          },
+          {
+            command: fixture.defaultCommand,
+            source: "path",
+            version: "0.1.0-default",
+          },
+        ]);
 
         const settingsEntry = installedAcpAgentSettingsEntry(
           persisted as AcpInstalledAgentRecord,
@@ -172,8 +188,22 @@ describeExecutableAcp("ACP runtime path overrides", () => {
 
     try {
       agentStore.upsertInstalledAgent(
-        await discoverSingleProvider({ env, registryId: "grok" }),
+        await discoverSingleProvider({
+          env,
+          registryId: "grok",
+          rootDir: tempDir,
+        }),
       );
+      expect(agentStore.getInstalledAgent("acp:grok")).toMatchObject({
+        activeCommand: first.defaultCommand,
+        instances: [
+          {
+            command: first.defaultCommand,
+            source: "path",
+            version: "0.1.0-default",
+          },
+        ],
+      });
       adapter = createAdapter({
         agentStore,
         sessionStore,
@@ -182,6 +212,7 @@ describeExecutableAcp("ACP runtime path overrides", () => {
             env,
             overridePath,
             registryId: "grok",
+            rootDir: tempDir,
           }),
         ],
       });
@@ -248,14 +279,31 @@ function createAdapter(params: {
   });
 }
 
+/**
+ * Runs the real discovery pipeline, confined to `rootDir`.
+ *
+ * An `env.PATH` override alone does NOT sandbox discovery: the kit also probes
+ * well-known `$HOME` bin dirs and each strategy's absolute fallback candidates
+ * (`~/.kimi-code/bin/kimi`, `/opt/homebrew/bin/qwen`, …). Left unconfined this
+ * `execFile`s whichever agent CLIs the developer has installed — hundreds of
+ * real `kimi` / `grok` / `qwen` processes per suite run — and asserts against
+ * their versions instead of the fixture's. `listExecutables` + `fallbackRootDir`
+ * are the seams that keep every candidate inside the fixture; the
+ * agent-cli-spawn guard in `setup/agent-cli-spawn-guard.ts` fails the test if
+ * one escapes anyway.
+ */
 async function discoverSingleProvider(params: {
   env: NodeJS.ProcessEnv;
   overridePath?: string;
   registryId: ProviderCase["registryId"];
+  rootDir: string;
 }): Promise<AcpInstalledAgentRecord> {
   const records = await discoverLocalAcpAgentRecords({
     enabledRegistryIds: [params.registryId],
     env: params.env,
+    bundledGrokCommand: null,
+    fallbackRootDir: params.rootDir,
+    listExecutables: fixtureListExecutables(params.rootDir),
     ...(params.overridePath
       ? { preferences: { [params.registryId]: { overridePath: params.overridePath } } }
       : {}),
@@ -266,7 +314,61 @@ async function discoverSingleProvider(params: {
   if (!record) {
     throw new Error(`Fake ${params.registryId} executable was not discovered`);
   }
+  // Every bucket, not just `instances`: a real binary that discovery finds but
+  // then classifies as legacy or unverifiable lands in `incompatibleInstances`
+  // / `rejectedInstances`, which is exactly the escape this assertion exists to
+  // catch.
+  expectInstancesInside(params.rootDir, [
+    ...(record.instances ?? []),
+    ...(record.incompatibleInstances ?? []),
+    ...(record.rejectedInstances ?? []),
+  ]);
   return record;
+}
+
+/**
+ * `PATH` lister that only ever yields executables under `rootDir`. The kit's
+ * default lister appends the operator's well-known bin dirs to `env.PATH`, and
+ * the fixture `PATH` itself has to carry the Node bin dir so the fixtures'
+ * `#!/usr/bin/env node` shebang resolves — which is exactly where a globally
+ * installed `gemini` or `qwen` lives.
+ */
+function fixtureListExecutables(rootDir: string): AcpPathExecutableLister {
+  return (command, env) => {
+    // Both separators, matching the kit's own lister: `path.sep` alone would
+    // treat "bin/qwen" as a bare name on Windows and join it onto every dir.
+    if (command.includes("/") || command.includes("\\")) {
+      return [];
+    }
+    const found: string[] = [];
+    for (const dir of (env.PATH ?? "").split(path.delimiter)) {
+      const candidate = path.join(dir, command);
+      if (!isPathWithin(rootDir, candidate)) {
+        continue;
+      }
+      try {
+        const stat = statSync(candidate);
+        if (stat.isFile() && (stat.mode & 0o111) !== 0) {
+          found.push(candidate);
+        }
+      } catch {
+        // Not installed in this directory.
+      }
+    }
+    return found;
+  };
+}
+
+function expectInstancesInside(
+  rootDir: string,
+  instances: readonly { command: string }[],
+): void {
+  for (const instance of instances) {
+    expect(
+      isPathWithin(rootDir, instance.command),
+      `discovered ${instance.command} outside the fixture root ${rootDir}`,
+    ).toBe(true);
+  }
 }
 
 function fixtureDiscoveryEnv(
