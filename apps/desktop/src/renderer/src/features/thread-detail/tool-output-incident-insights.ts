@@ -93,6 +93,120 @@ export function buildTokenMiserContextComparison(
   };
 }
 
+/**
+ * A gate that did not pay off, or a payload the gate never really controlled.
+ *
+ * Aggregate savings hide these: a thread can show a large avoided footprint
+ * while individual gates cost more than they saved, hand most of the payload
+ * back through retrieval, or summarize the same output several times over.
+ */
+export type TokenMiserRoughEdge = {
+  detail: string;
+  key: string;
+  kind: "cost" | "leak" | "repeat" | "truncated";
+  label: string;
+  title: string;
+  value: string;
+};
+
+const ROUGH_EDGE_ORDER: Record<TokenMiserRoughEdge["kind"], number> = {
+  cost: 0,
+  leak: 1,
+  repeat: 2,
+  truncated: 3,
+};
+
+export function buildTokenMiserRoughEdges(
+  invocations: readonly ThreadToolInvocationRecord[],
+  tokenMiser: ThreadToolAccounting["tokenMiser"],
+): TokenMiserRoughEdge[] {
+  const interceptions = tokenMiser?.interceptions ?? [];
+  if (interceptions.length === 0) {
+    return [];
+  }
+  const invocationByToolUseId = new Map<string, ThreadToolInvocationRecord>();
+  for (const invocation of invocations) {
+    if (invocation.itemId) {
+      invocationByToolUseId.set(invocation.itemId, invocation);
+    }
+  }
+  const describe = (toolUseId: string, toolName: string): string =>
+    invocationByToolUseId.get(toolUseId)?.normalizedCommand ?? toolName;
+
+  // Count gates per command so a payload summarized several times reads as one
+  // finding about the repetition rather than N unrelated gates.
+  const gatesByCommand = new Map<string, number>();
+  for (const entry of interceptions) {
+    const command = describe(entry.toolUseId, entry.toolName);
+    gatesByCommand.set(command, (gatesByCommand.get(command) ?? 0) + 1);
+  }
+
+  const edges: TokenMiserRoughEdge[] = [];
+  const reportedRepeats = new Set<string>();
+  for (const entry of interceptions) {
+    const command = describe(entry.toolUseId, entry.toolName);
+    if (entry.estimatedParentTokensSaved <= 0) {
+      edges.push({
+        detail:
+          `A ${formatCompactTokens(entry.baselineParentTokens)} baseline became `
+          + `${formatCompactTokens(entry.replacementTokens + entry.retrievedTokens)} of summary and retrieval.`,
+        key: entry.objectId,
+        kind: "cost",
+        label: "Cost more than it saved",
+        title: command,
+        value: `${formatCompactTokens(Math.abs(entry.estimatedParentTokensSaved))} over`,
+      });
+      continue;
+    }
+    if (entry.retrievedTokens > 0 && entry.retrievedTokens * 2 >= entry.baselineParentTokens) {
+      edges.push({
+        detail:
+          `The agent read ${formatCompactTokens(entry.retrievedTokens)} of the `
+          + `${formatCompactTokens(entry.baselineParentTokens)} baseline back, so most of the payload reached the parent anyway.`,
+        key: entry.objectId,
+        kind: "leak",
+        label: "Retrieval defeated it",
+        title: command,
+        value: `${formatCompactTokens(entry.estimatedParentTokensSaved)} net`,
+      });
+      continue;
+    }
+    const gateCount = gatesByCommand.get(command) ?? 1;
+    if (gateCount > 1 && !reportedRepeats.has(command)) {
+      reportedRepeats.add(command);
+      edges.push({
+        detail:
+          `The same output was gated ${gateCount.toLocaleString()} times, so `
+          + `${(gateCount - 1).toLocaleString()} extra ${gateCount === 2 ? "summary was" : "summaries were"} written for one payload.`,
+        key: `repeat:${command}`,
+        kind: "repeat",
+        label: `Gated ${gateCount.toLocaleString()}×`,
+        title: command,
+        value: `${(gateCount - 1).toLocaleString()} redundant`,
+      });
+      continue;
+    }
+    // Codex caps tool output before the hook sees it, so a payload far past the
+    // cap was never gateable in full — the gate only ever saw the capped head.
+    const emitted = invocationByToolUseId.get(entry.toolUseId)?.outputChars ?? 0;
+    if (emitted > TOOL_OUTPUT_CAP_CHARS * 2 && !reportedRepeats.has(command)) {
+      edges.push({
+        detail:
+          `The tool emitted ${emitted.toLocaleString()} characters. Codex truncated it to `
+          + `${TOOL_OUTPUT_CAP_CHARS.toLocaleString()} before the hook saw it, so only the cap was ever gateable.`,
+        key: `truncated:${entry.objectId}`,
+        kind: "truncated",
+        label: "Truncated upstream",
+        title: command,
+        value: `${formatCompactTokens(entry.baselineParentTokens)} of ${formatCompactTokens(Math.ceil(emitted / 4))}`,
+      });
+    }
+  }
+  return edges.sort((left, right) =>
+    ROUGH_EDGE_ORDER[left.kind] - ROUGH_EDGE_ORDER[right.kind]
+  );
+}
+
 export type TurnCostRow = {
   callCount: number;
   /** Billed cost of this turn, when the pricing ledger has priced it. */
