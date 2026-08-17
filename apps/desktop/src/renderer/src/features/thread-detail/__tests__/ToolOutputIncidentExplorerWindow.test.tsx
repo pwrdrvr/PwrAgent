@@ -64,6 +64,102 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       .not.toBeInTheDocument();
   });
 
+  it("shows the priced savings equation and how much of it was observed", async () => {
+    const response = buildResponse();
+    response.pricing = {
+      lines: [],
+      summaries: [{
+        backend: "codex",
+        threadId: "thread-1",
+        provider: "openai",
+        currency: "USD",
+        totalCostMicros: 360_000,
+        totalTokens: 500_000,
+        usageLineCount: 4,
+        pricedUsageLineCount: 4,
+        unpricedUsageLineCount: 0,
+        updatedAt: 1_800_000_000_000,
+      }] as never,
+    } as never;
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 4,
+      originalCharacters: 160_000,
+      baselineParentTokens: 40_000,
+      replacementTokens: 1_400,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 38_600,
+      cachedReplayCount: 47,
+      estimatedCachedReplayTokensSaved: 1_800_000,
+      savings: {
+        currency: "USD",
+        pricedGateCount: 4,
+        gateCount: 4,
+        withoutGateCostMicros: 680_000,
+        gateCostMicros: 50_000,
+        revealedCostMicros: 280_000,
+        savingsMicros: 350_000,
+        directlyObservedReplayCount: 47,
+        reconstructedReplayCount: 0,
+        gateModel: "gpt-5.6-luna",
+        parentModel: "gpt-5.6-terra",
+      },
+      interceptions: [],
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    await screen.findByRole("tab", { name: /Savings/, selected: true });
+    expect(screen.getByText("Net saved on this thread")).toBeInTheDocument();
+    expect(screen.getByText("$0.35")).toBeInTheDocument();
+    expect(screen.getByText(/This thread cost/)).toHaveTextContent(
+      "This thread cost $0.36 · about $0.71 without Token Miser",
+    );
+    expect(screen.getByText("1 · Without the gate")).toBeInTheDocument();
+    expect(screen.getByText("$0.68")).toBeInTheDocument();
+    expect(screen.getByText("2 · Gate compute")).toBeInTheDocument();
+    expect(screen.getByText("$0.05")).toBeInTheDocument();
+    expect(screen.getByText("3 · Revealed to parent")).toBeInTheDocument();
+    expect(screen.getByText("$0.28")).toBeInTheDocument();
+    expect(
+      screen.getByText(/Directly observed · 47 of 47 replays tracked at the request boundary/),
+    ).toBeInTheDocument();
+  });
+
+  // Reconstructed replays are inferred from later tool calls and cannot see
+  // cross-turn replays or compaction, so the figure must not read as measured.
+  it("marks savings as reconstructed when replays were inferred", async () => {
+    const response = buildResponse();
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 2,
+      originalCharacters: 80_000,
+      baselineParentTokens: 20_000,
+      replacementTokens: 700,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 19_300,
+      savings: {
+        currency: "USD",
+        pricedGateCount: 1,
+        gateCount: 2,
+        withoutGateCostMicros: 100_000,
+        gateCostMicros: 10_000,
+        revealedCostMicros: 20_000,
+        savingsMicros: 70_000,
+        directlyObservedReplayCount: 3,
+        reconstructedReplayCount: 5,
+      },
+      interceptions: [],
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    await screen.findByRole("tab", { name: /Savings/, selected: true });
+    expect(
+      screen.getByText(/Partly reconstructed · 5 of 8 replays inferred from later tool calls · 1 gate is not priced yet/),
+    ).toBeInTheDocument();
+  });
+
   it("shows Token Miser savings beside gross tool-output exposure", async () => {
     const response = buildResponse();
     response.toolAccounting!.tokenMiser = {
@@ -105,6 +201,11 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       selected: true,
     });
     expect(savings).toHaveTextContent("18k avoided");
+    // Without a priced gate the lens states what it has — tokens — and says
+    // why the dollars are missing, rather than showing a partial equation.
+    expect(
+      screen.getByText("Dollar terms appear once the gate's usage line is priced."),
+    ).toBeInTheDocument();
 
     expect(screen.getByText("Without the gate")).toBeInTheDocument();
     expect(screen.getByText("20k")).toBeInTheDocument();

@@ -269,6 +269,7 @@ import {
   type ThreadToolInvocationAlert,
   type ThreadToolInvocationRecord,
   type ThreadCompactionRecord,
+  type ThreadTokenMiserSavings,
   type ThreadPricingSummary,
   type ThreadUsageLineRecord,
   type PrSummary,
@@ -11803,12 +11804,18 @@ export class DesktopBackendRegistry {
       const tokenMiser = await this.tokenMiserStore.summarizeThreadUsage(
         params.threadId,
       );
+      const withReplays = withLegacyTokenMiserReplayAccounting(
+        tokenMiser,
+        params.accounting.invocations,
+      );
+      const savings = await this.buildTokenMiserThreadSavings({
+        backend: params.backend,
+        invocations: params.accounting.invocations,
+        threadId: params.threadId,
+      });
       return {
         ...params.accounting,
-        tokenMiser: withLegacyTokenMiserReplayAccounting(
-          tokenMiser,
-          params.accounting.invocations,
-        ),
+        tokenMiser: savings ? { ...withReplays, savings } : withReplays,
       };
     } catch (error) {
       backendRegistryLog.warn("failed to read Token Miser thread accounting", {
@@ -25752,6 +25759,100 @@ export class DesktopBackendRegistry {
       backend: "codex",
       threadId: event.notification.params.threadId,
     });
+  }
+
+  /**
+   * Thread-level dollar accounting for the gate.
+   *
+   * Built from `buildTokenMiserLedgerArtifact`, the same per-gate computation
+   * behind the Pricing rail cards, so the Explorer's total and the rail's rows
+   * are the same arithmetic rather than two implementations that can drift.
+   *
+   * Gates whose dollars are not resolvable yet — the helper's usage line has
+   * not landed, or the parent turn has no known model or rate — contribute to
+   * `gateCount` but not to any total. Reporting a partial sum as the whole is
+   * how a savings figure quietly becomes wrong.
+   */
+  private async buildTokenMiserThreadSavings(params: {
+    backend: AppServerBackendKind;
+    invocations: readonly ThreadToolInvocationRecord[];
+    threadId: string;
+  }): Promise<ThreadTokenMiserSavings | undefined> {
+    if (!this.tokenMiserStore) {
+      return undefined;
+    }
+    const entries = (await this.tokenMiserStore.listMetadata())
+      .filter((entry) => entry.threadId === params.threadId);
+    if (entries.length === 0) {
+      return undefined;
+    }
+    const pricing = typeof this.overlayStore.readThreadPricing === "function"
+      ? await this.overlayStore.readThreadPricing({
+          backend: params.backend,
+          threadId: params.threadId,
+        })
+      : { lines: [], summaries: [] };
+    const pricingLines = [
+      ...pricing.lines,
+      ...(this.liveTokenMiserUsageLines.get(params.threadId)?.values() ?? []),
+    ];
+
+    let pricedGateCount = 0;
+    let withoutGateCostMicros = 0;
+    let gateCostMicros = 0;
+    let revealedCostMicros = 0;
+    let savingsMicros = 0;
+    let directlyObservedReplayCount = 0;
+    let reconstructedReplayCount = 0;
+    let gateModel: string | undefined;
+    let parentModel: string | undefined;
+
+    for (const entry of entries) {
+      const replayCount = entry.replayTrackingVersion === 2
+        ? entry.cachedReplayCount ?? 0
+        : countLegacyTokenMiserCachedReplays({
+            entry,
+            invocations: params.invocations,
+          });
+      if (entry.replayTrackingVersion === 2) {
+        directlyObservedReplayCount += replayCount;
+      } else {
+        reconstructedReplayCount += replayCount;
+      }
+      const accounting = this.buildTokenMiserLedgerArtifact({
+        entry,
+        pricingLines,
+        toolInvocations: params.invocations,
+      }).subAgent.tokenMiserAccounting;
+      if (!accounting) {
+        continue;
+      }
+      pricedGateCount += 1;
+      withoutGateCostMicros +=
+        accounting.baselineParentCostMicros
+        + (accounting.cachedBaselineCostMicros ?? 0);
+      gateCostMicros += accounting.gateCostMicros;
+      revealedCostMicros +=
+        accounting.revealedParentCostMicros
+        + (accounting.cachedRevealedCostMicros ?? 0);
+      savingsMicros += accounting.savingsMicros;
+      gateModel ??= accounting.gateModel;
+      parentModel ??= accounting.originalModel;
+    }
+
+    return {
+      currency: "USD",
+      directlyObservedReplayCount,
+      gateCostMicros,
+      gateCount: entries.length,
+      ...(gateModel ? { gateModel } : {}),
+      ...(parentModel ? { parentModel } : {}),
+      pricedGateCount,
+      reconstructedReplayCount,
+      revealedCostMicros,
+      savingsMicros,
+      withoutGateCostMicros,
+    };
   }
 
   private buildTokenMiserLedgerArtifact(params: {
