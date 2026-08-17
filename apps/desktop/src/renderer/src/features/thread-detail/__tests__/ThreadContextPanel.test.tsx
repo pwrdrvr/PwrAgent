@@ -2276,6 +2276,58 @@ describe("ThreadContextPanel", () => {
     expect(times?.textContent).toContain("· 1m 5s");
   });
 
+  it("shows Token Miser savings on the matching Pricing gate card", () => {
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_000_000,
+            monitorId: "mon-1",
+            status: "success",
+            task: "Gate Bash output",
+            tokenMiserAccounting: {
+              baselineParentCostMicros: 15_000,
+              baselineParentTokens: 6_000,
+              currency: "USD",
+              gateCostMicros: 2_600,
+              gateModel: "gpt-5.6-luna",
+              gateTotalTokens: 2_100,
+              originalModel: "gpt-5.6-terra",
+              revealedParentCostMicros: 563,
+              revealedParentTokens: 225,
+              savingsMicros: 11_837,
+            },
+            updatedAt: 1_800_000_000_100,
+          },
+        ],
+      },
+      pricing: {
+        lines: [
+          buildMonitorLine({
+            model: "gpt-5.6-luna",
+            sourceItemId: "mon-1",
+          }),
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const savings = screen.getByLabelText("Token Miser savings");
+    expect(within(savings).getByText("1 · Without gate")).toBeInTheDocument();
+    expect(savings).toHaveTextContent("$0.015");
+    expect(within(savings).getByText("2 · Gate model")).toBeInTheDocument();
+    expect(within(savings).getByText("3 · Revealed to parent"))
+      .toBeInTheDocument();
+    expect(within(savings).getByText("Savings · 1 − 2 − 3"))
+      .toBeInTheDocument();
+    expect(savings).toHaveTextContent("$0.012");
+  });
+
   it("keeps a completed sub-agent duration on its pricing card", () => {
     const startedAt = 1_800_000_000_000;
     const completedAt = startedAt + 125_000;
