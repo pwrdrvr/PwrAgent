@@ -37,15 +37,14 @@ import { DesktopSettingsService } from "../settings/desktop-settings-service";
 
 // These tests build a real `DesktopSettingsService`, whose default
 // `CodexDiscoveryCoordinator` runs `codex --version` against every install
-// location on this machine. Stub the probe to the shape a machine with no
-// Codex CLI produces; messaging config has no stake in the result.
+// location on this machine. Messaging config has no stake in the result.
 vi.mock("@pwrdrvr/codex-discovery", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("@pwrdrvr/codex-discovery")>();
-  return {
-    ...actual,
-    discoverCodexCommands: vi.fn(async () => ({ candidates: [] })),
-  };
+  const { stubbedCodexDiscovery } = await import(
+    "./helpers/codex-discovery-stub"
+  );
+  return stubbedCodexDiscovery(
+    await importOriginal<typeof import("@pwrdrvr/codex-discovery")>(),
+  );
 });
 
 const messagingLog = vi.hoisted(() => ({

@@ -31,7 +31,8 @@ import { ChildProcess } from "node:child_process";
 import { realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach } from "vitest";
+import { afterAll, afterEach } from "vitest";
+import { isPathWithin } from "../../../shared/path-within";
 
 /** `codex`, `kimi-code`, `grok-absolute-override`, `codex-beta`, … */
 const AGENT_CLI_PATTERN =
@@ -90,18 +91,30 @@ if (guardGlobal[INSTALLED] !== true) {
 }
 
 afterEach(() => {
+  reportRecordedViolations("This test");
+});
+
+// `afterEach` cannot see a spawn from `afterAll`, nor one from an async probe
+// that settles after the final test. The recorded violation would sit in the
+// array unread and the file would exit green, since the throw at the spawn site
+// is swallowed by the probe's own try/catch.
+afterAll(() => {
+  reportRecordedViolations("This test file, after its last test,");
+});
+
+function reportRecordedViolations(subject: string): void {
   const observed = violations.splice(0);
   if (observed.length > 0) {
     throw new Error(
       [
-        `This test spawned ${observed.length} real coding-agent CLI process(es):`,
+        `${subject} spawned ${observed.length} real coding-agent CLI process(es):`,
         ...observed.map((violation) => `  ${describeViolation(violation)}`),
         "Confine discovery to the test's fixtures instead — see the remedies in",
         "apps/desktop/src/main/__tests__/setup/agent-cli-spawn-guard.ts.",
       ].join("\n"),
     );
   }
-});
+}
 
 function isForbiddenAgentCli(file: string): boolean {
   if (file.length === 0 || !AGENT_CLI_PATTERN.test(path.basename(file))) {
@@ -112,20 +125,17 @@ function isForbiddenAgentCli(file: string): boolean {
   return path.isAbsolute(file) ? !isInsideAllowedRoot(file) : true;
 }
 
+/**
+ * Resolved, not literal. A symlink under the temp dir pointing at a real
+ * installation would otherwise pass on its raw path alone, and symlinked agent
+ * CLIs are the norm here (`~/.local/bin/grok` → `~/.grok/bin/grok` → the
+ * downloaded binary). `realpathOrSelf` falls back to the literal path when the
+ * file does not exist, which is what the sandboxed-but-absent fallback
+ * candidates (`<fixture>/.kimi-code/bin/kimi`) rely on.
+ */
 function isInsideAllowedRoot(file: string): boolean {
-  const candidates = [file, realpathOrSelf(path.dirname(file))];
-  return ALLOWED_ROOTS.some((root) =>
-    candidates.some((candidate) => isInside(root, candidate)),
-  );
-}
-
-function isInside(root: string, candidate: string): boolean {
-  const relative = path.relative(root, candidate);
-  return (
-    relative.length > 0
-    && !relative.startsWith("..")
-    && !path.isAbsolute(relative)
-  );
+  const resolved = realpathOrSelf(file);
+  return ALLOWED_ROOTS.some((root) => isPathWithin(root, resolved));
 }
 
 function realpathOrSelf(target: string): string {

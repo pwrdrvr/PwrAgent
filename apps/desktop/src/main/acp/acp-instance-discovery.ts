@@ -146,26 +146,9 @@ export async function discoverAcpAgentInstances(
     options?.fallbackRootDir,
   );
 
-  const overrides: Record<string, string> = {};
-  for (const [registryId, pref] of Object.entries(preferences)) {
-    const override = pref.overridePath?.trim();
-    if (override) {
-      overrides[registryId] = override;
-    }
-  }
-
   const discover = options?.discover ?? discoverLocalAcpAgentInstances;
   const [discoveredGroups, managedGrokCommand] = await Promise.all([
-    discover({
-      ...(strategies !== undefined ? { strategies } : {}),
-      ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
-      ...(options?.env ? { env: options.env } : {}),
-      ...(options?.now ? { now: options.now } : {}),
-      ...(options?.listExecutables
-        ? { listExecutables: options.listExecutables }
-        : {}),
-      includeRejectedCandidates: true,
-    }),
+    discover(kitDiscoveryOptions(options, strategies)),
     resolveManagedGrokCommand(options, strategies),
   ]);
   const groups = await withPwrAgentGrok(
@@ -223,26 +206,9 @@ export async function discoverLocalAcpAgentRecords(
     options?.fallbackRootDir,
   );
 
-  const overrides: Record<string, string> = {};
-  for (const [registryId, pref] of Object.entries(preferences)) {
-    const override = pref.overridePath?.trim();
-    if (override) {
-      overrides[registryId] = override;
-    }
-  }
-
   const discover = options?.discover ?? discoverLocalAcpAgentInstances;
   const [discoveredGroups, managedGrokCommand] = await Promise.all([
-    discover({
-      ...(strategies !== undefined ? { strategies } : {}),
-      ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
-      ...(options?.env ? { env: options.env } : {}),
-      ...(options?.now ? { now: options.now } : {}),
-      ...(options?.listExecutables
-        ? { listExecutables: options.listExecutables }
-        : {}),
-      includeRejectedCandidates: true,
-    }),
+    discover(kitDiscoveryOptions(options, strategies)),
     resolveManagedGrokCommand(options, strategies),
   ]);
   const now = options?.now?.() ?? Date.now();
@@ -554,10 +520,38 @@ function rejectedAcpCandidateMessage(
   }
 }
 
+/**
+ * Builds the kit's options for both entry points, so an option added here
+ * reaches the record view and the per-registryId view together instead of
+ * silently diverging between them.
+ */
+function kitDiscoveryOptions(
+  options: DiscoverAcpAgentInstancesOptions | undefined,
+  strategies: readonly AcpAgentStrategy[],
+): LocalAcpDiscoveryOptions {
+  const overrides: Record<string, string> = {};
+  for (const [registryId, pref] of Object.entries(options?.preferences ?? {})) {
+    const override = pref.overridePath?.trim();
+    if (override) {
+      overrides[registryId] = override;
+    }
+  }
+  return {
+    strategies,
+    ...(Object.keys(overrides).length > 0 ? { overrides } : {}),
+    ...(options?.env ? { env: options.env } : {}),
+    ...(options?.now ? { now: options.now } : {}),
+    ...(options?.listExecutables
+      ? { listExecutables: options.listExecutables }
+      : {}),
+    includeRejectedCandidates: true,
+  };
+}
+
 function strategiesForEnabledRegistryIds(
   enabledRegistryIds: readonly string[] | undefined,
   fallbackRootDir: string | undefined,
-): readonly AcpAgentStrategy[] | undefined {
+): readonly AcpAgentStrategy[] {
   let strategies = ACP_DISCOVERY_STRATEGIES;
   if (enabledRegistryIds !== undefined) {
     const enabled = new Set(enabledRegistryIds);

@@ -2,7 +2,7 @@ import type { AcpPathExecutableLister } from "@pwrdrvr/agent-acp";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AcpAgentInstance, AcpBackendId } from "@pwragent/shared";
+import type { AcpBackendId } from "@pwragent/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AcpAgentStore } from "../acp/acp-agent-store";
 import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
@@ -14,6 +14,7 @@ import {
 } from "../acp/testing/executable-acp-agent-fixture";
 import { AcpBackendAdapter } from "../app-server/acp-backend-adapter";
 import { installedAcpAgentSettingsEntry } from "../ipc/settings";
+import { isPathWithin } from "../../shared/path-within";
 import { StateDb } from "../state/state-db";
 
 type ProviderCase = {
@@ -313,7 +314,15 @@ async function discoverSingleProvider(params: {
   if (!record) {
     throw new Error(`Fake ${params.registryId} executable was not discovered`);
   }
-  expectInstancesInside(params.rootDir, record.instances ?? []);
+  // Every bucket, not just `instances`: a real binary that discovery finds but
+  // then classifies as legacy or unverifiable lands in `incompatibleInstances`
+  // / `rejectedInstances`, which is exactly the escape this assertion exists to
+  // catch.
+  expectInstancesInside(params.rootDir, [
+    ...(record.instances ?? []),
+    ...(record.incompatibleInstances ?? []),
+    ...(record.rejectedInstances ?? []),
+  ]);
   return record;
 }
 
@@ -326,13 +335,15 @@ async function discoverSingleProvider(params: {
  */
 function fixtureListExecutables(rootDir: string): AcpPathExecutableLister {
   return (command, env) => {
-    if (command.includes(path.sep)) {
+    // Both separators, matching the kit's own lister: `path.sep` alone would
+    // treat "bin/qwen" as a bare name on Windows and join it onto every dir.
+    if (command.includes("/") || command.includes("\\")) {
       return [];
     }
     const found: string[] = [];
     for (const dir of (env.PATH ?? "").split(path.delimiter)) {
       const candidate = path.join(dir, command);
-      if (!isInside(rootDir, candidate)) {
+      if (!isPathWithin(rootDir, candidate)) {
         continue;
       }
       try {
@@ -350,23 +361,14 @@ function fixtureListExecutables(rootDir: string): AcpPathExecutableLister {
 
 function expectInstancesInside(
   rootDir: string,
-  instances: readonly AcpAgentInstance[],
+  instances: readonly { command: string }[],
 ): void {
   for (const instance of instances) {
     expect(
-      isInside(rootDir, instance.command),
+      isPathWithin(rootDir, instance.command),
       `discovered ${instance.command} outside the fixture root ${rootDir}`,
     ).toBe(true);
   }
-}
-
-function isInside(rootDir: string, candidate: string): boolean {
-  const relative = path.relative(rootDir, candidate);
-  return (
-    relative.length > 0
-    && !relative.startsWith("..")
-    && !path.isAbsolute(relative)
-  );
 }
 
 function fixtureDiscoveryEnv(
