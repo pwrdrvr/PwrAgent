@@ -100,8 +100,10 @@ describe("ToolOutputIncidentExplorerWindow", () => {
 
     // Gating happened, so the savings lens opens first rather than the
     // raw-output view: the question the operator has here is what it bought.
-    const savings = await screen.findByRole("tab", { name: /Savings/ });
-    expect(savings).toHaveAttribute("aria-selected", "true");
+    const savings = await screen.findByRole("tab", {
+      name: /Savings/,
+      selected: true,
+    });
     expect(savings).toHaveTextContent("18k avoided");
 
     expect(screen.getByText("Without the gate")).toBeInTheDocument();
