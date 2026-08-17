@@ -6,14 +6,19 @@ description: >-
   network-isolated self-hosted GitHub Actions lane for macOS/ARM64 E2E and
   visual-regression coverage. Use when a user mentions Tart, a local macOS VM,
   self-hosted macOS runners, E2E windows stealing focus, or PwrAgent visual
-  goldens.
-compatibility: >-
-  Apple Silicon Mac host with Homebrew, Tart, and an authenticated gh CLI.
-  Plan for about 80 GB free disk. The first softnet sudoers rule and the GitHub
-  Actions external-contributor setting require a human operator.
+  goldens. Do not use for Windows VM probes or Windows E2E.
 ---
 
 # PwrAgent macOS VM E2E lab
+
+This skill is macOS-only. For Windows work, read
+`.agents/skills/use-windows-vm-lab/SKILL.md` in the operator-selected
+PwrSuiteLab checkout.
+
+Use an Apple Silicon Mac host with Homebrew, Tart, and an authenticated `gh`
+CLI. Plan for approximately 80 GB of free disk. A human operator must configure
+the first softnet sudoers rule and the GitHub Actions external-contributor
+setting.
 
 ## What this provides
 
@@ -88,6 +93,17 @@ workspace/directory tools, PwrAgent Federation tools, or MCP resources to find
 an existing local PwrSuiteLab checkout; do not assume a pathname or clone,
 install, or provision it as part of a baseline update. If no checkout is
 discoverable, ask the operator for the appropriate lab pointer.
+
+After resolving the checkout, test its ignored configuration directly:
+
+```bash
+test -f "$suite_lab_root/local-config/macos-tart.sh"
+```
+
+Do not infer its absence from `rg --files`, `git ls-files`, or another
+worktree. Do not read, print, or copy the config. If the exact default is
+absent, ask for an existing config path only and set `PWRLAB_MACOS_CONFIG_FILE`
+for that invocation.
 
 ```bash
 suite_lab_root="<PwrSuiteLab checkout discovered with tools/MCP>"
