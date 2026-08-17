@@ -962,6 +962,30 @@ export type ThreadToolInvocationOutputState =
   | "truncated"
   | "unavailable";
 
+/**
+ * One observed context compaction.
+ *
+ * Compaction is the boundary that ends a preserved tool payload's replay life,
+ * and the first request after it re-sends the whole surviving context uncached.
+ * The replay fold already classifies that request as a cold replay, but a cold
+ * replay can equally be prompt-cache expiry or a long gap between turns — the
+ * `cold*` fields exist to name the ones compaction actually caused.
+ */
+export type ThreadCompactionRecord = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId?: string;
+  /** Compaction marker item, when the backend reports one. */
+  itemId?: string;
+  compactionId: string;
+  observedAt: number;
+  /** The first priced request observed after this compaction, once it lands. */
+  coldUsageLineId?: string;
+  coldUncachedTokens?: number;
+  coldCostMicros?: number;
+  updatedAt: number;
+};
+
 export type ThreadToolInvocationRecord = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
