@@ -502,6 +502,11 @@ function SettingsSectionBody(props: {
             experimental: { threadPricingDisplayCodexCredits: enabled },
           });
         }}
+        onTokenMiserEnabledChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            general: { tokenMiserEnabled: enabled },
+          });
+        }}
         onToolOutputAlertsChange={async (toolOutputAlerts) => {
           await props.settings.writeConfig({
             general: { toolOutputAlerts },

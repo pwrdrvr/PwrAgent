@@ -1482,6 +1482,10 @@ describe("App", () => {
           value: false,
           source: "default",
         },
+        tokenMiserEnabled: {
+          value: false,
+          source: "default",
+        },
         toolOutputAlerts: {
           outputCapHitsEnabled: { value: true, source: "config" },
           repeatedLargeOutputsEnabled: { value: true, source: "config" },

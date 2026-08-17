@@ -32,6 +32,15 @@ export type TokenMiserReadResult = {
   text: string;
 };
 
+export type TokenMiserUsageSummary = {
+  interceptionCount: number;
+  originalCharacters: number;
+  baselineParentTokens: number;
+  replacementTokens: number;
+  retrievedTokens: number;
+  estimatedParentTokensSaved: number;
+};
+
 export class TokenMiserStore {
   private readonly updateLocks = new Map<string, Promise<void>>();
 
@@ -114,14 +123,15 @@ export class TokenMiserStore {
       Math.min(lines.length, startLine + MAX_READ_LINES - 1),
     );
     const text = lines.slice(startLine - 1, endLine).join("\n");
-    await this.recordRetrieval(params.objectId, text.length);
-    return {
+    const result = {
       objectId: params.objectId,
       startLine,
       endLine,
       totalLines: lines.length,
       text,
     };
+    await this.recordRetrieval(params.objectId, JSON.stringify(result).length);
+    return result;
   }
 
   async readAll(params: {
@@ -133,14 +143,15 @@ export class TokenMiserStore {
       return undefined;
     }
     const lines = splitLines(stored.output);
-    await this.recordRetrieval(params.objectId, stored.output.length);
-    return {
+    const result = {
       objectId: params.objectId,
       startLine: 1,
       endLine: lines.length,
       totalLines: lines.length,
       text: stored.output,
     };
+    await this.recordRetrieval(params.objectId, JSON.stringify(result).length);
+    return result;
   }
 
   async search(params: {
@@ -167,21 +178,22 @@ export class TokenMiserStore {
         }
       }
     }
-    const returnedCharacters = matches.reduce(
-      (total, match) => total + match.text.length,
-      0,
-    );
-    await this.recordRetrieval(params.objectId, returnedCharacters);
-    return {
+    const result = {
       objectId: params.objectId,
       totalLines: lines.length,
       matches,
     };
+    await this.recordRetrieval(params.objectId, JSON.stringify(result).length);
+    return result;
   }
 
   async listMetadata(): Promise<TokenMiserObjectMetadata[]> {
-    await this.ensureRoot();
-    const entries = await fs.readdir(this.rootDir);
+    const entries = await fs.readdir(this.rootDir).catch((error: unknown) => {
+      if (isMissingFileError(error)) {
+        return [];
+      }
+      throw error;
+    });
     const metadata = await Promise.all(
       entries
         .filter((entry) => entry.endsWith(METADATA_SUFFIX))
@@ -190,6 +202,34 @@ export class TokenMiserStore {
     return metadata
       .filter((entry): entry is TokenMiserObjectMetadata => Boolean(entry))
       .sort((left, right) => right.createdAt - left.createdAt);
+  }
+
+  async summarizeUsage(): Promise<TokenMiserUsageSummary> {
+    const metadata = await this.listMetadata();
+    const baselineParentTokens = metadata.reduce(
+      (total, entry) => total + entry.baselineParentTokens,
+      0,
+    );
+    const replacementTokens = metadata.reduce(
+      (total, entry) => total + estimateTokenCount(entry.replacementCharacters),
+      0,
+    );
+    const retrievedTokens = metadata.reduce(
+      (total, entry) => total + estimateTokenCount(entry.retrievedCharacters),
+      0,
+    );
+    return {
+      interceptionCount: metadata.length,
+      originalCharacters: metadata.reduce(
+        (total, entry) => total + entry.originalCharacters,
+        0,
+      ),
+      baselineParentTokens,
+      replacementTokens,
+      retrievedTokens,
+      estimatedParentTokensSaved:
+        baselineParentTokens - replacementTokens - retrievedTokens,
+    };
   }
 
   async prune(params: {

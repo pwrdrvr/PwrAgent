@@ -34,6 +34,7 @@ import type {
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import { execFile } from "node:child_process";
+import path from "node:path";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
@@ -173,6 +174,7 @@ import {
   readEnvString,
   readEnvWorktreeStorage,
 } from "./desktop-settings-env";
+import { TokenMiserStore } from "../token-miser/token-miser-store";
 import {
   discoverCodexAuthProfiles,
   resolveCodexHomeForProfile,
@@ -594,12 +596,28 @@ export class DesktopSettingsService {
     const slackChannelUserAccessMode = this.resolveSlackChannelUserAccessMode(
       config.messaging?.slack?.channelUserAccessMode,
     );
+    const tokenMiserUsage = await new TokenMiserStore(
+      path.join(
+        path.dirname(this.configPath),
+        "state",
+        "token-miser",
+        "objects",
+      ),
+    ).summarizeUsage().catch(() => ({
+      interceptionCount: 0,
+      originalCharacters: 0,
+      baselineParentTokens: 0,
+      replacementTokens: 0,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+    }));
 
     return {
       fetchedAt: this.now(),
       configPath: this.configPath,
       configError: error,
       runtime: {
+        tokenMiser: tokenMiserUsage,
         messaging: {
           disabled: messagingOverride.disabled,
           overrideActive: messagingOverride.disabled,
@@ -654,6 +672,10 @@ export class DesktopSettingsService {
         ),
         notificationsEnabled: this.resolveConfigBoolean(
           config.general?.notificationsEnabled,
+          false,
+        ),
+        tokenMiserEnabled: this.resolveConfigBoolean(
+          config.general?.tokenMiserEnabled,
           false,
         ),
         toolOutputAlerts: {
@@ -1343,6 +1365,13 @@ export class DesktopSettingsService {
   resolveNotificationsEnabled(): boolean {
     return this.resolveConfigBoolean(
       this.readConfig().config.general?.notificationsEnabled,
+      false,
+    ).value;
+  }
+
+  resolveTokenMiserEnabled(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.general?.tokenMiserEnabled,
       false,
     ).value;
   }

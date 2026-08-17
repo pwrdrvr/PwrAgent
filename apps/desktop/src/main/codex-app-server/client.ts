@@ -8245,6 +8245,7 @@ export class CodexAppServerClient {
    */
   async generateStructuredObject(params: {
     model?: string;
+    reasoningEffort?: string;
     prompt: string;
     schema: Record<string, unknown>;
     system?: string;
@@ -8326,6 +8327,7 @@ export class CodexAppServerClient {
 
   private async runHelperStructuredTurn(params: {
     model?: string;
+    reasoningEffort?: string;
     prompt: string;
     schema: Record<string, unknown>;
     system?: string;
@@ -8340,6 +8342,8 @@ export class CodexAppServerClient {
     const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
     const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
     const helperModel = params.model?.trim() || DEFAULT_CODEX_THREAD_TITLE_MODEL;
+    const helperReasoningEffort =
+      normalizeCodexReasoningEffort(params.reasoningEffort) ?? "low";
     const helperSystem = params.system?.trim() || "";
     const protocolCompatibility = this.getProtocolCompatibility();
     try {
@@ -8439,7 +8443,7 @@ export class CodexAppServerClient {
               input: [{ type: "text", text: params.prompt, text_elements: [] }],
               model: helperModel,
               serviceTier: null,
-              reasoningEffort: "low",
+              reasoningEffort: helperReasoningEffort,
               outputSchema: params.schema as CodexTurnStartParams["outputSchema"],
             },
             protocolCompatibility,
@@ -8458,7 +8462,7 @@ export class CodexAppServerClient {
           helperThreadId,
           ...(helperTurnId ? { helperTurnId } : {}),
           model: helperModel,
-          reasoningEffort: "low",
+          reasoningEffort: helperReasoningEffort,
           ...(tokenUsage !== undefined ? { tokenUsage } : {}),
         };
       }
@@ -8482,7 +8486,7 @@ export class CodexAppServerClient {
         helperThreadId,
         helperTurnId,
         model: helperModel,
-        reasoningEffort: "low",
+        reasoningEffort: helperReasoningEffort,
         ...(helperResult.tokenUsage !== undefined
           ? { tokenUsage: helperResult.tokenUsage }
           : {}),

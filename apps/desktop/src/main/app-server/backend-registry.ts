@@ -26,6 +26,7 @@ import {
   findLiveProfileRuntimeMarkers,
   getProcessRuntimeIdentity,
   resolveActiveProfileName,
+  resolveActiveProfilePath,
 } from "../profile";
 import {
   getAppStateDb,
@@ -421,6 +422,16 @@ import type { MessagingAgentToolService } from "../messaging/messaging-agent-too
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import {
+  AgentToolRouter,
+  readAgentDynamicToolCall,
+  toDynamicToolResponse,
+} from "../agent-tools/agent-tool-router";
+import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
+import { TokenMiserHookBridge } from "../token-miser/token-miser-hook-bridge";
+import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
+import { TokenMiserService } from "../token-miser/token-miser-service";
+import { TokenMiserStore } from "../token-miser/token-miser-store";
+import {
   AgentToolMcpServer,
   type AgentToolMcpClientContext,
   type AgentToolMcpRegistration,
@@ -473,6 +484,7 @@ import { analyzeNormalizedToolReplay } from "./tool-output-replay-analyzer";
 import { detectUsageSpendAlerts } from "./usage-spend-alerts";
 import {
   ThreadTitleGenerationService,
+  type ThreadTitleAdapterResult,
   type ThreadTitleGenerator,
   type ThreadTitleGenerationResult,
 } from "./thread-title-generation-service";
@@ -665,6 +677,7 @@ type BackendClient = {
   generateTitle?: ThreadTitleGenerator["generateTitle"];
   generateStructuredObject?(params: {
     model?: string;
+    reasoningEffort?: string;
     prompt: string;
     schema: Record<string, unknown>;
     system?: string;
@@ -7277,6 +7290,7 @@ export class DesktopBackendRegistry {
   >;
   private readonly resolveCodexFastAllowedFn: () => boolean;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
+  private readonly resolveTokenMiserEnabledFn: () => boolean;
   private readonly resolveSpendAlertPolicyFn: () => DesktopSpendAlertPolicy;
   private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
   private spendAlertPolicy = DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
@@ -7284,6 +7298,9 @@ export class DesktopBackendRegistry {
   private readonly localFilePrivateStorageRoots: readonly string[];
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
   private readonly pdfToolMcpServer?: AgentToolMcpServerLike;
+  private readonly tokenMiserStore?: TokenMiserStore;
+  private readonly tokenMiserHookBridge?: TokenMiserHookBridge;
+  private readonly tokenMiserPluginManager?: TokenMiserPluginManager;
   private readonly mcpConnectionService?: Pick<
     PwrSnapConnectionService,
     "registerBridge"
@@ -7483,6 +7500,18 @@ export class DesktopBackendRegistry {
           return true;
         }
       });
+    this.resolveTokenMiserEnabledFn = () => {
+      try {
+        return (
+          settingsService ?? getDesktopSettingsService()
+        ).resolveTokenMiserEnabled();
+      } catch (error) {
+        backendRegistryLog.warn("failed to resolve Token Miser setting", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return false;
+      }
+    };
     this.resolveToolOutputAlertPolicyFn =
       options?.resolveToolOutputAlertPolicy ??
       (() => {
@@ -7527,6 +7556,9 @@ export class DesktopBackendRegistry {
         settingsService.onConfigWritten(() => {
           this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
           this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
+          if (this.resolveTokenMiserEnabledFn()) {
+            void this.prepareTokenMiserRuntime();
+          }
         }),
       );
     }
@@ -7573,6 +7605,40 @@ export class DesktopBackendRegistry {
         // surfaces as `available: false` with a clean reason.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
+    if (createsLiveCodexClient && isAppStateInitialized()) {
+      const tokenMiserStateDir = resolveActiveProfilePath("state/token-miser");
+      this.tokenMiserStore = new TokenMiserStore(
+        path.join(tokenMiserStateDir, "objects"),
+      );
+      const tokenMiserService = new TokenMiserService({
+        store: this.tokenMiserStore,
+        isEnabled: () => this.resolveTokenMiserEnabledFn(),
+        generateSummary: async (params) => {
+          if (!this.codexClient.generateStructuredObject) {
+            return {
+              status: "unavailable",
+              reason: "codex_structured_generation_unavailable",
+            };
+          }
+          return await this.codexClient.generateStructuredObject({
+            ...params,
+            isMatch: (record) =>
+              typeof record.summary === "string"
+              && Array.isArray(record.usefulDetails)
+              && typeof record.suggestedNextStep === "string",
+          });
+        },
+      });
+      this.tokenMiserHookBridge = new TokenMiserHookBridge({
+        stateDir: tokenMiserStateDir,
+        service: tokenMiserService,
+      });
+      this.tokenMiserPluginManager = new TokenMiserPluginManager({
+        stateDir: tokenMiserStateDir,
+        executablePath: process.execPath,
+        hookEntryPath: path.join(__dirname, "token-miser-hook.js"),
+      });
+    }
     this.acpWorktreeRepositoryResolver =
       options?.acpWorktreeRepositoryResolver ??
       resolveWorktreeRepositoryDirectory;
@@ -7618,6 +7684,7 @@ export class DesktopBackendRegistry {
                   await this.handleAgentTaskMonitorRequest(request),
                 threadInspectionHandler: this.threadInspectionHandler,
                 threadOrchestrationHandler: this.threadOrchestrationHandler,
+                tokenMiserStore: this.tokenMiserStore,
               }, { taskMonitorRole: "all" }),
             authorizeToolCall: (params) =>
               this.authorizeAgentToolMcpCall(params),
@@ -11707,6 +11774,9 @@ export class DesktopBackendRegistry {
       executionMode: effectiveExecutionMode,
       runtime: acpRuntimeWithModel,
     });
+    if (backend === "codex" && this.resolveTokenMiserEnabledFn()) {
+      await this.prepareTokenMiserRuntime();
+    }
     const agentToolCatalogs = resolveAgentToolCatalogs({
       appManagementHandler: this.appManagementHandler,
       automationInspectionHandler: this.automationInspectionHandler,
@@ -11716,6 +11786,7 @@ export class DesktopBackendRegistry {
         await this.handleAgentTaskMonitorRequest(request),
       threadInspectionHandler: this.threadInspectionHandler,
       threadOrchestrationHandler: this.threadOrchestrationHandler,
+      tokenMiserStore: this.tokenMiserStore,
     });
     const pdfMcpRegistration =
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
@@ -18561,6 +18632,10 @@ export class DesktopBackendRegistry {
       },
       { name: "pdf-mcp", close: () => this.pdfToolMcpServer?.close() },
       {
+        name: "token-miser-hook-bridge",
+        close: () => this.tokenMiserHookBridge?.close(),
+      },
+      {
         name: "codex",
         close: async () => {
           try {
@@ -18653,14 +18728,13 @@ export class DesktopBackendRegistry {
   async generateStructuredObject(params: {
     backend?: "codex";
     model?: string;
+    reasoningEffort?: string;
     system: string;
     prompt: string;
     schema: Record<string, unknown>;
     schemaName?: string;
     timeoutMs?: number;
-  }): Promise<
-    { status: "ok"; object: unknown } | { status: "unavailable" | "failed"; reason: string }
-  > {
+  }): Promise<ThreadTitleAdapterResult> {
     const defaults = await this.overlayStore.getLaunchpadDefaults();
     const backend = params.backend === "codex"
       ? (await this.listBackends({ includeUnavailable: true })).backends.find(
@@ -18677,6 +18751,7 @@ export class DesktopBackendRegistry {
       return await this.codexClient.generateStructuredObject({
         system: params.system,
         model: params.model,
+        reasoningEffort: params.reasoningEffort,
         prompt: params.prompt,
         schema: params.schema,
         isMatch: (record) =>
@@ -18691,6 +18766,30 @@ export class DesktopBackendRegistry {
       status: "unavailable",
       reason: `${params.backend ?? backend?.kind ?? "backend"}_structured_generation_unavailable`,
     };
+  }
+
+  private async prepareTokenMiserRuntime(): Promise<void> {
+    if (
+      !this.tokenMiserStore
+      || !this.tokenMiserHookBridge
+      || !this.tokenMiserPluginManager
+    ) {
+      return;
+    }
+    try {
+      await Promise.all([
+        this.tokenMiserHookBridge.start(),
+        this.tokenMiserPluginManager.ensurePluginSource(),
+        this.tokenMiserStore.prune({
+          maxAgeMs: 7 * 24 * 60 * 60 * 1_000,
+          maxBytes: 512 * 1024 * 1024,
+        }),
+      ]);
+    } catch (error) {
+      backendRegistryLog.warn("Token Miser runtime preparation failed open", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async resolveLaunchpadBackend(
@@ -25375,6 +25474,31 @@ export class DesktopBackendRegistry {
         });
         return { decision: "approve" };
       }
+    }
+
+    const tokenMiserCall = readAgentDynamicToolCall({
+      method: request.method,
+      params: request.params,
+    });
+    const tokenMiserRouter = new AgentToolRouter(
+      buildTokenMiserToolDefinitions(this.tokenMiserStore),
+    );
+    if (
+      tokenMiserCall
+      && tokenMiserRouter.acceptsDynamicToolCall(tokenMiserCall)
+    ) {
+      if (!this.isLiveDynamicToolCall(backend, tokenMiserCall)) {
+        return toDynamicToolResponse({
+          ok: false,
+          code: "forbidden",
+          message:
+            "Token Miser retrieval must originate from an active turn on the owning thread.",
+        });
+      }
+      return await tokenMiserRouter.handleDynamicToolCall({
+        backend,
+        call: tokenMiserCall,
+      });
     }
 
     const dynamicToolCall = readAutomationInspectionDynamicToolCall({

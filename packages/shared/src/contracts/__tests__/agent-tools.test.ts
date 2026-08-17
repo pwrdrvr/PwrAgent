@@ -20,6 +20,7 @@ describe("agent tool contracts", () => {
       "messaging_context",
       "thread_orchestration",
       "federation",
+      "token_miser",
     ]);
     expect(isAgentToolCatalogId("automation_inspection")).toBe(true);
     expect(isAgentToolCatalogId("app_management")).toBe(true);
@@ -27,6 +28,7 @@ describe("agent tool contracts", () => {
     expect(isAgentToolCatalogId("messaging_context")).toBe(true);
     expect(isAgentToolCatalogId("thread_orchestration")).toBe(true);
     expect(isAgentToolCatalogId("federation")).toBe(true);
+    expect(isAgentToolCatalogId("token_miser")).toBe(true);
     expect(isAgentToolCatalogId("shell")).toBe(false);
   });
 
