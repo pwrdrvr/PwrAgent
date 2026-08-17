@@ -17,8 +17,8 @@ describe("TokenMiserHookBridge", () => {
       path.join(os.tmpdir(), "pwragent-token-miser-bridge-"),
     );
     const handlePostToolUse = vi.fn(async () => ({
-      decision: "block" as const,
-      reason: "replacement",
+      continue: false as const,
+      stopReason: "replacement",
       hookSpecificOutput: {
         hookEventName: "PostToolUse" as const,
         additionalContext: "replacement",
@@ -48,8 +48,8 @@ describe("TokenMiserHookBridge", () => {
     expect(authorized.status).toBe(200);
     expect(await authorized.json()).toEqual({
       hookOutput: {
-        decision: "block",
-        reason: "replacement",
+        continue: false,
+        stopReason: "replacement",
         hookSpecificOutput: {
           hookEventName: "PostToolUse",
           additionalContext: "replacement",

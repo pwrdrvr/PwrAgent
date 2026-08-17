@@ -39,9 +39,9 @@ describe("TokenMiserService", () => {
 
     const result = await service.handlePostToolUse(payload("1\n2\n3\n4000"));
 
-    expect(result?.decision).toBe("block");
-    expect(result?.reason).toContain("Token Miser intercepted");
-    expect(result?.reason).toContain("pwragent.read_token_miser_output");
+    expect(result?.continue).toBe(false);
+    expect(result?.stopReason).toContain("Token Miser intercepted");
+    expect(result?.stopReason).toContain("pwragent.read_token_miser_output");
     expect(generateSummary).toHaveBeenCalledWith(
       expect.objectContaining({
         model: "gpt-5.6-luna",
@@ -59,7 +59,7 @@ describe("TokenMiserService", () => {
         reasoningEffort: "medium",
       },
     });
-    expect(result?.reason).toContain(metadata!.objectId);
+    expect(result?.stopReason).toContain(metadata!.objectId);
   });
 
   it("fails open for disabled, small, and failed-summary output", async () => {

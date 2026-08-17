@@ -1047,11 +1047,22 @@ export type ThreadToolAnalysisCoverage = {
   explanation?: string;
 };
 
+export type ThreadTokenMiserAccounting = {
+  interceptionCount: number;
+  originalCharacters: number;
+  baselineParentTokens: number;
+  replacementTokens: number;
+  retrievedTokens: number;
+  estimatedParentTokensSaved: number;
+};
+
 export type ThreadToolAccounting = {
   analysis?: ThreadToolAnalysisCoverage;
   alerts: ThreadToolInvocationAlert[];
   invocations: ThreadToolInvocationRecord[];
   summaries: ThreadToolInvocationSummary[];
+  /** Actual Token Miser gate activity for this thread, not raw-output risk. */
+  tokenMiser?: ThreadTokenMiserAccounting;
 };
 
 export type PersistThreadUsageActivityRequest = {

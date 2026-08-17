@@ -64,6 +64,13 @@ describe("TokenMiserStore", () => {
       (await store.readMetadata(metadata.objectId))?.retrievedCharacters,
     ).toBeGreaterThan("needle one".length + "needle two".length);
     expect((await store.summarizeUsage()).retrievedTokens).toBeGreaterThan(0);
+    expect((await store.summarizeUsage({ threadId: "thread-owner" })))
+      .toMatchObject({ interceptionCount: 1 });
+    expect((await store.summarizeUsage({ threadId: "thread-other" })))
+      .toMatchObject({
+        interceptionCount: 0,
+        estimatedParentTokensSaved: 0,
+      });
   });
 
   it("prunes expired and over-budget outputs oldest first", async () => {

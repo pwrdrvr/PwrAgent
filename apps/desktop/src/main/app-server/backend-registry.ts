@@ -266,6 +266,7 @@ import {
   type ThreadOverlayState,
   type ThreadWorkspaceHandoffStrategy,
   type ThreadSubAgentSummary,
+  type ThreadToolAccounting,
   type ThreadToolInvocationAlert,
   type ThreadToolInvocationRecord,
   type ThreadUsageLineRecord,
@@ -7301,6 +7302,10 @@ export class DesktopBackendRegistry {
   private readonly tokenMiserStore?: TokenMiserStore;
   private readonly tokenMiserHookBridge?: TokenMiserHookBridge;
   private readonly tokenMiserPluginManager?: TokenMiserPluginManager;
+  private readonly resolveTokenMiserCodexRuntimeFn?: () => Promise<{
+    codexCommand: string;
+    codexEnv: NodeJS.ProcessEnv;
+  }>;
   private readonly mcpConnectionService?: Pick<
     PwrSnapConnectionService,
     "registerBridge"
@@ -7567,6 +7572,21 @@ export class DesktopBackendRegistry {
       typeof settingsService?.resolveCodexSpawnEnv === "function"
         ? settingsService.resolveCodexSpawnEnv()
         : undefined;
+    this.resolveTokenMiserCodexRuntimeFn = settingsService
+      ? async () => {
+          const [resolvedCommand, resolvedEnv] = await Promise.all([
+            settingsService.resolveCodexCommand(),
+            settingsService.resolveCodexSpawnEnvAsync(),
+          ]);
+          return {
+            codexCommand: resolvedCommand.command,
+            codexEnv: resolvedEnv,
+          };
+        }
+      : async () => ({
+          codexCommand: codexCommand ?? "codex",
+          codexEnv: codexEnv ?? process.env,
+        });
     this.codexEnvironmentCommandEnv = codexEnv;
     this.codexEnvironmentCommandRunner = options?.codexEnvironmentCommandRunner;
     this.codexEnvironmentHydrationStore =
@@ -9425,7 +9445,7 @@ export class DesktopBackendRegistry {
     // ACP thread that read lands as the turn ends, which is why the Pricing
     // Tool calls tab used to appear during a turn and vanish
     // the moment it finished.
-    const toolAccounting =
+    const storedToolAccounting =
       typeof this.overlayStore.readThreadToolAccounting === "function"
         ? await this.overlayStore.readThreadToolAccounting({
             backend,
@@ -9435,6 +9455,13 @@ export class DesktopBackendRegistry {
             threadId: request.threadId,
           })
         : undefined;
+    const toolAccounting = storedToolAccounting
+      ? await this.withTokenMiserAccounting({
+          accounting: storedToolAccounting,
+          backend,
+          threadId: request.threadId,
+        })
+      : undefined;
     const pendingRequest = this.pendingServerRequestForThread({
       backend,
       threadId: request.threadId,
@@ -11201,7 +11228,7 @@ export class DesktopBackendRegistry {
             threadId: request.threadId,
           })
         : { lines: [], summaries: [] };
-    const toolAccounting =
+    const storedToolAccounting =
       typeof this.overlayStore.readThreadToolAccounting === "function"
         ? await this.overlayStore.readThreadToolAccounting({
             backend,
@@ -11211,6 +11238,13 @@ export class DesktopBackendRegistry {
             threadId: request.threadId,
           })
         : undefined;
+    const toolAccounting = storedToolAccounting
+      ? await this.withTokenMiserAccounting({
+          accounting: storedToolAccounting,
+          backend,
+          threadId: request.threadId,
+        })
+      : undefined;
     const pendingRequest = this.pendingServerRequestForThread({
       backend,
       threadId: request.threadId,
@@ -11301,9 +11335,14 @@ export class DesktopBackendRegistry {
     });
     const persistMs = Math.round(performance.now() - persistStartedAt);
     const readbackStartedAt = performance.now();
-    const accounting = await this.overlayStore.readThreadToolAccounting({
+    const storedAccounting = await this.overlayStore.readThreadToolAccounting({
       backend: request.backend,
       includeAllInvocations: true,
+      threadId: request.threadId,
+    });
+    const accounting = await this.withTokenMiserAccounting({
+      accounting: storedAccounting,
+      backend: request.backend,
       threadId: request.threadId,
     });
     const readbackMs = Math.round(performance.now() - readbackStartedAt);
@@ -11483,6 +11522,30 @@ export class DesktopBackendRegistry {
         },
       },
     });
+  }
+
+  private async withTokenMiserAccounting(params: {
+    accounting: ThreadToolAccounting;
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadToolAccounting> {
+    if (params.backend !== "codex" || !this.tokenMiserStore) {
+      return params.accounting;
+    }
+    try {
+      return {
+        ...params.accounting,
+        tokenMiser: await this.tokenMiserStore.summarizeUsage({
+          threadId: params.threadId,
+        }),
+      };
+    } catch (error) {
+      backendRegistryLog.warn("failed to read Token Miser thread accounting", {
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId,
+      });
+      return params.accounting;
+    }
   }
 
   /**
@@ -18777,9 +18840,12 @@ export class DesktopBackendRegistry {
       return;
     }
     try {
+      const codexRuntime = await this.resolveTokenMiserCodexRuntimeFn?.();
       await Promise.all([
         this.tokenMiserHookBridge.start(),
-        this.tokenMiserPluginManager.ensurePluginSource(),
+        codexRuntime
+          ? this.tokenMiserPluginManager.ensureInstalled(codexRuntime)
+          : this.tokenMiserPluginManager.ensurePluginSource(),
         this.tokenMiserStore.prune({
           maxAgeMs: 7 * 24 * 60 * 60 * 1_000,
           maxBytes: 512 * 1024 * 1024,

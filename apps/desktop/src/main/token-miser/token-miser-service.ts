@@ -121,8 +121,8 @@ export class TokenMiserService {
     });
 
     return {
-      decision: "block",
-      reason: replacement,
+      continue: false,
+      stopReason: replacement,
       hookSpecificOutput: {
         hookEventName: "PostToolUse",
         additionalContext: replacement,
