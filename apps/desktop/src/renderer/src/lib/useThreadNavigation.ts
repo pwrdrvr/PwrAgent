@@ -4773,8 +4773,8 @@ export function useThreadNavigation(
       delete next[ROOT_NEW_THREAD_WORKSPACE_LAUNCHPAD_KEY];
       const canonicalLaunchpad =
         current[canonicalWorkspace.key]
-        ?? canonicalWorkspace.launchpad
-        ?? fallbackLaunchpad;
+        ?? fallbackLaunchpad
+        ?? canonicalWorkspace.launchpad;
       next[canonicalWorkspace.key] = {
         ...canonicalLaunchpad,
         directoryKey: canonicalWorkspace.key,

@@ -6950,7 +6950,7 @@ describe("useThreadNavigation", () => {
     });
   });
 
-  it("rebases a loading fallback launchpad onto the remote workspace without duplicating it", async () => {
+  it("rebases a loading fallback launchpad without duplicating it or losing viewer input", async () => {
     const federationTarget = {
       scope: "remote" as const,
       instanceId: "owner-mini",
@@ -6975,6 +6975,19 @@ describe("useThreadNavigation", () => {
         threadKeys: ["codex:scratch-thread"],
         needsAttentionCount: 1,
         pinnedRank: "6144",
+        launchpad: {
+          directoryKey: workspaceKey,
+          directoryKind: "workspace",
+          directoryLabel: "Workspaces",
+          directoryPath: "/Users/test/.pwragent/profiles/default/projects",
+          backend: "codex",
+          executionMode: "default",
+          model: "owner-model",
+          prompt: "Owner snapshot draft",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 1,
+        },
       }],
       launchpadDefaults: {
         backend: "codex",
@@ -6987,7 +7000,8 @@ describe("useThreadNavigation", () => {
       directoryLabel: "Workspaces",
       backend: "codex",
       executionMode: "default",
-      prompt: "",
+      model: "viewer-model",
+      prompt: "Viewer unsent draft",
       workMode: "local",
       createdAt: 1,
       updatedAt: 2,
@@ -7041,6 +7055,8 @@ describe("useThreadNavigation", () => {
         launchpad: {
           directoryKey: workspaceKey,
           directoryPath: "/Users/test/.pwragent/profiles/default/projects",
+          model: "viewer-model",
+          prompt: "Viewer unsent draft",
         },
       });
       expect(result.current.selectedItemKey).toBe(`launchpad:${workspaceKey}`);
