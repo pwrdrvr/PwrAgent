@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.2-prerelease.2 - 2026-08-17
+
+- Updates - Added Stable and Beta update channels, each with Latest and Prerelease tracks. Stable installs stay insulated from 1.1 alpha and beta builds unless you opt into Beta.
+- Grok Usage - Added accurate Grok 4.6 usage pricing, including `grok-4.6`, Build, and Latest variants across context sizes. Existing unpriced recent usage is repaired safely when it can be priced confidently.
+- Windows Environment Actions - Improved child-process ownership and shutdown, preventing action workspaces from being removed before launched Windows processes have exited.
+- Windows Appearance - Windows title bars and auxiliary windows now follow the system light/dark appearance when PwrAgent uses the System theme.
+- Directories and Thread Controls - Tightened directory/thread spacing, preserved keyboard-focus clearance, and refined thread-row action alignment and menu iconography.
+
 ## v1.0.2-prerelease.1 - 2026-08-16
 
 - Updates - Added Stable and Beta update channels, each with Latest and Prerelease tracks. Stable installs stay insulated from 1.1 alpha and beta builds unless you opt into Beta.
