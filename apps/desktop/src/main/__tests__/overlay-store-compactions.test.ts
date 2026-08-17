@@ -86,7 +86,7 @@ describe("SqliteOverlayStore — compaction markers", () => {
       threadId: "thread-1",
     })).toHaveLength(1);
     expect(await store.listThreadCompactions({
-      backend: "claude",
+      backend: "acp:claude",
       threadId: "thread-1",
     })).toHaveLength(0);
   });
@@ -104,6 +104,7 @@ describe("SqliteOverlayStore — compaction markers", () => {
     expect(await store.attributeThreadCompactionColdReplay({
       backend: "codex",
       costMicros: 680_000,
+      observedAt: 2400,
       threadId: "thread-1",
       uncachedTokens: 135_236,
       usageLineId: "usage-1",
@@ -122,11 +123,63 @@ describe("SqliteOverlayStore — compaction markers", () => {
     expect(compactions[0]?.coldUsageLineId).toBeUndefined();
   });
 
+  // Usage lines are re-emitted carrying the same cumulative tally. Without the
+  // idempotency guard the second emission would walk backwards and credit the
+  // earlier compaction with a cold replay that belongs to the later one.
+  it("does not re-credit an older marker when the same usage line repeats", async () => {
+    await store.recordThreadCompaction({ compaction: buildCompaction() });
+    await store.recordThreadCompaction({
+      compaction: buildCompaction({
+        compactionId: "codex:thread-1:item-2",
+        itemId: "item-2",
+        observedAt: 2000,
+      }),
+    });
+    const attribution = {
+      backend: "codex",
+      costMicros: 680_000,
+      observedAt: 2400,
+      threadId: "thread-1",
+      uncachedTokens: 135_236,
+      usageLineId: "usage-1",
+      updatedAt: 2500,
+    } as const;
+
+    expect(await store.attributeThreadCompactionColdReplay(attribution)).toBe(true);
+    expect(await store.attributeThreadCompactionColdReplay(attribution)).toBe(false);
+
+    const compactions = await store.listThreadCompactions({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(compactions[0]?.coldUsageLineId).toBeUndefined();
+    expect(compactions[1]?.coldUsageLineId).toBe("usage-1");
+  });
+
+  // A cold replay observed before any compaction is prompt-cache expiry or a
+  // long gap, not a compaction cost — it must not claim a later marker.
+  it("does not attribute a cold replay that precedes the compaction", async () => {
+    await store.recordThreadCompaction({
+      compaction: buildCompaction({ observedAt: 5000 }),
+    });
+
+    expect(await store.attributeThreadCompactionColdReplay({
+      backend: "codex",
+      costMicros: 100,
+      observedAt: 4000,
+      threadId: "thread-1",
+      uncachedTokens: 100,
+      usageLineId: "usage-early",
+      updatedAt: 4100,
+    })).toBe(false);
+  });
+
   it("reports no attribution when every marker already has one", async () => {
     await store.recordThreadCompaction({ compaction: buildCompaction() });
     await store.attributeThreadCompactionColdReplay({
       backend: "codex",
       costMicros: 1,
+      observedAt: 1400,
       threadId: "thread-1",
       uncachedTokens: 1,
       usageLineId: "usage-1",
@@ -136,6 +189,7 @@ describe("SqliteOverlayStore — compaction markers", () => {
     expect(await store.attributeThreadCompactionColdReplay({
       backend: "codex",
       costMicros: 2,
+      observedAt: 2400,
       threadId: "thread-1",
       uncachedTokens: 2,
       usageLineId: "usage-2",
