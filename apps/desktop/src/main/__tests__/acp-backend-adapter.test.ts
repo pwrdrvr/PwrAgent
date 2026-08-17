@@ -3938,8 +3938,15 @@ describe("AcpBackendAdapter", () => {
   });
 });
 
+/**
+ * `discoverLocalAcpAgents` is required on the adapter so no caller inherits
+ * machine-wide discovery by omission; it stays optional here so this helper can
+ * keep supplying the inert default a test wants by default.
+ */
 function createTestAcpBackendAdapter(
-  options: AcpBackendAdapterOptions,
+  options:
+    Omit<AcpBackendAdapterOptions, "discoverLocalAcpAgents">
+    & Partial<Pick<AcpBackendAdapterOptions, "discoverLocalAcpAgents">>,
 ): AcpBackendAdapter {
   return new AcpBackendAdapter({
     discoverLocalAcpAgents: async () => [],
