@@ -2631,6 +2631,105 @@ describe("App", () => {
     expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves replay fixture navigation instead of opening the startup composer", async () => {
+    const ensureDirectoryLaunchpad = vi.fn();
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        replayFixtureActive: true,
+        readSettings: async () => ({
+          snapshot: {
+            general: {
+              appearance: {
+                theme: { value: "system", source: "default" },
+                density: { value: "mission-control", source: "default" },
+                sidebarTextSize: { value: "md", source: "default" },
+                transcriptTextSize: { value: "md", source: "default" },
+              },
+            },
+            onboarding: {
+              completed: { value: true, source: "config" },
+              completedSource: { value: "migrated", source: "default" },
+            },
+            imageUploads: {
+              pastedImageMaxPatches: { value: 1536, source: "default" },
+            },
+            experimental: {
+              fullAccessRiskWarningDismissed: {
+                value: false,
+                source: "default",
+              },
+            },
+          } as DesktopSettingsSnapshot,
+        }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: [
+            {
+              kind: "codex" as const,
+              source: "codex" as const,
+              label: "Codex",
+              available: true,
+              methods: ["thread/start", "turn/start"],
+              capabilities: {
+                listThreads: true,
+                createThread: true,
+                resumeThread: true,
+                renameThread: true,
+                readThread: true,
+                startTurn: true,
+                interruptTurn: true,
+                steerTurn: true,
+                transcriptPagination: true,
+                toolUse: true,
+                approvalRequests: true,
+                multiDirectoryThreads: true,
+              },
+              executionModes: [],
+            },
+          ],
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: ["codex:thread-replay"],
+          threads: [
+            {
+              id: "thread-replay",
+              title: "Existing replay thread",
+              titleSource: "explicit" as const,
+              source: "codex" as const,
+              linkedDirectories: [],
+              inbox: {
+                inInbox: true,
+                reason: "new-thread" as const,
+              },
+              updatedAt: 1,
+            },
+          ],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        ensureDirectoryLaunchpad,
+        onAgentEvent: () => () => undefined,
+      },
+    });
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("button", { name: "Existing replay thread" }),
+    ).toBeInTheDocument();
+    await flushReactUpdates();
+    expect(screen.queryByRole("textbox", { name: "New thread" })).not.toBeInTheDocument();
+    expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
+  });
+
   it("reopens onboarding on startup when no backend can create a thread", async () => {
     const ensureDirectoryLaunchpad = vi.fn();
 

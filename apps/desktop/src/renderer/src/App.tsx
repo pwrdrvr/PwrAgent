@@ -1716,6 +1716,7 @@ function DesktopAppShell(props: {
       settings.snapshot?.onboarding?.completed.value !== true
       || onboardingOpen !== null
       || Boolean(readRendererFederationTarget())
+      || desktopApi?.replayFixtureActive === true
       || !navigation.loaded
       || !backendSummaries.loaded
       || !desktopApi?.listBackends
