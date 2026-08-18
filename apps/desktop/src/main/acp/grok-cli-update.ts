@@ -2,6 +2,7 @@ import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
 import type { AcpAgentUpdateStatus } from "@pwragent/shared";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env.js";
+import type { AcpInstalledAgentRecord } from "./acp-registry-types.js";
 
 const execFile = promisify(execFileCallback);
 
@@ -23,6 +24,20 @@ type GrokUpdateCheckJson = {
 export type GrokCliUpdateProbe = (
   command: string,
 ) => Promise<{ stdout?: string; stderr?: string }>;
+
+/**
+ * Whether this record's active runtime is a PwrAgent-supplied Grok build
+ * (managed download or app bundle). Discovery stamps `GROK_INSTALLER=pwragent`
+ * on the launch descriptor when the resolved active command is one of those,
+ * and that stamp is the single marker every update-status path keys on: the
+ * vendor updater follows a different channel, so its result must never run
+ * against, decorate, or survive on a PwrAgent-owned runtime.
+ */
+export function isPwrAgentOwnedGrokRuntime(
+  record: Pick<AcpInstalledAgentRecord, "launchDescriptor">,
+): boolean {
+  return record.launchDescriptor?.env?.GROK_INSTALLER === "pwragent";
+}
 
 export function shouldCheckGrokCliUpdate(params: {
   command: string;

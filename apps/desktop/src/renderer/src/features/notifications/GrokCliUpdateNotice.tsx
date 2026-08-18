@@ -99,6 +99,13 @@ export function buildGrokCliUpdateNotice(params: {
     || !update.latestVersion
     || update.dismissedAt !== undefined
     || (update.snoozedUntil ?? 0) > params.now
+    // The notice is durable (`autoDismiss: false`), so a status that no longer
+    // describes the runtime in effect would sit on screen until the operator
+    // clicked it. Show it only for a vendor install whose installed version
+    // still matches the version the check ran against.
+    || params.entry.pwrAgentManagedRuntime === true
+    || (params.entry.version !== undefined
+      && params.entry.version !== update.currentVersion)
   ) {
     return undefined;
   }

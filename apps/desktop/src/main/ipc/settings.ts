@@ -91,6 +91,7 @@ import { discoverLocalAcpAgentRecords } from "../acp/acp-instance-discovery";
 import { discoverAcpRuntimeCapabilities } from "../acp/acp-runtime-discovery";
 import { shouldReprobeAcpCapabilities } from "../acp/acp-capability-freshness";
 import { describeDistributionSource } from "../acp/acp-install-provenance";
+import { isPwrAgentOwnedGrokRuntime } from "../acp/grok-cli-update";
 import { selectAcpDistributionForCurrentPlatform } from "../acp/acp-platform-distribution";
 import { AcpRegistryService } from "../acp/acp-registry-service";
 import type {
@@ -510,8 +511,7 @@ async function listInstalledAndLocalAcpAgents(
           current?.version !== undefined
           && record.version !== undefined
           && current.version !== record.version;
-        const pwrAgentOwnedGrok =
-          record.launchDescriptor?.env?.GROK_INSTALLER === "pwragent";
+        const pwrAgentOwnedGrok = isPwrAgentOwnedGrokRuntime(record);
         const nextRecord = {
           ...record,
           runtimeCapabilities: runtimeVersionChanged
@@ -708,6 +708,11 @@ export function installedAcpAgentSettingsEntry(
   registryAgent?: AcpRegistryAgent,
 ): AcpAgentSettingsEntry {
   const agent = registryAgent ?? record.registryAgent;
+  // Reads without a discovery pass (`refresh: false`) serve the durable record
+  // as-is, so a vendor update status written while a vendor binary was active
+  // would still reach the renderer after the PwrAgent build became the runtime.
+  // Drop it at the boundary: the runtime in effect owns the update story.
+  const pwrAgentOwnedGrok = isPwrAgentOwnedGrokRuntime(record);
   return {
     backendId: record.backendId,
     registryId: record.registryId,
@@ -732,7 +737,8 @@ export function installedAcpAgentSettingsEntry(
     lastDiscoveredAt: record.lastDiscoveredAt,
     lastDiscoveryError: record.lastDiscoveryError,
     runtime: record.runtimeCapabilities,
-    update: record.update,
+    update: pwrAgentOwnedGrok ? undefined : record.update,
+    ...(pwrAgentOwnedGrok ? { pwrAgentManagedRuntime: true } : {}),
     ...(record.instances !== undefined ? { instances: record.instances } : {}),
     ...(record.incompatibleInstances !== undefined
       ? { incompatibleInstances: record.incompatibleInstances }

@@ -88,6 +88,7 @@ import {
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import {
   checkGrokCliUpdate,
+  isPwrAgentOwnedGrokRuntime,
   preserveGrokUpdateAcknowledgement,
   shouldCheckGrokCliUpdate,
 } from "../acp/grok-cli-update";
@@ -1118,7 +1119,7 @@ export class AcpBackendAdapter {
   private refreshGrokUpdateStatusInBackground(
     agent: AcpInstalledAgentRecord,
   ): void {
-    if (agent.launchDescriptor?.env?.GROK_INSTALLER === "pwragent") {
+    if (isPwrAgentOwnedGrokRuntime(agent)) {
       // Managed and bundled PwrAgent builds follow the verified GitHub release
       // feed. The vendor updater follows a different channel and must not
       // decorate these runtimes with an unrelated update notice.
@@ -1950,10 +1951,18 @@ export class AcpBackendAdapter {
         ...(sameRuntime && cached?.lastDiscoveryError !== undefined
           ? { lastDiscoveryError: cached.lastDiscoveryError }
           : {}),
-        ...(sameRuntime && cached?.update !== undefined
+        // A PwrAgent-supplied Grok build follows the verified GitHub release
+        // feed, so a cached vendor-updater result must not ride along with it.
+        // Dropping it here keeps a status written while a vendor binary was
+        // active from reappearing once the managed build becomes the runtime.
+        ...(sameRuntime
+          && cached?.update !== undefined
+          && !isPwrAgentOwnedGrokRuntime(agent)
           ? { update: cached.update }
           : {}),
-        ...(sameRuntime && cached?.updateCommand !== undefined
+        ...(sameRuntime
+          && cached?.updateCommand !== undefined
+          && !isPwrAgentOwnedGrokRuntime(agent)
           ? { updateCommand: cached.updateCommand }
           : {}),
       };

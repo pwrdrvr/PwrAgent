@@ -2489,6 +2489,72 @@ describe("AcpBackendAdapter", () => {
     await adapter.close();
   });
 
+  it("drops a cached vendor update status once a PwrAgent build is the runtime", async () => {
+    const launchDescriptor = {
+      backendId: "acp:grok" as AcpBackendId,
+      registryId: "grok",
+      distributionKind: "local" as const,
+      command: "/pwragent/agents/grok/versions/latest/grok",
+      args: ["agent", "stdio"],
+      env: { GROK_INSTALLER: "pwragent" },
+    };
+    // Same runtime as the discovery result, so the merge carries cached fields
+    // forward — except the vendor update status, which belongs to the vendor
+    // binary that was active when the check ran.
+    let stored: AcpInstalledAgentRecord = {
+      ...buildInstalledAgent(),
+      backendId: "acp:grok",
+      registryId: "grok",
+      name: "Grok",
+      version: "1.0.4-pwragent.2",
+      activeCommand: launchDescriptor.command,
+      launchDescriptor,
+      update: {
+        status: "available",
+        checkedAt: 1000,
+        currentVersion: "1.0.3",
+        latestVersion: "1.0.5",
+      },
+      updateCommand: "/Users/me/.grok/bin/grok",
+    };
+    const upsertInstalledAgent = vi.fn((record: AcpInstalledAgentRecord) => {
+      stored = record;
+    });
+    const adapter = createTestAcpBackendAdapter({
+      acpAgentStore: {
+        getInstalledAgent: () => stored,
+        listInstalledAgents: () => [stored],
+        upsertInstalledAgent,
+      },
+      captureStores: [],
+      checkGrokCliUpdate: vi.fn(),
+      discoverLocalAcpAgents: async () => [
+        {
+          ...buildInstalledAgent(),
+          backendId: "acp:grok" as AcpBackendId,
+          registryId: "grok",
+          name: "Grok",
+          version: "1.0.4-pwragent.2",
+          activeCommand: launchDescriptor.command,
+          launchDescriptor,
+        },
+      ],
+      emit: async () => undefined,
+      handleServerRequest: async () => ({ decision: "accept" }),
+      isAcpAgentEnabled: () => true,
+    });
+
+    const [agent] = await adapter.listAvailableAgents();
+
+    expect(agent?.update).toBeUndefined();
+    expect(agent?.updateCommand).toBeUndefined();
+    expect(upsertInstalledAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ backendId: "acp:grok" }),
+    );
+    expect(stored.update).toBeUndefined();
+    await adapter.close();
+  });
+
   it.each([
     {
       change: "selected command",
