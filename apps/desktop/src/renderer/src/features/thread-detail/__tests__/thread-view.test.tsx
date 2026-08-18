@@ -2782,7 +2782,9 @@ describe("ThreadView", () => {
     // that is not a git checkout and for a git probe that failed, so the copy
     // must not claim the directory was deleted. A false positive shipped for
     // exactly that reason: the banner named an existing directory.
-    expect(screen.getByRole("alert")).toHaveTextContent(
+    // Polite, not assertive: an unresolved link is not a failure, and this
+    // banner re-renders on every thread selection.
+    expect(screen.getByRole("status")).toHaveTextContent(
       "This thread's recorded working directory is not linked to a project: /Users/example/.codex/worktrees/tree-epsilon/catalog-portal"
     );
 

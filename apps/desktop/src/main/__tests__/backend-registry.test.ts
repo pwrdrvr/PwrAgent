@@ -10493,10 +10493,9 @@ script = "echo setup"
         },
       ],
     });
-    const enrichThreadDirectories = vi.fn(
-      async (threads: AppServerThreadSummary[]) =>
-        threads.map((thread) => ({ ...thread, linkedDirectories: [] })),
-    );
+    // No implementation: the assertion below is that this is never invoked,
+    // so any body would be unreachable.
+    const enrichThreadDirectories = vi.fn();
     Object.assign(codexClient, { enrichThreadDirectories });
     const overlayStore = createOverlayStoreMock({
       overlays: {

@@ -365,7 +365,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
         </div>
       </div>
       {unlinkedPath ? (
-        <p className="thread-header__warning" role="alert">
+        // `role="status"` (polite), not `alert`: this reports an unresolved
+        // link, not a failure, and it is derived state that re-announces on
+        // every thread selection. Matches the branch-drift banner right
+        // below, which shares this class and is the more urgent of the two.
+        <p className="thread-header__warning" role="status">
           This thread's recorded working directory is not linked to a project:{" "}
           <code>{unlinkedPath}</code>
         </p>
