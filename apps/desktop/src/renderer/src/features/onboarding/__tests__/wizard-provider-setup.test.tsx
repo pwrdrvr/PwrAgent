@@ -572,7 +572,7 @@ describe("Slack onboarding setup", () => {
     }));
     const configuredSecret = {
       configured: true,
-      source: "secret" as const,
+      source: "keychain" as const,
       writable: true,
     };
     const settings = slackSettings();
