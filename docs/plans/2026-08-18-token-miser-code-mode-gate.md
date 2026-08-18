@@ -24,9 +24,11 @@ gate.
 
 - `codex-cli 0.145.0` (Homebrew), macOS 15.6 (Darwin 25.6.0).
 - Isolated `CODEX_HOME`, `codex exec`, `gpt-5.6-sol`.
-- Source citations are from the `codex` checkout at `1b81365926` (2026-06-15).
-  That checkout is **older than the installed CLI**; where source and observed
-  behavior disagree, the observed behavior is authoritative and is called out.
+- Source citations are from the `codex` checkout at `2a30972fcb` (2026-08-18),
+  i.e. current `main`. The repo is on `0.148.0-alpha.22` while the tested
+  binary is `0.145.0`, so **the source is ahead of the binary under test**.
+  Claims about the installed CLI are measured; claims about `main` are read.
+  Where they disagree, both are reported rather than reconciled.
 
 ## Finding 1 — command rewriting is inseparable from auto-approval
 
@@ -42,21 +44,39 @@ Full key set: `cwd`, `hook_event_name`, `model`, `permission_mode`,
 `session_id`, `tool_input`, `tool_name`, `tool_use_id`, `transcript_path`,
 `turn_id`.
 
-Controlled A/B/A over three runs, varying only `permissionDecision`:
+Controlled test over three runs, one hook script switching on an env var so
+only the `permissionDecision` field varies. The hook logs each invocation, so
+"fired" rules out the hook silently not running:
 
-| `hookSpecificOutput` | Rewrite applied? |
-|---|---|
-| `updatedInput` only | **No** |
-| `permissionDecision: "ask"` + `updatedInput` | **No** |
-| `permissionDecision: "allow"` + `updatedInput` | **Yes** |
+| `hookSpecificOutput` | Hook fired | Rewrite applied? |
+|---|---|---|
+| `updatedInput` only | 2 | **No** |
+| `permissionDecision: "ask"` + `updatedInput` | 2 | **No** |
+| `permissionDecision: "allow"` + `updatedInput` | 2 | **Yes** |
 
-This contradicts the checkout source, where `updated_input` is assigned
-whenever the hook does not block
-(`codex-rs/hooks/src/events/pre_tool_use.rs`). The shipped CLI requires the
-`allow` decision. RTK's Claude Code hook relies on the documented
-`updatedInput`-without-decision behavior for its "ask" path
-(`hooks/claude/rtk-rewrite.sh`), so this is a Codex-specific divergence, not a
-general hook contract.
+**The source does not explain this, and staleness is not the reason.** Every
+layer that touches `updated_input` — at current `main` *and* at the matching
+`rust-v0.145.0-alpha.18` tag — assigns it whenever the hook does not block,
+with no gate on the decision:
+
+- `codex-rs/hooks/src/events/pre_tool_use.rs` sets
+  `updated_input = parsed.updated_input` inside `if !should_block`.
+- `codex-rs/core/src/hook_runtime.rs` returns
+  `PreToolUseHookResult::Continue { updated_input }` unconditionally on the
+  non-blocking path.
+- `codex-rs/core/src/tools/registry.rs` applies it via
+  `with_updated_hook_input` whenever it is `Some`.
+- The wire schema marks every field `Option`, so `updatedInput` alone parses.
+
+So either the installed `codex-cli 0.145.0` is not built from
+`rust-v0.145.0-alpha.18`, or the decision is enforced somewhere not found by
+reading. **The mechanism is unattributed.** Settling it requires building the
+exact binary, and settling whether current `main` still behaves this way
+requires building `main`. Neither was done.
+
+RTK's Claude Code hook relies on `updatedInput` without a decision for its
+"ask" path (`hooks/claude/rtk-rewrite.sh`), so the behavior measured here is
+not the general hook contract.
 
 **Consequence.** A Token Miser `PreToolUse` rewrite auto-approves every command
 it wraps. Wrapping unconditionally would silently escalate tool calls past the
@@ -202,9 +222,11 @@ became whether to patch Codex, add an App Server filtering feature, or extend
 Codex hooks to Claude-hook parity. Reading the code-mode implementation shows
 those three are not the choices they appear to be.
 
-Source citations remain from checkout `1b81365926`, which is older than the
-installed CLI. Structure is unlikely to have changed, but nothing in this
-section was measured against a running build.
+Source citations are from current `main` (`2a30972fcb`, 2026-08-18). Nothing
+in this section was measured against a running build. Notably
+`PostToolUseFeedbackOutput::code_mode_result` still returns
+`self.original` at that commit, so the premise of this whole record is current
+upstream behavior and not an artifact of an old tree.
 
 ## The nested-tool boundary is not the context path
 
@@ -296,10 +318,14 @@ for a streaming filter over a terminal one.
 
 PwrAgent drives the operator's installed Codex. Shipping a patched build adds
 a rebase burden against a fast-moving upstream, plus signing, notarization, and
-update surface. The checkout used here is roughly two months behind the
-installed CLI and already diverges behaviorally on hook semantics — Part 1's
-`permissionDecision` finding contradicts this same source tree. That divergence
-rate is the fork's recurring cost, not a one-time port.
+update surface.
+
+The rebase burden is real but should be sized honestly rather than asserted:
+upstream `main` moves at roughly a commit every few minutes, and the seam this
+would patch (`truncate_code_mode_result`) is small and stable. The sharper risk
+is behavioral rather than textual — Part 1 measured a hook behavior that no
+layer of the source explains, which means a fork can be textually clean and
+still wrong about what the binary does.
 
 ## Direction this points to
 
