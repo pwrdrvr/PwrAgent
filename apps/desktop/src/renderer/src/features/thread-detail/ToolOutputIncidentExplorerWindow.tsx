@@ -607,9 +607,11 @@ export function ToolOutputIncidentExplorerWindow() {
           <span aria-hidden="true" className="incident-explorer__token-miser-dot" />
           <span>
             {activeTokenMiser
-              ? `Token Miser gated ${activeTokenMiser.interceptionCount.toLocaleString()} of `
-                + `${summary.caseCount.toLocaleString()} flagged ${summary.caseCount === 1 ? "call" : "calls"} `
-                + `and kept ${formatCompactTokens(activeTokenMiser.estimatedParentTokensSaved)} out of the parent's context.`
+              ? describeTokenMiserReach({
+                  gatedCount: activeTokenMiser.interceptionCount,
+                  savedTokens: activeTokenMiser.estimatedParentTokensSaved,
+                  toolCallCount: allInvocations.length,
+                })
               : "Token Miser is on, but nothing in this thread was gated."}
           </span>
           <span className="incident-explorer__token-miser-spacer" />
@@ -887,6 +889,32 @@ export function ToolOutputIncidentExplorerWindow() {
   );
 }
 
+/**
+ * How much of the thread the gate actually caught.
+ *
+ * The denominator is every tool call, not the flagged ones: flagging uses the
+ * alert threshold while gating uses Token Miser's own, much lower one, so gated
+ * calls are not a subset of flagged calls — pairing them produced "gated 25 of
+ * 7 flagged calls". When the counts still cannot be reconciled (accounting that
+ * does not list every gated call), report the gated count alone rather than a
+ * ratio that cannot be true.
+ */
+function describeTokenMiserReach(params: {
+  gatedCount: number;
+  savedTokens: number;
+  toolCallCount: number;
+}): string {
+  const kept =
+    `kept ${formatCompactTokens(params.savedTokens)} out of the parent's context.`;
+  if (params.toolCallCount < params.gatedCount || params.toolCallCount === 0) {
+    return `Token Miser gated ${params.gatedCount.toLocaleString()} `
+      + `${params.gatedCount === 1 ? "call" : "calls"} and ${kept}`;
+  }
+  return `Token Miser gated ${params.gatedCount.toLocaleString()} of `
+    + `${params.toolCallCount.toLocaleString()} tool `
+    + `${params.toolCallCount === 1 ? "call" : "calls"} and ${kept}`;
+}
+
 type ExplorerLens = "incidents" | "savings";
 
 function describeTokenMiserOutcome(estimatedTokensSaved: number): string {
@@ -911,12 +939,18 @@ function describeTokenMiserOutcome(estimatedTokensSaved: number): string {
  * see cross-turn replays or compaction boundaries — a floor, not a count. The
  * distinction has to survive into the UI, because the two are summed into one
  * savings figure and only one of them is exact.
+ *
+ * The count is payload replays, not model requests: it sums each gate against
+ * the requests that followed it, so 25 gates over 65 requests is on the order
+ * of a thousand. Calling those "replays tracked at the request boundary" read
+ * as a request count and produced "902 of 902" on a single-turn thread.
  */
 function SavingsConfidence(props: { savings: ThreadTokenMiserSavings }) {
   const { directlyObservedReplayCount, reconstructedReplayCount } = props.savings;
   const total = directlyObservedReplayCount + reconstructedReplayCount;
   const reconstructed = reconstructedReplayCount > 0;
   const unpriced = props.savings.gateCount - props.savings.pricedGateCount;
+  const gates = props.savings.gateCount;
   return (
     <p
       className="incident-explorer__confidence"
@@ -925,9 +959,10 @@ function SavingsConfidence(props: { savings: ThreadTokenMiserSavings }) {
       <span aria-hidden="true" />
       {reconstructed
         ? `Partly reconstructed · ${reconstructedReplayCount.toLocaleString()} of `
-          + `${total.toLocaleString()} replays inferred from later tool calls`
-        : `Directly observed · ${directlyObservedReplayCount.toLocaleString()} of `
-          + `${total.toLocaleString()} replays tracked at the request boundary`}
+          + `${total.toLocaleString()} payload replays inferred from later tool calls`
+        : `Directly observed · ${total.toLocaleString()} payload `
+          + `${total === 1 ? "replay" : "replays"} across ${gates.toLocaleString()} `
+          + `${gates === 1 ? "gate" : "gates"}, each counted at a request boundary`}
       {unpriced > 0
         ? ` · ${unpriced.toLocaleString()} ${unpriced === 1 ? "gate is" : "gates are"} not priced yet`
         : ""}

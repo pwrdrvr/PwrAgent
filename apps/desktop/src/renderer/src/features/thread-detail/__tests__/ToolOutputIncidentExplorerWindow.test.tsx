@@ -64,6 +64,57 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       .not.toBeInTheDocument();
   });
 
+  // Gating uses Token Miser's own threshold; flagging uses the much higher
+  // alert threshold. Pairing them printed "gated 25 of 7 flagged calls".
+  it("states the gated share when the counts reconcile", async () => {
+    const response = buildResponse();
+    const invocations = response.toolAccounting!.invocations;
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 1,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementTokens: 300,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 9_700,
+      interceptions: [],
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Incidents/ }));
+    expect(
+      screen.getByText(
+        new RegExp(`Token Miser gated 1 of ${invocations.length} tool calls?`),
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("counts gated calls against every tool call, not the flagged ones", async () => {
+    const response = buildResponse();
+    const invocations = response.toolAccounting!.invocations;
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: invocations.length + 1,
+      originalCharacters: 100_000,
+      baselineParentTokens: 25_000,
+      replacementTokens: 900,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 24_100,
+      interceptions: [],
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Incidents/ }));
+    // More gated than accounted-for calls cannot be stated as a ratio, so the
+    // count stands alone rather than claiming an impossible denominator.
+    expect(
+      screen.getByText(/^Token Miser gated \d+ calls and kept /),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/gated \d+ of \d+ flagged/)).not.toBeInTheDocument();
+  });
+
   it("shows the priced savings equation and how much of it was observed", async () => {
     const response = buildResponse();
     response.pricing = {
@@ -122,7 +173,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(screen.getByText("3 · Revealed to parent")).toBeInTheDocument();
     expect(screen.getByText("$0.28")).toBeInTheDocument();
     expect(
-      screen.getByText(/Directly observed · 47 of 47 replays tracked at the request boundary/),
+      screen.getByText(/Directly observed · 47 payload replays across 4 gates, each counted at a request boundary/),
     ).toBeInTheDocument();
   });
 
@@ -156,7 +207,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
 
     await screen.findByRole("tab", { name: /Savings/, selected: true });
     expect(
-      screen.getByText(/Partly reconstructed · 5 of 8 replays inferred from later tool calls · 1 gate is not priced yet/),
+      screen.getByText(/Partly reconstructed · 5 of 8 payload replays inferred from later tool calls · 1 gate is not priced yet/),
     ).toBeInTheDocument();
   });
 
