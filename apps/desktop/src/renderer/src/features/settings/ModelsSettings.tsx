@@ -250,14 +250,15 @@ export function ModelsSettings(props: {
                   placeholder="Auto discovery"
                   value={codexPath}
                   // Blur still commits, so tabbing away or closing Settings
-                  // does not silently discard a typed path. But not when focus
-                  // is moving to a button: writeConfig flips `saving` true
-                  // synchronously, React flushes that before mouseup, and a
-                  // control disabled at mouseup receives no click at all — so
-                  // saving here would swallow the very action being clicked.
-                  // Let the button decide instead.
+                  // does not silently discard a typed path. Path actions settle
+                  // the pending value themselves: saving here would flip
+                  // `saving` before mouseup, disable the action, and swallow
+                  // its click. Unrelated buttons still need the blur commit.
                   onBlur={(event) => {
-                    if (event.relatedTarget instanceof HTMLButtonElement) {
+                    if (
+                      event.relatedTarget instanceof HTMLButtonElement
+                      && event.relatedTarget.closest("[data-codex-path-actions]")
+                    ) {
                       return;
                     }
                     saveCodexPath(codexPath);
@@ -269,7 +270,10 @@ export function ModelsSettings(props: {
                     }
                   }}
                 />
-                <div className="settings-inline-actions">
+                <div
+                  className="settings-inline-actions"
+                  data-codex-path-actions
+                >
                   <button
                     className="button button--primary"
                     disabled={
@@ -313,6 +317,7 @@ export function ModelsSettings(props: {
               <div
                 className="settings-paths"
                 aria-label="Codex discovery"
+                data-codex-path-actions
               >
                 {autoCandidates.length === 0 ? (
                   <p className="settings-empty">No Codex candidates found.</p>

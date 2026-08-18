@@ -683,6 +683,36 @@ describe("SettingsScreen", () => {
     expect(screen.queryByText(/PWRDRVR_CODEX_COMMAND/)).not.toBeInTheDocument();
   });
 
+  it("commits an edited Codex path before an unrelated button action", async () => {
+    const settings = createSettingsState();
+
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const codexPathInput = screen.getByRole("textbox", { name: "Codex path" });
+    const generalButton = screen.getByRole("button", { name: "General" });
+    fireEvent.change(codexPathInput, {
+      target: { value: "C:\\nvm4w\\nodejs\\codex.ps1" },
+    });
+    fireEvent.blur(codexPathInput, { relatedTarget: generalButton });
+    fireEvent.click(generalButton);
+
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        models: {
+          codex: {
+            path: "C:\\nvm4w\\nodejs\\codex.ps1",
+          },
+        },
+      });
+    });
+  });
+
   it("clamps accidental document scroll while mounted", async () => {
     Object.defineProperty(window, "scrollX", {
       configurable: true,
