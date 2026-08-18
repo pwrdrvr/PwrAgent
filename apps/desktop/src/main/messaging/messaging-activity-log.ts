@@ -124,7 +124,7 @@ export class MessagingActivityLog {
                     conversation_title, actor_id, actor_display_name, summary,
                     created_at, payload
              FROM messaging_activity_log
-             WHERE id > ? AND kind <> 'outbound'
+             WHERE id > ?
              ORDER BY id DESC
              LIMIT ?`,
           )
@@ -135,7 +135,6 @@ export class MessagingActivityLog {
                     conversation_title, actor_id, actor_display_name, summary,
                     created_at, payload
              FROM messaging_activity_log
-             WHERE kind <> 'outbound'
              ORDER BY id DESC
              LIMIT ?`,
           )

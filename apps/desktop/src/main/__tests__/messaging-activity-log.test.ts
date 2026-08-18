@@ -4,6 +4,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MessagingActivityLog } from "../messaging/messaging-activity-log";
 import { StateDb } from "../state/state-db";
+import {
+  measureSqliteWrites,
+  resetSqliteWriteMetrics,
+  SQLITE_WRITE_METRICS_ENV,
+} from "../state/sqlite-write-metrics";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 
 let stateDb: StateDb;
 let log: MessagingActivityLog;
@@ -149,11 +155,15 @@ describe("MessagingActivityLog", () => {
     ]);
   });
 
-  it("keeps outbound response freshness out of the activity feed", () => {
+  it("lists outbound rows while keeping response freshness separate", () => {
+    // Ordinary replies never write an `outbound` row — they only bump the
+    // per-platform freshness timestamp. A row here is a deliberate
+    // agent-initiated send (send_messaging_file) that an operator must be
+    // able to audit, so the feed shows it.
     log.record({
       platform: "telegram",
       kind: "outbound",
-      summary: "legacy visible outbound row",
+      summary: "Sent report.pdf (2048 bytes)",
       createdAt: 1_500,
     });
     log.recordPlatformResponseActivity({
@@ -161,7 +171,12 @@ describe("MessagingActivityLog", () => {
       createdAt: 2_000,
     });
 
-    expect(log.list()).toEqual([]);
+    expect(log.list()).toEqual([
+      expect.objectContaining({
+        kind: "outbound",
+        summary: "Sent report.pdf (2048 bytes)",
+      }),
+    ]);
     expect(log.getPlatformActivitySummary()).toEqual({
       summaries: [
         expect.objectContaining({
@@ -266,5 +281,39 @@ describe("MessagingActivityLog", () => {
     // Reopen the temp DB so afterEach close() doesn't double-close.
     stateDb = StateDb.open(dbPath);
     log = new MessagingActivityLog(stateDb);
+  });
+});
+
+describe("MessagingActivityLog write cost", () => {
+  it("writes one row per agent-initiated outbound file send", async () => {
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const budgetDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-activity-writes-"));
+    const budgetDb = StateDb.open(path.join(budgetDir, "state.db"));
+    try {
+      const budgetLog = new MessagingActivityLog(budgetDb);
+      resetSqliteWriteMetrics();
+      const { writes } = await measureSqliteWrites(async () => {
+        budgetLog.record({
+          platform: "telegram",
+          kind: "outbound",
+          backend: "codex",
+          threadId: "thread-1",
+          summary: "Sent report.pdf (2048 bytes)",
+          createdAt: 1_000,
+          payload: { tool: "send_messaging_file" },
+        });
+      });
+      expectSqliteWriteBudget({
+        note:
+          "one send_messaging_file audit row; this runs per agent tool call, "
+          + "so the row count must not grow with attachment parts",
+        scenario: "messaging-outbound-file-activity",
+        writes,
+      });
+    } finally {
+      delete process.env[SQLITE_WRITE_METRICS_ENV];
+      budgetDb.close();
+      rmSync(budgetDir, { recursive: true, force: true });
+    }
   });
 });

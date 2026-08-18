@@ -121,12 +121,24 @@ export type PwrAgentMessagingManagedConversationSummary = {
   updatedAt?: number;
 };
 
+/**
+ * What `send_messaging_file` can actually deliver on this surface. Without it
+ * the model can only discover a provider's upload ceiling by buffering a file
+ * and failing.
+ */
+export type PwrAgentMessagingOutboundAttachmentSummary = {
+  maxUploadBytes?: number;
+  supportsFileUpload: boolean;
+  supportsImageUpload: boolean;
+};
+
 export type PwrAgentMessagingLocationSummary = {
   actor?: PwrAgentMessagingActorSummary;
   binding?: PwrAgentMessagingBindingSummary;
   channel: MessagingChannelKind;
   conversation: PwrAgentMessagingConversationSummary;
   managedConversation: PwrAgentMessagingManagedConversationSummary;
+  outboundAttachments: PwrAgentMessagingOutboundAttachmentSummary;
 };
 
 export type GetCurrentMessagingSurfaceToolArgs = Record<string, never>;

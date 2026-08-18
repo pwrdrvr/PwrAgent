@@ -137,6 +137,71 @@ describe("resolveMessagingOutboundFile", () => {
     });
   });
 
+  it("accepts a GIF as an image", async () => {
+    const tempDir = await createTempDir();
+    const gifPath = path.join(tempDir, "anim.gif");
+    await writeFile(
+      gifPath,
+      Buffer.from([0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00]),
+    );
+
+    await expect(
+      resolveOutbound({
+        path: gifPath,
+        mediaKind: "image",
+      }, { supportsFileUpload: true, supportsImageUpload: true }, {
+        allowedRoots: [tempDir],
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      filename: "anim.gif",
+      mediaKind: "image",
+      mimeType: "image/gif",
+    });
+  });
+
+  it("recognizes a WebP container by its magic bytes", async () => {
+    const tempDir = await createTempDir();
+    const webpPath = path.join(tempDir, "shot.webp");
+    await writeFile(
+      webpPath,
+      Buffer.from([
+        0x52, 0x49, 0x46, 0x46, 0x1a, 0x00, 0x00, 0x00,
+        0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x20,
+      ]),
+    );
+
+    await expect(
+      resolveOutbound({
+        path: webpPath,
+      }, { supportsFileUpload: true, supportsImageUpload: true }, {
+        allowedRoots: [tempDir],
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      mediaKind: "image",
+      mimeType: "image/webp",
+    });
+  });
+
+  it("bounds an over-long requested filename and keeps its extension", async () => {
+    const tempDir = await createTempDir();
+    const pngPath = path.join(tempDir, "shot.png");
+    await writeFile(pngPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+    const result = await resolveOutbound({
+      path: pngPath,
+      filename: `${"a".repeat(600)}.png`,
+    }, { supportsFileUpload: true, supportsImageUpload: true }, {
+      allowedRoots: [tempDir],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.filename).toHaveLength(255);
+    expect(result.filename.endsWith(".png")).toBe(true);
+  });
+
   it("honors an explicit document hint for an image file", async () => {
     const tempDir = await createTempDir();
     const pngPath = path.join(tempDir, "shot.png");
@@ -222,6 +287,79 @@ describe("resolveMessagingOutboundFile", () => {
       code: "forbidden",
       message: expect.stringContaining("workspace"),
     });
+  });
+
+  it("refuses a symlink into a profile's state directory", async () => {
+    // The profile database lives at profiles/<name>/state/state.db, not at
+    // the profile root, so a guard that only matches root-level state files
+    // leaves the real database readable.
+    const allowed = await createTempDir();
+    const pwragentRoot = await createTempDir();
+    const statePath = path.join(
+      pwragentRoot,
+      "profiles",
+      "default",
+      "state",
+      "state.db",
+    );
+    const linkedPath = path.join(allowed, "notes.db");
+    await mkdir(path.dirname(statePath), { recursive: true });
+    await writeFile(statePath, "operator state\n");
+    await symlink(statePath, linkedPath);
+    await expect(
+      resolveOutbound({
+        path: linkedPath,
+      }, { supportsFileUpload: true }, {
+        allowedRoots: [allowed],
+        privateStorageRoots: [pwragentRoot],
+      }),
+    ).resolves.toMatchObject({
+      ok: false,
+      code: "forbidden",
+    });
+  });
+
+  it("still allows a generated-output file under the PwrAgent root", async () => {
+    // `projects/` is the scratch-output directory the tool exists to send
+    // from; hardening the state directory must not sweep it up.
+    const pwragentRoot = await createTempDir();
+    const outPath = path.join(pwragentRoot, "projects", "run-1", "report.pdf");
+    await mkdir(path.dirname(outPath), { recursive: true });
+    await writeFile(outPath, "%PDF-1.4 report");
+    await expect(
+      resolveOutbound({
+        path: outPath,
+      }, { supportsFileUpload: true }, {
+        allowedRoots: [pwragentRoot],
+        privateStorageRoots: [pwragentRoot],
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      filename: "report.pdf",
+      mediaKind: "document",
+    });
+  });
+
+  it("truncates an over-long filename without splitting a surrogate pair", async () => {
+    const tempDir = await createTempDir();
+    const pngPath = path.join(tempDir, "shot.png");
+    await writeFile(pngPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
+
+    const result = await resolveOutbound({
+      path: pngPath,
+      filename: `${"\u{1F600}".repeat(200)}.png`,
+    }, { supportsFileUpload: true, supportsImageUpload: true }, {
+      allowedRoots: [tempDir],
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.filename.length).toBeLessThanOrEqual(255);
+    expect(result.filename.endsWith(".png")).toBe(true);
+    // A lone surrogate would survive JSON but not a UTF-8 encode.
+    expect(Buffer.from(result.filename, "utf8").toString("utf8")).toBe(
+      result.filename,
+    );
   });
 
   it("refuses a symlink that escapes into private storage", async () => {

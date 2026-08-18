@@ -22601,13 +22601,20 @@ describe("send_messaging_file agent tool", () => {
         filename: "shot.png",
       },
     });
+    // Raw bytes, not a base64 data URL: encoding the file as text costs
+    // several full copies of it in the main process. `url` stays empty so an
+    // adapter that has not been taught about `data` skips the part rather
+    // than treating a placeholder as a remote image URL.
     expect(harness.delivered).toContainEqual(
       expect.objectContaining({
         kind: "message",
         parts: [
           expect.objectContaining({
             type: "image",
-            url: expect.stringMatching(/^data:image\/png;base64,/u),
+            url: "",
+            data: new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+            mimeType: "image/png",
+            name: "shot.png",
           }),
         ],
       }),
@@ -23467,7 +23474,9 @@ async function createHarness(options?: {
     inputDebounceMs: options?.inputDebounceMs ?? 0,
     logger: options?.logger,
     now: options?.now ?? (() => 1000),
-    outboundFileAccess: options?.outboundFileAccess,
+    outboundFileAccess: options?.outboundFileAccess
+      ? () => options.outboundFileAccess as MessagingOutboundFileAccess
+      : undefined,
     pendingIntentTtlMs: options?.pendingIntentTtlMs,
     pdfAnalysisEnabled: options?.pdfAnalysisEnabled,
     sleepUntil: options?.sleepUntil,

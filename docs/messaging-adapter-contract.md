@@ -315,6 +315,11 @@ absolute local path and emits a byte-backed `MessagingFilePart` or data-image
 those parts for plan/review artifacts and assistant images; this tool does not
 add a new adapter API.
 
+An adapter that names its image uploads must prefer `MessagingImagePart.name`
+when it is set, falling back to a generated name only when it is absent. The
+operator-visible filename is part of what this tool promises to deliver, and a
+generated `assistant-image.png` silently discards it.
+
 For outbound final responses, desktop messaging core resolves structured
 assistant image parts and local Markdown image links before constructing the
 provider intent. Local files and signed loopback media are copied into the

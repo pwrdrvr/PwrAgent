@@ -542,6 +542,56 @@ describe("discord adapter", () => {
     );
   });
 
+  it("uploads a bytes-backed image without a data URL, keeping its name", async () => {
+    const createMessage = vi.fn(async (channelId: string) => ({
+      channel_id: channelId,
+      id: "message-image-bytes",
+    }));
+    const adapter = new DiscordAdapter({
+      api: createApi({ createMessage }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      now: () => 1234,
+    });
+
+    await adapter.deliver({
+      audit: discordAudit(),
+      createdAt: 1234,
+      delivery: { requireAttachments: true },
+      id: "message-image-bytes",
+      kind: "message",
+      parts: [
+        { type: "text", text: "Rendered image" },
+        {
+          type: "image",
+          url: "",
+          data: new Uint8Array([1, 2, 3]),
+          mimeType: "image/png",
+          name: "q4-revenue.png",
+        },
+      ],
+      role: "assistant",
+    });
+
+    expect(createMessage).toHaveBeenCalledWith(
+      "channel-1",
+      expect.objectContaining({
+        content: "Rendered image",
+        // The empty url must not become a remote embed.
+        embeds: undefined,
+        files: [
+          {
+            data: new Uint8Array([1, 2, 3]),
+            name: "q4-revenue.png",
+          },
+        ],
+      }),
+    );
+  });
+
   it("delivers every final image as an upload or remote embed", async () => {
     const createMessage = vi.fn(async (channelId: string) => ({
       channel_id: channelId,

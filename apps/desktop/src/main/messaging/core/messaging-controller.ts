@@ -57,6 +57,7 @@ import type {
   PwrAgentMessagingBoundThreadSummary,
   PwrAgentMessagingLocationSummary,
   PwrAgentMessagingManagedConversationSummary,
+  PwrAgentMessagingOutboundAttachmentSummary,
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
   NavigationDirectorySummary,
@@ -140,7 +141,6 @@ import {
 } from "./messaging-monitor-card.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";
 import {
-  messagingOutboundImageDataUrl,
   resolveMessagingOutboundFile,
   type MessagingOutboundFileAccess,
 } from "./messaging-outbound-file.js";
@@ -843,11 +843,11 @@ export type MessagingControllerOptions = {
    */
   onBindingChanged?: () => void;
   /**
-   * Extra roots the agent may send files from, plus optional extra private
-   * storage roots to refuse. Production callers omit this; tests use it to
-   * point at a temp workspace without writing into ~/.pwragent.
+   * Extra roots the agent may send files from, plus extra private storage
+   * roots to refuse. Resolved lazily on each `send_messaging_file` call so
+   * starting an adapter never forces heavier singletons into existence.
    */
-  outboundFileAccess?: MessagingOutboundFileAccess;
+  outboundFileAccess?: () => MessagingOutboundFileAccess;
 };
 
 export class MessagingController {
@@ -15466,9 +15466,11 @@ export class MessagingController {
     binding: MessagingBindingRecord | undefined,
     result: MessagingDeliveryResult,
   ): void {
-    // Only update provider-visible freshness. Typing activity, dismissals, and
-    // partial stream edits are control/noisy signals; the Activity window stays
-    // focused on operator-facing inbound, binding, pairing, and diagnostic rows.
+    // Ordinary replies only update provider-visible freshness. Typing activity,
+    // dismissals, and partial stream edits are control/noisy signals; the
+    // Activity window stays focused on operator-facing rows. Deliberate
+    // agent-initiated sends write their own `outbound` row — see
+    // recordOutboundFileActivity.
     if (!shouldRecordOutboundActivity(intent, result)) {
       return;
     }
@@ -16776,25 +16778,9 @@ export class MessagingController {
       return origin;
     }
 
-    const outbound = await resolveMessagingOutboundFile(
-      {
-        path: typeof request.args?.path === "string" ? request.args.path : "",
-        ...(filename ? { filename } : {}),
-        ...(mediaKind ? { mediaKind } : {}),
-      },
-      this.capabilityProfile.outboundAttachments ?? {},
-      await this.resolveOutboundFileAccess(request.context),
-    );
-    if (!outbound.ok) {
-      return {
-        ok: false,
-        error: {
-          code: outbound.code,
-          message: outbound.message,
-        },
-      };
-    }
-
+    // Resolve the destination before loading bytes. A file may run to the
+    // provider's whole upload ceiling, and every failure below is knowable
+    // without reading it.
     let deliveryEvent = origin.origin.event;
     if (sendPrivately) {
       if (!this.options.adapter.resolvePrivateConversation) {
@@ -16855,12 +16841,36 @@ export class MessagingController {
       };
     }
 
+    const outbound = await resolveMessagingOutboundFile(
+      {
+        path: typeof request.args?.path === "string" ? request.args.path : "",
+        ...(filename ? { filename } : {}),
+        ...(mediaKind ? { mediaKind } : {}),
+      },
+      this.capabilityProfile.outboundAttachments ?? {},
+      await this.resolveOutboundFileAccess(request.context),
+    );
+    if (!outbound.ok) {
+      return {
+        ok: false,
+        error: {
+          code: outbound.code,
+          message: outbound.message,
+        },
+      };
+    }
+
     const sourceBinding = origin.origin.deliveryBinding ?? origin.origin.binding;
     const filePart = outbound.mediaKind === "image"
       ? {
           type: "image" as const,
-          url: messagingOutboundImageDataUrl(outbound.mimeType, outbound.data),
+          // Bytes, not a base64 data URL. See MessagingImagePart.data — the
+          // round trip through text costs several copies of the whole file.
+          url: "",
+          data: outbound.data,
+          mimeType: outbound.mimeType,
           alt: outbound.filename,
+          name: outbound.filename,
           sourceUrl: outbound.path,
         }
       : {
@@ -16903,6 +16913,21 @@ export class MessagingController {
         },
       };
     }
+    this.recordOutboundFileActivity({
+      backend: request.context.backend,
+      binding: sourceBinding,
+      event: deliveryEvent,
+      file: {
+        filename: outbound.filename,
+        mediaKind: outbound.mediaKind,
+        mimeType: outbound.mimeType,
+        path: outbound.path,
+        sizeBytes: outbound.sizeBytes,
+      },
+      deliveredAt: result.deliveredAt,
+      private: sendPrivately,
+      threadId: request.context.threadId,
+    });
     if (
       !sendPrivately
       && sourceBinding
@@ -16968,7 +16993,12 @@ export class MessagingController {
     } as AgentEvent;
     const variants: MessagingImagePart[][] = [params.images];
     for (const image of params.images) {
-      variants.push([{ ...image, sourceUrl: undefined }]);
+      // Only claim the sourceUrl-less shape when `url` still identifies the
+      // image. A bytes-backed part has an empty url, and claiming that would
+      // register a signature matching any other empty-url image.
+      if (image.url) {
+        variants.push([{ ...image, sourceUrl: undefined }]);
+      }
       const aliases = outboundImageClaimAliases([
         image.sourceUrl,
         image.url,
@@ -16995,7 +17025,7 @@ export class MessagingController {
   private async resolveOutboundFileAccess(
     context: PwrAgentMessagingRequest["context"],
   ): Promise<MessagingOutboundFileAccess> {
-    const configured = this.options.outboundFileAccess;
+    const configured = this.options.outboundFileAccess?.();
     const allowedRoots = [
       ...resolveScratchProjectsRoots(),
       ...(configured?.allowedRoots ?? []),
@@ -17375,6 +17405,18 @@ export class MessagingController {
       channel: origin.event.channel.channel,
       conversation: summarizeMessagingConversation(origin.event.channel.conversation),
       managedConversation: await this.resolveManagedConversationSummary(origin),
+      outboundAttachments: this.summarizeOutboundAttachments(),
+    };
+  }
+
+  private summarizeOutboundAttachments(): PwrAgentMessagingOutboundAttachmentSummary {
+    const profile = this.capabilityProfile.outboundAttachments;
+    return {
+      ...(profile?.maxUploadBytes !== undefined
+        ? { maxUploadBytes: profile.maxUploadBytes }
+        : {}),
+      supportsFileUpload: profile?.supportsFileUpload === true,
+      supportsImageUpload: profile?.supportsImageUpload === true,
     };
   }
 
@@ -17698,6 +17740,61 @@ export class MessagingController {
       auditAction,
       opts,
     );
+  }
+
+  /**
+   * `send_messaging_file` reads a workspace file and pushes its bytes to an
+   * external platform. That is the one outbound delivery an operator needs to
+   * be able to audit after the fact, so it gets a real row rather than the
+   * timestamp bump ordinary replies write.
+   */
+  private recordOutboundFileActivity(params: {
+    backend: AppServerBackendKind;
+    binding: MessagingBindingRecord | undefined;
+    event: MessagingInboundEvent;
+    file: {
+      filename: string;
+      mediaKind: "document" | "image";
+      mimeType: string;
+      path: string;
+      sizeBytes: number;
+    };
+    deliveredAt: number;
+    private: boolean;
+    threadId: ThreadIdentifier;
+  }): void {
+    try {
+      const log = this.desktopActivityLog();
+      if (!log) return;
+      const conversation = params.event.channel.conversation;
+      log.record({
+        platform: params.event.channel.channel,
+        kind: "outbound",
+        backend: params.backend,
+        threadId: params.threadId,
+        bindingId: params.binding?.id,
+        conversationId: conversation.id,
+        conversationTitle: conversation.title,
+        actorId: params.event.actor.platformUserId,
+        actorDisplayName: params.event.actor.displayName,
+        summary: `Sent ${params.file.filename}${
+          params.private ? " privately" : ""
+        } (${params.file.sizeBytes} bytes)`,
+        createdAt: params.deliveredAt,
+        payload: {
+          tool: "send_messaging_file",
+          filename: params.file.filename,
+          mediaKind: params.file.mediaKind,
+          mimeType: params.file.mimeType,
+          sizeBytes: params.file.sizeBytes,
+          sourcePath: params.file.path,
+          private: params.private,
+          conversationKind: conversation.kind,
+        },
+      });
+    } catch {
+      // Activity log is best-effort observability.
+    }
   }
 
   private recordCapabilityDenied(

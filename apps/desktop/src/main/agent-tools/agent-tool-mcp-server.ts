@@ -66,9 +66,12 @@ export type AgentToolMcpServerLike = {
   close(): Promise<void>;
 };
 
-export type AgentToolMcpCatalog = Pick<ResolvedAgentToolCatalog, "router"> & {
-  id?: ResolvedAgentToolCatalog["id"];
-};
+/**
+ * `id` is required: `authorizeToolCall` resolves a catalog's RBAC category
+ * from it, and a catalog without one would dispatch every tool it owns with no
+ * permission check rather than failing closed.
+ */
+export type AgentToolMcpCatalog = Pick<ResolvedAgentToolCatalog, "id" | "router">;
 
 export type AgentToolMcpAuthorization = {
   backend: AppServerBackendKind;

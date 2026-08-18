@@ -159,10 +159,21 @@ refuses Codex/PwrAgent private storage, and only reads from the bound thread's
 workspace or a PwrAgent generated-output (scratch project) directory. It then
 size/type-checks the loaded bytes against the provider's `outboundAttachments`
 profile and delivers a `MessagingFilePart` or `MessagingImagePart` only to the
-active messaging origin. Delivery sets `requireAttachments` so an adapter that
-would otherwise post leftover text after a failed upload must fail the tool
-call instead. `private=true` reuses the private-conversation resolver
-but does not suppress the source reply.
+active messaging origin. `get_current_messaging_surface` reports the same
+`outboundAttachments` limits so the model can size a file before sending it.
+Delivery sets `requireAttachments`, which Discord, Feishu, Mattermost, and
+Slack honor by failing the delivery rather than letting a post stand in for an
+attachment that never uploaded. Slack posts its message before uploading, so a
+failure there still fails the tool call but can leave the caption posted.
+Telegram and LINE need no flag handling: an upload failure already rejects the
+whole delivery. `private=true` reuses the private-conversation resolver but
+does not suppress the source reply.
+
+A successful send writes an `outbound` row to the messaging activity log
+(`send_messaging_file` payload, filename, size, media kind, source path), which
+is what the Activity window's **Sent** group shows. Ordinary assistant replies
+still write only per-platform response freshness, so that group stays a record
+of deliberate agent-initiated sends rather than a copy of every reply.
 
 Because Codex fixes a thread's dynamic-tool catalog at thread creation, the
 controller also recognizes explicit private-response requests as a compatibility

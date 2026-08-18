@@ -126,6 +126,21 @@ function classifyMagicBytes(
       return { kind: "pdf", mimeType: "application/pdf" };
     }
   }
+  // RIFF....WEBP. Screenshot tooling emits WebP routinely, and without this the
+  // container is indistinguishable from an unknown binary.
+  if (
+    data.length >= 12 &&
+    data[0] === 0x52 &&
+    data[1] === 0x49 &&
+    data[2] === 0x46 &&
+    data[3] === 0x46 &&
+    data[8] === 0x57 &&
+    data[9] === 0x45 &&
+    data[10] === 0x42 &&
+    data[11] === 0x50
+  ) {
+    return { kind: "image", mimeType: "image/webp" };
+  }
   return undefined;
 }
 

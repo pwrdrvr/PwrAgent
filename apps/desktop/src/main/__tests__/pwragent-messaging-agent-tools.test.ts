@@ -32,6 +32,11 @@ describe("PwrAgent messaging agent tools", () => {
             outcome: "unsupported" as const,
             providerSupportsCreation: false,
           },
+          outboundAttachments: {
+            maxUploadBytes: 50 * 1024 * 1024,
+            supportsFileUpload: true,
+            supportsImageUpload: true,
+          },
         },
       },
     }));

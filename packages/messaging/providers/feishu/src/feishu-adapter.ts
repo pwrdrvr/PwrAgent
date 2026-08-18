@@ -36,6 +36,7 @@ import {
   evictStaleStreamAnchors,
   extractMessagingPairingToken,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
+  messagingInlineImageBytes,
   splitTextForDelivery,
 } from "@pwragent/messaging-interface";
 import type { FeishuMessagingConfig } from "./feishu-config.ts";
@@ -658,7 +659,8 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       if (part.type !== "image") {
         continue;
       }
-      const image = parseFeishuDataImageUrl(part.url);
+      const image = messagingInlineImageBytes(part)
+        ?? parseFeishuDataImageUrl(part.url);
       if (!image || image.data.byteLength > maxBytes) {
         continue;
       }
@@ -666,7 +668,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         const uploaded = await this.api.uploadImage({
           data: image.data,
           mimeType: image.mimeType,
-          name: `assistant-image-${index + 1}.${image.extension}`,
+          name: part.name ?? `assistant-image-${index + 1}.${image.extension}`,
         });
         output.push({
           alt: part.alt?.trim() || `Assistant image ${index + 1}`,

@@ -7566,6 +7566,10 @@ export class DesktopBackendRegistry {
                   this.resolveAgentToolMcpCallContext(context),
                 resolveCatalogs: () => [
                   {
+                    // These are messaging-context tools; none of them maps to
+                    // a permission today, so naming the category leaves them
+                    // ungated while routing any future mapping through RBAC.
+                    id: "messaging_context",
                     router: buildPwrAgentMessagingPdfToolRouter(
                       this.messagingHandler,
                     ),
@@ -25459,6 +25463,15 @@ export class DesktopBackendRegistry {
       tool: params.tool,
       arguments: params.arguments,
     });
+  }
+
+  /**
+   * Storage roots that no local-file read may reach. Messaging shares these so
+   * its outbound file tool refuses the same Codex-owned paths the turn-input
+   * enrichment path already refuses.
+   */
+  getLocalFilePrivateStorageRoots(): readonly string[] {
+    return this.localFilePrivateStorageRoots;
   }
 
   private async handleThreadOrchestrationRequest(

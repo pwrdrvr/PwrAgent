@@ -41,6 +41,7 @@ import type {
 import {
   evictStaleStreamAnchors,
   extractMessagingPairingToken,
+  messagingInlineImageBytes,
   splitTextForDelivery,
 } from "@pwragent/messaging-interface";
 import type { MattermostMessagingConfig } from "./mattermost-config.ts";
@@ -2622,7 +2623,8 @@ function mattermostUploadParts(intent: MessagingSurfaceIntent): MessagingFilePar
     if (part.type !== "image") {
       return [];
     }
-    const image = parseMattermostDataImageUrl(part.url);
+    const image = messagingInlineImageBytes(part)
+      ?? parseMattermostDataImageUrl(part.url);
     if (!image) {
       return [];
     }
@@ -2630,7 +2632,7 @@ function mattermostUploadParts(intent: MessagingSurfaceIntent): MessagingFilePar
       data: image.data,
       description: part.alt,
       mimeType: image.mimeType,
-      name: `image-${index + 1}.${image.extension}`,
+      name: part.name ?? `image-${index + 1}.${image.extension}`,
       sizeBytes: image.data.byteLength,
       type: "file",
     }];

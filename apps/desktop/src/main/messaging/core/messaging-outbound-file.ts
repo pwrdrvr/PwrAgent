@@ -42,6 +42,9 @@ export type MessagingOutboundFile =
       message: string;
     };
 
+/** Mirrors the `filename` maxLength advertised in the tool's input schema. */
+const MAX_OUTBOUND_FILENAME_LENGTH = 255;
+
 const OUTSIDE_ALLOWED_ROOTS_MESSAGE =
   "send_messaging_file can only send files from this thread's workspace "
   + "or a PwrAgent generated-output directory.";
@@ -107,7 +110,9 @@ export async function resolveMessagingOutboundFile(
 
   let data: Uint8Array;
   try {
-    data = new Uint8Array(await readFile(readable.path));
+    // readFile already returns a Uint8Array (a Buffer). Re-wrapping it copies
+    // the whole file a second time, which matters at a 100 MB upload ceiling.
+    data = await readFile(readable.path);
   } catch (error) {
     return mapOutboundFileSystemError(error, rawPath);
   }
@@ -129,7 +134,11 @@ export async function resolveMessagingOutboundFile(
     fileName: filename,
   });
   const requestedKind = request.mediaKind ?? "auto";
-  const looksLikeImage = classification.kind === "image";
+  // A GIF is an image everywhere this tool can deliver one. Treating it as a
+  // separate classification kind here only produced a rejection whose message
+  // claimed the file was not an image.
+  const looksLikeImage =
+    classification.kind === "image" || classification.kind === "gif";
   const mediaKind = resolveOutboundMediaKind({
     looksLikeImage,
     requestedKind,
@@ -151,13 +160,6 @@ export async function resolveMessagingOutboundFile(
     path: readable.path,
     sizeBytes: data.byteLength,
   };
-}
-
-export function messagingOutboundImageDataUrl(
-  mimeType: string,
-  data: Uint8Array,
-): string {
-  return `data:${mimeType};base64,${Buffer.from(data).toString("base64")}`;
 }
 
 function resolveOutboundMediaKind(params: {
@@ -215,7 +217,40 @@ function resolveOutboundMediaKind(params: {
 
 function sanitizeOutboundFilename(name: string): string {
   const base = path.basename(name).trim();
-  return base && base !== "." && base !== ".." ? base : "file";
+  if (!base || base === "." || base === "..") {
+    return "file";
+  }
+  // The advertised schema caps this at 255, but nothing validates tool
+  // arguments against that schema before dispatch, so bound it here too.
+  if (base.length <= MAX_OUTBOUND_FILENAME_LENGTH) {
+    return base;
+  }
+  const extension = path.extname(base);
+  const stem = base.slice(0, base.length - extension.length);
+  if (extension.length >= MAX_OUTBOUND_FILENAME_LENGTH || !stem) {
+    return truncateCodePoints(base, MAX_OUTBOUND_FILENAME_LENGTH);
+  }
+  return (
+    truncateCodePoints(stem, MAX_OUTBOUND_FILENAME_LENGTH - extension.length)
+    + extension
+  );
+}
+
+/**
+ * Truncate without splitting a surrogate pair. A plain `slice` cuts on UTF-16
+ * code units, so a name made of astral characters can end on a lone surrogate
+ * and reach the provider as an unencodable filename.
+ */
+function truncateCodePoints(value: string, maxLength: number): string {
+  if (value.length <= maxLength) {
+    return value;
+  }
+  let end = maxLength;
+  const code = value.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) {
+    end -= 1;
+  }
+  return value.slice(0, end);
 }
 
 function oversizedFileError(

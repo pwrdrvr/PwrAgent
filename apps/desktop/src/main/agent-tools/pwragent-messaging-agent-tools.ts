@@ -117,11 +117,11 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
     case "get_current_location":
       return "Deprecated alias for get_current_messaging_surface. Inspect the messaging platform, actor, conversation, binding, compact bound-thread identity, and native thread/topic creation capability for the surface that started this Agent turn.";
     case "get_current_messaging_surface":
-      return "Inspect the current messaging surface, actor, conversation, binding, bound thread, and native child-topic support.";
+      return "Inspect the current messaging surface, actor, conversation, binding, bound thread, and native child-topic support. Also returns this surface's outbound attachment limits.";
     case "send_private_response":
       return "Send the final response privately to the user who started this messaging turn. Use this only after an explicit request or to protect secrets. After success, end the turn without a public copy. Set awaitReply and replyInstructions to start a continuation from one private reply. Only the continuation's final response returns to the source surface. This tool works only in an active messaging turn and cannot target another user.";
     case "send_messaging_file":
-      return "Send a local file that is not already in the response. Use this for a rendered PDF, zip, or installer. Do not use it for an image you will embed in the final reply. Those images already go to this messaging surface. Do not use this tool to inspect a file. Requires an absolute filesystem path. Optional caption, filename, mediaKind, and private. private=true DMs the requesting user without suppressing the source reply. Works only on the active messaging origin.";
+      return "Send a local file that is not already in the response. Use this for a rendered PDF, zip, or installer. Do not use it for an image you will embed in the final reply. Those images already go to this messaging surface. Do not use this tool to inspect a file. Requires an absolute filesystem path. Optional caption, filename, mediaKind, and private. private=true DMs the requesting user without suppressing the source reply. Call get_current_messaging_surface for this surface's outboundAttachments limits before sending a large file. Works only on the active messaging origin.";
     case "attach_thread_here":
       return "Attach a known PwrAgent thread to the current messaging surface. Use new_child for a native child topic when supported. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. This tool does not rename the PwrAgent thread.";
     case "inspect_messaging_pdfs":
@@ -201,7 +201,7 @@ function inputSchemaForOperation(
             type: "string",
             enum: ["document", "image", "auto"],
             description:
-              "How to present the file. auto sends images as photos when the provider supports it and everything else as a document.",
+              "How to present the file. auto sends images as photos when the provider supports it and everything else as a document. Use document when the recipient should see the exact filename. Some providers rename photo uploads.",
           },
           private: {
             type: "boolean",

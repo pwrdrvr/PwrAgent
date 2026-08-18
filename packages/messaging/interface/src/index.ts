@@ -543,7 +543,80 @@ export type MessagingTextPart = {
 
 export type MessagingImagePart = AppServerThreadImagePart & {
   source?: "assistant" | "user" | "system";
+  /**
+   * Preferred upload filename. Adapters that name their image uploads must use
+   * this when present instead of a generated `assistant-image.png`-style name;
+   * without it an operator-chosen name is lost on the way to the platform.
+   */
+  name?: string;
+  /**
+   * Raw image bytes, as an alternative to a base64 `data:` URL in `url`.
+   *
+   * Encoding a large image as a data URL costs several full copies of the file
+   * in the main process: the base64 string is 4/3 the size, the producer holds
+   * the source bytes, and the adapter decodes it straight back to bytes. A
+   * 25 MB image measured at 5.66x its own size end to end. Producers with the
+   * bytes already in hand should set these instead.
+   *
+   * A part carrying `data` sets `url` to the empty string, so any consumer
+   * that has not been taught about this field skips it rather than treating a
+   * placeholder as a remote image URL. Resolve both shapes through
+   * `messagingInlineImageBytes`.
+   */
+  data?: Uint8Array;
+  /** MIME type for `data`. Ignored when `data` is absent. */
+  mimeType?: string;
 };
+
+const MESSAGING_IMAGE_EXTENSIONS = new Map<string, string>([
+  ["image/gif", "gif"],
+  ["image/jpeg", "jpg"],
+  ["image/png", "png"],
+  ["image/webp", "webp"],
+]);
+
+export type MessagingInlineImageBytes = {
+  data: Uint8Array;
+  extension: string;
+  mimeType: string;
+};
+
+/**
+ * Read an image part's inline bytes when it carries them directly. Returns
+ * undefined for a part that only has a `url`, so adapters keep their existing
+ * `data:` URL parser as the fallback:
+ *
+ *     const image = messagingInlineImageBytes(part) ?? parseDataImageUrl(part.url);
+ */
+export function messagingInlineImageBytes(
+  part: MessagingImagePart,
+): MessagingInlineImageBytes | undefined {
+  if (!part.data || part.data.byteLength === 0) {
+    return undefined;
+  }
+  const mimeType = part.mimeType?.trim().toLowerCase() || "image/png";
+  return {
+    data: part.data,
+    extension: MESSAGING_IMAGE_EXTENSIONS.get(mimeType)
+      ?? messagingImageExtensionFromMimeType(mimeType),
+    mimeType,
+  };
+}
+
+/**
+ * Derive a filename extension from an unrecognized image MIME type. The
+ * subtype can carry parameters (`image/jpeg; charset=binary`) or a structuring
+ * suffix (`image/svg+xml`), neither of which belongs in a filename.
+ */
+function messagingImageExtensionFromMimeType(mimeType: string): string {
+  const subtype = mimeType
+    .split("/")
+    .at(-1)
+    ?.split(";")[0]
+    ?.split("+")[0]
+    ?.trim();
+  return subtype && /^[a-z0-9][a-z0-9.-]*$/u.test(subtype) ? subtype : "png";
+}
 
 export type MessagingFilePart = {
   type: "file";

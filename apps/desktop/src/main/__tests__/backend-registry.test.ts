@@ -24737,6 +24737,11 @@ command = "pnpm dev"
                 outcome: "ok",
                 providerSupportsCreation: true,
               },
+              outboundAttachments: {
+                maxUploadBytes: 25 * 1024 * 1024,
+                supportsFileUpload: true,
+                supportsImageUpload: true,
+              },
             },
             outcome: "created_and_attached",
             placement: "new_child",

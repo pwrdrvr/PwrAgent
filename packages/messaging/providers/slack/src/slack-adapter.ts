@@ -50,6 +50,7 @@ import {
   SLACK_DM_ACCESS_MODE_DEFAULT,
   SLACK_GROUP_DM_ACCESS_MODE_DEFAULT,
   SLACK_TEAM_AUTHORIZATION_MODE_DEFAULT,
+  messagingInlineImageBytes,
 } from "@pwragent/messaging-interface";
 import type {
   SlackAuthorizedContact,
@@ -3304,15 +3305,43 @@ export class SlackAdapter implements SlackProviderAdapter {
     intent: MessagingSurfaceIntent;
     threadTs?: string;
   }): Promise<void> {
-    if (!this.api.uploadFile || params.intent.kind !== "message") return;
+    // An intent that carries `requireAttachments` must not report a successful
+    // delivery when an attachment was silently skipped — the caller posted the
+    // accompanying text before this ran, so a skip leaves text with no file.
+    const requireAttachments =
+      params.intent.delivery?.requireAttachments === true;
+    if (!this.api.uploadFile || params.intent.kind !== "message") {
+      if (requireAttachments) {
+        throw new Error("Slack cannot upload files with this client.");
+      }
+      return;
+    }
     for (const [index, part] of params.intent.parts.entries()) {
-      const image = part.type === "image" ? parseSlackDataImageUrl(part.url) : undefined;
-      if (part.type !== "file" && !image) continue;
+      const image = part.type === "image"
+        ? messagingInlineImageBytes(part) ?? parseSlackDataImageUrl(part.url)
+        : undefined;
+      if (part.type !== "file" && part.type !== "image") continue;
+      if (part.type === "image" && !image) {
+        // A remote image URL renders through blocks instead of an upload, so
+        // only an undecodable inline image is a genuine miss here.
+        if (
+          requireAttachments
+          && (part.data !== undefined || part.url.startsWith("data:"))
+        ) {
+          throw new Error("Slack could not decode the requested image.");
+        }
+        continue;
+      }
       const data = part.type === "file" ? part.data : image?.data;
-      if (!data) continue;
+      if (!data) {
+        if (requireAttachments) {
+          throw new Error("Slack could not read the requested attachment.");
+        }
+        continue;
+      }
       const filename = part.type === "file"
         ? part.name
-        : `image-${index + 1}.${image?.extension ?? "png"}`;
+        : part.name ?? `image-${index + 1}.${image?.extension ?? "png"}`;
       await this.api.uploadFile({
         channel: params.channelId,
         data,

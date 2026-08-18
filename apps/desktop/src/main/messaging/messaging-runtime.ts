@@ -79,6 +79,8 @@ import {
   type DesktopMessagingChannelConfigUpdate,
 } from "./messaging-config";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
+import { getDesktopBackendRegistry } from "../app-server/backend-registry";
+import { resolvePwragentRoot } from "../profile";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
 import {
@@ -1385,6 +1387,16 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       },
       onFullAccessPolicyViolation: (event) =>
         this.recordFullAccessPolicyViolation(adapter.channel, event),
+      // Resolved per tool call, not at adapter start: the backend registry is
+      // a heavy Electron-bound singleton and messaging must not force it into
+      // existence just to start an adapter.
+      outboundFileAccess: () => ({
+        allowedRoots: [],
+        privateStorageRoots: [
+          ...getDesktopBackendRegistry().getLocalFilePrivateStorageRoots(),
+          resolvePwragentRoot(),
+        ],
+      }),
     });
 
     let unsubscribeDiagnostic: (() => void) | undefined;

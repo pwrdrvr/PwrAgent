@@ -106,6 +106,11 @@ const PRIVATE_STORAGE_DIRECTORIES = new Set([
   "archived_sessions",
   "rollouts",
   "sessions",
+  // A PwrAgent profile keeps its database, runtime-instance markers, and
+  // focus requests under `state/`. The root-file patterns below only match a
+  // database sitting directly in the profile directory, which is not where the
+  // app actually writes one.
+  "state",
 ]);
 
 const PRIVATE_STORAGE_ROOT_FILES = [
