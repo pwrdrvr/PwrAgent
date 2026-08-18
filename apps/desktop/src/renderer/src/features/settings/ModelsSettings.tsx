@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { isValidatedDiscoveryCandidate } from "@pwragent/shared";
 import type {
   BackendModelOption,
   BackendSummary,
@@ -119,12 +120,19 @@ export function ModelsSettings(props: {
   // out unconditionally hid the failure reason from the only person who could
   // act on it, including the "PowerShell shim" diagnostic, which is only ever
   // emitted for a path someone typed.
+  // Automatic sources always list. A fixed (env/config) row lists when it
+  // failed, so the operator can see why the path they pinned was rejected,
+  // and when it is the current selection, so there is a "Using" row to point
+  // at. Gate on the same predicate the row and the main process use: keying
+  // on `failureReason` alone missed the most common rejection shape, which
+  // upstream reports as executable:true with the reason in
+  // `versionFailureReason`.
   const autoCandidates = codex.discovery.candidates.filter(
     (candidate) =>
       candidate.source === "path"
       || candidate.source === "application"
-      || !candidate.executable
-      || Boolean(candidate.failureReason),
+      || candidate.selected
+      || !isValidatedDiscoveryCandidate(candidate),
   );
   // Per-field source pill text — shows where the effective value
   // comes from (config / env override / default). Used on both the
@@ -193,6 +201,14 @@ export function ModelsSettings(props: {
   }, [props.desktopApi]);
 
   const saveCodexPath = (path: string): void => {
+    // Skip a no-op write. Without this, blur alone flips `saving` true
+    // synchronously, which disables the button being clicked before mouseup
+    // and Chromium then dispatches no click at all — so clicking Use while
+    // focus is in this field silently does nothing. It also stops a plain
+    // tab-through from rewriting config.toml and re-running discovery.
+    if (path.trim() === codex.path.value.trim()) {
+      return;
+    }
     void props.onSaveCodexPath(path.trim());
   };
 
@@ -1369,11 +1385,7 @@ function CodexCandidateRow(props: {
   // `executable` is not a usability test on Windows: it comes from
   // fs.access(X_OK), which succeeds for any existing file, so an sh shim
   // scores true. Gate on the same predicate the main process selects with.
-  const usable =
-    candidate.executable
-    && Boolean(candidate.version)
-    && !candidate.failureReason
-    && !candidate.versionFailureReason;
+  const usable = isValidatedDiscoveryCandidate(candidate);
 
   const chips: SettingsPathRowChip[] = [
     { key: "source", label: candidate.source, tone: "muted" },

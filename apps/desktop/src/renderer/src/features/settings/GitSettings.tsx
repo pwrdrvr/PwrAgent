@@ -15,6 +15,7 @@ import {
   type DesktopSettingsSnapshot,
   type GhStatus,
 } from "@pwragent/shared";
+import { isValidatedDiscoveryCandidate } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { copyText } from "../../lib/copy-text";
 import {
@@ -865,7 +866,9 @@ function GitCandidateRow(props: {
   return (
     <SettingsPathRow
       title={candidate.command}
-      path={commandDiscoveryFailureDetail(candidate.failureReason)}
+      path={commandDiscoveryFailureDetail(
+        candidate.failureReason ?? candidate.versionFailureReason,
+      )}
       pathIsDetail
       chips={chips}
       selected={candidate.selected}
@@ -881,10 +884,14 @@ function GhCandidateRow(props: {
 }) {
   const candidate = props.candidate;
   const unavailableLabel = describeCommandDiscoveryFailure(candidate.failureReason);
+  // `executable` comes from fs.access(X_OK), which succeeds for any existing
+  // file on Windows, so an sh shim scores true. Gate on the same predicate
+  // the main process selects with.
+  const usable = isValidatedDiscoveryCandidate(candidate);
   const chips: SettingsPathRowChip[] = [
     { label: candidate.source, tone: "muted" },
   ];
-  if (candidate.executable) {
+  if (usable) {
     // Only a real version belongs in the version slot. Routing a failure
     // label through here produced rows reading "Launch failed" next to
     // "Available"; the reason now rides the detail line instead.
@@ -898,7 +905,7 @@ function GhCandidateRow(props: {
       tone: "err",
     });
   }
-  if (candidate.executable && !candidate.selected) {
+  if (usable && !candidate.selected) {
     chips.push({
       label: "Available",
       tone: "muted",
@@ -914,8 +921,8 @@ function GhCandidateRow(props: {
       pathIsDetail
       chips={chips}
       selected={candidate.selected}
-      disabled={props.disabled || !candidate.executable}
-      onUse={candidate.executable ? () => props.onUse(candidate.command) : undefined}
+      disabled={props.disabled || !usable}
+      onUse={usable ? () => props.onUse(candidate.command) : undefined}
     />
   );
 }

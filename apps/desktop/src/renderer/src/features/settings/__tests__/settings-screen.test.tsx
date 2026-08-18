@@ -2912,6 +2912,50 @@ describe("SettingsScreen", () => {
     expect(getGhStatus).toHaveBeenCalledWith({ recheck: true });
   });
 
+  it("lists a pinned Codex whose version probe failed, and the one in use", async () => {
+    // Upstream's most common rejection is executable:true with the reason in
+    // versionFailureReason and no failureReason. Keying the list on
+    // failureReason hid exactly that row from the operator who pinned it,
+    // and a validated config row had no "Using" entry at all.
+    const snapshot = createSnapshot();
+    snapshot.models.codex.discovery = {
+      selectedCommand: "C:\\nvm4w\\nodejs\\codex.cmd",
+      selectedSource: "config",
+      candidates: [
+        {
+          command: "C:\\nvm4w\\nodejs\\codex.cmd",
+          executable: true,
+          selected: true,
+          source: "config",
+          version: "0.146.0",
+        },
+        {
+          command: "C:\\pinned\\codex.cmd",
+          executable: true,
+          selected: false,
+          source: "env",
+          versionFailureReason: "version_not_reported",
+        },
+      ],
+    };
+
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    const rows = Array.from(
+      document.querySelectorAll(".settings-pathrow"),
+    ).map((row) => row.textContent ?? "");
+    expect(rows.some((row) => row.includes("C:\\pinned\\codex.cmd"))).toBe(true);
+    expect(rows.some((row) => row.includes("C:\\nvm4w\\nodejs\\codex.cmd"))).toBe(
+      true,
+    );
+  });
+
   it("shows the installed version on a Codex rejected as too old", async () => {
     // Upstream builds a codex_too_old candidate as executable:false WITH a
     // version — the rejection is derived from parsing one. Gating the version

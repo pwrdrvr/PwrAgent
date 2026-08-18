@@ -209,6 +209,69 @@ describe("discoverWindowsCodexCandidates", () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
+  it("reports a timeout, but not an external kill, as timed out", async () => {
+    // Node sets `killed` only when it terminated the child itself. An EDR or
+    // Defender kill arrives with the same SIGTERM but killed:false, and
+    // calling that a timeout sends the operator after a latency problem that
+    // is not there.
+    const timedOut = Object.assign(new Error("Command failed"), {
+      code: null,
+      killed: true,
+      signal: "SIGTERM",
+    });
+    const externallyKilled = Object.assign(new Error("Command failed"), {
+      code: null,
+      killed: false,
+      signal: "SIGTERM",
+    });
+
+    const run = async (error: unknown) =>
+      await discoverWindowsCodexCandidates({
+        candidates: [],
+        configuredCommand: `${NVM}\\codex.ps1`,
+        env: {},
+        exists: existsIn([`${NVM}\\codex.cmd`]),
+        runner: async () => {
+          throw error;
+        },
+      });
+
+    expect(await run(timedOut)).toMatchObject([
+      { failureReason: "version_probe_timed_out" },
+    ]);
+    expect(await run(externallyKilled)).toMatchObject([
+      { failureReason: "Command failed" },
+    ]);
+  });
+
+  it("re-probes a sibling that shared discovery left unvalidated", async () => {
+    // The plain npm-global layout: upstream's short probe times out and leaves
+    // the .cmd executable-but-versionless. That row must not suppress the
+    // re-probe on this module's longer budget.
+    const runner = vi.fn(async () => ({ stdout: "codex-cli 0.146.0\n" }));
+
+    const candidates = await discoverWindowsCodexCandidates({
+      candidates: [
+        { command: `${NVM}\\codex`, executable: false, selected: false, source: "path" },
+        {
+          command: `${NVM}\\codex.cmd`,
+          executable: true,
+          selected: false,
+          source: "application",
+          versionFailureReason: "version_not_reported",
+        },
+      ],
+      env: {},
+      exists: existsIn([`${NVM}\\codex.cmd`]),
+      runner,
+    });
+
+    expect(runner).toHaveBeenCalledTimes(1);
+    expect(candidates).toMatchObject([
+      { command: `${NVM}\\codex.cmd`, executable: true, version: "0.146.0" },
+    ]);
+  });
+
   it("surfaces a spawn failure as the candidate's failure reason", async () => {
     const error = Object.assign(new Error("spawn EPERM"), { code: "EPERM" });
 

@@ -30,10 +30,6 @@ function classifiedLabel(reason: string): string | undefined {
     : undefined;
 }
 
-export function isClassifiedCommandDiscoveryFailure(reason: string): boolean {
-  return Object.hasOwn(CLASSIFIED_FAILURE_LABELS, reason);
-}
-
 /**
  * Chip-sized label for a discovery failure. Never returns the raw reason.
  *

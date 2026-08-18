@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { createCommandInvocation } from "@pwrdrvr/agent-transport";
+import { isValidatedDiscoveryCandidate } from "@pwragent/shared";
 import {
   CODEX_COMMAND_ENV,
   compareCodexCliVersions,
@@ -207,7 +208,12 @@ function classifyProbeFailure(error: unknown): string {
     killed?: boolean;
     signal?: string;
   };
-  if (failure?.killed || failure?.signal === "SIGTERM") {
+  // `killed` alone. Node sets it only when it terminated the child itself,
+  // which for execFile means the timeout fired. An externally-sent SIGTERM
+  // (EDR, Defender, a job-object kill) arrives as killed:false with the same
+  // signal, and reporting that as a timeout points the operator at a latency
+  // problem that does not exist.
+  if (failure?.killed === true) {
     return "version_probe_timed_out";
   }
   const code = failure?.code;
@@ -233,12 +239,7 @@ export function isValidatedCandidate(
     "executable" | "failureReason" | "version" | "versionFailureReason"
   >,
 ): boolean {
-  return (
-    candidate.executable
-    && Boolean(candidate.version)
-    && !candidate.failureReason
-    && !candidate.versionFailureReason
-  );
+  return isValidatedDiscoveryCandidate(candidate);
 }
 
 /**
