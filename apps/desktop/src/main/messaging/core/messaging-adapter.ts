@@ -160,6 +160,13 @@ export type MessagingBackendBridge = {
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot>;
+  /**
+   * Storage roots no local-file read may reach. Read through the bridge rather
+   * than the backend-registry singleton: that getter constructs a registry with
+   * real machine ACP discovery, so reaching for it from a tool call would make
+   * sending a file trigger a PATH scan, a release fetch, and a binary probe.
+   */
+  getLocalFilePrivateStorageRoots?(): readonly string[];
   resolveThreadTarget?(request: {
     backend: AppServerBackendKind;
     threadId: string;
