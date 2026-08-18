@@ -343,6 +343,8 @@ export function useThreadLinkHoverTarget(threadKey: string): boolean {
  * sidebar card then reads as a stuck highlight. `:focus-visible` is the
  * platform's own answer to "did the user get here by keyboard".
  */
+type HoverSourceOwner = { active: boolean };
+
 function isFocusVisible(element: Element): boolean {
   try {
     return element.matches(":focus-visible");
@@ -358,36 +360,62 @@ function isFocusVisible(element: Element): boolean {
  * in place if `target` changes while the pointer still rests on the link
  * (the title-bar link after a thread switch). Inert outside a provider.
  *
- * Each caller is one owner in the store, so releasing here never darkens a
- * highlight another link still holds.
+ * The pointer and focus are **independent** inputs and register as separate
+ * owners, because either can outlive the other on the same link: a pointer
+ * drifting off a Tab-focused link, or the blur Chromium delivers when the
+ * window is deactivated under a resting pointer. A shared owner would let
+ * whichever input ended first darken the row the other still holds.
+ *
+ * Each owner is distinct in the store, so releasing here never darkens a
+ * highlight another link holds either.
  */
 export function useThreadLinkHoverSource(
   target: ThreadLinkHoverTarget | undefined,
 ): {
-  show: () => void;
-  /** `show`, gated on visible keyboard focus — wire to `onFocus`. */
+  showFromPointer: () => void;
+  hideFromPointer: () => void;
+  /** Gated on visible keyboard focus — wire to `onFocus`. */
   showFromFocus: (element: Element) => void;
-  hide: () => void;
+  hideFromFocus: () => void;
+  /** Drop both inputs at once, for a link that was just activated. */
+  release: () => void;
 } {
   const store = useThreadLinks()?.hoverTarget;
-  // The owner token doubles as the "am I currently showing" flag so the
-  // re-point effect below can tell a resting pointer from an idle link.
-  const ownerRef = useRef<{ active: boolean }>({ active: false });
+  // Each owner token doubles as its own "am I currently showing" flag, so the
+  // re-point effect below can tell a resting input from an idle one.
+  const pointerOwnerRef = useRef<HoverSourceOwner>({ active: false });
+  const focusOwnerRef = useRef<HoverSourceOwner>({ active: false });
   const storeRef = useRef(store);
   storeRef.current = store;
   const targetRef = useRef(target);
   targetRef.current = target;
   const targetKey = target ? threadLinkHoverKey(target) : undefined;
+  const mountedRef = useRef(true);
 
-  const show = useCallback(() => {
-    const owner = ownerRef.current;
+  const showOwner = useCallback((owner: HoverSourceOwner) => {
     owner.active = true;
     const current = targetRef.current;
     if (current) {
       storeRef.current?.set(owner, current);
     }
   }, []);
-  const mountedRef = useRef(true);
+  const hideOwner = useCallback((owner: HoverSourceOwner) => {
+    owner.active = false;
+    storeRef.current?.clear(owner);
+  }, []);
+
+  const showFromPointer = useCallback(
+    () => showOwner(pointerOwnerRef.current),
+    [showOwner],
+  );
+  const hideFromPointer = useCallback(
+    () => hideOwner(pointerOwnerRef.current),
+    [hideOwner],
+  );
+  const hideFromFocus = useCallback(
+    () => hideOwner(focusOwnerRef.current),
+    [hideOwner],
+  );
   const showFromFocus = useCallback(
     (element: Element) => {
       // Read `:focus-visible` once the focus dispatch has settled rather than
@@ -395,45 +423,47 @@ export function useThreadLinkHoverSource(
       // longer matches, and an unmounted source stays silent.
       queueMicrotask(() => {
         if (mountedRef.current && isFocusVisible(element)) {
-          show();
+          showOwner(focusOwnerRef.current);
         }
       });
     },
-    [show],
+    [showOwner],
   );
-  const hide = useCallback(() => {
-    const owner = ownerRef.current;
-    owner.active = false;
-    storeRef.current?.clear(owner);
-  }, []);
+  const release = useCallback(() => {
+    hideOwner(pointerOwnerRef.current);
+    hideOwner(focusOwnerRef.current);
+  }, [hideOwner]);
 
-  // The link's target changed under a resting pointer: follow it, so the row
-  // that is lit is always the one activation would open.
+  // The link's target changed under a resting pointer or focus: follow it, so
+  // the row that is lit is always the one activation would open.
   useEffect(() => {
-    const owner = ownerRef.current;
-    if (!owner.active) {
-      return;
-    }
-    const current = targetRef.current;
-    if (current) {
-      storeRef.current?.set(owner, current);
-    } else {
-      storeRef.current?.clear(owner);
+    for (const owner of [pointerOwnerRef.current, focusOwnerRef.current]) {
+      if (!owner.active) {
+        continue;
+      }
+      const current = targetRef.current;
+      if (current) {
+        storeRef.current?.set(owner, current);
+      } else {
+        storeRef.current?.clear(owner);
+      }
     }
   }, [targetKey]);
 
   // A link can unmount under the pointer (its message re-renders, the
   // transcript navigates away) without ever seeing mouseleave.
   useEffect(() => {
-    const owner = ownerRef.current;
+    const pointerOwner = pointerOwnerRef.current;
+    const focusOwner = focusOwnerRef.current;
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      storeRef.current?.clear(owner);
+      storeRef.current?.clear(pointerOwner);
+      storeRef.current?.clear(focusOwner);
     };
   }, []);
 
-  return { show, showFromFocus, hide };
+  return { showFromPointer, hideFromPointer, showFromFocus, hideFromFocus, release };
 }
 
 export function ThreadLinkProvider(props: {

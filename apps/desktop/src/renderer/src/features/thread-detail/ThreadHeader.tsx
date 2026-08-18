@@ -179,11 +179,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                     className="thread-header__title-button"
                     title="Show in thread list"
                     type="button"
-                    onBlur={titleHover.hide}
+                    onBlur={titleHover.hideFromFocus}
                     onClick={props.onRevealSelectedThreadInList}
                     onFocus={(event) => titleHover.showFromFocus(event.currentTarget)}
-                    onMouseEnter={titleHover.show}
-                    onMouseLeave={titleHover.hide}
+                    onMouseEnter={titleHover.showFromPointer}
+                    onMouseLeave={titleHover.hideFromPointer}
                   >
                     {props.thread.title}
                   </button>

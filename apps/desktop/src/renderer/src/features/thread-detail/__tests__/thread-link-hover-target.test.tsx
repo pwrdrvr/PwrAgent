@@ -271,12 +271,52 @@ describe("thread link hover target", () => {
     fireEvent.mouseEnter(popout);
     expect(targetRow).toHaveClass("is-link-target");
 
-    // Tab from chip to pop-out likewise stays lit; blurring out of the group
-    // releases it.
+    // Tab from chip to pop-out likewise stays lit; releasing needs BOTH the
+    // focus to leave the group and the pointer to leave it.
     await focus(chip);
     await focus(popout);
     expect(targetRow).toHaveClass("is-link-target");
     await blur(popout);
+    expect(targetRow).toHaveClass("is-link-target");
+    fireEvent.mouseLeave(popout.parentElement!);
+    expect(targetRow).not.toHaveClass("is-link-target");
+  });
+
+  it("keeps a pointer-held highlight when the same link loses focus", async () => {
+    // The pointer and keyboard focus are independent inputs on one link, and
+    // either can outlive the other: Chromium delivers a blur when the window
+    // is deactivated, and a pointer can drift off a Tab-focused link. Neither
+    // ending may darken a row the other input still holds.
+    renderScene({ headerThread: targetThread });
+    const titleLink = screen.getByRole("button", { name: TITLE_LINK_NAME });
+    const targetRow = rowElement("RELATED query deranking issue");
+
+    fireEvent.mouseEnter(titleLink);
+    await focus(titleLink);
+    expect(targetRow).toHaveClass("is-link-target");
+
+    // Focus leaves (window deactivated, Tab onward) — the pointer has not moved.
+    await blur(titleLink);
+    expect(targetRow).toHaveClass("is-link-target");
+
+    fireEvent.mouseLeave(titleLink);
+    expect(targetRow).not.toHaveClass("is-link-target");
+  });
+
+  it("keeps a focus-held highlight when the pointer drifts off the same link", async () => {
+    renderScene({ headerThread: targetThread });
+    const titleLink = screen.getByRole("button", { name: TITLE_LINK_NAME });
+    const targetRow = rowElement("RELATED query deranking issue");
+
+    await focus(titleLink);
+    fireEvent.mouseEnter(titleLink);
+    expect(targetRow).toHaveClass("is-link-target");
+
+    // Pointer wanders off while the link still wears the focus ring.
+    fireEvent.mouseLeave(titleLink);
+    expect(targetRow).toHaveClass("is-link-target");
+
+    await blur(titleLink);
     expect(targetRow).not.toHaveClass("is-link-target");
   });
 

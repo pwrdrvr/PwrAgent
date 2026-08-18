@@ -68,7 +68,7 @@ export function ThreadChip(props: ThreadChipProps) {
     event.preventDefault();
     event.stopPropagation();
     tooltipController.hide();
-    hoverSource.hide();
+    hoverSource.release();
     event.currentTarget.blur();
     props.onOpen(link);
   };
@@ -82,11 +82,11 @@ export function ThreadChip(props: ThreadChipProps) {
           if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
             return;
           }
-          hoverSource.hide();
+          hoverSource.hideFromFocus();
         }}
         onFocus={(event) => hoverSource.showFromFocus(event.target as Element)}
-        onMouseEnter={hoverSource.show}
-        onMouseLeave={hoverSource.hide}
+        onMouseEnter={hoverSource.showFromPointer}
+        onMouseLeave={hoverSource.hideFromPointer}
       >
         <span
           aria-label={`Open thread ${label}`}
