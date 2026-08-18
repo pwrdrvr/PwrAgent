@@ -1,8 +1,7 @@
-import {
-  isBranchDrifted,
-  type BackendSummary,
-  type MessagingChannelKind,
-  type NavigationThreadSummary,
+import type {
+  BackendSummary,
+  MessagingChannelKind,
+  NavigationThreadSummary,
 } from "@pwragent/shared";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
@@ -95,31 +94,13 @@ type ThreadHeaderProps = {
 };
 
 /**
- * The thread records a working directory the backend reported, but nothing
- * resolved it to a linked project. Deliberately NOT an "it was deleted" test:
- * the renderer never stats a path, and an empty `linkedDirectories` has
- * several causes besides absence — a cwd that is not a git checkout, a git
- * probe that failed or timed out, or a backend that reports no cwd at all.
- * Absence is only one of them, so the copy this drives must stay limited to
- * what is actually known here. Do not reword it back into a claim about the
- * directory no longer existing without a real absence signal on the summary.
+ * Keep this header's height constant. The context rail is anchored to
+ * `.thread-view__layout`, the header's next sibling, so a conditional row in
+ * here slides the rail's icon strip down the pane. Thread-level warning
+ * banners live in `ThreadWarnings`, inside the chat column, for that reason.
  */
-function unlinkedWorkspacePath(thread: NavigationThreadSummary): string | undefined {
-  const projectKey = thread.projectKey?.trim();
-  if (!projectKey || thread.linkedDirectories.length > 0) {
-    return undefined;
-  }
-
-  return projectKey;
-}
-
 export function ThreadHeader(props: ThreadHeaderProps) {
-  const unlinkedPath = unlinkedWorkspacePath(props.thread);
   const projectLabel = props.projectLabel?.trim();
-  const branchDrifted = isBranchDrifted(
-    props.thread.gitBranch,
-    props.thread.observedGitBranch,
-  );
   // On Windows the AppTitleBar strip owns the layout toggles + masthead
   // actions; rendering them here too would duplicate the control and the
   // ⌘B/⌘⌥B listener.
@@ -364,22 +345,6 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           />
         </div>
       </div>
-      {unlinkedPath ? (
-        // `role="status"` (polite), not `alert`: this reports an unresolved
-        // link, not a failure, and it is derived state that re-announces on
-        // every thread selection. Matches the branch-drift banner right
-        // below, which shares this class and is the more urgent of the two.
-        <p className="thread-header__warning" role="status">
-          This thread's recorded working directory is not linked to a project:{" "}
-          <code>{unlinkedPath}</code>
-        </p>
-      ) : null}
-      {branchDrifted ? (
-        <p className="thread-header__warning" role="status">
-          Branch warning: this thread expects <code>{props.thread.gitBranch}</code>, but the
-          worktree is on <code>{props.thread.observedGitBranch}</code>.
-        </p>
-      ) : null}
     </header>
   );
 }

@@ -182,8 +182,6 @@ function hydrateHoverStableSidebarSnapshot(
 type SidebarProps = {
   backends: BackendSummary[];
   browseMode: BrowseMode;
-  createThreadError?: string;
-  pickDirectoryError?: string;
   directories: NavigationDirectorySummary[];
   error?: string;
   inboxThreads?: NavigationThreadSummary[];
@@ -201,9 +199,6 @@ type SidebarProps = {
     backend: AppServerBackendKind;
     executionMode: ThreadExecutionMode;
   };
-  launchpadError?: string;
-  archiveThreadError?: string;
-  renameThreadError?: string;
   runtimeIdentity?: RuntimeIdentity;
   activeProfile?: string;
   automationsActive?: boolean;
@@ -1942,17 +1937,13 @@ export function Sidebar(props: SidebarProps) {
         </div>
       ) : null}
 
-      {props.createThreadError ? (
-        <p className="sidebar-error sidebar-error--masthead">{props.createThreadError}</p>
-      ) : props.pickDirectoryError ? (
-        <p className="sidebar-error sidebar-error--masthead">{props.pickDirectoryError}</p>
-      ) : props.launchpadError ? (
-        <p className="sidebar-error sidebar-error--masthead">{props.launchpadError}</p>
-      ) : props.archiveThreadError ? (
-        <p className="sidebar-error sidebar-error--masthead">{props.archiveThreadError}</p>
-      ) : props.renameThreadError ? (
-        <p className="sidebar-error sidebar-error--masthead">{props.renameThreadError}</p>
-      ) : null}
+      {/* The masthead error slot is gone. It rendered five unrelated
+          failures through one `? :` chain, so a stale create error masked a
+          fresh rename error, none of them could be dismissed or timed out,
+          and each one permanently shortened the thread list. Create, rename,
+          and archive failures now go to the durable notice stack; the
+          directory-picker and launchpad failures render at their own
+          controls in the composer, which stay on screen. */}
 
       <section className="sidebar__section sidebar__section--fill" aria-label="Thread browser">
         <div className="lens-switch" role="tablist" aria-label="Thread lenses">

@@ -47,6 +47,7 @@ import {
   sortSubthreadSummaries,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import type { ThreadActionErrorKind } from "../features/notifications/thread-action-error-notice";
 import { fileLabelFromPath } from "./directory-references";
 import {
   readRendererFederationLabel,
@@ -2844,6 +2845,19 @@ type UseThreadNavigationOptions = {
   enabled?: boolean;
   lightweightNavigationRefresh?: boolean;
   threadViewVisible?: boolean;
+  /**
+   * Publishes create / rename / archive / discard failures to the app's
+   * notice stack. A `message` of `undefined` means the slot cleared — the
+   * next attempt started, or it succeeded — and the notice should come down.
+   *
+   * These actions used to render into a shared static slot at the top of the
+   * sidebar, which had no dismiss, no timeout, a fixed priority order that
+   * let one stale error mask the other four, and a permanent layout cost.
+   */
+  onThreadActionError?: (event: {
+    kind: ThreadActionErrorKind;
+    message?: string;
+  }) => void;
 };
 
 export function useThreadNavigation(
@@ -2868,7 +2882,6 @@ export function useThreadNavigation(
     parent: NavigationThreadSummary,
     mode: ThreadWorkspaceMode,
   ) => Promise<void>;
-  createThreadError?: string;
   creatingThread?: CreatingThreadState;
   directories: NavigationDirectorySummary[];
   error?: string;
@@ -2877,11 +2890,9 @@ export function useThreadNavigation(
   inboxThreads: NavigationThreadSummary[];
   recentThreads: NavigationThreadSummary[];
   launchpadError?: string;
-  archiveThreadError?: string;
   archiveThreadNotice?: ArchiveThreadNotice;
   dismissArchiveThreadNotice: () => void;
   worktreeArchiveError?: string;
-  renameThreadError?: string;
   loading: boolean;
   loaded: boolean;
   refreshing: boolean;
@@ -3120,12 +3131,66 @@ export function useThreadNavigation(
   // network. Keep only the most recent launch intent so a slow prior peer or
   // project selection cannot replace the launchpad the operator just chose.
   const federatedLaunchpadOpenRevisionRef = useRef(0);
+  // Create / rename / archive keep their single error slot here — every
+  // producer already clears it when the next attempt starts — but the slot
+  // is now published to the notice stack instead of rendered inline. See
+  // `onThreadActionError`.
   const [createThreadError, setCreateThreadError] = useState<string>();
   const [launchpadError, setLaunchpadError] = useState<string>();
   const [archiveThreadError, setArchiveThreadError] = useState<string>();
   const [archiveThreadNotice, setArchiveThreadNotice] = useState<ArchiveThreadNotice>();
   const [worktreeArchiveError, setWorktreeArchiveError] = useState<string>();
   const [renameThreadError, setRenameThreadError] = useState<string>();
+  // Held in a ref so a caller that rebuilds the callback every render cannot
+  // re-fire the publish effects below on an unchanged message.
+  const onThreadActionErrorRef = useRef(options.onThreadActionError);
+  useEffect(() => {
+    onThreadActionErrorRef.current = options.onThreadActionError;
+  }, [options.onThreadActionError]);
+  useEffect(() => {
+    onThreadActionErrorRef.current?.({
+      kind: "create-thread",
+      message: createThreadError,
+    });
+  }, [createThreadError]);
+  useEffect(() => {
+    onThreadActionErrorRef.current?.({
+      kind: "archive-thread",
+      message: archiveThreadError,
+    });
+  }, [archiveThreadError]);
+  useEffect(() => {
+    onThreadActionErrorRef.current?.({
+      kind: "rename-thread",
+      message: renameThreadError,
+    });
+  }, [renameThreadError]);
+  // Discard has no slot of its own. `discardLaunchpad` clears the selection
+  // before it persists the discard, so the launchpad composer that renders
+  // `launchpadError` is already unmounted when the persistence call rejects —
+  // the message would land on a surface nobody is looking at (or, worse, on
+  // the next unrelated launchpad the operator opens). Publish it directly.
+  const publishDiscardLaunchpadError = useCallback((error?: unknown): void => {
+    onThreadActionErrorRef.current?.({
+      kind: "discard-launchpad",
+      message:
+        error === undefined
+          ? undefined
+          : error instanceof Error
+            ? error.message
+            : String(error),
+    });
+  }, []);
+  // Same shape for the masthead's "Add project directory" entry. It lives in
+  // the sidebar / title bar, and `pickDirectoryError`'s only inline surface is
+  // the launchpad composer's project picker — not mounted behind that menu, so
+  // a rejected pick ("not a git repository") would land nowhere. The ref
+  // carries what `pickDirectoryForReference` last recorded, since the state
+  // setter cannot be read back inside the same call.
+  const lastPickDirectoryErrorRef = useRef<string>(undefined);
+  const publishAddDirectoryError = useCallback((message?: string): void => {
+    onThreadActionErrorRef.current?.({ kind: "add-directory", message });
+  }, []);
   const [updatingThreadExecutionMode, setUpdatingThreadExecutionMode] =
     useState<ThreadExecutionMode>();
   const [setThreadExecutionModeError, setSetThreadExecutionModeError] =
@@ -6138,6 +6203,11 @@ export function useThreadNavigation(
     [desktopApi, refresh, rendererFederationTarget],
   );
 
+  const recordPickDirectoryError = useCallback((message?: string): void => {
+    lastPickDirectoryErrorRef.current = message;
+    setPickDirectoryError(message);
+  }, []);
+
   const pickDirectoryForReference = useCallback(async (): Promise<
     { label: string; path: string } | undefined
   > => {
@@ -6147,6 +6217,7 @@ export function useThreadNavigation(
     // the caller mints a chip in place instead of moving to the new
     // launchpad. Same cancel-vs-failure split as the sibling: cancel is
     // silent, validation failure surfaces via `pickDirectoryError`.
+    lastPickDirectoryErrorRef.current = undefined;
     if (rendererFederationTarget) {
       return undefined;
     }
@@ -6154,11 +6225,11 @@ export function useThreadNavigation(
       !desktopApi?.pickDirectoryFromDisk ||
       !desktopApi?.registerDirectoryFromDisk
     ) {
-      setPickDirectoryError("Desktop bridge is missing the directory picker.");
+      recordPickDirectoryError("Desktop bridge is missing the directory picker.");
       return undefined;
     }
 
-    setPickDirectoryError(undefined);
+    recordPickDirectoryError(undefined);
     setPickingDirectory(true);
     try {
       const pick = await desktopApi.pickDirectoryFromDisk();
@@ -6169,7 +6240,7 @@ export function useThreadNavigation(
         path: pick.path,
       });
       if (!result.ok) {
-        setPickDirectoryError(result.message);
+        recordPickDirectoryError(result.message);
         return undefined;
       }
       setLocalLaunchpads((current) => ({
@@ -6189,22 +6260,31 @@ export function useThreadNavigation(
         path: result.launchpad.directoryPath ?? pick.path,
       };
     } catch (error) {
-      setPickDirectoryError(
+      recordPickDirectoryError(
         error instanceof Error ? error.message : String(error),
       );
       return undefined;
     } finally {
       setPickingDirectory(false);
     }
-  }, [desktopApi, rendererFederationTarget]);
+  }, [desktopApi, recordPickDirectoryError, rendererFederationTarget]);
 
   const addProjectDirectory = useCallback(async (): Promise<void> => {
     const picked = await pickDirectoryForReference();
+    // Nothing on screen renders `pickDirectoryError` for this entry point,
+    // so publish the outcome to the notice stack. A cancel or a success
+    // records `undefined`, which takes any prior notice down.
+    publishAddDirectoryError(lastPickDirectoryErrorRef.current);
     if (picked) {
       updateBrowseMode("directories");
       await refresh();
     }
-  }, [pickDirectoryForReference, refresh, updateBrowseMode]);
+  }, [
+    pickDirectoryForReference,
+    publishAddDirectoryError,
+    refresh,
+    updateBrowseMode,
+  ]);
 
   const pickAndAttachDirectoryToSelectedThread = useCallback(async (): Promise<void> => {
     if (rendererFederationTarget) {
@@ -6977,6 +7057,9 @@ export function useThreadNavigation(
    * selection to the source card the user invoked it from.
    */
   const discardLaunchpad = useCallback((directoryKey: string): boolean => {
+    // A previous discard failure is stale the moment the operator tries
+    // again; clear it so a retry that succeeds takes the toast down.
+    publishDiscardLaunchpadError();
     if (
       activeFederatedLaunchpad
       && activeFederatedLaunchpad.launchpad.directoryKey === directoryKey
@@ -6993,7 +7076,7 @@ export function useThreadNavigation(
       );
 
       const handleDiscardError = (error: unknown): void => {
-        setLaunchpadError(error instanceof Error ? error.message : String(error));
+        publishDiscardLaunchpadError(error);
       };
       if (isRegisteredDirectory) {
         void desktopApi
@@ -7058,7 +7141,7 @@ export function useThreadNavigation(
     // draft on the next open (or after a refresh / restart / in another window).
     // The in-memory reset above only affects this render.
     const handleDiscardError = (error: unknown): void => {
-      setLaunchpadError(error instanceof Error ? error.message : String(error));
+      publishDiscardLaunchpadError(error);
     };
     if (isRegisteredDirectory) {
       // Keep the registered directory (and its remembered sticky settings);
@@ -7075,7 +7158,12 @@ export function useThreadNavigation(
         .catch(handleDiscardError);
     }
     return restoresSourceThread;
-  }, [activeFederatedLaunchpad, desktopApi, directories]);
+  }, [
+    activeFederatedLaunchpad,
+    desktopApi,
+    directories,
+    publishDiscardLaunchpadError,
+  ]);
 
   const archiveThread = useCallback(
     async (
@@ -8282,7 +8370,6 @@ export function useThreadNavigation(
     createSubthread,
     discardLaunchpad,
     forkThread,
-    createThreadError,
     creatingThread,
     directories,
     error: state.error,
@@ -8291,11 +8378,9 @@ export function useThreadNavigation(
     inboxThreads,
     recentThreads,
     launchpadError,
-    archiveThreadError,
     archiveThreadNotice,
     dismissArchiveThreadNotice,
     worktreeArchiveError,
-    renameThreadError,
     loading: state.loading,
     loaded: Boolean(state.response),
     refreshing: state.refreshing,

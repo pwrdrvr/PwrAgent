@@ -1501,12 +1501,14 @@ textarea,
      compact title's top at y=18.5 — exactly where the brand sits in
      the sidebar masthead. Result: title, brand, and messaging pills
      all share the same vertical centerline.
-     The header is now a column: a single top row (breadcrumb + chips on
-     the left, layout toggles + MessagingStatusBar on the right) with any
-     directory/branch warnings stacked beneath it. Keeping MSG in the top
-     row — instead of vertically centered against a `__main` that grows
-     when a warning appears — is what keeps the MSG cluster on the
-     titlebar line on macOS (the warnings used to push it down). */
+     The header is a column holding exactly ONE row (breadcrumb + chips on
+     the left, layout toggles + MessagingStatusBar on the right). Keeping MSG
+     in that row — instead of vertically centered against a `__main` that
+     grows — is what keeps the MSG cluster on the titlebar line on macOS.
+     Directory/branch warnings used to stack beneath it here and pushed MSG
+     down; they now render in `.thread-warnings` inside the chat column so
+     this header's height (and therefore the context rail's top) is
+     constant. Do not add a second row here. */
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;
@@ -6348,10 +6350,6 @@ textarea,
   color: var(--danger-text);
   font-size: 14px;
   line-height: 1.45;
-}
-
-.sidebar-error--masthead {
-  margin-top: 12px;
 }
 
 .thread-context-menu {
@@ -13376,7 +13374,22 @@ textarea,
   background: var(--status-warning);
 }
 
-.thread-header__warning {
+/* Thread-level warning banners. These sit at the top of the chat column
+   (`.thread-view__primary`), NOT in `.thread-header` — a conditional row in
+   the header changes its height, which moves `.thread-view__layout` and
+   drags the absolutely-positioned context rail down with it. The left inset
+   matches the header's 22px so the banner still lines up under the title. */
+.thread-warnings {
+  display: flex;
+  /* `.thread-view__primary` is a flex column whose transcript takes the
+     remaining space, so pin the banners at their content height instead of
+     letting the default `flex-shrink: 1` compress them on a short window. */
+  flex: 0 0 auto;
+  flex-direction: column;
+  padding: 0 22px;
+}
+
+.thread-warning {
   max-width: min(72vw, 760px);
   margin: 10px 0 0;
   padding: 10px 12px;
@@ -13388,7 +13401,7 @@ textarea,
   line-height: 1.45;
 }
 
-.thread-header__warning code {
+.thread-warning code {
   color: var(--accent-bright);
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
@@ -19106,7 +19119,18 @@ a.transcript-message__messaging-origin:focus-visible {
      or squash its toggles/MSG to clear a rail that overlaps the title line.
      `right: 0` lands on the layout's padding edge = the window's right edge;
      the layout's padding-right reserves the gutter so the transcript /
-     composer sit flush against the rail's left border when pinned. */
+     composer sit flush against the rail's left border when pinned.
+
+     This anchor makes the rail's top a function of the header's height, so
+     THE HEADER MUST STAY A FIXED HEIGHT. It used to grow two conditional
+     warning rows, and each one slid the rail's icon strip down the pane —
+     branch drift lands from a background poll, so the strip moved under the
+     operator's cursor. Those banners now render in `.thread-view__primary`
+     (see `.thread-warnings`). Do not add a conditional row to the header,
+     and do not "fix" a future displacement with a constant top offset: the
+     header also relocates the sidebar's wordmark into itself, so no
+     hard-coded height is right. Keep the header one fixed row and the rail
+     cannot move. */
   position: absolute;
   top: 0;
   right: 0;

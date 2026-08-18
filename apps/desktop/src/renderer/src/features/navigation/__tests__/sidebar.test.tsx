@@ -340,10 +340,8 @@ describe("Sidebar", () => {
         activeProfile="dev"
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         profiles={[]}
@@ -388,10 +386,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="recents"
-          createThreadError={undefined}
           directories={directories}
           inboxThreads={[sharedThread, nextThread]}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey="codex:thread-1"
@@ -408,10 +404,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="recents"
-          createThreadError={undefined}
           directories={directories}
           inboxThreads={[sharedThread, nextThread]}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey="codex:thread-next"
@@ -461,10 +455,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="directories"
-          createThreadError={undefined}
           directories={[directories[0]!, projectBDirectory]}
           inboxThreads={[sharedThread, nextThread]}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey="codex:thread-1"
@@ -492,10 +484,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="directories"
-          createThreadError={undefined}
           directories={[directories[0]!, projectBDirectory]}
           inboxThreads={[sharedThread, nextThread]}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey="codex:thread-in-projectb"
@@ -557,7 +547,6 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[
           {
             ...collapsedDirectory,
@@ -565,7 +554,6 @@ describe("Sidebar", () => {
           },
         ]}
         inboxThreads={[pinnedThread, parentThread, childThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         revealSelectedThreadRequest={1}
@@ -667,10 +655,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="directories"
-          createThreadError={undefined}
           directories={[directories[0]!, projectBWithoutThread]}
           inboxThreads={[sharedThread, refreshedThread]}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey="codex:thread-1"
@@ -696,10 +682,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="directories"
-          createThreadError={undefined}
           directories={[directories[0]!, projectBWithoutThread]}
           inboxThreads={[sharedThread, refreshedThread]}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey="codex:thread-after-refresh"
@@ -719,10 +703,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="directories"
-          createThreadError={undefined}
           directories={[directories[0]!, projectBWithThread]}
           inboxThreads={[sharedThread, refreshedThread]}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey="codex:thread-after-refresh"
@@ -754,10 +736,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -803,10 +783,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -866,10 +844,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="inbox"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -910,10 +886,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         newThreadDirectoryLabel="PwrAgnt"
@@ -1741,10 +1715,8 @@ describe("Sidebar", () => {
           },
         ]}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -1800,10 +1772,8 @@ describe("Sidebar", () => {
           },
         ]}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -1840,10 +1810,8 @@ describe("Sidebar", () => {
           },
         ]}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -1865,10 +1833,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -1912,7 +1878,6 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[
           {
             ...directories[0],
@@ -1920,7 +1885,6 @@ describe("Sidebar", () => {
           },
         ]}
         inboxThreads={[sharedThread, localThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -2004,10 +1968,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[pwrGitDirectory]}
         inboxThreads={[multiDirectoryThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -2051,10 +2013,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -2089,10 +2049,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[unconfiguredDirectory]}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -2141,10 +2099,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={openedOnlyDirectories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -2184,10 +2140,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={pendingDirectories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -2209,10 +2163,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -2246,10 +2198,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[activeThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -2310,10 +2260,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[directory]}
         inboxThreads={[backendActiveThread, locallyThinkingThread, idleThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -2364,10 +2312,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         approvalRequestThreadKeys={{ "codex:thread-1": true }}
@@ -2398,10 +2344,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         inputRequestThreadKeys={{ "codex:thread-1": true }}
@@ -2432,10 +2376,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -2461,10 +2403,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[updatedSinceSeenThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -2521,10 +2461,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode={browseMode}
-          createThreadError={undefined}
           directories={directories}
           inboxThreads={allThreads}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey={undefined}
@@ -2564,9 +2502,7 @@ describe("Sidebar", () => {
       const props = {
         backends,
         browseMode: "attention" as const,
-        createThreadError: undefined,
         directories,
-        launchpadError: undefined,
         loading: false,
         creatingThread: undefined,
         selectedItemKey: undefined,
@@ -2621,10 +2557,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="inbox"
-          createThreadError={undefined}
           directories={directories}
           inboxThreads={[idleThread]}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey={undefined}
@@ -2678,10 +2612,8 @@ describe("Sidebar", () => {
         const sidebarProps = (threads: typeof allThreads) => ({
           backends,
           browseMode: "inbox" as const,
-          createThreadError: undefined,
           directories,
           inboxThreads: threads,
-          launchpadError: undefined,
           loading: false,
           creatingThread: undefined,
           selectedItemKey: undefined,
@@ -2741,10 +2673,8 @@ describe("Sidebar", () => {
       const remoteSidebarProps = (threads: typeof allThreads) => ({
         backends,
         browseMode: "inbox" as const,
-        createThreadError: undefined,
         directories,
         inboxThreads: threads,
-        launchpadError: undefined,
         loading: false,
         creatingThread: undefined,
         selectedItemKey: undefined,
@@ -2921,10 +2851,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="attention"
-          createThreadError={undefined}
           directories={directories}
           inboxThreads={[activeAndUnread]}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey={undefined}
@@ -2948,10 +2876,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="attention"
-          createThreadError={undefined}
           directories={directories}
           inboxThreads={[idleThread]}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey={undefined}
@@ -3007,10 +2933,8 @@ describe("Sidebar", () => {
       const props = (threads: typeof allThreads) => ({
         backends,
         browseMode: "inbox" as const,
-        createThreadError: undefined,
         directories,
         inboxThreads: threads,
-        launchpadError: undefined,
         loading: false,
         creatingThread: undefined,
         selectedItemKey: undefined,
@@ -3054,10 +2978,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="inbox"
-          createThreadError={undefined}
           directories={directories}
           inboxThreads={[activeThread, remoteActive, unreadThread]}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey={undefined}
@@ -3106,11 +3028,9 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode={browseMode}
-          createThreadError={undefined}
           directories={directories}
           draftThreadKeys={draftThreadKeys}
           inboxThreads={allThreads}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey={undefined}
@@ -3198,14 +3118,12 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="inbox"
-          createThreadError={undefined}
           directories={directories}
           draftThreadKeys={{
             ...draftThreadKeys,
             [`${secondDraftThread.source}:${secondDraftThread.id}`]: true,
           }}
           inboxThreads={[...allThreads, secondDraftThread]}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey={undefined}
@@ -3250,10 +3168,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="inbox"
-          createThreadError={undefined}
           directories={directories}
           inboxThreads={allThreads}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey={undefined}
@@ -3278,10 +3194,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="drafts"
-          createThreadError={undefined}
           directories={directories}
           inboxThreads={allThreads}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey={undefined}
@@ -3306,10 +3220,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="inbox"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[updatedSinceSeenThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -3358,11 +3270,9 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[updatedLater, createdLater]}
         recentThreads={[createdLater, updatedLater]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -3391,10 +3301,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -3862,10 +3770,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread, childThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -3918,10 +3824,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread, childThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -3959,10 +3863,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -4029,7 +3931,6 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[
           {
             ...directories[0]!,
@@ -4037,7 +3938,6 @@ describe("Sidebar", () => {
           },
         ]}
         inboxThreads={[]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-top"
@@ -4090,10 +3990,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -4137,10 +4035,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[directoryWithPinnedThread]}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -4197,7 +4093,6 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[
           {
             ...directoryWithPinnedThread,
@@ -4205,7 +4100,6 @@ describe("Sidebar", () => {
           },
         ]}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-updated"
@@ -4276,10 +4170,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[directoryWithManyThreads]}
         inboxThreads={cappedThreads}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-cap-1"
@@ -4338,10 +4230,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[directoryWithManyThreads]}
         inboxThreads={cappedThreads}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         // thread-cap-12 sits in the overflow (beyond the cap of 10).
@@ -4370,10 +4260,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -4413,10 +4301,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[directoryWithPinnedThread]}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -4464,10 +4350,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -4531,10 +4415,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -4605,10 +4487,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -4676,10 +4556,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -4747,7 +4625,6 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[
           {
             ...directories[0]!,
@@ -4759,7 +4636,6 @@ describe("Sidebar", () => {
           },
         ]}
         inboxThreads={[firstPinnedThread, secondPinnedThread, unpinnedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -4838,10 +4714,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -4901,10 +4775,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[directories[0], projectBDirectory]}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -4939,10 +4811,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -4983,10 +4853,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[readThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -5014,10 +4882,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="attention"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[updatedSinceSeenThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-updated"
@@ -5043,10 +4909,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[updatedSinceSeenThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-updated"
@@ -5120,10 +4984,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -5158,10 +5020,8 @@ describe("Sidebar", () => {
         <Sidebar
           backends={backends}
           browseMode="recents"
-          createThreadError={undefined}
           directories={directories}
           inboxThreads={[sharedThread]}
-          launchpadError={undefined}
           loading={false}
           creatingThread={undefined}
           selectedItemKey="codex:thread-1"
@@ -5200,7 +5060,6 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[
           {
@@ -5216,7 +5075,6 @@ describe("Sidebar", () => {
             ],
           },
         ]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -5267,10 +5125,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backendsWithoutArchive}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -5296,10 +5152,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -5349,10 +5203,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={[...backends, acpBackend]}
         browseMode="recents"
-        createThreadError={undefined}
         directories={[]}
         inboxThreads={[acpThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="acp:gemini:session-1"
@@ -5384,10 +5236,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -5417,10 +5267,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -5456,10 +5304,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -5492,10 +5338,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -5529,10 +5373,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -5604,10 +5446,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[threadWithBase]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -5653,10 +5493,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[pullRequestThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -5695,10 +5533,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         runtimeIdentity={{
@@ -5759,10 +5595,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         runtimeIdentity={{
@@ -5789,7 +5623,6 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[
           {
@@ -5797,7 +5630,6 @@ describe("Sidebar", () => {
             observedGitBranch: "main",
           },
         ]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -5824,10 +5656,8 @@ describe("Sidebar", () => {
       <Sidebar
         backends={backends}
         browseMode="recents"
-        createThreadError={undefined}
         directories={directories}
         inboxThreads={[sharedThread]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-1"
@@ -5948,10 +5778,8 @@ describe("Sidebar directory pinning", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={directoriesArg}
         inboxThreads={[]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={undefined}
@@ -6491,10 +6319,8 @@ describe("Sidebar directory pinning", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[pinnedA, pinnedB]}
         inboxThreads={[]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={threadKey}
@@ -6534,10 +6360,8 @@ describe("Sidebar directory pinning", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[unpinnedA, pinnedB]}
         inboxThreads={[]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey={threadKey}
@@ -6579,10 +6403,8 @@ describe("Sidebar directory pinning", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[pinnedA]}
         inboxThreads={[]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         // selectedItemKey points at the thread inside A so the
@@ -6850,7 +6672,6 @@ describe("Sidebar thread pinning Move items", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[
           pinnedThreadsDirectory([
             "codex:codex-top",
@@ -6859,7 +6680,6 @@ describe("Sidebar thread pinning Move items", () => {
           ]),
         ]}
         inboxThreads={[]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:codex-top"
@@ -6918,12 +6738,10 @@ describe("Sidebar thread pinning Move items", () => {
       <Sidebar
         backends={backends}
         browseMode="directories"
-        createThreadError={undefined}
         directories={[
           pinnedThreadsDirectory(["codex:thread-top", "codex:thread-bottom"]),
         ]}
         inboxThreads={[]}
-        launchpadError={undefined}
         loading={false}
         creatingThread={undefined}
         selectedItemKey="codex:thread-top"

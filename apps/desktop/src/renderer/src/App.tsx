@@ -109,6 +109,11 @@ import {
   appNoticeReducer,
   INITIAL_APP_NOTICE_STATE,
 } from "./features/notifications/app-notice-state";
+import {
+  resolveThreadActionErrorNotice,
+  threadActionErrorNoticeId,
+  type ThreadActionErrorKind,
+} from "./features/notifications/thread-action-error-notice";
 import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-auto-dispatch-budget-notice";
 import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNotices";
 import { GrokCliUpdateNotice } from "./features/notifications/GrokCliUpdateNotice";
@@ -343,6 +348,30 @@ function DesktopAppShell(props: {
   }, []);
   const dismissAppNotice = useCallback((id: string): void => {
     dispatchAppNotice({ type: "dismiss", id });
+  }, []);
+  /* Thread create / rename / archive failures. The originating control is
+     always gone by the time these resolve — the rename dialog closes on
+     submit, the context menu closes on click, and a failed create has no
+     thread to point at — so they land in the durable stack rather than a
+     static slot. An empty message means the producer cleared it. */
+  const handleThreadActionError = useCallback((event: {
+    kind: ThreadActionErrorKind;
+    message?: string;
+  }): void => {
+    if (!event.message) {
+      dispatchAppNotice({
+        type: "dismiss",
+        id: threadActionErrorNoticeId(event.kind),
+      });
+      return;
+    }
+    dispatchAppNotice({
+      type: "show",
+      notice: resolveThreadActionErrorNotice({
+        kind: event.kind,
+        message: event.message,
+      }),
+    });
   }, []);
   const [githubPrSamlEvents, setGithubPrSamlEvents] =
     useState<GithubPrSamlEnforcementEvent[]>([]);
@@ -1101,6 +1130,7 @@ function DesktopAppShell(props: {
     enabled: normalAppEnabled,
     lightweightNavigationRefresh:
       settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false,
+    onThreadActionError: handleThreadActionError,
     threadViewVisible: mainView === "thread",
   });
   useEffect(() => {
@@ -1888,7 +1918,6 @@ function DesktopAppShell(props: {
     providerModelDefaults: settings.snapshot?.models?.providerDefaults,
     providerThreadMigrations:
       settings.snapshot?.models?.providerThreadMigrations,
-    archiveThreadError: navigation.archiveThreadError,
     clearPendingRequest: session.clearPendingRequest,
     composerDisabled:
       !navigation.selectedThread ||
@@ -2277,8 +2306,6 @@ function DesktopAppShell(props: {
           addingProjectDirectory={navigation.pickingDirectory}
           backends={backendSummaries.backends}
           browseMode={navigation.browseMode}
-          createThreadError={navigation.createThreadError}
-          pickDirectoryError={navigation.pickDirectoryError}
           creatingThread={navigation.creatingThread}
           directories={navigation.directories}
           error={navigation.error}
@@ -2287,12 +2314,9 @@ function DesktopAppShell(props: {
           attentionPromoteOnTurnEnd={
             settings.snapshot?.general.attentionPromoteOnTurnEnd?.value ?? true
           }
-          archiveThreadError={navigation.archiveThreadError}
-          renameThreadError={navigation.renameThreadError}
           runtimeIdentity={runtimeIdentity}
           activeProfile={profiles.activeProfile}
           profiles={profiles.profiles}
-          launchpadError={navigation.launchpadError}
           loaded={navigation.loaded}
           loading={navigation.loading}
           approvalRequestThreadKeys={session.approvalRequestThreadKeys}

@@ -22,6 +22,28 @@ import {
 } from "../native-drag-interaction";
 import { useThreadNavigation } from "../useThreadNavigation";
 
+/**
+ * Create / rename / archive failures leave the hook through
+ * `onThreadActionError` instead of a returned string — they render as
+ * durable toasts now, not as a static slot in the sidebar. The hook
+ * republishes the slot on every change, including the clear that each new
+ * attempt performs, so the LAST call for a kind is the current state.
+ */
+function latestThreadActionError(
+  onThreadActionError: ReturnType<typeof vi.fn>,
+  kind:
+    | "add-directory"
+    | "archive-thread"
+    | "create-thread"
+    | "discard-launchpad"
+    | "rename-thread",
+): string | undefined {
+  const calls = onThreadActionError.mock.calls.filter(
+    ([event]) => event?.kind === kind,
+  );
+  return calls.at(-1)?.[0]?.message;
+}
+
 describe("useThreadNavigation", () => {
   beforeEach(() => {
     vi.spyOn(document, "hasFocus").mockReturnValue(true);
@@ -3429,7 +3451,10 @@ describe("useThreadNavigation", () => {
       onAgentEvent: () => () => undefined,
     };
 
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
 
     await waitFor(() => {
       expect(result.current.threads.map((thread) => thread.id)).toEqual([
@@ -3441,7 +3466,7 @@ describe("useThreadNavigation", () => {
       await result.current.archiveThread(result.current.threads[0]!);
     });
 
-    expect(result.current.archiveThreadError).toBeUndefined();
+    expect(latestThreadActionError(onThreadActionError, "archive-thread")).toBeUndefined();
     expect(result.current.archiveThreadNotice).toMatchObject({
       title: "Worktree cleanup skipped",
       message: "Thread archived. The worktree cleanup did not complete.",
@@ -3502,7 +3527,10 @@ describe("useThreadNavigation", () => {
       onAgentEvent: () => () => undefined,
     };
 
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
 
     await waitFor(() => {
       expect(result.current.threads.map((thread) => thread.id)).toEqual([
@@ -3514,7 +3542,7 @@ describe("useThreadNavigation", () => {
       await result.current.archiveThread(result.current.threads[0]!);
     });
 
-    expect(result.current.archiveThreadError).toBeUndefined();
+    expect(latestThreadActionError(onThreadActionError, "archive-thread")).toBeUndefined();
     expect(result.current.archiveThreadNotice).toMatchObject({
       title: "Worktree cleanup skipped",
       message: "Thread archived. The worktree cleanup did not complete.",
@@ -3572,7 +3600,10 @@ describe("useThreadNavigation", () => {
       onAgentEvent: () => () => undefined,
     };
 
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
 
     await waitFor(() => {
       expect(result.current.threads.map((thread) => thread.id)).toEqual([
@@ -3584,7 +3615,7 @@ describe("useThreadNavigation", () => {
       await result.current.archiveThread(result.current.threads[0]!);
     });
 
-    expect(result.current.archiveThreadError).toBeUndefined();
+    expect(latestThreadActionError(onThreadActionError, "archive-thread")).toBeUndefined();
     expect(result.current.archiveThreadNotice).toMatchObject({
       title: "Worktree kept",
       message:
@@ -4200,7 +4231,10 @@ describe("useThreadNavigation", () => {
       onAgentEvent: () => () => undefined,
     };
 
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
 
     await waitFor(() => {
       expect(result.current.selectedThread?.id).toBe("thread-archived");
@@ -4210,7 +4244,7 @@ describe("useThreadNavigation", () => {
       await result.current.archiveThread(result.current.threads[0]!);
     });
 
-    expect(result.current.archiveThreadError).toBe("Archive failed");
+    expect(latestThreadActionError(onThreadActionError, "archive-thread")).toBe("Archive failed");
     expect(result.current.threads.map((thread) => thread.id)).toEqual([
       "thread-archived",
       "thread-fallback",
@@ -7133,6 +7167,94 @@ describe("useThreadNavigation", () => {
     );
   });
 
+  it("publishes a create failure to the notice stack and clears it on retry", async () => {
+    // Regression: `Desktop backend registry is closed` pinned itself in the
+    // sidebar masthead with no dismiss, no timeout, and a permanent layout
+    // cost. It is a durable toast now, and the retry that clears the hook's
+    // slot has to take the toast down with it.
+    let attempt = 0;
+    const ensureDirectoryLaunchpad = vi.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error("Desktop backend registry is closed");
+      }
+      return {
+        launchpad: {
+          directoryKey: "workspace:/Users/test/.pwragent/projects",
+          directoryKind: "workspace" as const,
+          directoryLabel: "Workspaces",
+          directoryPath: "/Users/test/.pwragent/projects",
+          backend: "codex" as const,
+          executionMode: "default" as const,
+          prompt: "",
+          workMode: "local" as const,
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        defaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      };
+    });
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: "workspace:/Users/test/.pwragent/projects",
+          kind: "workspace" as const,
+          label: "Workspaces",
+          path: "/Users/test/.pwragent/projects",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      ensureDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.directories[0]?.label).toBe("Workspaces");
+    });
+
+    await act(async () => {
+      await result.current.createThread();
+    });
+
+    await waitFor(() => {
+      expect(latestThreadActionError(onThreadActionError, "create-thread")).toBe(
+        "Desktop backend registry is closed",
+      );
+    });
+
+    await act(async () => {
+      await result.current.createThread();
+    });
+
+    await waitFor(() => {
+      expect(
+        latestThreadActionError(onThreadActionError, "create-thread"),
+      ).toBeUndefined();
+    });
+  });
+
   it("opens masthead new-thread drafts while the initial navigation snapshot is loading", async () => {
     const initialSnapshot = createDeferred<NavigationSnapshot>();
     const emptySnapshot: NavigationSnapshot = {
@@ -8743,6 +8865,149 @@ describe("useThreadNavigation", () => {
     ).toBe(true);
   });
 
+  it("publishes a masthead add-directory rejection to the notice stack", async () => {
+    // "Add project directory" lives in the sidebar / title-bar menu, and
+    // `pickDirectoryError`'s only inline surface is the launchpad composer's
+    // project picker — not mounted behind that menu. Picking a folder that is
+    // not a git repository would otherwise fail silently.
+    const pickDirectoryFromDisk = vi.fn(async () => ({
+      canceled: false as const,
+      path: "/Users/test/not-a-repo",
+    }));
+    const registerDirectoryFromDisk = vi.fn(async () => ({
+      ok: false as const,
+      reason: "not-a-git-repo" as const,
+      message: "/Users/test/not-a-repo is not a git repository.",
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      pickDirectoryFromDisk,
+      registerDirectoryFromDisk,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.loaded).toBe(true);
+    });
+
+    await act(async () => {
+      await result.current.addProjectDirectory();
+    });
+
+    expect(latestThreadActionError(onThreadActionError, "add-directory")).toBe(
+      "/Users/test/not-a-repo is not a git repository.",
+    );
+
+    // A later cancel clears the slot, so the notice comes down on its own.
+    pickDirectoryFromDisk.mockResolvedValueOnce({
+      canceled: true,
+    } as unknown as Awaited<ReturnType<typeof pickDirectoryFromDisk>>);
+    await act(async () => {
+      await result.current.addProjectDirectory();
+    });
+
+    expect(
+      latestThreadActionError(onThreadActionError, "add-directory"),
+    ).toBeUndefined();
+  });
+
+  it("publishes a launchpad discard failure to the notice stack", async () => {
+    // `discardLaunchpad` drops the selection before it persists the discard,
+    // so the launchpad composer that renders `launchpadError` is already
+    // unmounted when the persistence call rejects. Routing it there would
+    // show the operator nothing while the cancelled draft rehydrates on the
+    // next open.
+    const registeredLaunchpad = {
+      directoryKey: "directory:/repo/app",
+      directoryKind: "directory" as const,
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      workMode: "local" as const,
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "leftover draft",
+      registeredAt: 1_500,
+      settingsTouchedAt: 1_600,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const updateDirectoryLaunchpad = vi.fn(async () => {
+      throw new Error("Launchpad overlay is read-only");
+    });
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: "directory:/repo/app",
+          kind: "directory" as const,
+          label: "app",
+          path: "/repo/app",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          latestUpdatedAt: 2,
+          launchpad: registeredLaunchpad,
+        },
+      ],
+      launchpadDefaults: defaults,
+    }));
+    const desktopApi: DesktopApi = {
+      updateDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
+
+    await waitFor(() => {
+      expect(
+        result.current.directories.some(
+          (directory) => directory.key === "directory:/repo/app",
+        ),
+      ).toBe(true);
+    });
+
+    await act(async () => {
+      result.current.discardLaunchpad("directory:/repo/app");
+    });
+
+    await waitFor(() => {
+      expect(
+        latestThreadActionError(onThreadActionError, "discard-launchpad"),
+      ).toBe("Launchpad overlay is read-only");
+    });
+    // The launchpad's own inline surface stays empty — one surface per error.
+    expect(result.current.launchpadError).toBeUndefined();
+  });
+
   it("removes an empty registered directory and deletes its overlay row", async () => {
     const registeredLaunchpad = {
       directoryKey: "directory:/repo/app",
@@ -9816,7 +10081,10 @@ describe("useThreadNavigation", () => {
       onAgentEvent: () => () => undefined,
     };
 
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
 
     await waitFor(() => {
       expect(result.current.selectedThread?.title).toBe("First thread");
@@ -9827,7 +10095,7 @@ describe("useThreadNavigation", () => {
     });
 
     await waitFor(() => {
-      expect(result.current.renameThreadError).toBe("rename failed");
+      expect(latestThreadActionError(onThreadActionError, "rename-thread")).toBe("rename failed");
       expect(result.current.selectedThread?.title).toBe("First thread");
     });
   });
