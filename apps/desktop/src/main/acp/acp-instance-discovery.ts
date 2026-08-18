@@ -67,7 +67,8 @@ export type AcpInstanceDiscovery = {
   instances: AcpAgentInstance[];
   /** Detected command collisions that are intentionally excluded. */
   incompatibleInstances?: AcpAgentInstance[];
-  /** Detected executables that failed ACP verification and cannot launch. */
+  /** Detected executables that did not pass ACP verification and cannot launch.
+   *  A timed-out verification may succeed on a later refresh. */
   rejectedInstances?: AcpRejectedAgentInstance[];
   /** The instance command currently in effect (override → picked → first). */
   activeCommand?: string;
@@ -511,6 +512,8 @@ function rejectedAcpCandidateMessage(
 ): string {
   const command = rejected?.command ?? "The detected executable";
   switch (rejected?.reason) {
+    case "probe-timed-out":
+      return `${command} was found, but its ACP verification timed out. Refresh to try again.`;
     case "version-probe-failed":
       return `${command} was found, but its version check failed.`;
     case "acp-help-mismatch":

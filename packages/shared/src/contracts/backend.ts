@@ -284,8 +284,9 @@ export type AcpAgentSettingsEntry = {
    *  unsupported predecessor product. They are shown for remediation but are
    *  never eligible for launch or model discovery. */
   incompatibleInstances?: AcpAgentInstance[];
-  /** Detected executables that failed the Agent Kit ACP discovery probe.
-   *  They are diagnostic-only and must never be offered as launch targets. */
+  /** Detected executables that did not pass the Agent Kit ACP discovery probe.
+   *  They are diagnostic-only and must never be offered as launch targets.
+   *  `probe-timed-out` is retryable; the other reasons are definitive failures. */
   rejectedInstances?: AcpRejectedAgentInstance[];
   activeCommand?: string;
   enabled?: boolean;
@@ -321,9 +322,14 @@ export type AcpAgentInstance = {
   source: AcpAgentInstanceSource;
 };
 
-/** An executable that was found but did not pass ACP discovery. */
+/** An executable that was found but did not pass ACP discovery. A timed-out
+ *  probe is retryable, unlike the other definitive verification failures. */
 export type AcpRejectedAgentInstance = AcpAgentInstance & {
-  reason: "version-probe-failed" | "acp-probe-failed" | "acp-help-mismatch";
+  reason:
+    | "version-probe-failed"
+    | "acp-probe-failed"
+    | "acp-help-mismatch"
+    | "probe-timed-out";
 };
 
 /** A user's per-agent path choice. `overridePath` is a manual absolute path

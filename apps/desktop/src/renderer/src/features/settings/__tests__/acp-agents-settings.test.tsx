@@ -638,6 +638,52 @@ describe("AcpAgentsSettings", () => {
     expect(screen.queryByText("Not installed.")).not.toBeInTheDocument();
   });
 
+  it("surfaces a timed-out ACP verification as retryable", async () => {
+    const timedOutPath = "/usr/local/bin/qwen";
+    const desktopApi = {
+      listAcpAgents: vi.fn(async () => ({
+        fetchedAt: 1000,
+        entries: [
+          {
+            backendId: "acp:qwen",
+            registryId: "qwen",
+            name: "Qwen Code",
+            authors: [],
+            distributionKind: "local",
+            distributionSource: `${timedOutPath} (ACP verification timed out)`,
+            installable: false,
+            installed: false,
+            installStatus: "unavailable",
+            authStatus: "not-required",
+            verificationStatus: "not-applicable",
+            lastError: `${timedOutPath} was found, but its ACP verification timed out. Refresh to try again.`,
+            instances: [],
+            rejectedInstances: [
+              {
+                command: timedOutPath,
+                version: "0.21.0",
+                source: "path",
+                reason: "probe-timed-out",
+              },
+            ],
+          } satisfies AcpAgentSettingsEntry,
+        ],
+      })),
+    } as unknown as DesktopApi;
+
+    render(<AcpAgentsSettings desktopApi={desktopApi} />);
+
+    expect(await screen.findByText("Qwen Code")).toBeInTheDocument();
+    expect(screen.getByText("Detected · check timed out")).toBeInTheDocument();
+    expect(screen.getByText(timedOutPath)).toBeInTheDocument();
+    expect(screen.getByText("ACP check timed out")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        `${timedOutPath} was found, but its ACP verification timed out. Refresh to try again.`,
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("renders a durable remediation card for legacy Python kimi-cli", async () => {
     const legacyPath = "/Users/me/.local/bin/kimi";
     const rejectedPath = "/Users/me/bin/not-kimi";

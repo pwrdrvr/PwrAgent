@@ -585,6 +585,8 @@ function rejectedAcpInstanceLabel(
   reason: NonNullable<AcpAgentSettingsEntry["rejectedInstances"]>[number]["reason"],
 ): string {
   switch (reason) {
+    case "probe-timed-out":
+      return "ACP check timed out";
     case "version-probe-failed":
       return "version check failed";
     case "acp-help-mismatch":
