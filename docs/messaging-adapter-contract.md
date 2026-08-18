@@ -222,10 +222,12 @@ opaque provider routing state. The result returns a normalized `dm`
 conversation plus opaque routing state for ordinary `deliver(intent)` handling;
 desktop orchestration must not parse provider user IDs or DM channel IDs.
 
-This resolver is used by the scoped Agent `send_private_response` tool. The
-tool can address only the actor recorded for its active messaging turn, and the
-controller suppresses the normal source-conversation final response only after
-the private delivery succeeds. Resolver and delivery failure leave source
+This resolver is used by the scoped Agent `send_private_response` tool and by
+`send_messaging_file` when `private=true`. Those tools can address only the
+actor recorded for the active messaging turn. `send_private_response`
+suppresses the normal source-conversation final response only after the
+private delivery succeeds; `send_messaging_file` never suppresses the source
+reply. Resolver and delivery failure leave source
 delivery unchanged. Adapters must revalidate the actor identifier at this
 boundary and reject bot actors or unsupported conversation types explicitly.
 
@@ -306,6 +308,17 @@ When a parent's persisted conversation identity has its own `parentId`, the
 child also carries that value as `parentConversationParentId`; this keeps route
 inheritance provider-neutral without treating the child's `parentId` as though
 it belonged to the parent.
+
+The scoped Agent `send_messaging_file` tool is the only producer that reads an
+absolute local path and emits a byte-backed `MessagingFilePart` or data-image
+`MessagingImagePart` for the active messaging origin. Adapters already consume
+those parts for plan/review artifacts and assistant images; this tool does not
+add a new adapter API.
+
+An adapter that names its image uploads must prefer `MessagingImagePart.name`
+when it is set, falling back to a generated name only when it is absent. The
+operator-visible filename is part of what this tool promises to deliver, and a
+generated `assistant-image.png` silently discards it.
 
 For outbound final responses, desktop messaging core resolves structured
 assistant image parts and local Markdown image links before constructing the

@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildReviewBranchOptions,
@@ -56,6 +57,7 @@ import type {
   PwrAgentMessagingBoundThreadSummary,
   PwrAgentMessagingLocationSummary,
   PwrAgentMessagingManagedConversationSummary,
+  PwrAgentMessagingOutboundAttachmentSummary,
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
   NavigationDirectorySummary,
@@ -138,6 +140,11 @@ import {
   selectMonitorThreads,
 } from "./messaging-monitor-card.js";
 import { buildMessagingConversationKey } from "./messaging-store.js";
+import {
+  resolveMessagingOutboundFile,
+  type MessagingOutboundFileAccess,
+} from "./messaging-outbound-file.js";
+import { resolveScratchProjectsRoots } from "../../app-server/scratch-projects.js";
 import {
   defaultAgentBackendSupport,
   defaultAgentScopeForChannel,
@@ -835,6 +842,12 @@ export type MessagingControllerOptions = {
    * not abort the controller's mutation flow.
    */
   onBindingChanged?: () => void;
+  /**
+   * Extra roots the agent may send files from, plus extra private storage
+   * roots to refuse. Resolved lazily on each `send_messaging_file` call so
+   * starting an adapter never forces heavier singletons into existence.
+   */
+  outboundFileAccess?: () => MessagingOutboundFileAccess;
 };
 
 export class MessagingController {
@@ -1018,6 +1031,8 @@ export class MessagingController {
       }
       case "send_private_response":
         return await this.sendPrivateResponseFromAgentMessagingOrigin(request);
+      case "send_messaging_file":
+        return await this.sendMessagingFileFromAgentMessagingOrigin(request);
       case "attach_thread_here":
         return await this.attachThreadHereFromAgentMessagingOrigin(request);
       case "inspect_messaging_pdfs":
@@ -6542,16 +6557,12 @@ export class MessagingController {
     // Text and image ownership are independent. Another completion event may
     // have posted these images while this path awaited resolution, even though
     // this path already owns the backend item/text delivery.
-    const messageImages =
-      images.length > 0
-      && this.claimAssistantMessageContentDelivery(
-        event,
-        binding,
-        assistantImageDeliverySignature(images),
-        identity,
-      )
-        ? images
-        : [];
+    const messageImages = this.takeUndeliveredAssistantImages(
+      images,
+      event,
+      binding,
+      identity,
+    );
     this.logger.debug?.(
       `messaging assistant deliver thread=${binding.threadId} binding=${binding.id} chars=${text.length} images=${messageImages.length} preview="${compactLogPreview(text)}"`,
     );
@@ -6583,30 +6594,18 @@ export class MessagingController {
     event: AgentEvent,
     binding: MessagingBindingRecord,
     identity?: AssistantMessageDeliveryIdentity,
-    deliveryClaimed = false,
+    _deliveryClaimed = false,
   ): Promise<void> {
     if (images.length === 0) {
       return;
     }
-    if (!deliveryClaimed) {
-      if (
-        !this.markAssistantMessageDelivered(
-          event,
-          binding,
-          assistantImageDeliverySignature(images),
-          identity,
-        )
-      ) {
-        return;
-      }
-    } else if (
-      !this.claimAssistantMessageContentDelivery(
-        event,
-        binding,
-        assistantImageDeliverySignature(images),
-        identity,
-      )
-    ) {
+    const pendingImages = this.takeUndeliveredAssistantImages(
+      images,
+      event,
+      binding,
+      identity,
+    );
+    if (pendingImages.length === 0) {
       return;
     }
     const attribution = await this.responseAttributionForBinding(binding);
@@ -6618,9 +6617,25 @@ export class MessagingController {
         createdAt: this.now(),
         role: "assistant",
         attribution,
-        parts: images,
+        parts: pendingImages,
       },
       binding,
+    );
+  }
+
+  private takeUndeliveredAssistantImages(
+    images: MessagingImagePart[],
+    event: AgentEvent,
+    binding: MessagingBindingRecord,
+    identity?: AssistantMessageDeliveryIdentity,
+  ): MessagingImagePart[] {
+    return images.filter((image) =>
+      this.claimAssistantMessageContentDelivery(
+        event,
+        binding,
+        assistantImageDeliverySignature([image]),
+        identity,
+      )
     );
   }
 
@@ -15451,9 +15466,11 @@ export class MessagingController {
     binding: MessagingBindingRecord | undefined,
     result: MessagingDeliveryResult,
   ): void {
-    // Only update provider-visible freshness. Typing activity, dismissals, and
-    // partial stream edits are control/noisy signals; the Activity window stays
-    // focused on operator-facing inbound, binding, pairing, and diagnostic rows.
+    // Ordinary replies only update provider-visible freshness. Typing activity,
+    // dismissals, and partial stream edits are control/noisy signals; the
+    // Activity window stays focused on operator-facing rows. Deliberate
+    // agent-initiated sends write their own `outbound` row — see
+    // recordOutboundFileActivity.
     if (!shouldRecordOutboundActivity(intent, result)) {
       return;
     }
@@ -16688,6 +16705,360 @@ export class MessagingController {
     };
   }
 
+  private async sendMessagingFileFromAgentMessagingOrigin(
+    request: Extract<
+      PwrAgentMessagingRequest,
+      { operation: "send_messaging_file" }
+    >,
+  ): Promise<PwrAgentMessagingResponse> {
+    const caption = typeof request.args?.caption === "string"
+      ? request.args.caption.trim()
+      : "";
+    const filename = typeof request.args?.filename === "string"
+      ? request.args.filename.trim()
+      : "";
+    const mediaKind = request.args?.mediaKind;
+    if (
+      mediaKind !== undefined
+      && mediaKind !== "auto"
+      && mediaKind !== "document"
+      && mediaKind !== "image"
+    ) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "send_messaging_file mediaKind must be document, image, or auto.",
+        },
+      };
+    }
+    if (caption.length > 4_000) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "send_messaging_file caption must be at most 4,000 characters.",
+        },
+      };
+    }
+    const permission = this.checkDynamicToolPermission({
+      backend: request.context.backend,
+      threadId: request.context.threadId,
+      turnId: request.context.turnId,
+      category: "messaging_context",
+      tool: "send_messaging_file",
+    });
+    if (permission.owns && !permission.allowed) {
+      return {
+        ok: false,
+        error: {
+          code: "forbidden",
+          message:
+            `The messaging user who started this turn lacks permission for this tool (${
+              permission.permission ?? "message.reply"
+            }).`,
+        },
+      };
+    }
+    const sendPrivately = request.args?.private === true;
+    if (sendPrivately && !request.context.turnId) {
+      return {
+        ok: false,
+        error: {
+          code: "not_found",
+          message:
+            "Private file delivery requires the active messaging turn that identified the requesting user.",
+        },
+      };
+    }
+    const origin = await this.resolveAgentMessagingOrigin(request.context);
+    if (!origin.ok) {
+      return origin;
+    }
+
+    // Resolve the destination before loading bytes. A file may run to the
+    // provider's whole upload ceiling, and every failure below is knowable
+    // without reading it.
+    let deliveryEvent = origin.origin.event;
+    if (sendPrivately) {
+      if (!this.options.adapter.resolvePrivateConversation) {
+        return {
+          ok: false,
+          error: {
+            code: "unsupported_operation",
+            message:
+              "This messaging provider cannot send a private file to the requesting user.",
+          },
+        };
+      }
+      let privateConversation: MessagingPrivateConversationResolveResult;
+      try {
+        privateConversation = await this.options.adapter.resolvePrivateConversation({
+          actor: origin.origin.event.actor,
+          source: origin.origin.event.channel,
+          routingState: origin.origin.event.routingState,
+        });
+      } catch (error) {
+        return {
+          ok: false,
+          error: {
+            code: "internal_error",
+            message:
+              error instanceof Error
+                ? `Could not resolve a private conversation: ${error.message}`
+                : "Could not resolve a private conversation.",
+          },
+        };
+      }
+      if (
+        privateConversation.outcome !== "resolved"
+        || !privateConversation.conversation
+        || privateConversation.channel !== origin.origin.event.channel.channel
+      ) {
+        return {
+          ok: false,
+          error: {
+            code: privateConversation.outcome === "unsupported"
+              ? "unsupported_operation"
+              : "internal_error",
+            message:
+              privateConversation.errorMessage
+              ?? "The messaging provider could not resolve a private conversation.",
+          },
+        };
+      }
+      deliveryEvent = {
+        ...origin.origin.event,
+        id: `${origin.origin.event.id}:private-file:${this.now()}`,
+        channel: {
+          channel: privateConversation.channel,
+          conversation: privateConversation.conversation,
+        },
+        receivedAt: this.now(),
+        routingState: privateConversation.routingState,
+      };
+    }
+
+    const outbound = await resolveMessagingOutboundFile(
+      {
+        path: typeof request.args?.path === "string" ? request.args.path : "",
+        ...(filename ? { filename } : {}),
+        ...(mediaKind ? { mediaKind } : {}),
+      },
+      this.capabilityProfile.outboundAttachments ?? {},
+      await this.resolveOutboundFileAccess(request.context),
+    );
+    if (!outbound.ok) {
+      return {
+        ok: false,
+        error: {
+          code: outbound.code,
+          message: outbound.message,
+        },
+      };
+    }
+
+    const sourceBinding = origin.origin.deliveryBinding ?? origin.origin.binding;
+    const filePart = outbound.mediaKind === "image"
+      ? {
+          type: "image" as const,
+          // Bytes, not a base64 data URL. See MessagingImagePart.data — the
+          // round trip through text costs several copies of the whole file.
+          url: "",
+          data: outbound.data,
+          mimeType: outbound.mimeType,
+          alt: outbound.filename,
+          name: outbound.filename,
+          sourceUrl: outbound.path,
+        }
+      : {
+          type: "file" as const,
+          name: outbound.filename,
+          data: outbound.data,
+          mimeType: outbound.mimeType,
+          sizeBytes: outbound.sizeBytes,
+        };
+    const result = await this.deliver(
+      {
+        id: this.newIntentId("messaging-file"),
+        kind: "message",
+        bindingId: sourceBinding?.id,
+        createdAt: this.now(),
+        delivery: {
+          requireAttachments: true,
+        },
+        role: "assistant",
+        parts: [
+          ...(caption
+            ? [{ type: "text" as const, text: caption, markdown: "markdown" as const }]
+            : []),
+          filePart,
+        ],
+      },
+      sendPrivately ? undefined : sourceBinding,
+      deliveryEvent,
+    );
+    if (!isVisibleAssistantStreamDelivery(result)) {
+      return {
+        ok: false,
+        error: {
+          code: result.outcome === "unsupported"
+            ? "unsupported_operation"
+            : "internal_error",
+          message:
+            result.errorMessage
+            ?? "The file was not delivered to the messaging surface.",
+        },
+      };
+    }
+    this.recordOutboundFileActivity({
+      backend: request.context.backend,
+      binding: sourceBinding,
+      event: deliveryEvent,
+      file: {
+        filename: outbound.filename,
+        mediaKind: outbound.mediaKind,
+        mimeType: outbound.mimeType,
+        path: outbound.path,
+        sizeBytes: outbound.sizeBytes,
+      },
+      deliveredAt: result.deliveredAt,
+      private: sendPrivately,
+      threadId: request.context.threadId,
+    });
+    if (
+      !sendPrivately
+      && sourceBinding
+      && filePart.type === "image"
+    ) {
+      this.rememberOutboundMessagingFileImages({
+        backend: request.context.backend,
+        binding: sourceBinding,
+        images: [filePart],
+        pathAliases: [outbound.path, typeof request.args?.path === "string"
+          ? request.args.path.trim()
+          : ""],
+        threadId: request.context.threadId,
+        turnId: request.context.turnId,
+      });
+    }
+
+    return {
+      ok: true,
+      data: {
+        channel: deliveryEvent.channel.channel,
+        conversation: summarizeMessagingConversation(
+          deliveryEvent.channel.conversation,
+        ),
+        deliveredAt: result.deliveredAt,
+        filename: outbound.filename,
+        mediaKind: outbound.mediaKind,
+        mimeType: outbound.mimeType,
+        outcome: "delivered",
+        private: sendPrivately,
+        sizeBytes: outbound.sizeBytes,
+        ...(sendPrivately
+          ? { recipient: summarizeMessagingActor(origin.origin.event.actor) }
+          : {}),
+      },
+    };
+  }
+
+  private rememberOutboundMessagingFileImages(params: {
+    backend: AppServerBackendKind;
+    binding: MessagingBindingRecord;
+    images: MessagingImagePart[];
+    pathAliases?: readonly string[];
+    threadId: ThreadIdentifier;
+    turnId?: string;
+  }): void {
+    if (params.images.length === 0) {
+      return;
+    }
+    const identity = {
+      threadId: params.threadId,
+      turnId: params.turnId,
+    };
+    const syntheticEvent = {
+      backend: params.backend,
+      notification: {
+        method: "item/completed",
+        params: {
+          threadId: params.threadId,
+          turnId: params.turnId,
+        },
+      },
+    } as AgentEvent;
+    const variants: MessagingImagePart[][] = [params.images];
+    for (const image of params.images) {
+      // Only claim the sourceUrl-less shape when `url` still identifies the
+      // image. A bytes-backed part has an empty url, and claiming that would
+      // register a signature matching any other empty-url image.
+      if (image.url) {
+        variants.push([{ ...image, sourceUrl: undefined }]);
+      }
+      const aliases = outboundImageClaimAliases([
+        image.sourceUrl,
+        image.url,
+        ...(params.pathAliases ?? []),
+      ]);
+      for (const alias of aliases) {
+        variants.push([{
+          ...image,
+          url: alias,
+          sourceUrl: alias,
+        }]);
+      }
+    }
+    for (const images of variants) {
+      this.claimAssistantMessageContentDelivery(
+        syntheticEvent,
+        params.binding,
+        assistantImageDeliverySignature(images),
+        identity,
+      );
+    }
+  }
+
+  private async resolveOutboundFileAccess(
+    context: PwrAgentMessagingRequest["context"],
+  ): Promise<MessagingOutboundFileAccess> {
+    const configured = this.options.outboundFileAccess?.();
+    const allowedRoots = [
+      ...resolveScratchProjectsRoots(),
+      ...(configured?.allowedRoots ?? []),
+    ];
+    try {
+      const navigation = await this.options.backend.getNavigationSnapshot({
+        backend: context.backend,
+      });
+      const thread = navigation.threads.find(
+        (candidate) =>
+          candidate.source === context.backend
+          && candidate.id === context.threadId,
+      );
+      if (thread?.projectKey) {
+        allowedRoots.push(thread.projectKey);
+      }
+      for (const directory of thread?.linkedDirectories ?? []) {
+        allowedRoots.push(directory.path);
+        if (directory.worktreePath) {
+          allowedRoots.push(directory.worktreePath);
+        }
+      }
+    } catch {
+      // Scratch-project and configured roots still apply.
+    }
+    return {
+      allowedRoots,
+      ...(configured?.privateStorageRoots
+        ? { privateStorageRoots: configured.privateStorageRoots }
+        : {}),
+    };
+  }
+
   private async inspectMessagingPdfsFromAgentMessagingOrigin(
     request: Extract<PwrAgentMessagingRequest, { operation: "inspect_messaging_pdfs" }>,
   ): Promise<PwrAgentMessagingResponse> {
@@ -17034,6 +17405,18 @@ export class MessagingController {
       channel: origin.event.channel.channel,
       conversation: summarizeMessagingConversation(origin.event.channel.conversation),
       managedConversation: await this.resolveManagedConversationSummary(origin),
+      outboundAttachments: this.summarizeOutboundAttachments(),
+    };
+  }
+
+  private summarizeOutboundAttachments(): PwrAgentMessagingOutboundAttachmentSummary {
+    const profile = this.capabilityProfile.outboundAttachments;
+    return {
+      ...(profile?.maxUploadBytes !== undefined
+        ? { maxUploadBytes: profile.maxUploadBytes }
+        : {}),
+      supportsFileUpload: profile?.supportsFileUpload === true,
+      supportsImageUpload: profile?.supportsImageUpload === true,
     };
   }
 
@@ -17357,6 +17740,61 @@ export class MessagingController {
       auditAction,
       opts,
     );
+  }
+
+  /**
+   * `send_messaging_file` reads a workspace file and pushes its bytes to an
+   * external platform. That is the one outbound delivery an operator needs to
+   * be able to audit after the fact, so it gets a real row rather than the
+   * timestamp bump ordinary replies write.
+   */
+  private recordOutboundFileActivity(params: {
+    backend: AppServerBackendKind;
+    binding: MessagingBindingRecord | undefined;
+    event: MessagingInboundEvent;
+    file: {
+      filename: string;
+      mediaKind: "document" | "image";
+      mimeType: string;
+      path: string;
+      sizeBytes: number;
+    };
+    deliveredAt: number;
+    private: boolean;
+    threadId: ThreadIdentifier;
+  }): void {
+    try {
+      const log = this.desktopActivityLog();
+      if (!log) return;
+      const conversation = params.event.channel.conversation;
+      log.record({
+        platform: params.event.channel.channel,
+        kind: "outbound",
+        backend: params.backend,
+        threadId: params.threadId,
+        bindingId: params.binding?.id,
+        conversationId: conversation.id,
+        conversationTitle: conversation.title,
+        actorId: params.event.actor.platformUserId,
+        actorDisplayName: params.event.actor.displayName,
+        summary: `Sent ${params.file.filename}${
+          params.private ? " privately" : ""
+        } (${params.file.sizeBytes} bytes)`,
+        createdAt: params.deliveredAt,
+        payload: {
+          tool: "send_messaging_file",
+          filename: params.file.filename,
+          mediaKind: params.file.mediaKind,
+          mimeType: params.file.mimeType,
+          sizeBytes: params.file.sizeBytes,
+          sourcePath: params.file.path,
+          private: params.private,
+          conversationKind: conversation.kind,
+        },
+      });
+    } catch {
+      // Activity log is best-effort observability.
+    }
   }
 
   private recordCapabilityDenied(
@@ -19492,6 +19930,28 @@ function imageDataUrlSizeBytes(url: string): number | undefined {
 
 function assistantImageDeliverySignature(images: readonly MessagingImagePart[]): string {
   return `images:${images.map((image) => image.sourceUrl ?? image.url).join("\0")}`;
+}
+
+function outboundImageClaimAliases(
+  values: readonly (string | undefined)[],
+): string[] {
+  const aliases = new Set<string>();
+  for (const value of values) {
+    if (!value) {
+      continue;
+    }
+    aliases.add(value);
+    if (
+      value.startsWith("data:")
+      || /^https?:\/\//iu.test(value)
+    ) {
+      continue;
+    }
+    if (path.isAbsolute(value)) {
+      aliases.add(pathToFileURL(value).toString());
+    }
+  }
+  return [...aliases];
 }
 
 function automationTurnKey(params: {

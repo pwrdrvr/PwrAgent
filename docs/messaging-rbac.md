@@ -28,7 +28,7 @@ code side).
 
 | Permission ID | Group | What it gates |
 |---|---|---|
-| `message.reply` | conversation | Send a plain message turn to a bound thread. The baseline floor. |
+| `message.reply` | conversation | Send a plain message turn to a bound thread. The baseline floor. Also gates the agent `send_messaging_file` tool. |
 | `elicitation.answer` | conversation | Respond to the agent's elicitation prompts (questionnaire buttons + freeform fallback). |
 | `thread.status.view` | session | Read the binding status card and transcript. |
 | `thread.resume` | session | Attach the conversation to an existing thread (`/resume`, `/agent`, and the agent-driven `attach_thread_here`). |
@@ -151,7 +151,8 @@ All enforcement funnels through `requirePermission` in
 - the `message.reply` floor for plain turns,
 - the full-access double-gate inside the escalation/runtime-mode paths, and
 - agent dynamic-tool calls, attributed to the RBAC actor who started the turn
-  (`checkDynamicToolPermission`), with `mutate_thread` gated per mutated field.
+  (`checkDynamicToolPermission`), with `mutate_thread` gated per mutated field
+  and `send_messaging_file` gated on `message.reply`.
 
 Render-time filtering shares the same command/action → permission lookup
 tables from the shared contract, so what a user *sees* and what the

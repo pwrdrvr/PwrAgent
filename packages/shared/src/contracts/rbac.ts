@@ -715,7 +715,10 @@ export type MessagingDynamicToolCategory =
  *   - thread_orchestration → `tools.thread_orchestration` (inject messages, handoff, attach dirs)
  *   - app_management / automation_inspection → `tools.instance_management`
  *   - messaging_context: `get_current_messaging_surface` is benign (ungated);
- *     `attach_thread_here` binds a conversation to a thread → `thread.resume`.
+ *     `send_private_response` is also ungated (terminal private text);
+ *     `send_messaging_file` delivers a local file to the current surface →
+ *     `message.reply`; `attach_thread_here` binds a conversation to a thread
+ *     → `thread.resume`.
  */
 export function permissionForDynamicTool(
   category: MessagingDynamicToolCategory,
@@ -737,7 +740,13 @@ export function permissionForDynamicTool(
     case "app_management":
       return "tools.instance_management";
     case "messaging_context":
-      return tool === "attach_thread_here" ? "thread.resume" : undefined;
+      if (tool === "attach_thread_here") {
+        return "thread.resume";
+      }
+      if (tool === "send_messaging_file") {
+        return "message.reply";
+      }
+      return undefined;
     default:
       return undefined;
   }

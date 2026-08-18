@@ -79,6 +79,7 @@ import {
   type DesktopMessagingChannelConfigUpdate,
 } from "./messaging-config";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
+import { resolvePwragentRoot } from "../profile";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { getDesktopMessagingActivityLog } from "./desktop-messaging-activity-log";
 import {
@@ -1385,6 +1386,18 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       },
       onFullAccessPolicyViolation: (event) =>
         this.recordFullAccessPolicyViolation(adapter.channel, event),
+      // Resolved per tool call, not at adapter start, and read through the
+      // bridge rather than `getDesktopBackendRegistry()`: that getter builds a
+      // registry with real machine ACP discovery, so touching it here would
+      // make sending a file scan PATH, fetch releases, and probe a binary.
+      outboundFileAccess: () => ({
+        allowedRoots: [],
+        privateStorageRoots: [
+          ...(this.options.backendBridge.getLocalFilePrivateStorageRoots?.()
+            ?? []),
+          resolvePwragentRoot(),
+        ],
+      }),
     });
 
     let unsubscribeDiagnostic: (() => void) | undefined;

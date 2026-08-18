@@ -35,7 +35,7 @@ describe("PwrAgent task monitor agent tools", () => {
       "render_messaging_pdf_pages",
       "search_messaging_pdf_text",
     ]);
-    expect(dynamicTools).toHaveLength(33);
+    expect(dynamicTools).toHaveLength(34);
     expect(mcpTools).toEqual(expect.arrayContaining(
       dynamicTools.filter((tool) => !dynamicOnlyToolNames.has(tool.name)),
     ));
@@ -53,6 +53,8 @@ describe("PwrAgent task monitor agent tools", () => {
       .toContain("stop_thread");
     expect(mcpTools.map((tool) => tool.name))
       .toContain("steer_thread");
+    expect(mcpTools.map((tool) => tool.name))
+      .toContain("send_messaging_file");
     expect(mcpTools.map((tool) => tool.name))
       .not.toEqual(expect.arrayContaining([...dynamicOnlyToolNames]));
     const createMonitorTool = mcpTools.find(

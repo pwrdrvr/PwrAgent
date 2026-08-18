@@ -148,6 +148,33 @@ private delivery suppresses the source-conversation final response. Provider
 user IDs and DM routing remain validated and opaque inside the adapter; the
 Agent cannot select an arbitrary recipient.
 
+`send_messaging_file` is the opt-in companion for generated files that are not
+already in the assistant response (rendered PDFs, zips, installers). Do not use
+it for images the model will embed in the final reply; those already mirror to
+the current messaging surface. After an image send, the controller claims the
+same assistant-image delivery signature so a later transcript embed does not
+post the photo twice. The model
+must call it with an absolute local path. The controller realpath()s the file,
+refuses Codex/PwrAgent private storage, and only reads from the bound thread's
+workspace or a PwrAgent generated-output (scratch project) directory. It then
+size/type-checks the loaded bytes against the provider's `outboundAttachments`
+profile and delivers a `MessagingFilePart` or `MessagingImagePart` only to the
+active messaging origin. `get_current_messaging_surface` reports the same
+`outboundAttachments` limits so the model can size a file before sending it.
+Delivery sets `requireAttachments`, which Discord, Feishu, Mattermost, and
+Slack honor by failing the delivery rather than letting a post stand in for an
+attachment that never uploaded. Slack posts its message before uploading, so a
+failure there still fails the tool call but can leave the caption posted.
+Telegram and LINE need no flag handling: an upload failure already rejects the
+whole delivery. `private=true` reuses the private-conversation resolver but
+does not suppress the source reply.
+
+A successful send writes an `outbound` row to the messaging activity log
+(`send_messaging_file` payload, filename, size, media kind, source path), which
+is what the Activity window's **Sent** group shows. Ordinary assistant replies
+still write only per-platform response freshness, so that group stays a record
+of deliberate agent-initiated sends rather than a copy of every reply.
+
 Because Codex fixes a thread's dynamic-tool catalog at thread creation, the
 controller also recognizes explicit private-response requests as a compatibility
 path for older threads. It suppresses source output from the start of the turn

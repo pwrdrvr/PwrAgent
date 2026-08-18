@@ -36,6 +36,7 @@ import {
   layoutMessagingActionRows,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   MESSAGING_COMMAND_CATALOG,
+  messagingInlineImageBytes,
 } from "@pwragent/messaging-interface";
 import type { TelegramMessagingConfig } from "./telegram-config.ts";
 import {
@@ -2153,7 +2154,17 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     }
 
     return intent.parts.flatMap((part) => {
-      if (part.type !== "image" || !part.url) {
+      if (part.type !== "image") {
+        return [];
+      }
+      const inline = messagingInlineImageBytes(part);
+      if (inline) {
+        return [{
+          filename: part.name ?? `image.${inline.extension}`,
+          source: inline.data,
+        }];
+      }
+      if (!part.url) {
         return [];
       }
       const dataImage = parseDataImageUrl(part.url);

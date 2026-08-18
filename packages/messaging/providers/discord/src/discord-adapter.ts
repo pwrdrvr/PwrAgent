@@ -39,6 +39,7 @@ import {
   evictStaleStreamAnchors,
   extractMessagingPairingToken,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
+  messagingInlineImageBytes,
 } from "@pwragent/messaging-interface";
 import type { DiscordMessagingConfig } from "./discord-config.ts";
 import type {
@@ -506,6 +507,19 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       const imageUploads = uploadableImageParts(intent);
       const imageUrls = this.remoteImageUrls(intent);
       const files = [...uploadableFileParts(intent), ...imageUploads];
+      // `requireAttachments` callers cannot accept a text-only post standing in
+      // for an attachment that never made it into the request.
+      if (
+        intent.delivery?.requireAttachments === true &&
+        files.length < expectedDiscordUploads(intent)
+      ) {
+        return {
+          outcome: "failed",
+          channel: this.channel,
+          deliveredAt: this.now(),
+          errorMessage: "Discord could not attach the requested file.",
+        };
+      }
       const chunks = splitDiscordContent(
         (files.length > 0
           ? textForDiscordIntentWithoutUploads(intent)
@@ -1430,7 +1444,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
 
     return intent.parts.flatMap((part) =>
-      part.type === "image" && !part.url.startsWith("data:image/")
+      part.type === "image"
+      && !part.data
+      && part.url.length > 0
+      && !part.url.startsWith("data:image/")
         ? [part.url]
         : [],
     ).slice(0, 10);
@@ -1885,6 +1902,18 @@ function uploadableFileParts(intent: MessagingSurfaceIntent): MessagingFilePart[
   );
 }
 
+function expectedDiscordUploads(intent: MessagingSurfaceIntent): number {
+  if (intent.kind !== "message") {
+    return 0;
+  }
+  return intent.parts.filter(
+    (part) =>
+      (part.type === "file" && part.data !== undefined) ||
+      (part.type === "image"
+        && (part.data !== undefined || part.url.startsWith("data:"))),
+  ).length;
+}
+
 function uploadableImageParts(intent: MessagingSurfaceIntent): MessagingFilePart[] {
   if (intent.kind !== "message") {
     return [];
@@ -1893,7 +1922,14 @@ function uploadableImageParts(intent: MessagingSurfaceIntent): MessagingFilePart
   return intent.parts.filter(
     (part): part is MessagingImagePart => part.type === "image",
   ).flatMap((part, index): MessagingFilePart[] => {
-    const dataImage = parseDataImageUrl(part.url);
+    const inline = messagingInlineImageBytes(part);
+    const dataImage = inline
+      ? {
+          data: inline.data,
+          mimeType: inline.mimeType,
+          name: `image.${inline.extension}`,
+        }
+      : parseDataImageUrl(part.url);
     if (!dataImage) {
       return [];
     }
@@ -1902,9 +1938,10 @@ function uploadableImageParts(intent: MessagingSurfaceIntent): MessagingFilePart
       data: dataImage.data,
       description: part.alt,
       mimeType: dataImage.mimeType,
-      name: index === 0
-        ? `assistant-image.${extension}`
-        : `assistant-image-${index + 1}.${extension}`,
+      name: part.name
+        ?? (index === 0
+          ? `assistant-image.${extension}`
+          : `assistant-image-${index + 1}.${extension}`),
       sizeBytes: dataImage.data.byteLength,
       type: "file",
     }];
@@ -1921,7 +1958,8 @@ function textForDiscordIntentWithoutUploads(intent: MessagingSurfaceIntent): str
     parts: intent.parts.filter(
       (part) =>
         !(part.type === "file" && part.data !== undefined) &&
-        !(part.type === "image" && part.url.startsWith("data:image/")),
+        !(part.type === "image"
+          && (part.data !== undefined || part.url.startsWith("data:image/"))),
     ),
   });
 }

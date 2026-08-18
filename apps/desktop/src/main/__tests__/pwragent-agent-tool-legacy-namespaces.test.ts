@@ -74,6 +74,11 @@ describe("PwrAgent legacy agent tool namespaces", () => {
             outcome: "ok" as const,
             providerSupportsCreation: true,
           },
+          outboundAttachments: {
+            maxUploadBytes: 25 * 1024 * 1024,
+            supportsFileUpload: true,
+            supportsImageUpload: true,
+          },
         },
         outcome: "attached" as const,
         placement: "current_conversation" as const,

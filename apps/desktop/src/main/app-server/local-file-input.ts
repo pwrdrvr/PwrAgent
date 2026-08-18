@@ -106,6 +106,11 @@ const PRIVATE_STORAGE_DIRECTORIES = new Set([
   "archived_sessions",
   "rollouts",
   "sessions",
+  // A PwrAgent profile keeps its database, runtime-instance markers, and
+  // focus requests under `state/`. The root-file patterns below only match a
+  // database sitting directly in the profile directory, which is not where the
+  // app actually writes one.
+  "state",
 ]);
 
 const PRIVATE_STORAGE_ROOT_FILES = [
@@ -149,13 +154,13 @@ async function inspectLocalFile(
   privateStorageRoots: readonly string[],
 ): Promise<{ item: AppServerLocalFileInputItem; previewBytes: number }> {
   const cleanItem = discardDerivedContext(item);
-  const inspectedPath = await resolveInspectableLocalFilePath(
-    cleanItem.path,
+  const inspected = await resolveReadableLocalFilePath(cleanItem.path, {
     privateStorageRoots,
-  );
-  if (!inspectedPath) {
+  });
+  if (!inspected.ok) {
     return { item: cleanItem, previewBytes: 0 };
   }
+  const inspectedPath = inspected.path;
   const knownType = knownLocalFileType(cleanItem.path);
   try {
     const handle = await open(inspectedPath, "r");
@@ -231,31 +236,61 @@ function discardDerivedContext(
   return cleanItem;
 }
 
-async function resolveInspectableLocalFilePath(
+export type ReadableLocalFilePathResult =
+  | { ok: true; path: string }
+  | { ok: false; reason: "forbidden" | "not_found" };
+
+/**
+ * Canonicalize a local path and refuse Codex/PwrAgent private storage.
+ * When `allowedRoots` is provided, the resolved file must sit inside one of
+ * those roots. Callers that omit `allowedRoots` keep the historical
+ * inspect-anywhere-except-private-storage behavior.
+ */
+export async function resolveReadableLocalFilePath(
   filePath: string,
-  privateStorageRoots: readonly string[],
-): Promise<string | undefined> {
-  const configuredRoots = configuredPrivateStorageRoots(privateStorageRoots);
+  options?: {
+    allowedRoots?: readonly string[];
+    privateStorageRoots?: readonly string[];
+  },
+): Promise<ReadableLocalFilePathResult> {
+  const configuredRoots = configuredPrivateStorageRoots(
+    options?.privateStorageRoots ?? [],
+  );
   if (isPrivateStoragePath(filePath, configuredRoots)) {
-    return undefined;
+    return { ok: false, reason: "forbidden" };
   }
+  let resolvedPath: string;
   try {
-    const resolvedPath = await realpath(filePath);
-    const canonicalRoots = await Promise.all(
-      configuredRoots.map(async (root) => {
-        try {
-          return await realpath(root);
-        } catch {
-          return path.resolve(root);
-        }
-      }),
-    );
-    return isPrivateStoragePath(resolvedPath, canonicalRoots)
-      ? undefined
-      : resolvedPath;
+    resolvedPath = await realpath(filePath);
   } catch {
-    return undefined;
+    return { ok: false, reason: "not_found" };
   }
+  const canonicalPrivateRoots = await canonicalizeRoots(configuredRoots);
+  if (isPrivateStoragePath(resolvedPath, canonicalPrivateRoots)) {
+    return { ok: false, reason: "forbidden" };
+  }
+  if (options?.allowedRoots) {
+    const canonicalAllowedRoots = await canonicalizeRoots(options.allowedRoots);
+    const allowed = canonicalAllowedRoots.some((root) =>
+      isPathInsideRoot(path.relative(root, resolvedPath)),
+    );
+    if (!allowed) {
+      return { ok: false, reason: "forbidden" };
+    }
+  }
+  return { ok: true, path: resolvedPath };
+}
+
+async function canonicalizeRoots(roots: readonly string[]): Promise<string[]> {
+  return await Promise.all(
+    roots.map(async (root) => {
+      try {
+        return await realpath(root);
+      } catch {
+        return path.resolve(root);
+      }
+    }),
+  );
 }
 
 function configuredPrivateStorageRoots(

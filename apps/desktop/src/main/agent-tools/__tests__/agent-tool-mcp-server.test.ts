@@ -253,6 +253,69 @@ describe("AgentToolMcpServer", () => {
       await client.close();
     }
   });
+
+  it("rejects MCP calls denied by messaging RBAC", async () => {
+    const dispatch = vi.fn(() => agentToolSuccess({ status: "ok" }));
+    const catalog = buildCatalog(
+      new AgentToolRouter([
+        {
+          namespace: "pwragent",
+          name: "send_messaging_file",
+          description: "Send a file.",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+          },
+          dispatch,
+        },
+      ]),
+    );
+    catalog.id = "messaging_context";
+    catalog.summary.id = "messaging_context";
+    const authorizeToolCall = vi.fn(() => "message.reply");
+    const server = new AgentToolMcpServer({
+      authorizeToolCall,
+      resolveCallContext: (context) =>
+        context.threadId
+          ? {
+              backend: context.backend,
+              threadId: context.threadId,
+              turnId: "turn-1",
+            }
+          : undefined,
+      resolveCatalogs: () => [catalog],
+    });
+    openServers.push(server);
+    const registration = await server.registerClient({
+      backend: "acp:grok",
+    });
+    registration.bindThread("thread-1");
+    const client = await connectClient(registration);
+    try {
+      await expect(
+        client.callTool({
+          name: "send_messaging_file",
+          arguments: { path: "/tmp/resume.pdf" },
+        }),
+      ).resolves.toMatchObject({
+        isError: true,
+        structuredContent: {
+          code: "forbidden",
+        },
+      });
+    } finally {
+      await client.close();
+    }
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(authorizeToolCall).toHaveBeenCalledWith({
+      backend: "acp:grok",
+      catalogId: "messaging_context",
+      threadId: "thread-1",
+      tool: "send_messaging_file",
+      turnId: "turn-1",
+      arguments: { path: "/tmp/resume.pdf" },
+    });
+  });
 });
 
 function buildCatalog(router: AgentToolRouter): ResolvedAgentToolCatalog {

@@ -90,6 +90,13 @@
     "rowsChanged": 30,
     "statements": 30
   },
+  "messaging-outbound-file-activity": {
+    "commits": 1,
+    "note": "one send_messaging_file audit row; this runs per agent tool call, so the row count must not grow with attachment parts",
+    "observedWalBytes": 20600,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "native-subagent-discovery-backfill": {
     "commits": 2,
     "note": "one missing native child pricing row and parent sub-agent card discovered from the thread list",

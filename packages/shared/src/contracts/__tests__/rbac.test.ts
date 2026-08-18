@@ -348,10 +348,17 @@ describe("action → permission lookup tables", () => {
     expect(
       permissionForDynamicTool("automation_inspection", "list_automations"),
     ).toBe("tools.instance_management");
-    // messaging_context: benign surface ungated; attach binds → resume.
+    // messaging_context: benign surface ungated; file send is a message;
+    // attach binds → resume.
     expect(
       permissionForDynamicTool("messaging_context", "get_current_messaging_surface"),
     ).toBeUndefined();
+    expect(
+      permissionForDynamicTool("messaging_context", "send_private_response"),
+    ).toBeUndefined();
+    expect(
+      permissionForDynamicTool("messaging_context", "send_messaging_file"),
+    ).toBe("message.reply");
     expect(
       permissionForDynamicTool("messaging_context", "attach_thread_here"),
     ).toBe("thread.resume");

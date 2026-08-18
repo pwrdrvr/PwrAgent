@@ -115,6 +115,10 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     private readonly federation?: DesktopMessagingFederationBridge,
   ) {}
 
+  getLocalFilePrivateStorageRoots(): readonly string[] {
+    return this.registry.getLocalFilePrivateStorageRoots();
+  }
+
   async getNavigationSnapshot(
     request: GetNavigationSnapshotRequest = {},
   ): Promise<NavigationSnapshot> {
