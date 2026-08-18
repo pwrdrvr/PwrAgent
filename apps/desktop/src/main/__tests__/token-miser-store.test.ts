@@ -22,13 +22,16 @@ describe("TokenMiserStore", () => {
     const store = new TokenMiserStore(root, { onMetadataUpdated });
     const metadata = await createObject(store, "alpha\nbeta", 1);
 
-    expect(onMetadataUpdated).toHaveBeenLastCalledWith(metadata);
+    // The reason lets the registry skip a full ledger republish for writes that
+    // only advance replay counters.
+    expect(onMetadataUpdated).toHaveBeenLastCalledWith(metadata, "stored");
     await store.readAll({
       objectId: metadata.objectId,
       threadId: "thread-owner",
     });
 
     expect(onMetadataUpdated).toHaveBeenCalledTimes(2);
+    expect(onMetadataUpdated.mock.calls[1]?.[1]).toBe("retrieval");
     expect(onMetadataUpdated.mock.calls[1]?.[0].retrievedCharacters)
       .toBeGreaterThan(0);
   });

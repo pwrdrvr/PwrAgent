@@ -134,12 +134,21 @@ export function buildTokenMiserRoughEdges(
   const describe = (toolUseId: string, toolName: string): string =>
     invocationByToolUseId.get(toolUseId)?.normalizedCommand ?? toolName;
 
+  // Only a resolved command identifies a payload. Codex names every shell call
+  // `commandExecution`, so grouping on the toolName fallback merged unrelated
+  // gates into one bogus repeat finding and downgraded each of them to a miss.
+  const groupingKey = (toolUseId: string): string | undefined =>
+    invocationByToolUseId.get(toolUseId)?.normalizedCommand;
+
   // Count gates per command so a payload summarized several times reads as one
   // finding about the repetition rather than N unrelated gates.
   const gatesByCommand = new Map<string, number>();
   for (const entry of interceptions) {
-    const command = describe(entry.toolUseId, entry.toolName);
-    gatesByCommand.set(command, (gatesByCommand.get(command) ?? 0) + 1);
+    const key = groupingKey(entry.toolUseId);
+    if (key === undefined) {
+      continue;
+    }
+    gatesByCommand.set(key, (gatesByCommand.get(key) ?? 0) + 1);
   }
 
   const edges: TokenMiserRoughEdge[] = [];
@@ -172,9 +181,12 @@ export function buildTokenMiserRoughEdges(
       });
       continue;
     }
-    const gateCount = gatesByCommand.get(command) ?? 1;
-    if (gateCount > 1 && !reportedRepeats.has(command)) {
-      reportedRepeats.add(command);
+    const repeatKey = groupingKey(entry.toolUseId);
+    const gateCount = repeatKey === undefined
+      ? 1
+      : gatesByCommand.get(repeatKey) ?? 1;
+    if (repeatKey !== undefined && gateCount > 1 && !reportedRepeats.has(repeatKey)) {
+      reportedRepeats.add(repeatKey);
       edges.push({
         detail:
           `The same output was gated ${gateCount.toLocaleString()} times, so `
@@ -190,7 +202,7 @@ export function buildTokenMiserRoughEdges(
     // Codex caps tool output before the hook sees it, so a payload far past the
     // cap was never gateable in full — the gate only ever saw the capped head.
     const emitted = invocationByToolUseId.get(entry.toolUseId)?.outputChars ?? 0;
-    if (emitted > TOOL_OUTPUT_CAP_CHARS * 2 && !reportedRepeats.has(command)) {
+    if (emitted > TOOL_OUTPUT_CAP_CHARS * 2) {
       edges.push({
         detail:
           `The tool emitted ${emitted.toLocaleString()} characters. Codex truncated it to `

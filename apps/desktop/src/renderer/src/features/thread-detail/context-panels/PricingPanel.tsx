@@ -106,6 +106,9 @@ export function PricingPanel(props: PricingPanelProps) {
     () => groupCompactionsByRow(props.pricing?.compactions ?? []),
     [props.pricing?.compactions],
   );
+  // Rebuilt per render alongside the row map: rows are laid out newest-first in
+  // one pass, so the first row of a turn claims that turn's pending markers.
+  const claimedCompactionTurns = new Set<string>();
 
   return (
     <section className="context-panel__section">
@@ -225,7 +228,11 @@ export function PricingPanel(props: PricingPanelProps) {
               displayOptions,
               line,
             });
-            const rowCompactions = selectRowCompactions(compactionsByRow, line);
+            const rowCompactions = selectRowCompactions(
+              compactionsByRow,
+              line,
+              claimedCompactionTurns,
+            );
             const runningTokens = formatUsageLineRunningTokens(line);
             const subAgent =
               line.scope === "monitor" && line.sourceItemId
@@ -417,14 +424,24 @@ function groupCompactionsByRow(
 function selectRowCompactions(
   grouped: Map<string, ThreadCompactionRecord[]>,
   line: PricingUsageLine,
+  claimedTurnKeys: Set<string>,
 ): ThreadCompactionRecord[] {
   if (grouped.size === 0 || line.scope === "monitor") {
     return [];
   }
   const attributed = grouped.get(line.usageLineId) ?? [];
-  const pending = line.turnId
-    ? (grouped.get(`${COMPACTION_TURN_KEY_PREFIX}${line.turnId}`) ?? [])
+  // Unattributed markers are claimed by one row per turn, not every row in it.
+  // A turn routinely has several usage lines, and showing the pending marker on
+  // each of them read as several compactions rather than one.
+  const turnKey = line.turnId
+    ? `${COMPACTION_TURN_KEY_PREFIX}${line.turnId}`
+    : undefined;
+  const pending = turnKey && !claimedTurnKeys.has(turnKey)
+    ? (grouped.get(turnKey) ?? [])
     : [];
+  if (turnKey && pending.length > 0) {
+    claimedTurnKeys.add(turnKey);
+  }
   return [...attributed, ...pending];
 }
 

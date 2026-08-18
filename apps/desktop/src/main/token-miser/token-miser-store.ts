@@ -66,9 +66,22 @@ export type TokenMiserThreadUsageSummary = TokenMiserUsageSummary & {
   }>;
 };
 
+/**
+ * Why a metadata write happened. Replay-counter writes fire once per active
+ * gate per model request and change nothing the gate card or its usage line
+ * shows, so the registry can keep its in-memory view fresh without paying for
+ * a full ledger republish on each one.
+ */
+export type TokenMiserMetadataUpdateReason =
+  | "replay"
+  | "retrieval"
+  | "stopped"
+  | "stored";
+
 export type TokenMiserStoreOptions = {
   onMetadataUpdated?: (
     metadata: TokenMiserObjectMetadata,
+    reason: TokenMiserMetadataUpdateReason,
   ) => void | Promise<void>;
 };
 
@@ -129,7 +142,7 @@ export class TokenMiserStore {
     };
     await writePrivateFileAtomic(this.outputPath(objectId), params.output);
     await this.writeMetadata(metadata);
-    await this.options.onMetadataUpdated?.(metadata);
+    await this.options.onMetadataUpdated?.(metadata, "stored");
     return metadata;
   }
 
@@ -211,13 +224,15 @@ export class TokenMiserStore {
     if (!stored) {
       return undefined;
     }
-    const query = params.query.trim().toLocaleLowerCase();
+    // Locale-independent: toLocaleLowerCase maps I to a dotless i under tr/az,
+    // so a Turkish-locale host would miss matches that are plainly present.
+    const query = params.query.trim().toLowerCase();
     const lines = splitLines(stored.output);
     const maxResults = clampInteger(params.maxResults ?? 20, 1, MAX_SEARCH_RESULTS);
     const matches: TokenMiserSearchMatch[] = [];
     if (query) {
       for (let index = 0; index < lines.length && matches.length < maxResults; index += 1) {
-        if (lines[index]!.toLocaleLowerCase().includes(query)) {
+        if (lines[index]!.toLowerCase().includes(query)) {
           matches.push({
             line: index + 1,
             text: lines[index]!,
@@ -395,7 +410,7 @@ export class TokenMiserStore {
           metadata.replacementCharacters + metadata.retrievedCharacters,
         );
       return true;
-    });
+    }, "replay");
   }
 
   async stopReplayTracking(params: {
@@ -411,14 +426,19 @@ export class TokenMiserStore {
       }
       metadata.replayTrackingStoppedAt = params.stoppedAt ?? Date.now();
       return true;
-    });
+    }, "stopped");
   }
 
   private async updateMetadata(
     objectId: string,
     update: (metadata: TokenMiserObjectMetadata) => boolean,
+    reason: TokenMiserMetadataUpdateReason = "retrieval",
   ): Promise<TokenMiserObjectMetadata | undefined> {
-    const previous = this.updateLocks.get(objectId) ?? Promise.resolve();
+    // Swallow the predecessor's rejection: this chain only serializes access,
+    // so one failed write must not stop every queued update behind it from
+    // running — which would silently retire the gate.
+    const previous = (this.updateLocks.get(objectId) ?? Promise.resolve())
+      .catch(() => undefined);
     let updated: TokenMiserObjectMetadata | undefined;
     const next = previous.then(async () => {
       const metadata = await this.readMetadata(objectId);
@@ -426,7 +446,7 @@ export class TokenMiserStore {
         return;
       }
       await this.writeMetadata(metadata);
-      await this.options.onMetadataUpdated?.(metadata);
+      await this.options.onMetadataUpdated?.(metadata, reason);
       updated = metadata;
     });
     this.updateLocks.set(objectId, next);

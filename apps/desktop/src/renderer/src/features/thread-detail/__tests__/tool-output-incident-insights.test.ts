@@ -759,8 +759,19 @@ describe("buildTokenMiserRoughEdges", () => {
     expect(edges[0]?.kind).toBe("leak");
   });
 
+  // Grouping keys on the resolved command, so the fixture has to supply the
+  // invocations. Codex names every shell call `commandExecution`, so grouping
+  // on the toolName fallback would merge unrelated gates.
   it("collapses repeated gates on one command into a single finding", () => {
-    const edges = buildTokenMiserRoughEdges([], {
+    const repeated = ["item-1", "item-2", "item-3"].map((itemId, index) =>
+      invocation({
+        invocationId: `invocation-${index + 1}`,
+        itemId,
+        normalizedCommand: "sed -n '1,300p' AGENTS.md",
+        outputChars: 24_000,
+      })
+    );
+    const edges = buildTokenMiserRoughEdges(repeated, {
       interceptionCount: 3,
       originalCharacters: 120_000,
       baselineParentTokens: 30_000,
@@ -777,5 +788,25 @@ describe("buildTokenMiserRoughEdges", () => {
     expect(edges[0]?.kind).toBe("repeat");
     expect(edges[0]?.label).toBe("Gated 3×");
     expect(edges[0]?.value).toBe("2 redundant");
+  });
+
+  // Without a resolved command there is nothing to say two gates share, and
+  // merging them produced a bogus "Gated N×" that also downgraded each gate
+  // from a win to a miss.
+  it("does not group gates whose command could not be resolved", () => {
+    const edges = buildTokenMiserRoughEdges([], {
+      interceptionCount: 3,
+      originalCharacters: 120_000,
+      baselineParentTokens: 30_000,
+      replacementTokens: 900,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 29_100,
+      interceptions: [
+        gate({ objectId: "obj-1", toolUseId: "item-1" }),
+        gate({ objectId: "obj-2", toolUseId: "item-2" }),
+        gate({ objectId: "obj-3", toolUseId: "item-3" }),
+      ],
+    });
+    expect(edges.filter((edge) => edge.kind === "repeat")).toHaveLength(0);
   });
 });

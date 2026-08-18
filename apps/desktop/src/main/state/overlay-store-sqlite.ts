@@ -1547,13 +1547,27 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       // compaction forces. Claim it for the compaction that preceded it so the
       // cost has a cause; rides this transaction, so it adds no commit.
       if ((line.observedColdReplayCount ?? 0) > 0) {
+        const coldTokens = line.observedColdReplayUncachedTokens
+          ?? line.uncachedInputTokens;
+        // Cost the cold subset, not the turn. `uncachedInputCostMicros` is the
+        // whole turn's uncached spend, so pairing it with the cold-replay token
+        // count overstated what the compaction cost by the ratio between them.
+        const coldCostMicros = line.uncachedInputTokens > 0
+          ? Math.round(
+            line.uncachedInputCostMicros
+            * (coldTokens / line.uncachedInputTokens),
+          )
+          : 0;
         this.attributeThreadCompactionColdReplaySync({
           backend: line.backend as AppServerBackendKind,
-          costMicros: line.uncachedInputCostMicros,
-          observedAt: line.createdAt,
+          costMicros: coldCostMicros,
+          // Anchored to now, not `line.createdAt`: the usage line is per turn
+          // and its created_at is pinned by MIN() to the turn's first flush, so
+          // a marker written mid-turn always sorted after it and could never be
+          // claimed by the turn it actually interrupted.
+          observedAt: now,
           threadId: line.threadId,
-          uncachedTokens: line.observedColdReplayUncachedTokens
-            ?? line.uncachedInputTokens,
+          uncachedTokens: coldTokens,
           usageLineId: line.usageLineId,
           updatedAt: now,
         });
