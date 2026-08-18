@@ -3267,6 +3267,46 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  // The gate used to be prepared only when a *new* thread was created, so an
+  // app that booted and resumed an existing thread had no hook bridge for it
+  // until something else started one. Turn start on a Codex thread is where
+  // resumed threads reach the gate, so it has to prepare the runtime too.
+  it("prepares the Token Miser runtime when a Codex turn starts", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const internals = registry as unknown as {
+      prepareTokenMiserRuntime: (options?: { prune?: boolean }) => Promise<void>;
+      resolveTokenMiserEnabledFn: () => boolean;
+    };
+    internals.resolveTokenMiserEnabledFn = () => true;
+    const prepare = vi.spyOn(internals, "prepareTokenMiserRuntime");
+
+    try {
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-1",
+        input: [{ type: "text", text: "continue" }],
+      });
+      // Called without pruning: retention is boot-only, so the turn path stays
+      // cheap once the memoized bridge and plugin steps have run.
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(prepare).toHaveBeenCalledWith();
+
+      internals.resolveTokenMiserEnabledFn = () => false;
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-2",
+        input: [{ type: "text", text: "again" }],
+      });
+      expect(prepare).toHaveBeenCalledTimes(1);
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("seeds Auto-fix PR for new threads from the configured default", async () => {
     const defaultOverlayStore = createOverlayStoreMock();
     const defaultRegistry = new DesktopBackendRegistry({
