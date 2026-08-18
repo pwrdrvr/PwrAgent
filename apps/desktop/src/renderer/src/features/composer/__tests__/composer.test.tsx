@@ -934,6 +934,86 @@ describe("Composer", () => {
     expect(setThreadAgent).not.toHaveBeenCalled();
   });
 
+  // Gating adds a synchronous helper round trip per large tool result, so a
+  // thread needs a way to opt out — or in — without touching Settings. The
+  // menu shows the effective state (override, else global) and writes the
+  // override to the thread.
+  it("toggles Token Miser for this thread from the composer menu", async () => {
+    const setThreadTokenMiser = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      tokenMiserEnabled: false,
+    }));
+    const onRefreshNavigation = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        desktopApi={{ setThreadTokenMiser }}
+        disabled={false}
+        onRefreshNavigation={onRefreshNavigation}
+        skills={[]}
+        tokenMiserEnabled
+        thread={{
+          id: "thread-1",
+          title: "Existing Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    const tokenMiser = screen.getByRole("menuitemcheckbox", {
+      name: /Token Miser/,
+    });
+    // No override yet: reflects the global setting, and says nothing about
+    // "this thread".
+    expect(tokenMiser).toHaveAttribute("aria-checked", "true");
+    expect(tokenMiser).not.toHaveTextContent("this thread");
+
+    await act(async () => {
+      fireEvent.click(tokenMiser);
+      await Promise.resolve();
+    });
+
+    expect(setThreadTokenMiser).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      enabled: false,
+    });
+    expect(onRefreshNavigation).toHaveBeenCalled();
+  });
+
+  it("shows a per-thread Token Miser override as such", () => {
+    render(
+      <Composer
+        desktopApi={{ setThreadTokenMiser: vi.fn() }}
+        disabled={false}
+        skills={[]}
+        tokenMiserEnabled
+        thread={{
+          id: "thread-1",
+          title: "Existing Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          tokenMiserEnabled: false,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    const tokenMiser = screen.getByRole("menuitemcheckbox", {
+      name: /Token Miser/,
+    });
+    // Globally on, overridden off for this thread.
+    expect(tokenMiser).toHaveAttribute("aria-checked", "false");
+    expect(tokenMiser).toHaveTextContent("this thread");
+  });
+
   it("marks an existing non-Codex thread as an Agent from the composer menu", async () => {
     const setThreadAgent = vi.fn(async () => ({
       backend: "acp:gemini" as const,

@@ -3121,6 +3121,26 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return nextState;
   }
 
+  async setThreadTokenMiser(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    enabled: boolean | null;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const { tokenMiserEnabled: _cleared, ...rest } = current;
+    const nextState: ThreadOverlayState = params.enabled === null
+      ? rest
+      : { ...current, tokenMiserEnabled: params.enabled };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async setThreadHandoffOrigin(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;
@@ -7264,6 +7284,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadPin"
   | "setThreadParent"
   | "setThreadAgent"
+  | "setThreadTokenMiser"
   | "setThreadHandoffOrigin"
   | "setThreadForkOrigin"
   | "reorderThreadPins"

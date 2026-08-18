@@ -49,6 +49,11 @@ export type TokenMiserStructuredGenerationResult =
 export type TokenMiserServiceOptions = {
   store: TokenMiserStore;
   isEnabled: () => boolean;
+  /**
+   * Per-thread override. `true`/`false` force the gate for that thread;
+   * `undefined` defers to `isEnabled`.
+   */
+  isEnabledForThread?: (threadId: string) => Promise<boolean | undefined>;
   generateSummary: (params: {
     model: string;
     reasoningEffort: "medium";
@@ -87,7 +92,14 @@ export class TokenMiserService {
   async handlePostToolUse(
     payload: TokenMiserPostToolUsePayload,
   ): Promise<TokenMiserHookOutput | undefined> {
-    if (!this.options.isEnabled()) {
+    // A per-thread override wins over the global setting in both directions:
+    // a thread can opt out of the helper round trip when latency matters
+    // more than context, or opt in while the feature is globally off.
+    const threadOverride = await this.options.isEnabledForThread
+      ?.(payload.session_id)
+      .catch(() => undefined);
+    const enabled = threadOverride ?? this.options.isEnabled();
+    if (!enabled) {
       return undefined;
     }
     const output = serializeToolResponse(payload.tool_response);

@@ -120,6 +120,8 @@ import {
   type SetThreadParentRequest,
   type SetThreadParentResponse,
   type SetThreadAgentRequest,
+  type SetThreadTokenMiserRequest,
+  type SetThreadTokenMiserResponse,
   type SetThreadAgentResponse,
   type SetThreadPinRequest,
   type SetThreadPinResponse,
@@ -251,6 +253,7 @@ import {
   NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_THREAD_PARENT_CHANNEL,
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
+  NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
@@ -5954,6 +5957,41 @@ class DesktopAppServerService {
     };
   }
 
+  async setThreadTokenMiser(
+    request: SetThreadTokenMiserRequest,
+  ): Promise<SetThreadTokenMiserResponse> {
+    const backend = request.backend ?? "codex";
+    const overlay = await this.getOverlayStore().setThreadTokenMiser({
+      backend,
+      threadId: request.threadId,
+      enabled: request.enabled,
+    });
+    logDebug("setThreadTokenMiser", {
+      backend,
+      threadId: request.threadId,
+      tokenMiserEnabled: overlay.tokenMiserEnabled ?? null,
+    });
+    // Reuse the thread-agent notification path: it already tells every window
+    // to re-read this thread's summary, and the override lives on the same
+    // overlay row.
+    await getDesktopBackendRegistry().publishLocalEvent({
+      backend,
+      notification: {
+        method: "thread/agent/updated",
+        params: {
+          threadId: request.threadId,
+        },
+      },
+    });
+    return {
+      backend,
+      threadId: request.threadId,
+      ...(overlay.tokenMiserEnabled !== undefined
+        ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+        : {}),
+    };
+  }
+
   async reorderThreadPins(
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> {
@@ -7734,6 +7772,16 @@ export function registerAppServerIpcHandlers(): void {
       request: SetThreadAgentRequest,
     ): Promise<SetThreadAgentResponse> => {
       return await appServerService.setThreadAgent(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
+    async (
+      _event,
+      request: SetThreadTokenMiserRequest,
+    ): Promise<SetThreadTokenMiserResponse> => {
+      return await appServerService.setThreadTokenMiser(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_REORDER_THREAD_PINS_CHANNEL);

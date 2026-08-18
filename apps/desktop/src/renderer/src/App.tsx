@@ -1939,6 +1939,7 @@ function DesktopAppShell(props: {
     pastedImageMaxPatches:
       settings.snapshot?.imageUploads.pastedImageMaxPatches.value,
     pdfAnalysisEnabled: settings.snapshot?.general.pdfAnalysisEnabled?.value,
+    tokenMiserEnabled: settings.snapshot?.general.tokenMiserEnabled?.value,
     platform: desktopApi?.platform,
     ...(navigation.creatingThread?.pendingForkEnvironmentSetup
       ? {

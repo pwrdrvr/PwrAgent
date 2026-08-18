@@ -7896,6 +7896,15 @@ export class DesktopBackendRegistry {
       const tokenMiserService = new TokenMiserService({
         store: this.tokenMiserStore,
         isEnabled: () => this.resolveTokenMiserEnabledFn(),
+        // A thread can force the gate on or off regardless of the global
+        // setting; the override lives on the thread's overlay row.
+        isEnabledForThread: async (threadId) => {
+          const overlay = await this.overlayStore.getThreadOverlayState({
+            backend: "codex",
+            threadId,
+          });
+          return overlay?.tokenMiserEnabled;
+        },
         getParentCumulativeInputTokens: (threadId) =>
           this.liveThreadReplayInputCursor.get(
             ["codex", threadId].join(":"),
@@ -33903,6 +33912,9 @@ function toThreadInspectionSummary(
     updatedAt: thread.updatedAt,
     archivedAt: thread.archivedAt,
     agent: overlay?.agent,
+    ...(overlay?.tokenMiserEnabled !== undefined
+      ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+      : {}),
     handoffOrigin: overlay?.handoffOrigin,
     executionMode: thread.executionMode,
     model: thread.model,
@@ -33949,6 +33961,9 @@ function toThreadInspectionSummaryFromSearchResult(
     updatedAt: result.updatedAt,
     archivedAt: result.archivedAt,
     agent: overlay?.agent,
+    ...(overlay?.tokenMiserEnabled !== undefined
+      ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+      : {}),
     handoffOrigin: overlay?.handoffOrigin,
     model: result.model,
     linkedDirectories,

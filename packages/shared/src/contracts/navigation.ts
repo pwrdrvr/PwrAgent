@@ -112,6 +112,14 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * to act as a personal Agent surface.
    */
   agent?: ThreadAgentMetadata;
+  /**
+   * Per-thread Token Miser override. `true`/`false` force the gate on or off
+   * for this thread regardless of the global setting; absent means follow the
+   * global setting. Set from the composer's thread menu — gating adds a
+   * synchronous helper round trip per large tool result, so a latency-
+   * sensitive thread wants a way to opt out without touching Settings.
+   */
+  tokenMiserEnabled?: boolean;
   /** User-curated position in the pinned section. Lower ranks sort first. */
   pinnedRank?: string;
   /**
@@ -1519,6 +1527,19 @@ export type SetThreadAgentResponse = {
   agent?: ThreadAgentMetadata;
 };
 
+export type SetThreadTokenMiserRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Null clears the override so the thread follows the global setting. */
+  enabled: boolean | null;
+};
+
+export type SetThreadTokenMiserResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  tokenMiserEnabled?: boolean;
+};
+
 export type ReorderThreadPinsRequest = {
   federationTarget?: FederationTarget;
   /**
@@ -1814,6 +1835,14 @@ export type ThreadOverlayState = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   agent?: ThreadAgentMetadata;
+  /**
+   * Per-thread Token Miser override. `true`/`false` force the gate on or off
+   * for this thread regardless of the global setting; absent means follow the
+   * global setting. Set from the composer's thread menu — gating adds a
+   * synchronous helper round trip per large tool result, so a latency-
+   * sensitive thread wants a way to opt out without touching Settings.
+   */
+  tokenMiserEnabled?: boolean;
   executionMode?: ThreadExecutionMode;
   /**
    * Timestamp of the source that last established `executionMode`.

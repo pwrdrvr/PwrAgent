@@ -107,6 +107,63 @@ describe("TokenMiserService", () => {
   });
 });
 
+describe("TokenMiserService per-thread override", () => {
+  const summary = vi.fn(async () => ({
+    status: "ok" as const,
+    helperThreadId: "helper",
+    helperTurnId: "helper-turn",
+    model: "gpt-5.6-luna",
+    reasoningEffort: "medium" as const,
+    object: {
+      summary: "Large output.",
+      usefulDetails: [],
+      suggestedNextStep: "None.",
+    },
+    tokenUsage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
+  }));
+
+  // A thread can opt out of the helper round trip when latency matters more
+  // than context, without touching the global setting.
+  it("lets a thread force the gate off while it is globally on", async () => {
+    const store = await createStore();
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      isEnabledForThread: async (threadId) =>
+        threadId === "thread-1" ? false : undefined,
+      generateSummary: summary,
+      thresholdCharacters: 1,
+    });
+    expect(await service.handlePostToolUse(payload("large"))).toBeUndefined();
+    expect(summary).not.toHaveBeenCalled();
+  });
+
+  // And opt in while it is globally off — the override wins both ways.
+  it("lets a thread force the gate on while it is globally off", async () => {
+    const store = await createStore();
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => false,
+      isEnabledForThread: async () => true,
+      generateSummary: summary,
+      thresholdCharacters: 1,
+    });
+    expect(await service.handlePostToolUse(payload("large"))).toBeDefined();
+  });
+
+  it("follows the global setting when no override is set", async () => {
+    const store = await createStore();
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => false,
+      isEnabledForThread: async () => undefined,
+      generateSummary: summary,
+      thresholdCharacters: 1,
+    });
+    expect(await service.handlePostToolUse(payload("large"))).toBeUndefined();
+  });
+});
+
 function payload(output: string): TokenMiserPostToolUsePayload {
   return {
     session_id: "thread-1",
