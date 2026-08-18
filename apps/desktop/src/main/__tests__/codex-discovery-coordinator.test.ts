@@ -486,6 +486,11 @@ describe("CodexDiscoveryCoordinator", () => {
       }));
       const coordinator = new CodexDiscoveryCoordinator({
         discover,
+        // Pin the platform: these fixtures use POSIX-shaped commands, and the
+        // `windows-desktop-main` CI lane would otherwise resolve
+        // `process.platform` to win32, where `isReprobableCommand` rejects an
+        // extension-less path and nothing is re-probed.
+        platform: "darwin",
         probeVersion,
         resolveEnv: async () => ({ PATH: "/bin" }),
       });
@@ -530,6 +535,11 @@ describe("CodexDiscoveryCoordinator", () => {
           selectedCommand: "/usr/local/bin/codex",
           selectedSource: "application" as const,
         }),
+        // Pin the platform: these fixtures use POSIX-shaped commands, and the
+        // `windows-desktop-main` CI lane would otherwise resolve
+        // `process.platform` to win32, where `isReprobableCommand` rejects an
+        // extension-less path and nothing is re-probed.
+        platform: "darwin",
         probeVersion,
         resolveEnv: async () => ({ PATH: "/bin" }),
       });
@@ -549,6 +559,11 @@ describe("CodexDiscoveryCoordinator", () => {
       }));
       const coordinator = new CodexDiscoveryCoordinator({
         discover: async () => selectedSnapshot("/fast/codex"),
+        // Pin the platform: these fixtures use POSIX-shaped commands, and the
+        // `windows-desktop-main` CI lane would otherwise resolve
+        // `process.platform` to win32, where `isReprobableCommand` rejects an
+        // extension-less path and nothing is re-probed.
+        platform: "darwin",
         probeVersion,
         resolveEnv: async () => ({ PATH: "/bin" }),
       });
@@ -559,6 +574,116 @@ describe("CodexDiscoveryCoordinator", () => {
       // #1720 coalesced provider probes; a re-probe on the healthy path would
       // reintroduce exactly the duplicate `--version` spawn it removed.
       expect(probeVersion).not.toHaveBeenCalled();
+    });
+
+    it("does not probe a candidate that carries no probe failure at all", async () => {
+      // `__tests__/helpers/codex-discovery-stub.ts` emits exactly this shape —
+      // `executable: false`, no version, no reason — for an explicitly
+      // requested command. Treating that as retryable made the coordinator
+      // escape the documented seam and spawn a real `codex --version` out of
+      // desktop-settings-service.test.ts and messaging-config.test.ts, which
+      // `agent-cli-spawn-guard` only failed to catch because a Windows-shaped
+      // fixture path defeats its POSIX `path.basename` check.
+      const probeVersion = vi.fn<VersionProbe>(async () => ({
+        version: "0.130.0",
+      }));
+      const coordinator = new CodexDiscoveryCoordinator({
+        discover: async () => ({
+          candidates: [
+            {
+              command: "codex-env",
+              executable: false,
+              selected: false,
+              source: "env" as const,
+            },
+          ],
+        }),
+        // Pin the platform: these fixtures use POSIX-shaped commands, and the
+        // `windows-desktop-main` CI lane would otherwise resolve
+        // `process.platform` to win32, where `isReprobableCommand` rejects an
+        // extension-less path and nothing is re-probed.
+        platform: "darwin",
+        probeVersion,
+        resolveEnv: async () => ({ PATH: "/bin" }),
+      });
+
+      const snapshot = await coordinator.discover();
+      expect(snapshot.selectedCommand).toBeUndefined();
+      expect(probeVersion).not.toHaveBeenCalled();
+    });
+
+    it("skips a Windows command Windows cannot start, and keeps its shim", async () => {
+      const probeVersion = vi.fn<VersionProbe>(async () => ({
+        version: "0.146.0",
+      }));
+      const coordinator = new CodexDiscoveryCoordinator({
+        discover: async () => ({
+          candidates: [
+            // npm's extensionless sh shim. Upstream calls it `executable`
+            // because `fs.access(X_OK)` succeeds for any file on Windows.
+            {
+              command: "C:\\npm\\codex",
+              executable: true,
+              selected: false,
+              source: "path" as const,
+              versionFailureReason: "spawn C:\\npm\\codex ENOEXEC",
+            },
+            {
+              command: "C:\\npm\\codex.cmd",
+              executable: true,
+              selected: false,
+              source: "path" as const,
+              versionFailureReason: "Command failed\nterminated by SIGTERM",
+            },
+          ],
+        }),
+        discoverWindows: async () => [],
+        platform: "win32",
+        probeVersion,
+        resolveEnv: async () => ({ Path: "C:\\npm" }),
+      });
+
+      await expect(coordinator.resolve()).resolves.toMatchObject({
+        command: "C:\\npm\\codex.cmd",
+        version: "0.146.0",
+      });
+      expect(probeVersion).toHaveBeenCalledOnce();
+      expect(probeVersion.mock.calls[0]?.[0]).toMatchObject({
+        command: "C:\\npm\\codex.cmd",
+      });
+    });
+
+    it("probes one binary once when its rows differ only in case", async () => {
+      const probeVersion = vi.fn<VersionProbe>(async () => ({
+        version: "0.146.0",
+      }));
+      const coordinator = new CodexDiscoveryCoordinator({
+        discover: async () => ({
+          candidates: [
+            {
+              command: "C:\\npm\\codex.cmd",
+              executable: true,
+              selected: false,
+              source: "application" as const,
+              versionFailureReason: "Command failed\nterminated by SIGTERM",
+            },
+            {
+              command: "C:\\npm\\codex.CMD",
+              executable: true,
+              selected: false,
+              source: "path" as const,
+              versionFailureReason: "Command failed\nterminated by SIGTERM",
+            },
+          ],
+        }),
+        discoverWindows: async () => [],
+        platform: "win32",
+        probeVersion,
+        resolveEnv: async () => ({ Path: "C:\\npm" }),
+      });
+
+      await coordinator.discover();
+      expect(probeVersion).toHaveBeenCalledOnce();
     });
 
     it("leaves settled failures alone", async () => {
@@ -585,6 +710,11 @@ describe("CodexDiscoveryCoordinator", () => {
             },
           ],
         }),
+        // Pin the platform: these fixtures use POSIX-shaped commands, and the
+        // `windows-desktop-main` CI lane would otherwise resolve
+        // `process.platform` to win32, where `isReprobableCommand` rejects an
+        // extension-less path and nothing is re-probed.
+        platform: "darwin",
         probeVersion,
         resolveEnv: async () => ({ PATH: "/bin" }),
       });
@@ -600,6 +730,11 @@ describe("CodexDiscoveryCoordinator", () => {
       }));
       const coordinator = new CodexDiscoveryCoordinator({
         discover: async () => timedOutProbeSnapshot("/slow/codex"),
+        // Pin the platform: these fixtures use POSIX-shaped commands, and the
+        // `windows-desktop-main` CI lane would otherwise resolve
+        // `process.platform` to win32, where `isReprobableCommand` rejects an
+        // extension-less path and nothing is re-probed.
+        platform: "darwin",
         probeVersion,
         resolveEnv: async () => ({ PATH: "/bin" }),
       });

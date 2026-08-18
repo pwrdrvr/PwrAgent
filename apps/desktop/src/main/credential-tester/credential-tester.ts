@@ -13,7 +13,10 @@ import {
 } from "@pwrdrvr/codex-discovery";
 import { createCommandInvocation } from "@pwrdrvr/agent-transport";
 import { resolveWindowsCodexLaunchCommand } from "../codex-windows-launch";
-import { runCodexOneShot } from "../codex-version-probe";
+import {
+  CODEX_VERSION_PATTERN,
+  runCodexOneShot,
+} from "../codex-version-probe";
 
 const log = getMainLogger("pwragent:credential-tester");
 
@@ -302,7 +305,12 @@ export class CredentialTester {
       const durationMs = Date.now() - probeStart;
       const testedAt = Date.now();
       const output = `${stdout}\n${stderr}`;
-      const match = output.match(/\b(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/);
+      // Share discovery's banner-anchored pattern. An unanchored
+      // `\d+\.\d+\.\d+` here reported "Connected, 18.20.4" off a node
+      // deprecation warning while discovery — now anchored — called the same
+      // binary unusable, leaving the operator with two Settings surfaces
+      // giving opposite answers about one install.
+      const match = output.match(CODEX_VERSION_PATTERN);
       if (match) {
         const version = match[1];
         if (compareCodexCliVersions(version, MINIMUM_CODEX_CLI_VERSION) < 0) {

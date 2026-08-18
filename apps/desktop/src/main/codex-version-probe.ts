@@ -10,9 +10,17 @@ import { createCommandInvocation } from "@pwrdrvr/agent-transport";
  * row, but selection now ranks automatic candidates by version descending, so
  * an unanchored match can outrank a genuine install and become the launched
  * command.
+ *
+ * The banner anchor has to be the START OF A LINE, not just a word boundary:
+ * `/` is in the separator class (to accept `codex/1.2.3`), which without the
+ * line anchor also accepts the version out of a PATH fragment — the Homebrew
+ * layout `/opt/homebrew/Cellar/codex/0.146.0/bin` appearing anywhere in
+ * stderr would hand back a fabricated `0.146.0`, and the recovery path marks
+ * a candidate launchable on exactly that value. `m` keeps it working when the
+ * banner sits behind a node/npm warning line.
  */
 export const CODEX_VERSION_PATTERN =
-  /\bcodex(?:-cli)?[\s/v]+(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/i;
+  /^\s*codex(?:-cli)?[\s/v]+(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\b/im;
 
 /**
  * How long a Codex CLI gets to answer `--version` on a desktop-owned probe.

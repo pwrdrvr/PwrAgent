@@ -10,10 +10,12 @@ import {
 import {
   discoverWindowsCodexCandidates,
   isValidatedCandidate,
+  isWindowsSpawnableCommand,
 } from "./codex-windows-launch";
 import {
   CODEX_VERSION_PROBE_TIMEOUT_MS,
   probeCodexVersion,
+  type CodexVersionProbeResult,
 } from "./codex-version-probe";
 
 export const CODEX_DISCOVERY_SUCCESS_TTL_MS = 5 * 60_000;
@@ -256,12 +258,16 @@ export class CodexDiscoveryCoordinator {
    * be on the machine. Both are the same event, so the rule is keyed on
    * PRIORITY rather than on "nothing was selected":
    *
-   * - A candidate is re-probed only if no candidate of equal or higher
+   * - A candidate is re-probed only if no candidate of STRICTLY higher
    *   priority already validated (env > config > automatic, matching
-   *   `normalizeCodexDiscoverySnapshot`). A healthy scan therefore
-   *   re-probes nothing, which is what keeps
-   *   `windows-codex-discovery.spec.ts`'s "exactly one version probe"
-   *   assertion — and #1720's coalescing — true.
+   *   `normalizeCodexDiscoverySnapshot`). Same-tier is deliberately included:
+   *   the automatic tier is ordered by version, not by source, so a validated
+   *   Homebrew install does not settle the question for an npm install that
+   *   merely failed to answer. The cost of that is real and worth stating —
+   *   a machine with a working Codex AND a second broken one pays one
+   *   re-probe for the broken one, because "which is newer" cannot be known
+   *   without asking. Only candidates that reported nothing are eligible, so
+   *   a scan where every command answered re-probes nothing.
    * - Only candidates whose version could not be READ are eligible. A
    *   command that is absent (`not_found`), genuinely too old
    *   (`codex_too_old`), or a `.ps1` we refuse to launch is a settled
@@ -281,51 +287,88 @@ export class CodexDiscoveryCoordinator {
           : best,
       Number.POSITIVE_INFINITY,
     );
-    const eligible = snapshot.candidates.filter(
-      (candidate) =>
-        isUnreadVersionCandidate(candidate)
-        && codexCandidateRank(candidate) < bestValidatedRank,
+    const eligible = new Set(
+      snapshot.candidates.filter(
+        (candidate) =>
+          isUnreadVersionCandidate(candidate)
+          // `<=`, not `<`: the automatic tier is ordered by version descending,
+          // not by source, so a validated automatic candidate does not settle
+          // the question for a DIFFERENT automatic candidate that merely failed
+          // to answer. With `<`, a newer npm install whose probe timed out is
+          // never recovered once an older Homebrew install validated, and the
+          // app silently launches the older one — the same wrong-binary harm
+          // this method exists to prevent, one tier down.
+          && codexCandidateRank(candidate) <= bestValidatedRank
+          && isReprobableCommand(candidate.command, context.platform),
+      ),
     );
-    if (eligible.length === 0) {
+    if (eligible.size === 0) {
       return snapshot;
     }
 
     const probe = this.options.probeVersion ?? probeCodexVersion;
-    const reprobed = new Map<
-      string,
-      CodexDiscoverySnapshot["candidates"][number]
-    >();
+    // Probe each distinct command ONCE. Upstream concatenates fixed and auto
+    // candidates without cross-deduping them, so a configured `[models.codex]
+    // path` that also resolves on PATH arrives as two rows sharing one
+    // command; probing per row would spawn the same binary twice, which is the
+    // stampede #1720 removed.
+    // Case-insensitively on Windows, matching `mergeCodexDiscoveryCandidates`
+    // and `stripExtension` in this file. It is the one platform where two rows
+    // for the same binary routinely differ only in case: the hard-coded
+    // install candidate is `…/npm/codex.cmd` while a PATH scan appends the
+    // PATHEXT entry verbatim and yields `…\codex.CMD`.
+    const versions = new Map<string, string>();
+    const probeKey = (command: string): string =>
+      context.platform === "win32" ? command.toLowerCase() : command;
+    const commands = [
+      ...new Map(
+        [...eligible].map((it) => [probeKey(it.command), it.command] as const),
+      ).values(),
+    ];
     await Promise.all(
-      eligible.map(async (candidate) => {
+      commands.map(async (command) => {
+        // Isolate per command: a single rejection must not discard the
+        // versions the other probes recovered, which would leave `runProbe`
+        // caching a hard discovery failure and make recovery strictly worse
+        // than no recovery at all.
         const result = await probe({
-          command: candidate.command,
+          command,
           env: context.env,
           platform: context.platform,
           timeoutMs: CODEX_VERSION_PROBE_TIMEOUT_MS,
-        });
-        if (!result.version) {
-          return;
+        }).catch(() => ({}) as CodexVersionProbeResult);
+        if (result.version) {
+          versions.set(probeKey(command), result.version);
         }
-        const tooOld =
-          compareCodexCliVersions(result.version, MINIMUM_CODEX_CLI_VERSION) < 0;
-        reprobed.set(candidate.command, {
-          command: candidate.command,
-          source: candidate.source,
-          executable: !tooOld,
-          selected: false,
-          version: result.version,
-          ...(tooOld ? { failureReason: "codex_too_old" } : {}),
-        });
       }),
     );
-    if (reprobed.size === 0) {
+    if (versions.size === 0) {
       return snapshot;
     }
     return normalizeCodexDiscoverySnapshot({
       ...snapshot,
-      candidates: snapshot.candidates.map(
-        (candidate) => reprobed.get(candidate.command) ?? candidate,
-      ),
+      // Rewrite only the rows that were actually eligible. Keying the result
+      // by command alone would stamp every row sharing that command with one
+      // arbitrary `source`, so the operator's configured row could be
+      // reclassified as `path` — nondeterministically, by probe race order.
+      candidates: snapshot.candidates.map((candidate) => {
+        const version = eligible.has(candidate)
+          ? versions.get(probeKey(candidate.command))
+          : undefined;
+        if (!version) {
+          return candidate;
+        }
+        const tooOld =
+          compareCodexCliVersions(version, MINIMUM_CODEX_CLI_VERSION) < 0;
+        return {
+          command: candidate.command,
+          source: candidate.source,
+          executable: !tooOld,
+          selected: false,
+          version,
+          ...(tooOld ? { failureReason: "codex_too_old" } : {}),
+        };
+      }),
     });
   }
 
@@ -388,12 +431,28 @@ export class CodexDiscoveryCoordinator {
  * Failure reasons that are a settled answer about a command, not a probe
  * that failed to get one. Re-probing these would only spawn a process to
  * learn what we already know.
+ *
+ * Two of these settle the question even though they came from a probe:
+ *
+ * - `version_not_reported` means the probe RAN TO COMPLETION and printed
+ *   something we could not parse. A longer budget cannot change that, and
+ *   our own pattern is stricter than upstream's, so the re-probe would read
+ *   the same output and reject it again.
+ * - `version_probe_timed_out` is produced only by `classifyProbeFailure`,
+ *   i.e. by a desktop-owned probe that already spent the full
+ *   `CODEX_VERSION_PROBE_TIMEOUT_MS`. Upstream reports its own 2s timeout as
+ *   a raw `execFile` message instead, which stays unsettled and is exactly
+ *   the case worth retrying. Without this entry the Windows path probes one
+ *   command three times — 2s upstream, 10s sibling, 10s here — for a
+ *   guaranteed-identical answer.
  */
 const SETTLED_CODEX_FAILURE_REASONS = new Set([
   "codex_too_old",
   "not_executable",
   "not_found",
   "powershell_shim_unsupported",
+  "version_not_reported",
+  "version_probe_timed_out",
 ]);
 
 /**
@@ -416,15 +475,26 @@ function codexCandidateRank(
 }
 
 /**
- * Whether this candidate's version is unknown *because the probe did not
- * report one* — a timeout, a killed child, an unparseable answer — rather
- * than because the command itself is unusable.
+ * Whether a command is worth spending a process on at all.
  *
- * `version_probe_timed_out` (from `classifyProbeFailure`) is the explicit
- * form of exactly the case this exists for, and is deliberately absent from
- * the settled set. The shared upstream probe reports its own timeout as a raw
- * `execFile` message instead, which lands here the same way: unrecognized
- * means unsettled.
+ * On Windows `fs.access(X_OK)` succeeds for any existing file, so upstream
+ * hands back npm's extensionless sh shim as `executable: true` with only a
+ * raw spawn error to show for it. Re-probing that shim spawns a process that
+ * cannot succeed, and if it somehow did report a version the recovery path
+ * would mark it launchable — reintroducing the unspawnable-shim selection
+ * `codex-windows-launch` exists to prevent.
+ */
+function isReprobableCommand(
+  command: string,
+  platform: NodeJS.Platform,
+): boolean {
+  return platform !== "win32" || isWindowsSpawnableCommand(command);
+}
+
+/**
+ * Whether this candidate's version is unknown *because the probe did not
+ * report one* — a timeout at a budget we can beat, or a killed child — rather
+ * than because the command itself is unusable or already had its answer.
  */
 function isUnreadVersionCandidate(
   candidate: CodexDiscoverySnapshot["candidates"][number],
@@ -432,8 +502,16 @@ function isUnreadVersionCandidate(
   if (candidate.version) {
     return false;
   }
+  // Deliberately NOT gated on `candidate.executable`: the normalizer clears
+  // that flag when it demotes a candidate, and it runs immediately before
+  // this, so every genuinely recoverable candidate arrives with
+  // `executable: false`.
   const reason = candidate.failureReason ?? candidate.versionFailureReason;
-  return reason === undefined || !SETTLED_CODEX_FAILURE_REASONS.has(reason);
+  // A candidate with NO reason at all is not evidence of a probe we can beat.
+  // Upstream always records one, so this shape only comes from a stub or a
+  // future producer — and treating it as retryable made discovery spawn a real
+  // `codex --version` out of tests that had pinned every other seam.
+  return reason !== undefined && !SETTLED_CODEX_FAILURE_REASONS.has(reason);
 }
 
 function normalizeCodexDiscoverySnapshot(
