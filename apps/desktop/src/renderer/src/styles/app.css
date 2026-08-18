@@ -15731,8 +15731,15 @@ a.transcript-message__messaging-origin:focus-visible {
   list-style: none;
 }
 
+/* `flex: none` is load-bearing: `overflow: hidden` (for the stripe and the
+   rounded corners) gives a flex item an automatic minimum height of zero, so
+   inside the bounded, scrolling list a card would shrink to share space and
+   clip its own summary instead of growing to fit — the list then never
+   overflowed, so nothing scrolled. Cards keep their content height; the list
+   scrolls. */
 .incident-explorer__gate {
   display: grid;
+  flex: none;
   grid-template-columns: 3px minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--border-subtle);
