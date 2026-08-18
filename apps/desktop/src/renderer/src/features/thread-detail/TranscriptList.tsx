@@ -923,6 +923,13 @@ export function TranscriptList(props: TranscriptListProps) {
         : undefined,
     [props.directoryPaths, props.pendingRequest, transcriptEntries],
   );
+  // `directoryPaths` is rebuilt by the caller on every render, so depending on
+  // the array itself would rebuild every group label on every streamed item.
+  const directoryPathsKey = (props.directoryPaths ?? []).join("\n");
+  const stableDirectoryPaths = useMemo(
+    () => (directoryPathsKey ? directoryPathsKey.split("\n") : undefined),
+    [directoryPathsKey],
+  );
   const transcriptRenderItems = useMemo(
     () =>
       buildTranscriptRenderItems({
@@ -932,6 +939,7 @@ export function TranscriptList(props: TranscriptListProps) {
         activeMessageId:
           props.transientMessage?.id ?? props.pendingAssistantMessage?.id,
         alwaysVisibleEntryIds: alwaysVisibleTransientMessageIds,
+        directoryPaths: stableDirectoryPaths,
         now: renderNow,
       }),
     [
@@ -941,6 +949,7 @@ export function TranscriptList(props: TranscriptListProps) {
       props.transientMessage?.id,
       alwaysVisibleTransientMessageIds,
       renderNow,
+      stableDirectoryPaths,
       transcriptEntries,
     ]
   );
