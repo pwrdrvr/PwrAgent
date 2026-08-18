@@ -1120,6 +1120,16 @@ export type ThreadTokenMiserInterceptionAccounting = {
   cachedRevealedTokens?: number;
   estimatedCachedReplayTokensSaved?: number;
   replayTrackingVersion?: 2;
+  /**
+   * What the parent actually received in place of the payload. This is the
+   * gate's real product — carrying it here is what lets the Explorer show the
+   * operator what was traded away, rather than only how many tokens it cost.
+   */
+  summary?: {
+    summary: string;
+    usefulDetails: string[];
+    suggestedNextStep: string;
+  };
 };
 
 export type ThreadToolAccounting = {

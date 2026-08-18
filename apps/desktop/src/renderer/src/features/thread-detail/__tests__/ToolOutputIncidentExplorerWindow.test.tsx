@@ -115,6 +115,69 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(screen.queryByText(/gated \d+ of \d+ flagged/)).not.toBeInTheDocument();
   });
 
+  // The summary is what the parent actually received in place of the payload.
+  // Without it the screen can only say how many tokens were traded, never what
+  // was traded for — which is the only way to judge whether a "win" was one.
+  it("shows Luna's summary for a gate and filters gates by outcome", async () => {
+    const response = buildResponse();
+    const gate = (
+      objectId: string,
+      saved: number,
+      retrieved: number,
+    ) => ({
+      objectId,
+      turnId: "turn-1",
+      toolUseId: `item-${objectId}`,
+      toolName: `cmd-${objectId}`,
+      createdAt: 1_800_000_000_000,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementTokens: 500,
+      retrievedTokens: retrieved,
+      estimatedParentTokensSaved: saved,
+      summary: {
+        summary: `Traced the handler for ${objectId}.`,
+        usefulDetails: [`pr-auto-dispatch.ts:326 clears the timer for ${objectId}`],
+        suggestedNextStep: `Inspect notifyPending for ${objectId}.`,
+      },
+    });
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 3,
+      originalCharacters: 120_000,
+      baselineParentTokens: 30_000,
+      replacementTokens: 1_500,
+      retrievedTokens: 9_000,
+      estimatedParentTokensSaved: 19_500,
+      interceptions: [
+        gate("win-1", 9_500, 0),
+        gate("leak-1", 4_000, 6_000),
+        gate("cost-1", -200, 0),
+      ],
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    await screen.findByRole("tab", { name: /Savings/, selected: true });
+    expect(screen.getByRole("button", { name: /^All\s*3$/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Wins\s*1$/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Misses\s*1$/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Big misses\s*1$/ })).toBeInTheDocument();
+
+    // The summary is behind a disclosure so the list stays scannable.
+    expect(screen.queryByText("Traced the handler for win-1.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /win-1/ }));
+    expect(screen.getByText("Traced the handler for win-1.")).toBeInTheDocument();
+    expect(
+      screen.getByText("pr-auto-dispatch.ts:326 clears the timer for win-1"),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Inspect notifyPending for win-1/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Big misses\s*1$/ }));
+    expect(screen.getByRole("button", { name: /cost-1/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /win-1/ })).not.toBeInTheDocument();
+  });
+
   it("shows the priced savings equation and how much of it was observed", async () => {
     const response = buildResponse();
     response.pricing = {
