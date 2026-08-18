@@ -7,6 +7,7 @@ import {
 
 function grokEntry(
   update: AcpAgentSettingsEntry["update"],
+  overrides?: Partial<AcpAgentSettingsEntry>,
 ): AcpAgentSettingsEntry {
   return {
     backendId: "acp:grok",
@@ -21,6 +22,7 @@ function grokEntry(
     authStatus: "not-required",
     verificationStatus: "not-applicable",
     update,
+    ...overrides,
   };
 }
 
@@ -88,5 +90,40 @@ describe("buildGrokCliUpdateNotice", () => {
       now: 200,
       ...callbacks,
     })).toBeUndefined();
+  });
+
+  it("hides a vendor update status on a PwrAgent-supplied runtime", () => {
+    const callbacks = {
+      onOpenUpdatePage: vi.fn(),
+      onDismiss: vi.fn(),
+      onSnooze: vi.fn(),
+    };
+    const available = {
+      status: "available" as const,
+      checkedAt: 100,
+      currentVersion: "1.0.3",
+      latestVersion: "1.0.5",
+    };
+
+    expect(buildGrokCliUpdateNotice({
+      entry: grokEntry(available, {
+        pwrAgentManagedRuntime: true,
+        version: "1.0.4-pwragent.2",
+      }),
+      now: 200,
+      ...callbacks,
+    })).toBeUndefined();
+    // A status left over from a vendor binary that is no longer the runtime:
+    // the notice is durable, so a stale one would never clear itself.
+    expect(buildGrokCliUpdateNotice({
+      entry: grokEntry(available, { version: "1.0.4-pwragent.2" }),
+      now: 200,
+      ...callbacks,
+    })).toBeUndefined();
+    expect(buildGrokCliUpdateNotice({
+      entry: grokEntry(available, { version: "1.0.3" }),
+      now: 200,
+      ...callbacks,
+    })).toBeDefined();
   });
 });

@@ -289,6 +289,10 @@ export type AcpAgentSettingsEntry = {
    *  `probe-timed-out` is retryable; the other reasons are definitive failures. */
   rejectedInstances?: AcpRejectedAgentInstance[];
   activeCommand?: string;
+  /** The active install is a PwrAgent-supplied build (managed download or app
+   *  bundle) rather than a vendor install. Those runtimes follow the verified
+   *  PwrAgent release feed, so vendor update notices never apply to them. */
+  pwrAgentManagedRuntime?: boolean;
   enabled?: boolean;
   preference?: AcpAgentPreference;
 };

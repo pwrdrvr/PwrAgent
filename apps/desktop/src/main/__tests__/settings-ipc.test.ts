@@ -931,6 +931,86 @@ describe("settings ipc", () => {
     }
   });
 
+  it("never serves a vendor Grok update status for a PwrAgent build", async () => {
+    const tempRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "pwragent-settings-ipc-"),
+    );
+    tempRoots.push(tempRoot);
+    vi.stubEnv("PWRAGENT_HOME", tempRoot);
+    const { initializeAppState, disposeAppState, getAppStateDb } = await import(
+      "../state/app-state"
+    );
+    const { AcpAgentStore } = await import("../acp/acp-agent-store");
+    const { registerSettingsIpcHandlers } = await import("../ipc/settings");
+    const { ACP_AGENTS_LIST_CHANNEL } = await import("../../shared/ipc");
+    const service = new DesktopSettingsService({
+      configPath: path.join(tempRoot, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+      now: () => 20,
+    });
+
+    initializeAppState("bootstrap");
+    try {
+      // A vendor update status left in the durable record from a session where
+      // ~/.grok/bin/grok was the runtime, now that a PwrAgent build is active.
+      new AcpAgentStore(getAppStateDb()).upsertInstalledAgent({
+        backendId: "acp:grok",
+        registryId: "grok",
+        name: "Grok",
+        version: "1.0.4-pwragent.2",
+        distributionKind: "local",
+        distributionSource: "grok agent stdio",
+        installStatus: "installed",
+        authStatus: "not-required",
+        verificationStatus: "not-applicable",
+        allowlistRuleId: "local-grok-cli",
+        installedAt: 1234,
+        updatedAt: 1234,
+        activeCommand: "/pwragent/agents/grok/versions/latest/grok",
+        launchDescriptor: {
+          backendId: "acp:grok",
+          registryId: "grok",
+          distributionKind: "local",
+          command: "/pwragent/agents/grok/versions/latest/grok",
+          args: ["agent", "stdio"],
+          env: { GROK_INSTALLER: "pwragent", NO_COLOR: "1" },
+        },
+        update: {
+          status: "available",
+          checkedAt: 1000,
+          currentVersion: "1.0.3",
+          latestVersion: "1.0.5",
+        },
+        updateCommand: "/Users/me/.grok/bin/grok",
+      });
+      registerSettingsIpcHandlers(service);
+
+      // `refresh: false` serves the durable record without a discovery pass —
+      // the read path the update notice uses, and where the stale vendor
+      // status used to reach the renderer.
+      const response = (await handlers.get(ACP_AGENTS_LIST_CHANNEL)?.(
+        {},
+        { refresh: false },
+      )) as
+        | {
+            entries?: Array<{
+              registryId: string;
+              pwrAgentManagedRuntime?: boolean;
+              update?: unknown;
+            }>;
+          }
+        | undefined;
+      const grok = response?.entries?.find(
+        (entry) => entry.registryId === "grok",
+      );
+      expect(grok).toMatchObject({ pwrAgentManagedRuntime: true });
+      expect(grok?.update).toBeUndefined();
+    } finally {
+      disposeAppState();
+    }
+  });
+
   it("persists legacy Kimi diagnostics without probing or retaining models", async () => {
     const tempRoot = fs.mkdtempSync(
       path.join(os.tmpdir(), "pwragent-settings-ipc-"),
