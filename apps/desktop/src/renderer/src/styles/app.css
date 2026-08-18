@@ -22037,10 +22037,13 @@ a.transcript-message__messaging-origin:focus-visible {
   border-top: 1px solid var(--border-subtle);
 }
 
-.pricing-token-miser__gate-when {
-  margin: 6px 0 2px;
-  color: var(--text-muted);
-  font-size: 10.5px;
+.pricing-token-miser__gates {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
 }
 
 /* An orphan group stands in for its gates' cards; the group carries its own

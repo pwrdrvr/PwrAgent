@@ -2469,12 +2469,14 @@ describe("ThreadContextPanel", () => {
     });
 
     const savings = screen.getByLabelText("Token Miser savings");
-    expect(within(savings).getByText("Kept out of context")).toBeInTheDocument();
-    expect(savings).toHaveTextContent("6,000 → 225 tokens");
-    expect(within(savings).getByText("Across requests")).toBeInTheDocument();
-    expect(savings).toHaveTextContent("once uncached + 6 cached replays");
-    expect(within(savings).getByText("Summarizer, once")).toBeInTheDocument();
-    expect(within(savings).getByText("Saved")).toBeInTheDocument();
+    expect(within(savings).getByText("1 · Without gate")).toBeInTheDocument();
+    expect(savings).toHaveTextContent("$0.024");
+    expect(savings).toHaveTextContent("36,000 cached across 6 replays");
+    expect(within(savings).getByText("2 · Gate model")).toBeInTheDocument();
+    expect(within(savings).getByText("3 · Revealed to parent"))
+      .toBeInTheDocument();
+    expect(within(savings).getByText("Savings · 1 − 2 − 3"))
+      .toBeInTheDocument();
     expect(savings).toHaveTextContent("$0.021");
   });
 
