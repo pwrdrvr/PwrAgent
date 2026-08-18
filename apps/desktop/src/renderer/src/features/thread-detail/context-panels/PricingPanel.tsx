@@ -10,7 +10,7 @@ import {
   estimateTokenUsageCost,
   formatTokenUsageMicrosAsUsd,
 } from "@pwragent/shared";
-import { useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ChipContextMenu,
   type ChipContextMenuItem,
@@ -118,6 +118,182 @@ export function PricingPanel(props: PricingPanelProps) {
   // one pass, so the first row of a turn claims that turn's pending markers.
   const claimedCompactionTurns = new Set<string>();
 
+  // One usage row, whether it sits in the flat list or nested under a turn.
+  // Nested gates render the same full card as before — title, model, helper
+  // usage, timing, list price, the savings equation, running total — the
+  // heading above them is a fold, not a replacement.
+  const renderUsageRow = (
+    line: PricingUsageLine,
+    options: { nested?: boolean } = {},
+  ) => {
+    const orphanGroup = options.nested
+      ? undefined
+      : orphanGroupsByAnchor.get(line.usageLineId);
+    if (orphanGroup) {
+      // A gate with no turn to nest under is either the compact group
+      // or nothing. Full cards for gates that cannot be priced were
+      // pure noise — the summarizer's cost is still in the totals, and
+      // the Explorer still lists every gate.
+      const anyPriced = orphanGroup.some((gate) =>
+        gate.sourceItemId
+        && subAgentsById.get(gate.sourceItemId)?.tokenMiserAccounting,
+      );
+      return anyPriced ? (
+        <li
+          key={line.usageLineId}
+          className="rail-card pricing-usage-row pricing-usage-row--orphan-gates"
+        >
+          <TokenMiserTurnGroup
+            gates={orphanGroup}
+            renderGate={(gate) => renderUsageRow(gate, { nested: true })}
+            subAgentsById={subAgentsById}
+          />
+        </li>
+      ) : null;
+    }
+    const lineTotals = pricingTotals.byLineId.get(line.usageLineId);
+    const usageLineEstimate = formatUsageLineEstimates({
+      displayOptions,
+      line,
+      lineTotals,
+    });
+    const runningTotal = formatUsageLineRunningTotal({
+      displayOptions,
+      line,
+      lineTotals,
+    });
+    const contextReplayLines = formatContextReplayEstimate({
+      displayOptions,
+      line,
+    });
+    const rowCompactions = selectRowCompactions(
+      compactionsByRow,
+      line,
+      claimedCompactionTurns,
+    );
+    const runningTokens = formatUsageLineRunningTokens(line);
+    const subAgent =
+      line.scope === "monitor" && line.sourceItemId
+        ? subAgentsById.get(line.sourceItemId)
+        : undefined;
+    const nestedGates = line.scope !== "monitor" && line.turnId
+      ? (gateLinesByTurn.get(line.turnId) ?? [])
+      : [];
+    const isActive = isActiveUsageLine({ activeTurnId, line, subAgentsById });
+    const usageTitle = formatUsageLineTitle(line, subAgent);
+    const showUsageTitle = usageTitle !== "Turn usage";
+    const reasoningEffort =
+      line.reasoningEffort
+      ?? subAgent?.preferredReasoningEffort
+      ?? (isActive && line.scope !== "monitor"
+        ? props.threadReasoningEffort
+        : undefined);
+    const runtimeLabel = formatUsageLineRuntimeLabel(line, subAgent);
+    const runtimeModel =
+      line.model
+      ?? subAgent?.preferredModel
+      ?? subAgent?.monitorUsage?.model
+      ?? subAgent?.monitorUsage?.cost?.model;
+
+    return (
+      <li
+        key={line.usageLineId}
+        className={`rail-card pricing-usage-row${
+          isActive ? " pricing-usage-row--active" : ""
+        }`}
+      >
+        <div className="pricing-usage-row__header">
+          <div className="pricing-usage-row__identity">
+            {showUsageTitle ? (
+              <p className="rail-card__title">{usageTitle}</p>
+            ) : null}
+            <p className="rail-card__runtime">
+              <span className="rail-card__provider-chip">
+                {runtimeLabel}
+              </span>
+              <span className="rail-card__model">
+                {runtimeModel ?? "Unknown model"}
+                {reasoningEffort ? ` · ${reasoningEffort}` : ""}
+                {formatServiceTierLabel(line)}
+              </span>
+            </p>
+          </div>
+          <div className="pricing-usage-row__controls">
+            {isActive ? (
+              <RailStatusChip tone="active">Running</RailStatusChip>
+            ) : null}
+            <PricingUsageActions
+              line={line}
+              onScrollToTurn={props.onScrollToTurn}
+              startedAt={
+                subAgent?.createdAt ?? line.startedAt ?? line.createdAt
+              }
+              subAgent={subAgent}
+            />
+          </div>
+        </div>
+        {subAgent?.agentName ? (
+          <p className="rail-card__agent-name" title={subAgent.agentName}>
+            {subAgent.agentName}
+          </p>
+        ) : null}
+        {/* Cost first: it is the answer the card exists to give. Tokens,
+            timing and replay estimates are the working shown under it. */}
+        {usageLineEstimate ? (
+          <p className="pricing-usage-row__cost">{usageLineEstimate}</p>
+        ) : null}
+        <p className="rail-card__usage">
+          {formatTokenCount(line.uncachedInputTokens)} uncached in ·{" "}
+          {formatTokenCount(line.cachedInputTokens)} cached ·{" "}
+          {formatTokenCount(line.outputTokens)} out
+          {line.reasoningOutputTokens > 0
+            ? ` (${formatTokenCount(line.reasoningOutputTokens)} reasoning)`
+            : ""}
+        </p>
+        <PricingUsageTimestamp
+          isActive={isActive}
+          line={line}
+          now={now}
+          onScrollToTurn={props.onScrollToTurn}
+          subAgent={subAgent}
+        />
+        {contextReplayLines.map((replayLine) => (
+          <p key={replayLine} className="rail-card__usage">
+            {replayLine}
+          </p>
+        ))}
+        {subAgent?.tokenMiserAccounting ? (
+          <TokenMiserSavingsBreakdown
+            accounting={subAgent.tokenMiserAccounting}
+          />
+        ) : null}
+        {nestedGates.length > 0 ? (
+          <TokenMiserTurnGroup
+            gates={nestedGates}
+            renderGate={(gate) => renderUsageRow(gate, { nested: true })}
+            subAgentsById={subAgentsById}
+          />
+        ) : null}
+        {rowCompactions.length > 0 ? (
+          <CompactionBreakdown compactions={rowCompactions} />
+        ) : null}
+        {runningTokens ? (
+          <details className="pricing-running-total">
+            <summary className="pricing-running-total__summary">
+              {runningTotal ?? "Running total"}
+            </summary>
+            <p className="rail-card__usage pricing-running-total__tokens">
+              {runningTokens}
+            </p>
+          </details>
+        ) : runningTotal ? (
+          <p className="rail-card__usage">{runningTotal}</p>
+        ) : null}
+      </li>
+    );
+    };
+
+
   return (
     <section className="context-panel__section">
       <h3>Pricing</h3>
@@ -220,169 +396,7 @@ export function PricingPanel(props: PricingPanelProps) {
 
       {displayLines.length > 0 ? (
         <ul className="context-list context-list--cards pricing-usage-list">
-          {visibleDisplayLines.map((line) => {
-            const orphanGroup = orphanGroupsByAnchor.get(line.usageLineId);
-            if (orphanGroup) {
-              // A gate with no turn to nest under is either the compact group
-              // or nothing. Full cards for gates that cannot be priced were
-              // pure noise — the summarizer's cost is still in the totals, and
-              // the Explorer still lists every gate.
-              const anyPriced = orphanGroup.some((gate) =>
-                gate.sourceItemId
-                && subAgentsById.get(gate.sourceItemId)?.tokenMiserAccounting,
-              );
-              return anyPriced ? (
-                <li
-                  key={line.usageLineId}
-                  className="rail-card pricing-usage-row pricing-usage-row--orphan-gates"
-                >
-                  <TokenMiserTurnGroup
-                    gates={orphanGroup}
-                    subAgentsById={subAgentsById}
-                  />
-                </li>
-              ) : null;
-            }
-            const lineTotals = pricingTotals.byLineId.get(line.usageLineId);
-            const usageLineEstimate = formatUsageLineEstimates({
-              displayOptions,
-              line,
-              lineTotals,
-            });
-            const runningTotal = formatUsageLineRunningTotal({
-              displayOptions,
-              line,
-              lineTotals,
-            });
-            const contextReplayLines = formatContextReplayEstimate({
-              displayOptions,
-              line,
-            });
-            const rowCompactions = selectRowCompactions(
-              compactionsByRow,
-              line,
-              claimedCompactionTurns,
-            );
-            const runningTokens = formatUsageLineRunningTokens(line);
-            const subAgent =
-              line.scope === "monitor" && line.sourceItemId
-                ? subAgentsById.get(line.sourceItemId)
-                : undefined;
-            const nestedGates = line.scope !== "monitor" && line.turnId
-              ? (gateLinesByTurn.get(line.turnId) ?? [])
-              : [];
-            const isActive = isActiveUsageLine({ activeTurnId, line, subAgentsById });
-            const usageTitle = formatUsageLineTitle(line, subAgent);
-            const showUsageTitle = usageTitle !== "Turn usage";
-            const reasoningEffort =
-              line.reasoningEffort
-              ?? subAgent?.preferredReasoningEffort
-              ?? (isActive && line.scope !== "monitor"
-                ? props.threadReasoningEffort
-                : undefined);
-            const runtimeLabel = formatUsageLineRuntimeLabel(line, subAgent);
-            const runtimeModel =
-              line.model
-              ?? subAgent?.preferredModel
-              ?? subAgent?.monitorUsage?.model
-              ?? subAgent?.monitorUsage?.cost?.model;
-
-            return (
-              <li
-                key={line.usageLineId}
-                className={`rail-card pricing-usage-row${
-                  isActive ? " pricing-usage-row--active" : ""
-                }`}
-              >
-                <div className="pricing-usage-row__header">
-                  <div className="pricing-usage-row__identity">
-                    {showUsageTitle ? (
-                      <p className="rail-card__title">{usageTitle}</p>
-                    ) : null}
-                    <p className="rail-card__runtime">
-                      <span className="rail-card__provider-chip">
-                        {runtimeLabel}
-                      </span>
-                      <span className="rail-card__model">
-                        {runtimeModel ?? "Unknown model"}
-                        {reasoningEffort ? ` · ${reasoningEffort}` : ""}
-                        {formatServiceTierLabel(line)}
-                      </span>
-                    </p>
-                  </div>
-                  <div className="pricing-usage-row__controls">
-                    {isActive ? (
-                      <RailStatusChip tone="active">Running</RailStatusChip>
-                    ) : null}
-                    <PricingUsageActions
-                      line={line}
-                      onScrollToTurn={props.onScrollToTurn}
-                      startedAt={
-                        subAgent?.createdAt ?? line.startedAt ?? line.createdAt
-                      }
-                      subAgent={subAgent}
-                    />
-                  </div>
-                </div>
-                {subAgent?.agentName ? (
-                  <p className="rail-card__agent-name" title={subAgent.agentName}>
-                    {subAgent.agentName}
-                  </p>
-                ) : null}
-                {/* Cost first: it is the answer the card exists to give. Tokens,
-                    timing and replay estimates are the working shown under it. */}
-                {usageLineEstimate ? (
-                  <p className="pricing-usage-row__cost">{usageLineEstimate}</p>
-                ) : null}
-                <p className="rail-card__usage">
-                  {formatTokenCount(line.uncachedInputTokens)} uncached in ·{" "}
-                  {formatTokenCount(line.cachedInputTokens)} cached ·{" "}
-                  {formatTokenCount(line.outputTokens)} out
-                  {line.reasoningOutputTokens > 0
-                    ? ` (${formatTokenCount(line.reasoningOutputTokens)} reasoning)`
-                    : ""}
-                </p>
-                <PricingUsageTimestamp
-                  isActive={isActive}
-                  line={line}
-                  now={now}
-                  onScrollToTurn={props.onScrollToTurn}
-                  subAgent={subAgent}
-                />
-                {contextReplayLines.map((replayLine) => (
-                  <p key={replayLine} className="rail-card__usage">
-                    {replayLine}
-                  </p>
-                ))}
-                {subAgent?.tokenMiserAccounting ? (
-                  <TokenMiserSavingsBreakdown
-                    accounting={subAgent.tokenMiserAccounting}
-                  />
-                ) : null}
-                {nestedGates.length > 0 ? (
-                  <TokenMiserTurnGroup
-                    gates={nestedGates}
-                    subAgentsById={subAgentsById}
-                  />
-                ) : null}
-                {rowCompactions.length > 0 ? (
-                  <CompactionBreakdown compactions={rowCompactions} />
-                ) : null}
-                {runningTokens ? (
-                  <details className="pricing-running-total">
-                    <summary className="pricing-running-total__summary">
-                      {runningTotal ?? "Running total"}
-                    </summary>
-                    <p className="rail-card__usage pricing-running-total__tokens">
-                      {runningTokens}
-                    </p>
-                  </details>
-                ) : runningTotal ? (
-                  <p className="rail-card__usage">{runningTotal}</p>
-                ) : null}
-              </li>
-            );
-          })}
+          {visibleDisplayLines.map((line) => renderUsageRow(line))}
         </ul>
       ) : null}
       {hiddenUsageRowCount > 0 ? (
@@ -519,6 +533,7 @@ function partitionTokenMiserGateLines(
  */
 function TokenMiserTurnGroup(props: {
   gates: readonly PricingUsageLine[];
+  renderGate: (line: PricingUsageLine) => ReactNode;
   subAgentsById: Map<string, ThreadSubAgentSummary>;
 }) {
   const [expanded, setExpanded] = useState(false);
@@ -528,9 +543,6 @@ function TokenMiserTurnGroup(props: {
       ? props.subAgentsById.get(line.sourceItemId)?.tokenMiserAccounting
       : undefined,
     line,
-    startedAt: line.sourceItemId
-      ? props.subAgentsById.get(line.sourceItemId)?.createdAt
-      : undefined,
   }));
   const priced = entries.filter((entry) => entry.accounting !== undefined);
   const savingsMicros = priced.reduce(
@@ -581,18 +593,11 @@ function TokenMiserTurnGroup(props: {
       </button>
       {expanded ? (
         <div className="pricing-token-miser__body">
-          {[...carded, ...(showSmall ? small : [])].map((entry) => (
-            <div className="pricing-token-miser__gate" key={entry.line.usageLineId}>
-              <p className="pricing-token-miser__gate-when">
-                {entry.startedAt !== undefined
-                  ? formatTimestamp(entry.startedAt)
-                  : formatTimestamp(entry.line.createdAt)}
-              </p>
-              {entry.accounting ? (
-                <TokenMiserSavingsBreakdown accounting={entry.accounting} />
-              ) : null}
-            </div>
-          ))}
+          <ul className="context-list context-list--cards pricing-token-miser__gates">
+            {[...carded, ...(showSmall ? small : [])].map((entry) =>
+              props.renderGate(entry.line)
+            )}
+          </ul>
           {small.length > 0 ? (
             <button
               aria-expanded={showSmall}
