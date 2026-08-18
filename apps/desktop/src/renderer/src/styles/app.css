@@ -17027,17 +17027,17 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 /* Savings lens. */
-/* The lens owns the window's remaining height and scrolls inside it, matching
-   `__list` / `__detail` on the incidents lens. `min-height: 0` is the load
-   bearing part: without it a flex child refuses to shrink below its content,
-   so a long gate list overflowed the window with no scrollbar. */
+/* The lens claims the window's remaining height but does not scroll itself:
+   the figure, the equation and the filters stay put while only the gate list
+   moves. `min-height: 0` runs the whole way down — savings, gates, gate-list —
+   because a flex child refuses to shrink below its content, and one missing
+   link anywhere in that chain pushes the scroll back up to the whole lens. */
 .incident-explorer__savings {
   display: flex;
   flex: 1;
   flex-direction: column;
   gap: 14px;
   min-height: 0;
-  overflow-y: auto;
   padding: 16px 18px 20px;
 }
 
@@ -17171,8 +17171,10 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .incident-explorer__gates {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 10px;
+  min-height: 0;
 }
 
 .incident-explorer__gates-head {
@@ -17224,9 +17226,12 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .incident-explorer__gate-list {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 6px;
   margin: 0;
+  min-height: 0;
+  overflow-y: auto;
   padding: 0;
   list-style: none;
 }
