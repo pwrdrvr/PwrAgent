@@ -23540,10 +23540,15 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--status-warning);
 }
 
+/* The body scrolls inside a bounded height so a long list of gates moves
+   under the summary line rather than carrying it — and the turn card above
+   it — off the screen. The chevron and the context it names stay put. */
 .pricing-token-miser__body {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  max-height: 360px;
+  overflow-y: auto;
   padding: 2px 8px 8px;
   border-top: 1px solid var(--border-subtle);
 }
@@ -23568,11 +23573,26 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .pricing-token-miser__folded {
   margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--text-muted);
+  font: inherit;
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
   line-height: 1.4;
+  text-align: left;
+}
+
+button.pricing-token-miser__folded {
+  color: var(--accent-bright);
+  cursor: pointer;
+}
+
+button.pricing-token-miser__folded:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
 .rail-card__actions {

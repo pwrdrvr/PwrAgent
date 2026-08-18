@@ -2666,11 +2666,99 @@ describe("ThreadContextPanel", () => {
     expect(summary).toHaveAttribute("aria-expanded", "false");
 
     fireEvent.click(summary);
-    // Only the gate past ten cents earns a card; the small one is one line.
+    // The gate past ten cents shows its card by default; the small one waits
+    // behind a toggle rather than being flattened to a line of prose.
     expect(screen.getAllByLabelText("Token Miser savings")).toHaveLength(1);
+    const reveal = screen.getByRole("button", {
+      name: /Show 1 smaller gate · \$0\.004 saved between them/,
+    });
+    fireEvent.click(reveal);
+    expect(screen.getAllByLabelText("Token Miser savings")).toHaveLength(2);
     expect(
-      screen.getByText(/1 gate under \$0\.10 each · \$0\.004 saved between them/),
+      screen.getByRole("button", { name: /Hide 1 smaller gate/ }),
     ).toBeInTheDocument();
+  });
+
+  // A group with nothing past the threshold has nothing to hold back, so
+  // expanding shows every card outright — never a summary line and no cards.
+  it("shows every card when no gate clears the threshold", () => {
+    const smallAccounting = {
+      baselineParentCostMicros: 5_000,
+      baselineParentTokens: 1_000,
+      cachedReplayCount: 2,
+      cachedBaselineTokens: 2_000,
+      cachedBaselineCostMicros: 1_000,
+      currency: "USD" as const,
+      gateCostMicros: 500,
+      gateModel: "gpt-5.6-luna",
+      gateTotalTokens: 800,
+      originalModel: "gpt-5.6-sol",
+      revealedParentCostMicros: 200,
+      revealedParentTokens: 40,
+      cachedRevealedTokens: 80,
+      cachedRevealedCostMicros: 40,
+      savingsMicros: 5_260,
+    };
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [{
+          agentName: "Token Miser",
+          createdAt: 1_800_000_010_000,
+          monitorId: "system:token-miser:tiny",
+          parentTurnId: "turn-1",
+          status: "success",
+          task: "Gate Bash output",
+          tokenMiserAccounting: smallAccounting,
+          updatedAt: 1_800_000_010_000,
+        }],
+      },
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            usageLineId: "turn-line-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            scope: "turn",
+            source: "live",
+            status: "finalized",
+            model: "gpt-5.6-sol",
+            inputTokens: 1_000,
+            uncachedInputTokens: 1_000,
+            cachedInputTokens: 0,
+            outputTokens: 10,
+            reasoningOutputTokens: 0,
+            totalTokens: 1_010,
+            priceStatus: "priced",
+            currency: "USD",
+            uncachedInputCostMicros: 5_000,
+            cachedInputCostMicros: 0,
+            outputCostMicros: 300,
+            totalCostMicros: 5_300,
+            provider: "openai",
+            createdAt: 1_800_000_000_000,
+          },
+          {
+            ...buildMonitorLine({
+              model: "gpt-5.6-luna",
+              sourceItemId: "system:token-miser:tiny",
+            }),
+            createdAt: 1_800_000_010_000,
+            usageLineId: "gate-line-tiny",
+            totalCostMicros: 500,
+          },
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Token Miser/ }));
+    expect(screen.getAllByLabelText("Token Miser savings")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /smaller gate/ })).not.toBeInTheDocument();
   });
 
   it("keeps a completed sub-agent duration on its pricing card", () => {
