@@ -13,6 +13,9 @@ export function acpStatusLabel(entry: AcpAgentSettingsEntry): string {
   if (entry.installStatus === "not-installed") {
     return "Not installed";
   }
+  if (entry.rejectedInstances?.some((instance) => instance.reason === "probe-timed-out")) {
+    return "Detected · check timed out";
+  }
   if (entry.rejectedInstances?.length) {
     return "Detected · unavailable";
   }

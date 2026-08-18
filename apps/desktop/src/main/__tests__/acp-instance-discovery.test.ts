@@ -472,6 +472,42 @@ describe("discoverLocalAcpAgentRecords", () => {
     expect(record).not.toHaveProperty("runtimeCapabilities");
   });
 
+  it("retains a timed-out ACP verification as retryable", async () => {
+    const timedOutPath = "/usr/local/bin/qwen";
+    const discover = vi.fn(async () => [
+      group("qwen", [], [
+        {
+          command: timedOutPath,
+          version: "0.21.0",
+          source: "path",
+          reason: "probe-timed-out",
+        },
+      ]),
+    ]);
+
+    const [record, ...rest] = await discoverLocalAcpAgentRecords({
+      discover,
+      now: () => 4242,
+    });
+
+    expect(rest).toHaveLength(0);
+    expect(record).toMatchObject({
+      backendId: "acp:qwen",
+      installStatus: "unavailable",
+      instances: [],
+      rejectedInstances: [
+        {
+          command: timedOutPath,
+          version: "0.21.0",
+          source: "path",
+          reason: "probe-timed-out",
+        },
+      ],
+      lastError: `${timedOutPath} was found, but its ACP verification timed out. Refresh to try again.`,
+    });
+    expect(record).not.toHaveProperty("launchDescriptor");
+  });
+
   it("passes an empty strategy list when every provider is disabled", async () => {
     const discover = vi.fn(async () => []);
     await discoverLocalAcpAgentRecords({
