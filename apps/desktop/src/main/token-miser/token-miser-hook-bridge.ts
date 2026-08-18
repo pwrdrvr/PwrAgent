@@ -31,6 +31,19 @@ export class TokenMiserHookBridge {
     if (this.descriptor) {
       return this.descriptor;
     }
+    // Memoize the in-flight start. There are four awaits before `descriptor` is
+    // assigned, and two ungated callers (thread start and the config-write
+    // listener), so without this two callers bind two listeners and the second
+    // overwrites the reference to the first, leaking it past close().
+    this.starting ??= this.startOnce().finally(() => {
+      this.starting = undefined;
+    });
+    return await this.starting;
+  }
+
+  private starting?: Promise<TokenMiserBridgeDescriptor>;
+
+  private async startOnce(): Promise<TokenMiserBridgeDescriptor> {
     await fs.mkdir(this.options.stateDir, { recursive: true, mode: 0o700 });
     const token = randomBytes(32).toString("base64url");
     const server = createServer((request, response) => {

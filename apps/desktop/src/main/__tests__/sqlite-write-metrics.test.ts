@@ -135,6 +135,62 @@ describe("sqlite write metrics", () => {
     });
   });
 
+  it("records compaction markers and their attribution without extra commits", async () => {
+    const threadId = "thread-compaction-writes";
+    const { writes } = await measureSqliteWrites(async () => {
+      // Two compactions in one turn, then the cold-replay usage line whose
+      // attribution UPDATE must ride the existing usage-line transaction.
+      for (const index of [0, 1]) {
+        await store.recordThreadCompaction({
+          compaction: {
+            backend: "codex",
+            compactionId: `codex:${threadId}:item-${index}`,
+            itemId: `item-${index}`,
+            observedAt: 1_800_000_000_000 + index,
+            threadId,
+            turnId: "turn-1",
+            updatedAt: 1_800_000_000_000 + index,
+          },
+        });
+      }
+      await store.upsertThreadUsageLines({
+        lines: [{
+          backend: "codex",
+          cachedInputCostMicros: 0,
+          cachedInputTokens: 0,
+          createdAt: 1_800_000_000_100,
+          currency: "USD",
+          inputTokens: 135_236,
+          observedColdReplayCount: 1,
+          observedColdReplayUncachedTokens: 135_236,
+          outputCostMicros: 0,
+          outputTokens: 0,
+          priceStatus: "priced",
+          provider: "openai",
+          reasoningOutputTokens: 0,
+          scope: "turn",
+          source: "live",
+          status: "finalized",
+          threadId,
+          totalCostMicros: 680_000,
+          totalTokens: 135_236,
+          turnId: "turn-1",
+          uncachedInputCostMicros: 680_000,
+          uncachedInputTokens: 135_236,
+          usageLineId: `${threadId}:turn-1:live`,
+        }],
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note:
+        "two compaction markers plus one cold-replay usage line whose "
+        + "attribution rides the pricing-ledger transaction",
+      scenario: "thread-compaction-markers",
+      writes,
+    });
+  });
+
   it("updates retrieved Token Miser savings in one turn-boundary commit", async () => {
     const threadId = "thread-token-miser-retrieval";
     const subAgent = {

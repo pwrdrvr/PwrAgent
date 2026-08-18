@@ -17350,26 +17350,6 @@ a.transcript-message__messaging-origin:focus-visible {
   text-transform: uppercase;
 }
 
-.incident-explorer__edges-head {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-}
-
-.incident-explorer__edges-head span {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.incident-explorer__edge-list {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 10px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
 .incident-explorer__edge {
   display: grid;
   grid-template-columns: 3px minmax(0, 1fr) auto;
@@ -17420,44 +17400,7 @@ a.transcript-message__messaging-origin:focus-visible {
   font-size: 12px;
 }
 
-.incident-explorer__edge-verdict {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  padding: 10px 14px 10px 0;
-  white-space: nowrap;
-}
-
-.incident-explorer__edge-verdict span {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.incident-explorer__edge[data-kind="cost"] .incident-explorer__edge-verdict span {
-  color: var(--danger-text);
-}
-
-.incident-explorer__edge[data-kind="leak"] .incident-explorer__edge-verdict span,
-.incident-explorer__edge[data-kind="truncated"] .incident-explorer__edge-verdict span {
-  color: var(--status-warning);
-}
-
-.incident-explorer__edge[data-kind="repeat"] .incident-explorer__edge-verdict span {
-  color: var(--info-text);
-}
-
-.incident-explorer__edge-verdict b {
-  margin-top: 3px;
-  color: var(--text-secondary);
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Per-invocation gate box in the incidents lens: this call's own before/after,
+.incident-explorer__edge[data-kind="cost"] .incident-explorer__edge[data-kind="truncated"] .incident-explorer__edge[data-kind="repeat"] /* Per-invocation gate box in the incidents lens: this call's own before/after,
    shown beside the raw-output budget it replaced. */
 .incident-explorer__token-miser-call {
   display: flex;

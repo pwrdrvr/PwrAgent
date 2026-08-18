@@ -4360,6 +4360,10 @@ function mergeThreadPricingLines(
     summariesByKey.set(key, summary);
   }
   return {
+    // Spread the source ledger: rebuilding it field-by-field silently dropped
+    // `compactions` for every thread with a live gate line, which is exactly
+    // the thread that has compaction markers worth showing.
+    ...pricing,
     lines,
     summaries: [...summariesByKey.values()].sort((left, right) =>
       left.provider.localeCompare(right.provider)
@@ -7921,9 +7925,18 @@ export class DesktopBackendRegistry {
       this.tokenMiserStore = new TokenMiserStore(
         path.join(tokenMiserStateDir, "objects"),
         {
-          onMetadataUpdated: async (metadata) => {
+          onMetadataUpdated: async (metadata, reason) => {
             this.pendingTokenMiserInterceptions.set(metadata.objectId, metadata);
             this.rememberActiveTokenMiserReplayEntry(metadata);
+            // A replay-counter write changes nothing the gate card or its usage
+            // line renders, and it fires once per active gate per model
+            // request. Republishing the whole ledger for each one turned a
+            // single usage event into N pricing reads and 2N notifications;
+            // `recordTokenMiserParentModelRequest` already emits once for the
+            // whole batch.
+            if (reason === "replay") {
+              return;
+            }
             const publish = this.tokenMiserLivePublishChain.then(() =>
               this.publishLiveTokenMiserLedgerEntry(metadata),
             );
@@ -12237,7 +12250,9 @@ export class DesktopBackendRegistry {
       executionMode: effectiveExecutionMode,
       runtime: acpRuntimeWithModel,
     });
-    if (backend === "codex" && this.resolveTokenMiserEnabledFn()) {
+    const tokenMiserEnabled = backend === "codex"
+      && this.resolveTokenMiserEnabledFn();
+    if (tokenMiserEnabled) {
       await this.prepareTokenMiserRuntime();
     }
     const agentToolCatalogs = resolveAgentToolCatalogs({
@@ -12249,7 +12264,15 @@ export class DesktopBackendRegistry {
         await this.handleAgentTaskMonitorRequest(request),
       threadInspectionHandler: this.threadInspectionHandler,
       threadOrchestrationHandler: this.threadOrchestrationHandler,
-      tokenMiserStore: this.tokenMiserStore,
+      // Gated on the setting, not merely on the store existing: the store is
+      // constructed for any live Codex client, so passing it unconditionally
+      // advertised three retrieval tools into every turn of an operator who
+      // never enabled the feature.
+      // Gated on the setting, not merely on the store existing: the store is
+      // constructed for any live Codex client, so passing it unconditionally
+      // advertised three retrieval tools into every turn of an operator who
+      // never enabled the feature.
+      ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore } : {}),
     });
     const pdfMcpRegistration =
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
@@ -25933,16 +25956,13 @@ export class DesktopBackendRegistry {
    * the first usage event after a relaunch would look like a new request to
    * every gate and credit a replay that already happened.
    */
-  private seedTokenMiserRequestCursor(metadata: TokenMiserObjectMetadata): void {
-    const mark = metadata.lastParentCumulativeInputTokens;
-    if (mark === undefined) {
-      return;
-    }
-    const key = ["codex", metadata.threadId].join(":");
-    const current = this.liveTokenMiserRequestCursor.get(key);
-    if (current === undefined || mark > current) {
-      this.liveTokenMiserRequestCursor.set(key, mark);
-    }
+  private seedTokenMiserRequestCursor(_metadata: TokenMiserObjectMetadata): void {
+    // Intentionally does not seed. `total.inputTokens` is cumulative for the
+    // Codex *session*, not the thread's lifetime (see acp-usage.ts), so a mark
+    // persisted by the previous process sits above everything the new session
+    // reports. Seeding from it made every later event fail the advance test and
+    // froze replay counting for the life of the process. The sibling
+    // observed-context-replay fold re-seeds per process for the same reason.
   }
 
   private rememberActiveTokenMiserReplayEntry(
@@ -25962,6 +25982,20 @@ export class DesktopBackendRegistry {
     const entries = active ?? new Map<string, TokenMiserObjectMetadata>();
     entries.set(metadata.objectId, metadata);
     this.activeTokenMiserReplayEntries.set(metadata.threadId, entries);
+  }
+
+  private async runTokenMiserSideEffect(
+    stage: string,
+    run: () => Promise<void>,
+  ): Promise<void> {
+    try {
+      await run();
+    } catch (error) {
+      backendRegistryLog.warn("Token Miser side effect failed open", {
+        error: error instanceof Error ? error.message : String(error),
+        stage,
+      });
+    }
   }
 
   private async recordTokenMiserParentModelRequest(
@@ -26005,6 +26039,14 @@ export class DesktopBackendRegistry {
     const cursorKey = [event.backend, threadId].join(":");
     const priorCursor = this.liveTokenMiserRequestCursor.get(cursorKey);
     if (priorCursor !== undefined && cumulativeInputTokens <= priorCursor) {
+      // A large drop means the session restarted and its cumulative total reset,
+      // not that this is a duplicate. Re-anchor instead of declining forever;
+      // treating it as a duplicate is what makes a thread stop counting.
+      if (cumulativeInputTokens * 2 < priorCursor) {
+        this.liveTokenMiserRequestCursor.set(cursorKey, cumulativeInputTokens);
+        this.logTokenMiserReplaySkip("session-reset", threadId);
+        return;
+      }
       this.logTokenMiserReplaySkip("no-advance", threadId);
       return;
     }
@@ -26248,11 +26290,6 @@ export class DesktopBackendRegistry {
             entry,
             invocations: params.invocations,
           });
-      if (entry.replayTrackingVersion === 2) {
-        directlyObservedReplayCount += replayCount;
-      } else {
-        reconstructedReplayCount += replayCount;
-      }
       const accounting = this.buildTokenMiserLedgerArtifact({
         entry,
         pricingLines,
@@ -26260,6 +26297,14 @@ export class DesktopBackendRegistry {
       }).subAgent.tokenMiserAccounting;
       if (!accounting) {
         continue;
+      }
+      // Counted after the guard, with the dollars. Counting replays for a gate
+      // whose dollars were skipped made the confidence chip report replays the
+      // savings figure does not include.
+      if (entry.replayTrackingVersion === 2) {
+        directlyObservedReplayCount += replayCount;
+      } else {
+        reconstructedReplayCount += replayCount;
       }
       pricedGateCount += 1;
       withoutGateCostMicros +=
@@ -26274,6 +26319,12 @@ export class DesktopBackendRegistry {
       parentModel ??= accounting.originalModel;
     }
 
+    // No priced gate means no equation. Returning a zeroed ledger rendered
+    // "Net saved $0.00" as measured fact and made the token-only fallback,
+    // which says the dollars are not in yet, unreachable.
+    if (pricedGateCount === 0) {
+      return undefined;
+    }
     return {
       currency: "USD",
       directlyObservedReplayCount,
@@ -33782,7 +33833,16 @@ export class DesktopBackendRegistry {
       event,
       liveThreadUsageWork,
     );
-    await this.recordTokenMiserParentModelRequest(event);
+    // Token Miser is a fail-open accounting feature; a filesystem error in it
+    // must not abort the pipeline before `emitToListeners`, which would drop
+    // the notification the renderer is waiting on.
+    // Token Miser is fail-open accounting: a filesystem error in it must not
+    // abort the pipeline before `emitToListeners`, which would drop the
+    // notification the renderer is waiting on.
+    await this.runTokenMiserSideEffect(
+      "recordTokenMiserParentModelRequest",
+      () => this.recordTokenMiserParentModelRequest(event),
+    );
     await this.recordThreadCompaction(event);
     await this.stopTokenMiserReplayTrackingAtCompaction(event);
     await this.recordToolInvocationAccounting(event);

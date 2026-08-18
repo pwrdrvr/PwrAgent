@@ -135,8 +135,15 @@ export function ToolOutputIncidentExplorerWindow() {
       }
       const notification = event.notification;
       if (notification.method === "thread/pricing/updated") {
-        if (notification.params.threadId === route.threadId) {
-          void refresh();
+        // Only the pricing half is refreshed. Calling refresh() here replaced
+        // `latest` wholesale, and the selection effect keyed on that identity
+        // reset the operator's typed steering text mid-turn.
+        // Same shape as the read response's pricing by contract; the union
+        // narrowing does not survive into the callback.
+        const pricing = notification.params
+          .pricing as AppServerReadThreadResponse["pricing"];
+        if (notification.params.threadId === route.threadId && pricing) {
+          setLatest((current) => current ? { ...current, pricing } : current);
         }
         return;
       }
@@ -153,7 +160,19 @@ export function ToolOutputIncidentExplorerWindow() {
       if (params.threadId !== route.threadId || !params.toolAccounting) {
         return;
       }
-      setAccounting(params.toolAccounting);
+      // The event payload is capped at the newest 200 invocations while this
+      // window loaded every one of them, so adopting it wholesale shrank the
+      // case list mid-session. Take the Token Miser accounting, which is
+      // thread-wide, and keep the fuller invocation set already loaded.
+      const live = params.toolAccounting;
+      setAccounting((current) => {
+        if (!current) {
+          return live;
+        }
+        return current.invocations.length > live.invocations.length
+          ? { ...current, ...live, invocations: current.invocations }
+          : live;
+      });
     });
   }, [desktopApi, refresh, route]);
 
@@ -1078,7 +1097,10 @@ function TokenMiserSavingsLens(props: {
               <dd>
                 {formatMicrosCurrency(savings.revealedCostMicros, savings.currency)}
                 <span>
-                  {formatCompactTokens(props.comparison.actualParentTokens)}{" "}
+                  {formatCompactTokens(
+                    (tokenMiser.replacementTokens ?? 0)
+                    + (tokenMiser.retrievedTokens ?? 0),
+                  )}{" "}
                   of summaries and retrievals
                 </span>
               </dd>
