@@ -745,6 +745,16 @@ export type DesktopSettingsSnapshot = {
   configError?: string;
   runtime: {
     tokenMiser?: {
+      /**
+       * Whether the Codex-side gate is actually installed. The feature fails
+       * open by design, so an activation failure otherwise looks identical to
+       * a thread that simply had nothing worth gating.
+       */
+      activation?: {
+        state: "active" | "unavailable";
+        reason?: string;
+        observedAt: number;
+      };
       interceptionCount: number;
       originalCharacters: number;
       baselineParentTokens: number;

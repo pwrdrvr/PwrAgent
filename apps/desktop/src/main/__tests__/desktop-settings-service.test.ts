@@ -781,6 +781,49 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  // Token Miser fails open, so an inert gate looks exactly like a thread with
+  // nothing worth gating. The activation record is what lets Settings say the
+  // feature is switched on but not actually running.
+  it("surfaces a recorded Token Miser activation failure", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const stateDir = path.join(root, "state", "token-miser");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "activation.json"),
+      JSON.stringify({
+        observedAt: 1_800_000_000_000,
+        reason: "marketplace 'pwragent-local' is already added from a different source",
+        state: "unavailable",
+      }),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.runtime.tokenMiser?.activation).toMatchObject({
+      state: "unavailable",
+    });
+    expect(snapshot.runtime.tokenMiser?.activation?.reason)
+      .toContain("already added from a different source");
+  });
+
+  it("reports no activation claim when the profile never tried", async () => {
+    const root = createTempRoot();
+    const service = new DesktopSettingsService({
+      configPath: path.join(root, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).runtime.tokenMiser?.activation)
+      .toBeUndefined();
+  });
+
   it("defaults Token Miser off and persists the opt-in", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

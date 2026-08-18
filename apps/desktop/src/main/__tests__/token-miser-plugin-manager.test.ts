@@ -25,6 +25,7 @@ describe("TokenMiserPluginManager", () => {
     temporaryDirectories.push(stateDir);
     const manager = new TokenMiserPluginManager({
       stateDir,
+      profileName: "default",
       executablePath: "/Applications/Pwr Agent.app/Contents/MacOS/PwrAgent",
       hookEntryPath: "/Applications/Pwr Agent.app/Contents/Resources/app.asar/out/main/token-miser-hook.js",
       platform: "darwin",
@@ -55,6 +56,7 @@ describe("TokenMiserPluginManager", () => {
     expect(hooks.hooks.PostToolUse[0].hooks[0].command).toContain(
       "ELECTRON_RUN_AS_NODE=1",
     );
+    expect(marketplace.name).toBe("pwragent-local-default");
     expect(marketplace.plugins[0].source.path).toBe(
       "./plugins/pwragent-token-miser",
     );
@@ -87,6 +89,7 @@ describe("TokenMiserPluginManager", () => {
     const runCodexCommand = vi.fn(async () => undefined);
     const manager = new TokenMiserPluginManager({
       stateDir,
+      profileName: "dev",
       executablePath: "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
       hookEntryPath: "/Applications/PwrAgent.app/Contents/Resources/token-miser-hook.js",
       platform: "darwin",
@@ -103,8 +106,16 @@ describe("TokenMiserPluginManager", () => {
     ]);
     await manager.ensureInstalled({ codexCommand: "/usr/bin/codex", codexEnv });
 
-    expect(runCodexCommand).toHaveBeenCalledTimes(2);
+    expect(runCodexCommand).toHaveBeenCalledTimes(3);
+    // Retire this profile's own pre-scoping entry before claiming the scoped
+    // one, so the shared name stops blocking every other profile.
     expect(runCodexCommand).toHaveBeenNthCalledWith(1, {
+      command: "/usr/bin/codex",
+      args: ["plugin", "marketplace", "remove", "pwragent-local", "--json"],
+      env: codexEnv,
+      tolerateFailure: true,
+    });
+    expect(runCodexCommand).toHaveBeenNthCalledWith(2, {
       command: "/usr/bin/codex",
       args: [
         "plugin",
@@ -115,12 +126,14 @@ describe("TokenMiserPluginManager", () => {
       ],
       env: codexEnv,
     });
-    expect(runCodexCommand).toHaveBeenNthCalledWith(2, {
+    // Scoped by profile: Codex keys marketplaces by name, so an unscoped name
+    // let the first profile to activate lock out every other one.
+    expect(runCodexCommand).toHaveBeenNthCalledWith(3, {
       command: "/usr/bin/codex",
       args: [
         "plugin",
         "add",
-        "pwragent-token-miser@pwragent-local",
+        "pwragent-token-miser@pwragent-local-dev",
         "--json",
       ],
       env: codexEnv,

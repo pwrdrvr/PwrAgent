@@ -1,7 +1,7 @@
 import { app } from "electron";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { realpath, stat } from "node:fs/promises";
+import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -430,6 +430,10 @@ import {
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
 import { TokenMiserHookBridge } from "../token-miser/token-miser-hook-bridge";
 import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
+import {
+  TOKEN_MISER_ACTIVATION_FILENAME,
+  type TokenMiserActivationStatus,
+} from "../token-miser/token-miser-types";
 import { TokenMiserService } from "../token-miser/token-miser-service";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
 import {
@@ -7520,6 +7524,7 @@ export class DesktopBackendRegistry {
   private readonly tokenMiserStore?: TokenMiserStore;
   private readonly tokenMiserHookBridge?: TokenMiserHookBridge;
   private readonly tokenMiserPluginManager?: TokenMiserPluginManager;
+  private tokenMiserStateDir?: string;
   private readonly resolveTokenMiserCodexRuntimeFn?: () => Promise<{
     codexCommand: string;
     codexEnv: NodeJS.ProcessEnv;
@@ -7885,8 +7890,10 @@ export class DesktopBackendRegistry {
         stateDir: tokenMiserStateDir,
         service: tokenMiserService,
       });
+      this.tokenMiserStateDir = tokenMiserStateDir;
       this.tokenMiserPluginManager = new TokenMiserPluginManager({
         stateDir: tokenMiserStateDir,
+        profileName: resolveActiveProfileName(),
         executablePath: process.execPath,
         hookEntryPath: path.join(__dirname, "token-miser-hook.js"),
       });
@@ -19115,8 +19122,42 @@ export class DesktopBackendRegistry {
           maxBytes: 512 * 1024 * 1024,
         }),
       ]);
+      await this.recordTokenMiserActivation({ state: "active" });
     } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
       backendRegistryLog.warn("Token Miser runtime preparation failed open", {
+        error: reason,
+      });
+      // Failing open keeps the turn running, but it also makes an inert gate
+      // indistinguishable from one that had nothing to gate. Record it so the
+      // Settings screen can say the feature is on but not running.
+      await this.recordTokenMiserActivation({ reason, state: "unavailable" });
+    }
+  }
+
+  private async recordTokenMiserActivation(params: {
+    reason?: string;
+    state: TokenMiserActivationStatus["state"];
+  }): Promise<void> {
+    if (!this.tokenMiserStateDir) {
+      return;
+    }
+    try {
+      await mkdir(this.tokenMiserStateDir, {
+        recursive: true,
+        mode: 0o700,
+      });
+      await writeFile(
+        path.join(this.tokenMiserStateDir, TOKEN_MISER_ACTIVATION_FILENAME),
+        JSON.stringify({
+          observedAt: Date.now(),
+          ...(params.reason ? { reason: params.reason } : {}),
+          state: params.state,
+        } satisfies TokenMiserActivationStatus),
+        { encoding: "utf8", mode: 0o600 },
+      );
+    } catch (error) {
+      backendRegistryLog.warn("failed to record Token Miser activation", {
         error: error instanceof Error ? error.message : String(error),
       });
     }

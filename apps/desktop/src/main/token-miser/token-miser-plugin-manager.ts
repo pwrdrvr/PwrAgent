@@ -6,7 +6,24 @@ import path from "node:path";
 import { createCommandInvocation } from "@pwrdrvr/agent-transport";
 
 export const TOKEN_MISER_PLUGIN_NAME = "pwragent-token-miser";
-export const TOKEN_MISER_MARKETPLACE_NAME = "pwragent-local";
+/**
+ * Pre-scoping marketplace name. Every profile registered under this one name
+ * while pointing at its own per-profile root, so the first profile to activate
+ * claimed it and every other profile's `marketplace add` failed with "already
+ * added from a different source" — the gate then failed open and ran nothing,
+ * with only a log line to say so. Kept so a profile can retire its own stale
+ * registration.
+ */
+export const TOKEN_MISER_LEGACY_MARKETPLACE_NAME = "pwragent-local";
+
+/**
+ * Codex keys marketplaces by name, and the root is per-profile, so the name has
+ * to be per-profile too.
+ */
+export function buildTokenMiserMarketplaceName(profileName: string): string {
+  const slug = profileName.replace(/[^a-zA-Z0-9._-]/g, "-").slice(0, 48);
+  return slug ? `pwragent-local-${slug}` : TOKEN_MISER_LEGACY_MARKETPLACE_NAME;
+}
 
 const CODEX_PLUGIN_COMMAND_TIMEOUT_MS = 30_000;
 const CODEX_PLUGIN_COMMAND_OUTPUT_LIMIT = 64 * 1024;
@@ -15,12 +32,16 @@ type CodexPluginCommand = {
   command: string;
   args: string[];
   env: NodeJS.ProcessEnv;
+  /** Best-effort cleanup: a missing entry is success, not a failure. */
+  tolerateFailure?: boolean;
 };
 
 export class TokenMiserPluginManager {
   constructor(
     private readonly options: {
       stateDir: string;
+      /** Scopes the Codex marketplace name; the root is already per-profile. */
+      profileName: string;
       executablePath: string;
       hookEntryPath: string;
       platform?: NodeJS.Platform;
@@ -102,7 +123,7 @@ export class TokenMiserPluginManager {
         },
       }),
       writePrivateJsonAtomic(marketplacePath, {
-        name: TOKEN_MISER_MARKETPLACE_NAME,
+        name: buildTokenMiserMarketplaceName(this.options.profileName),
         interface: { displayName: "PwrAgent Local" },
         plugins: [
           {
@@ -163,6 +184,21 @@ export class TokenMiserPluginManager {
   }): Promise<void> {
     const run = this.options.runCodexCommand ?? ((command) =>
       runCodexPluginCommand(command, this.options.platform ?? process.platform));
+    // Retire this profile's own pre-scoping registration first. Scoped only by
+    // our own root, so a profile can never remove another profile's entry —
+    // each one cleans up after itself the next time it activates.
+    await run({
+      command: params.codexCommand,
+      args: [
+        "plugin",
+        "marketplace",
+        "remove",
+        TOKEN_MISER_LEGACY_MARKETPLACE_NAME,
+        "--json",
+      ],
+      env: params.codexEnv,
+      tolerateFailure: true,
+    });
     await run({
       command: params.codexCommand,
       args: [
@@ -179,7 +215,7 @@ export class TokenMiserPluginManager {
       args: [
         "plugin",
         "add",
-        `${TOKEN_MISER_PLUGIN_NAME}@${TOKEN_MISER_MARKETPLACE_NAME}`,
+        `${TOKEN_MISER_PLUGIN_NAME}@${buildTokenMiserMarketplaceName(this.options.profileName)}`,
         "--json",
       ],
       env: params.codexEnv,
@@ -260,6 +296,11 @@ async function runCodexPluginCommand(
     child.once("close", (code) => {
       clearTimeout(timeout);
       if (code === 0) {
+        resolve();
+        return;
+      }
+      if (command.tolerateFailure) {
+        // Best-effort cleanup: nothing to remove is the expected case.
         resolve();
         return;
       }

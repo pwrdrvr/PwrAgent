@@ -34,6 +34,7 @@ import type {
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
@@ -174,6 +175,10 @@ import {
   readEnvString,
   readEnvWorktreeStorage,
 } from "./desktop-settings-env";
+import {
+  TOKEN_MISER_ACTIVATION_FILENAME,
+  type TokenMiserActivationStatus,
+} from "../token-miser/token-miser-types";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
 import {
   discoverCodexAuthProfiles,
@@ -611,13 +616,16 @@ export class DesktopSettingsService {
       retrievedTokens: 0,
       estimatedParentTokensSaved: 0,
     }));
+    const tokenMiserActivation = await this.readTokenMiserActivation();
 
     return {
       fetchedAt: this.now(),
       configPath: this.configPath,
       configError: error,
       runtime: {
-        tokenMiser: tokenMiserUsage,
+        tokenMiser: tokenMiserActivation
+          ? { ...tokenMiserUsage, activation: tokenMiserActivation }
+          : tokenMiserUsage,
         messaging: {
           disabled: messagingOverride.disabled,
           overrideActive: messagingOverride.disabled,
@@ -2609,6 +2617,34 @@ export class DesktopSettingsService {
       value: configValue ?? SLACK_DM_ACCESS_MODE_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
+  }
+
+  /**
+   * Last recorded Codex-side activation result. Absent on a profile that has
+   * never tried to activate, which reads as "no claim either way" rather than
+   * as a failure.
+   */
+  private async readTokenMiserActivation(): Promise<
+    TokenMiserActivationStatus | undefined
+  > {
+    try {
+      const raw = await readFile(
+        path.join(
+          path.dirname(this.configPath),
+          "state",
+          "token-miser",
+          TOKEN_MISER_ACTIVATION_FILENAME,
+        ),
+        "utf8",
+      );
+      const parsed = JSON.parse(raw) as TokenMiserActivationStatus;
+      if (parsed.state !== "active" && parsed.state !== "unavailable") {
+        return undefined;
+      }
+      return parsed;
+    } catch {
+      return undefined;
+    }
   }
 
   private resolveSlackChannelUserAccessMode(

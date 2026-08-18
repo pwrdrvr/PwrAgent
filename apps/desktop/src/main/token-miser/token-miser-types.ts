@@ -100,3 +100,16 @@ export function isTokenMiserPostToolUsePayload(
     && Object.prototype.hasOwnProperty.call(record, "tool_response")
   );
 }
+
+/**
+ * Last observed result of Codex-side activation, written next to the objects so
+ * the Settings screen can read it without a live channel to the backend and it
+ * survives a restart.
+ */
+export type TokenMiserActivationStatus = {
+  state: "active" | "unavailable";
+  reason?: string;
+  observedAt: number;
+};
+
+export const TOKEN_MISER_ACTIVATION_FILENAME = "activation.json";
