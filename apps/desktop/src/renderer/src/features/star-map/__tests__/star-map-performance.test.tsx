@@ -74,15 +74,17 @@ describe("star map idle performance", () => {
     expect(css).not.toContain(".star-map__link-flow");
   });
 
-  it("promotes the large canvas only while pointer-panning", () => {
+  it("promotes the large canvas only while it is moving", () => {
     const canvasRule = css.match(
       /\.star-map__canvas\.is-transformed\s*\{[\s\S]*?\n\}/,
     )?.[0];
-    const panningRule = css.match(
-      /\.star-map__viewport\.is-panning \.star-map__canvas\.is-transformed\s*\{[\s\S]*?\n\}/,
+    // Pointer pan and keyboard flight both write the transform every
+    // frame; neither promotion may outlive its gesture.
+    const movingRule = css.match(
+      /\.star-map__viewport\.is-panning \.star-map__canvas\.is-transformed,\s*\.star-map\.is-flying \.star-map__canvas\.is-transformed\s*\{[\s\S]*?\n\}/,
     )?.[0];
     expect(canvasRule).not.toContain("will-change");
-    expect(panningRule).toContain("will-change: transform;");
+    expect(movingRule).toContain("will-change: transform;");
   });
 
   it("updates card layout from ResizeObserver without reading offsetHeight", async () => {

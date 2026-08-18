@@ -2696,7 +2696,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
   return (
     <div
       ref={layerRef}
-      className="star-map"
+      // `is-flying` mirrors the pointer pan's `is-panning` for keyboard
+      // flight, so the window's glass title strip can brighten its edge
+      // whenever the sky is moving under it, whichever hand moves it.
+      className={heldCameraKeys.size > 0 ? "star-map is-flying" : "star-map"}
       role="region"
       aria-label="Star Map"
       tabIndex={-1}

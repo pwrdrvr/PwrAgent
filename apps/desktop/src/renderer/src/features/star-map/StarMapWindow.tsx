@@ -52,12 +52,24 @@ export function StarMapWindow() {
   // Windows draws its caption buttons in a frameless overlay, so the
   // window needs a painted drag strip the way every other aux window
   // does. macOS keeps the map full-bleed: the map's own top chrome
-  // already reserves the stoplight gutter and the native title-bar band
-  // handles dragging. Linux keeps its normal OS frame.
-  const isWindows = getDesktopApi()?.platform === "win32";
+  // already reserves the stoplight gutter, but `hiddenInset` leaves no
+  // native title-bar band to grab, so a transparent glass strip over the
+  // top of the sky is the window's only drag handle. Linux keeps its
+  // normal OS frame.
+  const platform = getDesktopApi()?.platform;
+  const isWindows = platform === "win32";
+  const isMac = platform === "darwin";
 
   return (
     <div className="star-map-window">
+      {isMac ? (
+        // Purely a window-drag handle: `-webkit-app-region: drag` means
+        // macOS takes the mouse-down before the DOM sees it, so nothing
+        // here can (or should) start a canvas pan. The map's own top
+        // chrome and filter chips carve `no-drag` holes so they stay
+        // clickable inside the strip. Decorative to assistive tech.
+        <div aria-hidden="true" className="star-map-window__titlebar" />
+      ) : null}
       {isWindows ? (
         <header className="activity-titlebar">
           <p className="activity-titlebar__brand">

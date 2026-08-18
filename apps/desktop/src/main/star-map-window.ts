@@ -30,6 +30,7 @@ import {
   positionWindowForSourceDisplay,
   type WindowPlacementSource,
 } from "./window-placement";
+import { attachWindowFullscreenSync } from "./window-fullscreen-sync";
 
 const log = getMainLogger("pwragent:star-map-window");
 const STAR_MAP_WINDOW_TITLE = "Federation Star Map";
@@ -95,6 +96,13 @@ export function showStarMapWindow(source: WindowPlacementSource = {}): void {
   hideAuxiliaryWindowMenuBar(window);
 
   applyWindowSecurityHardening(window);
+  // This is the one auxiliary window that can go native-fullscreen, and
+  // macOS hides the stoplights when it does. The renderer reserves their
+  // gutter in `.star-map__chrome` and paints a drag strip across the top
+  // of the sky; both read `<html data-fullscreen>` to stand down, and
+  // that attribute only exists if this window forwards its fullscreen
+  // transitions the way the main window does.
+  attachWindowFullscreenSync(window);
   // The map is a live surface: thread status, star-map arrangement
   // deltas, and federation peer changes all arrive as agent events, so
   // this window subscribes to that push channel (unlike the polling
