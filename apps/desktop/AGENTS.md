@@ -757,23 +757,31 @@ replaces it for its own duration, as `auto-updater.test.ts` does. Not covered:
 `http.request` / `https.request` / `net.connect`, which Node's undici `fetch`
 does not route through and nothing here uses directly.
 
-**Loopback goes through.** `localhost`, `127.0.0.0/8`, and `::1` cannot leave
-the machine, so they are not what the guard is for — that is a test talking to
-a server it started, the same category as the spawn guard's `os.tmpdir()`
+**Loopback goes through.** `localhost` (and any `*.localhost`),
+`127.0.0.0/8` — including the `::ffff:127.0.0.1` form a dual-stack socket
+reports — `::1`, and the wildcard bind addresses `0.0.0.0` / `::` cannot leave
+the machine, so they are not what the guard is for: that is a test talking to a
+server it started, the same category as the spawn guard's `os.tmpdir()`
 allowance. `agent-tool-mcp-server.test.ts` drives its MCP server's real HTTP
-surface (auth, CORS, thread binding) exactly this way. The allowance is pinned
-by the self-test, including that a remote host merely *containing* "localhost"
-is still blocked.
+surface (auth, CORS, thread binding) exactly this way. A scheme that opens no
+socket at all — `data:`, `blob:`, `file:` — is allowed for the same reason;
+those have no host to classify, and reading an inline fixture is not egress.
+The allowance is pinned by the self-test, including that a remote host merely
+*containing* "localhost" is still blocked.
 
 The renderer project loads the fetch guard too. It has no `fetch` call site
 today and reaches the network through IPC, but `lint:boundaries` reads imports
 and cannot see a `globalThis.fetch`, and jsdom inherits a live one from Node —
 so this is the only thing here that would catch a renderer reaching a remote
-host directly. (A relative-URL fetch resolves against jsdom's `localhost` and
-is allowed through as loopback; the guard measures egress, not same-origin.)
+host directly. A relative URL is resolved against the document origin before it
+is classified, so a same-origin renderer fetch is allowed through as loopback;
+the guard measures egress, not same-origin. Node has no `location`, so the same
+input there stays unparseable and is treated as escaping.
 
 `__tests__/outbound-fetch-guard.test.ts` is the guard's self-test, in the same
-shape as `agent-cli-spawn-guard.test.ts`.
+shape as `agent-cli-spawn-guard.test.ts`;
+`renderer/src/test/outbound-fetch-guard.test.ts` covers the one case that needs
+a document origin.
 
 ## Sqlite Write-Volume Instrumentation
 

@@ -20,6 +20,14 @@ import type {
   SetThreadParentRequest,
   ThreadGitWorkingState,
 } from "@pwragent/shared";
+import { resolvePwragentRoot } from "../profile";
+
+// `resolveScratchProjectsRoots` anchors the first two workspace roots at the
+// PwrAgent root, which vitest redirects to a disposable directory; only the
+// legacy `.pwragnt` root stays anchored at the real home. Reading the root the
+// same way production does keeps these assertions about *which* roots are
+// scanned rather than about where the suite happens to be pointed.
+const PWRAGENT_ROOT = resolvePwragentRoot();
 
 const mockAppServerLog = vi.hoisted(() => ({
   debug: vi.fn(),
@@ -2099,8 +2107,8 @@ describe("app server ipc", () => {
         expect.objectContaining({ source: "acp:grok", id: "thread-1" }),
       ],
       workspaceRoots: [
-        path.join(os.homedir(), ".pwragent", "profiles", "default", "projects"),
-        path.join(os.homedir(), ".pwragent", "projects"),
+        path.join(PWRAGENT_ROOT, "profiles", "default", "projects"),
+        path.join(PWRAGENT_ROOT, "projects"),
         path.join(os.homedir(), ".pwragnt", "projects"),
       ],
     });
@@ -3346,8 +3354,8 @@ describe("app server ipc", () => {
         expect.objectContaining({ source: "acp:grok", id: "thread-1" }),
       ],
       workspaceRoots: [
-        path.join(os.homedir(), ".pwragent", "profiles", "default", "projects"),
-        path.join(os.homedir(), ".pwragent", "projects"),
+        path.join(PWRAGENT_ROOT, "profiles", "default", "projects"),
+        path.join(PWRAGENT_ROOT, "projects"),
         path.join(os.homedir(), ".pwragnt", "projects"),
       ],
     });
@@ -3596,8 +3604,8 @@ describe("app server ipc", () => {
         }),
       ],
       workspaceRoots: [
-        path.join(os.homedir(), ".pwragent", "profiles", "default", "projects"),
-        path.join(os.homedir(), ".pwragent", "projects"),
+        path.join(PWRAGENT_ROOT, "profiles", "default", "projects"),
+        path.join(PWRAGENT_ROOT, "projects"),
         path.join(os.homedir(), ".pwragnt", "projects"),
       ],
     });

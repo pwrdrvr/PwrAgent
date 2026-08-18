@@ -31,7 +31,8 @@
 //
 // Loopback is allowed through, because it is not egress: a request to
 // `localhost` / `127.0.0.0/8` / `::1` reaches a server the test itself started.
-// See `isLoopback` below.
+// So is a scheme that never opens a socket at all (`data:`, `blob:`, `file:`).
+// See `staysOnThisMachine` below.
 //
 // Not covered: `http.request` / `https.request` / `net.connect` and Electron's
 // `net` module. Node's `fetch` is undici and does not route through them, and
@@ -82,7 +83,7 @@ if (guardGlobal[INSTALLED] !== guardGlobal.fetch) {
     init?: Parameters<typeof globalThis.fetch>[1],
   ): Promise<Response> {
     const attempt = describeRequest(input, init);
-    if (isLoopback(attempt.url)) {
+    if (staysOnThisMachine(attempt.url)) {
       return nativeFetch(input, init);
     }
     attempts.push(attempt);
@@ -142,30 +143,63 @@ function describeAttempt(attempt: Attempt): string {
 }
 
 /**
- * A request to loopback cannot leave the machine, so it is not the thing this
- * guard exists to stop — it is a test talking to a server the test itself
- * started, the same category as the spawn guard's `os.tmpdir()` allowance.
- * `agent-tool-mcp-server.test.ts` drives its MCP server's real HTTP surface
- * (auth, CORS, thread binding) this way, and there is no version of that test
- * worth having that does not.
+ * A request that cannot leave the machine is not the thing this guard exists to
+ * stop. Two shapes qualify:
+ *
+ *   - Loopback — a test talking to a server the test itself started, the same
+ *     category as the spawn guard's `os.tmpdir()` allowance.
+ *     `agent-tool-mcp-server.test.ts` drives its MCP server's real HTTP surface
+ *     (auth, CORS, thread binding) this way, and there is no version of that
+ *     test worth having that does not.
+ *   - A scheme that opens no socket at all — `data:`, `blob:`, `file:`. Those
+ *     have no host to classify, and reading an inline fixture is not egress.
  *
  * An unparseable URL is treated as escaping: nothing here can prove where it
  * would go.
  */
-function isLoopback(url: string): boolean {
-  let host: string;
-  try {
-    host = new URL(url).hostname.toLowerCase();
-  } catch {
+function staysOnThisMachine(url: string): boolean {
+  const parsed = parseRequestUrl(url);
+  if (parsed === null) {
     return false;
   }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return true;
+  }
+  return isLoopbackHost(parsed.hostname.toLowerCase());
+}
+
+/**
+ * jsdom gives the renderer a document origin, so a relative URL there is a
+ * same-origin request against `localhost` rather than an unparseable one — the
+ * guard measures egress, not same-origin. Node has no `location`, and undici
+ * rejects a relative URL outright, so the same input there stays in the
+ * "cannot prove where it goes" case alongside a malformed URL.
+ */
+function parseRequestUrl(url: string): URL | null {
+  try {
+    return new URL(url, globalThis.location?.href);
+  } catch {
+    return null;
+  }
+}
+
+function isLoopbackHost(host: string): boolean {
   // Node reports IPv6 hosts in their bracketed form.
   const address = host.replace(/^\[|\]$/g, "");
   return (
     address === "localhost"
     || address.endsWith(".localhost")
-    || address === "::1"
+    // The wildcard bind addresses: a client that connects to one reaches a
+    // local listener, so a test addressing its own `0.0.0.0`/`::` server is
+    // still talking to itself.
     || address === "0.0.0.0"
+    || address === "::"
+    || address === "::1"
+    // A dual-stack socket reports IPv4 loopback as `::ffff:127.0.0.1`, which
+    // the URL parser normalizes to its hex form — `::ffff:7f00:1` for
+    // `127.0.0.1`. The first group is `7f` plus the second octet, so the whole
+    // of `127.0.0.0/8` is `7f00`–`7fff`.
+    || /^::ffff:7f[0-9a-f]{2}:[0-9a-f]{1,4}$/.test(address)
     || /^127(\.\d{1,3}){3}$/.test(address)
   );
 }

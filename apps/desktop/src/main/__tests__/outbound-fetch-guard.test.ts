@@ -72,16 +72,31 @@ describe("outbound fetch guard", () => {
     }
   });
 
-  it.each(["http://127.0.0.1:9/x", "http://[::1]:9/x", "http://localhost:9/x"])(
-    "treats %s as loopback rather than egress",
-    async (url) => {
-      // Nothing is listening on port 9, so the request fails at connect — the
-      // point is that it reached the socket instead of the guard.
-      await swallow(() => fetch(url));
+  it.each([
+    "http://127.0.0.1:9/x",
+    "http://[::1]:9/x",
+    "http://localhost:9/x",
+    // The dual-stack spelling of IPv4 loopback, and the wildcard bind
+    // addresses a test's own server reports when it listens on all interfaces.
+    "http://[::ffff:127.0.0.1]:9/x",
+    "http://0.0.0.0:9/x",
+    "http://[::]:9/x",
+  ])("treats %s as loopback rather than egress", async (url) => {
+    // Nothing is listening on port 9, so the request fails at connect — the
+    // point is that it reached the socket instead of the guard.
+    await swallow(() => fetch(url));
 
-      expect(drainAttempts()).toEqual([]);
-    },
-  );
+    expect(drainAttempts()).toEqual([]);
+  });
+
+  // A scheme that opens no socket is not egress and has no host to classify.
+  it("lets a data URL through instead of counting it as a request", async () => {
+    await expect((await fetch("data:text/plain,inline")).text()).resolves.toBe(
+      "inline",
+    );
+
+    expect(drainAttempts()).toEqual([]);
+  });
 
   it("still blocks a remote host that merely mentions localhost", async () => {
     const error = await captureFetchError(() =>
