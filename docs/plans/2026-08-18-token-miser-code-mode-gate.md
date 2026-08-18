@@ -192,3 +192,126 @@ The measurements above come from an isolated `CODEX_HOME` with a `PreToolUse`
 command hook that logs its stdin payload and emits a rewrite, driven by
 `codex exec --dangerously-bypass-hook-trust`, plus `sandbox-exec` runs against
 Codex's real base Seatbelt policy for the transport table.
+
+---
+
+# Part 2 — where interception can actually happen in Codex
+
+Recorded after the findings above ruled out a hook-only design. The question
+became whether to patch Codex, add an App Server filtering feature, or extend
+Codex hooks to Claude-hook parity. Reading the code-mode implementation shows
+those three are not the choices they appear to be.
+
+Source citations remain from checkout `1b81365926`, which is older than the
+installed CLI. Structure is unlikely to have changed, but nothing in this
+section was measured against a running build.
+
+## The nested-tool boundary is not the context path
+
+`call_nested_tool` ends with `Ok(result.code_mode_result())`
+(`codex-rs/core/src/tools/code_mode/mod.rs`). That `JsonValue` is returned
+**into the running script**, not into the model context. The script decides
+what to do with it — grep it, parse it, count it, discard it.
+
+What the model actually sees is what the script yields or returns:
+`handle_runtime_response` converts `RuntimeResponse::{Yielded, Terminated,
+Result}` into `content_items` and passes them through
+`truncate_code_mode_result(items, max_output_tokens)`.
+
+This recasts `PostToolUseFeedbackOutput::code_mode_result` returning
+`self.original`. It is defensible as intentional rather than an oversight: hook
+feedback shapes model-visible prose, and a script is a program that should
+receive real data. A patched Codex that let the hook suppress the original
+*at that point* would hand summaries to scripts doing programmatic
+post-processing, and break them silently.
+
+## The reduction seam already exists, one layer up
+
+`truncate_code_mode_result` is exactly the script-to-model boundary, and it
+already applies a token-budgeted reduction. It is simply a dumb truncation:
+
+```rust
+let max_output_tokens = resolve_max_tokens(max_output_tokens);
+let policy = TruncationPolicy::Tokens(max_output_tokens);
+```
+
+Two consequences:
+
+- This is the natural insertion point for a summarizing pass. Replacing
+  truncation with a Luna-class reduction preserves the script contract while
+  changing only what enters context — which is the whole objective.
+- The budget is **model-chosen, not operator-controlled**. It arrives as
+  `args.max_output_tokens` on the code-mode execute call
+  (`execute_handler.rs`) and as `args.max_tokens` on wait
+  (`wait_handler.rs`), falling back to `DEFAULT_MAX_OUTPUT_TOKENS`. There is
+  no operator lever over code-mode output volume today.
+
+## The App Server is not in the model's context path
+
+`codex-app-server` links `codex-core` and `codex-code-mode` in-process, but it
+is a JSON-RPC surface that drives and observes sessions. The tool-output to
+context flow does not route through it.
+
+So "filter output in the App Server" cannot be built as an App Server feature
+alone. It requires a core interception point that calls back out to the client
+over the protocol. That collapses the App Server option and the extend-hooks
+option into the same change: a new core seam plus a transport. The only real
+question left is whether the reducer runs in-process or out.
+
+An in-process reducer avoids the transport question entirely — and with it the
+sandbox, socket-path, and approval findings from Part 1, none of which apply to
+code running inside Codex.
+
+## The extension API exists but is deliberately observe-only for tools
+
+`codex-rs/ext/extension-api` exposes a contributor registry, and `codex-rs/ext`
+ships thirteen extensions. `ToolLifecycleContributor` is explicit about its
+scope:
+
+> Implementations should use these callbacks to observe tool execution and its
+> exposed input without rewriting the invocation. Use `ToolContributor` for
+> owning a tool implementation and hooks for policy that changes tool payloads.
+
+`TurnItemContributor` *can* mutate, but it mutates emitted `TurnItem`s through
+`finalize_non_tool_response_item` — the display and rollout representation, not
+the model input.
+
+So no existing extension seam does what Token Miser needs. `guardian-v2` is the
+closest precedent worth studying: it samples the transcript, runs a model over
+it, and can claim approval decisions. It establishes that "an extension runs a
+model over session data" is a sanctioned pattern — it just acts on approvals
+rather than on output.
+
+## Unverified: whether code mode observes output as it streams
+
+The premise that code mode needs live output to detect a hung or looping
+command is plausible but was not confirmed. What the code shows is that nested
+calls are awaited and return a complete `JsonValue`, and that
+`RuntimeResponse::Yielded` carries a `cell_id` so a script can yield and be
+resumed. No streaming path into the running script was found. This should be
+settled before it is used to justify a design, because it is the main argument
+for a streaming filter over a terminal one.
+
+## Cost note on forking
+
+PwrAgent drives the operator's installed Codex. Shipping a patched build adds
+a rebase burden against a fast-moving upstream, plus signing, notarization, and
+update surface. The checkout used here is roughly two months behind the
+installed CLI and already diverges behaviorally on hook semantics — Part 1's
+`permissionDecision` finding contradicts this same source tree. That divergence
+rate is the fork's recurring cost, not a one-time port.
+
+## Direction this points to
+
+The smallest change that solves the stated problem is at
+`truncate_code_mode_result`: make the code-mode reduction pluggable rather than
+a fixed truncation, and let the host rather than the model bound the budget.
+That is a contained, principled change, it is where a fork would patch anyway,
+and it is plausible as an upstream contribution.
+
+## Open questions
+
+- Does code mode observe streamed output, or only completed results?
+- Is a terminal reduction at the script-to-model boundary sufficient, or is
+  the runaway-output case only addressable mid-stream?
+- Upstream contribution or maintained fork?
