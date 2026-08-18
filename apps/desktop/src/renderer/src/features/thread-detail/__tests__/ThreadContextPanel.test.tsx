@@ -2469,15 +2469,121 @@ describe("ThreadContextPanel", () => {
     });
 
     const savings = screen.getByLabelText("Token Miser savings");
-    expect(within(savings).getByText("1 · Without gate")).toBeInTheDocument();
-    expect(savings).toHaveTextContent("$0.024");
-    expect(savings).toHaveTextContent("36,000 cached across 6 replays");
-    expect(within(savings).getByText("2 · Gate model")).toBeInTheDocument();
-    expect(within(savings).getByText("3 · Revealed to parent"))
-      .toBeInTheDocument();
-    expect(within(savings).getByText("Savings · 1 − 2 − 3"))
-      .toBeInTheDocument();
+    expect(within(savings).getByText("Kept out of context")).toBeInTheDocument();
+    expect(savings).toHaveTextContent("6,000 → 225 tokens");
+    expect(within(savings).getByText("Across requests")).toBeInTheDocument();
+    expect(savings).toHaveTextContent("once uncached + 6 cached replays");
+    expect(within(savings).getByText("Summarizer, once")).toBeInTheDocument();
+    expect(within(savings).getByText("Saved")).toBeInTheDocument();
     expect(savings).toHaveTextContent("$0.021");
+  });
+
+  // Gate rows fold under the turn they happened in. The turn card carries one
+  // summary line that sums every gate; only a gate past ten cents gets its own
+  // card when expanded, the rest are one line.
+  it("nests Token Miser gates under their turn and folds small ones", () => {
+    const gateAccounting = (savingsMicros: number) => ({
+      baselineParentCostMicros: 50_000,
+      baselineParentTokens: 10_000,
+      cachedReplayCount: 3,
+      cachedBaselineTokens: 30_000,
+      cachedBaselineCostMicros: 15_000,
+      currency: "USD" as const,
+      gateCostMicros: 2_000,
+      gateModel: "gpt-5.6-luna",
+      gateTotalTokens: 2_100,
+      originalModel: "gpt-5.6-sol",
+      revealedParentCostMicros: 1_500,
+      revealedParentTokens: 300,
+      cachedRevealedTokens: 900,
+      cachedRevealedCostMicros: 450,
+      savingsMicros,
+    });
+    const gateLine = (id: string, createdAt: number) => ({
+      ...buildMonitorLine({
+        model: "gpt-5.6-luna",
+        sourceItemId: `system:token-miser:${id}`,
+      }),
+      createdAt,
+      usageLineId: `gate-line-${id}`,
+      totalCostMicros: 2_000,
+    });
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_010_000,
+            monitorId: "system:token-miser:big",
+            parentTurnId: "turn-1",
+            status: "success",
+            task: "Gate Bash output",
+            tokenMiserAccounting: gateAccounting(250_000),
+            updatedAt: 1_800_000_010_000,
+          },
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_020_000,
+            monitorId: "system:token-miser:small",
+            parentTurnId: "turn-1",
+            status: "success",
+            task: "Gate Bash output",
+            tokenMiserAccounting: gateAccounting(4_000),
+            updatedAt: 1_800_000_020_000,
+          },
+        ],
+      },
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            usageLineId: "turn-line-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            scope: "turn",
+            source: "live",
+            status: "finalized",
+            model: "gpt-5.6-sol",
+            inputTokens: 100_000,
+            uncachedInputTokens: 10_000,
+            cachedInputTokens: 90_000,
+            outputTokens: 1_000,
+            reasoningOutputTokens: 0,
+            totalTokens: 101_000,
+            priceStatus: "priced",
+            currency: "USD",
+            uncachedInputCostMicros: 50_000,
+            cachedInputCostMicros: 45_000,
+            outputCostMicros: 30_000,
+            totalCostMicros: 125_000,
+            provider: "openai",
+            createdAt: 1_800_000_000_000,
+          },
+          gateLine("big", 1_800_000_010_000),
+          gateLine("small", 1_800_000_020_000),
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    // The gates are not standalone rows any more.
+    expect(screen.queryAllByLabelText("Token Miser savings")).toHaveLength(0);
+    // One summary on the turn, summing both gates: 250,000 + 4,000 micros.
+    const summary = screen.getByRole("button", { name: /Token Miser/ });
+    expect(summary).toHaveTextContent("2 gates");
+    expect(summary).toHaveTextContent("$0.26 saved");
+    expect(summary).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(summary);
+    // Only the gate past ten cents earns a card; the small one is one line.
+    expect(screen.getAllByLabelText("Token Miser savings")).toHaveLength(1);
+    expect(
+      screen.getByText(/1 gate under \$0\.10 each · \$0\.004 saved between them/),
+    ).toBeInTheDocument();
   });
 
   it("keeps a completed sub-agent duration on its pricing card", () => {

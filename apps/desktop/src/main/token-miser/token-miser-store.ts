@@ -104,6 +104,8 @@ export class TokenMiserStore {
     summary: TokenMiserSummary;
     helperUsage?: TokenMiserHelperUsage;
     parentCumulativeInputTokens?: number;
+    parentModel?: string;
+    parentServiceTier?: string;
     now?: number;
   }): Promise<TokenMiserObjectMetadata> {
     await this.ensureRoot();
@@ -139,6 +141,10 @@ export class TokenMiserStore {
         : {}),
       summary: params.summary,
       ...(params.helperUsage ? { helperUsage: params.helperUsage } : {}),
+      ...(params.parentModel ? { parentModel: params.parentModel } : {}),
+      ...(params.parentServiceTier
+        ? { parentServiceTier: params.parentServiceTier }
+        : {}),
     };
     await writePrivateFileAtomic(this.outputPath(objectId), params.output);
     await this.writeMetadata(metadata);

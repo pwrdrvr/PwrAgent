@@ -49,6 +49,16 @@ export type TokenMiserObjectMetadata = {
   replayTrackingStoppedAt?: number;
   summary: TokenMiserSummary;
   helperUsage?: TokenMiserHelperUsage;
+  /**
+   * The model whose context this gate protected, captured at creation.
+   *
+   * Pricing needs the parent's rate, and the usage line that normally carries
+   * it can be absent: a native review runs on the parent thread with no usage
+   * line of its own, and mid-turn the parent's line may not be priced yet.
+   * Stamping the model here lets a gate price without one.
+   */
+  parentModel?: string;
+  parentServiceTier?: string;
 };
 
 export type TokenMiserHookOutput = {

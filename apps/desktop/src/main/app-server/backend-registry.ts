@@ -4124,7 +4124,13 @@ function buildTokenMiserSubAgentAccounting(params: {
   legacyCachedReplayCount?: number;
   parentUsageLine?: ThreadUsageLineRecord;
 }): ThreadSubAgentSummary["tokenMiserAccounting"] {
-  const originalModel = params.parentUsageLine?.model;
+  // Prefer the live parent line; fall back to the model stamped at creation.
+  // The stamp is what lets a review-turn gate price at all — the reviewer has
+  // no usage line — and what keeps a mid-turn gate priced before its parent
+  // line lands.
+  const originalModel = params.parentUsageLine?.model ?? params.entry.parentModel;
+  const originalServiceTier =
+    params.parentUsageLine?.serviceTier ?? params.entry.parentServiceTier;
   const gateModel = params.gateUsageLine?.model;
   if (
     !originalModel
@@ -4140,7 +4146,7 @@ function buildTokenMiserSubAgentAccounting(params: {
     fastMode: params.parentUsageLine?.fastMode,
     model: originalModel,
     outputTokens: 0,
-    serviceTier: params.parentUsageLine?.serviceTier,
+    serviceTier: originalServiceTier,
   };
   const baselineCost = estimateTokenUsageCost({
     ...pricingParams,
@@ -4190,9 +4196,7 @@ function buildTokenMiserSubAgentAccounting(params: {
   return {
     currency: "USD",
     originalModel,
-    ...(params.parentUsageLine?.serviceTier
-      ? { originalServiceTier: params.parentUsageLine.serviceTier }
-      : {}),
+    ...(originalServiceTier ? { originalServiceTier } : {}),
     baselineParentTokens: params.entry.baselineParentTokens,
     baselineParentCostMicros: baselineCost.uncachedInputCostMicros,
     cachedReplayCount,
@@ -7883,6 +7887,8 @@ export class DesktopBackendRegistry {
           this.liveThreadReplayInputCursor.get(
             ["codex", threadId].join(":"),
           )?.cumulativeInputTokens,
+        resolveParentModel: (threadId) =>
+          this.resolveTokenMiserParentModel(threadId),
         generateSummary: async (params) => {
           if (!this.codexClient.generateStructuredObject) {
             return {
@@ -25605,6 +25611,49 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * The model whose context a new gate is protecting.
+   *
+   * A native review runs on the parent thread under its own inner turn id —
+   * the hook reports one id, `review/start` returned another — and produces no
+   * usage line, so a gate created during one has no line to price against. The
+   * review record knows the reviewer's model, and while it is active it is the
+   * only thing making requests on that thread. Otherwise the newest priced turn
+   * line is the parent's current model.
+   */
+  private async resolveTokenMiserParentModel(
+    threadId: string,
+  ): Promise<{ model?: string; serviceTier?: string } | undefined> {
+    for (const record of this.activeReviewSubAgents.values()) {
+      if (
+        record.mode === "native"
+        && record.reviewThreadId === threadId
+        && record.model
+      ) {
+        return {
+          model: record.model,
+          ...(record.serviceTier ? { serviceTier: record.serviceTier } : {}),
+        };
+      }
+    }
+    if (typeof this.overlayStore.readThreadPricing !== "function") {
+      return undefined;
+    }
+    const pricing = await this.overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId,
+    });
+    const line = [...pricing.lines]
+      .filter((entry) => entry.scope !== "monitor" && Boolean(entry.model))
+      .sort((left, right) => right.createdAt - left.createdAt)[0];
+    return line
+      ? {
+          model: line.model,
+          ...(line.serviceTier ? { serviceTier: line.serviceTier } : {}),
+        }
+      : undefined;
+  }
+
   private async recordTokenMiserParentModelRequest(
     event: AgentEvent,
   ): Promise<void> {
@@ -26019,6 +26068,7 @@ export class DesktopBackendRegistry {
         ...(entry.helperUsage?.helperThreadId
           ? { monitorThreadId: entry.helperUsage.helperThreadId }
           : {}),
+        parentTurnId: entry.turnId,
         ...(entry.helperUsage?.helperTurnId
           ? { monitorTurnId: entry.helperUsage.helperTurnId }
           : {}),

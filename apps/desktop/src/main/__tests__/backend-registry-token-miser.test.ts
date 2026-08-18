@@ -154,6 +154,40 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     expect(upsertUsageLines).toHaveBeenCalledTimes(1);
   });
 
+  // A native review runs on the parent thread with no usage line of its own,
+  // and its hook fires under an inner turn id that no line will ever carry.
+  // The model stamped at creation is the only rate source such a gate has.
+  it("prices a gate from its stamped parent model when no parent line exists", async () => {
+    const persist = (
+      registry as unknown as {
+        persistTokenMiserLedgerEntries(
+          metadata: readonly TokenMiserObjectMetadata[],
+        ): Promise<void>;
+      }
+    ).persistTokenMiserLedgerEntries.bind(registry);
+
+    await persist([{
+      ...metadata("gate-1", "helper-1"),
+      parentModel: "gpt-5.6-sol",
+      parentServiceTier: "standard",
+      replayTrackingVersion: 2,
+      turnId: "review-inner-turn-with-no-usage-line",
+    }]);
+
+    const overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    const accounting = overlay?.subAgents?.[0]?.tokenMiserAccounting;
+    expect(accounting).toBeDefined();
+    expect(accounting?.originalModel).toBe("gpt-5.6-sol");
+    expect(accounting?.originalServiceTier).toBe("standard");
+    // No replays were observed, so this is baseline once − revealed once −
+    // summarizer: honest, small, and non-zero.
+    expect(accounting?.cachedReplayCount).toBe(0);
+    expect(accounting?.baselineParentCostMicros).toBeGreaterThan(0);
+  });
+
   it("publishes live gate cards and pricing without writing the terminal ledger", async () => {
     await store.upsertThreadUsageLine({
       line: {
