@@ -522,6 +522,7 @@ function TokenMiserTurnGroup(props: {
   subAgentsById: Map<string, ThreadSubAgentSummary>;
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [showSmall, setShowSmall] = useState(false);
   const entries = props.gates.map((line) => ({
     accounting: line.sourceItemId
       ? props.subAgentsById.get(line.sourceItemId)?.tokenMiserAccounting
@@ -540,13 +541,19 @@ function TokenMiserTurnGroup(props: {
     (total, line) => total + line.totalCostMicros,
     0,
   );
-  const carded = priced.filter((entry) =>
+  // Expanding must reveal cards, never a lone line of prose. Gates past the
+  // threshold show by default; the rest sit behind one more toggle rather than
+  // being flattened away — and when nothing clears the threshold, expanding
+  // shows every card outright, because there is nothing to hold back.
+  const significant = priced.filter((entry) =>
     Math.abs(entry.accounting?.savingsMicros ?? 0) >= TOKEN_MISER_CARD_MIN_MICROS
   );
-  const foldedCount = entries.length - carded.length;
-  const foldedMicros = priced
-    .filter((entry) => !carded.includes(entry))
-    .reduce((total, entry) => total + (entry.accounting?.savingsMicros ?? 0), 0);
+  const carded = significant.length > 0 ? significant : priced;
+  const small = priced.filter((entry) => !carded.includes(entry));
+  const smallMicros = small.reduce(
+    (total, entry) => total + (entry.accounting?.savingsMicros ?? 0),
+    0,
+  );
   const unpricedCount = entries.length - priced.length;
   const count = props.gates.length;
   const verdict = priced.length === 0
@@ -574,7 +581,7 @@ function TokenMiserTurnGroup(props: {
       </button>
       {expanded ? (
         <div className="pricing-token-miser__body">
-          {carded.map((entry) => (
+          {[...carded, ...(showSmall ? small : [])].map((entry) => (
             <div className="pricing-token-miser__gate" key={entry.line.usageLineId}>
               <p className="pricing-token-miser__gate-when">
                 {entry.startedAt !== undefined
@@ -586,18 +593,23 @@ function TokenMiserTurnGroup(props: {
               ) : null}
             </div>
           ))}
-          {foldedCount > 0 || unpricedCount > 0 ? (
+          {small.length > 0 ? (
+            <button
+              aria-expanded={showSmall}
+              className="pricing-token-miser__folded"
+              onClick={() => setShowSmall((current) => !current)}
+              type="button"
+            >
+              {showSmall ? "Hide" : "Show"}{" "}
+              {small.length.toLocaleString()} smaller{" "}
+              {small.length === 1 ? "gate" : "gates"} ·{" "}
+              {formatTokenUsageMicrosAsUsd(Math.abs(smallMicros))}{" "}
+              {smallMicros >= 0 ? "saved" : "overhead"} between them
+            </button>
+          ) : null}
+          {unpricedCount > 0 ? (
             <p className="pricing-token-miser__folded">
-              {foldedCount > 0
-                ? `${foldedCount.toLocaleString()} ${foldedCount === 1 ? "gate" : "gates"} under `
-                  + `${formatTokenUsageMicrosAsUsd(TOKEN_MISER_CARD_MIN_MICROS)} each · `
-                  + `${formatTokenUsageMicrosAsUsd(Math.abs(foldedMicros))} `
-                  + `${foldedMicros >= 0 ? "saved" : "overhead"} between them`
-                : ""}
-              {foldedCount > 0 && unpricedCount > 0 ? " · " : ""}
-              {unpricedCount > 0
-                ? `${unpricedCount.toLocaleString()} not priced yet`
-                : ""}
+              {unpricedCount.toLocaleString()} not priced yet
             </p>
           ) : null}
         </div>
