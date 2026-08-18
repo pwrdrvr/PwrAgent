@@ -4169,7 +4169,7 @@ describe("SettingsScreen", () => {
     });
   });
 
-  it("shows a leftover Events API notice and keeps Socket Mode selected", () => {
+  it("shows a leftover Events API notice and persists Socket Mode", async () => {
     const snapshot = createSnapshot();
     snapshot.messaging.slack.inboundMode = { value: "events", source: "config" };
     const settings = createSettingsState(snapshot);
@@ -4190,6 +4190,15 @@ describe("SettingsScreen", () => {
       "true",
     );
     expect(screen.queryByRole("radio", { name: "Events API" })).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          slack: {
+            inboundMode: "socket",
+          },
+        },
+      });
+    });
   });
 
   it("sanitizes manually entered messaging display names before saving", async () => {

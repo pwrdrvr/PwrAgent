@@ -57,14 +57,12 @@ export async function validateCredentials(
     const result = await authTest();
     account = result.user ?? result.user_id ?? "unknown";
     workspace = result.team ?? hostFromUrl(result.url) ?? result.team_id;
-  } catch {
+  } catch (error) {
     return {
       status: "failed",
       durationMs: Date.now() - startedAt,
       testedAt: Date.now(),
-      errorMessage: clipMessagingValidationError(
-        SLACK_CREDENTIAL_ERROR.invalidBotToken,
-      ),
+      errorMessage: describeBotAuthFailure(error),
     };
   }
 
@@ -108,6 +106,50 @@ export async function validateCredentials(
       ),
     };
   }
+}
+
+const SLACK_AUTH_ERROR_CODES = new Set([
+  "account_inactive",
+  "invalid_auth",
+  "not_authed",
+  "token_expired",
+  "token_revoked",
+]);
+
+function describeBotAuthFailure(error: unknown): string {
+  if (looksLikeSlackAuthError(error)) {
+    return clipMessagingValidationError(SLACK_CREDENTIAL_ERROR.invalidBotToken);
+  }
+  const platformCode = slackPlatformErrorCode(error);
+  if (platformCode) {
+    return clipMessagingValidationError(`Slack request failed (${platformCode})`);
+  }
+  return clipMessagingValidationError(
+    error instanceof Error ? error.message : String(error),
+  );
+}
+
+function looksLikeSlackAuthError(error: unknown): boolean {
+  const platformCode = slackPlatformErrorCode(error);
+  if (platformCode) {
+    return SLACK_AUTH_ERROR_CODES.has(platformCode);
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return [...SLACK_AUTH_ERROR_CODES].some(
+    (code) => message === code || message.includes(code),
+  );
+}
+
+function slackPlatformErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object" || !("data" in error)) {
+    return undefined;
+  }
+  const data = (error as { data?: unknown }).data;
+  if (!data || typeof data !== "object" || !("error" in data)) {
+    return undefined;
+  }
+  const code = (data as { error?: unknown }).error;
+  return typeof code === "string" && code.length > 0 ? code : undefined;
 }
 
 function formatOkDetail(workspace: string | undefined): string {

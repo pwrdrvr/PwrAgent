@@ -4413,6 +4413,7 @@ function ProviderIdentityProbe(props: {
   const configured = isPlatformPrimarySecretConfigured(props.provider, props.snapshot);
   const desktopApi = props.desktopApi;
   const probeKind: SettingsCredentialTestKind = props.provider;
+  const fetchedAt = props.snapshot?.fetchedAt;
 
   useEffect(() => {
     if (!configured || !desktopApi?.testSettingsCredentials) {
@@ -4444,7 +4445,7 @@ function ProviderIdentityProbe(props: {
     return () => {
       cancelled = true;
     };
-  }, [configured, desktopApi, probeKind]);
+  }, [configured, desktopApi, fetchedAt, probeKind]);
 
   if (!configured && !running && !result) return null;
 

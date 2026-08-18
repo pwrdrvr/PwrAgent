@@ -561,4 +561,62 @@ describe("Slack onboarding setup", () => {
       messaging: { slack: { inboundMode: "socket" } },
     });
   });
+
+  it("re-runs Slack identity probe after a later secret replace", async () => {
+    const testSettingsCredentials = vi.fn(async () => ({
+      kind: "slack" as const,
+      status: "failed" as const,
+      testedAt: 1,
+      durationMs: 1,
+      errorMessage: "Socket Mode failed",
+    }));
+    const configuredSecret = {
+      configured: true,
+      source: "secret" as const,
+      writable: true,
+    };
+    const settings = slackSettings();
+    const snapshot = {
+      ...settings.snapshot!,
+      fetchedAt: 11,
+      messaging: {
+        ...settings.snapshot!.messaging,
+        slack: {
+          ...settings.snapshot!.messaging.slack,
+          botToken: configuredSecret,
+          appToken: configuredSecret,
+        },
+      },
+    };
+    const { rerender } = render(
+      <ProviderSetupStep
+        provider="slack"
+        settings={{ ...settings, snapshot }}
+        desktopApi={{ testSettingsCredentials } as unknown as DesktopApi}
+        bufferedSecrets={{}}
+        onBufferSecret={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(testSettingsCredentials).toHaveBeenCalledTimes(1);
+    });
+
+    rerender(
+      <ProviderSetupStep
+        provider="slack"
+        settings={{
+          ...settings,
+          snapshot: { ...snapshot, fetchedAt: 12 },
+        }}
+        desktopApi={{ testSettingsCredentials } as unknown as DesktopApi}
+        bufferedSecrets={{}}
+        onBufferSecret={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(testSettingsCredentials).toHaveBeenCalledTimes(2);
+    });
+  });
 });

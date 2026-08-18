@@ -33,6 +33,58 @@ describe("Slack credential validation", () => {
     expect(openedSocket).toBe(false);
   });
 
+  it("maps Slack platform auth errors to the invalid-token message", async () => {
+    await expect(
+      validateCredentials(
+        { botToken: "xoxb-bad", appToken: "xapp-test" },
+        {
+          authTest: async () => {
+            throw Object.assign(new Error("An API error occurred: invalid_auth"), {
+              data: { ok: false, error: "invalid_auth" },
+            });
+          },
+        },
+      ),
+    ).resolves.toMatchObject({
+      status: "failed",
+      errorMessage: SLACK_CREDENTIAL_ERROR.invalidBotToken,
+    });
+  });
+
+  it("preserves transient Slack failures instead of calling the token invalid", async () => {
+    await expect(
+      validateCredentials(
+        { botToken: "xoxb-test", appToken: "xapp-test" },
+        {
+          authTest: async () => {
+            throw new Error("request timed out");
+          },
+        },
+      ),
+    ).resolves.toMatchObject({
+      status: "failed",
+      errorMessage: "request timed out",
+    });
+  });
+
+  it("preserves Slack platform codes that are not auth failures", async () => {
+    await expect(
+      validateCredentials(
+        { botToken: "xoxb-test", appToken: "xapp-test" },
+        {
+          authTest: async () => {
+            throw Object.assign(new Error("An API error occurred: ratelimited"), {
+              data: { ok: false, error: "ratelimited" },
+            });
+          },
+        },
+      ),
+    ).resolves.toMatchObject({
+      status: "failed",
+      errorMessage: "Slack request failed (ratelimited)",
+    });
+  });
+
   it("reports a distinct Socket Mode failure after a valid bot token", async () => {
     await expect(
       validateCredentials(

@@ -128,6 +128,18 @@ export function MessagingSettings(props: {
   const discord = props.snapshot.messaging.discord;
   const mattermost = props.snapshot.messaging.mattermost;
   const slack = props.snapshot.messaging.slack;
+  useEffect(() => {
+    if (slack.inboundMode.value !== "events") return;
+    if (slack.inboundMode.source === "env") return;
+    void props.onSaveSlack({
+      ...slack,
+      inboundMode: { ...slack.inboundMode, value: "socket" },
+    });
+    // Persist leftover Events API configs once Settings opens. Runtime
+    // already coerces to Socket Mode; this makes the stored value match
+    // the control and the notice.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [slack.inboundMode.source, slack.inboundMode.value]);
   const feishu = props.snapshot.messaging.feishu;
   const line = props.snapshot.messaging.line;
   const messagingEnabled = props.snapshot.messaging.enabled;
