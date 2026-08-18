@@ -56,6 +56,16 @@ import {
 import { FederationRouter } from "../federation/federation-router";
 import type { FederationGatewayConnection } from "../federation/federation-transport";
 
+// `getDesktopBackendRegistry()` is the one construction that opts into real
+// machine ACP discovery, so a test that reaches the singleton inherits it — the
+// config read, the GitHub release fetch, the managed-Grok install under the
+// PwrAgent root, and the 5-16s probe. Nothing here needs an installed agent, so
+// keep that one call inert and leave the rest of the module real.
+vi.mock("../acp/acp-instance-discovery", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../acp/acp-instance-discovery")>()),
+  discoverLocalAcpAgentRecords: vi.fn(async () => []),
+}));
+
 type RuntimeHarness = {
   router?: FederationRouter;
   receiveEnvelope: (
