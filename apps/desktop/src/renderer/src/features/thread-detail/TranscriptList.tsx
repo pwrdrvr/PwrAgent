@@ -925,9 +925,11 @@ export function TranscriptList(props: TranscriptListProps) {
   );
   // `directoryPaths` is rebuilt by the caller on every render, so depending on
   // the array itself would rebuild every group label on every streamed item.
-  const directoryPathsKey = (props.directoryPaths ?? []).join("\n");
+  // NUL is the one byte a path cannot contain, so the key round-trips a
+  // directory name that holds a newline.
+  const directoryPathsKey = (props.directoryPaths ?? []).join("\u0000");
   const stableDirectoryPaths = useMemo(
-    () => (directoryPathsKey ? directoryPathsKey.split("\n") : undefined),
+    () => (directoryPathsKey ? directoryPathsKey.split("\u0000") : undefined),
     [directoryPathsKey],
   );
   const transcriptRenderItems = useMemo(

@@ -15,8 +15,16 @@ export function formatActivityText(
   details: AppServerThreadActivityEntry["details"],
   directoryPaths: string[] | undefined,
 ): string {
-  const paths = details
-    .filter((detail): detail is typeof detail & { path: string } => Boolean(detail.path))
+  const pathDetails = details.filter(
+    (detail): detail is typeof detail & { path: string } => Boolean(detail.path),
+  );
+  // Most entries — commands, searches, plan updates — carry no path at all.
+  // Work phase labels run this over every tool entry of a turn on each
+  // transcript rebuild, so those entries should not pay for the scan below.
+  if (pathDetails.length === 0) {
+    return text;
+  }
+  const paths = pathDetails
     .map((detail) => ({
       absolutePath: detail.path,
       displayPath: formatPathRelativeToDirectories(detail.path, directoryPaths),
