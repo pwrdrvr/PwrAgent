@@ -106,8 +106,8 @@ importers:
         specifier: ^0.15.0
         version: 0.15.0(zod@4.4.3)
       '@pwrdrvr/agent-client':
-        specifier: ^0.8.1
-        version: 0.8.1
+        specifier: ^0.8.2
+        version: 0.8.2
       '@pwrdrvr/agent-core':
         specifier: ^0.2.0
         version: 0.2.0
@@ -118,8 +118,8 @@ importers:
         specifier: 0.144.0
         version: 0.144.0
       '@pwrdrvr/codex-discovery':
-        specifier: ^0.3.0
-        version: 0.3.0
+        specifier: ^0.4.0
+        version: 0.4.0
       '@shutterstock/p-map-iterable':
         specifier: ^1.1.2
         version: 1.1.2(aggregate-error@3.1.0)
@@ -1060,8 +1060,8 @@ packages:
   '@pwrdrvr/agent-acp@0.15.0':
     resolution: {integrity: sha512-xUDZtiOGHQvX2cSlGGQ6KGfh37cLrqgxQgT6F/eh6j4M3xyvLdgr61vIJMltBsmuaYMoCI8gXmsTAoJnQxXo0A==}
 
-  '@pwrdrvr/agent-client@0.8.1':
-    resolution: {integrity: sha512-ripxT/31ca+UtckeerRwiPAh6WKZpbeoW3vU83xB9PixjeYjOJyAUlgFtaGTlT/XjbT3cdzeIFExKzN0Hb53ag==}
+  '@pwrdrvr/agent-client@0.8.2':
+    resolution: {integrity: sha512-/g6jEVvRr+vH1iUThORoPUGuEXUN9B3iDWxPmsHmEiLbTo+Eni1YT4fgbL4xQsCcSD8N2g+rYZG4GwoPFoa2ww==}
 
   '@pwrdrvr/agent-core@0.2.0':
     resolution: {integrity: sha512-zTo7vJGekyZX2h9xWYiZfQvt+qKTPhuciWyCouow1shaKgg0Bn6B8S5lTRvMzxvT7feKOZ7zy/To2Cu6+1i1+A==}
@@ -1073,8 +1073,8 @@ packages:
     resolution: {integrity: sha512-WmURXzmmNEY8lmnNZunNQj/Bnn3yjzS6Rc0gzlDU7sBHMd0kvtskXE9BCMcR+E7sVJ53V/gwjfksRUli0xUgdA==}
     engines: {node: '>=20'}
 
-  '@pwrdrvr/codex-discovery@0.3.0':
-    resolution: {integrity: sha512-FNM16prEoEZt7rKWKazGM/39mWLDaKid/wCtdOrRdq10RGzPSuewKXATgEYzim0WuM5x6gyYVyBe9cQCU2JzPg==}
+  '@pwrdrvr/codex-discovery@0.4.0':
+    resolution: {integrity: sha512-5QDeGsSTN6Oo+X2eIA8qOf7anWTIcnNJJzyfD3qFoFZLGS0RvIsMbzK1UwiVZszO3zT9DH6U4umbz2KrIyBv7A==}
 
   '@rolldown/binding-android-arm64@1.0.3':
     resolution: {integrity: sha512-454rs7jHngixp/NMxd5srYD57OnzSlZ/eFTETjORQHLwJG1lRtmNOJcBerZlfu4GjKqeq8aCCIQrMdHyhI51Hw==}
@@ -5162,12 +5162,12 @@ snapshots:
     transitivePeerDependencies:
       - zod
 
-  '@pwrdrvr/agent-client@0.8.1':
+  '@pwrdrvr/agent-client@0.8.2':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
       '@pwrdrvr/agent-transport': 0.1.7
       '@pwrdrvr/codex-app-server-protocol': 0.144.0
-      '@pwrdrvr/codex-discovery': 0.3.0
+      '@pwrdrvr/codex-discovery': 0.4.0
       zod: 4.4.3
 
   '@pwrdrvr/agent-core@0.2.0': {}
@@ -5178,7 +5178,7 @@ snapshots:
 
   '@pwrdrvr/codex-app-server-protocol@0.144.0': {}
 
-  '@pwrdrvr/codex-discovery@0.3.0':
+  '@pwrdrvr/codex-discovery@0.4.0':
     dependencies:
       '@pwrdrvr/agent-core': 0.2.0
       '@pwrdrvr/agent-transport': 0.1.7
