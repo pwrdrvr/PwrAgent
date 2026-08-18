@@ -3181,6 +3181,16 @@ export function useThreadNavigation(
             : String(error),
     });
   }, []);
+  // Same shape for the masthead's "Add project directory" entry. It lives in
+  // the sidebar / title bar, and `pickDirectoryError`'s only inline surface is
+  // the launchpad composer's project picker — not mounted behind that menu, so
+  // a rejected pick ("not a git repository") would land nowhere. The ref
+  // carries what `pickDirectoryForReference` last recorded, since the state
+  // setter cannot be read back inside the same call.
+  const lastPickDirectoryErrorRef = useRef<string>(undefined);
+  const publishAddDirectoryError = useCallback((message?: string): void => {
+    onThreadActionErrorRef.current?.({ kind: "add-directory", message });
+  }, []);
   const [updatingThreadExecutionMode, setUpdatingThreadExecutionMode] =
     useState<ThreadExecutionMode>();
   const [setThreadExecutionModeError, setSetThreadExecutionModeError] =
@@ -6193,6 +6203,11 @@ export function useThreadNavigation(
     [desktopApi, refresh, rendererFederationTarget],
   );
 
+  const recordPickDirectoryError = useCallback((message?: string): void => {
+    lastPickDirectoryErrorRef.current = message;
+    setPickDirectoryError(message);
+  }, []);
+
   const pickDirectoryForReference = useCallback(async (): Promise<
     { label: string; path: string } | undefined
   > => {
@@ -6202,6 +6217,7 @@ export function useThreadNavigation(
     // the caller mints a chip in place instead of moving to the new
     // launchpad. Same cancel-vs-failure split as the sibling: cancel is
     // silent, validation failure surfaces via `pickDirectoryError`.
+    lastPickDirectoryErrorRef.current = undefined;
     if (rendererFederationTarget) {
       return undefined;
     }
@@ -6209,11 +6225,11 @@ export function useThreadNavigation(
       !desktopApi?.pickDirectoryFromDisk ||
       !desktopApi?.registerDirectoryFromDisk
     ) {
-      setPickDirectoryError("Desktop bridge is missing the directory picker.");
+      recordPickDirectoryError("Desktop bridge is missing the directory picker.");
       return undefined;
     }
 
-    setPickDirectoryError(undefined);
+    recordPickDirectoryError(undefined);
     setPickingDirectory(true);
     try {
       const pick = await desktopApi.pickDirectoryFromDisk();
@@ -6224,7 +6240,7 @@ export function useThreadNavigation(
         path: pick.path,
       });
       if (!result.ok) {
-        setPickDirectoryError(result.message);
+        recordPickDirectoryError(result.message);
         return undefined;
       }
       setLocalLaunchpads((current) => ({
@@ -6244,22 +6260,31 @@ export function useThreadNavigation(
         path: result.launchpad.directoryPath ?? pick.path,
       };
     } catch (error) {
-      setPickDirectoryError(
+      recordPickDirectoryError(
         error instanceof Error ? error.message : String(error),
       );
       return undefined;
     } finally {
       setPickingDirectory(false);
     }
-  }, [desktopApi, rendererFederationTarget]);
+  }, [desktopApi, recordPickDirectoryError, rendererFederationTarget]);
 
   const addProjectDirectory = useCallback(async (): Promise<void> => {
     const picked = await pickDirectoryForReference();
+    // Nothing on screen renders `pickDirectoryError` for this entry point,
+    // so publish the outcome to the notice stack. A cancel or a success
+    // records `undefined`, which takes any prior notice down.
+    publishAddDirectoryError(lastPickDirectoryErrorRef.current);
     if (picked) {
       updateBrowseMode("directories");
       await refresh();
     }
-  }, [pickDirectoryForReference, refresh, updateBrowseMode]);
+  }, [
+    pickDirectoryForReference,
+    publishAddDirectoryError,
+    refresh,
+    updateBrowseMode,
+  ]);
 
   const pickAndAttachDirectoryToSelectedThread = useCallback(async (): Promise<void> => {
     if (rendererFederationTarget) {

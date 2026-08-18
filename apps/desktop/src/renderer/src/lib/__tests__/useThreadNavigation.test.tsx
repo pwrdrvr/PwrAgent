@@ -32,6 +32,7 @@ import { useThreadNavigation } from "../useThreadNavigation";
 function latestThreadActionError(
   onThreadActionError: ReturnType<typeof vi.fn>,
   kind:
+    | "add-directory"
     | "archive-thread"
     | "create-thread"
     | "discard-launchpad"
@@ -8862,6 +8863,70 @@ describe("useThreadNavigation", () => {
         (directory) => directory.key === "directory:/repo/app",
       ),
     ).toBe(true);
+  });
+
+  it("publishes a masthead add-directory rejection to the notice stack", async () => {
+    // "Add project directory" lives in the sidebar / title-bar menu, and
+    // `pickDirectoryError`'s only inline surface is the launchpad composer's
+    // project picker — not mounted behind that menu. Picking a folder that is
+    // not a git repository would otherwise fail silently.
+    const pickDirectoryFromDisk = vi.fn(async () => ({
+      canceled: false as const,
+      path: "/Users/test/not-a-repo",
+    }));
+    const registerDirectoryFromDisk = vi.fn(async () => ({
+      ok: false as const,
+      reason: "not-a-git-repo" as const,
+      message: "/Users/test/not-a-repo is not a git repository.",
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    const desktopApi: DesktopApi = {
+      pickDirectoryFromDisk,
+      registerDirectoryFromDisk,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
+
+    await waitFor(() => {
+      expect(result.current.loaded).toBe(true);
+    });
+
+    await act(async () => {
+      await result.current.addProjectDirectory();
+    });
+
+    expect(latestThreadActionError(onThreadActionError, "add-directory")).toBe(
+      "/Users/test/not-a-repo is not a git repository.",
+    );
+
+    // A later cancel clears the slot, so the notice comes down on its own.
+    pickDirectoryFromDisk.mockResolvedValueOnce({
+      canceled: true,
+    } as unknown as Awaited<ReturnType<typeof pickDirectoryFromDisk>>);
+    await act(async () => {
+      await result.current.addProjectDirectory();
+    });
+
+    expect(
+      latestThreadActionError(onThreadActionError, "add-directory"),
+    ).toBeUndefined();
   });
 
   it("publishes a launchpad discard failure to the notice stack", async () => {

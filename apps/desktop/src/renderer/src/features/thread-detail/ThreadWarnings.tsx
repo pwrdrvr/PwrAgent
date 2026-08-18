@@ -20,9 +20,9 @@ import {
  * clear the rail because the layout already reserves its gutter.
  *
  * Do not move these back into `<header>`, and do not try to compensate with a
- * hard-coded rail offset — the header has two conditional rows plus a
- * wordmark that relocates here when the sidebar is hidden, so no constant is
- * correct. `thread-view.test.tsx` pins the placement.
+ * hard-coded rail offset — these two rows are conditional and the header also
+ * takes in the sidebar's wordmark when the sidebar is hidden, so no constant
+ * is correct. `thread-view.test.tsx` pins the placement.
  */
 export function ThreadWarnings(props: { thread: NavigationThreadSummary }) {
   const unlinkedPath = unlinkedWorkspacePath(props.thread);

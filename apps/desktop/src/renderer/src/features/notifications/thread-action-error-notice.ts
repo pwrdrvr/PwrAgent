@@ -11,12 +11,19 @@ import type { AppNoticeToastNotice } from "./AppNoticeToast";
  * therefore nothing left inline to hang the message on, which is why these
  * route to the durable toast stack instead of a static slot in the sidebar.
  *
+ * The masthead's "Add project directory" entry is here for the same reason:
+ * it lives in the sidebar / title bar, and `pickDirectoryError`'s only inline
+ * surface is the launchpad composer's project picker, which is not mounted
+ * behind it.
+ *
  * Failures whose originating control IS still on screen deliberately do NOT
- * appear here — `pickDirectoryError` renders beside the composer's "Add
- * directory" button, and `launchpadError` renders in the launchpad composer's
- * footer, which is still mounted for every producer except the discard.
+ * appear here — the launchpad composer's own "Add directory" button renders
+ * `pickDirectoryError` beside itself, and `launchpadError` renders in that
+ * composer's footer, which is still mounted for every producer except the
+ * discard.
  */
 export type ThreadActionErrorKind =
+  | "add-directory"
   | "archive-thread"
   | "create-thread"
   | "discard-launchpad"
@@ -28,6 +35,7 @@ export type ThreadActionErrorSignal = {
 };
 
 const THREAD_ACTION_ERROR_TITLES: Record<ThreadActionErrorKind, string> = {
+  "add-directory": "Could not add directory",
   "archive-thread": "Archive failed",
   "create-thread": "Could not start thread",
   "discard-launchpad": "Discard failed",
