@@ -3949,8 +3949,8 @@ function createTestAcpBackendAdapter(
     & Partial<Pick<AcpBackendAdapterOptions, "discoverLocalAcpAgents">>,
 ): AcpBackendAdapter {
   return new AcpBackendAdapter({
-    discoverLocalAcpAgents: async () => [],
     ...options,
+    discoverLocalAcpAgents: options.discoverLocalAcpAgents ?? (async () => []),
   });
 }
 
