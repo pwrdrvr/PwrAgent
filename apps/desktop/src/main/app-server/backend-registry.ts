@@ -4122,6 +4122,19 @@ function buildTaskMonitorUsageLine(params: {
   };
 }
 
+/**
+ * Whether a persisted gate sub-agent needs rewriting. Only the fields the rail
+ * renders and that are stable across processes take part; see the call site.
+ */
+function tokenMiserSubAgentProjectionChanged(
+  existing: ThreadSubAgentSummary,
+  next: ThreadSubAgentSummary,
+): boolean {
+  return existing.parentTurnId !== next.parentTurnId
+    || JSON.stringify(existing.tokenMiserAccounting)
+      !== JSON.stringify(next.tokenMiserAccounting);
+}
+
 function buildTokenMiserSubAgentAccounting(params: {
   entry: TokenMiserObjectMetadata;
   gateUsageLine?: ThreadUsageLineRecord;
@@ -26641,10 +26654,18 @@ export class DesktopBackendRegistry {
         const existingSubAgent = existingSubAgents.get(
           artifact.subAgent.monitorId,
         );
+        // Compare the fields the rail actually renders, not the whole record:
+        // owner ids change every process, so a whole-record compare would
+        // rewrite every gate on every launch. But comparing accounting alone
+        // meant a new rendered field — `parentTurnId`, which the rail nests
+        // on — never reached gates whose numbers had not moved, so a restart
+        // left them un-nested indefinitely.
         if (
           !existingSubAgent
-          || JSON.stringify(existingSubAgent.tokenMiserAccounting)
-            !== JSON.stringify(artifact.subAgent.tokenMiserAccounting)
+          || tokenMiserSubAgentProjectionChanged(
+            existingSubAgent,
+            artifact.subAgent,
+          )
         ) {
           subAgents.push(artifact.subAgent);
         }

@@ -157,6 +157,48 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
   // A native review runs on the parent thread with no usage line of its own,
   // and its hook fires under an inner turn id that no line will ever carry.
   // The model stamped at creation is the only rate source such a gate has.
+  // Reconcile used to compare only the accounting, so a gate whose numbers had
+  // not moved was never rewritten — and a field the rail newly renders never
+  // reached it. After a restart every existing gate stayed un-nested.
+  it("rewrites a persisted gate when its rendered projection changes", async () => {
+    const persist = (
+      registry as unknown as {
+        persistTokenMiserLedgerEntries(
+          metadata: readonly TokenMiserObjectMetadata[],
+        ): Promise<void>;
+      }
+    ).persistTokenMiserLedgerEntries.bind(registry);
+
+    // A gate persisted by an older build: same accounting, no parentTurnId.
+    await store.upsertThreadSubAgents({
+      backend: "codex",
+      threadId: "thread-parent",
+      subAgents: [{
+        agentName: "Token Miser",
+        backend: "codex",
+        createdAt: 1_800_000_000_001,
+        monitorId: "system:token-miser:gate-1",
+        status: "success",
+        task: "Gate commandExecution output",
+        updatedAt: 1_800_000_000_001,
+      }],
+    });
+    const upsertSubAgents = vi.spyOn(store, "upsertThreadSubAgents");
+
+    await persist([metadata("gate-1", "helper-1")]);
+
+    expect(upsertSubAgents).toHaveBeenCalledTimes(1);
+    const overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(overlay?.subAgents?.[0]?.parentTurnId).toBe("turn-parent");
+
+    // And once the projection matches, a second reconcile is a no-op.
+    await persist([metadata("gate-1", "helper-1")]);
+    expect(upsertSubAgents).toHaveBeenCalledTimes(1);
+  });
+
   it("prices a gate from its stamped parent model when no parent line exists", async () => {
     const persist = (
       registry as unknown as {

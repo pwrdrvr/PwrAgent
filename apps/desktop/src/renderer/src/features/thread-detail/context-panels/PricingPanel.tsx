@@ -78,10 +78,8 @@ export function PricingPanel(props: PricingPanelProps) {
   // sort *above* their turn — a gate is created mid-turn, after the turn's
   // first usage flush — and each one is a full card, so a turn with 25 gates
   // pushed its own row a screen below the noise it produced.
-  const { gateLinesByTurn, displayLines } = partitionTokenMiserGateLines(
-    allDisplayLines,
-    subAgentsById,
-  );
+  const { gateLinesByTurn, displayLines, orphanGroupsByAnchor } =
+    partitionTokenMiserGateLines(allDisplayLines, subAgentsById);
   const pricingHistoryKey = summaries[0]
     ? `${summaries[0].backend}:${summaries[0].threadId}`
     : displayLines[0]
@@ -223,6 +221,28 @@ export function PricingPanel(props: PricingPanelProps) {
       {displayLines.length > 0 ? (
         <ul className="context-list context-list--cards pricing-usage-list">
           {visibleDisplayLines.map((line) => {
+            const orphanGroup = orphanGroupsByAnchor.get(line.usageLineId);
+            if (orphanGroup) {
+              // A gate with no turn to nest under is either the compact group
+              // or nothing. Full cards for gates that cannot be priced were
+              // pure noise — the summarizer's cost is still in the totals, and
+              // the Explorer still lists every gate.
+              const anyPriced = orphanGroup.some((gate) =>
+                gate.sourceItemId
+                && subAgentsById.get(gate.sourceItemId)?.tokenMiserAccounting,
+              );
+              return anyPriced ? (
+                <li
+                  key={line.usageLineId}
+                  className="rail-card pricing-usage-row pricing-usage-row--orphan-gates"
+                >
+                  <TokenMiserTurnGroup
+                    gates={orphanGroup}
+                    subAgentsById={subAgentsById}
+                  />
+                </li>
+              ) : null;
+            }
             const lineTotals = pricingTotals.byLineId.get(line.usageLineId);
             const usageLineEstimate = formatUsageLineEstimates({
               displayOptions,
@@ -435,6 +455,13 @@ function partitionTokenMiserGateLines(
 ): {
   displayLines: PricingUsageLine[];
   gateLinesByTurn: Map<string, PricingUsageLine[]>;
+  /**
+   * Gates with no turn row to nest under — a native review's inner turn, or a
+   * turn whose usage has not landed yet — grouped by parent turn and keyed by
+   * the usage line they should render in place of, so the group keeps the
+   * position of its newest gate rather than surfacing as N loose cards.
+   */
+  orphanGroupsByAnchor: Map<string, PricingUsageLine[]>;
 } {
   const turnRowIds = new Set<string>();
   for (const line of lines) {
@@ -443,23 +470,43 @@ function partitionTokenMiserGateLines(
     }
   }
   const gateLinesByTurn = new Map<string, PricingUsageLine[]>();
+  const orphansByTurn = new Map<string, PricingUsageLine[]>();
   const displayLines: PricingUsageLine[] = [];
+  const push = (map: Map<string, PricingUsageLine[]>, key: string, line: PricingUsageLine) => {
+    const bucket = map.get(key);
+    if (bucket) {
+      bucket.push(line);
+    } else {
+      map.set(key, [line]);
+    }
+  };
   for (const line of lines) {
-    const parentTurnId = isTokenMiserGateLine(line) && line.sourceItemId
+    if (!isTokenMiserGateLine(line)) {
+      displayLines.push(line);
+      continue;
+    }
+    const parentTurnId = line.sourceItemId
       ? subAgentsById.get(line.sourceItemId)?.parentTurnId
       : undefined;
     if (parentTurnId && turnRowIds.has(parentTurnId)) {
-      const bucket = gateLinesByTurn.get(parentTurnId);
-      if (bucket) {
-        bucket.push(line);
-      } else {
-        gateLinesByTurn.set(parentTurnId, [line]);
-      }
+      push(gateLinesByTurn, parentTurnId, line);
       continue;
     }
-    displayLines.push(line);
+    // No parent turn known at all (a gate persisted before parentTurnId
+    // existed) groups under its own id, so it still gets the compact form.
+    push(orphansByTurn, parentTurnId ?? `gate:${line.usageLineId}`, line);
   }
-  return { displayLines, gateLinesByTurn };
+  // Lines are newest-first; the first gate seen in each orphan group is its
+  // anchor. It stays in the flat list as a placeholder the renderer swaps for
+  // the group.
+  const orphanGroupsByAnchor = new Map<string, PricingUsageLine[]>();
+  for (const gates of orphansByTurn.values()) {
+    const anchor = gates[0]!;
+    orphanGroupsByAnchor.set(anchor.usageLineId, gates);
+    displayLines.push(anchor);
+  }
+  displayLines.sort(compareUsageLinesDescending);
+  return { displayLines, gateLinesByTurn, orphanGroupsByAnchor };
 }
 
 /**
