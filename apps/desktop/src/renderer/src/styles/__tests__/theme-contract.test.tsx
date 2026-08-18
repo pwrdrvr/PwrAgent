@@ -943,6 +943,39 @@ describe("Tangerine Terminal theme contract", () => {
     expect(windowRule).toMatch(/z-index:\s*\d+;/);
   });
 
+  it("gives the full-bleed Star Map window a glass drag strip that its top chrome punches through", () => {
+    // macOS `hiddenInset` leaves the map with stoplights but no native
+    // title-bar band, and the sky underneath is a pan handle, so the
+    // transparent strip is the only place the operator can grab the window.
+    // The two clusters that live inside it must opt out, or their pixels
+    // fall back to window-drag hit-testing and swallow the click.
+    const stripRule = extractRuleBody(css, ".star-map-window__titlebar");
+    expect(stripRule).toContain("-webkit-app-region: drag;");
+    expect(stripRule).toContain("position: absolute;");
+    expect(stripRule).toContain("backdrop-filter:");
+    // Below the filters (3) and chrome (4) it hosts, above the canvas.
+    const readZIndex = (rule: string): number =>
+      Number(rule.match(/z-index:\s*(\d+);/)?.[1] ?? Number.NaN);
+    expect(readZIndex(stripRule)).toBeLessThan(
+      readZIndex(extractRuleBody(css, ".star-map__filters")),
+    );
+    expect(readZIndex(stripRule)).toBeLessThan(
+      readZIndex(extractRuleBody(css, ".star-map__chrome")),
+    );
+    expect(css).toMatch(
+      /\.star-map__chrome,\s*\.star-map__chrome \*,\s*\.star-map__filters,\s*\.star-map__filters \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
+    );
+    // The edge brightens whenever the sky moves under it — pointer pan and
+    // keyboard flight alike — and the strip disappears in fullscreen, where
+    // there is no window to drag.
+    expect(css).toMatch(
+      /\.star-map-window:has\(\.star-map__viewport\.is-panning\) \.star-map-window__titlebar::before,\s*\.star-map-window:has\(\.star-map\.is-flying\) \.star-map-window__titlebar::before,/,
+    );
+    expect(css).toMatch(
+      /:root\[data-fullscreen="true"\] \.star-map-window__titlebar\s*\{[\s\S]*?display:\s*none;[\s\S]*?\}/,
+    );
+  });
+
   it("right-aligns the keyboard shortcut hint chip on context menu items", () => {
     // The `__shortcut` chip is the discoverability surface for
     // the otherwise-invisible Cmd+(Shift+)Arrow reorder shortcut.

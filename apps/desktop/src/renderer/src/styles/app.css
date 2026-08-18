@@ -10848,6 +10848,94 @@ textarea,
     var(--bg-app);
 }
 
+/* macOS drag handle for the full-bleed map. `hiddenInset` keeps the
+   stoplights but leaves no native title-bar band, and the sky underneath is
+   a pan handle, so this transparent strip is the only place the operator
+   can grab the window. It reads as a sheet of glass laid over the top of
+   the sky: a faint tint plus backdrop blur, finished with a specular
+   hairline along its bottom edge. At rest the hairline alone says "there is
+   a bar here"; while the map moves (pointer pan or WASD flight) the tint
+   and edge both step up, and the blur smears whatever slides underneath, so
+   the strip is legible exactly when the operator is most likely to reach
+   for the wrong handle. z-index 2 sits above the transformed canvas (its
+   own stacking context, so card z-indexes cannot climb out) and below the
+   `.star-map__filters` (3) and `.star-map__chrome` (4) that live inside it;
+   both of those carve `no-drag` holes so they stay clickable. Not rendered
+   on Windows (painted `.activity-titlebar` above the map) or Linux (OS
+   frame). */
+.star-map-window__titlebar {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 2;
+  height: 52px;
+  background:
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--bg-app) 42%, transparent),
+      color-mix(in srgb, var(--bg-app) 12%, transparent)
+    );
+  -webkit-backdrop-filter: blur(12px) saturate(135%);
+  backdrop-filter: blur(12px) saturate(135%);
+  -webkit-app-region: drag;
+}
+
+/* Extra tint that fades in while the sky moves. A separate layer because
+   gradients do not interpolate: swapping the background would snap, and
+   an opacity ramp on this sheet cross-fades instead. */
+.star-map-window__titlebar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(
+      to bottom,
+      color-mix(in srgb, var(--bg-app) 30%, transparent),
+      color-mix(in srgb, var(--bg-app) 14%, transparent)
+    );
+  opacity: 0;
+  transition: opacity 220ms ease;
+}
+
+/* The glass edge. A hairline that fades out toward both ends (so it reads
+   as a lit edge, not a ruled border) over a soft shadow that darkens the
+   sky just beneath it, which is what gives the sheet its thickness. Drawn
+   at its moving strength and dimmed through opacity at rest, so the same
+   ramp brightens it. */
+.star-map-window__titlebar::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 1px;
+  background:
+    linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--text-primary) 36%, transparent) 14%,
+      color-mix(in srgb, var(--text-primary) 36%, transparent) 86%,
+      transparent
+    );
+  box-shadow: 0 1px 8px color-mix(in srgb, var(--bg-app) 70%, transparent);
+  opacity: 0.45;
+  transition: opacity 220ms ease;
+}
+
+.star-map-window:has(.star-map__viewport.is-panning) .star-map-window__titlebar::before,
+.star-map-window:has(.star-map.is-flying) .star-map-window__titlebar::before,
+.star-map-window:has(.star-map__viewport.is-panning) .star-map-window__titlebar::after,
+.star-map-window:has(.star-map.is-flying) .star-map-window__titlebar::after {
+  opacity: 1;
+}
+
+/* Native fullscreen hides the stoplights and a fullscreen window cannot be
+   dragged, so the handle would only be a band of blur over the sky. */
+:root[data-fullscreen="true"] .star-map-window__titlebar {
+  display: none;
+}
+
 .star-map {
   position: relative;
   flex: 1;
@@ -12365,8 +12453,14 @@ textarea,
   cursor: pointer;
 }
 
+/* Both top clusters sit inside the macOS glass drag strip
+   (`.star-map-window__titlebar`). Draggable regions are rect-unions, so
+   every descendant has to opt out or its pixels fall back to window-drag
+   hit-testing and swallow the click. */
 .star-map__chrome,
-.star-map__chrome * {
+.star-map__chrome *,
+.star-map__filters,
+.star-map__filters * {
   -webkit-app-region: no-drag;
 }
 
