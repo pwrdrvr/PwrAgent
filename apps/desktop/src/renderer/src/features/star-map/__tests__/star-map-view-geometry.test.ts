@@ -4,10 +4,12 @@ import {
   MIN_VISIBLE_FRACTION,
   MIN_ZOOM,
   STAR_MAP_OVERVIEW_ZOOM,
+  STAR_MAP_SKY_PARALLAX,
   centerStarMapView,
   clampStarMapView,
   isOverviewZoom,
   overviewChromeScale,
+  starMapSkyOffset,
   type StarMapView,
 } from "../star-map-view-geometry";
 
@@ -145,5 +147,74 @@ describe("overview zoom", () => {
   it("treats a nonsense scale as unzoomed rather than dividing by zero", () => {
     expect(Number.isFinite(overviewChromeScale(0))).toBe(true);
     expect(overviewChromeScale(0)).toBe(1);
+  });
+});
+
+describe("starMapSkyOffset", () => {
+  function sky(view: Partial<StarMapView>, viewport = VIEWPORT) {
+    return starMapSkyOffset({
+      view: { x: 0, y: 0, scale: 1, ...view },
+      viewport,
+    });
+  }
+
+  it("moves the sky a small fraction of the way the map moved", () => {
+    // Subtle by design: the map should read as sitting in front of the
+    // sky, not as dragging it along.
+    expect(STAR_MAP_SKY_PARALLAX).toBeGreaterThan(0);
+    expect(STAR_MAP_SKY_PARALLAX).toBeLessThanOrEqual(0.2);
+    expect(sky({ x: -400, y: -300 })).toEqual({
+      x: -400 * STAR_MAP_SKY_PARALLAX,
+      y: -300 * STAR_MAP_SKY_PARALLAX,
+    });
+  });
+
+  it("does not move for zoom alone", () => {
+    expect(sky({ scale: 0.25 })).toEqual({ x: 0, y: 0 });
+    expect(sky({ x: -400, y: -300, scale: 2 })).toEqual(
+      sky({ x: -400, y: -300, scale: 0.5 }),
+    );
+  });
+
+  it("keeps the offset within one tile so the 2x2 sky always covers the window", () => {
+    // Any legal pan, at any zoom, in either direction, far beyond one tile.
+    for (const x of [-1e6, -25600, -12801, -12800, -1, 0, 1, 640, 12800, 1e6]) {
+      for (const y of [-1e6, -8001, -8000, 0, 800, 8000, 1e6]) {
+        const offset = sky({ x, y });
+        expect(offset.x).toBeGreaterThan(-VIEWPORT.width);
+        expect(offset.x).toBeLessThanOrEqual(0);
+        expect(offset.y).toBeGreaterThan(-VIEWPORT.height);
+        expect(offset.y).toBeLessThanOrEqual(0);
+      }
+    }
+  });
+
+  it("wraps by whole tiles, so the sky it shows is unchanged", () => {
+    // One tile of parallax is one viewport of pan divided by the factor.
+    const tilePan = VIEWPORT.width / STAR_MAP_SKY_PARALLAX;
+    const base = sky({ x: -400 });
+    expect(sky({ x: -400 - tilePan }).x).toBeCloseTo(base.x, 6);
+    expect(sky({ x: -400 + 3 * tilePan }).x).toBeCloseTo(base.x, 6);
+  });
+
+  it("wraps a positive pan below the origin rather than above it", () => {
+    // The sky starts at the window's origin and extends right and down, so
+    // a positive offset would uncover the window's left or top edge.
+    const offset = sky({ x: 500, y: 300 });
+    expect(offset.x).toBe(500 * STAR_MAP_SKY_PARALLAX - VIEWPORT.width);
+    expect(offset.y).toBe(300 * STAR_MAP_SKY_PARALLAX - VIEWPORT.height);
+  });
+
+  it("lands on a plain zero at a tile boundary, never -0", () => {
+    const tilePan = VIEWPORT.width / STAR_MAP_SKY_PARALLAX;
+    expect(Object.is(sky({ x: -tilePan }).x, 0)).toBe(true);
+    expect(Object.is(sky({ x: 0 }).x, 0)).toBe(true);
+  });
+
+  it("stays still against an unmeasured viewport", () => {
+    expect(sky({ x: -400, y: -300 }, { width: 0, height: 0 })).toEqual({
+      x: 0,
+      y: 0,
+    });
   });
 });

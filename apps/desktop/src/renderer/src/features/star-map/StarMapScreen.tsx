@@ -7,6 +7,7 @@ import {
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
+  type RefObject,
 } from "react";
 import {
   buildThreadIdentityKey,
@@ -105,6 +106,7 @@ import {
   MIN_ZOOM,
   overviewChromeScale,
   placeStarMapView,
+  starMapSkyOffset,
   type StarMapView,
 } from "./star-map-view-geometry";
 import { StarMapViewOptions } from "./StarMapViewOptions";
@@ -191,28 +193,47 @@ const STAR_FIELD = generateStarField(STAR_COUNT);
  *
  * The map re-renders whenever active-thread state advances. Keeping the 130
  * circles behind a memo boundary means React does not reconcile a decorative
- * subtree on every streamed update. The stars intentionally stay still: 130
- * independent SVG opacity animations kept Chromium painting continuously even
- * when the operator was not touching the map.
+ * subtree on every streamed update. The stars intentionally do not twinkle:
+ * 130 independent SVG opacity animations kept Chromium painting continuously
+ * even when the operator was not touching the map.
+ *
+ * The field is one viewport-sized tile drawn four times, 2×2, and the whole
+ * sky is what `paintView` slides for the parallax — the map moves, and the
+ * stars follow it a fraction of the way. Tiling is what makes that safe:
+ * wrapped to one tile (`starMapSkyOffset`), the sky covers the window at
+ * every offset, so no pan can ever drag a bare edge into view. Only the
+ * parent's `paintView` writes the offset, through the ref, so this subtree
+ * still never re-renders for a view change.
  */
-const StarMapSky = memo(function StarMapSky() {
+const StarMapSky = memo(function StarMapSky(props: {
+  ref: RefObject<SVGSVGElement | null>;
+}) {
   return (
     <svg
+      ref={props.ref}
       className="star-map__sky"
-      viewBox="0 0 100 100"
+      viewBox="0 0 200 200"
       preserveAspectRatio="none"
       aria-hidden="true"
     >
-      {STAR_FIELD.map((star, index) => (
-        <circle
-          key={index}
-          className="star-map__star"
-          cx={star.x}
-          cy={star.y}
-          r={star.radius * 0.08}
-          fillOpacity={star.opacity}
-        />
-      ))}
+      <defs>
+        <g id="star-map-sky-tile">
+          {STAR_FIELD.map((star, index) => (
+            <circle
+              key={index}
+              className="star-map__star"
+              cx={star.x}
+              cy={star.y}
+              r={star.radius * 0.08}
+              fillOpacity={star.opacity}
+            />
+          ))}
+        </g>
+      </defs>
+      <use href="#star-map-sky-tile" x={0} y={0} />
+      <use href="#star-map-sky-tile" x={100} y={0} />
+      <use href="#star-map-sky-tile" x={0} y={100} />
+      <use href="#star-map-sky-tile" x={100} y={100} />
     </svg>
   );
 });
@@ -272,6 +293,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const layerRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
+  const skyRef = useRef<SVGSVGElement>(null);
   const { health } = useFederationHealth({ desktopApi: props.desktopApi });
   const celestialIcons = useCelestialIcons({ desktopApi: props.desktopApi });
   const [filterSelection, setFilterSelection] =
@@ -280,6 +302,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
     width: number;
     height: number;
   }>({ width: 1280, height: 800 });
+  /**
+   * The viewport size as `paintView` sees it. The sky's parallax wraps to
+   * the viewport, and `paintView` runs on gesture frames outside React, so
+   * it reads the measurement from a ref rather than closing over state and
+   * changing identity — and every gesture's captured copy of it — on resize.
+   */
+  const viewportSizeRef = useRef(viewportSize);
   const [intakeTarget, setIntakeTarget] = useState<IntakeDialogTarget>();
   // Which instance the operator is focused on. Selection is deliberately
   // view-local and unsynced: it is a "where am I looking" gesture, not a
@@ -364,6 +393,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
       canvas.style.transform =
         `translate(${next.x}px, ${next.y}px) scale(${next.scale})`;
     }
+    // The sky follows a fraction of the way behind the canvas. Written as
+    // custom properties rather than a transform so the stylesheet owns the
+    // transform and reduced motion can pin the sky in CSS alone.
+    const sky = skyRef.current;
+    if (sky) {
+      const offset = starMapSkyOffset({
+        view: next,
+        viewport: viewportSizeRef.current,
+      });
+      sky.style.setProperty("--star-map-sky-x", `${offset.x}px`);
+      sky.style.setProperty("--star-map-sky-y", `${offset.y}px`);
+    }
   }, []);
 
   /**
@@ -430,6 +471,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
     observer.observe(element);
     return () => observer.disconnect();
   }, []);
+
+  // A resize changes the tile the sky's parallax wraps to. Re-painting the
+  // live view re-wraps the offset against the new size before the frame
+  // shows; a stale wrap from a wider window can leave the sky short of the
+  // window's right or bottom edge.
+  useLayoutEffect(() => {
+    viewportSizeRef.current = viewportSize;
+    paintView(viewRef.current);
+  }, [paintView, viewportSize]);
 
   // Card height changes are driven by the browser's layout observer rather
   // than a synchronous offsetHeight sweep after every render. Active threads
@@ -2719,7 +2769,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         className="star-map__viewport"
         onPointerDown={startCanvasPan}
       >
-        <StarMapSky />
+        <StarMapSky ref={skyRef} />
         <div
           ref={canvasRef}
           // Every lens is now a transformed canvas sized to its content —

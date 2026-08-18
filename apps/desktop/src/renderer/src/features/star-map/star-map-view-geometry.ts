@@ -148,6 +148,59 @@ export function clampStarMapView(params: {
 }
 
 /**
+ * How far the sky moves for each pixel the map moves.
+ *
+ * The stars are the far layer of a two-plane parallax: the canvas is what
+ * the operator holds, and the sky drifts a fraction of that behind it, the
+ * way the backdrop of a side-scroller lags the foreground. Small on purpose
+ * — the point is that the map reads as sitting in front of the sky, not
+ * that the sky is going anywhere.
+ */
+export const STAR_MAP_SKY_PARALLAX = 0.1;
+
+/**
+ * Wrap a scroll offset into one tile period, `(-period, 0]`.
+ *
+ * `%` alone leaves a positive result for positive input; shifting that down
+ * a period keeps the sky's origin at or left of the window's, which is what
+ * lets a 2×2 tiling starting at the origin always cover the window.
+ */
+function wrapToTile(offset: number, period: number): number {
+  if (!(period > 0) || !Number.isFinite(offset)) return 0;
+  const wrapped = offset % period;
+  // `-0` from a negative multiple of the period; a plain 0 keeps the value
+  // comparable and the CSS free of `-0px`.
+  if (wrapped === 0) return 0;
+  return wrapped > 0 ? wrapped - period : wrapped;
+}
+
+/**
+ * Where the sky sits for a view, in viewport pixels.
+ *
+ * The sky is drawn as a 2×2 tiling of one viewport-sized star field, so it
+ * can follow the map by any distance and still cover the window: the offset
+ * is wrapped to one tile, and the copy scrolling in on one side is the copy
+ * that left on the other. Only the pan participates — zoom does not scale
+ * distant stars, and the operator's zoom-to-cursor pans are exactly the
+ * camera moves a parallax layer should answer.
+ */
+export function starMapSkyOffset(params: {
+  view: StarMapView;
+  viewport: StarMapViewBox;
+}): { x: number; y: number } {
+  return {
+    x: wrapToTile(
+      params.view.x * STAR_MAP_SKY_PARALLAX,
+      params.viewport.width,
+    ),
+    y: wrapToTile(
+      params.view.y * STAR_MAP_SKY_PARALLAX,
+      params.viewport.height,
+    ),
+  };
+}
+
+/**
  * The view that puts the middle of the canvas in the middle of the window
  * at 1:1. Used to place the map on open, on a lens switch, and by "Reset
  * view".

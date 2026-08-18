@@ -10863,13 +10863,36 @@ textarea,
   transition: transform 240ms ease, opacity 240ms ease;
 }
 
+/* The sky is a 2×2 tiling of one viewport-sized star field, twice the
+   window on each axis, and slides behind the map as a parallax layer.
+   `paintView` writes the offset — always within one tile, (-100%, 0] —
+   as custom properties so the transform stays the stylesheet's to own:
+   reduced motion pins the sky below without fighting an inline style. */
 .star-map__sky {
   position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
+  left: 0;
+  top: 0;
+  width: 200%;
+  height: 200%;
   color: color-mix(in srgb, var(--text-primary) 78%, transparent);
   pointer-events: none;
+  transform: translate(var(--star-map-sky-x, 0px), var(--star-map-sky-y, 0px));
+}
+
+/* Promoted alongside the canvas for the pointer drag only: the parallax is
+   a per-frame transform on a surface four times the window, and a
+   permanently promoted sky is exactly the retained compositor surface the
+   canvas rule (`.star-map__viewport.is-panning .star-map__canvas`) avoids. */
+.star-map__viewport.is-panning .star-map__sky {
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* Parallax is the textbook vestibular trigger. Pinned, the sky shows the
+     origin tile — the same still field the map had before the effect. */
+  .star-map__sky {
+    transform: none;
+  }
 }
 
 .star-map__star {
