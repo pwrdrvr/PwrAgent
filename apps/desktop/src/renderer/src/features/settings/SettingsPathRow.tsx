@@ -30,6 +30,11 @@ export function SettingsPathRow(props: {
   title?: ReactNode;
   /** Mono secondary path beneath the title. */
   path?: string;
+  /**
+   * Render `path` as wrapping prose rather than a single ellipsized line.
+   * Set it when the value is a failure reason instead of a filesystem path.
+   */
+  pathIsDetail?: boolean;
   /** Right-side status chips (source / version / state). */
   chips?: SettingsPathRowChip[];
   /** Whether this row is the currently-active selection. */
@@ -56,10 +61,31 @@ export function SettingsPathRow(props: {
       ) : null}
       <div className="settings-pathrow__body">
         {props.title ? (
-          <span className="settings-pathrow__title">{props.title}</span>
+          <span
+            // Truncation is only applied to a plain string, where `title`
+            // below can carry the full value. An element title (the auth
+            // profile rows pass one) composes its own inline layout, and
+            // text-overflow does not apply to an atomic inline-flex box, so
+            // ellipsizing it would hard-cut with nothing to hover.
+            className={`settings-pathrow__title${
+              typeof props.title === "string"
+                ? " settings-pathrow__title--truncate"
+                : ""
+            }`}
+            title={typeof props.title === "string" ? props.title : undefined}
+          >
+            {props.title}
+          </span>
         ) : null}
         {props.path ? (
-          <span className="settings-pathrow__path">{props.path}</span>
+          <span
+            className={`settings-pathrow__path${
+              props.pathIsDetail ? " settings-pathrow__path--detail" : ""
+            }`}
+            title={props.path}
+          >
+            {props.path}
+          </span>
         ) : null}
       </div>
       {props.chips && props.chips.length > 0 ? (
@@ -73,6 +99,9 @@ export function SettingsPathRow(props: {
               <span
                 key={chip.key ?? `${chip.tone ?? "default"}-${index}`}
                 className={`settings-pathrow__chip${toneClass}`}
+                // Chips are width-capped, so a long label (a prerelease
+                // version string) needs the full value reachable on hover.
+                title={typeof chip.label === "string" ? chip.label : undefined}
               >
                 {chip.label}
               </span>

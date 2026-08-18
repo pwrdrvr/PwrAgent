@@ -651,6 +651,68 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("names the active PwrAgent Codex path environment override", () => {
+    const base = createSnapshot();
+    const snapshot = createSnapshot({
+      models: {
+        ...base.models,
+        codex: {
+          ...base.models.codex,
+          path: {
+            value: "C:\\nvm4w\\nodejs\\codex.ps1",
+            source: "env",
+          },
+        },
+      },
+    });
+
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("textbox", { name: "Codex path" })).toBeDisabled();
+    expect(
+      screen.getByText(
+        "PWRAGENT_CODEX_COMMAND controls this path for the current process.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/PWRDRVR_CODEX_COMMAND/)).not.toBeInTheDocument();
+  });
+
+  it("commits an edited Codex path before an unrelated button action", async () => {
+    const settings = createSettingsState();
+
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const codexPathInput = screen.getByRole("textbox", { name: "Codex path" });
+    const generalButton = screen.getByRole("button", { name: "General" });
+    fireEvent.change(codexPathInput, {
+      target: { value: "C:\\nvm4w\\nodejs\\codex.ps1" },
+    });
+    fireEvent.blur(codexPathInput, { relatedTarget: generalButton });
+    fireEvent.click(generalButton);
+
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        models: {
+          codex: {
+            path: "C:\\nvm4w\\nodejs\\codex.ps1",
+          },
+        },
+      });
+    });
+  });
+
   it("clamps accidental document scroll while mounted", async () => {
     Object.defineProperty(window, "scrollX", {
       configurable: true,
@@ -1251,9 +1313,21 @@ describe("SettingsScreen", () => {
     // default name (it shows the path the Test button would invoke).
     // Both are correct.
     expect(screen.getAllByText("/usr/local/bin/codex").length).toBeGreaterThanOrEqual(2);
-    expect(
-      screen.getByRole("radio", { name: "Auto Discovery - Use Newest" }),
-    ).toHaveAttribute("aria-checked", "true");
+    const codexPathInput = screen.getByRole("textbox", { name: "Codex path" });
+    expect(codexPathInput).toBeEnabled();
+    fireEvent.change(codexPathInput, {
+      target: { value: "C:\\nvm4w\\nodejs\\codex.ps1" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save path" }));
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        models: {
+          codex: {
+            path: "C:\\nvm4w\\nodejs\\codex.ps1",
+          },
+        },
+      });
+    });
     expect(screen.getByText("0.130.0")).toBeInTheDocument();
     // Source pills on the Codex fields show the effective config
     // source (the redundant `Using /path/to/binary` label was
@@ -2866,6 +2940,161 @@ describe("SettingsScreen", () => {
       });
     });
     expect(getGhStatus).toHaveBeenCalledWith({ recheck: true });
+  });
+
+  it("lists a pinned Codex whose version probe failed, and the one in use", async () => {
+    // Upstream's most common rejection is executable:true with the reason in
+    // versionFailureReason and no failureReason. Keying the list on
+    // failureReason hid exactly that row from the operator who pinned it,
+    // and a validated config row had no "Using" entry at all.
+    const snapshot = createSnapshot();
+    snapshot.models.codex.discovery = {
+      selectedCommand: "C:\\nvm4w\\nodejs\\codex.cmd",
+      selectedSource: "config",
+      candidates: [
+        {
+          command: "C:\\nvm4w\\nodejs\\codex.cmd",
+          executable: true,
+          selected: true,
+          source: "config",
+          version: "0.146.0",
+        },
+        {
+          command: "C:\\pinned\\codex.cmd",
+          executable: true,
+          selected: false,
+          source: "env",
+          versionFailureReason: "version_not_reported",
+        },
+      ],
+    };
+
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    const rows = Array.from(
+      document.querySelectorAll(".settings-pathrow"),
+    ).map((row) => row.textContent ?? "");
+    expect(rows.some((row) => row.includes("C:\\pinned\\codex.cmd"))).toBe(true);
+    expect(rows.some((row) => row.includes("C:\\nvm4w\\nodejs\\codex.cmd"))).toBe(
+      true,
+    );
+  });
+
+  it("shows the installed version on a Codex rejected as too old", async () => {
+    // Upstream builds a codex_too_old candidate as executable:false WITH a
+    // version — the rejection is derived from parsing one. Gating the version
+    // chip on usability therefore hid the number on every platform, and
+    // commandDiscoveryFailureDetail returns undefined for a classified reason
+    // so the detail line could not recover it either.
+    const snapshot = createSnapshot();
+    snapshot.models.codex.discovery = {
+      selectedCommand: "",
+      selectedSource: "path",
+      candidates: [
+        {
+          command: "/usr/local/bin/codex",
+          executable: false,
+          failureReason: "codex_too_old",
+          selected: false,
+          source: "path",
+          version: "0.100.0",
+        },
+      ],
+    };
+
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    const chips = Array.from(
+      document.querySelectorAll(".settings-pathrow__chip"),
+    ).map((chip) => chip.textContent ?? "");
+    expect(chips).toContain("0.100.0");
+    expect(chips).toContain("Codex too old");
+
+    // Still unusable: no Use button on a rejected candidate.
+    const row = Array.from(document.querySelectorAll(".settings-pathrow")).find(
+      (candidate) => candidate.textContent?.includes("/usr/local/bin/codex"),
+    )!;
+    expect(within(row as HTMLElement).queryByRole("button")).toBeNull();
+  });
+
+  it("keeps a raw Codex spawn error out of the status chips", async () => {
+    // Regression: a failed Windows probe returns a whole command line as its
+    // reason. The row used to render it as BOTH the version chip and the
+    // status chip; chips are `flex: 0 0 auto`, so the path beside them
+    // collapsed to "C:" and the row overflowed.
+    const rawFailure =
+      "Command failed: C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0"
+      + "\\powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy"
+      + " Bypass -File C:\\nvm4w\\nodejs\\codex.ps1 --version";
+    const snapshot = createSnapshot();
+    snapshot.models.codex.discovery = {
+      selectedCommand: "C:\\nvm4w\\nodejs\\codex.cmd",
+      selectedSource: "path",
+      candidates: [
+        {
+          command: "C:\\nvm4w\\nodejs\\codex.cmd",
+          executable: true,
+          selected: true,
+          source: "path",
+          version: "0.146.0",
+        },
+        {
+          command: "C:\\nvm4w\\nodejs\\codex.ps1",
+          executable: false,
+          selected: false,
+          source: "path",
+          failureReason: rawFailure,
+        },
+        {
+          command:
+            "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.810.7004.0_x64"
+            + "\\app\\resources\\codex.exe",
+          executable: false,
+          selected: false,
+          source: "application",
+          failureReason: "spawn EPERM",
+        },
+      ],
+    };
+
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    const chips = Array.from(
+      document.querySelectorAll(".settings-pathrow__chip"),
+    ).map((chip) => chip.textContent ?? "");
+    expect(chips).toContain("Launch failed");
+    expect(chips).toContain("Blocked");
+    expect(chips.some((chip) => chip.includes("powershell.exe"))).toBe(false);
+    // "spawn EPERM" previously rendered twice on the same row.
+    expect(chips.filter((chip) => chip === "Blocked")).toHaveLength(1);
+
+    // The full reason stays reachable on the row's mono detail line.
+    expect(screen.getByText(rawFailure)).toBeInTheDocument();
+
+    // An unusable candidate must not offer to become the selection.
+    const rows = Array.from(document.querySelectorAll(".settings-pathrow"));
+    const failingRow = rows.find((row) =>
+      row.textContent?.includes("codex.ps1"),
+    )!;
+    expect(within(failingRow as HTMLElement).queryByRole("button")).toBeNull();
   });
 
   it("shows Git discovery and Xcode license remediation", async () => {

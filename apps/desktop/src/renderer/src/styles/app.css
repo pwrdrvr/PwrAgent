@@ -9731,6 +9731,18 @@ textarea,
   line-height: 1.2;
 }
 
+/*
+ * Only for a plain-string title, which carries a `title` attribute so the
+ * clipped tail stays reachable. An element title composes its own inline
+ * layout and text-overflow does not apply to it, so truncating there would
+ * hard-cut with no ellipsis and no hover.
+ */
+.settings-pathrow__title--truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-pathrow__title-line {
   display: inline-flex;
   max-width: 100%;
@@ -9763,6 +9775,21 @@ textarea,
   white-space: nowrap;
 }
 
+/*
+ * Discovery failure text is prose, not a path: a spawn error is a full command
+ * line, and clipping it to one nowrap line left about 24 of 170 characters
+ * readable, recoverable only by hovering a non-focusable span. Let it wrap to
+ * a couple of lines and stay selectable.
+ */
+.settings-pathrow__path--detail {
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  white-space: normal;
+  user-select: text;
+}
+
 .settings-pathrow.is-selected .settings-pathrow__title {
   color: var(--accent-bright);
 }
@@ -9775,6 +9802,8 @@ textarea,
 }
 
 .settings-pathrow__chip {
+  max-width: 180px;
+  overflow: hidden;
   padding: 3px 7px;
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
@@ -9784,6 +9813,8 @@ textarea,
   font-size: 10px;
   font-weight: 500;
   line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .settings-pathrow__chip--ok {

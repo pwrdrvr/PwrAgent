@@ -1,5 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { MessagingCredentialValidationResult } from "@pwragent/messaging-interface";
 import type {
   SettingsCredentialTestKind,
@@ -13,8 +11,11 @@ import {
   compareCodexCliVersions,
   MINIMUM_CODEX_CLI_VERSION,
 } from "@pwrdrvr/codex-discovery";
-
-const execFileAsync = promisify(execFile);
+import { createCommandInvocation } from "@pwrdrvr/agent-transport";
+import {
+  resolveWindowsCodexLaunchCommand,
+  runCodexOneShot,
+} from "../codex-windows-launch";
 
 const log = getMainLogger("pwragent:credential-tester");
 
@@ -146,7 +147,7 @@ export class CredentialTester {
         status: "failed",
         testedAt: Date.now(),
         durationMs: Date.now() - startedAt,
-        errorMessage: clipError(error),
+        errorMessage: clipError(preferChildDiagnostic(error)),
       };
     }
     this.lastResults.set(kind, result);
@@ -340,7 +341,7 @@ export class CredentialTester {
         testedAt: Date.now(),
         durationMs: Date.now() - probeStart,
         account: command,
-        errorMessage: clipError(error),
+        errorMessage: clipError(preferChildDiagnostic(error)),
       };
     }
   }
@@ -387,6 +388,19 @@ function clipString(value: string): string {
   return `${value.slice(0, ERROR_MESSAGE_LIMIT - 1)}…`;
 }
 
+/**
+ * Prefer what the child printed over the invocation that ran it. On Windows a
+ * Codex probe goes through the cmd.exe wrapper, so `error.message` opens with
+ * ~90 characters of `cmd.exe /d /s /c "^…^"` before anything useful, and the
+ * clip below would otherwise spend the whole budget on it.
+ */
+function preferChildDiagnostic(error: unknown): unknown {
+  const stderr = (error as { stderr?: unknown } | undefined)?.stderr
+    ?.toString?.()
+    .trim();
+  return stderr ? stderr : error;
+}
+
 function clipError(error: unknown): string {
   if (error instanceof Error) {
     if (error.name === "AbortError") return "request timed out";
@@ -398,10 +412,24 @@ function clipError(error: unknown): string {
 async function defaultRunCodexVersion(
   command: string,
 ): Promise<{ stdout: string; stderr: string }> {
-  const { stdout, stderr } = await execFileAsync(command, ["--version"], {
-    env: buildPwrAgentChildProcessEnv(process.env),
-    timeout: DEFAULT_PROBE_TIMEOUT_MS,
+  const env = buildPwrAgentChildProcessEnv(process.env);
+  // Probe the command that would actually be launched, so a `.ps1` in config
+  // cannot report Connected while the app-server launch resolves elsewhere.
+  const invocation = createCommandInvocation({
+    command: resolveWindowsCodexLaunchCommand({ command }),
+    args: ["--version"],
+    env,
   });
+  const { stdout, stderr } = await runCodexOneShot(
+    invocation.command,
+    invocation.args,
+    {
+      env,
+      timeout: DEFAULT_PROBE_TIMEOUT_MS,
+      windowsHide: true,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    },
+  );
   return {
     stdout: stdout?.toString?.() ?? "",
     stderr: stderr?.toString?.() ?? "",

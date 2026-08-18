@@ -337,4 +337,64 @@ describe("StdioJsonRpcTransport", () => {
 
     await transport.close();
   });
+
+  // A PowerShell shim cannot host the app-server: npm's codex.ps1 branches on
+  // `$MyInvocation.ExpectingInput`, and the transport holds stdin open as a
+  // pipe, so it takes the `$input | & node …` branch and the `initialize`
+  // handshake never returns. Verified on the Windows lab guest: powershell
+  // times out, codex.cmd answers in ~1.5s.
+  it("launches a resolved Windows PowerShell shim through its .cmd sibling", async () => {
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    const command = "C:\\nvm4w\\nodejs\\codex.ps1";
+    const sibling = "C:\\nvm4w\\nodejs\\codex.cmd";
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      args: ["--feature", "value & whoami"],
+      commandExists: (candidate) => candidate === sibling,
+      env: {
+        PATH: "C:\\nvm4w\\nodejs",
+        SystemRoot: "C:\\Windows",
+      },
+      platform: "win32",
+      resolveCommand: async () => ({
+        command,
+        source: "path",
+        version: "0.144.0",
+      }),
+    });
+
+    await transport.connect();
+
+    const [spawnedCommand, spawnedArgs] = spawnMock.mock.calls[0] ?? [];
+    expect(spawnedCommand).toMatch(/cmd\.exe$/i);
+    expect(spawnedArgs?.join(" ")).toContain("codex.cmd");
+    expect(spawnedArgs?.join(" ")).not.toContain("powershell");
+
+    await transport.close();
+  });
+
+  it("keeps a PowerShell shim when no spawnable sibling is installed", async () => {
+    const child = new MockCodexChildProcess();
+    spawnMock.mockReturnValue(child);
+    const command = "C:\\nvm4w\\nodejs\\codex.ps1";
+    const transport = new StdioJsonRpcTransport({
+      command: "codex",
+      commandExists: () => false,
+      env: { PATH: "C:\\nvm4w\\nodejs" },
+      platform: "win32",
+      resolveCommand: async () => ({
+        command,
+        source: "path",
+        version: "0.144.0",
+      }),
+    });
+
+    await transport.connect();
+
+    // Failing loudly at spawn beats inventing a path that is not installed.
+    expect(spawnMock.mock.calls[0]?.[0]).toBe(command);
+
+    await transport.close();
+  });
 });
