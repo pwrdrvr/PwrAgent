@@ -109,7 +109,9 @@ describe("buildTranscriptRenderItems", () => {
       type: "activity",
       id: `tool-${index}`,
       summary: `Read \`${path}\``,
-      details: [{ id: `detail-${index}`, label: `Read \`${path}\``, path }],
+      details: [
+        { id: `detail-${index}`, kind: "read", label: `Read \`${path}\``, path },
+      ],
       turn,
     }));
 
@@ -138,7 +140,9 @@ describe("buildTranscriptRenderItems", () => {
       type: "activity",
       id: `tool-${index}`,
       summary: `Read \`${path}\``,
-      details: [{ id: `detail-${index}`, label: `Read \`${path}\``, path }],
+      details: [
+        { id: `detail-${index}`, kind: "read", label: `Read \`${path}\``, path },
+      ],
       turn,
     }));
 
@@ -164,7 +168,9 @@ describe("buildTranscriptRenderItems", () => {
       type: "activity",
       id: `tool-${index}`,
       summary: `Read \`${path}\``,
-      details: [{ id: `detail-${index}`, label: `Read \`${path}\``, path }],
+      details: [
+        { id: `detail-${index}`, kind: "read", label: `Read \`${path}\``, path },
+      ],
       turn,
     }));
 
