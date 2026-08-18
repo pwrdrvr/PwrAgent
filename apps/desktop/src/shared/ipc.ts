@@ -172,6 +172,8 @@ export const NAVIGATION_SET_THREAD_PIN_CHANNEL =
   "navigation:set-thread-pin";
 export const NAVIGATION_SET_THREAD_AGENT_CHANNEL =
   "navigation:set-thread-agent";
+export const NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL =
+  "navigation:set-thread-token-miser";
 export const NAVIGATION_REORDER_THREAD_PINS_CHANNEL =
   "navigation:reorder-thread-pins";
 export const NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL =

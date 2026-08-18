@@ -76,6 +76,8 @@ import type {
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadAgentRequest,
+  SetThreadTokenMiserRequest,
+  SetThreadTokenMiserResponse,
   SetThreadAgentResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
@@ -663,6 +665,7 @@ import {
   NAVIGATION_SET_DIRECTORY_THREADS_COLLAPSED_CHANNEL,
   NAVIGATION_SET_THREAD_PARENT_CHANNEL,
   NAVIGATION_SET_THREAD_AGENT_CHANNEL,
+  NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL,
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
@@ -1731,6 +1734,10 @@ const desktopApi = Object.freeze({
     request: SetThreadAgentRequest,
   ): Promise<SetThreadAgentResponse> =>
     await ipcRenderer.invoke(NAVIGATION_SET_THREAD_AGENT_CHANNEL, request),
+  setThreadTokenMiser: async (
+    request: SetThreadTokenMiserRequest,
+  ): Promise<SetThreadTokenMiserResponse> =>
+    await ipcRenderer.invoke(NAVIGATION_SET_THREAD_TOKEN_MISER_CHANNEL, request),
   reorderThreadPins: async (
     request: ReorderThreadPinsRequest,
   ): Promise<ReorderThreadPinsResponse> =>

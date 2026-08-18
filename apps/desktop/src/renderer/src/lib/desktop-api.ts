@@ -310,6 +310,8 @@ import type {
   SetThreadExecutionModeRequest,
   SetThreadExecutionModeResponse,
   SetThreadAgentRequest,
+  SetThreadTokenMiserRequest,
+  SetThreadTokenMiserResponse,
   SetThreadAgentResponse,
   SetThreadModelSettingsRequest,
   SetThreadModelSettingsResponse,
@@ -959,6 +961,9 @@ export type DesktopApi = {
   setThreadAgent?: (
     request: SetThreadAgentRequest
   ) => Promise<SetThreadAgentResponse>;
+  setThreadTokenMiser?: (
+    request: SetThreadTokenMiserRequest
+  ) => Promise<SetThreadTokenMiserResponse>;
   reorderThreadPins?: (
     request: ReorderThreadPinsRequest
   ) => Promise<ReorderThreadPinsResponse>;
