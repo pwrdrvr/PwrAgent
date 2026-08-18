@@ -89,12 +89,12 @@ MIT
 - @octokit/request@10.0.13 | github:octokit/request.js
 - @octokit/request-error@7.1.1 | github:octokit/request-error.js
 - @octokit/types@17.0.0 | github:octokit/types.ts
-- @pwrdrvr/agent-acp@0.14.0 | https://github.com/pwrdrvr/agent-kit
-- @pwrdrvr/agent-client@0.7.0 | https://github.com/pwrdrvr/agent-kit
+- @pwrdrvr/agent-acp@0.15.0 | https://github.com/pwrdrvr/agent-kit
+- @pwrdrvr/agent-client@0.8.0 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/agent-core@0.2.0 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/agent-transport@0.1.7 | https://github.com/pwrdrvr/agent-kit
 - @pwrdrvr/codex-app-server-protocol@0.144.0 | https://github.com/pwrdrvr/codex-app-server-protocol
-- @pwrdrvr/codex-discovery@0.1.6 | https://github.com/pwrdrvr/agent-kit
+- @pwrdrvr/codex-discovery@0.2.0 | https://github.com/pwrdrvr/agent-kit
 - @shutterstock/p-map-iterable@1.1.2 | https://github.com/shutterstock/p-map-iterable
 - @tiptap/core@3.29.2 | https://github.com/ueberdosis/tiptap
 - @tiptap/extension-blockquote@3.29.2 | https://github.com/ueberdosis/tiptap
@@ -839,18 +839,18 @@ The above copyright notice and this permission notice (including the next paragr
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-@pwrdrvr/agent-acp@0.14.0 (MIT)
+@pwrdrvr/agent-acp@0.15.0 (MIT)
 -------------------------------
 
 Applies to:
-- @pwrdrvr/agent-acp@0.14.0 (MIT)
-- @pwrdrvr/agent-client@0.7.0 (MIT)
+- @pwrdrvr/agent-acp@0.15.0 (MIT)
+- @pwrdrvr/agent-client@0.8.0 (MIT)
 - @pwrdrvr/agent-core@0.2.0 (MIT)
 - @pwrdrvr/agent-transport@0.1.7 (MIT)
 - @pwrdrvr/codex-app-server-protocol@0.144.0 (MIT)
-- @pwrdrvr/codex-discovery@0.1.6 (MIT)
+- @pwrdrvr/codex-discovery@0.2.0 (MIT)
 
-Representative file: @pwrdrvr/agent-acp@0.14.0/LICENSE
+Representative file: @pwrdrvr/agent-acp@0.15.0/LICENSE
 
 MIT License
 

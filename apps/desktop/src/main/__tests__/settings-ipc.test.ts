@@ -66,33 +66,30 @@ const leaseCoordinatorMock = vi.hoisted(() => ({
   })),
 }));
 
-function createMockSpawnChild(
-  schedule: (child: EventEmitter & {
-    stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
-    stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
-  }) => void,
-): EventEmitter & {
+type MockSpawnStream = EventEmitter & {
+  destroy: ReturnType<typeof vi.fn>;
+  setEncoding: ReturnType<typeof vi.fn>;
+};
+
+type MockSpawnChild = EventEmitter & {
   kill: ReturnType<typeof vi.fn>;
   pid: number;
-  stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
-  stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
-} {
-  const child = new EventEmitter() as EventEmitter & {
-    kill: ReturnType<typeof vi.fn>;
-    pid: number;
-    stderr: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
-    stdout: EventEmitter & { setEncoding: ReturnType<typeof vi.fn> };
-  };
+  stderr: MockSpawnStream;
+  stdout: MockSpawnStream;
+};
+
+function createMockSpawnChild(
+  schedule: (child: MockSpawnChild) => void,
+): MockSpawnChild {
+  const child = new EventEmitter() as MockSpawnChild;
   child.pid = 321;
   child.kill = vi.fn();
-  child.stdout = new EventEmitter() as EventEmitter & {
-    setEncoding: ReturnType<typeof vi.fn>;
-  };
-  child.stderr = new EventEmitter() as EventEmitter & {
-    setEncoding: ReturnType<typeof vi.fn>;
-  };
+  child.stdout = new EventEmitter() as MockSpawnStream;
+  child.stderr = new EventEmitter() as MockSpawnStream;
   child.stdout.setEncoding = vi.fn();
+  child.stdout.destroy = vi.fn();
   child.stderr.setEncoding = vi.fn();
+  child.stderr.destroy = vi.fn();
   schedule(child);
   return child;
 }
