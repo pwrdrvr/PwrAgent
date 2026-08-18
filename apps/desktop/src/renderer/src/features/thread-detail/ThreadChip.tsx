@@ -1,4 +1,10 @@
-import { useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import { PopoutIcon, ThreadIcon } from "../../icons";
 import { useLiveThreadLink, useThreadLinks } from "../../lib/thread-links";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
@@ -47,6 +53,35 @@ export function ThreadChip(props: ThreadChipProps) {
     ? `Open this thread in the remote viewer window for ${remoteInstanceLabel}`
     : undefined;
 
+  // While the pointer (or focus) rests on the chip, the sidebar card it points
+  // at lights up in the same solid-accent style as a sub-thread composer's
+  // source card — the link and its target read as one thing. Only rows already
+  // on screen respond; nothing scrolls until the chip is activated.
+  const hoveringRef = useRef(false);
+  const threadLinksRef = useRef(threadLinks);
+  threadLinksRef.current = threadLinks;
+  const showTarget = (element: HTMLSpanElement): void => {
+    tooltipController.show(element, tooltip);
+    hoveringRef.current = true;
+    threadLinks?.setHoverTarget(link);
+  };
+  const hideTarget = (): void => {
+    tooltipController.hide();
+    hoveringRef.current = false;
+    threadLinks?.setHoverTarget(undefined);
+  };
+  // A chip can unmount under the pointer (its message re-renders, the
+  // transcript navigates away) without ever seeing mouseleave. Release the
+  // highlight then, but only if this chip is the one holding it.
+  useEffect(
+    () => () => {
+      if (hoveringRef.current) {
+        threadLinksRef.current?.setHoverTarget(undefined);
+      }
+    },
+    [],
+  );
+
   // role="button" span rather than a real <button>: the chip renders inside
   // markdown that may already sit within a clickable surface, and a nested
   // <button> is invalid HTML.
@@ -55,7 +90,7 @@ export function ThreadChip(props: ThreadChipProps) {
   ): void => {
     event.preventDefault();
     event.stopPropagation();
-    tooltipController.hide();
+    hideTarget();
     event.currentTarget.blur();
     props.onOpen(link);
   };
@@ -71,13 +106,13 @@ export function ThreadChip(props: ThreadChipProps) {
           draggable={false}
           role="button"
           tabIndex={0}
-          onBlur={tooltipController.hide}
+          onBlur={hideTarget}
           onClick={handleActivate}
           onContextMenu={(event) => {
             event.preventDefault();
             event.stopPropagation();
             window.getSelection()?.removeAllRanges();
-            tooltipController.hide();
+            hideTarget();
             const rect = event.currentTarget.getBoundingClientRect();
             contextMenuInvokerRef.current = event.currentTarget;
             setContextMenuPosition({
@@ -87,14 +122,14 @@ export function ThreadChip(props: ThreadChipProps) {
             });
           }}
           onDragStart={(event) => event.preventDefault()}
-          onFocus={(event) => tooltipController.show(event.currentTarget, tooltip)}
+          onFocus={(event) => showTarget(event.currentTarget)}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
               handleActivate(event);
             }
           }}
-          onMouseEnter={(event) => tooltipController.show(event.currentTarget, tooltip)}
-          onMouseLeave={tooltipController.hide}
+          onMouseEnter={(event) => showTarget(event.currentTarget)}
+          onMouseLeave={hideTarget}
         >
           <ThreadIcon className="thread-chip__icon" size={12} />
           <span className="thread-chip__label">#{label.replace(/^#/, "")}</span>

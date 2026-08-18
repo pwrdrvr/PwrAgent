@@ -4145,8 +4145,15 @@ textarea,
    foreground flips to the on-accent token and meta chips invert to readable
    pills. Declared after `.thread-row:hover` (equal specificity) so the fill
    survives hover. Clears automatically when the composer materializes, is
-   cancelled, or the user navigates away. */
-.thread-row.is-composer-source {
+   cancelled, or the user navigates away.
+
+   `.is-link-target` is the same treatment on a different trigger: a thread
+   link elsewhere in the window (a transcript provenance chip, the title-bar
+   thread link) is hovered or focused and points at this card. Sharing the
+   rule keeps "the card this points at" one visual idea; it lasts only as
+   long as the pointer rests on the link (see ThreadRow / thread-links). */
+.thread-row.is-composer-source,
+.thread-row.is-link-target {
   border-color: var(--accent);
   background: var(--accent);
   color: var(--accent-on);
@@ -4156,17 +4163,21 @@ textarea,
 }
 
 .thread-row.is-composer-source .thread-row__time,
-.thread-row.is-composer-source .thread-row__summary {
+.thread-row.is-composer-source .thread-row__summary,
+.thread-row.is-link-target .thread-row__time,
+.thread-row.is-link-target .thread-row__summary {
   color: var(--accent-on);
 }
 
-.thread-row.is-composer-source .thread-row__chip {
+.thread-row.is-composer-source .thread-row__chip,
+.thread-row.is-link-target .thread-row__chip {
   border-color: transparent;
   background: var(--accent-on);
   color: var(--accent);
 }
 
-.thread-row.is-composer-source .thread-row__status-cookie {
+.thread-row.is-composer-source .thread-row__status-cookie,
+.thread-row.is-link-target .thread-row__status-cookie {
   border-color: var(--accent-on);
   background: var(--accent-on);
   box-shadow: none;
@@ -4175,7 +4186,8 @@ textarea,
 /* The thinking sweep is an accent-on-accent gradient — invisible on the solid
    accent fill. Recolor it to the on-accent token so a source card that's still
    working stays legible. */
-.thread-row.is-composer-source .thinking-scanner__beam {
+.thread-row.is-composer-source .thinking-scanner__beam,
+.thread-row.is-link-target .thinking-scanner__beam {
   background: linear-gradient(
     90deg,
     color-mix(in srgb, var(--accent-on) 18%, transparent) 0%,

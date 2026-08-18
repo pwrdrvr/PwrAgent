@@ -49,7 +49,60 @@ export type ThreadLinkContextValue = {
   show: (link: ResolvedThreadLink) => void;
   getSnapshot: (link: ResolvedThreadLink) => ResolvedThreadLink;
   subscribe: (link: ResolvedThreadLink, listener: () => void) => () => void;
+  /**
+   * Marks the thread a hovered or focused link points at, so the matching
+   * sidebar card can light up while the pointer rests on the link. Pass
+   * `undefined` when the pointer leaves. Rows read it through
+   * `useThreadLinkHoverTarget`.
+   */
+  setHoverTarget: (link: ThreadLinkHoverTarget | undefined) => void;
+  getHoverTargetKey: () => string | undefined;
+  subscribeHoverTarget: (listener: () => void) => () => void;
 };
+
+export type ThreadLinkHoverTarget = Pick<ResolvedThreadLink, "backend" | "threadId">;
+
+/**
+ * The key a hovered link is matched against a sidebar card by. Same shape as
+ * the row's own identity key (`buildThreadIdentityKey(source, id)`) and as
+ * `composerSourceThreadKey`, so a link to a pinned remote thread lights up
+ * that row too — the instance is deliberately not part of the match.
+ */
+export function threadLinkHoverKey(link: ThreadLinkHoverTarget): string {
+  return buildThreadIdentityKey(link.backend, link.threadId);
+}
+
+/**
+ * Hover state is a separate store from the metadata store: it changes on
+ * every pointer enter/leave, and only the row it names (plus the one it just
+ * left) should re-render — not the provider, and not the transcript.
+ */
+class ThreadLinkHoverStore {
+  private key: string | undefined;
+  private listeners = new Set<() => void>();
+
+  get(): string | undefined {
+    return this.key;
+  }
+
+  set(link: ThreadLinkHoverTarget | undefined): void {
+    const nextKey = link ? threadLinkHoverKey(link) : undefined;
+    if (nextKey === this.key) {
+      return;
+    }
+    this.key = nextKey;
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+}
 
 function threadLinkKey(
   link: Pick<ResolvedThreadLink, "backend" | "instanceId" | "threadId">,
@@ -226,6 +279,25 @@ export function useLiveThreadLink(link: ResolvedThreadLink): ResolvedThreadLink 
   );
 }
 
+/**
+ * Whether a hovered or focused thread link currently points at `threadKey`
+ * (a `buildThreadIdentityKey` value). Subscribes per row, so only the rows
+ * whose answer flips re-render. Always false outside a `ThreadLinkProvider`.
+ */
+export function useThreadLinkHoverTarget(threadKey: string): boolean {
+  const links = useThreadLinks();
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      links?.subscribeHoverTarget(listener) ?? (() => {}),
+    [links],
+  );
+  const getSnapshot = useCallback(
+    () => links?.getHoverTargetKey() === threadKey,
+    [links, threadKey],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot, () => false);
+}
+
 export function ThreadLinkProvider(props: {
   children: ReactNode;
   onOpenRemoteViewer?: (request: {
@@ -251,6 +323,11 @@ export function ThreadLinkProvider(props: {
     metadataStoreRef.current = new ThreadLinkMetadataStore(threads);
   }
   const metadataStore = metadataStoreRef.current;
+  const hoverStoreRef = useRef<ThreadLinkHoverStore | null>(null);
+  if (!hoverStoreRef.current) {
+    hoverStoreRef.current = new ThreadLinkHoverStore();
+  }
+  const hoverStore = hoverStoreRef.current;
   const threadsRef = useRef(threads);
   threadsRef.current = threads;
   const metadataKey = threadLinkMetadataKey(threads);
@@ -372,11 +449,20 @@ export function ThreadLinkProvider(props: {
       subscribe(link, listener) {
         return metadataStore.subscribe(link, listener);
       },
+      setHoverTarget(link) {
+        hoverStore.set(link);
+      },
+      getHoverTargetKey() {
+        return hoverStore.get();
+      },
+      subscribeHoverTarget(listener) {
+        return hoverStore.subscribe(listener);
+      },
     };
     // Rebuild only when membership changes; `threadsRef`/`onShowThreadRef`
     // carry the freshest values so no other deps are needed.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [membershipKey, metadataStore]);
+  }, [hoverStore, membershipKey, metadataStore]);
 
   return <ThreadLinkContext.Provider value={value}>{props.children}</ThreadLinkContext.Provider>;
 }

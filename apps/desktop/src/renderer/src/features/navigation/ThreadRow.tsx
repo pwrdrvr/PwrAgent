@@ -19,6 +19,7 @@ import {
   MESSAGING_PLATFORM_ICONS,
 } from "../../lib/messaging-platform-branding";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
+import { useThreadLinkHoverTarget } from "../../lib/thread-links";
 import { isNativeDragInteractionActive } from "../../lib/native-drag-interaction";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
 import { PrChip } from "../pr-status/PrChip";
@@ -139,6 +140,10 @@ export function ThreadRow(props: ThreadRowProps) {
     : threadKey === props.selectedThreadKey;
   const active = threadKey === props.selectedThreadKey;
   const isComposerSource = threadKey === props.composerSourceThreadKey;
+  // A thread link elsewhere in the window (a provenance chip in the
+  // transcript, the title-bar thread link) is being hovered and points at
+  // this card. Wears the composer-source accent fill for the duration.
+  const isLinkTarget = useThreadLinkHoverTarget(threadKey);
   // A remote-owned row whose peer isn't currently connected renders dimmed:
   // the data shown is the last-known snapshot, not live.
   const isRemoteOffline = Boolean(
@@ -301,7 +306,9 @@ export function ThreadRow(props: ThreadRowProps) {
           isPinnedRow ? " thread-row--pinned" : ""
         }${selected ? " is-selected" : ""}${
           isComposerSource ? " is-composer-source" : ""
-        }${isRemoteOffline ? " is-remote-offline" : ""}`}
+        }${isLinkTarget ? " is-link-target" : ""}${
+          isRemoteOffline ? " is-remote-offline" : ""
+        }`}
         // The open-thread BUTTON's rect is only the title band (see
         // `.thread-row__open` in app.css for why a card-sized button
         // rect broke axe target-size and Playwright row clicks). The
