@@ -29,12 +29,13 @@ import type {
   TurnCostStrip,
   TurnStripScope,
   TokenMiserContextComparison,
-  TokenMiserRoughEdge,
+  TokenMiserGateEntry,
+  TokenMiserGateOutcome,
 } from "./tool-output-incident-insights";
 import {
   buildCategoryComposition,
   buildTokenMiserContextComparison,
-  buildTokenMiserRoughEdges,
+  buildTokenMiserGateEntries,
   buildTurnCostStrip,
   capMeterWidth,
   countRepeatedCommands,
@@ -187,8 +188,8 @@ export function ToolOutputIncidentExplorerWindow() {
     () => buildTokenMiserContextComparison(allInvocations, activeTokenMiser),
     [activeTokenMiser, allInvocations],
   );
-  const roughEdges = useMemo(
-    () => buildTokenMiserRoughEdges(allInvocations, activeTokenMiser),
+  const gateEntries = useMemo(
+    () => buildTokenMiserGateEntries(allInvocations, activeTokenMiser),
     [activeTokenMiser, allInvocations],
   );
   // The savings lens only exists where gating is part of the story. With the
@@ -518,7 +519,7 @@ export function ToolOutputIncidentExplorerWindow() {
           {...(currency ? { currency } : {})}
           gateCostMicros={tokenMiserGateCostMicros}
           gateTokens={tokenMiserGateTokens}
-          roughEdges={roughEdges}
+          gates={gateEntries}
           threadCostMicros={threadCostMicros}
           tokenMiser={activeTokenMiser}
         />
@@ -975,7 +976,7 @@ function TokenMiserSavingsLens(props: {
   currency?: string;
   gateCostMicros: number;
   gateTokens: number;
-  roughEdges: TokenMiserRoughEdge[];
+  gates: TokenMiserGateEntry[];
   threadCostMicros: number;
   tokenMiser?: ThreadToolAccounting["tokenMiser"];
 }) {
@@ -1121,35 +1122,135 @@ function TokenMiserSavingsLens(props: {
           : "nothing read back later"}
       </p>
 
-      <section className="incident-explorer__edges" aria-label="Rough edges">
-        <div className="incident-explorer__edges-head">
-          <p className="incident-explorer__eyebrow">Rough edges</p>
-          <span>Where the gate did not pay off</span>
-        </div>
-        {props.roughEdges.length === 0 ? (
-          <p className="incident-explorer__edges-empty">
-            Every gate in this thread saved more than it cost, and nothing was
-            read back through retrieval.
-          </p>
-        ) : (
-          <ul className="incident-explorer__edge-list">
-            {props.roughEdges.map((edge) => (
-              <li className="incident-explorer__edge" data-kind={edge.kind} key={edge.key}>
-                <span aria-hidden="true" className="incident-explorer__edge-stripe" />
-                <div>
-                  <code>{edge.title}</code>
-                  <p>{edge.detail}</p>
-                </div>
-                <div className="incident-explorer__edge-verdict">
-                  <span>{edge.label}</span>
-                  <b>{edge.value}</b>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
+      <TokenMiserGateList entries={props.gates} />
     </div>
+  );
+}
+
+const GATE_FILTERS: Array<{
+  key: "all" | TokenMiserGateOutcome;
+  label: string;
+}> = [
+  { key: "all", label: "All" },
+  { key: "win", label: "Wins" },
+  { key: "miss", label: "Misses" },
+  { key: "big-miss", label: "Big misses" },
+];
+
+/**
+ * Every gate, filterable by outcome, with the summary the parent actually got.
+ *
+ * The summary is the gate's product — without it the screen can only say how
+ * many tokens were traded, never what was traded for. Seeing it is also the
+ * only way to judge a "win": a gate that saved 9k tokens and threw away the one
+ * line that mattered is not a win, and no token count will say so.
+ */
+function TokenMiserGateList(props: { entries: TokenMiserGateEntry[] }) {
+  const [filter, setFilter] = useState<"all" | TokenMiserGateOutcome>("all");
+  const [expanded, setExpanded] = useState<string>();
+  const counts = props.entries.reduce(
+    (totals, entry) => ({ ...totals, [entry.outcome]: totals[entry.outcome] + 1 }),
+    { "big-miss": 0, miss: 0, win: 0 } as Record<TokenMiserGateOutcome, number>,
+  );
+  const visible = filter === "all"
+    ? props.entries
+    : props.entries.filter((entry) => entry.outcome === filter);
+
+  return (
+    <section className="incident-explorer__gates" aria-label="Gated calls">
+      <div className="incident-explorer__gates-head">
+        <p className="incident-explorer__eyebrow">Gated calls</p>
+        <div className="incident-explorer__gate-filters" role="group" aria-label="Filter gates by outcome">
+          {GATE_FILTERS.map((option) => {
+            const count = option.key === "all"
+              ? props.entries.length
+              : counts[option.key];
+            return (
+              <button
+                aria-pressed={filter === option.key}
+                className="incident-explorer__gate-filter"
+                disabled={count === 0 && option.key !== "all"}
+                key={option.key}
+                onClick={() => setFilter(option.key)}
+                type="button"
+              >
+                {option.label}
+                <em>{count.toLocaleString()}</em>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {visible.length === 0 ? (
+        <p className="incident-explorer__edges-empty">
+          No gated calls in this group.
+        </p>
+      ) : (
+        <ul className="incident-explorer__gate-list">
+          {visible.map((entry) => {
+            const isOpen = expanded === entry.interception.objectId;
+            const saved = entry.interception.estimatedParentTokensSaved;
+            return (
+              <li
+                className="incident-explorer__gate"
+                data-outcome={entry.outcome}
+                key={entry.interception.objectId}
+              >
+                <span aria-hidden="true" className="incident-explorer__edge-stripe" />
+                <button
+                  aria-expanded={isOpen}
+                  className="incident-explorer__gate-row"
+                  onClick={() => setExpanded(isOpen ? undefined : entry.interception.objectId)}
+                  type="button"
+                >
+                  <span className="incident-explorer__gate-identity">
+                    <code>{entry.command}</code>
+                    <span>
+                      {entry.edge
+                        ? entry.edge.label
+                        : `${formatCompactTokens(entry.interception.baselineParentTokens)} → `
+                          + `${formatCompactTokens(entry.interception.replacementTokens)} summary`}
+                    </span>
+                  </span>
+                  <span className="incident-explorer__gate-verdict">
+                    {saved >= 0 ? "+" : "−"}
+                    {formatCompactTokens(Math.abs(saved))}
+                  </span>
+                </button>
+                {isOpen ? (
+                  <div className="incident-explorer__gate-detail">
+                    {entry.edge ? <p>{entry.edge.detail}</p> : null}
+                    {entry.interception.summary ? (
+                      <>
+                        <p className="incident-explorer__gate-summary">
+                          {entry.interception.summary.summary}
+                        </p>
+                        {entry.interception.summary.usefulDetails.length > 0 ? (
+                          <ul>
+                            {entry.interception.summary.usefulDetails.map((detail) => (
+                              <li key={detail}>{detail}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        <p className="incident-explorer__gate-next">
+                          <b>Suggested next step</b>{" "}
+                          {entry.interception.summary.suggestedNextStep}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="incident-explorer__gate-summary">
+                        No summary was recorded for this gate.
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }
 

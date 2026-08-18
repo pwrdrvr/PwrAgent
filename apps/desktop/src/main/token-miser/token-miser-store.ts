@@ -62,6 +62,7 @@ export type TokenMiserThreadUsageSummary = TokenMiserUsageSummary & {
     cachedRevealedTokens: number;
     estimatedCachedReplayTokensSaved: number;
     replayTrackingVersion?: 2;
+    summary?: TokenMiserSummary;
   }>;
 };
 
@@ -294,6 +295,7 @@ export class TokenMiserStore {
           ...(entry.replayTrackingVersion
             ? { replayTrackingVersion: entry.replayTrackingVersion }
             : {}),
+          ...(entry.summary ? { summary: entry.summary } : {}),
         };
       }),
     };

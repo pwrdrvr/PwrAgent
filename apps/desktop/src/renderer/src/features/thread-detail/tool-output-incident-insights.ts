@@ -1,4 +1,5 @@
 import type {
+  ThreadTokenMiserInterceptionAccounting,
   ThreadToolInvocationCategory,
   ThreadToolInvocationRecord,
   ThreadToolAccounting,
@@ -205,6 +206,66 @@ export function buildTokenMiserRoughEdges(
   return edges.sort((left, right) =>
     ROUGH_EDGE_ORDER[left.kind] - ROUGH_EDGE_ORDER[right.kind]
   );
+}
+
+/**
+ * Every gate, classified by how it actually turned out.
+ *
+ * The rough-edges list answered "where did this go wrong", which is only useful
+ * once you can also see what went right. Outcome is one axis over the same set,
+ * so the operator can move between all / wins / misses instead of seeing only
+ * the failures and inferring the rest.
+ */
+export type TokenMiserGateOutcome = "win" | "miss" | "big-miss";
+
+export type TokenMiserGateEntry = {
+  command: string;
+  edge?: TokenMiserRoughEdge;
+  interception: ThreadTokenMiserInterceptionAccounting;
+  outcome: TokenMiserGateOutcome;
+};
+
+export function buildTokenMiserGateEntries(
+  invocations: readonly ThreadToolInvocationRecord[],
+  tokenMiser: ThreadToolAccounting["tokenMiser"],
+): TokenMiserGateEntry[] {
+  const interceptions = tokenMiser?.interceptions ?? [];
+  if (interceptions.length === 0) {
+    return [];
+  }
+  const edgesByKey = new Map<string, TokenMiserRoughEdge>();
+  for (const edge of buildTokenMiserRoughEdges(invocations, tokenMiser)) {
+    edgesByKey.set(edge.key, edge);
+  }
+  const invocationByToolUseId = new Map<string, ThreadToolInvocationRecord>();
+  for (const invocation of invocations) {
+    if (invocation.itemId) {
+      invocationByToolUseId.set(invocation.itemId, invocation);
+    }
+  }
+  return interceptions.map((interception) => {
+    const command =
+      invocationByToolUseId.get(interception.toolUseId)?.normalizedCommand
+      ?? interception.toolName;
+    // Rough edges are keyed by object id, except the repeat finding which is
+    // reported once per command; look for both so a repeated gate still shows
+    // its finding on every row it applies to.
+    const edge = edgesByKey.get(interception.objectId)
+      ?? edgesByKey.get(`repeat:${command}`)
+      ?? edgesByKey.get(`truncated:${interception.objectId}`);
+    const outcome: TokenMiserGateOutcome =
+      interception.estimatedParentTokensSaved <= 0
+        ? "big-miss"
+        : edge
+          ? "miss"
+          : "win";
+    return {
+      command,
+      ...(edge ? { edge } : {}),
+      interception,
+      outcome,
+    };
+  });
 }
 
 export type TurnCostRow = {
