@@ -1,5 +1,3 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import type { MessagingCredentialValidationResult } from "@pwragent/messaging-interface";
 import type {
   SettingsCredentialTestKind,
@@ -13,8 +11,11 @@ import {
   compareCodexCliVersions,
   MINIMUM_CODEX_CLI_VERSION,
 } from "@pwrdrvr/codex-discovery";
-
-const execFileAsync = promisify(execFile);
+import { createCommandInvocation } from "@pwrdrvr/agent-transport";
+import {
+  resolveWindowsCodexLaunchCommand,
+  runCodexOneShot,
+} from "../codex-windows-launch";
 
 const log = getMainLogger("pwragent:credential-tester");
 
@@ -398,10 +399,24 @@ function clipError(error: unknown): string {
 async function defaultRunCodexVersion(
   command: string,
 ): Promise<{ stdout: string; stderr: string }> {
-  const { stdout, stderr } = await execFileAsync(command, ["--version"], {
-    env: buildPwrAgentChildProcessEnv(process.env),
-    timeout: DEFAULT_PROBE_TIMEOUT_MS,
+  const env = buildPwrAgentChildProcessEnv(process.env);
+  // Probe the command that would actually be launched, so a `.ps1` in config
+  // cannot report Connected while the app-server launch resolves elsewhere.
+  const invocation = createCommandInvocation({
+    command: resolveWindowsCodexLaunchCommand({ command }),
+    args: ["--version"],
+    env,
   });
+  const { stdout, stderr } = await runCodexOneShot(
+    invocation.command,
+    invocation.args,
+    {
+      env,
+      timeout: DEFAULT_PROBE_TIMEOUT_MS,
+      windowsHide: true,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+    },
+  );
   return {
     stdout: stdout?.toString?.() ?? "",
     stderr: stderr?.toString?.() ?? "",

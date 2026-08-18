@@ -585,6 +585,30 @@ export type DesktopCodexDiscoveryCandidate = {
   failureReason?: string;
 };
 
+/**
+ * Whether a discovered command is safe to launch.
+ *
+ * `executable` alone is not that test. Discovery derives it from
+ * `fs.access(X_OK)`, which succeeds for any existing file on Windows, so an
+ * npm sh shim scores `true` while being unstartable. Selection in the main
+ * process and the Use affordance in Settings must agree on this, so the
+ * predicate lives beside the type both sides already import rather than being
+ * hand-copied into each.
+ */
+export function isValidatedDiscoveryCandidate(candidate: {
+  executable: boolean;
+  failureReason?: string;
+  version?: string;
+  versionFailureReason?: string;
+}): boolean {
+  return (
+    candidate.executable
+    && Boolean(candidate.version)
+    && !candidate.failureReason
+    && !candidate.versionFailureReason
+  );
+}
+
 export type DesktopCodexDiscoverySnapshot = {
   selectedCommand?: string;
   selectedSource?: DesktopCodexCandidateSource;

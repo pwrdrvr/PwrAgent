@@ -15,6 +15,7 @@ import {
   resolveCodexCommand,
   type ResolvedCodexCommandCandidate,
 } from "@pwrdrvr/codex-discovery";
+import { resolveWindowsCodexLaunchCommand } from "../codex-windows-launch";
 
 const codexTransportLog = getMainLogger("pwragent:codex-transport");
 
@@ -40,6 +41,8 @@ export type StdioJsonRpcTransportOptions = {
   }) => Promise<ResolvedCodexCommandCandidate>;
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
   platform?: NodeJS.Platform;
+  /** Test seam for the Windows shim-sibling lookup. */
+  commandExists?: (candidate: string) => boolean;
 };
 
 export { compareCodexCliVersions };
@@ -128,8 +131,17 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
     });
     this.assertCurrentGeneration(generation);
     const childEnv = buildPwrAgentChildProcessEnv(commandEnv);
+    // A `.ps1` can still reach us from config or a stale cache, and routing a
+    // long-lived stdio JSON-RPC server through PowerShell never completes the
+    // `initialize` handshake. Swap it for the sibling Windows can start.
     const invocation = createCommandInvocation({
-      command: command.command,
+      command: resolveWindowsCodexLaunchCommand({
+        command: command.command,
+        ...(this.options.commandExists
+          ? { exists: this.options.commandExists }
+          : {}),
+        ...(this.options.platform ? { platform: this.options.platform } : {}),
+      }),
       args: ["app-server", ...args],
       env: childEnv,
       platform: this.options.platform,

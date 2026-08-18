@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { isValidatedDiscoveryCandidate } from "@pwragent/shared";
 import type {
   BackendModelOption,
   BackendSummary,
@@ -29,8 +30,10 @@ import {
 } from "./CodexAuthProfileSelect";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
 import { SettingsSwitch } from "./SettingsSwitch";
-
-type CodexPathMode = "auto" | "specified";
+import {
+  commandDiscoveryFailureDetail,
+  describeCommandDiscoveryFailure,
+} from "./command-discovery-failure";
 
 const UNSPECIFIED_SOURCE_MODEL_KEY = "\0unspecified";
 
@@ -105,9 +108,6 @@ export function ModelsSettings(props: {
   onManagedGrokBuildsChange?: (enabled: boolean) => Promise<boolean>;
 }) {
   const [codexPath, setCodexPath] = useState(props.snapshot.models.codex.path.value);
-  const [codexMode, setCodexMode] = useState<CodexPathMode>(
-    props.snapshot.models.codex.path.value.trim() ? "specified" : "auto",
-  );
   const [backends, setBackends] = useState<BackendSummary[]>(
     props.cachedBackends ?? [],
   );
@@ -115,8 +115,24 @@ export function ModelsSettings(props: {
   const [refreshingCatalog, setRefreshingCatalog] = useState(false);
   const codex = props.snapshot.models.codex;
   const envForced = codex.path.source === "env";
+  // Automatic sources, plus any fixed candidate that failed. An operator who
+  // pins a path needs to see why it was rejected — filtering config/env rows
+  // out unconditionally hid the failure reason from the only person who could
+  // act on it, including the "PowerShell shim" diagnostic, which is only ever
+  // emitted for a path someone typed.
+  // Automatic sources always list. A fixed (env/config) row lists when it
+  // failed, so the operator can see why the path they pinned was rejected,
+  // and when it is the current selection, so there is a "Using" row to point
+  // at. Gate on the same predicate the row and the main process use: keying
+  // on `failureReason` alone missed the most common rejection shape, which
+  // upstream reports as executable:true with the reason in
+  // `versionFailureReason`.
   const autoCandidates = codex.discovery.candidates.filter(
-    (candidate) => candidate.source === "path" || candidate.source === "application",
+    (candidate) =>
+      candidate.source === "path"
+      || candidate.source === "application"
+      || candidate.selected
+      || !isValidatedDiscoveryCandidate(candidate),
   );
   // Per-field source pill text — shows where the effective value
   // comes from (config / env override / default). Used on both the
@@ -130,7 +146,6 @@ export function ModelsSettings(props: {
 
   useEffect(() => {
     setCodexPath(codex.path.value);
-    setCodexMode(codex.path.value.trim() || envForced ? "specified" : "auto");
   }, [codex.path.value, envForced]);
 
   useEffect(() => {
@@ -186,6 +201,14 @@ export function ModelsSettings(props: {
   }, [props.desktopApi]);
 
   const saveCodexPath = (path: string): void => {
+    // Skip a no-op write. Without this, blur alone flips `saving` true
+    // synchronously, which disables the button being clicked before mouseup
+    // and Chromium then dispatches no click at all — so clicking Use while
+    // focus is in this field silently does nothing. It also stops a plain
+    // tab-through from rewriting config.toml and re-running discovery.
+    if (path.trim() === codex.path.value.trim()) {
+      return;
+    }
     void props.onSaveCodexPath(path.trim());
   };
 
@@ -215,68 +238,68 @@ export function ModelsSettings(props: {
       <SettingsSection eyebrow="Models" title="Codex">
         <div className="settings-fields">
           <SettingsField
-            label="Codex selection"
-            sub="Pick the Codex binary to invoke for new threads."
+            label="Codex path"
+            sub="Absolute path to the Codex binary. Leave blank to use auto discovery."
             source={codexSource}
             control={
-              <div
-                className="settings-segmented"
-                role="radiogroup"
-                aria-label="Codex selection mode"
-              >
-                <button
-                  aria-checked={codexMode === "auto" && !envForced}
-                  className={`settings-segmented__button${
-                    codexMode === "auto" && !envForced ? " is-active" : ""
-                  }`}
-                  disabled={props.saving || envForced}
-                  role="radio"
-                  type="button"
-                  onClick={() => {
-                    setCodexMode("auto");
-                    setCodexPath("");
-                    saveCodexPath("");
-                  }}
-                >
-                  Auto Discovery - Use Newest
-                </button>
-                <button
-                  aria-checked={codexMode === "specified" || envForced}
-                  className={`settings-segmented__button${
-                    codexMode === "specified" || envForced ? " is-active" : ""
-                  }`}
-                  disabled={props.saving || envForced}
-                  role="radio"
-                  type="button"
-                  onClick={() => setCodexMode("specified")}
-                >
-                  Specified Path
-                </button>
-              </div>
-            }
-          />
-
-          {codexMode === "specified" || envForced ? (
-            <SettingsField
-              label="Codex path"
-              sub="Absolute path to the Codex binary to invoke."
-              control={
+              <>
                 <input
                   aria-label="Codex path"
                   className="settings-input"
                   disabled={props.saving || envForced}
-                  placeholder="Path to codex"
+                  placeholder="Auto discovery"
                   value={codexPath}
+                  // Blur still commits. Requiring Enter or the button meant
+                  // clicking Test, switching fields, or closing Settings threw
+                  // the typed path away with no feedback, and the effect that
+                  // syncs from the snapshot then reset the box.
                   onBlur={() => saveCodexPath(codexPath)}
                   onChange={(event) => setCodexPath(event.currentTarget.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      saveCodexPath(codexPath);
+                    }
+                  }}
                 />
-              }
-            />
-          ) : null}
+                <div className="settings-inline-actions">
+                  <button
+                    className="button button--primary"
+                    disabled={
+                      props.saving
+                      || envForced
+                      || codexPath.trim() === codex.path.value.trim()
+                    }
+                    type="button"
+                    onClick={() => saveCodexPath(codexPath)}
+                  >
+                    Save path
+                  </button>
+                  <button
+                    className="button button--secondary"
+                    disabled={
+                      props.saving || envForced || !codex.path.value.trim()
+                    }
+                    type="button"
+                    onClick={() => {
+                      setCodexPath("");
+                      saveCodexPath("");
+                    }}
+                  >
+                    Use auto discovery
+                  </button>
+                </div>
+              </>
+            }
+            help={
+              envForced
+                ? "PWRAGENT_CODEX_COMMAND controls this path for the current process."
+                : undefined
+            }
+          />
 
           <SettingsField
             label="Available paths"
-            sub="Detected on this machine. The first listed will be used."
+            sub="Detected on this machine. The newest supported version is used automatically."
             source={codexSource}
             control={
               <div
@@ -292,7 +315,6 @@ export function ModelsSettings(props: {
                       candidate={candidate}
                       disabled={props.saving || envForced}
                       onUse={(command) => {
-                        setCodexMode("specified");
                         setCodexPath(command);
                         saveCodexPath(command);
                       }}
@@ -1354,46 +1376,48 @@ function CodexCandidateRow(props: {
   onUse: (command: string) => void;
 }) {
   const candidate = props.candidate;
-  const unavailableLabel = describeCommandDiscoveryFailure(candidate.failureReason);
-  const status = !candidate.executable
-    ? (unavailableLabel ?? "Not executable")
-    : candidate.selected
-      ? "Using"
-      : "Available";
-  const version =
-    candidate.version
-    ?? describeCommandDiscoveryFailure(candidate.versionFailureReason)
-    ?? unavailableLabel
-    ?? "version unknown";
+  const reason = candidate.failureReason ?? candidate.versionFailureReason;
+
+  // One chip per fact: where it came from, and either its version or the one
+  // reason it cannot be used. The old row emitted the failure twice — once as
+  // the version and again as the status — which is what put `spawn EPERM`
+  // on the same row two ways.
+  // `executable` is not a usability test on Windows: it comes from
+  // fs.access(X_OK), which succeeds for any existing file, so an sh shim
+  // scores true. Gate on the same predicate the main process selects with.
+  const usable = isValidatedDiscoveryCandidate(candidate);
 
   const chips: SettingsPathRowChip[] = [
-    { label: candidate.source, tone: "muted" },
-    { label: version, tone: "muted" },
+    { key: "source", label: candidate.source, tone: "muted" },
   ];
-  if (!candidate.selected) {
+  // A version is worth showing whenever we have one, including on a rejected
+  // candidate — "Codex too old" without a number leaves the operator unable
+  // to tell how far behind they are.
+  if (candidate.version) {
+    chips.push({ key: "version", label: candidate.version, tone: "muted" });
+  }
+  if (usable) {
+    if (!candidate.selected) {
+      chips.push({ key: "status", label: "Available", tone: "muted" });
+    }
+  } else {
     chips.push({
-      label: status,
-      tone: candidate.executable ? "muted" : "err",
+      key: "status",
+      label: describeCommandDiscoveryFailure(reason) ?? "Not executable",
+      tone: "err",
     });
   }
 
   return (
     <SettingsPathRow
       title={candidate.command}
+      path={commandDiscoveryFailureDetail(reason)}
+      pathIsDetail
       chips={chips}
       selected={candidate.selected}
       selectedLabel="Using"
-      disabled={props.disabled || !candidate.executable}
-      onUse={() => props.onUse(candidate.command)}
+      disabled={props.disabled || !usable}
+      onUse={usable ? () => props.onUse(candidate.command) : undefined}
     />
   );
-}
-
-function describeCommandDiscoveryFailure(reason?: string): string | undefined {
-  if (!reason) return undefined;
-  if (reason === "not_found") return "Missing";
-  if (reason === "not_executable") return "Not executable";
-  if (reason === "version_not_reported") return "Version unknown";
-  if (reason === "codex_too_old") return "Codex too old";
-  return reason;
 }

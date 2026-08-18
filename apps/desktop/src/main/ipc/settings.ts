@@ -101,6 +101,7 @@ import type {
   AcpRegistrySnapshot,
 } from "../acp/acp-registry-types";
 import { getAppStateDb, getAppStateMode } from "../state/app-state";
+import { resolveWindowsCodexLaunchCommand } from "../codex-windows-launch";
 import {
   normalizeProfileName,
   resolveActiveProfileDir,
@@ -760,7 +761,12 @@ async function resolveCodexCommandForProfileWorkflow(
   if (!command) {
     throw new Error("No Codex command is configured or discoverable.");
   }
-  return command;
+  // Codex login and auth-status spawn this command the same way the transport
+  // and the credential tester do, so they need the same Windows shim redirect.
+  // Without it a `.ps1` reaching us from a stale cache launches threads fine
+  // while onboarding login fails, which is the split this redirect exists to
+  // prevent.
+  return resolveWindowsCodexLaunchCommand({ command });
 }
 
 /**
