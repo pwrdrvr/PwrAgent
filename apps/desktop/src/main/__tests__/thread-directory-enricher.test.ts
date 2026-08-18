@@ -285,4 +285,55 @@ describe("createThreadDirectoryEnricher", () => {
       linkedDirectories: [],
     });
   });
+
+  it("does not cache a miss, so a directory created later resolves immediately", async () => {
+    const projectPath = "/Users/huntharo/.pwragent/profiles/default/projects";
+    let directoryExists = false;
+    vi.doMock("node:fs/promises", () => ({
+      // The scratch projects root is created lazily by the first thread that
+      // needs it, so the first probe legitimately misses.
+      access: vi.fn(async () => {
+        if (!directoryExists) {
+          throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+        }
+      }),
+      readFile: vi.fn(async () => {
+        throw Object.assign(new Error("EISDIR"), { code: "EISDIR" });
+      }),
+    }));
+    vi.doMock("node:child_process", () => ({
+      // Not a git repository, so the probe fails and the enricher falls back
+      // to describing the directory itself.
+      execFile: vi.fn((_cmd: string, _args: string[], _opts: unknown, done: (
+        error: Error | null,
+        result?: { stdout: string; stderr: string },
+      ) => void) => {
+        done(new Error("not a git repository"));
+      }),
+    }));
+
+    const { createThreadDirectoryEnricher } = await import(
+      "../app-server/thread-directory-enricher"
+    );
+    const enricher = createThreadDirectoryEnricher({ cacheTtlMs: 60_000 });
+
+    await expect(enricher(projectPath)).resolves.toEqual({
+      linkedDirectories: [],
+    });
+
+    directoryExists = true;
+
+    // A cached miss would serve the empty result for the full 60s TTL and keep
+    // the thread reading as unlinked long after the directory appeared.
+    await expect(enricher(projectPath)).resolves.toEqual({
+      linkedDirectories: [
+        {
+          id: expectedDir(projectPath),
+          path: expectedDir(projectPath),
+          label: "projects",
+          kind: "local",
+        },
+      ],
+    });
+  });
 });

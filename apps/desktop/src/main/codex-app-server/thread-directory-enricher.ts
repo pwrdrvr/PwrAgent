@@ -322,6 +322,26 @@ export function createThreadDirectoryEnricher(params?: {
 
     const inFlight = loadThreadDirectoryEnrichment(normalizedKey)
       .then((value) => {
+        // A miss is deliberately left uncached, matching the ACP worktree
+        // resolver (`resolveAcpLinkedDirectories` persists only a directory
+        // it actually resolved). `loadThreadDirectoryEnrichment` yields no
+        // directories only when `access()` on the path fails — every other
+        // outcome, including a git probe that fails or times out, still
+        // returns one. Note what that does and does not prove: `access()`
+        // also fails for a path that is merely unreachable right now (denied
+        // permissions, an unmounted or stalled network volume), so a miss
+        // means "unresolved", not "deleted" — the same distinction the thread
+        // header's copy draws. Retrying is worth it because the common causes
+        // are transient: a scratch project root and a worktree are both
+        // created moments after a thread first refers to them. Caching pins
+        // the thread to "no linked project" for the rest of the TTL after the
+        // directory appears, which is long enough on a slow machine to show
+        // a workspace warning for a directory that exists by the time anyone
+        // reads it. Recomputing costs one `access()` and never spawns git.
+        if (value.linkedDirectories.length === 0) {
+          cache.delete(normalizedKey);
+          return value;
+        }
         cache.set(normalizedKey, {
           expiresAt: Date.now() + cacheTtlMs,
           value,

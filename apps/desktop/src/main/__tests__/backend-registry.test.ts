@@ -10472,6 +10472,88 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("skips Codex directory backfill when the overlay owns a handoff workspace", async () => {
+    const projectA = "/Users/huntharo/projects/ProjectA";
+    // The provider still reports the pre-handoff worktree. That directory was
+    // removed when the workspace moved to a freshly hashed worktree, so
+    // enrichment resolves nothing from it and reports no linked directories.
+    const staleWorktreePath = "/Users/huntharo/.codex/worktrees/mse9d2vb/ProjectA";
+    const handoffWorktreePath = "/Users/huntharo/.codex/worktrees/msf1iq9n/ProjectA";
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-1",
+          title: "ProjectA worktree",
+          titleSource: "explicit",
+          source: "codex",
+          projectKey: staleWorktreePath,
+          createdAt: 1_000,
+          updatedAt: 1_000,
+          linkedDirectories: [],
+        },
+      ],
+    });
+    // No implementation: the assertion below is that this is never invoked,
+    // so any body would be unreachable.
+    const enrichThreadDirectories = vi.fn();
+    Object.assign(codexClient, { enrichThreadDirectories });
+    const overlayStore = createOverlayStoreMock({
+      overlays: {
+        "codex:thread-1": {
+          backend: "codex",
+          threadId: "thread-1",
+          executionMode: "default",
+          extraLinkedDirectories: [
+            {
+              id: "pwragent-handoff:codex:thread-1",
+              label: "ProjectA",
+              path: projectA,
+              worktreePath: handoffWorktreePath,
+              kind: "worktree",
+            },
+          ],
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+    });
+
+    await registry.listThreads({
+      backend: "codex",
+      callerReason: "startup-prewarm",
+    });
+
+    // The handoff overlay is the authoritative workspace selection, so the
+    // repair gate refuses this thread no matter what enrichment returns.
+    // Enriching it anyway cannot change stored state; it only spends a probe
+    // on a removed path and logs a missing-relationship warning for a thread
+    // whose directory the overlay already records correctly.
+    expect(enrichThreadDirectories).not.toHaveBeenCalled();
+    await expect(
+      overlayStore.getThreadOverlayState({ backend: "codex", threadId: "thread-1" }),
+    ).resolves.toMatchObject({
+      extraLinkedDirectories: [
+        expect.objectContaining({
+          id: "pwragent-handoff:codex:thread-1",
+          worktreePath: handoffWorktreePath,
+        }),
+      ],
+    });
+
+    // Skipping backfill must not disturb the workspace sync that carries the
+    // handoff to the provider — that is what migrates the stale projectKey.
+    await vi.waitFor(() => {
+      expect(codexClient.lastUpdateThreadWorkspaceParams).toEqual({
+        threadId: "thread-1",
+        cwd: handoffWorktreePath,
+      });
+    });
+
+    await registry.close();
+  });
+
   it("keeps aggregate list cache sensitive to Codex directory backfill", async () => {
     const worktreePath = "/Users/huntharo/.codex/worktrees/wt1/ProjectA";
     const codexClient = new MockBackendClient({
@@ -10784,7 +10866,12 @@ script = "echo setup"
       callerReason: "startup-prewarm",
     });
 
-    expect(enrichThreadDirectories).toHaveBeenCalledTimes(1);
+    // This used to enrich and then discard the result at the repair gate. The
+    // gate refuses every handoff-overlay thread, so the candidate filter now
+    // skips the probe outright — same guarantee below, without spending a git
+    // probe on the provider's stale worktree or logging a missing-relationship
+    // warning when that worktree has since been removed.
+    expect(enrichThreadDirectories).not.toHaveBeenCalled();
     await vi.waitFor(() => {
       expect(codexClient.lastUpdateThreadWorkspaceParams).toEqual({
         threadId: "thread-1",

@@ -94,7 +94,17 @@ type ThreadHeaderProps = {
   };
 };
 
-function missingDirectoryPath(thread: NavigationThreadSummary): string | undefined {
+/**
+ * The thread records a working directory the backend reported, but nothing
+ * resolved it to a linked project. Deliberately NOT an "it was deleted" test:
+ * the renderer never stats a path, and an empty `linkedDirectories` has
+ * several causes besides absence — a cwd that is not a git checkout, a git
+ * probe that failed or timed out, or a backend that reports no cwd at all.
+ * Absence is only one of them, so the copy this drives must stay limited to
+ * what is actually known here. Do not reword it back into a claim about the
+ * directory no longer existing without a real absence signal on the summary.
+ */
+function unlinkedWorkspacePath(thread: NavigationThreadSummary): string | undefined {
   const projectKey = thread.projectKey?.trim();
   if (!projectKey || thread.linkedDirectories.length > 0) {
     return undefined;
@@ -104,7 +114,7 @@ function missingDirectoryPath(thread: NavigationThreadSummary): string | undefin
 }
 
 export function ThreadHeader(props: ThreadHeaderProps) {
-  const missingPath = missingDirectoryPath(props.thread);
+  const unlinkedPath = unlinkedWorkspacePath(props.thread);
   const projectLabel = props.projectLabel?.trim();
   const branchDrifted = isBranchDrifted(
     props.thread.gitBranch,
@@ -354,10 +364,14 @@ export function ThreadHeader(props: ThreadHeaderProps) {
           />
         </div>
       </div>
-      {missingPath ? (
-        <p className="thread-header__warning" role="alert">
-          This thread is linked to a directory that no longer exists:{" "}
-          <code>{missingPath}</code>
+      {unlinkedPath ? (
+        // `role="status"` (polite), not `alert`: this reports an unresolved
+        // link, not a failure, and it is derived state that re-announces on
+        // every thread selection. Matches the branch-drift banner right
+        // below, which shares this class and is the more urgent of the two.
+        <p className="thread-header__warning" role="status">
+          This thread's recorded working directory is not linked to a project:{" "}
+          <code>{unlinkedPath}</code>
         </p>
       ) : null}
       {branchDrifted ? (
