@@ -2,6 +2,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -208,6 +209,13 @@ const STAR_FIELD = generateStarField(STAR_COUNT);
 const StarMapSky = memo(function StarMapSky(props: {
   ref: RefObject<SVGSVGElement | null>;
 }) {
+  // SVG ids are document-wide, and `<use>` resolves against the document:
+  // a second map in the same document would otherwise borrow — or, once
+  // the first unmounted, lose — this one's tile. React's id is wrapped in
+  // punctuation that is legal in an `id` but not worth trusting in a
+  // fragment reference, so only its alphanumerics are kept.
+  const tileId = `star-map-sky-tile-${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
+  const tileHref = `#${tileId}`;
   return (
     <svg
       ref={props.ref}
@@ -217,7 +225,7 @@ const StarMapSky = memo(function StarMapSky(props: {
       aria-hidden="true"
     >
       <defs>
-        <g id="star-map-sky-tile">
+        <g id={tileId}>
           {STAR_FIELD.map((star, index) => (
             <circle
               key={index}
@@ -230,10 +238,10 @@ const StarMapSky = memo(function StarMapSky(props: {
           ))}
         </g>
       </defs>
-      <use href="#star-map-sky-tile" x={0} y={0} />
-      <use href="#star-map-sky-tile" x={100} y={0} />
-      <use href="#star-map-sky-tile" x={0} y={100} />
-      <use href="#star-map-sky-tile" x={100} y={100} />
+      <use href={tileHref} x={0} y={0} />
+      <use href={tileHref} x={100} y={0} />
+      <use href={tileHref} x={0} y={100} />
+      <use href={tileHref} x={100} y={100} />
     </svg>
   );
 });
@@ -307,6 +315,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * the viewport, and `paintView` runs on gesture frames outside React, so
    * it reads the measurement from a ref rather than closing over state and
    * changing identity — and every gesture's captured copy of it — on resize.
+   * Written by the measure below, in the same call that sets the state.
    */
   const viewportSizeRef = useRef(viewportSize);
   const [intakeTarget, setIntakeTarget] = useState<IntakeDialogTarget>();
@@ -457,6 +466,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
     const measure = () => {
       const rect = element.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
+        // A resize changes the tile the sky's parallax wraps to. Re-wrapped
+        // here, synchronously in the observer callback, rather than in an
+        // effect off the state below: the observer runs after layout and
+        // before paint, while the state commit lands a frame later, and a
+        // stale wrap from a wider window leaves the sky short of the new
+        // right or bottom edge for that frame.
+        viewportSizeRef.current = { width: rect.width, height: rect.height };
+        paintView(viewRef.current);
         setViewportSize((current) =>
           current.width === rect.width && current.height === rect.height
             ? current
@@ -470,16 +487,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
-
-  // A resize changes the tile the sky's parallax wraps to. Re-painting the
-  // live view re-wraps the offset against the new size before the frame
-  // shows; a stale wrap from a wider window can leave the sky short of the
-  // window's right or bottom edge.
-  useLayoutEffect(() => {
-    viewportSizeRef.current = viewportSize;
-    paintView(viewRef.current);
-  }, [paintView, viewportSize]);
+  }, [paintView]);
 
   // Card height changes are driven by the browser's layout observer rather
   // than a synchronous offsetHeight sweep after every render. Active threads

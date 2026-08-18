@@ -10863,6 +10863,23 @@ textarea,
   transition: transform 240ms ease, opacity 240ms ease;
 }
 
+/* The sky's parallax offset. Registered so it does NOT inherit: `paintView`
+   rewrites it on every gesture frame, and an inherited custom property
+   would dirty the style of every star under the sky — the tile's circles
+   plus four `<use>` instances of them — before the compositor saw the
+   transform. Non-inherited, the write touches the sky element alone. */
+@property --star-map-sky-x {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --star-map-sky-y {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
 /* The sky is a 2×2 tiling of one viewport-sized star field, twice the
    window on each axis, and slides behind the map as a parallax layer.
    `paintView` writes the offset — always within one tile, (-100%, 0] —
@@ -10876,15 +10893,19 @@ textarea,
   height: 200%;
   color: color-mix(in srgb, var(--text-primary) 78%, transparent);
   pointer-events: none;
-  transform: translate(var(--star-map-sky-x, 0px), var(--star-map-sky-y, 0px));
+  transform: translate(var(--star-map-sky-x), var(--star-map-sky-y));
 }
 
-/* Promoted alongside the canvas for the pointer drag only: the parallax is
-   a per-frame transform on a surface four times the window, and a
-   permanently promoted sky is exactly the retained compositor surface the
-   canvas rule (`.star-map__viewport.is-panning .star-map__canvas`) avoids. */
-.star-map__viewport.is-panning .star-map__sky {
-  will-change: transform;
+@media (prefers-reduced-motion: no-preference) {
+  /* Promoted alongside the canvas for the pointer drag only: the parallax
+     is a per-frame transform on a surface four times the window, and a
+     permanently promoted sky is exactly the retained compositor surface the
+     canvas rule (`.star-map__viewport.is-panning .star-map__canvas`)
+     avoids. Not under reduced motion either — the sky is pinned there and
+     a promoted layer would buy nothing. */
+  .star-map__viewport.is-panning .star-map__sky {
+    will-change: transform;
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

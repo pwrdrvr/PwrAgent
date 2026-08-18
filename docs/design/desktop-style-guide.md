@@ -298,6 +298,11 @@ Avoid:
 - theatrical page entrances
 - decorative parallax or float effects
 
+One exception: the Star Map sky parallaxes behind the map as the operator
+pans it. That is a direct-manipulation depth cue, not decoration — it only
+moves when the map moves, by a tenth as far, and it is pinned under
+`prefers-reduced-motion`. Do not extend it to other surfaces.
+
 ## Copy Rules
 
 PwrAgent UI copy should sound like product UI, not demo narration.

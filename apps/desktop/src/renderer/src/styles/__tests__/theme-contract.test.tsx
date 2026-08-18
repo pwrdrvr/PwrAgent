@@ -341,6 +341,11 @@ describe("Tangerine Terminal theme contract", () => {
       // lines offset themselves by; both are layout, not theme.
       "automations-header-h",
       "automation-row-h",
+      // Star Map sky parallax offset — registered with `@property` as a
+      // non-inherited length and written per gesture frame by the screen.
+      // Geometry, not theme.
+      "star-map-sky-x",
+      "star-map-sky-y",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token
