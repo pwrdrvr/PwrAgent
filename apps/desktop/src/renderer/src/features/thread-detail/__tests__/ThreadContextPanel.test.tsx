@@ -2481,6 +2481,93 @@ describe("ThreadContextPanel", () => {
   // Gate rows fold under the turn they happened in. The turn card carries one
   // summary line that sums every gate; only a gate past ten cents gets its own
   // card when expanded, the rest are one line.
+  // A gate whose parent turn has no usage row — a native review's inner turn,
+  // or a gate persisted before parentTurnId existed — cannot nest. Unpriced,
+  // it was a full card saying nothing; that is suppressed. Priced, it gets the
+  // same compact group a turn would, standing in for its cards.
+  it("suppresses unpriced orphan gates and compacts priced ones", () => {
+    const gateLine = (id: string, createdAt: number) => ({
+      ...buildMonitorLine({
+        model: "gpt-5.6-luna",
+        sourceItemId: `system:token-miser:${id}`,
+      }),
+      createdAt,
+      usageLineId: `gate-line-${id}`,
+      totalCostMicros: 2_000,
+    });
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_010_000,
+            monitorId: "system:token-miser:review-a",
+            parentTurnId: "review-inner-turn",
+            status: "success",
+            task: "Gate Bash output",
+            updatedAt: 1_800_000_010_000,
+          },
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_020_000,
+            monitorId: "system:token-miser:review-b",
+            parentTurnId: "review-inner-turn",
+            status: "success",
+            task: "Gate Bash output",
+            updatedAt: 1_800_000_020_000,
+          },
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_030_000,
+            monitorId: "system:token-miser:priced-orphan",
+            parentTurnId: "another-turn-with-no-row",
+            status: "success",
+            task: "Gate Bash output",
+            tokenMiserAccounting: {
+              baselineParentCostMicros: 50_000,
+              baselineParentTokens: 10_000,
+              cachedReplayCount: 0,
+              cachedBaselineTokens: 0,
+              cachedBaselineCostMicros: 0,
+              currency: "USD",
+              gateCostMicros: 2_000,
+              gateModel: "gpt-5.6-luna",
+              gateTotalTokens: 2_100,
+              originalModel: "gpt-5.6-sol",
+              revealedParentCostMicros: 1_500,
+              revealedParentTokens: 300,
+              cachedRevealedTokens: 0,
+              cachedRevealedCostMicros: 0,
+              savingsMicros: 46_500,
+            },
+            updatedAt: 1_800_000_030_000,
+          },
+        ],
+      },
+      pricing: {
+        lines: [
+          gateLine("review-a", 1_800_000_010_000),
+          gateLine("review-b", 1_800_000_020_000),
+          gateLine("priced-orphan", 1_800_000_030_000),
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    // The two unpriced review gates render nothing at all.
+    expect(screen.queryByText("Token Miser gate")).not.toBeInTheDocument();
+    // The priced orphan is one compact group, not a card.
+    const groups = screen.getAllByRole("button", { name: /Token Miser/ });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toHaveTextContent("1 gate");
+    expect(groups[0]).toHaveTextContent("$0.047 saved");
+    expect(screen.queryAllByLabelText("Token Miser savings")).toHaveLength(0);
+  });
+
   it("nests Token Miser gates under their turn and folds small ones", () => {
     const gateAccounting = (savingsMicros: number) => ({
       baselineParentCostMicros: 50_000,

@@ -22038,6 +22038,18 @@ a.transcript-message__messaging-origin:focus-visible {
   font-size: 10.5px;
 }
 
+/* An orphan group stands in for its gates' cards; the group carries its own
+   chrome, so the list item wrapping it is transparent. */
+.pricing-usage-row--orphan-gates {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.pricing-usage-row--orphan-gates .pricing-token-miser {
+  margin: 0;
+}
+
 .pricing-token-miser__folded {
   margin: 4px 0 0;
   color: var(--text-muted);
