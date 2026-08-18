@@ -6,9 +6,9 @@ import type {
   DesktopApplicationsSnapshot,
   MarkdownFileViewerContext,
 } from "@pwragent/shared";
-import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../lib/thread-links";
+import { formatActivityText } from "./activity-path-display";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 import {
   isThreadReferenceToolDetail,
@@ -314,59 +314,6 @@ function buildActivityCopyText(entry: AppServerThreadActivityEntry): string {
   return [entry.summary, ...entry.details.map((detail) => detail.label)]
     .filter((text) => text.trim().length > 0)
     .join("\n");
-}
-
-function formatActivityText(
-  text: string,
-  details: AppServerThreadActivityEntry["details"],
-  directoryPaths: string[] | undefined,
-): string {
-  const paths = details
-    .filter((detail): detail is typeof detail & { path: string } => Boolean(detail.path))
-    .map((detail) => ({
-      absolutePath: detail.path,
-      displayPath: formatPathRelativeToDirectories(detail.path, directoryPaths),
-    }))
-    .sort((left, right) => right.absolutePath.length - left.absolutePath.length);
-  let displayText = "";
-  let cursor = 0;
-
-  while (cursor < text.length) {
-    const matchingPath = paths.find(
-      (path) =>
-        text.startsWith(path.absolutePath, cursor)
-        && hasPathTextBoundaries(text, cursor, path.absolutePath.length),
-    );
-    if (matchingPath) {
-      displayText += matchingPath.displayPath;
-      cursor += matchingPath.absolutePath.length;
-      continue;
-    }
-    displayText += text[cursor];
-    cursor += 1;
-  }
-
-  return displayText;
-}
-
-function hasPathTextBoundaries(
-  text: string,
-  start: number,
-  length: number,
-): boolean {
-  const before = text[start - 1];
-  const after = text[start + length];
-  return isPathTextBoundary(before, "before") && isPathTextBoundary(after, "after");
-}
-
-function isPathTextBoundary(
-  character: string | undefined,
-  position: "before" | "after",
-): boolean {
-  if (character === undefined || /[\s`'"()[\]{}<>,;:!?=|]/.test(character)) {
-    return true;
-  }
-  return position === "after" && (character === "/" || character === "\\");
 }
 
 function formatActivityDetailStatus(

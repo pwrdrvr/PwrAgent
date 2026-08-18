@@ -99,6 +99,89 @@ describe("buildTranscriptRenderItems", () => {
     ]);
   });
 
+  it("relativizes absolute paths in a collapsed work phase label", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const root = "/Users/dev/.pwragent/worktrees/ab12/PwrAgnt";
+    const activities: AppServerThreadActivityEntry[] = [
+      `${root}/apps/desktop/src/renderer/src/features/settings/MessagingSettings.tsx`,
+      `${root}/packages/messaging/providers/slack/src/validate-credentials.ts`,
+    ].map((path, index) => ({
+      type: "activity",
+      id: `tool-${index}`,
+      summary: `Read \`${path}\``,
+      details: [
+        { id: `detail-${index}`, kind: "read", label: `Read \`${path}\``, path },
+      ],
+      turn,
+    }));
+
+    expect(
+      buildTranscriptRenderItems({
+        entries: activities,
+        directoryPaths: [root],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        type: "workPhaseGroup",
+        entries: activities,
+        label:
+          "Worked for 1m 10s · 2 tool updates: "
+          + "Read `apps/desktop/src/renderer/src/features/settings/MessagingSettings.tsx`, "
+          + "Read `packages/messaging/providers/slack/src/validate-credentials.ts`",
+      }),
+    ]);
+  });
+
+  it("coalesces repeated reads of one file after relativizing", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const root = "/Users/dev/.pwragent/worktrees/ab12/PwrAgnt";
+    const path = `${root}/apps/desktop/src/main/messaging/messaging-config.ts`;
+    const activities: AppServerThreadActivityEntry[] = [0, 1].map((index) => ({
+      type: "activity",
+      id: `tool-${index}`,
+      summary: `Read \`${path}\``,
+      details: [
+        { id: `detail-${index}`, kind: "read", label: `Read \`${path}\``, path },
+      ],
+      turn,
+    }));
+
+    expect(
+      buildTranscriptRenderItems({
+        entries: activities,
+        directoryPaths: [root],
+      }),
+    ).toEqual([
+      expect.objectContaining({
+        type: "workPhaseGroup",
+        label:
+          "Worked for 1m 10s · 2 tool updates: "
+          + "2 × Read `apps/desktop/src/main/messaging/messaging-config.ts`",
+      }),
+    ]);
+  });
+
+  it("leaves a work phase label alone when no directories are linked", () => {
+    const turn = completedTurn("turn-1", 70_000);
+    const path = "/Users/dev/PwrAgnt/apps/desktop/src/main/messaging/messaging-config.ts";
+    const activities: AppServerThreadActivityEntry[] = [0, 1].map((index) => ({
+      type: "activity",
+      id: `tool-${index}`,
+      summary: `Read \`${path}\``,
+      details: [
+        { id: `detail-${index}`, kind: "read", label: `Read \`${path}\``, path },
+      ],
+      turn,
+    }));
+
+    expect(buildTranscriptRenderItems({ entries: activities })).toEqual([
+      expect.objectContaining({
+        type: "workPhaseGroup",
+        label: `Worked for 1m 10s · 2 tool updates: 2 × Read \`${path}\``,
+      }),
+    ]);
+  });
+
   it("uses completed turn metadata when live entries have mixed turn status", () => {
     const inProgressTurn = {
       id: "turn-1",

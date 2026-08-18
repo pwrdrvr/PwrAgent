@@ -6,6 +6,7 @@ import type {
   AppServerThreadTurnMetadata,
 } from "@pwragent/shared";
 import { coalesceToolActivityBurst } from "@pwragent/shared";
+import { formatActivityText } from "./activity-path-display";
 
 export type TranscriptRenderItem =
   | {
@@ -29,6 +30,7 @@ export function buildTranscriptRenderItems(params: {
   activeTurnStartedAt?: number;
   activeMessageId?: string;
   alwaysVisibleEntryIds?: ReadonlySet<string>;
+  directoryPaths?: string[];
   now?: number;
 }): TranscriptRenderItem[] {
   const activeTurnId =
@@ -44,6 +46,7 @@ export function buildTranscriptRenderItems(params: {
       params.entries,
       activeTurnId,
       params.alwaysVisibleEntryIds,
+      params.directoryPaths,
     );
     const activeGroups = buildActiveWorkGroups(
       params.entries,
@@ -64,6 +67,7 @@ export function buildTranscriptRenderItems(params: {
     params.entries,
     undefined,
     params.alwaysVisibleEntryIds,
+    params.directoryPaths,
   );
   if (completedGroups.length > 0) {
     return renderWithGroups(params.entries, completedGroups);
@@ -142,6 +146,7 @@ function buildCompletedGroups(
   entries: AppServerThreadEntry[],
   excludeTurnId?: string,
   alwaysVisibleEntryIds?: ReadonlySet<string>,
+  directoryPaths?: string[],
 ): RenderGroup[] {
   const groups: RenderGroup[] = [];
   const groupIds = new Set<string>();
@@ -176,7 +181,7 @@ function buildCompletedGroups(
       label: hasWork
         ? repeatedWorkTurn
           ? "More work"
-          : workGroupLabel(turn, currentEntries)
+          : workGroupLabel(turn, currentEntries, directoryPaths)
         : previousMessagesLabel(currentEntries.filter(isAssistantCommentaryMessage).length),
     });
     if (hasWork) {
@@ -403,6 +408,7 @@ function readCompletedTurn(
 function workGroupLabel(
   turn: AppServerThreadTurnMetadata,
   entries: AppServerThreadEntry[],
+  directoryPaths: string[] | undefined,
 ): string {
   const base = typeof turn.durationMs === "number" && turn.durationMs > 60_000
     ? `Worked for ${formatElapsedMs(turn.durationMs)}`
@@ -421,7 +427,10 @@ function workGroupLabel(
   const groups = coalesceToolActivityBurst(
     toolEntries.map((entry) => ({
       entry,
-      label: entry.summary,
+      // Backends that forward an agent's own tool title can put an absolute
+      // path here. The rows inside the group already display these relative to
+      // the thread's directories, so the group label has to match them.
+      label: formatActivityText(entry.summary, entry.details, directoryPaths),
       status: entry.status,
     })),
   );
