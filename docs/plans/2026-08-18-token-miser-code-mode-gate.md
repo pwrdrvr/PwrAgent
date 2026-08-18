@@ -341,3 +341,84 @@ and it is plausible as an upstream contribution.
 - Is a terminal reduction at the script-to-model boundary sufficient, or is
   the runaway-output case only addressable mid-stream?
 - Upstream contribution or maintained fork?
+
+---
+
+# Part 3 — decision
+
+Operator decision, 2026-08-18. Resolves the open questions above.
+
+## Chosen design
+
+A reduction seam at `truncate_code_mode_result`, with an optional external
+reducer that Codex calls **from the Codex process**, not from a sandboxed
+child. PwrAgent holds the full output and serves it through the retrieval tools
+that already exist on the Token Miser branch. The replacement text is produced
+by an ephemeral gpt-5.6-luna thread with no skills, MCP servers, or tools — a
+dumb rewriter, shaped like the existing thread-naming ephemerals.
+
+Delivered as a PwrDrvr fork of Codex with signed Windows and macOS builds,
+reusing the agent-kit discovery and download mechanism, and likely bundled with
+PwrAgent installers as the default runtime.
+
+## Why this closes Part 1
+
+Every constraint in Part 1 applied to a callout originating inside the Codex
+sandbox. The Codex process is not sandboxed — it is the process that spawns the
+`sandbox-exec` and landlock children. Moving the callout into core therefore
+retires all of it: the loopback `EPERM` result, the
+`network.allow_unix_sockets` allowlist, the 104-byte `sun_path` limit, the hook
+trust flow, and the `permissionDecision` approval escalation. The existing
+loopback bridge works unchanged.
+
+Part 1 is retained as the record of why those paths were rejected, not as
+outstanding work.
+
+## Resolved
+
+- **Approval policy.** Moot. No hook rewrites a command, so nothing
+  auto-approves anything.
+- **`[network]` side effects.** Moot. No unix socket, no network config.
+- **Nested code-mode `updatedInput` behavior.** Moot for this design.
+- **App Server vs. extend-hooks.** Neither. A core seam with an out-of-process
+  reducer, which is what both options reduced to.
+
+## Still open
+
+- **Streaming.** This is a terminal reduction at the script-to-model boundary.
+  It does not detect a hung or runaway command mid-stream.
+  `RuntimeResponse::Yielded` means long scripts pass intermediate results
+  through the seam, which partially covers the case. Not claimed as solved.
+- **Upstream or fork.** Worth attempting the upstream PR in parallel. The seam
+  replaces an existing dumb truncation rather than adding a new interception
+  point, which is the strongest version of that argument. If it lands, the fork
+  thins to near nothing.
+- **Bundling.** Shipping a forked Codex as the default changes what "works with
+  your Codex" means, including version skew against an operator's own install.
+  Tracked separately from the feature.
+
+## Carried constraint: the summary lands in the parent's context
+
+The ephemeral rewriter has no tools, so an injected rewriter cannot act. But its
+output is inserted as tool output into the parent model's context, and the
+parent does have tools. Isolation protects the rewriter, not the parent.
+Hostile file content can therefore propagate through the summarizer as text
+aimed at the parent.
+
+The replacement must be framed as untrusted data, and must never carry content
+shaped like an instruction to the parent. This is the one Part 1-era security
+concern that the new design does not retire.
+
+## Also worth fixing in the same change
+
+`max_output_tokens` arrives from the model on the code-mode call
+(`execute_handler.rs`, `wait_handler.rs`) with no host or operator ceiling. A
+model can request a budget large enough to make the gate pointless. The seam
+should clamp it host-side.
+
+## Lesson to carry into the fork
+
+Part 1 measured a hook behavior that no layer of the source explains, at
+current `main` or at the matching release tag. A fork can be textually clean and
+still wrong about what the shipped binary does, so the fork needs behavioral
+smoke tests rather than a green build.
