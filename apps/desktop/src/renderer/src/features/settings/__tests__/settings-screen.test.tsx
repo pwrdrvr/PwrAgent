@@ -2890,6 +2890,68 @@ describe("SettingsScreen", () => {
     expect(dialog).not.toHaveTextContent("Codex login exited before emitting a login link");
   });
 
+  // Token Miser fails open, so an inert gate is invisible: turns keep running
+  // and nothing is gated. Settings has to state the contradiction outright.
+  it("warns when Token Miser is enabled but Codex never loaded the gate", async () => {
+    const snapshot = createSnapshot();
+    snapshot.general.tokenMiserEnabled = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      activation: {
+        observedAt: 1_800_000_000_000,
+        reason: "marketplace 'pwragent-local' is already added from a different source",
+        state: "unavailable",
+      },
+      interceptionCount: 0,
+      originalCharacters: 0,
+      baselineParentTokens: 0,
+      replacementTokens: 0,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+    };
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        desktopApi={{} as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+        initialSection="pricing"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Codex could not load the gate")).toBeInTheDocument();
+    expect(screen.getByText("Enabled, not running")).toBeInTheDocument();
+    expect(
+      screen.getByText(/already added from a different source/),
+    ).toBeInTheDocument();
+  });
+
+  it("leaves the Token Miser section unflagged when the gate loaded", async () => {
+    const snapshot = createSnapshot();
+    snapshot.general.tokenMiserEnabled = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      activation: { observedAt: 1_800_000_000_000, state: "active" },
+      interceptionCount: 0,
+      originalCharacters: 0,
+      baselineParentTokens: 0,
+      replacementTokens: 0,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+    };
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        desktopApi={{} as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+        initialSection="pricing"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.queryByText("Codex could not load the gate")).not.toBeInTheDocument();
+  });
+
   it("shows resolved gh discovery details and saves an alternate candidate", async () => {
     const snapshot = createSnapshot();
     snapshot.applications.gh = {

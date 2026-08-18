@@ -68,6 +68,11 @@ export function PricingSettings(props: {
   const tokenMiserEnabled =
     props.snapshot.general.tokenMiserEnabled ?? DEFAULT_TOKEN_MISER_ENABLED;
   const tokenMiserUsage = props.snapshot.runtime.tokenMiser;
+  const tokenMiserActivation = tokenMiserUsage?.activation;
+  // Only a contradiction is worth reporting: switched on, but the Codex side
+  // never loaded. Off-and-unavailable is just off.
+  const tokenMiserInert =
+    tokenMiserEnabled.value && tokenMiserActivation?.state === "unavailable";
   const spendAlerts = props.snapshot.general.spendAlerts;
   const alertsEnabled =
     spendAlerts.activeTurnSpendEnabled.value
@@ -161,8 +166,12 @@ export function PricingSettings(props: {
         eyebrow="Usage"
         title="Token Miser"
         description="Keep accidental walls of Codex tool output out of the parent thread while preserving the exact result for targeted retrieval."
-        chip={tokenMiserEnabled.value ? "On" : "Off"}
-        chipKind={tokenMiserEnabled.value ? "ok" : "default"}
+        chip={tokenMiserInert ? "Not running" : tokenMiserEnabled.value ? "On" : "Off"}
+        chipKind={
+          tokenMiserInert
+            ? "warn"
+            : tokenMiserEnabled.value ? "ok" : "default"
+        }
       >
         <div className="settings-fields">
           <SettingsField
@@ -181,6 +190,19 @@ export function PricingSettings(props: {
               />
             }
           />
+          {tokenMiserInert ? (
+            <SettingsField
+              label="Codex could not load the gate"
+              sub={tokenMiserActivation?.reason
+                ?? "Codex plugin activation did not complete."}
+              help="Token Miser fails open, so turns keep running with tool output unchanged — nothing is gated until this clears. PwrAgent retries activation each time a Codex backend starts, so relaunching after fixing the cause is usually enough."
+              control={
+                <span className="settings-field__value settings-field__value--warn">
+                  Enabled, not running
+                </span>
+              }
+            />
+          ) : null}
           {tokenMiserUsage && tokenMiserUsage.interceptionCount > 0 ? (
             <SettingsField
               label="Estimated parent-context savings"

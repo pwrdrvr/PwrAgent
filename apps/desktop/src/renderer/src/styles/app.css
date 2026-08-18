@@ -8414,6 +8414,12 @@ textarea,
   border-top: 1px solid var(--border-subtle);
 }
 
+/* Contradiction state: the setting says on, the runtime says it never loaded.
+   Semantic warning, not the accent — this reports health, not emphasis. */
+.settings-field__value--warn {
+  color: var(--status-warning);
+}
+
 .settings-field:first-child {
   border-top: 0;
 }
