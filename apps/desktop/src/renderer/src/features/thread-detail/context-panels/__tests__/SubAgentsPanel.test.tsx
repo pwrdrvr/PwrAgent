@@ -84,20 +84,21 @@ describe("SubAgentsPanel", () => {
       />,
     );
 
+    // Read left to right as (avoided − revealed) × requests − summarizer once,
+    // not as three totals that invite claiming the whole without-gate figure.
     const savings = screen.getByLabelText("Token Miser savings");
-    expect(within(savings).getByText("1 · Without gate")).toBeInTheDocument();
+    expect(within(savings).getByText("Kept out of context")).toBeInTheDocument();
+    expect(savings).toHaveTextContent("6,000 → 225 tokens");
+    expect(savings).toHaveTextContent("5,775 fewer per request · gpt-5.6-terra");
+    expect(within(savings).getByText("Across requests")).toBeInTheDocument();
+    // 15,000 + 9,000 − 563 − 338 = 23,099 micros — the replay value before the
+    // summarizer is subtracted; the formatter rounds up to the tenth of a cent.
     expect(savings).toHaveTextContent("$0.024");
-    expect(savings).toHaveTextContent(
-      "6,000 uncached + 36,000 cached across 6 replays · gpt-5.6-terra",
-    );
-    expect(within(savings).getByText("2 · Gate model")).toBeInTheDocument();
-    expect(savings).toHaveTextContent("2,100 total · gpt-5.6-luna");
-    expect(within(savings).getByText("3 · Revealed to parent")).toBeInTheDocument();
-    expect(savings).toHaveTextContent(
-      "225 uncached + 1,350 cached · gpt-5.6-terra",
-    );
-    expect(within(savings).getByText("Savings · 1 − 2 − 3"))
-      .toBeInTheDocument();
+    expect(savings).toHaveTextContent("once uncached + 6 cached replays");
+    expect(within(savings).getByText("Summarizer, once")).toBeInTheDocument();
+    expect(savings).toHaveTextContent("−$0.003");
+    expect(savings).toHaveTextContent("2,100 tokens · gpt-5.6-luna");
+    expect(within(savings).getByText("Saved")).toBeInTheDocument();
     expect(savings).toHaveTextContent("$0.021");
   });
 

@@ -23447,6 +23447,122 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--accent);
 }
 
+/* A gate that cost more than it saved: the total row carries the warning
+   tone instead of the accent, so overhead never reads as a saving. */
+.rail-card__token-miser-savings[data-negative="true"] > div[data-total="true"] {
+  background: color-mix(in srgb, var(--status-warning) 9%, var(--bg-panel));
+}
+
+.rail-card__token-miser-savings[data-negative="true"] > div[data-total="true"] dt,
+.rail-card__token-miser-savings[data-negative="true"] > div[data-total="true"] dd strong {
+  color: var(--status-warning);
+}
+
+/* Turn card hierarchy. The cost is the answer the card exists to give, so it
+   is the one line set in primary; tokens, timing and replay estimates stay
+   in the muted mono the rail already uses for metadata. */
+.pricing-usage-row__cost {
+  margin: 4px 0 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+/* Token Miser folded under its turn: one summary line that keeps moving as
+   replays are counted, a chevron, and cards only for gates worth a card. */
+.pricing-token-miser {
+  margin: 6px 0 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
+}
+
+.pricing-token-miser__summary {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pricing-token-miser__summary:hover {
+  background: var(--bg-panel-hover);
+}
+
+.pricing-token-miser__summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.pricing-token-miser__chevron {
+  display: inline-block;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+
+.pricing-token-miser[data-expanded="true"] .pricing-token-miser__chevron {
+  transform: rotate(90deg);
+}
+
+.pricing-token-miser__label {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.pricing-token-miser__count {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pricing-token-miser__verdict {
+  margin-left: auto;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pricing-token-miser__verdict[data-negative="true"] {
+  color: var(--status-warning);
+}
+
+.pricing-token-miser__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 2px 8px 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pricing-token-miser__gate-when {
+  margin: 6px 0 2px;
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+.pricing-token-miser__folded {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+}
+
 .rail-card__actions {
   width: 100%;
   margin-top: 2px;

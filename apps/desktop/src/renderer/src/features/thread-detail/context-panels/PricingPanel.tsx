@@ -70,7 +70,18 @@ const PRICING_USAGE_PAGE_SIZE = 20;
 export function PricingPanel(props: PricingPanelProps) {
   const summaries = props.pricing?.summaries ?? [];
   const lines = props.pricing?.lines ?? [];
-  const displayLines = buildPricingDisplayLines(lines);
+  const allDisplayLines = buildPricingDisplayLines(lines);
+  const subAgentsById = new Map(
+    (props.subAgents ?? []).map((subAgent) => [subAgent.monitorId, subAgent]),
+  );
+  // Gate rows nest under the turn they happened in. Left in the flat list they
+  // sort *above* their turn — a gate is created mid-turn, after the turn's
+  // first usage flush — and each one is a full card, so a turn with 25 gates
+  // pushed its own row a screen below the noise it produced.
+  const { gateLinesByTurn, displayLines } = partitionTokenMiserGateLines(
+    allDisplayLines,
+    subAgentsById,
+  );
   const pricingHistoryKey = summaries[0]
     ? `${summaries[0].backend}:${summaries[0].threadId}`
     : displayLines[0]
@@ -86,17 +97,16 @@ export function PricingPanel(props: PricingPanelProps) {
       : PRICING_USAGE_PAGE_SIZE;
   const visibleDisplayLines = displayLines.slice(0, visibleUsageRowCount);
   const hiddenUsageRowCount = displayLines.length - visibleDisplayLines.length;
-  const estimatedLines = displayLines.filter(isEstimatedUsageGap);
+  const estimatedLines = allDisplayLines.filter(isEstimatedUsageGap);
   const displaySummaries = addEstimatedLinesToSummaries(summaries, estimatedLines);
   const summary =
-    aggregateSummaries(displaySummaries) ?? aggregateUsageLines(displayLines);
+    aggregateSummaries(displaySummaries) ?? aggregateUsageLines(allDisplayLines);
   const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
-  const pricingTotals = buildPricingRunningTotals(displayLines);
+  // Totals run over every line, nested gates included: a gate's helper cost is
+  // still part of the running total of every turn after it.
+  const pricingTotals = buildPricingRunningTotals(allDisplayLines);
   const activeTurnId = props.activeTurnId;
-  const subAgentsById = new Map(
-    (props.subAgents ?? []).map((subAgent) => [subAgent.monitorId, subAgent]),
-  );
-  const hasActiveRow = displayLines.some((line) =>
+  const hasActiveRow = allDisplayLines.some((line) =>
     isActiveUsageLine({ activeTurnId, line, subAgentsById }),
   );
   // Tick while any row is live — the main turn or any still-running sub-agent —
@@ -238,6 +248,9 @@ export function PricingPanel(props: PricingPanelProps) {
               line.scope === "monitor" && line.sourceItemId
                 ? subAgentsById.get(line.sourceItemId)
                 : undefined;
+            const nestedGates = line.scope !== "monitor" && line.turnId
+              ? (gateLinesByTurn.get(line.turnId) ?? [])
+              : [];
             const isActive = isActiveUsageLine({ activeTurnId, line, subAgentsById });
             const usageTitle = formatUsageLineTitle(line, subAgent);
             const showUsageTitle = usageTitle !== "Turn usage";
@@ -296,6 +309,11 @@ export function PricingPanel(props: PricingPanelProps) {
                     {subAgent.agentName}
                   </p>
                 ) : null}
+                {/* Cost first: it is the answer the card exists to give. Tokens,
+                    timing and replay estimates are the working shown under it. */}
+                {usageLineEstimate ? (
+                  <p className="pricing-usage-row__cost">{usageLineEstimate}</p>
+                ) : null}
                 <p className="rail-card__usage">
                   {formatTokenCount(line.uncachedInputTokens)} uncached in ·{" "}
                   {formatTokenCount(line.cachedInputTokens)} cached ·{" "}
@@ -311,9 +329,6 @@ export function PricingPanel(props: PricingPanelProps) {
                   onScrollToTurn={props.onScrollToTurn}
                   subAgent={subAgent}
                 />
-                {usageLineEstimate ? (
-                  <p className="rail-card__usage">{usageLineEstimate}</p>
-                ) : null}
                 {contextReplayLines.map((replayLine) => (
                   <p key={replayLine} className="rail-card__usage">
                     {replayLine}
@@ -322,6 +337,12 @@ export function PricingPanel(props: PricingPanelProps) {
                 {subAgent?.tokenMiserAccounting ? (
                   <TokenMiserSavingsBreakdown
                     accounting={subAgent.tokenMiserAccounting}
+                  />
+                ) : null}
+                {nestedGates.length > 0 ? (
+                  <TokenMiserTurnGroup
+                    gates={nestedGates}
+                    subAgentsById={subAgentsById}
                   />
                 ) : null}
                 {rowCompactions.length > 0 ? (
@@ -384,6 +405,158 @@ function formatServiceTierLabel(line: ThreadUsageLineRecord): string {
     return "";
   }
   return ` · ${line.serviceTier}`;
+}
+
+/**
+ * A gate below this saved (or cost) too little to earn its own card. Its
+ * dollars still count in the turn's summary line; only the card is withheld.
+ * Ten cents is where a card stops being noise: below it the equation reads as
+ * rounding, above it the reader can see which term moved.
+ */
+const TOKEN_MISER_CARD_MIN_MICROS = 100_000;
+
+const TOKEN_MISER_SOURCE_PREFIX = "system:token-miser:";
+
+function isTokenMiserGateLine(line: PricingUsageLine): boolean {
+  return line.scope === "monitor"
+    && Boolean(line.sourceItemId?.startsWith(TOKEN_MISER_SOURCE_PREFIX));
+}
+
+/**
+ * Split gate rows out of the flat list and attach each to its parent turn.
+ *
+ * A gate whose parent turn has no row of its own — a native review's inner
+ * turn, or a turn whose usage has not landed yet — stays in the flat list, so
+ * it is still visible rather than silently dropped.
+ */
+function partitionTokenMiserGateLines(
+  lines: readonly PricingUsageLine[],
+  subAgentsById: Map<string, ThreadSubAgentSummary>,
+): {
+  displayLines: PricingUsageLine[];
+  gateLinesByTurn: Map<string, PricingUsageLine[]>;
+} {
+  const turnRowIds = new Set<string>();
+  for (const line of lines) {
+    if (!isTokenMiserGateLine(line) && line.scope !== "monitor" && line.turnId) {
+      turnRowIds.add(line.turnId);
+    }
+  }
+  const gateLinesByTurn = new Map<string, PricingUsageLine[]>();
+  const displayLines: PricingUsageLine[] = [];
+  for (const line of lines) {
+    const parentTurnId = isTokenMiserGateLine(line) && line.sourceItemId
+      ? subAgentsById.get(line.sourceItemId)?.parentTurnId
+      : undefined;
+    if (parentTurnId && turnRowIds.has(parentTurnId)) {
+      const bucket = gateLinesByTurn.get(parentTurnId);
+      if (bucket) {
+        bucket.push(line);
+      } else {
+        gateLinesByTurn.set(parentTurnId, [line]);
+      }
+      continue;
+    }
+    displayLines.push(line);
+  }
+  return { displayLines, gateLinesByTurn };
+}
+
+/**
+ * The turn's Token Miser story, folded under the turn it belongs to.
+ *
+ * The summary line sums every gate — it is what the turn saved, and it keeps
+ * moving as replays are counted, until the next compaction. The expanded list
+ * shows a card only for gates past the threshold; the rest are one line, so a
+ * turn with twenty-five gates that each saved half a cent reads as one fact.
+ */
+function TokenMiserTurnGroup(props: {
+  gates: readonly PricingUsageLine[];
+  subAgentsById: Map<string, ThreadSubAgentSummary>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const entries = props.gates.map((line) => ({
+    accounting: line.sourceItemId
+      ? props.subAgentsById.get(line.sourceItemId)?.tokenMiserAccounting
+      : undefined,
+    line,
+    startedAt: line.sourceItemId
+      ? props.subAgentsById.get(line.sourceItemId)?.createdAt
+      : undefined,
+  }));
+  const priced = entries.filter((entry) => entry.accounting !== undefined);
+  const savingsMicros = priced.reduce(
+    (total, entry) => total + (entry.accounting?.savingsMicros ?? 0),
+    0,
+  );
+  const gateCostMicros = props.gates.reduce(
+    (total, line) => total + line.totalCostMicros,
+    0,
+  );
+  const carded = priced.filter((entry) =>
+    Math.abs(entry.accounting?.savingsMicros ?? 0) >= TOKEN_MISER_CARD_MIN_MICROS
+  );
+  const foldedCount = entries.length - carded.length;
+  const foldedMicros = priced
+    .filter((entry) => !carded.includes(entry))
+    .reduce((total, entry) => total + (entry.accounting?.savingsMicros ?? 0), 0);
+  const unpricedCount = entries.length - priced.length;
+  const count = props.gates.length;
+  const verdict = priced.length === 0
+    ? `${formatTokenUsageMicrosAsUsd(gateCostMicros)} summarizing · savings not priced yet`
+    : savingsMicros >= 0
+      ? `${formatTokenUsageMicrosAsUsd(savingsMicros)} saved`
+      : `${formatTokenUsageMicrosAsUsd(Math.abs(savingsMicros))} net overhead`;
+
+  return (
+    <div className="pricing-token-miser" data-expanded={expanded ? "true" : "false"}>
+      <button
+        aria-expanded={expanded}
+        className="pricing-token-miser__summary"
+        onClick={() => setExpanded((current) => !current)}
+        type="button"
+      >
+        <span aria-hidden="true" className="pricing-token-miser__chevron">›</span>
+        <span className="pricing-token-miser__label">Token Miser</span>
+        <span className="pricing-token-miser__count">
+          {count.toLocaleString()} {count === 1 ? "gate" : "gates"}
+        </span>
+        <span className="pricing-token-miser__verdict" data-negative={savingsMicros < 0}>
+          {verdict}
+        </span>
+      </button>
+      {expanded ? (
+        <div className="pricing-token-miser__body">
+          {carded.map((entry) => (
+            <div className="pricing-token-miser__gate" key={entry.line.usageLineId}>
+              <p className="pricing-token-miser__gate-when">
+                {entry.startedAt !== undefined
+                  ? formatTimestamp(entry.startedAt)
+                  : formatTimestamp(entry.line.createdAt)}
+              </p>
+              {entry.accounting ? (
+                <TokenMiserSavingsBreakdown accounting={entry.accounting} />
+              ) : null}
+            </div>
+          ))}
+          {foldedCount > 0 || unpricedCount > 0 ? (
+            <p className="pricing-token-miser__folded">
+              {foldedCount > 0
+                ? `${foldedCount.toLocaleString()} ${foldedCount === 1 ? "gate" : "gates"} under `
+                  + `${formatTokenUsageMicrosAsUsd(TOKEN_MISER_CARD_MIN_MICROS)} each · `
+                  + `${formatTokenUsageMicrosAsUsd(Math.abs(foldedMicros))} `
+                  + `${foldedMicros >= 0 ? "saved" : "overhead"} between them`
+                : ""}
+              {foldedCount > 0 && unpricedCount > 0 ? " · " : ""}
+              {unpricedCount > 0
+                ? `${unpricedCount.toLocaleString()} not priced yet`
+                : ""}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 const COMPACTION_TURN_KEY_PREFIX = "turn:";

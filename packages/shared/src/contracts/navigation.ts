@@ -315,6 +315,12 @@ export type ThreadSubAgentSummary = {
   preferredFastMode?: boolean;
   monitorThreadId?: ThreadIdentifier;
   monitorTurnId?: ThreadIdentifier;
+  /**
+   * The parent turn this sub-agent ran inside. Set for Token Miser gates so
+   * the Pricing rail can nest a gate under the turn it happened in — the gate's
+   * own usage line carries the helper's turn, not the parent's.
+   */
+  parentTurnId?: ThreadIdentifier;
   lastMessage?: string;
   outcome?: "success" | "failure" | "cancelled";
   completedAt?: number;

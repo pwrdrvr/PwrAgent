@@ -61,6 +61,15 @@ export type TokenMiserServiceOptions = {
     metadata: TokenMiserObjectMetadata,
   ) => void | Promise<void>;
   getParentCumulativeInputTokens?: (threadId: string) => number | undefined;
+  /**
+   * The model whose context the gate is protecting. Resolved at creation and
+   * stamped on the gate, because the usage line pricing would otherwise lean on
+   * can be absent — a native review runs on the parent thread with no line of
+   * its own, and mid-turn the parent's line may not be priced yet.
+   */
+  resolveParentModel?: (
+    threadId: string,
+  ) => Promise<{ model?: string; serviceTier?: string } | undefined>;
   thresholdCharacters?: number;
   summaryTimeoutMs?: number;
 };
@@ -109,6 +118,9 @@ export class TokenMiserService {
       outputCharacters: output.length,
       summary,
     });
+    const parentModel = await this.options.resolveParentModel?.(
+      payload.session_id,
+    ).catch(() => undefined);
     const metadata = await this.options.store.store({
       objectId,
       threadId: payload.session_id,
@@ -128,6 +140,10 @@ export class TokenMiserService {
       },
       parentCumulativeInputTokens:
         this.options.getParentCumulativeInputTokens?.(payload.session_id),
+      ...(parentModel?.model ? { parentModel: parentModel.model } : {}),
+      ...(parentModel?.serviceTier
+        ? { parentServiceTier: parentModel.serviceTier }
+        : {}),
     });
     await this.options.onInterceptionStored?.(metadata);
 
