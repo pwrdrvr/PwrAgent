@@ -7874,7 +7874,7 @@ export class DesktopBackendRegistry {
           this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
           this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
           if (this.resolveTokenMiserEnabledFn()) {
-            void this.prepareTokenMiserRuntime();
+            void this.prepareTokenMiserRuntime({ prune: true });
           }
         }),
       );
@@ -8038,6 +8038,12 @@ export class DesktopBackendRegistry {
             error: error instanceof Error ? error.message : String(error),
           });
         });
+      // Bring the gate up at boot when the feature is on, so a resumed thread
+      // is covered from its first tool call rather than from whenever a new
+      // thread happens to be created. Retention pruning rides this one call.
+      if (this.resolveTokenMiserEnabledFn()) {
+        void this.prepareTokenMiserRuntime({ prune: true });
+      }
     }
     this.gitDirectoryService =
       options?.gitDirectoryService ??
@@ -13443,6 +13449,11 @@ export class DesktopBackendRegistry {
       if (this.closed) {
         throw new Error("Desktop backend registry closed before turn start");
       }
+    }
+    // Existing threads reach the gate through here, not through startThread.
+    // Awaited so the hook has a bridge before this turn's first tool call.
+    if (params.backend === "codex" && this.resolveTokenMiserEnabledFn()) {
+      await this.prepareTokenMiserRuntime();
     }
     const migrationResult = await this.applyThreadModelMigration({
       backend: params.backend,
@@ -19283,7 +19294,22 @@ export class DesktopBackendRegistry {
     };
   }
 
-  private async prepareTokenMiserRuntime(): Promise<void> {
+  /**
+   * Bring the Codex-side gate up: the loopback bridge the hook talks to, and
+   * the plugin registration that makes Codex run the hook at all.
+   *
+   * Runs at boot, on every Codex turn start, and when the setting changes.
+   * It used to run only when a *new* thread was created, so an app that
+   * booted and resumed an existing thread had no bridge for that thread until
+   * something else happened to start one — five minutes of fail-open on the
+   * turn this was diagnosed from, nine large results ungated. Every call
+   * after the first is cheap: the bridge start and the plugin install are
+   * memoized, retention pruning is boot-only, and the activation record is
+   * written only when its state changes.
+   */
+  private async prepareTokenMiserRuntime(
+    options: { prune?: boolean } = {},
+  ): Promise<void> {
     if (
       !this.tokenMiserStore
       || !this.tokenMiserHookBridge
@@ -19298,10 +19324,12 @@ export class DesktopBackendRegistry {
         codexRuntime
           ? this.tokenMiserPluginManager.ensureInstalled(codexRuntime)
           : this.tokenMiserPluginManager.ensurePluginSource(),
-        this.tokenMiserStore.prune({
-          maxAgeMs: 7 * 24 * 60 * 60 * 1_000,
-          maxBytes: 512 * 1024 * 1024,
-        }),
+        options.prune
+          ? this.tokenMiserStore.prune({
+              maxAgeMs: 7 * 24 * 60 * 60 * 1_000,
+              maxBytes: 512 * 1024 * 1024,
+            })
+          : Promise.resolve(),
       ]);
       await this.recordTokenMiserActivation({ state: "active" });
     } catch (error) {
@@ -19316,6 +19344,8 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private lastRecordedTokenMiserActivation?: string;
+
   private async recordTokenMiserActivation(params: {
     reason?: string;
     state: TokenMiserActivationStatus["state"];
@@ -19323,6 +19353,12 @@ export class DesktopBackendRegistry {
     if (!this.tokenMiserStateDir) {
       return;
     }
+    // Now called on every turn start; only a change is worth a file write.
+    const signature = `${params.state}:${params.reason ?? ""}`;
+    if (this.lastRecordedTokenMiserActivation === signature) {
+      return;
+    }
+    this.lastRecordedTokenMiserActivation = signature;
     try {
       await mkdir(this.tokenMiserStateDir, {
         recursive: true,
