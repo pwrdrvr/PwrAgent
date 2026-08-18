@@ -232,7 +232,10 @@ export function PricingPanel(props: PricingPanelProps) {
             />
           </div>
         </div>
-        {subAgent?.agentName ? (
+        {/* Under the Token Miser fold the heading already names the agent,
+            and the card keeps its own title — a second "Token Miser" line on
+            every nested card was one title too many. */}
+        {subAgent?.agentName && !options.nested ? (
           <p className="rail-card__agent-name" title={subAgent.agentName}>
             {subAgent.agentName}
           </p>

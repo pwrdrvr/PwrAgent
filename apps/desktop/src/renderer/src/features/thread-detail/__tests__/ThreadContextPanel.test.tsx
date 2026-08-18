@@ -2679,6 +2679,11 @@ describe("ThreadContextPanel", () => {
     expect(
       screen.getByRole("button", { name: /Hide 1 smaller gate/ }),
     ).toBeInTheDocument();
+    // The heading names the agent; nested cards keep their title only, not a
+    // second "Token Miser" line each.
+    expect(screen.getAllByText("Token Miser gate")).toHaveLength(2);
+    expect(screen.queryByText("Token Miser", { selector: ".rail-card__agent-name" }))
+      .not.toBeInTheDocument();
   });
 
   // A group with nothing past the threshold has nothing to hold back, so
