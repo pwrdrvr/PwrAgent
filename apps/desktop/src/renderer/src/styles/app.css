@@ -1501,12 +1501,14 @@ textarea,
      compact title's top at y=18.5 — exactly where the brand sits in
      the sidebar masthead. Result: title, brand, and messaging pills
      all share the same vertical centerline.
-     The header is now a column: a single top row (breadcrumb + chips on
-     the left, layout toggles + MessagingStatusBar on the right) with any
-     directory/branch warnings stacked beneath it. Keeping MSG in the top
-     row — instead of vertically centered against a `__main` that grows
-     when a warning appears — is what keeps the MSG cluster on the
-     titlebar line on macOS (the warnings used to push it down). */
+     The header is a column holding exactly ONE row (breadcrumb + chips on
+     the left, layout toggles + MessagingStatusBar on the right). Keeping MSG
+     in that row — instead of vertically centered against a `__main` that
+     grows — is what keeps the MSG cluster on the titlebar line on macOS.
+     Directory/branch warnings used to stack beneath it here and pushed MSG
+     down; they now render in `.thread-warnings` inside the chat column so
+     this header's height (and therefore the context rail's top) is
+     constant. Do not add a second row here. */
   flex-direction: column;
   align-items: stretch;
   justify-content: flex-start;

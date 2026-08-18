@@ -6,17 +6,20 @@ import type { AppNoticeToastNotice } from "./AppNoticeToast";
  *
  * Each of these is fire-and-forget: the rename dialog closes before
  * `renameThread` resolves, the context menu closes before `archiveThread`
- * resolves, and a create failure has no thread to anchor to at all. There is
+ * resolves, `discardLaunchpad` drops the selection before it persists the
+ * discard, and a create failure has no thread to anchor to at all. There is
  * therefore nothing left inline to hang the message on, which is why these
  * route to the durable toast stack instead of a static slot in the sidebar.
  *
  * Failures whose originating control IS still on screen deliberately do NOT
  * appear here — `pickDirectoryError` renders beside the composer's "Add
- * directory" button and `launchpadError` renders in the composer footer.
+ * directory" button, and `launchpadError` renders in the launchpad composer's
+ * footer, which is still mounted for every producer except the discard.
  */
 export type ThreadActionErrorKind =
   | "archive-thread"
   | "create-thread"
+  | "discard-launchpad"
   | "rename-thread";
 
 export type ThreadActionErrorSignal = {
@@ -27,6 +30,7 @@ export type ThreadActionErrorSignal = {
 const THREAD_ACTION_ERROR_TITLES: Record<ThreadActionErrorKind, string> = {
   "archive-thread": "Archive failed",
   "create-thread": "Could not start thread",
+  "discard-launchpad": "Discard failed",
   "rename-thread": "Rename failed",
 };
 

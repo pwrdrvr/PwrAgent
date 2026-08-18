@@ -31,7 +31,11 @@ import { useThreadNavigation } from "../useThreadNavigation";
  */
 function latestThreadActionError(
   onThreadActionError: ReturnType<typeof vi.fn>,
-  kind: "archive-thread" | "create-thread" | "rename-thread",
+  kind:
+    | "archive-thread"
+    | "create-thread"
+    | "discard-launchpad"
+    | "rename-thread",
 ): string | undefined {
   const calls = onThreadActionError.mock.calls.filter(
     ([event]) => event?.kind === kind,
@@ -8858,6 +8862,85 @@ describe("useThreadNavigation", () => {
         (directory) => directory.key === "directory:/repo/app",
       ),
     ).toBe(true);
+  });
+
+  it("publishes a launchpad discard failure to the notice stack", async () => {
+    // `discardLaunchpad` drops the selection before it persists the discard,
+    // so the launchpad composer that renders `launchpadError` is already
+    // unmounted when the persistence call rejects. Routing it there would
+    // show the operator nothing while the cancelled draft rehydrates on the
+    // next open.
+    const registeredLaunchpad = {
+      directoryKey: "directory:/repo/app",
+      directoryKind: "directory" as const,
+      directoryLabel: "app",
+      directoryPath: "/repo/app",
+      workMode: "local" as const,
+      backend: "codex" as const,
+      executionMode: "default" as const,
+      prompt: "leftover draft",
+      registeredAt: 1_500,
+      settingsTouchedAt: 1_600,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+    const defaults = {
+      backend: "codex" as const,
+      executionMode: "default" as const,
+    };
+    const updateDirectoryLaunchpad = vi.fn(async () => {
+      throw new Error("Launchpad overlay is read-only");
+    });
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [
+        {
+          key: "directory:/repo/app",
+          kind: "directory" as const,
+          label: "app",
+          path: "/repo/app",
+          threadKeys: [],
+          needsAttentionCount: 0,
+          latestUpdatedAt: 2,
+          launchpad: registeredLaunchpad,
+        },
+      ],
+      launchpadDefaults: defaults,
+    }));
+    const desktopApi: DesktopApi = {
+      updateDirectoryLaunchpad,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const onThreadActionError = vi.fn();
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { onThreadActionError }),
+    );
+
+    await waitFor(() => {
+      expect(
+        result.current.directories.some(
+          (directory) => directory.key === "directory:/repo/app",
+        ),
+      ).toBe(true);
+    });
+
+    await act(async () => {
+      result.current.discardLaunchpad("directory:/repo/app");
+    });
+
+    await waitFor(() => {
+      expect(
+        latestThreadActionError(onThreadActionError, "discard-launchpad"),
+      ).toBe("Launchpad overlay is read-only");
+    });
+    // The launchpad's own inline surface stays empty — one surface per error.
+    expect(result.current.launchpadError).toBeUndefined();
   });
 
   it("removes an empty registered directory and deletes its overlay row", async () => {

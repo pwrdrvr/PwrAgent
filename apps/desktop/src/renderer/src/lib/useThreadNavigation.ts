@@ -2846,9 +2846,9 @@ type UseThreadNavigationOptions = {
   lightweightNavigationRefresh?: boolean;
   threadViewVisible?: boolean;
   /**
-   * Publishes create / rename / archive failures to the app's notice stack.
-   * A `message` of `undefined` means the slot cleared — the next attempt
-   * started, or it succeeded — and the notice should come down.
+   * Publishes create / rename / archive / discard failures to the app's
+   * notice stack. A `message` of `undefined` means the slot cleared — the
+   * next attempt started, or it succeeded — and the notice should come down.
    *
    * These actions used to render into a shared static slot at the top of the
    * sidebar, which had no dismiss, no timeout, a fixed priority order that
@@ -3165,6 +3165,22 @@ export function useThreadNavigation(
       message: renameThreadError,
     });
   }, [renameThreadError]);
+  // Discard has no slot of its own. `discardLaunchpad` clears the selection
+  // before it persists the discard, so the launchpad composer that renders
+  // `launchpadError` is already unmounted when the persistence call rejects —
+  // the message would land on a surface nobody is looking at (or, worse, on
+  // the next unrelated launchpad the operator opens). Publish it directly.
+  const publishDiscardLaunchpadError = useCallback((error?: unknown): void => {
+    onThreadActionErrorRef.current?.({
+      kind: "discard-launchpad",
+      message:
+        error === undefined
+          ? undefined
+          : error instanceof Error
+            ? error.message
+            : String(error),
+    });
+  }, []);
   const [updatingThreadExecutionMode, setUpdatingThreadExecutionMode] =
     useState<ThreadExecutionMode>();
   const [setThreadExecutionModeError, setSetThreadExecutionModeError] =
@@ -7016,6 +7032,9 @@ export function useThreadNavigation(
    * selection to the source card the user invoked it from.
    */
   const discardLaunchpad = useCallback((directoryKey: string): boolean => {
+    // A previous discard failure is stale the moment the operator tries
+    // again; clear it so a retry that succeeds takes the toast down.
+    publishDiscardLaunchpadError();
     if (
       activeFederatedLaunchpad
       && activeFederatedLaunchpad.launchpad.directoryKey === directoryKey
@@ -7032,7 +7051,7 @@ export function useThreadNavigation(
       );
 
       const handleDiscardError = (error: unknown): void => {
-        setLaunchpadError(error instanceof Error ? error.message : String(error));
+        publishDiscardLaunchpadError(error);
       };
       if (isRegisteredDirectory) {
         void desktopApi
@@ -7097,7 +7116,7 @@ export function useThreadNavigation(
     // draft on the next open (or after a refresh / restart / in another window).
     // The in-memory reset above only affects this render.
     const handleDiscardError = (error: unknown): void => {
-      setLaunchpadError(error instanceof Error ? error.message : String(error));
+      publishDiscardLaunchpadError(error);
     };
     if (isRegisteredDirectory) {
       // Keep the registered directory (and its remembered sticky settings);
@@ -7114,7 +7133,12 @@ export function useThreadNavigation(
         .catch(handleDiscardError);
     }
     return restoresSourceThread;
-  }, [activeFederatedLaunchpad, desktopApi, directories]);
+  }, [
+    activeFederatedLaunchpad,
+    desktopApi,
+    directories,
+    publishDiscardLaunchpadError,
+  ]);
 
   const archiveThread = useCallback(
     async (
