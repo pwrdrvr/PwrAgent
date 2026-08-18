@@ -72,8 +72,9 @@ const unsubscribeAppearance = desktopApi?.onAppearanceChanged?.(
 // Mirror native fullscreen state onto <html data-fullscreen>. macOS hides
 // the traffic-light stoplights in fullscreen, so app.css reads this to
 // drop the reserved stoplight inset that would otherwise leave a dead gap
-// at the left of the masthead. Only the main window ever fires this (aux
-// windows are not fullscreenable); the listener is harmless elsewhere.
+// at the left of the masthead. Fired by the main window and by the Star
+// Map window (the one fullscreenable aux window, which drops its stoplight
+// gutter and drag strip the same way); harmless in the others.
 const unsubscribeFullscreen = desktopApi?.onWindowFullscreen?.(
   (isFullScreen) => {
     if (isFullScreen) {

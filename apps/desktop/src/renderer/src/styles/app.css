@@ -10860,9 +10860,14 @@ textarea,
    for the wrong handle. z-index 2 sits above the transformed canvas (its
    own stacking context, so card z-indexes cannot climb out) and below the
    `.star-map__filters` (3) and `.star-map__chrome` (4) that live inside it;
-   both of those carve `no-drag` holes so they stay clickable. Not rendered
-   on Windows (painted `.activity-titlebar` above the map) or Linux (OS
-   frame). */
+   both of those carve `no-drag` holes so they stay clickable (the card
+   no-drag list further down does the same for anything panned up under
+   the glass, so it goes inert rather than turning into a window drag).
+   The strip owns pointer events in its band: wheel there is lost to the
+   map, deliberately, so a press can never start both a window drag and a
+   canvas pan. Not rendered on Windows (painted `.activity-titlebar` above
+   the map) or Linux (OS frame); hidden in fullscreen, which
+   `star-map-window.ts` forwards to `<html data-fullscreen>`. */
 .star-map-window__titlebar {
   position: absolute;
   top: 0;
@@ -10870,20 +10875,14 @@ textarea,
   left: 0;
   z-index: 2;
   height: 52px;
-  background:
-    linear-gradient(
-      to bottom,
-      color-mix(in srgb, var(--bg-app) 42%, transparent),
-      color-mix(in srgb, var(--bg-app) 12%, transparent)
-    );
-  -webkit-backdrop-filter: blur(12px) saturate(135%);
   backdrop-filter: blur(12px) saturate(135%);
   -webkit-app-region: drag;
 }
 
-/* Extra tint that fades in while the sky moves. A separate layer because
-   gradients do not interpolate: swapping the background would snap, and
-   an opacity ramp on this sheet cross-fades instead. */
+/* The tint, drawn at its moving strength and dimmed through opacity at
+   rest. A pseudo-element rather than a background on the strip because
+   gradients do not interpolate: swapping backgrounds would snap, and one
+   opacity ramp cross-fades. */
 .star-map-window__titlebar::before {
   content: "";
   position: absolute;
@@ -10891,18 +10890,17 @@ textarea,
   background:
     linear-gradient(
       to bottom,
-      color-mix(in srgb, var(--bg-app) 30%, transparent),
-      color-mix(in srgb, var(--bg-app) 14%, transparent)
+      color-mix(in srgb, var(--bg-app) 60%, transparent),
+      color-mix(in srgb, var(--bg-app) 24%, transparent)
     );
-  opacity: 0;
+  opacity: 0.7;
   transition: opacity 220ms ease;
 }
 
 /* The glass edge. A hairline that fades out toward both ends (so it reads
    as a lit edge, not a ruled border) over a soft shadow that darkens the
-   sky just beneath it, which is what gives the sheet its thickness. Drawn
-   at its moving strength and dimmed through opacity at rest, so the same
-   ramp brightens it. */
+   sky just beneath it, which is what gives the sheet its thickness. Same
+   draw-bright-dim-at-rest ramp as the tint above. */
 .star-map-window__titlebar::after {
   content: "";
   position: absolute;
@@ -10918,15 +10916,15 @@ textarea,
       color-mix(in srgb, var(--text-primary) 36%, transparent) 86%,
       transparent
     );
-  box-shadow: 0 1px 8px color-mix(in srgb, var(--bg-app) 70%, transparent);
+  box-shadow: 0 1px 8px var(--shadow-tint-soft);
   opacity: 0.45;
   transition: opacity 220ms ease;
 }
 
-.star-map-window:has(.star-map__viewport.is-panning) .star-map-window__titlebar::before,
-.star-map-window:has(.star-map.is-flying) .star-map-window__titlebar::before,
-.star-map-window:has(.star-map__viewport.is-panning) .star-map-window__titlebar::after,
-.star-map-window:has(.star-map.is-flying) .star-map-window__titlebar::after {
+.star-map-window:has(.star-map__viewport.is-panning, .star-map.is-flying)
+  .star-map-window__titlebar::before,
+.star-map-window:has(.star-map__viewport.is-panning, .star-map.is-flying)
+  .star-map-window__titlebar::after {
   opacity: 1;
 }
 
@@ -11354,6 +11352,16 @@ textarea,
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+/* The dialog is body-portaled and full-window, so on macOS its top 52px
+   overlap the glass drag strip's rect. Draggable regions ignore z-order:
+   without this, a click on the scrim up there moves the window instead of
+   dismissing the dialog. Punching out the whole overlay is fine — a modal
+   is the one time the window has no business moving. */
+.star-map-intake,
+.star-map-intake * {
+  -webkit-app-region: no-drag;
 }
 
 .star-map-intake__backdrop {
@@ -12362,7 +12370,8 @@ textarea,
 /* Promote the large canvas only for the direct-manipulation window. Keeping
    the whole off-screen map permanently promoted retains a large compositor
    surface even while the operator is only reading it. */
-.star-map__viewport.is-panning .star-map__canvas.is-transformed {
+.star-map__viewport.is-panning .star-map__canvas.is-transformed,
+.star-map.is-flying .star-map__canvas.is-transformed {
   will-change: transform;
 }
 
@@ -12453,14 +12462,8 @@ textarea,
   cursor: pointer;
 }
 
-/* Both top clusters sit inside the macOS glass drag strip
-   (`.star-map-window__titlebar`). Draggable regions are rect-unions, so
-   every descendant has to opt out or its pixels fall back to window-drag
-   hit-testing and swallow the click. */
 .star-map__chrome,
-.star-map__chrome *,
-.star-map__filters,
-.star-map__filters * {
+.star-map__chrome * {
   -webkit-app-region: no-drag;
 }
 
@@ -12605,12 +12608,14 @@ textarea,
   color: var(--text-primary);
 }
 
-/* The map's top chrome sits inside the macOS title-bar drag band, and
-   Chromium ignores `-webkit-app-region` on inline-level boxes - a plain
-   <button> there has its clicks swallowed by the OS (the same trap
-   documented on .messaging-status-bar). Every interactive element gets an
-   explicit no-drag on a non-inline box; the bare sky stays draggable so
-   the window can still be moved while the map is open. */
+/* The map's top chrome sits inside the macOS glass drag strip
+   (`.star-map-window__titlebar`; `.star-map__chrome` opts out beside its
+   own rule), and Chromium ignores `-webkit-app-region` on inline-level
+   boxes - a plain <button> there has its clicks swallowed by the OS (the
+   same trap documented on .messaging-status-bar). Draggable regions are
+   rect unions independent of z-order, so every interactive element gets an
+   explicit no-drag on a non-inline box: anything panned up under the strip
+   goes inert behind the glass rather than turning into a window drag. */
 .star-map__filters,
 .star-map__filters *,
 .star-map-instance,
@@ -12619,6 +12624,10 @@ textarea,
 .star-map-card *,
 .star-map-load-card,
 .star-map-load-card *,
+.star-map-chat-card,
+.star-map-chat-card *,
+.star-map-satellite-card,
+.star-map-satellite-card *,
 .star-map__cluster-label,
 .star-map__cluster-label *,
 .star-map__cluster-overflow {

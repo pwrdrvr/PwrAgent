@@ -57,6 +57,11 @@ function extractRuleBody(source: string, selector: string): string {
   return ruleMatch.groups.body;
 }
 
+/** First `z-index` in a rule body, NaN when the rule declares none. */
+function readZIndex(rule: string): number {
+  return Number(rule.match(/z-index:\s*(\d+);/)?.[1] ?? Number.NaN);
+}
+
 function expandHex(hex: string): string {
   const normalized = hex.replace("#", "");
   if (normalized.length === 3) {
@@ -925,9 +930,6 @@ describe("Tangerine Terminal theme contract", () => {
       css,
       ".app-notice-toast__thread-menu",
     );
-    const readZIndex = (rule: string): number =>
-      Number(rule.match(/z-index:\s*(\d+);/)?.[1] ?? Number.NaN);
-
     expect(readZIndex(toastThreadMenuRule)).toBeGreaterThan(
       readZIndex(toastStackRule),
     );
@@ -954,8 +956,6 @@ describe("Tangerine Terminal theme contract", () => {
     expect(stripRule).toContain("position: absolute;");
     expect(stripRule).toContain("backdrop-filter:");
     // Below the filters (3) and chrome (4) it hosts, above the canvas.
-    const readZIndex = (rule: string): number =>
-      Number(rule.match(/z-index:\s*(\d+);/)?.[1] ?? Number.NaN);
     expect(readZIndex(stripRule)).toBeLessThan(
       readZIndex(extractRuleBody(css, ".star-map__filters")),
     );
@@ -963,13 +963,22 @@ describe("Tangerine Terminal theme contract", () => {
       readZIndex(extractRuleBody(css, ".star-map__chrome")),
     );
     expect(css).toMatch(
-      /\.star-map__chrome,\s*\.star-map__chrome \*,\s*\.star-map__filters,\s*\.star-map__filters \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
+      /\.star-map__chrome,\s*\.star-map__chrome \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
+    );
+    expect(css).toMatch(
+      /\.star-map__filters,\s*\.star-map__filters \*,[\s\S]*?\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
+    );
+    // The intake dialog is body-portaled and full-window, so its scrim
+    // overlaps the strip's rect and would otherwise turn a dismiss-click
+    // near the top into a window drag.
+    expect(css).toMatch(
+      /\.star-map-intake,\s*\.star-map-intake \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
     );
     // The edge brightens whenever the sky moves under it — pointer pan and
     // keyboard flight alike — and the strip disappears in fullscreen, where
     // there is no window to drag.
     expect(css).toMatch(
-      /\.star-map-window:has\(\.star-map__viewport\.is-panning\) \.star-map-window__titlebar::before,\s*\.star-map-window:has\(\.star-map\.is-flying\) \.star-map-window__titlebar::before,/,
+      /\.star-map-window:has\(\.star-map__viewport\.is-panning, \.star-map\.is-flying\)\s*\.star-map-window__titlebar::before,/,
     );
     expect(css).toMatch(
       /:root\[data-fullscreen="true"\] \.star-map-window__titlebar\s*\{[\s\S]*?display:\s*none;[\s\S]*?\}/,
