@@ -1,17 +1,17 @@
 # Changelog
 
-## Unreleased
+## v1.1.0-alpha.1 - 2026-08-18
 
-- Messaging - Add opt-in Slack Live Working Updates cards that render Working Updates as one rate-aware Thinking Steps task card per turn, with phase-aware plan headlines, ordered/coalesced stream calls, terminal/waiting state handling, cancellation, classic text fallback when native streaming is off or unavailable, and profile-wide plus per-route Working Updates controls for Default Agent routes.
-
-## v1.1.0-beta.1 - 2026-08-09
-
-- Federation and Star Map - Added secure remote-instance federation, live remote thread and terminal access, and the Star Map mission-control surface with project lenses, filters, arrangement controls, load visibility, and drag, snap, and multi-select interactions.
-- Reviews and Agent Controls - Expanded managed reviews across supported providers, including Grok and Kimi, with provider/model/reasoning overrides, transcript activity, project-aware review context, agent turn controls, and automated pull-request repair controls.
-- Threads and Composer - Added durable scheduling and queued-turn controls, richer thread references, attachment and PDF analysis/preview workflows, HTML-rich clipboard support, directory multi-selection, and improved transcript and code-copy interactions.
-- Messaging - Added Slack App Home, configurable routes, terminal private responses, final image delivery, clearer routed-response labels, and stronger startup, delivery, and authorization recovery.
-- Reliability and Operations - Strengthened remote-session routing and lifecycle recovery, Windows process isolation, agent usage and tool-accounting visibility, SQLite write budgeting, diagnostics, accessibility, and test infrastructure.
-- Release Reliability - Made debug-retention artifact uploads non-fatal so transient retention failures cannot prevent required release assets or changelog notes from publishing.
+- Messaging Access Control - Added role-based access control for messaging actors and destinations, with configurable capabilities, a dedicated Access Control pane, auditable decisions, and fail-closed behavior for invalid configured policy.
+- Messaging Automations - Rebuilt the Automations interface into an operator-ready workflow with a clear list/editor, condition-based inbound filters, scoped sender access, execution identity, routing, and lifecycle visibility.
+- Slack Operations - Added agent/binding identity to Slack replies and opt-in Live Working Updates cards, so one rate-aware Thinking Steps card can show an agent's progress without filling the channel with streaming messages.
+- Messaging Files - Added the `send_messaging_file` Dynamic Tool, allowing agents to deliver approved local files through a connected messaging surface.
+- Secure Federation - Added profile-to-profile federation with enrolled identities and a Noise-encrypted control channel; supports local endpoints, Tailscale Serve/Funnel, and Cloudflare Tunnel with optional Access-token and mTLS edge controls.
+- Remote Threads and Terminals - Added mounted remote threads, reusable remote viewer windows, live transcript and image synchronization, and integrated terminals relayed across federation.
+- Star Map - Added the full-screen Star Map mission-control surface for local and remote work, with project clouds, instance/load cards, chat cards, filters, keyboard navigation, layout controls, drag, snap, and multi-select.
+- Grok Build - Added a managed downloadable Grok Build runtime with update controls, improved steering, rewind and budget support, Working Updates, and image inputs.
+- CI Monitor Auto-Fixer - Added GitHub pull-request monitoring that can wake the owning agent on CI failures or merge conflicts and dispatch bounded repair work, with linked failed-run context.
+- Operator Work Queue - Added Attention and Drafts lenses so live, review-ready, unread, and unsent work can be triaged without losing the normal Inbox/Recents flows.
 
 ## v1.0.0-beta.50 - 2026-07-31
 
