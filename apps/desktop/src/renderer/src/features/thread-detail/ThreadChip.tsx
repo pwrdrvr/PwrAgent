@@ -1,6 +1,10 @@
 import { useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { PopoutIcon, ThreadIcon } from "../../icons";
-import { useLiveThreadLink, useThreadLinks } from "../../lib/thread-links";
+import {
+  useLiveThreadLink,
+  useThreadLinkHoverSource,
+  useThreadLinks,
+} from "../../lib/thread-links";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import {
@@ -47,6 +51,14 @@ export function ThreadChip(props: ThreadChipProps) {
     ? `Open this thread in the remote viewer window for ${remoteInstanceLabel}`
     : undefined;
 
+  // While the pointer (or keyboard focus) rests on the link, the sidebar card
+  // it points at lights up in the same solid-accent style as a sub-thread
+  // composer's source card — the link and its target read as one thing. Only
+  // rows already on screen respond; nothing scrolls until the chip is
+  // activated. Wired on the group so a remote link's pop-out button counts as
+  // the same link: sliding from the chip onto it must not drop the highlight.
+  const hoverSource = useThreadLinkHoverSource(link);
+
   // role="button" span rather than a real <button>: the chip renders inside
   // markdown that may already sit within a clickable surface, and a nested
   // <button> is invalid HTML.
@@ -56,13 +68,26 @@ export function ThreadChip(props: ThreadChipProps) {
     event.preventDefault();
     event.stopPropagation();
     tooltipController.hide();
+    hoverSource.release();
     event.currentTarget.blur();
     props.onOpen(link);
   };
 
   return (
     <>
-      <span className="thread-chip-group">
+      <span
+        className="thread-chip-group"
+        onBlur={(event) => {
+          // Focus moving between the chip and its pop-out stays in the group.
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) {
+            return;
+          }
+          hoverSource.hideFromFocus();
+        }}
+        onFocus={(event) => hoverSource.showFromFocus(event.target as Element)}
+        onMouseEnter={hoverSource.showFromPointer}
+        onMouseLeave={hoverSource.hideFromPointer}
+      >
         <span
           aria-label={`Open thread ${label}`}
           aria-haspopup="menu"

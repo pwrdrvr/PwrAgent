@@ -6,6 +6,7 @@ import type {
 import { formatBackendLabel } from "../../lib/backend-label";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
+import { useThreadLinkHoverSource } from "../../lib/thread-links";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { TerminalIcon } from "../../icons/TerminalIcon";
 import { HistoryIcon } from "../../icons/HistoryIcon";
@@ -113,6 +114,15 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   // sidebar/rail toggles sitting right beside it instead of falling back to the
   // slow, edge-clipping native `title`.
   const terminalTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  // The title is a link back to this thread's sidebar card. While hovered or
+  // keyboard-focused it lights that card up in the accent fill, the same cue
+  // a transcript thread chip gives its target, so "which row is this?" is
+  // answered before the click scrolls to it. The hook follows a thread switch
+  // under a resting pointer and releases on unmount.
+  const titleHover = useThreadLinkHoverSource({
+    backend: props.thread.source,
+    threadId: props.thread.id,
+  });
   const starMapTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const rewindTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const workflowBudgetTooltip = useViewportTooltip({ className: "viewport-tooltip" });
@@ -169,7 +179,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                     className="thread-header__title-button"
                     title="Show in thread list"
                     type="button"
+                    onBlur={titleHover.hideFromFocus}
                     onClick={props.onRevealSelectedThreadInList}
+                    onFocus={(event) => titleHover.showFromFocus(event.currentTarget)}
+                    onMouseEnter={titleHover.showFromPointer}
+                    onMouseLeave={titleHover.hideFromPointer}
                   >
                     {props.thread.title}
                   </button>
