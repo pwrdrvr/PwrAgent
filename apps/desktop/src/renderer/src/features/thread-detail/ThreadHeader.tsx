@@ -3,11 +3,10 @@ import type {
   MessagingChannelKind,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { useEffect, useRef } from "react";
 import { formatBackendLabel } from "../../lib/backend-label";
 import { MessagingStatusBar } from "../messaging-status/MessagingStatusBar";
 import { getDesktopApi, type DesktopApi } from "../../lib/desktop-api";
-import { useThreadLinks } from "../../lib/thread-links";
+import { useThreadLinkHoverSource } from "../../lib/thread-links";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { TerminalIcon } from "../../icons/TerminalIcon";
 import { HistoryIcon } from "../../icons/HistoryIcon";
@@ -116,33 +115,14 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   // slow, edge-clipping native `title`.
   const terminalTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   // The title is a link back to this thread's sidebar card. While hovered or
-  // focused it lights that card up in the accent fill, the same cue a
-  // transcript thread chip gives its target, so "which row is this?" is
-  // answered before the click scrolls to it.
-  const threadLinks = useThreadLinks();
-  const threadSource = props.thread.source;
-  const threadId = props.thread.id;
-  const titleHoveringRef = useRef(false);
-  const showTitleTarget = (): void => {
-    titleHoveringRef.current = true;
-    threadLinks?.setHoverTarget({ backend: threadSource, threadId });
-  };
-  const hideTitleTarget = (): void => {
-    titleHoveringRef.current = false;
-    threadLinks?.setHoverTarget(undefined);
-  };
-  // The header stays mounted across a thread switch (⌘K, sidebar click while
-  // the pointer rests on the title), and no mouseleave fires for that. Drop
-  // the previous thread's highlight rather than leave its row lit.
-  useEffect(
-    () => () => {
-      if (titleHoveringRef.current) {
-        titleHoveringRef.current = false;
-        threadLinks?.setHoverTarget(undefined);
-      }
-    },
-    [threadLinks, threadSource, threadId],
-  );
+  // keyboard-focused it lights that card up in the accent fill, the same cue
+  // a transcript thread chip gives its target, so "which row is this?" is
+  // answered before the click scrolls to it. The hook follows a thread switch
+  // under a resting pointer and releases on unmount.
+  const titleHover = useThreadLinkHoverSource({
+    backend: props.thread.source,
+    threadId: props.thread.id,
+  });
   const starMapTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const rewindTooltip = useViewportTooltip({ className: "viewport-tooltip" });
   const workflowBudgetTooltip = useViewportTooltip({ className: "viewport-tooltip" });
@@ -199,11 +179,11 @@ export function ThreadHeader(props: ThreadHeaderProps) {
                     className="thread-header__title-button"
                     title="Show in thread list"
                     type="button"
-                    onBlur={hideTitleTarget}
+                    onBlur={titleHover.hide}
                     onClick={props.onRevealSelectedThreadInList}
-                    onFocus={showTitleTarget}
-                    onMouseEnter={showTitleTarget}
-                    onMouseLeave={hideTitleTarget}
+                    onFocus={(event) => titleHover.showFromFocus(event.currentTarget)}
+                    onMouseEnter={titleHover.show}
+                    onMouseLeave={titleHover.hide}
                   >
                     {props.thread.title}
                   </button>

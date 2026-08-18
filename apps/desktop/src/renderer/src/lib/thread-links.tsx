@@ -13,6 +13,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -50,14 +51,12 @@ export type ThreadLinkContextValue = {
   getSnapshot: (link: ResolvedThreadLink) => ResolvedThreadLink;
   subscribe: (link: ResolvedThreadLink, listener: () => void) => () => void;
   /**
-   * Marks the thread a hovered or focused link points at, so the matching
-   * sidebar card can light up while the pointer rests on the link. Pass
-   * `undefined` when the pointer leaves. Rows read it through
-   * `useThreadLinkHoverTarget`.
+   * Which sidebar card a hovered or focused thread link points at. Sources
+   * (`ThreadChip`, the title-bar link) write it through
+   * `useThreadLinkHoverSource`; rows read it through `useThreadLinkHoverTarget`.
+   * One store instance per provider, stable across membership rebuilds.
    */
-  setHoverTarget: (link: ThreadLinkHoverTarget | undefined) => void;
-  getHoverTargetKey: () => string | undefined;
-  subscribeHoverTarget: (listener: () => void) => () => void;
+  hoverTarget: ThreadLinkHoverStore;
 };
 
 export type ThreadLinkHoverTarget = Pick<ResolvedThreadLink, "backend" | "threadId">;
@@ -68,7 +67,7 @@ export type ThreadLinkHoverTarget = Pick<ResolvedThreadLink, "backend" | "thread
  * `composerSourceThreadKey`, so a link to a pinned remote thread lights up
  * that row too — the instance is deliberately not part of the match.
  */
-export function threadLinkHoverKey(link: ThreadLinkHoverTarget): string {
+function threadLinkHoverKey(link: ThreadLinkHoverTarget): string {
   return buildThreadIdentityKey(link.backend, link.threadId);
 }
 
@@ -76,31 +75,68 @@ export function threadLinkHoverKey(link: ThreadLinkHoverTarget): string {
  * Hover state is a separate store from the metadata store: it changes on
  * every pointer enter/leave, and only the row it names (plus the one it just
  * left) should re-render — not the provider, and not the transcript.
+ * Listeners are partitioned by thread key for that reason.
+ *
+ * Owner-aware: hover and keyboard focus are independent inputs from
+ * different elements, so several sources can hold a target at once (a
+ * Tab-focused chip while the pointer crosses another). Each source registers
+ * under its own owner token; the most recently set owner wins, and clearing
+ * an owner falls back to whoever else still holds one rather than wiping the
+ * slot — a chip's mouseleave never darkens a highlight the focused title link
+ * still owns.
  */
-class ThreadLinkHoverStore {
-  private key: string | undefined;
-  private listeners = new Set<() => void>();
+export class ThreadLinkHoverStore {
+  /** Owner → key, in set order; the last entry is the current target. */
+  private holders = new Map<object, string>();
+  private currentKey: string | undefined;
+  private listeners = new Map<string, Set<() => void>>();
 
   get(): string | undefined {
-    return this.key;
+    return this.currentKey;
   }
 
-  set(link: ThreadLinkHoverTarget | undefined): void {
-    const nextKey = link ? threadLinkHoverKey(link) : undefined;
-    if (nextKey === this.key) {
+  set(owner: object, target: ThreadLinkHoverTarget): void {
+    const key = threadLinkHoverKey(target);
+    // Re-insert so a re-set moves this owner to the most-recent position.
+    this.holders.delete(owner);
+    this.holders.set(owner, key);
+    this.recompute();
+  }
+
+  clear(owner: object): void {
+    if (this.holders.delete(owner)) {
+      this.recompute();
+    }
+  }
+
+  subscribe(key: string, listener: () => void): () => void {
+    const listeners = this.listeners.get(key) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(key, listeners);
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) {
+        this.listeners.delete(key);
+      }
+    };
+  }
+
+  private recompute(): void {
+    let nextKey: string | undefined;
+    for (const key of this.holders.values()) {
+      nextKey = key;
+    }
+    if (nextKey === this.currentKey) {
       return;
     }
-    this.key = nextKey;
-    for (const listener of this.listeners) {
-      listener();
+    const previousKey = this.currentKey;
+    this.currentKey = nextKey;
+    for (const key of [previousKey, nextKey]) {
+      if (key === undefined) continue;
+      for (const listener of this.listeners.get(key) ?? []) {
+        listener();
+      }
     }
-  }
-
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => {
-      this.listeners.delete(listener);
-    };
   }
 }
 
@@ -285,17 +321,119 @@ export function useLiveThreadLink(link: ResolvedThreadLink): ResolvedThreadLink 
  * whose answer flips re-render. Always false outside a `ThreadLinkProvider`.
  */
 export function useThreadLinkHoverTarget(threadKey: string): boolean {
-  const links = useThreadLinks();
+  // The store is a stable per-provider instance, so these deps do not churn
+  // when the context value is rebuilt on a membership change.
+  const store = useThreadLinks()?.hoverTarget;
   const subscribe = useCallback(
-    (listener: () => void) =>
-      links?.subscribeHoverTarget(listener) ?? (() => {}),
-    [links],
+    (listener: () => void) => store?.subscribe(threadKey, listener) ?? (() => {}),
+    [store, threadKey],
   );
   const getSnapshot = useCallback(
-    () => links?.getHoverTargetKey() === threadKey,
-    [links, threadKey],
+    () => store?.get() === threadKey,
+    [store, threadKey],
   );
   return useSyncExternalStore(subscribe, getSnapshot, () => false);
+}
+
+/**
+ * Whether focus on `element` should be treated as visible keyboard focus.
+ * Focus also arrives programmatically (a context menu returning focus to its
+ * invoker, Chromium re-dispatching focus to the active element when the
+ * window is re-activated) with the pointer nowhere near the link; lighting a
+ * sidebar card then reads as a stuck highlight. `:focus-visible` is the
+ * platform's own answer to "did the user get here by keyboard".
+ */
+function isFocusVisible(element: Element): boolean {
+  try {
+    return element.matches(":focus-visible");
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * The write side of the hover-target store, for an element that links to a
+ * thread. Returns handlers to wire to the link's pointer and focus events;
+ * the highlight is released on mouseleave/blur, on unmount, and is re-pointed
+ * in place if `target` changes while the pointer still rests on the link
+ * (the title-bar link after a thread switch). Inert outside a provider.
+ *
+ * Each caller is one owner in the store, so releasing here never darkens a
+ * highlight another link still holds.
+ */
+export function useThreadLinkHoverSource(
+  target: ThreadLinkHoverTarget | undefined,
+): {
+  show: () => void;
+  /** `show`, gated on visible keyboard focus — wire to `onFocus`. */
+  showFromFocus: (element: Element) => void;
+  hide: () => void;
+} {
+  const store = useThreadLinks()?.hoverTarget;
+  // The owner token doubles as the "am I currently showing" flag so the
+  // re-point effect below can tell a resting pointer from an idle link.
+  const ownerRef = useRef<{ active: boolean }>({ active: false });
+  const storeRef = useRef(store);
+  storeRef.current = store;
+  const targetRef = useRef(target);
+  targetRef.current = target;
+  const targetKey = target ? threadLinkHoverKey(target) : undefined;
+
+  const show = useCallback(() => {
+    const owner = ownerRef.current;
+    owner.active = true;
+    const current = targetRef.current;
+    if (current) {
+      storeRef.current?.set(owner, current);
+    }
+  }, []);
+  const mountedRef = useRef(true);
+  const showFromFocus = useCallback(
+    (element: Element) => {
+      // Read `:focus-visible` once the focus dispatch has settled rather than
+      // mid-event: an element that lost focus again in between simply no
+      // longer matches, and an unmounted source stays silent.
+      queueMicrotask(() => {
+        if (mountedRef.current && isFocusVisible(element)) {
+          show();
+        }
+      });
+    },
+    [show],
+  );
+  const hide = useCallback(() => {
+    const owner = ownerRef.current;
+    owner.active = false;
+    storeRef.current?.clear(owner);
+  }, []);
+
+  // The link's target changed under a resting pointer: follow it, so the row
+  // that is lit is always the one activation would open.
+  useEffect(() => {
+    const owner = ownerRef.current;
+    if (!owner.active) {
+      return;
+    }
+    const current = targetRef.current;
+    if (current) {
+      storeRef.current?.set(owner, current);
+    } else {
+      storeRef.current?.clear(owner);
+    }
+  }, [targetKey]);
+
+  // A link can unmount under the pointer (its message re-renders, the
+  // transcript navigates away) without ever seeing mouseleave.
+  useEffect(() => {
+    const owner = ownerRef.current;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      storeRef.current?.clear(owner);
+    };
+  }, []);
+
+  return { show, showFromFocus, hide };
 }
 
 export function ThreadLinkProvider(props: {
@@ -449,15 +587,7 @@ export function ThreadLinkProvider(props: {
       subscribe(link, listener) {
         return metadataStore.subscribe(link, listener);
       },
-      setHoverTarget(link) {
-        hoverStore.set(link);
-      },
-      getHoverTargetKey() {
-        return hoverStore.get();
-      },
-      subscribeHoverTarget(listener) {
-        return hoverStore.subscribe(listener);
-      },
+      hoverTarget: hoverStore,
     };
     // Rebuild only when membership changes; `threadsRef`/`onShowThreadRef`
     // carry the freshest values so no other deps are needed.
