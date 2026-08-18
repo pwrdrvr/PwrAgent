@@ -9725,11 +9725,20 @@ textarea,
 
 .settings-pathrow__title {
   display: block;
-  overflow: hidden;
   color: var(--text-primary);
   font-size: 13px;
   font-weight: 600;
   line-height: 1.2;
+}
+
+/*
+ * Only for a plain-string title, which carries a `title` attribute so the
+ * clipped tail stays reachable. An element title composes its own inline
+ * layout and text-overflow does not apply to it, so truncating there would
+ * hard-cut with no ellipsis and no hover.
+ */
+.settings-pathrow__title--truncate {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

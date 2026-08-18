@@ -147,7 +147,7 @@ export class CredentialTester {
         status: "failed",
         testedAt: Date.now(),
         durationMs: Date.now() - startedAt,
-        errorMessage: clipError(error),
+        errorMessage: clipError(preferChildDiagnostic(error)),
       };
     }
     this.lastResults.set(kind, result);
@@ -341,7 +341,7 @@ export class CredentialTester {
         testedAt: Date.now(),
         durationMs: Date.now() - probeStart,
         account: command,
-        errorMessage: clipError(error),
+        errorMessage: clipError(preferChildDiagnostic(error)),
       };
     }
   }
@@ -386,6 +386,19 @@ function unset(
 function clipString(value: string): string {
   if (value.length <= ERROR_MESSAGE_LIMIT) return value;
   return `${value.slice(0, ERROR_MESSAGE_LIMIT - 1)}…`;
+}
+
+/**
+ * Prefer what the child printed over the invocation that ran it. On Windows a
+ * Codex probe goes through the cmd.exe wrapper, so `error.message` opens with
+ * ~90 characters of `cmd.exe /d /s /c "^…^"` before anything useful, and the
+ * clip below would otherwise spend the whole budget on it.
+ */
+function preferChildDiagnostic(error: unknown): unknown {
+  const stderr = (error as { stderr?: unknown } | undefined)?.stderr
+    ?.toString?.()
+    .trim();
+  return stderr ? stderr : error;
 }
 
 function clipError(error: unknown): string {

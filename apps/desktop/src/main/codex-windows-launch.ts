@@ -108,7 +108,12 @@ export async function runCodexOneShot(
   return await new Promise((resolve, reject) => {
     const child = execFile(command, args, options, (error, stdout, stderr) => {
       if (error) {
-        reject(error);
+        // execFile's message is the invocation, which on Windows is the
+        // cmd.exe wrapper plus `^` escapes — ~90 characters of boilerplate
+        // that crowds out the child's own diagnostic in any clipped surface.
+        // Carry stdout/stderr on the error the way promisify(execFile) does
+        // so a caller can report what the command actually said.
+        reject(Object.assign(error, { stderr, stdout }));
         return;
       }
       resolve({ stderr, stdout });

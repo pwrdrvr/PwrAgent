@@ -249,11 +249,19 @@ export function ModelsSettings(props: {
                   disabled={props.saving || envForced}
                   placeholder="Auto discovery"
                   value={codexPath}
-                  // Blur still commits. Requiring Enter or the button meant
-                  // clicking Test, switching fields, or closing Settings threw
-                  // the typed path away with no feedback, and the effect that
-                  // syncs from the snapshot then reset the box.
-                  onBlur={() => saveCodexPath(codexPath)}
+                  // Blur still commits, so tabbing away or closing Settings
+                  // does not silently discard a typed path. But not when focus
+                  // is moving to a button: writeConfig flips `saving` true
+                  // synchronously, React flushes that before mouseup, and a
+                  // control disabled at mouseup receives no click at all — so
+                  // saving here would swallow the very action being clicked.
+                  // Let the button decide instead.
+                  onBlur={(event) => {
+                    if (event.relatedTarget instanceof HTMLButtonElement) {
+                      return;
+                    }
+                    saveCodexPath(codexPath);
+                  }}
                   onChange={(event) => setCodexPath(event.currentTarget.value)}
                   onKeyDown={(event) => {
                     if (event.key === "Enter") {

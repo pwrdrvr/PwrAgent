@@ -62,9 +62,16 @@ export function SettingsPathRow(props: {
       <div className="settings-pathrow__body">
         {props.title ? (
           <span
-            className="settings-pathrow__title"
-            // Titles are ellipsized (a Windows MSIX path runs well past the
-            // row), so keep the full value reachable on hover.
+            // Truncation is only applied to a plain string, where `title`
+            // below can carry the full value. An element title (the auth
+            // profile rows pass one) composes its own inline layout, and
+            // text-overflow does not apply to an atomic inline-flex box, so
+            // ellipsizing it would hard-cut with nothing to hover.
+            className={`settings-pathrow__title${
+              typeof props.title === "string"
+                ? " settings-pathrow__title--truncate"
+                : ""
+            }`}
             title={typeof props.title === "string" ? props.title : undefined}
           >
             {props.title}
@@ -92,6 +99,9 @@ export function SettingsPathRow(props: {
               <span
                 key={chip.key ?? `${chip.tone ?? "default"}-${index}`}
                 className={`settings-pathrow__chip${toneClass}`}
+                // Chips are width-capped, so a long label (a prerelease
+                // version string) needs the full value reachable on hover.
+                title={typeof chip.label === "string" ? chip.label : undefined}
               >
                 {chip.label}
               </span>
