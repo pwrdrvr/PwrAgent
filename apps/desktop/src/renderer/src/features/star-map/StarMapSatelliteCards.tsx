@@ -103,6 +103,12 @@ export function StarMapContextCard(props: {
           backends={[]}
           desktopApi={props.desktopApi}
           editedFileGroups={cardContext.editedFileGroups}
+          // The rail is the only edits surface a chat card has: the card
+          // composes through CompactComposer and renders no above-composer
+          // work rail. Left at the panel's "above" default, the dock toggle
+          // came up accent-filled and aria-pressed, claiming a second copy
+          // that does not exist on this surface.
+          editedFilesDock="sidebar"
           onActiveTabChange={setTab}
           pinned
           pricing={cardContext.pricing}

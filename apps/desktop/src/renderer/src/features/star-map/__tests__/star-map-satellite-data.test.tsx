@@ -186,6 +186,25 @@ describe("star map context satellite data", () => {
     expect(satellite().queryByRole("tab", { name: "Pricing" })).toBeNull();
   });
 
+  it("keeps the map's edits in the rail: no above-composer dock offered", async () => {
+    // A chat card has no above-composer work rail, so the dock toggle's
+    // "also pinned above the composer" state is a claim the surface cannot
+    // honor. Pin it to the rail rather than take the panel's default.
+    const desktopApi = buildApi(editEntries());
+    renderCardWithContextSatellite(desktopApi);
+
+    await waitFor(() => {
+      expect(desktopApi.readThread).toHaveBeenCalled();
+    });
+
+    fireEvent.click(satellite().getByRole("tab", { name: "Edits" }));
+
+    const dockToggle = await satellite().findByRole("button", {
+      name: "Show above composer",
+    });
+    expect(dockToggle.getAttribute("aria-pressed")).toBe("false");
+  });
+
   it("shows the turn's edited files, collected from the host's transcript", async () => {
     const desktopApi = buildApi(editEntries());
     renderCardWithContextSatellite(desktopApi);
