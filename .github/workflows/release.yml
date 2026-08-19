@@ -414,24 +414,32 @@ jobs:
             exit 1
           fi
 
+          # Every CI-published release is born as a GitHub Pre-release, even when
+          # the tag has no prerelease suffix. Promotion to Latest is a separate
+          # operator action after assets, updater metadata, and smoke checks pass.
           release_args=(
             "$RELEASE_TAG"
             --repo pwrdrvr/PwrAgent
             --verify-tag
+            --prerelease
             --title "$RELEASE_TAG"
             --notes-file "$notes"
           )
-          if [[ "$RELEASE_TAG" == *-* ]]; then
-            release_args+=(--prerelease)
-          else
-            release_args+=(--latest)
-          fi
 
           gh release create "${release_args[@]}" \
             mac-dist/* \
             windows-dist/* \
             linux-dist/*.deb \
             linux-dist/SHA256SUMS
+
+          is_prerelease="$(gh release view "$RELEASE_TAG" \
+            --repo pwrdrvr/PwrAgent \
+            --json isPrerelease \
+            --jq '.isPrerelease')"
+          if [ "$is_prerelease" != "true" ]; then
+            echo "::error::Release $RELEASE_TAG was not created as a GitHub Pre-release." >&2
+            exit 1
+          fi
 
       - name: Upload assembled release artifacts (debug retention)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
