@@ -6,6 +6,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   formatWindowsJobStartupTelemetry,
+  prewarmWindowsJobWrapper,
   formatWindowsJobStartupTimeout,
   readWindowsJobStartupTelemetry,
   startWindowsJobReadyPoll,
@@ -450,5 +451,21 @@ describe("wrapCommandInWindowsJob", () => {
       }
     },
     30_000,
+  );
+});
+
+describe("prewarmWindowsJobWrapper", () => {
+  // The prewarm exists to move a cold start, so it must never become a failure
+  // path of its own: a machine without `SystemRoot`, a PowerShell that will not
+  // launch, and a healthy Windows host all have to settle the same way.
+  it(
+    "shares one best-effort attempt across callers",
+    async () => {
+      const attempt = prewarmWindowsJobWrapper();
+
+      expect(prewarmWindowsJobWrapper()).toBe(attempt);
+      await expect(attempt).resolves.toBeUndefined();
+    },
+    60_000,
   );
 });
