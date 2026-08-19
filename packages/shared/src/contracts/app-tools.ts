@@ -41,14 +41,34 @@ export type PwrAgentAppToolArgs<
   TOperation extends PwrAgentAppOperationName = PwrAgentAppOperationName,
 > = PwrAgentAppToolArgsByOperation[TOperation];
 
+/**
+ * `"downgrade"` means the offered build is *older* than the running one: the
+ * release resolved for the operator's own channel selection, which they can
+ * only reach by moving back down. Absent means the normal forward case.
+ */
+export type PwrAgentUpdateToolDirection = "downgrade";
+
 export type PwrAgentUpdateToolStatus =
   | { status: "idle" }
   | { status: "skipped"; reason: string }
   | { status: "checking" }
   | { status: "no-update"; version: string }
-  | { status: "available"; version: string }
-  | { status: "downloading"; version: string; percent?: number }
-  | { status: "downloaded"; version: string }
+  | {
+      status: "available";
+      version: string;
+      direction?: PwrAgentUpdateToolDirection;
+    }
+  | {
+      status: "downloading";
+      version: string;
+      percent?: number;
+      direction?: PwrAgentUpdateToolDirection;
+    }
+  | {
+      status: "downloaded";
+      version: string;
+      direction?: PwrAgentUpdateToolDirection;
+    }
   | { status: "error"; message: string };
 
 export type PwrAgentAppRuntimeStatus = {

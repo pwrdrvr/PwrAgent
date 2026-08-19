@@ -410,6 +410,52 @@ describe("auto updater", () => {
     expect(autoUpdaterMock.allowDowngrade).toBe(false);
   });
 
+  it("resets allowDowngrade once a later check resolves to a newer release", async () => {
+    // The flag is global state on the shared autoUpdater singleton, so the
+    // case that matters is clearing it after a switch-back check set it.
+    resolveUpdateChannelMock.mockReturnValue("latest");
+    mockGitHubReleases([
+      githubRelease("v1.1.0-alpha.2", { prerelease: true }),
+      githubRelease("v1.0.2"),
+    ]);
+    checkForUpdatesMock.mockResolvedValue({ updateInfo: { version: "1.0.2" } });
+    autoUpdaterMock.currentVersion = { version: "1.1.0-alpha.2" };
+    const updater = await importAutoUpdater();
+
+    await updater.checkForAppUpdatesNow("manual");
+    expect(autoUpdaterMock.allowDowngrade).toBe(true);
+
+    // The operator switches to Beta, where the alpha is a real update.
+    resolveUpdateTrainMock.mockReturnValue("beta");
+    resolveUpdateChannelMock.mockReturnValue("prerelease");
+    autoUpdaterMock.currentVersion = { version: "1.0.2" };
+    checkForUpdatesMock.mockResolvedValue({
+      updateInfo: { version: "1.1.0-alpha.2" },
+    });
+
+    await expect(updater.checkForAppUpdatesNow("manual")).resolves.toEqual({
+      status: "available",
+      version: "1.1.0-alpha.2",
+    });
+    expect(autoUpdaterMock.allowDowngrade).toBe(false);
+  });
+
+  it("does not treat an unreadable release tag as a switch back", async () => {
+    // compareSemver sorts a tag it cannot parse below every real version, so
+    // an unreadable tag must not reach the downgrade path and pin the feed.
+    mockGitHubReleases([githubRelease("nightly")]);
+    autoUpdaterMock.currentVersion = { version: "1.0.2" };
+    const updater = await importAutoUpdater();
+
+    await expect(updater.checkForAppUpdatesNow("manual")).resolves.toEqual({
+      status: "no-update",
+      version: "1.0.2",
+    });
+    expect(autoUpdaterMock.allowDowngrade).toBe(false);
+    expect(setFeedURLMock).not.toHaveBeenCalled();
+    expect(checkForUpdatesMock).not.toHaveBeenCalled();
+  });
+
   it("reports no update when the selected release matches the running build", async () => {
     mockGitHubReleases([githubRelease("v1.0.0-beta.7")]);
     autoUpdaterMock.currentVersion = { version: "1.0.0-beta.7" };
