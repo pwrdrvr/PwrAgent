@@ -744,6 +744,56 @@ describe("selectChannelReleases", () => {
     expect(selected.betaPrerelease?.tag_name).toBe("v1.1.0-alpha.7");
   });
 
+  it("does not let a mistagged main-train alpha take stable latest", async () => {
+    const { selectChannelReleases } = await import("../auto-updater");
+    // The GitHub Pre-release flag is set by hand at tag time. If a `main` tag
+    // ships without it, it must still not become the feed every Stable
+    // operator is pushed onto.
+    const releases = [
+      { tag_name: "v1.1.0-alpha.1", prerelease: false, draft: false },
+      { tag_name: "v1.0.2", prerelease: false, draft: false },
+      { tag_name: "v1.0.2-prerelease.2", prerelease: true, draft: false },
+    ];
+    const selected = selectChannelReleases(releases);
+    expect(selected.stableLatest?.tag_name).toBe("v1.0.2");
+    // The same flag is what keeps it out of the Stable prerelease slot, so a
+    // mistag must not leak it there either.
+    expect(selected.stablePrerelease?.tag_name).toBe("v1.0.2");
+  });
+
+  it("does not let a mistagged main-train beta take stable latest", async () => {
+    const { selectChannelReleases } = await import("../auto-updater");
+    const releases = [
+      { tag_name: "v1.1.0-beta.3", prerelease: false, draft: false },
+      { tag_name: "v1.0.2", prerelease: false, draft: false },
+    ];
+    const selected = selectChannelReleases(releases);
+    expect(selected.stableLatest?.tag_name).toBe("v1.0.2");
+    expect(selected.stablePrerelease?.tag_name).toBe("v1.0.2");
+  });
+
+  it("still promotes a real suffix-free stable over the current one", async () => {
+    const { selectChannelReleases } = await import("../auto-updater");
+    const releases = [
+      { tag_name: "v1.1.0", prerelease: false, draft: false },
+      { tag_name: "v1.0.2", prerelease: false, draft: false },
+    ];
+    const selected = selectChannelReleases(releases);
+    expect(selected.stableLatest?.tag_name).toBe("v1.1.0");
+  });
+
+  it("falls back to a suffixed stable when no suffix-free tag exists", async () => {
+    const { selectChannelReleases } = await import("../auto-updater");
+    // The pre-v1.0.0 world: every stable was a `-beta.N` tag published as
+    // GitHub Latest. Those trains must keep resolving.
+    const releases = [
+      { tag_name: "v1.0.0-beta.50", prerelease: false, draft: false },
+      { tag_name: "v1.0.0-beta.48", prerelease: true, draft: false },
+    ];
+    const selected = selectChannelReleases(releases);
+    expect(selected.stableLatest?.tag_name).toBe("v1.0.0-beta.50");
+  });
+
   it("ignores drafts in both channels", async () => {
     const { selectChannelReleases } = await import("../auto-updater");
     const releases = [
