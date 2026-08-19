@@ -59,6 +59,10 @@ export default defineConfig({
             "apps/desktop/src/main/agent-tools/__tests__/**/*.test.ts",
             "apps/desktop/src/shared/__tests__/**/*.test.ts"
           ],
+          // Windows only in effect: warms the Job-object wrapper that owns
+          // `git worktree remove` so its one-time PowerShell + helper-compile
+          // cold start is not billed to whichever test reaches it first.
+          globalSetup: ["apps/desktop/src/test-setup/windows-job-wrapper-prewarm.ts"],
           // Inline @pwrdrvr/codex-discovery so vitest transforms it. Without
           // this, the kit's bundled `import { spawn } from "child_process"`
           // is loaded raw by Node and bypasses the tests'

@@ -111,6 +111,7 @@ import {
   isAppStateInitialized,
   recordBootDecision,
 } from "./state/app-state";
+import { prewarmWindowsJobWrapper } from "./windows-job-wrapper";
 import { createMainWindow, syncHotCpuProfilersFromSettings } from "./window";
 import { subscribersForChannel } from "./window-channels";
 import { requestOpenNewThread } from "./window-open-new-thread";
@@ -1005,6 +1006,11 @@ export function bootstrapApp(): void {
     if (isDevelopment) {
       registerRuntimeIdentityIpcHandlers();
     }
+    // Windows only, and a no-op everywhere else. The first Job-wrapped command
+    // on a machine pays a cold PowerShell host launch and a helper compile that
+    // has measured in the tens of seconds; without this the bill lands on the
+    // operator's first worktree archive.
+    void prewarmWindowsJobWrapper();
     const messagingRuntime = getDesktopMessagingRuntime((options) =>
       loadDesktopMessagingConfigFromSettings(
         getDesktopSettingsService(),
