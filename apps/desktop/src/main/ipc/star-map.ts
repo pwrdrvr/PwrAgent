@@ -1,17 +1,15 @@
 import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import type {
+  OpenStarMapManagerRequest,
+  OpenStarMapManagerResponse,
   ReadStarMapArrangementResponse,
   ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
   StarMapArrangementEntry,
   StarMapIntakeRequest,
   StarMapIntakeResponse,
-  WriteStarMapWorkspaceRequest,
-} from "@pwragent/shared";
-import type {
-  OpenStarMapManagerRequest,
-  OpenStarMapManagerResponse,
   StarMapViewSnapshot,
+  WriteStarMapWorkspaceRequest,
 } from "@pwragent/shared";
 import {
   MAX_STAR_MAP_INTAKE_IMAGE_UPLOADS,

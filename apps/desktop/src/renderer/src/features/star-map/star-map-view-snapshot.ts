@@ -2,6 +2,7 @@ import {
   buildThreadIdentityKey,
   type NavigationThreadSummary,
   type StarMapViewCloud,
+  type StarMapViewInstance,
   type StarMapViewLayout,
   type StarMapViewSnapshot,
   type StarMapViewSurface,
@@ -110,10 +111,36 @@ export function buildStarMapViewSnapshot(
 
   // The projects lens pools threads from every instance into one body, so
   // its clouds belong to no single instance.
+  // Which instances draw a given thread. Built once: a project pools threads
+  // from the whole fleet, and the same thread can sit under two instances
+  // (a pinned remote row alongside its owner).
+  const instancesByThreadKey = new Map<string, string[]>();
+  for (const [instanceId, instanceThreads] of input.threadsByInstance) {
+    for (const thread of instanceThreads) {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const owners = instancesByThreadKey.get(threadKey);
+      if (owners) owners.push(instanceId);
+      else instancesByThreadKey.set(threadKey, [instanceId]);
+    }
+  }
   for (const project of input.projects ?? []) {
     const threadKeys = project.threads.map((thread) =>
       buildThreadIdentityKey(thread.source, thread.id),
     );
+    let visibleCount = 0;
+    for (const threadKey of threadKeys) {
+      // A project cloud is the answer to "its cloud" in this lens, so its
+      // members carry the cloud key the same way an orbit cloud's do —
+      // without this every thread reported `cloudKey: undefined` here, and
+      // the one reference the tool exists to resolve went unanswered.
+      let drawn = false;
+      for (const instanceId of instancesByThreadKey.get(threadKey) ?? []) {
+        const cardKey = cardKeyOf(instanceId, threadKey);
+        cloudKeyByCard.set(cardKey, project.key);
+        if (input.visibleCardKeys.has(cardKey)) drawn = true;
+      }
+      if (drawn) visibleCount += 1;
+    }
     clouds.push({
       key: project.key,
       label: project.label,
@@ -121,18 +148,14 @@ export function buildStarMapViewSnapshot(
       isParentGroup: false,
       expanded: false,
       threadCount: threadKeys.length,
-      visibleCount: threadKeys.filter((threadKey) =>
-        isDrawnInAnyInstance(input, threadKey),
-      ).length,
-      hiddenCount: threadKeys.filter(
-        (threadKey) => !isDrawnInAnyInstance(input, threadKey),
-      ).length,
+      visibleCount,
+      hiddenCount: threadKeys.length - visibleCount,
       threadKeys,
     });
   }
 
   const threads: StarMapViewThread[] = [];
-  const instances = [];
+  const instances: StarMapViewInstance[] = [];
   for (const [instanceId, instanceThreads] of input.threadsByInstance) {
     const instanceLabel = input.instanceLabels.get(instanceId) ?? instanceId;
     let visibleThreadCount = 0;
@@ -202,14 +225,3 @@ export function buildStarMapViewSnapshot(
   };
 }
 
-function isDrawnInAnyInstance(
-  input: StarMapViewSnapshotInput,
-  threadKey: string,
-): boolean {
-  for (const instanceId of input.threadsByInstance.keys()) {
-    if (input.visibleCardKeys.has(cardKeyOf(instanceId, threadKey))) {
-      return true;
-    }
-  }
-  return false;
-}
