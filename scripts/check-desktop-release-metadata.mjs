@@ -384,7 +384,8 @@ for (const expected of [
   "gh release create",
   "--verify-tag",
   "--prerelease",
-  "--latest",
+  "isPrerelease",
+  "was not created as a GitHub Pre-release",
   "windows-dist/*.exe",
   "windows-dist/*.exe.blockmap",
 ]) {
@@ -400,6 +401,22 @@ assertWorkflowJobExcludesText(
   ".github/workflows/release.yml",
   "publish-release-assets",
   "windows-dist/* \\",
+);
+// Every release is published as a GitHub Pre-release. Promotion to Latest is a
+// deliberate operator action after the assets and smoke checks are validated,
+// so CI must never pass --latest.
+assertWorkflowJobExcludesText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "publish-release-assets",
+  "--latest",
+);
+assertWorkflowJobOrdersText(
+  releaseWorkflow,
+  ".github/workflows/release.yml",
+  "publish-release-assets",
+  "gh release create",
+  "was not created as a GitHub Pre-release",
 );
 assertWorkflowJobContainsText(
   releaseWorkflow,
@@ -501,7 +518,8 @@ for (const expected of [
   "PwrAgent-linux-x64.deb",
   "PwrAgent-linux-arm64.deb",
   "SHA256SUMS",
-  "born as GitHub `Pre-release`",
+  "born as a GitHub `Pre-release`",
+  "--latest --prerelease=false",
 ]) {
   if (!desktopReleaseRunbook.includes(expected)) {
     fail(`docs/desktop-release-runbook.md must contain ${JSON.stringify(expected)}`);
