@@ -14,7 +14,7 @@ import {
   type ReactNode,
 } from "react";
 
-type PullRequestLinkContextValue = {
+export type PullRequestLinkContextValue = {
   getSnapshot: (fallback: PrSummary) => PrSummary;
   getNumberSnapshot: (number: number) => PrSummary | undefined;
   resolve: (href: string) => PrSummary | undefined;
@@ -372,6 +372,18 @@ export function useLivePullRequestNumber(number: number): PrSummary | undefined 
     getSnapshot,
     () => undefined,
   );
+}
+
+/**
+ * The live status for a parsed PR, for callers outside a component that already
+ * hold the context value (draft hydration). `useLivePullRequest` is the hook
+ * form and stays the right choice inside a chip.
+ */
+export function resolveLivePullRequest(
+  pr: PrSummary,
+  links: PullRequestLinkContextValue | undefined,
+): PrSummary {
+  return links?.getSnapshot(pr) ?? pr;
 }
 
 export function resolvePullRequestHref(

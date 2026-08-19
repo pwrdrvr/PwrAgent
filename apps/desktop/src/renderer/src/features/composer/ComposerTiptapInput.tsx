@@ -41,6 +41,7 @@ import {
   threadCopyTargets,
   type ThreadChipMenuLink,
 } from "../chrome/ThreadChipContextMenu";
+import { readPrChipModifierClasses } from "../pr-status/pr-chip-state";
 import type {
   ComposerInputChangeMetadata,
   ComposerInputHandle,
@@ -139,6 +140,18 @@ const SkillMention = Mention.extend({
         default: null,
         parseHTML: (element) => element.getAttribute("data-mention-kind"),
       },
+      // Pull-request chips only. The dot color is a fact about the PR, and
+      // Tiptap's DOM specs cannot mount `PrChip` to look it up, so the
+      // `pr-chip--*` modifiers `resolvePrChipPresentation` produced when the
+      // chip was minted ride on the node. They round-trip through the chip's
+      // own `class`, so a copy/paste of a chip keeps its color.
+      prChipModifiers: {
+        default: null,
+        parseHTML: (element) => {
+          const modifiers = readPrChipModifierClasses(element.className);
+          return modifiers.length > 0 ? modifiers : null;
+        },
+      },
     };
   },
 }).configure({
@@ -197,10 +210,20 @@ const SkillMention = Mention.extend({
     if (node.attrs.kind === "pull-request") {
       const label = String(node.attrs.name ?? "pull request");
       const path = typeof node.attrs.path === "string" ? node.attrs.path : "";
+      // A chip minted before any status was known keeps the gray dot; that is
+      // the honest reading of "we have never seen this PR", not a default.
+      const modifiers = readMentionPrChipModifiers(node.attrs) ?? [
+        "pr-chip--unknown",
+      ];
       return [
         "span",
         {
-          class: "pr-chip pr-chip--unknown composer-pr-chip composer-tiptap-input__mention",
+          class: [
+            "pr-chip",
+            ...modifiers,
+            "composer-pr-chip",
+            "composer-tiptap-input__mention",
+          ].join(" "),
           "data-type": "mention",
           "data-mention-kind": "pull-request",
           "data-composer-skill-token-id": String(node.attrs.id ?? ""),
@@ -212,6 +235,12 @@ const SkillMention = Mention.extend({
         },
         ["span", { class: "pr-chip__dot", "aria-hidden": "true" }],
         ["span", { class: "pr-chip__label" }, label],
+        // Same affordance the sidebar chip renders under a draft PR. Without
+        // it `pr-chip--draft` only lifts the label and the chip reads as
+        // misaligned rather than as a draft.
+        ...(modifiers.includes("pr-chip--draft")
+          ? [["span", { class: "pr-chip__draft-bar", "aria-hidden": "true" }]]
+          : []),
       ];
     }
     if (node.attrs.kind === "directory" || node.attrs.kind === "file") {
@@ -826,14 +855,7 @@ function buildTiptapContent(
     content.push(...splitTextContent(value.slice(cursor, index)));
     content.push({
       type: "mention",
-      attrs: {
-        id: skill.id,
-        name: skill.name,
-        path: skill.path ?? null,
-        description: skill.description ?? null,
-        shortDescription: skill.shortDescription ?? null,
-        kind: skill.kind ?? null,
-      },
+      attrs: getSkillMentionAttrs(skill),
     });
     cursor = index;
   });
@@ -1000,6 +1022,7 @@ function mentionAttrsToSkill(
     || attrs.kind === "thread"
       ? attrs.kind
       : undefined;
+  const prChipModifiers = readMentionPrChipModifiers(attrs);
   return {
     id: typeof attrs.id === "string" ? attrs.id : `${name}:${index}`,
     index,
@@ -1012,6 +1035,7 @@ function mentionAttrsToSkill(
         ? attrs.shortDescription
         : undefined,
     ...(kind ? { kind } : {}),
+    ...(prChipModifiers ? { prChipModifiers } : {}),
   };
 }
 
@@ -1898,7 +1922,22 @@ function getSkillMentionAttrs(skill: ComposerSkillToken): Record<string, unknown
     description: skill.description ?? null,
     shortDescription: skill.shortDescription ?? null,
     kind: skill.kind ?? null,
+    prChipModifiers: skill.prChipModifiers ?? null,
   };
+}
+
+/** The stored `pr-chip--*` modifiers on a mention node, when it has any. */
+function readMentionPrChipModifiers(
+  attrs: Record<string, unknown>,
+): string[] | undefined {
+  if (!Array.isArray(attrs.prChipModifiers)) {
+    return undefined;
+  }
+  const modifiers = attrs.prChipModifiers.filter(
+    (entry): entry is string =>
+      typeof entry === "string" && entry.startsWith("pr-chip--"),
+  );
+  return modifiers.length > 0 ? modifiers : undefined;
 }
 
 function getContentSignature(params: {
@@ -1912,6 +1951,11 @@ function getContentSignature(params: {
       kind: token.kind,
       name: token.name,
       path: token.path,
+      // A re-hydrated draft mints its PR chips from the live status, so the
+      // same `#123` at the same offset can come back a different color. That
+      // is a content change — without it the rebuilt document compares equal
+      // to the rendered one and the dot keeps the status it was minted with.
+      prChipModifiers: token.prChipModifiers,
     })),
   });
 }

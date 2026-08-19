@@ -54,6 +54,72 @@ function normalizeLegacyCheckState(
   return "unknown";
 }
 
+/**
+ * Everything the chip's classes say about a PR, resolved once.
+ *
+ * The composer renders its PR chips through Tiptap's DOM specs, which cannot
+ * mount `PrChip` and never see a `PrSummary` again after the chip is minted.
+ * Deriving both surfaces from this one function is what keeps a composer chip
+ * the same color as the sidebar chip for the same PR.
+ */
+export type PrChipPresentation = {
+  chipState: PrChipDotState;
+  hasFailingChecksStillRunning: boolean;
+  isConflicting: boolean;
+  isDraft: boolean;
+};
+
+export function resolvePrChipPresentation(
+  pr: PrSummary,
+  options?: {
+    /**
+     * The chip sits next to explicit status pills (the Pull Requests card), so
+     * draft + merge conflict belong to those pills and are dropped here.
+     */
+    withStatusPills?: boolean;
+  },
+): PrChipPresentation {
+  // Draft and merge-conflict ride ALONGSIDE the check-state dot color rather
+  // than replacing it: an OPEN draft keeps its real status color and gains a
+  // separate affordance bar, and a conflict recolors the dot red (see the
+  // `.pr-chip--draft` / `.pr-chip--conflicting` rules in app.css). Both only
+  // apply while the PR is open — a merged/closed chip owns its own dot color.
+  const isOpen = resolveLifecycleState(pr) === "open";
+  const surfaceAffordances = isOpen && !options?.withStatusPills;
+  return {
+    chipState: resolveChipState(pr),
+    hasFailingChecksStillRunning:
+      isOpen
+      && resolveCheckState(pr) === "failing"
+      && pr.checksStillRunning === true,
+    isConflicting: surfaceAffordances && pr.mergeState === "conflicting",
+    isDraft: surfaceAffordances && pr.reviewState === "draft",
+  };
+}
+
+/**
+ * The `pr-chip--*` modifiers for a presentation, WITHOUT the base `pr-chip`
+ * class. Kept separate so the composer can store the modifiers on its mention
+ * node and still compose them with its own chip classes.
+ */
+export function prChipModifierClasses(
+  presentation: PrChipPresentation,
+): string[] {
+  return [
+    `pr-chip--${presentation.chipState}`,
+    presentation.hasFailingChecksStillRunning ? "pr-chip--checks-running" : "",
+    presentation.isDraft ? "pr-chip--draft" : "",
+    presentation.isConflicting ? "pr-chip--conflicting" : "",
+  ].filter(Boolean);
+}
+
+/** The modifiers a `pr-chip` element already carries, in stored order. */
+export function readPrChipModifierClasses(className: string): string[] {
+  return className
+    .split(/\s+/)
+    .filter((entry) => entry.startsWith("pr-chip--"));
+}
+
 /** Whether the PR carries no status signal at all — a fresh attachment. */
 export function isPrStatusUnknown(pr: PrSummary): boolean {
   return (

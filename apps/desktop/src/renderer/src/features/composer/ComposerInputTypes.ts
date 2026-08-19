@@ -24,6 +24,15 @@ export type ComposerSkillToken = AppServerSkillSummary & {
   id: string;
   index: number;
   kind?: "directory" | "file" | "pull-request" | "thread";
+  /**
+   * Pull-request chips only: the `pr-chip--*` modifiers the sidebar chip would
+   * render for this PR, resolved when the token was minted. The composer draws
+   * its chips through Tiptap DOM specs, which cannot mount `PrChip`, so the
+   * status has to travel with the token or the chip renders permanently gray.
+   * Absent only on a chip restored from an editor document saved before chips
+   * carried their status; those keep rendering the gray "unknown" dot.
+   */
+  prChipModifiers?: string[];
 };
 
 export type ComposerInputChangeMetadata = {

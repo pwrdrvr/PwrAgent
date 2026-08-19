@@ -119,7 +119,16 @@ import {
   canChangeExistingThreadAgentDesignation,
   createDesktopAgentThread,
 } from "../../lib/agent-thread";
-import { parsePullRequestUrl } from "../../lib/pull-request-links";
+import {
+  parsePullRequestUrl,
+  resolveLivePullRequest,
+  usePullRequestLinks,
+  type PullRequestLinkContextValue,
+} from "../../lib/pull-request-links";
+import {
+  prChipModifierClasses,
+  resolvePrChipPresentation,
+} from "../pr-status/pr-chip-state";
 import {
   resolveThreadHref,
   resolveThreadIdText,
@@ -1525,6 +1534,14 @@ function createComposerPullRequestToken(
     shortDescription: `${pullRequest.org}/${pullRequest.repo}`,
     id: `${pullRequest.url}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
     index,
+    // Every PR chip in the composer is minted here — picker, pasted URL, and
+    // draft rehydration — so this is the one place the chip's status can be
+    // read off the summary. A summary that carries no status at all resolves
+    // to the same "unknown" gray the chip renders without it, so a PR nothing
+    // has observed is not dressed up as a state we know.
+    prChipModifiers: prChipModifierClasses(
+      resolvePrChipPresentation(pullRequest),
+    ),
   };
 }
 
@@ -1773,6 +1790,7 @@ function hydrateComposerDraft(
   canonicalDraft: string,
   skills: AppServerSkillSummary[],
   threadLinks: ThreadLinkContextValue | undefined,
+  pullRequestLinks: PullRequestLinkContextValue | undefined,
 ): {
   draft: string;
   skillTokens: ComposerSkillToken[];
@@ -1837,8 +1855,15 @@ function hydrateComposerDraft(
     } else {
       const pullRequest = parsePullRequestUrl(href);
       if (pullRequest) {
+        // The parsed summary knows the repo and the number and nothing else.
+        // Upgrading it through the live store before minting the token is what
+        // gives a restored draft the same colored chip the sidebar shows; an
+        // unseen PR falls back to the parsed summary and stays gray.
         skillTokens.push(
-          createComposerPullRequestToken(pullRequest, draft.length),
+          createComposerPullRequestToken(
+            resolveLivePullRequest(pullRequest, pullRequestLinks),
+            draft.length,
+          ),
         );
       } else {
         draft += match[0];
@@ -2888,6 +2913,7 @@ function CopyableComposerError(props: {
 
 export function Composer(props: ComposerProps) {
   const threadLinks = useThreadLinks();
+  const pullRequestLinks = usePullRequestLinks();
   const rendererFederationTarget = readRendererFederationTarget();
   const filesystemFederationTarget =
     props.thread?.federation?.ref.target
@@ -2947,6 +2973,7 @@ export function Composer(props: ComposerProps) {
           props.launchpad.prompt ?? "",
           props.skills,
           threadLinks,
+          pullRequestLinks,
         );
   const activeComposerScopeKeyRef = useRef(composerScopeKey);
   const pasteScopeRef = useRef({ key: composerScopeKey, version: 0 });
@@ -3270,8 +3297,14 @@ export function Composer(props: ComposerProps) {
     [draft, skillTokens]
   );
   const canonicalReferenceTokens = useMemo(
-    () => hydrateComposerDraft(canonicalDraft, props.skills, threadLinks).skillTokens,
-    [canonicalDraft, props.skills, threadLinks],
+    () =>
+      hydrateComposerDraft(
+        canonicalDraft,
+        props.skills,
+        threadLinks,
+        pullRequestLinks,
+      ).skillTokens,
+    [canonicalDraft, props.skills, pullRequestLinks, threadLinks],
   );
   const explicitReferencePaths = useMemo(
     () =>
@@ -3647,7 +3680,12 @@ export function Composer(props: ComposerProps) {
   const setComposerDraftFromCanonical = (nextDraft: string): void => {
     deletedSkillTokenHistoryRef.current = [];
     setEditorDocument(undefined);
-    const hydrated = hydrateComposerDraft(nextDraft, props.skills, threadLinks);
+    const hydrated = hydrateComposerDraft(
+      nextDraft,
+      props.skills,
+      threadLinks,
+      pullRequestLinks,
+    );
     setDraft(hydrated.draft);
     setSkillTokens(hydrated.skillTokens);
   };
@@ -4947,6 +4985,7 @@ export function Composer(props: ComposerProps) {
         props.launchpad?.prompt ?? "",
         props.skills,
         threadLinks,
+        pullRequestLinks,
       );
       const parkedTargetDraft = savedTargetDraft ?? {
         draft: hydratedTargetDraft.draft,
@@ -5123,7 +5162,12 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     deletedSkillTokenHistoryRef.current = [];
     if (skillTokens.length === 0 && draft.includes("](")) {
-      const hydrated = hydrateComposerDraft(draft, props.skills, threadLinks);
+      const hydrated = hydrateComposerDraft(
+        draft,
+        props.skills,
+        threadLinks,
+        pullRequestLinks,
+      );
       if (hydrated.skillTokens.length > 0) {
         // The paste update retained a rich document without mention nodes.
         // Let the controlled editor rebuild it from the hydrated tokens so
@@ -6172,6 +6216,7 @@ export function Composer(props: ComposerProps) {
       textDraft,
       props.skills,
       threadLinks,
+      pullRequestLinks,
     ).skillTokens;
     const localReferenceTokens = [
       ...fileSkillTokens,

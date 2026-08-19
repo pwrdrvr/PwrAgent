@@ -31,6 +31,7 @@ import {
 } from "../../../lib/agent-thread";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { FEDERATED_THREAD_SEARCH_DEBOUNCE_MS } from "../../../lib/useFederatedThreadSearch";
+import { PullRequestLinkProvider } from "../../../lib/pull-request-links";
 import { ThreadLinkProvider } from "../../../lib/thread-links";
 import { Composer } from "../Composer";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "../native-picker-boundary";
@@ -2988,6 +2989,140 @@ describe("Composer", () => {
         ],
       });
     });
+  });
+
+  it("gives a picked pull-request chip the status color the thread list shows", async () => {
+    const pullRequest = {
+      provider: "github.com" as const,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      number: 13268,
+      state: "unknown" as const,
+      checkState: "passing" as const,
+      lifecycleState: "open" as const,
+      title: "Ship channel-style thread references",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/13268",
+    };
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+    };
+    const pullRequestThread: NavigationThreadSummary = {
+      id: "thread-pr-13268",
+      title: "Implement hash references",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      prs: [pullRequest],
+    };
+
+    render(
+      <Composer
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startTurn: vi.fn(async () => ({
+            backend: "codex" as const,
+            threadId: currentThread.id,
+            turnId: "turn-1",
+          })),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={currentThread}
+        threads={[currentThread, pullRequestThread]}
+      />,
+    );
+
+    const textbox = screen.getByRole("textbox", { name: "Reply" });
+    fireEvent.change(textbox, { target: { value: "See #13268" } });
+    const listbox = await screen.findByRole("listbox", {
+      name: "Threads and pull requests",
+    });
+    fireEvent.click(
+      within(listbox).getByRole("option", { name: /pwrdrvr\/PwrAgent#13268/ }),
+    );
+
+    const chip = await waitFor(() =>
+      within(textbox).getByText("#13268").closest("[data-mention-kind]"),
+    );
+    expect(chip).toHaveClass("pr-chip--passing");
+    expect(chip).not.toHaveClass("pr-chip--unknown");
+  });
+
+  it("colors a restored pull-request chip from the live pull request status", async () => {
+    const url = "https://github.com/pwrdrvr/PwrAgent/pull/13268";
+    const pullRequest = {
+      provider: "github.com" as const,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      number: 13268,
+      state: "unknown" as const,
+      checkState: "failing" as const,
+      lifecycleState: "open" as const,
+      reviewState: "draft" as const,
+      title: "Ship channel-style thread references",
+      url,
+    };
+    const currentThread: NavigationThreadSummary = {
+      id: "thread-current",
+      title: "Current thread",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      prs: [pullRequest],
+    };
+    const launchpad: NavigationLaunchpadDraft = {
+      directoryKey: "directory:/repo",
+      directoryKind: "directory",
+      directoryLabel: "Repo",
+      directoryPath: "/repo",
+      backend: "codex",
+      executionMode: "default",
+      prompt: `look at [#13268](${url})`,
+      workMode: "local",
+      branchName: "main",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    render(
+      <PullRequestLinkProvider
+        activeThread={currentThread}
+        threads={[currentThread]}
+      >
+        <Composer
+          backends={[backendSummary("codex")]}
+          directory={{
+            key: "directory:/repo",
+            kind: "directory",
+            label: "Repo",
+            path: "/repo",
+            threadKeys: [],
+            needsAttentionCount: 0,
+          }}
+          draftStore={createComposerDraftStore()}
+          launchpad={launchpad}
+          onMaterializeLaunchpad={async () => undefined}
+          onUpdateLaunchpad={async () => undefined}
+          skills={[]}
+          threads={[currentThread]}
+        />
+      </PullRequestLinkProvider>,
+    );
+
+    const richInput = screen.getByTestId("composer-tiptap-input");
+    const chip = await waitFor(() =>
+      within(richInput).getByText("#13268").closest("[data-mention-kind]"),
+    );
+    expect(chip).toHaveClass("pr-chip--failing");
+    expect(chip).toHaveClass("pr-chip--draft");
+    expect(chip).not.toHaveClass("pr-chip--unknown");
   });
 
   it("rebuilds a GitLab merge request chip from a prompt-only launchpad restore", async () => {
