@@ -815,6 +815,9 @@ function prLogIds(prs: PrSummary[]): string[] {
   return prs.map((pr) => getPrStatusKey(pr));
 }
 
+/** Bounded sample of PR keys carried by the stale-observation debug line. */
+const STALE_PR_OBSERVATION_LOG_SAMPLE = 5;
+
 function userPrRefreshLogPayload(params: {
   backend: AppServerBackendKind;
   branch: string;
@@ -2941,19 +2944,12 @@ class DesktopAppServerService {
   private rememberPrStatuses(prs: PrSummary[], fetchedAt: number): PrSummary[] {
     const changedPrs: PrSummary[] = [];
     const transitions: PrStatusTransition[] = [];
+    const staleKeys: string[] = [];
     for (const candidate of prs.map(normalizePrSummary)) {
       const key = getPrStatusKey(candidate);
       const current = this.prStatusRegistry.get(key);
       if (current && current.fetchedAt > fetchedAt) {
-        appServerLog.info("pr status observation ignored", {
-          prKey: key,
-          observedAt: fetchedAt,
-          currentObservedAt: current.fetchedAt,
-          observedCheckState: candidate.checkState,
-          currentCheckState: current.pr.checkState,
-          observedLifecycleState: candidate.lifecycleState,
-          currentLifecycleState: current.pr.lifecycleState,
-        });
+        staleKeys.push(key);
         continue;
       }
       const pr = preserveKnownPrHoverMetadata(current?.pr, candidate);
@@ -2972,6 +2968,17 @@ class DesktopAppServerService {
         ...current,
         pr,
         fetchedAt,
+      });
+    }
+    if (staleKeys.length > 0) {
+      // Losing to a newer registry entry is ordinary bookkeeping: cache loads
+      // and overlay seeds observe at timestamp 0, so every known PR reports one.
+      // A single bounded debug line keeps the detail reachable through
+      // Help -> Logs without burying the startup log under a line per PR.
+      appServerLog.debug("pr status observations ignored as stale", {
+        observedAt: fetchedAt,
+        staleCount: staleKeys.length,
+        prKeys: staleKeys.slice(0, STALE_PR_OBSERVATION_LOG_SAMPLE),
       });
     }
     if (transitions.length > 0) {

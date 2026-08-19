@@ -911,6 +911,15 @@ export function bootstrapApp(): void {
           assertUnreachableProfileBootDecision(bootDecision);
       }
     })();
+    // Every log file needs the build it came from. The preload records the
+    // same versions per window, but that is debug detail; this line is the one
+    // an operator reads at the top of a support log.
+    mainLog.info("app starting", {
+      appVersion: app.getVersion(),
+      electron: process.versions.electron ?? "unknown",
+      platform: process.platform,
+      arch: process.arch,
+    });
     logBootDecision(bootDecision);
     // Stash the boot decision so the renderer can read it via
     // `getBootInfo` IPC once the wizard mounts. Specifically the

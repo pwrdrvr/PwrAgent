@@ -35,6 +35,7 @@ import { MemoryDesktopSecretStore } from "../settings/desktop-secret-store";
 import { DesktopSettingsService } from "../settings/desktop-settings-service";
 
 const messagingLog = vi.hoisted(() => ({
+  debug: vi.fn(),
   error: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),

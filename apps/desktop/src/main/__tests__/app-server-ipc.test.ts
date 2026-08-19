@@ -1462,6 +1462,20 @@ describe("app server ipc", () => {
       prs: [passingPr],
     });
     expect(detectPullRequestsForThread).toHaveBeenCalledOnce();
+    // Thread two's overlay observes the older PR and loses to the registry.
+    // That drop is aggregated into one debug line — never an info line per PR,
+    // which would bury the startup log once a profile tracks many PRs.
+    expect(mockAppServerLog.debug).toHaveBeenCalledWith(
+      "pr status observations ignored as stale",
+      expect.objectContaining({
+        staleCount: 1,
+        prKeys: ["github.com/openai/codex#727"],
+      }),
+    );
+    expect(mockAppServerLog.info).not.toHaveBeenCalledWith(
+      "pr status observation ignored",
+      expect.anything(),
+    );
   });
 
   it("hydrates canonical PR state from persisted cache without scheduled GitHub refresh", async () => {
