@@ -11,11 +11,16 @@ import {
   STAR_MAP_INTAKE_CHANNEL,
   STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL,
   STAR_MAP_OPEN_WINDOW_CHANNEL,
+  STAR_MAP_PUBLISH_VIEW_CHANNEL,
   WINDOW_SHOW_THREAD_CHANNEL,
 } from "../../shared/ipc";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
 import { stageTurnInputAttachments } from "../app-server/turn-input-attachment-files";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import {
+  readStarMapView,
+  resetStarMapViewRegistry,
+} from "../star-map/star-map-view-registry";
 import { registerStarMapIpcHandlers } from "../ipc/star-map";
 import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
@@ -294,5 +299,49 @@ describe("star map window IPC", () => {
     })).rejects.toThrow(/at most 5 images/u);
     expect(stageTurnInputAttachments).not.toHaveBeenCalled();
     expect(dispatchStarMapIntake).not.toHaveBeenCalled();
+  });
+
+  it("accepts a published view and serves it to the star map tools", async () => {
+    resetStarMapViewRegistry();
+    const sender = {
+      id: 9,
+      isDestroyed: () => false,
+      once: () => undefined,
+    } as unknown as WebContents;
+
+    await handlerFor(STAR_MAP_PUBLISH_VIEW_CHANNEL)(
+      { sender },
+      {
+        capturedAt: 1,
+        surface: "window",
+        layout: "orbit",
+        camera: { x: 0, y: 0, scale: 1 },
+        viewport: { width: 100, height: 100 },
+        filters: [],
+        hideOfflineInstances: false,
+        hiddenInstanceCount: 0,
+        instances: [],
+        clouds: [],
+        threads: [],
+        selectedThreadKeys: [],
+        openChatCardThreadKeys: [],
+        matchedThreadCount: 0,
+      },
+    );
+
+    expect(readStarMapView()?.layout).toBe("orbit");
+  });
+
+  it("drops a malformed view rather than reporting it as the operator's screen", async () => {
+    resetStarMapViewRegistry();
+    const sender = {
+      id: 9,
+      isDestroyed: () => false,
+      once: () => undefined,
+    } as unknown as WebContents;
+
+    await handlerFor(STAR_MAP_PUBLISH_VIEW_CHANNEL)({ sender }, { layout: "orbit" });
+
+    expect(readStarMapView()).toBeUndefined();
   });
 });

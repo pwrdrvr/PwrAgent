@@ -8,6 +8,11 @@ import type {
   StarMapIntakeResponse,
   WriteStarMapWorkspaceRequest,
 } from "@pwragent/shared";
+import type {
+  OpenStarMapManagerRequest,
+  OpenStarMapManagerResponse,
+  StarMapViewSnapshot,
+} from "@pwragent/shared";
 import {
   MAX_STAR_MAP_INTAKE_IMAGE_UPLOADS,
   type StarMapIntakeDispatchRequest,
@@ -15,13 +20,16 @@ import {
 import {
   isRemoteFederationTarget,
   isStarMapArrangementEntry,
+  isStarMapViewSnapshot,
   isStarMapWorkspaceSnapshot,
 } from "@pwragent/shared";
 import {
   STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL,
   STAR_MAP_INTAKE_CHANNEL,
   STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL,
+  STAR_MAP_OPEN_MANAGER_CHANNEL,
   STAR_MAP_OPEN_WINDOW_CHANNEL,
+  STAR_MAP_PUBLISH_VIEW_CHANNEL,
   STAR_MAP_READ_ARRANGEMENT_CHANNEL,
   STAR_MAP_READ_WORKSPACE_CHANNEL,
   STAR_MAP_SET_CARD_POSITION_CHANNEL,
@@ -41,6 +49,8 @@ import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
 import { requestShowThread } from "../window-show-thread";
 import { showStarMapWindow } from "../star-map-window";
+import { publishStarMapView } from "../star-map/star-map-view-registry";
+import { openStarMapManagerThread } from "../star-map/star-map-manager-thread";
 
 /**
  * The main window the Star Map window's cross-window actions target.
@@ -123,6 +133,8 @@ export function registerStarMapIpcHandlers(): void {
   ipcMain.removeHandler(STAR_MAP_OPEN_WINDOW_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL);
+  ipcMain.removeHandler(STAR_MAP_PUBLISH_VIEW_CHANNEL);
+  ipcMain.removeHandler(STAR_MAP_OPEN_MANAGER_CHANNEL);
   ipcMain.handle(STAR_MAP_OPEN_WINDOW_CHANNEL, async (event): Promise<void> => {
     showStarMapWindow({
       sourceWindow: BrowserWindow.fromWebContents(event.sender),
@@ -172,6 +184,28 @@ export function registerStarMapIpcHandlers(): void {
           .starMapIntake(intake);
       }
       return await dispatchStarMapIntake(intake);
+    },
+  );
+  ipcMain.handle(
+    STAR_MAP_OPEN_MANAGER_CHANNEL,
+    async (
+      _event,
+      request: OpenStarMapManagerRequest,
+    ): Promise<OpenStarMapManagerResponse> =>
+      // Local only: the manager reads the viewer's own map, and its tools
+      // already reach peers by instanceId when a request needs them to.
+      await openStarMapManagerThread(request ?? {}),
+  );
+  ipcMain.handle(
+    STAR_MAP_PUBLISH_VIEW_CHANNEL,
+    async (event, snapshot: StarMapViewSnapshot): Promise<void> => {
+      // Validated rather than trusted: this lands in an Agent tool result,
+      // and a malformed snapshot would be reported to the model as the
+      // operator's screen.
+      if (!isStarMapViewSnapshot(snapshot)) {
+        return;
+      }
+      publishStarMapView({ snapshot, webContents: event.sender });
     },
   );
   ipcMain.handle(
@@ -242,6 +276,8 @@ export function registerStarMapIpcHandlers(): void {
 }
 
 export function disposeStarMapIpcHandlers(): void {
+  ipcMain.removeHandler(STAR_MAP_OPEN_MANAGER_CHANNEL);
+  ipcMain.removeHandler(STAR_MAP_PUBLISH_VIEW_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_READ_ARRANGEMENT_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_READ_WORKSPACE_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_SET_CARD_POSITION_CHANNEL);

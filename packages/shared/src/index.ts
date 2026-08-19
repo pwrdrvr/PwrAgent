@@ -28,6 +28,7 @@ export * from "./navigation-star-map-filters";
 export * from "./contracts/rbac";
 export * from "./contracts/settings";
 export * from "./contracts/scheduled-thread-actions";
+export * from "./contracts/star-map-tools";
 export * from "./contracts/subagent-transcript";
 export * from "./contracts/tool-output-incidents";
 export * from "./contracts/thread-link";
