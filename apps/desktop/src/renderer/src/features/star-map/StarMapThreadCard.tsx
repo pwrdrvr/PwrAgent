@@ -76,6 +76,13 @@ export function StarMapThreadCard(props: {
   /** This thread has a chat card open on the map, tethered to this card. */
   chatting?: boolean;
   /**
+   * The operator just picked this card out of the ⌘K palette and the camera
+   * flew here. Wears a brief ring: the flight centres the card, and the
+   * middle of the window is not something the eye picks out of a field of
+   * identical cards on its own.
+   */
+  located?: boolean;
+  /**
    * Add or remove this card from the selection. Deliberately outside
    * `drag`: amending a selection has to work before the durable instance
    * id lands, which is the one thing that gates dragging.
@@ -141,7 +148,7 @@ export function StarMapThreadCard(props: {
         props.entering ? " star-map-card-shell--entering" : ""
       }${props.selected ? " star-map-card-shell--selected" : ""}${
         props.chatting ? " star-map-card-shell--chatting" : ""
-      }`}
+      }${props.located ? " star-map-card-shell--located" : ""}`}
       style={style}
       data-thread-key={threadKey}
       data-card-key={props.cardKey}

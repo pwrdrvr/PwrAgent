@@ -1,4 +1,8 @@
-import { comparePinnedThreads, type NavigationThreadSummary } from "@pwragent/shared";
+import {
+  buildThreadIdentityKey,
+  comparePinnedThreads,
+  type NavigationThreadSummary,
+} from "@pwragent/shared";
 import {
   isAgentThread,
   threadAttentionCategories,
@@ -180,24 +184,36 @@ function pinOverridesFilters(
 }
 
 /**
- * Threads to show: pinned threads first in the operator's own pin order,
- * then everything else by recent activity. Archived threads never surface
- * on the map regardless of selection.
+ * Threads to show: summoned threads first, then pinned threads in the
+ * operator's own pin order, then everything else by recent activity.
+ * Archived threads never surface on the map regardless of selection.
  *
  * Pins sort nearest the star deliberately — the slot closest to the body is
  * the one that stays put as the column grows, so a curated thread does not
  * wander as unrelated activity arrives.
+ *
+ * A summoned thread is one the operator named in the ⌘K palette, and it
+ * outranks even a pin twice over: the chips do not get to hide it, and the
+ * slot order puts it inside every per-cloud cap. Both matter for the same
+ * reason — flying the camera to a card that the lens then declines to draw
+ * is the failure the summon exists to prevent.
  */
 export function selectFilteredThreads(params: {
   selection: StarMapFilterSelection;
   sessionKeys?: StarMapSessionKeys;
   threads: readonly NavigationThreadSummary[];
+  /** Identity keys the operator summoned from the ⌘K palette. */
+  summonedKeys?: ReadonlySet<string>;
 }): NavigationThreadSummary[] {
+  const summoned = (thread: NavigationThreadSummary): boolean =>
+    params.summonedKeys?.has(buildThreadIdentityKey(thread.source, thread.id))
+    === true;
   return params.threads
     .filter((thread) => thread.archivedAt === undefined)
     .filter(
       (thread) =>
-        pinOverridesFilters(params.selection, thread)
+        summoned(thread)
+        || pinOverridesFilters(params.selection, thread)
         || threadPassesFilters({
           selection: params.selection,
           sessionKeys: params.sessionKeys,
@@ -205,6 +221,9 @@ export function selectFilteredThreads(params: {
         }),
     )
     .sort((left, right) => {
+      const leftSummoned = summoned(left);
+      const rightSummoned = summoned(right);
+      if (leftSummoned !== rightSummoned) return leftSummoned ? -1 : 1;
       const leftPinned = isPinnedThread(left);
       const rightPinned = isPinnedThread(right);
       if (leftPinned !== rightPinned) return leftPinned ? -1 : 1;

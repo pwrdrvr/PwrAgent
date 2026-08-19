@@ -21,8 +21,14 @@ import {
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { SearchIcon } from "../../icons";
+import {
+  formatPrimaryAccel,
+  matchThreadJumpChord,
+} from "../../lib/keyboard-accel";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useFederationHealth } from "../../lib/useFederationHealth";
+import { SidebarSearchPopup } from "../navigation/SidebarSearchPopup";
 import {
   type StarMapSessionKeys,
 } from "./attention";
@@ -110,6 +116,11 @@ import {
   starMapSkyOffset,
   type StarMapView,
 } from "./star-map-view-geometry";
+import {
+  starMapFlightScale,
+  starMapViewFocusedOn,
+} from "./star-map-flight";
+import { useStarMapFlight } from "./useStarMapFlight";
 import { StarMapViewOptions } from "./StarMapViewOptions";
 import { StarMapKeyHint } from "./StarMapKeyHint";
 import { useStarMapCameraKeys } from "./useStarMapCameraKeys";
@@ -186,6 +197,24 @@ const SNAP_THRESHOLD_PX = 6;
  * that clears the selection, rather than a pan the operator abandoned.
  */
 const CANVAS_CLICK_SLOP_PX = 4;
+
+/**
+ * How long a card picked from the ⌘K palette wears its "here it is" ring.
+ * Long enough to find with the eye after the flight lands, short enough
+ * that it does not read as a state the card is now in.
+ */
+const STAR_MAP_LOCATED_MS = 1_600;
+
+/**
+ * How long a pending flight waits for its card to be laid out.
+ *
+ * A summon usually produces geometry on the next render; a remote thread
+ * whose instance has no body on the map never will. Giving up quietly
+ * beats a destination that sits armed until some unrelated snapshot
+ * happens to satisfy it.
+ */
+const STAR_MAP_SUMMON_TIMEOUT_MS = 2_000;
+
 
 const STAR_FIELD = generateStarField(STAR_COUNT);
 
@@ -323,10 +352,52 @@ export function StarMapScreen(props: StarMapScreenProps) {
   // view-local and unsynced: it is a "where am I looking" gesture, not a
   // property of the fleet the way card placement is.
   const [selectedInstanceId, setSelectedInstanceId] = useState<string>();
-  // Thread keys that just bubbled in via intake — they wear the entrance
-  // animation until the timer clears them.
+  // Thread keys that just bubbled in via intake or a ⌘K summon — they wear
+  // the entrance animation until the timer clears them.
   const [enteringThreadKeys, setEnteringThreadKeys] = useState<Set<string>>(
     new Set(),
+  );
+  /**
+   * Play the arrival animation for a card that was not on the map a moment
+   * ago. Shared by intake (a thread that did not exist) and the ⌘K summon
+   * (a thread the lens was not drawing): both are a card appearing where
+   * there was sky, and a card that simply blinks into a cloud reads as a
+   * rendering glitch rather than as an arrival.
+   */
+  const markThreadEntering = useCallback((threadKey: string) => {
+    setEnteringThreadKeys((current) => new Set(current).add(threadKey));
+    window.setTimeout(() => {
+      setEnteringThreadKeys((current) => {
+        const next = new Set(current);
+        next.delete(threadKey);
+        return next;
+      });
+    }, 2_000);
+  }, []);
+  /** Open state of the ⌘K palette. */
+  const [jumpOpen, setJumpOpen] = useState(false);
+  /**
+   * Threads the operator summoned from the ⌘K palette, by identity key.
+   *
+   * A search that flies the camera to a card the map is not drawing lands
+   * on empty sky, and every lens has at least three ways to not draw one: a
+   * filter chip that excludes it, a per-cloud cap that folds it into "+N
+   * more", and a peer feed this window has not caught up with. So a pick
+   * summons the card — the summary rides along so it can be merged into its
+   * instance's cloud even in that last case — and `selectFilteredThreads`
+   * seats it ahead of the caps and outside the chips.
+   *
+   * View-local and unsynced, like the selection and the expanded clouds: it
+   * is "what I went looking for in this window", not a property of the
+   * fleet. It lasts for the life of the window, which is the same lifetime
+   * as the search that produced it.
+   */
+  const [summonedThreads, setSummonedThreads] = useState<
+    ReadonlyMap<string, { instanceId: string; thread: NavigationThreadSummary }>
+  >(new Map());
+  const summonedKeys = useMemo(
+    () => new Set(summonedThreads.keys()),
+    [summonedThreads],
   );
   /**
    * Threads the operator archived from a card whose snapshot has not
@@ -433,6 +504,34 @@ export function StarMapScreen(props: StarMapScreenProps) {
     },
     [paintView],
   );
+  /**
+   * ⌘K flies the camera; the operator's own hands outrank it.
+   *
+   * Same live-view contract as the keyboard camera: the flight paints
+   * frames onto the canvas transform and commits on landing, and every
+   * other writer cancels it before it starts (see `abortFlight`), so two
+   * writers are never integrating against the same ref at once.
+   */
+  const flight = useStarMapFlight({
+    liveViewRef: viewRef,
+    onPaint: paintView,
+    onCommit: commitView,
+  });
+  /**
+   * The card a pick is travelling to, by card key.
+   *
+   * A pick cannot fly on the spot: a summoned card has no geometry until
+   * the lens has laid it out, which is a render away at least. So the pick
+   * records the destination and this effect leaves as soon as the layout
+   * produces a rect for it.
+   */
+  const [pendingFlight, setPendingFlight] = useState<string | undefined>();
+
+  const abortFlight = useCallback(() => {
+    setPendingFlight(undefined);
+    flight.cancel();
+  }, [flight]);
+
   const orbitMode = preferences.layout === "orbit";
   /**
    * Pulled far enough out that cards are unreadable. The map draws named
@@ -570,6 +669,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const startCanvasPan = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
     if (!shouldStartCanvasPan(event.target)) return;
+    // A hand on the map outranks a flight in progress: the operator gets
+    // the view back where they grabbed it, not where the flight was going.
+    abortFlight();
     // A press on bare sky is also how the operator LEAVES a terminal or a
     // chat composer. The pan's preventDefault below suppresses the
     // browser's default focus change, so without this the shell kept
@@ -819,6 +921,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           ),
           selection: filterSelection,
           sessionKeys: props.sessionKeys,
+          summonedKeys,
         }),
       ),
     );
@@ -826,9 +929,35 @@ export function StarMapScreen(props: StarMapScreenProps) {
       result.set(
         instanceId,
         withoutArchived(
-          selectFilteredThreads({ threads, selection: filterSelection }),
+          selectFilteredThreads({
+            threads,
+            selection: filterSelection,
+            summonedKeys,
+          }),
         ),
       );
+    }
+    // A summoned thread whose owning instance has not published it to this
+    // window yet — a peer whose snapshot is a minute old, or one the
+    // federated search reached but the map never fetched — is merged from
+    // the search result itself. Front of the list, like every other summon,
+    // so the caps cannot fold it away again.
+    for (const summon of summonedThreads.values()) {
+      const key = buildThreadIdentityKey(
+        summon.thread.source,
+        summon.thread.id,
+      );
+      if (archivedThreadKeys.has(key)) continue;
+      const present = result.get(summon.instanceId) ?? [];
+      if (
+        present.some(
+          (thread) =>
+            buildThreadIdentityKey(thread.source, thread.id) === key,
+        )
+      ) {
+        continue;
+      }
+      result.set(summon.instanceId, [summon.thread, ...present]);
     }
     return result;
   }, [
@@ -838,6 +967,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
     props.localThreads,
     props.sessionKeys,
     remote,
+    summonedKeys,
+    summonedThreads,
   ]);
 
   // Release optimistic hides once the thread has left its feed for real,
@@ -945,8 +1076,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   const projects = useMemo(
-    () => groupThreadsByProject(attentionByInstance),
-    [attentionByInstance],
+    () => groupThreadsByProject(attentionByInstance, { summonedKeys }),
+    [attentionByInstance, summonedKeys],
   );
 
   const projectThreadOwners = useMemo(
@@ -1224,6 +1355,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // plain scroll over a chat card belongs to that card's transcript.
       if (!event.ctrlKey && !shouldPanOnWheel(event.target)) return;
       event.preventDefault();
+      abortFlight();
       // Both branches read the LIVE view rather than a `setView` updater's
       // `current`. During a keyboard flight the committed state is frozen at
       // the last landing, so an updater would compute this pinch from a base
@@ -1268,6 +1400,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     element.addEventListener("wheel", onWheel, { passive: false });
     return () => element.removeEventListener("wheel", onWheel);
   }, [
+    abortFlight,
     commitView,
     topAnchoredView,
     panZoomCanvas.width,
@@ -1322,6 +1455,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * ref as well as re-centring means auto-centring resumes afterwards.
    */
   const resetView = useCallback(() => {
+    // `0` mid-flight has to end the flight, not race it: a landing commits
+    // the flight's destination and would silently undo the reset.
+    abortFlight();
     operatorMovedViewRef.current = false;
     // commitView, not setView: `0` can be pressed mid-flight, and the
     // keyboard camera's next frame reads the live ref. Committing to state
@@ -1335,6 +1471,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       }),
     );
   }, [
+    abortFlight,
     commitView,
     topAnchoredView,
     panZoomCanvas.width,
@@ -1344,8 +1481,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
   ]);
 
   const claimView = useCallback(() => {
+    abortFlight();
     operatorMovedViewRef.current = true;
-  }, []);
+  }, [abortFlight]);
 
   /**
    * WASD / arrows fly the camera, `-` and `=` work the zoom, `0` resets.
@@ -1954,6 +2092,206 @@ export function StarMapScreen(props: StarMapScreenProps) {
   projectsModeRef.current = projectsMode;
 
   /**
+   * Card geometry for the projects lens, which seats its cards around
+   * project bodies rather than instance bodies and so appears nowhere in
+   * `cardRects`.
+   *
+   * Kept separate rather than folded into that map because `cardRects` is
+   * the drag/snap/marquee geometry, and cards in this lens deliberately do
+   * not move (a project is not an instance, so there is no arrangement row
+   * to persist an offset to). This is read for one thing only: knowing
+   * where a card the operator asked for is, so the camera can go there.
+   */
+  const projectCardRects = useMemo(() => {
+    const rects = new Map<string, SnapRect>();
+    if (!projectsMode) return rects;
+    const placementByKey = new Map(
+      projectLayout.projects.map((placement) => [placement.key, placement]),
+    );
+    for (const project of projects) {
+      const placement = placementByKey.get(project.key);
+      if (!placement) continue;
+      const visible = project.threads.slice(0, PROJECT_MAX_CARDS_PER_BODY);
+      const slots = cardRingSlots(visible.length, ORBIT_CARD_WIDTH);
+      visible.forEach((thread, index) => {
+        const slot = slots[index];
+        if (!slot) return;
+        const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+        const owner = projectThreadOwners.get(threadKey) ?? localInstanceId;
+        // See `cardRects`: an unmeasured card reports 0, and a zero-height
+        // rect would centre the camera on the card's top edge.
+        const height =
+          cardHeights.get(threadKey) || STAR_MAP_ESTIMATED_CARD_HEIGHT;
+        rects.set(`${owner}::${threadKey}`, {
+          // Ring cards are centred on their slot both ways (`centered`),
+          // unlike the lane and cloud slots that hang from the top.
+          x: placement.x + slot.dx - ORBIT_CARD_WIDTH / 2,
+          y: placement.y + slot.dy - height / 2,
+          width: ORBIT_CARD_WIDTH,
+          height,
+        });
+      });
+    }
+    return rects;
+  }, [
+    cardHeights,
+    localInstanceId,
+    projectLayout,
+    projects,
+    projectThreadOwners,
+    projectsMode,
+  ]);
+
+  /** Where every card the current lens draws sits, by card key. */
+  const flightRects = projectsMode ? projectCardRects : cardRects;
+
+  useEffect(() => {
+    if (!pendingFlight) return;
+    const rect = flightRects.get(pendingFlight);
+    if (!rect) {
+      // The one place a summon cannot reach on its own: a cloud in the
+      // orbit lens caps its cards per PROJECT, and seating the summoned
+      // thread first in the instance's feed only puts it first in its
+      // bucket — a child in a long parent group can still land past the
+      // cap. Unfold that cloud exactly as its "+N more" chip would, and
+      // let the next layout answer with a rect.
+      if (!orbitMode) return;
+      const separator = pendingFlight.indexOf("::");
+      if (separator < 0) return;
+      const instanceId = pendingFlight.slice(0, separator);
+      const threadKey = pendingFlight.slice(separator + 2);
+      const cluster = clusterClouds
+        ?.get(instanceId)
+        ?.clusters.find(
+          (entry) =>
+            entry.visibleCount < entry.threads.length
+            && entry.threads.some(
+              (thread) =>
+                buildThreadIdentityKey(thread.source, thread.id) === threadKey,
+            ),
+        );
+      if (!cluster) return;
+      toggleClusterExpanded(instanceId, cluster.key);
+      return;
+    }
+    setPendingFlight(undefined);
+    // Arriving somewhere is the operator moving the view, so the map stops
+    // re-centring itself on content changes from here on — the same claim a
+    // drag or a camera key makes.
+    operatorMovedViewRef.current = true;
+    flight.flyTo(
+      starMapViewFocusedOn({
+        rect,
+        canvas: panZoomCanvas,
+        viewport: viewportSize,
+        scale: starMapFlightScale(viewRef.current.scale),
+      }),
+    );
+  }, [
+    clusterClouds,
+    flight,
+    flightRects,
+    orbitMode,
+    panZoomCanvas,
+    pendingFlight,
+    toggleClusterExpanded,
+    viewportSize,
+  ]);
+
+  /**
+   * The card a pick just landed on, by thread key. Wears a brief ring so
+   * the answer is visible: the camera centres the card, but "the middle of
+   * the window" is not something the eye reads off a field of forty
+   * identical cards.
+   */
+  const [locatedThreadKey, setLocatedThreadKey] = useState<string>();
+
+  /**
+   * Pick a result: put the card on the map if it is not there, then fly to
+   * it. Both halves matter — a search that only moved the camera would fly
+   * to empty sky whenever a chip, a cap, or a stale peer feed was the
+   * reason the operator could not find the card by eye.
+   */
+  const flyToThread = useCallback(
+    (thread: NavigationThreadSummary) => {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const target = thread.federation?.ref.target;
+      const instanceId =
+        target && isRemoteFederationTarget(target)
+          ? target.instanceId
+          : localInstanceId;
+      const cardKey = `${instanceId}::${threadKey}`;
+      if (!flightRects.has(cardKey)) {
+        setSummonedThreads((current) => {
+          const next = new Map(current);
+          next.set(threadKey, { instanceId, thread });
+          return next;
+        });
+        markThreadEntering(threadKey);
+      }
+      setLocatedThreadKey(threadKey);
+      window.setTimeout(() => {
+        setLocatedThreadKey((current) =>
+          current === threadKey ? undefined : current,
+        );
+      }, STAR_MAP_LOCATED_MS);
+      setPendingFlight(cardKey);
+      // A destination that never produces a rect must not sit waiting for
+      // one: an unrelated snapshot minutes later would otherwise fly the
+      // map somewhere the operator has long stopped expecting.
+      window.setTimeout(() => {
+        setPendingFlight((current) => (current === cardKey ? undefined : current));
+      }, STAR_MAP_SUMMON_TIMEOUT_MS);
+    },
+    [flightRects, localInstanceId, markThreadEntering],
+  );
+
+  /**
+   * Everything the ⌘K palette can search: this window's own threads and
+   * every peer feed the map has fetched, deduped by identity (a pinned
+   * remote thread appears in both). Archived threads are left out — the map
+   * never draws one, so a hit that could only ever fly to nothing is worse
+   * than no hit. The palette queries connected peers itself on top of this.
+   */
+  const searchThreads = useMemo(() => {
+    // Rebuilt only while the palette is open: its inputs change with every
+    // navigation snapshot, and an index nothing is reading is a pass over
+    // the whole fleet's threads per snapshot for nobody.
+    if (!jumpOpen) return [];
+    const seen = new Set<string>();
+    const rows: NavigationThreadSummary[] = [];
+    const add = (thread: NavigationThreadSummary) => {
+      if (thread.archivedAt !== undefined) return;
+      const key = buildThreadIdentityKey(thread.source, thread.id);
+      if (seen.has(key)) return;
+      seen.add(key);
+      rows.push(thread);
+    };
+    for (const thread of props.localThreads) add(thread);
+    for (const threads of remote.threadsByInstance.values()) {
+      for (const thread of threads) add(thread);
+    }
+    return rows;
+  }, [jumpOpen, props.localThreads, remote]);
+
+  /**
+   * ⌘K opens the palette, and pressing it again backs out of a jump the
+   * operator did not mean to start — the same toggle the main window's
+   * shell owns. Bound on the window rather than the map layer because the
+   * chord has to work from inside a chat card's composer too, which is
+   * exactly where an operator is standing when they want to go elsewhere.
+   */
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!matchThreadJumpChord(event)) return;
+      event.preventDefault();
+      setJumpOpen((open) => !open);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  /**
    * Canvas scale for the overlays drawn inside the transform. Every lens
    * scales now, lanes included, so the live value always applies.
    */
@@ -2545,6 +2883,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               hasUnsentDraft={props.draftThreadKeys?.[threadKey] === true}
               riseDelayMs={index * 45}
               entering={enteringThreadKeys.has(threadKey)}
+              located={locatedThreadKey === threadKey}
               instanceIcon={celestialIcons.iconFor(
                 position.instanceId === localInstanceId
                   ? undefined
@@ -2763,6 +3102,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
       tabIndex={-1}
       onKeyDown={(event) => {
         if (event.key === "Escape") {
+          // The ⌘K palette portals into this subtree, so its own Escape
+          // bubbles here through the React tree. Closing a palette is not
+          // also a request to drop the cards the operator gathered.
+          if (jumpOpen) return;
           event.stopPropagation();
           // Escape unwinds the selection; with nothing left to drop it
           // deliberately does nothing. The map lives in its own OS window
@@ -3040,6 +3383,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
                         hasUnsentDraft={
                           props.draftThreadKeys?.[threadKey] === true
                         }
+                        entering={enteringThreadKeys.has(threadKey)}
+                        located={locatedThreadKey === threadKey}
                         instanceIcon={celestialIcons.iconFor(
                           owner === localInstanceId ? undefined : owner,
                         )}
@@ -3173,24 +3518,33 @@ export function StarMapScreen(props: StarMapScreenProps) {
             })}
         </div>
       </div>
+      {jumpOpen ? (
+        // The same palette the main window's ⌘K opens, doing the same job
+        // for a different surface: there it scrolls a list to a row, here
+        // it flies the camera to a card. Reused rather than rebuilt so the
+        // matching rules, the peer search, and the keyboard model stay one
+        // implementation — an operator who learns to type "#1771" in one
+        // window should not find it means something else in the other.
+        <SidebarSearchPopup
+          threads={searchThreads}
+          label="Fly to thread"
+          placeholder="Fly to thread, PR #, branch, repo…"
+          onJumpToThread={flyToThread}
+          onClose={() => setJumpOpen(false)}
+        />
+      ) : null}
       {intakeTarget ? (
         <IntakeDialog
           desktopApi={props.desktopApi}
           target={intakeTarget}
           onClose={() => setIntakeTarget(undefined)}
           onCreated={(created) => {
-            const threadKey = buildThreadIdentityKey(
-              created.backend as NavigationThreadSummary["source"],
-              created.threadId,
+            markThreadEntering(
+              buildThreadIdentityKey(
+                created.backend as NavigationThreadSummary["source"],
+                created.threadId,
+              ),
             );
-            setEnteringThreadKeys((current) => new Set(current).add(threadKey));
-            window.setTimeout(() => {
-              setEnteringThreadKeys((current) => {
-                const next = new Set(current);
-                next.delete(threadKey);
-                return next;
-              });
-            }, 2_000);
             if (created.instanceId === localInstanceId) {
               props.onRefreshLocalThreads?.();
             } else {
@@ -3217,6 +3571,22 @@ export function StarMapScreen(props: StarMapScreenProps) {
         <p className="sidebar__brand">
           Pwr<span className="sidebar__brand-accent">Agent</span>
         </p>
+        {/* ⌘K is the map's only way to reach a card it is not drawing, and
+            a keyboard-only door on a surface driven by the pointer is a
+            door nobody finds. The chord rides the label so learning it
+            costs one glance. */}
+        <button
+          type="button"
+          className="star-map__filter-chip star-map__find"
+          aria-label="Find a thread on the map"
+          onClick={() => setJumpOpen(true)}
+        >
+          <SearchIcon size={13} />
+          <span>Find</span>
+          <span className="star-map__find-chord" aria-hidden="true">
+            {formatPrimaryAccel("K")}
+          </span>
+        </button>
         <StarMapViewOptions
           preferences={preferences}
           onChange={(next) => {

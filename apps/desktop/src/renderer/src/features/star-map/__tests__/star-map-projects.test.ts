@@ -415,3 +415,51 @@ describe("gravity seating", () => {
     expect(d.get("solo")!).toBeLessThan(400);
   });
 });
+
+describe("groupThreadsByProject summons", () => {
+  it("seats a summoned thread first, ahead of recency", () => {
+    // A project body seats only its first PROJECT_MAX_CARDS_PER_BODY
+    // threads, and this lens re-sorts its pools by activity — so a card
+    // the operator asked for by name has to be told to come forward here
+    // as well as in `selectFilteredThreads`.
+    const stale = thread({
+      id: "stale",
+      repoPath: "/repo/pwragent",
+      updatedAt: 1,
+    });
+    const busy = thread({
+      id: "busy",
+      repoPath: "/repo/pwragent",
+      updatedAt: 500,
+    });
+    const [project] = groupThreadsByProject(
+      new Map([["pwr_local", [busy, stale]]]),
+      { now: 1_000, summonedKeys: new Set(["codex:stale"]) },
+    );
+    expect(project.threads.map((entry) => entry.id)).toEqual([
+      "stale",
+      "busy",
+    ]);
+  });
+
+  it("leaves the order alone when nothing was summoned", () => {
+    const stale = thread({
+      id: "stale",
+      repoPath: "/repo/pwragent",
+      updatedAt: 1,
+    });
+    const busy = thread({
+      id: "busy",
+      repoPath: "/repo/pwragent",
+      updatedAt: 500,
+    });
+    const [project] = groupThreadsByProject(
+      new Map([["pwr_local", [stale, busy]]]),
+      { now: 1_000 },
+    );
+    expect(project.threads.map((entry) => entry.id)).toEqual([
+      "busy",
+      "stale",
+    ]);
+  });
+});
