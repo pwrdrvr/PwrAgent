@@ -8393,32 +8393,42 @@ textarea,
 
 .settings-update-channel {
   display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+/* The three controls (track segmented, Restart, Check) read as one row of
+   equal-height chiclets. `stretch` sizes both buttons to the segmented
+   control, which is the tallest because its options are two-line. Status
+   text is a SIBLING of this row, never a member of it — as a member its
+   own height fed back into `stretch` and inflated the buttons. */
+.settings-update-channel__controls {
+  display: flex;
   flex-wrap: wrap;
   align-items: stretch;
   gap: 8px;
 }
 
-.settings-update-channel__button {
+/* Match the segmented control's label register (12px/650). Without this the
+   two buttons fall back to the browser-default inherited size and read a
+   full step larger than the chiclets beside them. */
+.settings-update-channel__button,
+.settings-update-channel__restart-button {
   min-height: 0;
-}
-
-.settings-update-channel__restart {
-  display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 5px;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .settings-update-channel__restart-button {
   display: inline-flex;
-  min-height: 0;
   flex-direction: column;
   align-items: flex-start;
   justify-content: center;
   gap: 3px;
   padding-top: 6px;
   padding-bottom: 6px;
-  line-height: 1.1;
+  line-height: 1.15;
 }
 
 .settings-update-channel__restart-version,

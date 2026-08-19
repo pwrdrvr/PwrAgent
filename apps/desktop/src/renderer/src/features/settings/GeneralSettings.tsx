@@ -566,36 +566,38 @@ export function GeneralSettings(props: {
             source={sourceBadge(updateChannel)}
             control={
               <div className="settings-update-channel">
-                <div
-                  className="settings-segmented"
-                  role="radiogroup"
-                  aria-label="Update track"
-                >
-                  {UPDATE_CHANNEL_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      aria-checked={updateChannel.value === option.value}
-                      className={`settings-segmented__button settings-segmented__button--stacked${
-                        updateChannel.value === option.value ? " is-active" : ""
-                      }`}
-                      disabled={props.saving}
-                      role="radio"
-                      type="button"
-                      onClick={() => {
-                        void props.onUpdateChannelChange(option.value);
-                      }}
-                    >
-                      <span>{option.label}</span>
-                      <span className="settings-segmented__meta">
-                        {releaseVersionText(
-                          releaseVersions?.[updateTrain.value]?.[option.value],
-                        )}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-                {downloadedVersion ? (
-                  <div className="settings-update-channel__restart">
+                <div className="settings-update-channel__controls">
+                  <div
+                    className="settings-segmented"
+                    role="radiogroup"
+                    aria-label="Update track"
+                  >
+                    {UPDATE_CHANNEL_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        aria-checked={updateChannel.value === option.value}
+                        className={`settings-segmented__button settings-segmented__button--stacked${
+                          updateChannel.value === option.value
+                            ? " is-active"
+                            : ""
+                        }`}
+                        disabled={props.saving}
+                        role="radio"
+                        type="button"
+                        onClick={() => {
+                          void props.onUpdateChannelChange(option.value);
+                        }}
+                      >
+                        <span>{option.label}</span>
+                        <span className="settings-segmented__meta">
+                          {releaseVersionText(
+                            releaseVersions?.[updateTrain.value]?.[option.value],
+                          )}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                  {downloadedVersion ? (
                     <button
                       aria-label={`${restartActionLabel} (${downloadedVersion})`}
                       className="button button--primary settings-update-channel__restart-button"
@@ -612,29 +614,31 @@ export function GeneralSettings(props: {
                         ({downloadedVersion})
                       </span>
                     </button>
-                    <span className="settings-update-channel__downloaded">
-                      Downloaded version: {downloadedVersion}
-                    </span>
-                    {updateRestartError ? (
-                      <span
-                        className="settings-update-channel__result settings-update-channel__result--error"
-                        role="alert"
-                      >
-                        {updateRestartError}
-                      </span>
-                    ) : null}
-                  </div>
+                  ) : null}
+                  <button
+                    className="button button--secondary settings-update-channel__button"
+                    type="button"
+                    disabled={!checkForUpdates || props.saving || updateChecking}
+                    onClick={() => {
+                      void handleCheckForUpdate();
+                    }}
+                  >
+                    {updateChecking ? "Checking..." : "Check for Update"}
+                  </button>
+                </div>
+                {downloadedVersion ? (
+                  <span className="settings-update-channel__downloaded">
+                    Downloaded version: {downloadedVersion}
+                  </span>
                 ) : null}
-                <button
-                  className="button button--secondary settings-update-channel__button"
-                  type="button"
-                  disabled={!checkForUpdates || props.saving || updateChecking}
-                  onClick={() => {
-                    void handleCheckForUpdate();
-                  }}
-                >
-                  {updateChecking ? "Checking..." : "Check for Update"}
-                </button>
+                {downloadedVersion && updateRestartError ? (
+                  <span
+                    className="settings-update-channel__result settings-update-channel__result--error"
+                    role="alert"
+                  >
+                    {updateRestartError}
+                  </span>
+                ) : null}
               </div>
             }
           />
