@@ -10,6 +10,7 @@ import type {
   PwrAgentStarMapResponse,
   StarMapViewSnapshot,
 } from "@pwragent/shared";
+import { MAX_STAR_MAP_CAPTURE_BYTES } from "@pwragent/shared";
 import { createStarMapAgentToolsHandler } from "../star-map/star-map-agent-tools-service";
 import { buildPwrAgentStarMapToolDefinitions } from "../agent-tools/pwragent-star-map-agent-tools";
 import type {
@@ -183,6 +184,66 @@ describe("read_star_map_view", () => {
     ]);
   });
 
+  it("keeps the whole selection for an instance even when the cap truncates", async () => {
+    const handler = createStarMapAgentToolsHandler({
+      readView: () =>
+        snapshot({
+          threads: [
+            thread({ threadKey: "codex:a", selected: true }),
+            thread({ threadKey: "codex:b", selected: true }),
+            thread({
+              threadKey: "codex:p",
+              instanceId: "peer",
+              instanceLabel: "Studio",
+              isLocal: false,
+              selected: true,
+            }),
+          ],
+          selectedThreadKeys: ["codex:a", "codex:b", "codex:p"],
+          openChatCardThreadKeys: ["codex:b", "codex:p"],
+        }),
+      now: () => 1_000,
+    });
+    const response = expectOk(
+      (await handler({
+        operation: "read_star_map_view",
+        context: {},
+        args: { instanceId: "local", maxThreads: 1 },
+      })) as PwrAgentStarMapResponse<"read_star_map_view">,
+    );
+    // The cap shortens the thread list, never the selection: an Agent asked
+    // to act on "the selected cards" must see all of them.
+    expect(response.data.snapshot.threads).toHaveLength(1);
+    expect(response.data.snapshot.selectedThreadKeys).toEqual([
+      "codex:a",
+      "codex:b",
+    ]);
+    expect(response.data.snapshot.openChatCardThreadKeys).toEqual(["codex:b"]);
+  });
+
+  it("reports selection and open cards whole when no instance is named", async () => {
+    const handler = createStarMapAgentToolsHandler({
+      readView: () =>
+        snapshot({
+          selectedThreadKeys: ["codex:a", "codex:b"],
+          openChatCardThreadKeys: ["codex:b"],
+        }),
+      now: () => 1_000,
+    });
+    const response = expectOk(
+      (await handler({
+        operation: "read_star_map_view",
+        context: {},
+        args: { maxThreads: 1 },
+      })) as PwrAgentStarMapResponse<"read_star_map_view">,
+    );
+    expect(response.data.snapshot.selectedThreadKeys).toEqual([
+      "codex:a",
+      "codex:b",
+    ]);
+    expect(response.data.snapshot.openChatCardThreadKeys).toEqual(["codex:b"]);
+  });
+
   it("narrows instances, clouds and threads to one instance", async () => {
     const handler = createStarMapAgentToolsHandler({
       readView: () =>
@@ -300,6 +361,54 @@ describe("capture_star_map", () => {
       args: { maxWidth: 640 },
     });
     expect(capture).toHaveBeenCalledWith({ maxWidth: 640 });
+  });
+
+  it("re-captures smaller when the encoded image is over the tool-result limit", async () => {
+    const capture = vi.fn(async (options: { maxWidth?: number }) => ({
+      surface: "window" as const,
+      png: Buffer.alloc(
+        (options.maxWidth ?? 0) > 800
+          ? MAX_STAR_MAP_CAPTURE_BYTES + 1
+          : 1_024,
+      ),
+      width: options.maxWidth ?? 0,
+      height: 900,
+    }));
+    const handler = createStarMapAgentToolsHandler({
+      readView: () => snapshot(),
+      capture,
+    });
+    const response = expectOk(
+      (await handler({
+        operation: "capture_star_map",
+        context: {},
+        args: { maxWidth: 1_600 },
+      })) as PwrAgentStarMapResponse<"capture_star_map">,
+    );
+    expect(capture).toHaveBeenCalledTimes(2);
+    expect(capture.mock.calls[1][0]).toEqual({ maxWidth: 800 });
+    expect(response.data.byteLength).toBe(1_024);
+  });
+
+  it("refuses an image that is still oversized after the retry", async () => {
+    const handler = createStarMapAgentToolsHandler({
+      readView: () => snapshot(),
+      capture: async (options) => ({
+        surface: "window" as const,
+        png: Buffer.alloc(MAX_STAR_MAP_CAPTURE_BYTES + 1),
+        width: options.maxWidth ?? 0,
+        height: 900,
+      }),
+    });
+    const response = await handler({
+      operation: "capture_star_map",
+      context: {},
+      args: {},
+    });
+    expect(response.ok).toBe(false);
+    if (response.ok) return;
+    expect(response.error.code).toBe("capture_failed");
+    expect(response.error.message).toMatch(/smaller maxWidth/i);
   });
 
   it("fails rather than returning an empty image when the surface has gone", async () => {

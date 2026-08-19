@@ -154,6 +154,12 @@ export const MAX_STAR_MAP_VIEW_MAX_THREADS = 1_000;
 /** Capture cost is quadratic in the long edge; 1600 keeps titles legible. */
 export const DEFAULT_STAR_MAP_CAPTURE_MAX_WIDTH = 1_600;
 export const MAX_STAR_MAP_CAPTURE_MAX_WIDTH = 3_000;
+/**
+ * Ceiling on the encoded PNG. Base64 adds about a third on top of this
+ * before the image reaches the model, so a wide capture of a dense map is
+ * capable of dwarfing the turn it was meant to inform.
+ */
+export const MAX_STAR_MAP_CAPTURE_BYTES = 4 * 1_024 * 1_024;
 
 export type ReadStarMapViewToolArgs = {
   /**

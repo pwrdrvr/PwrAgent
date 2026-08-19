@@ -1,11 +1,12 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type {
-  AppServerBackendKind,
+  NavigationThreadSummary,
   OpenStarMapManagerRequest,
   OpenStarMapManagerResponse,
 } from "@pwragent/shared";
 import {
+  buildThreadIdentityKey,
   STAR_MAP_MANAGER_AGENT_INSTRUCTIONS,
   STAR_MAP_MANAGER_AGENT_NAME,
   STAR_MAP_MANAGER_THREAD_TITLE,
@@ -73,10 +74,13 @@ export async function openStarMapManagerThread(
   const overlayStore = deps.overlayStore ?? getDesktopOverlayStore();
   const registry = deps.registry ?? getDesktopBackendRegistry();
   try {
-    const workspace = await ensureManagerWorkspace(deps.workspaceDir);
     if (!request.reset) {
       const remembered = overlayStore.getStarMapManagerThread();
       if (remembered && (await threadStillExists(remembered, deps))) {
+        // Best effort: an instruction refresh that cannot be written is not a
+        // reason to withhold a thread that already exists and needs nothing
+        // from the filesystem to reopen.
+        await refreshManagerWorkspace(deps.workspaceDir);
         return {
           status: "ready",
           backend: remembered.backend,
@@ -85,6 +89,8 @@ export async function openStarMapManagerThread(
         };
       }
     }
+    // The create path genuinely needs the directory: it is the thread's cwd.
+    const workspace = await ensureManagerWorkspace(deps.workspaceDir);
     const defaults = await overlayStore.getLaunchpadDefaults();
     const started = await registry.startThread({
       backend: defaults.backend,
@@ -128,6 +134,18 @@ export async function openStarMapManagerThread(
   }
 }
 
+async function refreshManagerWorkspace(
+  workspaceDir?: () => string,
+): Promise<void> {
+  try {
+    await ensureManagerWorkspace(workspaceDir);
+  } catch (error) {
+    log.warn("could not refresh the star map manager instructions", {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function ensureManagerWorkspace(
   workspaceDir?: () => string,
 ): Promise<string> {
@@ -156,7 +174,12 @@ async function threadStillExists(
       deps.listThreadKeys
         ? await deps.listThreadKeys()
         : await localThreadKeys();
-    return keys.has(`${thread.backend}:${thread.threadId}`);
+    return keys.has(
+      buildThreadIdentityKey(
+        thread.backend as NavigationThreadSummary["source"],
+        thread.threadId,
+      ),
+    );
   } catch (error) {
     log.warn("could not verify the remembered manager thread", {
       error: error instanceof Error ? error.message : String(error),
@@ -172,9 +195,12 @@ async function localThreadKeys(): Promise<Set<string>> {
     {},
   );
   return new Set(
-    snapshot.threads.map(
-      (thread: { source: AppServerBackendKind; id: string }) =>
-        `${thread.source}:${thread.id}`,
-    ),
+    snapshot.threads
+      // Archived threads stay in the navigation snapshot — the map's own ⌘K
+      // palette filters them out for the same reason. Counting one as still
+      // present would reopen the manager card onto an archived thread rather
+      // than starting the fresh one the operator is asking for.
+      .filter((thread) => thread.archivedAt === undefined)
+      .map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
   );
 }

@@ -119,6 +119,48 @@ describe("openStarMapManagerThread", () => {
     expect(injected.handles.startThread).not.toHaveBeenCalled();
   });
 
+  it("replaces a remembered thread the operator archived", async () => {
+    const injected = deps({
+      remembered: { backend: "codex", threadId: "archived-1" },
+      // The navigation snapshot still carries archived threads, so the check
+      // has to exclude them itself — this is the seam where that happens.
+      listThreadKeys: async () => new Set<string>(),
+    });
+    const response = await openStarMapManagerThread({}, injected);
+    expect(response).toMatchObject({ threadId: "made-1", created: true });
+  });
+
+  it("still reopens a manager when its instructions cannot be rewritten", async () => {
+    const injected = deps({
+      remembered: { backend: "codex", threadId: "kept-1" },
+      existingThreadKeys: ["codex:kept-1"],
+    });
+    // A path whose parent is a file: mkdir fails the way a read-only or
+    // permission-denied profile directory would.
+    const blocker = path.join(workspace, "blocker");
+    await fs.writeFile(blocker, "not a directory", "utf8");
+    const response = await openStarMapManagerThread(
+      {},
+      { ...injected, workspaceDir: () => path.join(blocker, "manager") },
+    );
+    // Reopening needs nothing from the filesystem, so a failed instruction
+    // refresh must not take the manager away with it.
+    expect(response).toMatchObject({ threadId: "kept-1", created: false });
+  });
+
+  it("fails to CREATE a manager when its workspace cannot be made", async () => {
+    const injected = deps();
+    const blocker = path.join(workspace, "blocker");
+    await fs.writeFile(blocker, "not a directory", "utf8");
+    const response = await openStarMapManagerThread(
+      {},
+      { ...injected, workspaceDir: () => path.join(blocker, "manager") },
+    );
+    // The create path genuinely needs the directory — it is the thread's cwd.
+    expect(response.status).toBe("failed");
+    expect(injected.handles.startThread).not.toHaveBeenCalled();
+  });
+
   it("starts a fresh manager when the operator asks to reset", async () => {
     const injected = deps({
       remembered: { backend: "codex", threadId: "kept-1" },
