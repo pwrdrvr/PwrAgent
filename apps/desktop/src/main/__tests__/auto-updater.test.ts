@@ -36,6 +36,7 @@ const autoUpdaterMock = {
 };
 
 vi.mock("electron", () => ({
+  app: { isPackaged: false },
   BrowserWindow: {
     getAllWindows: vi.fn(() => [
       {
@@ -117,11 +118,44 @@ function githubRelease(
   };
 }
 
+function githubResponse(
+  body: unknown,
+  options: { headers?: Record<string, string>; status?: number } = {},
+) {
+  const status = options.status ?? 200;
+  const headers = new Headers(options.headers ?? {});
+  return {
+    headers,
+    json: async () => body,
+    ok: status >= 200 && status < 300,
+    status,
+  };
+}
+
 function mockGitHubReleases(releases = [githubRelease("v1.0.0-beta.8")]): void {
-  fetchMock.mockResolvedValue({
-    ok: true,
-    json: async () => releases,
-  });
+  fetchMock.mockResolvedValue(
+    githubResponse(releases, { headers: { etag: 'W/"releases"' } }),
+  );
+}
+
+function rateLimitedResponse(resetAtMs: number) {
+  return githubResponse(
+    { message: "API rate limit exceeded" },
+    {
+      headers: {
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-reset": String(Math.floor(resetAtMs / 1_000)),
+      },
+      status: 403,
+    },
+  );
+}
+
+function requestHeader(callIndex: number, name: string): string | undefined {
+  const init = fetchMock.mock.calls[callIndex]?.[1] as
+    | { headers?: Record<string, string> }
+    | undefined;
+  return init?.headers?.[name];
 }
 
 function createDeferred<T>(): {
@@ -137,6 +171,7 @@ function createDeferred<T>(): {
 
 describe("auto updater", () => {
   const originalNodeEnv = process.env.NODE_ENV;
+  const originalE2e = process.env.PWRAGENT_E2E;
   const originalPlatform = process.platform;
   const originalFetch = globalThis.fetch;
 
@@ -191,6 +226,11 @@ describe("auto updater", () => {
   afterEach(() => {
     vi.useRealTimers();
     process.env.NODE_ENV = originalNodeEnv;
+    if (originalE2e === undefined) {
+      delete process.env.PWRAGENT_E2E;
+    } else {
+      process.env.PWRAGENT_E2E = originalE2e;
+    }
     Object.defineProperty(globalThis, "fetch", {
       configurable: true,
       value: originalFetch,
@@ -734,6 +774,160 @@ describe("auto updater", () => {
 
     await install?.();
     expect(markUpdateInstallInProgressMock).not.toHaveBeenCalled();
+  });
+
+  it("serves renderer release reads from the main-process cache", async () => {
+    const updater = await importAutoUpdater();
+
+    const first = await updater.readAppUpdateReleaseVersions();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const second = await updater.readAppUpdateReleaseVersions();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(second.fetchedAt).toBe(first.fetchedAt);
+    expect(second.stable.latest.version).toBe("v1.0.0-beta.8");
+  });
+
+  it("shares one request between concurrent release readers", async () => {
+    const updater = await importAutoUpdater();
+
+    const [versions, release] = await Promise.all([
+      updater.readAppUpdateReleaseVersions(),
+      updater.checkForAppUpdatesNow("periodic"),
+    ]);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(versions.stable.latest.version).toBe("v1.0.0-beta.8");
+    expect(release.status).not.toBe("error");
+  });
+
+  it("refetches once the cache entry expires", async () => {
+    const updater = await importAutoUpdater();
+
+    await updater.readAppUpdateReleaseVersions();
+    await vi.advanceTimersByTimeAsync(updater.APP_UPDATE_RELEASE_CACHE_TTL_MS + 1);
+    await updater.readAppUpdateReleaseVersions();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("revalidates conditionally and keeps the cached list on 304", async () => {
+    const updater = await importAutoUpdater();
+
+    await updater.readAppUpdateReleaseVersions();
+    fetchMock.mockResolvedValueOnce(githubResponse(undefined, { status: 304 }));
+
+    const result = await updater.checkForAppUpdatesNow("manual");
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(requestHeader(1, "If-None-Match")).toBe('W/"releases"');
+    expect(result.status).not.toBe("error");
+  });
+
+  it("reports the rate-limit reset time instead of a bare 403", async () => {
+    const updater = await importAutoUpdater();
+    const resetAt = Date.now() + 30 * 60 * 1_000;
+    fetchMock.mockResolvedValue(rateLimitedResponse(resetAt));
+
+    const versions = await updater.readAppUpdateReleaseVersions();
+
+    expect(versions.stable.latest.unavailableReason).toMatch(
+      /GitHub rate limit reached\. Update checks resume at /,
+    );
+    expect(versions.stable.latest.unavailableReason).not.toMatch(/403/);
+  });
+
+  it("stops requesting while rate limited and serves the last good list", async () => {
+    const updater = await importAutoUpdater();
+
+    await updater.readAppUpdateReleaseVersions();
+    const resetAt = Date.now() + 30 * 60 * 1_000;
+    fetchMock.mockResolvedValue(rateLimitedResponse(resetAt));
+    await vi.advanceTimersByTimeAsync(updater.APP_UPDATE_RELEASE_CACHE_TTL_MS + 1);
+
+    // One request discovers the limit; that read already degrades to the
+    // cached list, and later reads must not spend another request.
+    const discovering = await updater.readAppUpdateReleaseVersions();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(discovering.stable.latest.version).toBe("v1.0.0-beta.8");
+    expect(discovering.stable.latest.unavailableReason).toBeUndefined();
+
+    const stale = await updater.readAppUpdateReleaseVersions();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(stale.stable.latest.version).toBe("v1.0.0-beta.8");
+    expect(stale.stable.latest.unavailableReason).toBeUndefined();
+  });
+
+  it("makes no update requests during an E2E run", async () => {
+    process.env.PWRAGENT_E2E = "1";
+    const updater = await importAutoUpdater();
+
+    updater.initAutoUpdater();
+    const result = await updater.checkForAppUpdatesNow("startup");
+    await vi.advanceTimersByTimeAsync(updater.APP_UPDATE_CHECK_INTERVAL_MS);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(checkForUpdatesMock).not.toHaveBeenCalled();
+    expect(result.status).toBe("skipped");
+  });
+
+  it("serves the E2E release read without reaching GitHub", async () => {
+    process.env.PWRAGENT_E2E = "1";
+    const updater = await importAutoUpdater();
+
+    updater.registerAppUpdateIpcHandlers();
+    const versions = (await ipcHandlers.get("app:read-update-releases")?.()) as
+      | { stable: { latest: { unavailableReason?: string } } }
+      | undefined;
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(versions?.stable.latest.unavailableReason).toBe(
+      "Update checks are disabled.",
+    );
+  });
+
+  it("still backs off when the rate-limit reset header is already past", async () => {
+    const updater = await importAutoUpdater();
+    // A local clock running ahead of GitHub reports the reset in the past.
+    fetchMock.mockResolvedValue(rateLimitedResponse(Date.now() - 60_000));
+
+    await updater.readAppUpdateReleaseVersions();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    const second = await updater.readAppUpdateReleaseVersions();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(second.stable.latest.unavailableReason).toMatch(
+      /GitHub rate limit reached/,
+    );
+  });
+
+  it("treats a backwards clock jump as a stale cache", async () => {
+    const updater = await importAutoUpdater();
+
+    await updater.readAppUpdateReleaseVersions();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    vi.setSystemTime(Date.now() - 2 * 60 * 60 * 1_000);
+    await updater.readAppUpdateReleaseVersions();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("resumes requesting after the rate-limit window passes", async () => {
+    const updater = await importAutoUpdater();
+    const resetAt = Date.now() + 30 * 60 * 1_000;
+    fetchMock.mockResolvedValue(rateLimitedResponse(resetAt));
+
+    await updater.readAppUpdateReleaseVersions();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(31 * 60 * 1_000);
+    mockGitHubReleases();
+    const recovered = await updater.readAppUpdateReleaseVersions();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(recovered.stable.latest.version).toBe("v1.0.0-beta.8");
   });
 
   it("does not install a downloaded update when quit confirmation is cancelled", async () => {
