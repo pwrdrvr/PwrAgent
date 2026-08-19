@@ -4370,17 +4370,24 @@ describe("app server ipc", () => {
       });
 
       resolveFetches[0]?.([stalePr]);
+      // The losing observation is dropped quietly: one aggregated debug line,
+      // never a per-PR info line, so a boot that reconciles hundreds of cached
+      // PRs does not bury the log.
       await vi.waitFor(() => {
-        expect(mockAppServerLog.info).toHaveBeenCalledWith(
-          "pr status observation ignored",
+        expect(mockAppServerLog.debug).toHaveBeenCalledWith(
+          "pr status observations ignored as stale",
           expect.objectContaining({
-            currentObservedAt: 4_000_001,
             observedAt: 4_000_000,
-            prKey: "github.com/pwrdrvr/pwragent#847",
+            staleCount: 1,
+            prKeys: ["github.com/pwrdrvr/pwragent#847"],
             source: "thread-lookup:user",
           }),
         );
       });
+      expect(mockAppServerLog.info).not.toHaveBeenCalledWith(
+        "pr status observation ignored",
+        expect.anything(),
+      );
       expect(setThreadPullRequests).toHaveBeenCalledWith(
         expect.objectContaining({
           threadId: "thread-request-order-0",

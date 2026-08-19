@@ -9,7 +9,7 @@ import {
   type StartupProfileEventSource,
 } from "../diagnostics/startup-profile-events";
 
-type PreloadLogLevel = "error" | "info" | "warn";
+type PreloadLogLevel = "debug" | "error" | "info" | "warn";
 
 type PreloadLogRequest = {
   details?: unknown;

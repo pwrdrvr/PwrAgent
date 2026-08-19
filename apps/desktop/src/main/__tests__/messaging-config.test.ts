@@ -48,6 +48,7 @@ vi.mock("@pwrdrvr/codex-discovery", async (importOriginal) => {
 });
 
 const messagingLog = vi.hoisted(() => ({
+  debug: vi.fn(),
   error: vi.fn(),
   info: vi.fn(),
   warn: vi.fn(),
