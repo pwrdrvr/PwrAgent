@@ -162,7 +162,10 @@ import type {
   ReadStarMapArrangementResponse,
   ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
+  OpenStarMapManagerRequest,
+  OpenStarMapManagerResponse,
   StarMapIntakeResponse,
+  StarMapViewSnapshot,
   WriteStarMapWorkspaceRequest,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
@@ -640,6 +643,17 @@ export type DesktopApi = {
   dispatchStarMapIntake?: (
     request: StarMapIntakeDispatchRequest,
   ) => Promise<StarMapIntakeResponse>;
+  /**
+   * Push the Star Map's on-screen state to the main process for the
+   * `read_star_map_view` Agent tool. Cloud membership, overflow, selection
+   * and the camera exist only here, so an Agent asked about "that thread"
+   * has no other source.
+   */
+  publishStarMapView?: (snapshot: StarMapViewSnapshot) => Promise<void>;
+  /** Resolve (creating on first use) the Star Map manager thread. */
+  openStarMapManager?: (
+    request: OpenStarMapManagerRequest,
+  ) => Promise<OpenStarMapManagerResponse>;
   /** Spawns or focuses the dedicated Federation Star Map window. */
   openStarMapWindow?: () => Promise<void>;
   /** From the Star Map window: focus the main window and open a thread there. */

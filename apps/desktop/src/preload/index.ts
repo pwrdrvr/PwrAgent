@@ -360,7 +360,10 @@ import type {
   ReadStarMapArrangementResponse,
   ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
+  OpenStarMapManagerRequest,
+  OpenStarMapManagerResponse,
   StarMapIntakeResponse,
+  StarMapViewSnapshot,
   WriteStarMapWorkspaceRequest,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
@@ -596,7 +599,9 @@ import {
   STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL,
   STAR_MAP_INTAKE_CHANNEL,
   STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL,
+  STAR_MAP_OPEN_MANAGER_CHANNEL,
   STAR_MAP_OPEN_WINDOW_CHANNEL,
+  STAR_MAP_PUBLISH_VIEW_CHANNEL,
   STAR_MAP_READ_ARRANGEMENT_CHANNEL,
   STAR_MAP_READ_WORKSPACE_CHANNEL,
   STAR_MAP_SET_CARD_POSITION_CHANNEL,
@@ -1124,6 +1129,12 @@ const desktopApi = Object.freeze({
     request: StarMapIntakeDispatchRequest,
   ): Promise<StarMapIntakeResponse> =>
     await ipcRenderer.invoke(STAR_MAP_INTAKE_CHANNEL, request),
+  publishStarMapView: async (snapshot: StarMapViewSnapshot): Promise<void> =>
+    await ipcRenderer.invoke(STAR_MAP_PUBLISH_VIEW_CHANNEL, snapshot),
+  openStarMapManager: async (
+    request: OpenStarMapManagerRequest,
+  ): Promise<OpenStarMapManagerResponse> =>
+    await ipcRenderer.invoke(STAR_MAP_OPEN_MANAGER_CHANNEL, request),
   openStarMapWindow: async (): Promise<void> => {
     await ipcRenderer.invoke(STAR_MAP_OPEN_WINDOW_CHANNEL);
   },

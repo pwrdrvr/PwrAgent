@@ -697,7 +697,8 @@ export type MessagingDynamicToolCategory =
   | "thread_inspection"
   | "app_management"
   | "thread_orchestration"
-  | "messaging_context";
+  | "messaging_context"
+  | "star_map";
 
 /**
  * Map a dynamic-tool call to the permission a messaging-originated turn must
@@ -752,6 +753,14 @@ export function permissionForDynamicTool(
         return "message.reply";
       }
       return undefined;
+    case "star_map":
+      if (tool === "capture_star_map") {
+        // A screenshot of the operator's screen is strictly more than a
+        // read of thread metadata, and a messaging-originated turn can
+        // relay whatever it sees back to its channel.
+        return "tools.instance_management";
+      }
+      return "tools.thread_inspection";
     default:
       return undefined;
   }

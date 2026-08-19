@@ -146,6 +146,7 @@ const requestBindingRevokeAllForThreadMock = vi.fn();
 const setMessagingArchiveCleanerMock = vi.fn();
 const setMessagingAgentToolServiceMock = vi.fn();
 const setPwrAgentAppManagementHandlerMock = vi.fn();
+const setPwrAgentStarMapHandlerMock = vi.fn();
 const setPwrAgentFederationHandlerMock = vi.fn();
 const setFederatedThreadMessageHandlerMock = vi.fn();
 const setFederatedThreadInspectionHandlerMock = vi.fn();
@@ -548,6 +549,7 @@ vi.mock("../app-server/backend-registry", () => ({
     refreshProvidersAtStartup: refreshProvidersAtStartupMock,
     setMessagingAgentToolService: setMessagingAgentToolServiceMock,
     setPwrAgentAppManagementHandler: setPwrAgentAppManagementHandlerMock,
+    setPwrAgentStarMapHandler: setPwrAgentStarMapHandlerMock,
     setPwrAgentFederationHandler: setPwrAgentFederationHandlerMock,
     setFederatedThreadMessageHandler: setFederatedThreadMessageHandlerMock,
     setFederatedThreadInspectionHandler:
@@ -755,6 +757,7 @@ describe("bootstrapApp", () => {
     setMessagingArchiveCleanerMock.mockReset();
     setMessagingAgentToolServiceMock.mockReset();
     setPwrAgentAppManagementHandlerMock.mockReset();
+    setPwrAgentStarMapHandlerMock.mockReset();
     setPwrAgentFederationHandlerMock.mockReset();
     setFederatedThreadMessageHandlerMock.mockReset();
     setFederatedThreadInspectionHandlerMock.mockReset();
