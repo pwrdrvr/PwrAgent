@@ -8412,10 +8412,15 @@ textarea,
 
 /* Match the segmented control's label register (12px/650). Without this the
    two buttons fall back to the browser-default inherited size and read a
-   full step larger than the chiclets beside them. */
+   full step larger than the chiclets beside them.
+
+   Do NOT reintroduce `min-height: 0` here. `stretch` already sizes these to
+   the segmented control on a shared line, so the override bought nothing
+   there — but once the row wraps and a button lands on a line alone it has
+   nothing to stretch against, and the override collapsed it to a 16px
+   sliver. The `.button` base floor of 34px is what catches that case. */
 .settings-update-channel__button,
 .settings-update-channel__restart-button {
-  min-height: 0;
   font-size: 12px;
   font-weight: 650;
 }

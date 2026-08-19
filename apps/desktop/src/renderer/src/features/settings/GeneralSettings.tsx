@@ -627,17 +627,19 @@ export function GeneralSettings(props: {
                   </button>
                 </div>
                 {downloadedVersion ? (
-                  <span className="settings-update-channel__downloaded">
-                    Downloaded version: {downloadedVersion}
-                  </span>
-                ) : null}
-                {downloadedVersion && updateRestartError ? (
-                  <span
-                    className="settings-update-channel__result settings-update-channel__result--error"
-                    role="alert"
-                  >
-                    {updateRestartError}
-                  </span>
+                  <>
+                    <span className="settings-update-channel__downloaded">
+                      Downloaded version: {downloadedVersion}
+                    </span>
+                    {updateRestartError ? (
+                      <span
+                        className="settings-update-channel__result settings-update-channel__result--error"
+                        role="alert"
+                      >
+                        {updateRestartError}
+                      </span>
+                    ) : null}
+                  </>
                 ) : null}
               </div>
             }
