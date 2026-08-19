@@ -8,6 +8,7 @@ import type {
   CreateInstanceThreadResult,
   PwrAgentFederationContext,
 } from "@pwragent/shared";
+import { createStarMapAgentToolsHandler } from "./star-map/star-map-agent-tools-service";
 import { createFederationAgentToolsHandler } from "./federation/federation-agent-tools-service";
 import { createFederatedThreadInspectionHandler } from "./federation/federated-thread-inspection-service";
 import { createFederatedThreadMutationHandler } from "./federation/federated-thread-mutation-service";
@@ -1310,6 +1311,11 @@ export function bootstrapApp(): void {
         startedAt: mainProcessStartedAt,
         version: () => app.getVersion(),
       }),
+    );
+    // Reads the view the Star Map renderer publishes, so an Agent turn can
+    // resolve "that thread" and "its cloud" against what is on screen.
+    getDesktopBackendRegistry().setPwrAgentStarMapHandler(
+      createStarMapAgentToolsHandler(),
     );
     // Injected rather than owned by the registry: the federation runtime
     // already imports the registry, so the reverse import would be a cycle.

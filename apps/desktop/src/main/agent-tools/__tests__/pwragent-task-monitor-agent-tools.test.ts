@@ -35,8 +35,9 @@ describe("PwrAgent task monitor agent tools", () => {
       "render_messaging_pdf_pages",
       "search_messaging_pdf_text",
     ]);
-    // 36 since manage_mcp_connections joined the namespace.
-    expect(dynamicTools).toHaveLength(36);
+    // 36 since manage_mcp_connections joined the namespace, 38 with the two
+    // Star Map tools.
+    expect(dynamicTools).toHaveLength(38);
     expect(mcpTools).toEqual(expect.arrayContaining(
       dynamicTools.filter((tool) => !dynamicOnlyToolNames.has(tool.name)),
     ));
@@ -56,6 +57,10 @@ describe("PwrAgent task monitor agent tools", () => {
       .toContain("steer_thread");
     expect(mcpTools.map((tool) => tool.name))
       .toContain("send_messaging_file");
+    expect(mcpTools.map((tool) => tool.name))
+      .toContain("read_star_map_view");
+    expect(mcpTools.map((tool) => tool.name))
+      .toContain("capture_star_map");
     expect(mcpTools.map((tool) => tool.name))
       .not.toEqual(expect.arrayContaining([...dynamicOnlyToolNames]));
     const createMonitorTool = mcpTools.find(

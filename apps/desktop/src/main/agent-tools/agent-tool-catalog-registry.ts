@@ -36,6 +36,10 @@ import {
   buildPwrAgentMcpConnectionToolRouter,
   type PwrAgentMcpConnectionHandler,
 } from "./pwragent-mcp-connection-agent-tools.js";
+import {
+  buildPwrAgentStarMapToolRouter,
+  type PwrAgentStarMapHandler,
+} from "./pwragent-star-map-agent-tools.js";
 import { AgentToolRouter } from "./agent-tool-router.js";
 import { buildTokenMiserToolDefinitions } from "./token-miser-agent-tools.js";
 import type { TokenMiserStore } from "../token-miser/token-miser-store.js";
@@ -57,6 +61,7 @@ export function resolveAgentToolCatalogs(params: {
   threadInspectionHandler?: PwrAgentThreadInspectionHandler;
   threadOrchestrationHandler?: PwrAgentThreadOrchestrationHandler;
   tokenMiserStore?: TokenMiserStore;
+  starMapHandler?: PwrAgentStarMapHandler;
 }, options?: {
   taskMonitorRole?: "parent" | "monitor" | "all";
 }): ResolvedAgentToolCatalog[] {
@@ -95,6 +100,8 @@ export function resolveAgentToolCatalogs(params: {
     buildTokenMiserToolDefinitions(params.tokenMiserStore),
   );
   const tokenMiserDynamicTools = tokenMiserRouter.buildDynamicToolSpecs();
+  const starMapRouter = buildPwrAgentStarMapToolRouter(params.starMapHandler);
+  const starMapDynamicTools = starMapRouter.buildDynamicToolSpecs();
   return [
     {
       id: "automation_inspection",
@@ -173,6 +180,22 @@ export function resolveAgentToolCatalogs(params: {
           id: "thread_orchestration",
           namespace: PWRAGENT_TOOL_NAMESPACE,
           tools: threadOrchestrationDynamicTools,
+        }),
+      },
+    },
+    {
+      id: "star_map",
+      dynamicTools: starMapDynamicTools,
+      router: starMapRouter,
+      summary: {
+        id: "star_map",
+        namespace: PWRAGENT_TOOL_NAMESPACE,
+        enabled: true,
+        toolCount: countDynamicTools(starMapDynamicTools),
+        fingerprint: buildCatalogFingerprint({
+          id: "star_map",
+          namespace: PWRAGENT_TOOL_NAMESPACE,
+          tools: starMapDynamicTools,
         }),
       },
     },
