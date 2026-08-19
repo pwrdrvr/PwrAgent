@@ -230,3 +230,56 @@ describe("countFilterMatches", () => {
     expect(counts.pinned).toBe(1);
   });
 });
+
+describe("selectFilteredThreads summons", () => {
+  it("keeps a summoned thread the chips would have hidden", () => {
+    // The operator asked for this one by name in the ⌘K palette. The
+    // camera is about to fly to its card, so the lens has to draw one.
+    expect(
+      selectFilteredThreads({
+        selection: { unread: "include" },
+        threads: [unread, withPr],
+        summonedKeys: new Set(["codex:pr"]),
+      }).map((entry) => entry.id),
+    ).toEqual(["pr", "unread"]);
+  });
+
+  it("outranks an explicit exclude on the same thread", () => {
+    // "Hide open PRs" is a standing chip; "take me to this thread" is an
+    // instruction about one card, issued later.
+    expect(
+      selectFilteredThreads({
+        selection: { pr: "exclude" },
+        threads: [unread, withPr],
+        summonedKeys: new Set(["codex:pr"]),
+      }).map((entry) => entry.id),
+    ).toEqual(["pr", "unread"]);
+  });
+
+  it("seats a summoned thread ahead of pins, so no cap can fold it away", () => {
+    // Every lens caps its cards and renders the first N; a summoned card
+    // that lands past the cap is a flight to empty sky.
+    expect(
+      selectFilteredThreads({
+        selection: {},
+        threads: [pinned, unread, withPr],
+        summonedKeys: new Set(["codex:pr"]),
+      }).map((entry) => entry.id),
+    ).toEqual(["pr", "pinned", "unread"]);
+  });
+
+  it("still refuses an archived thread", () => {
+    // The map never draws one, so summoning it would place a card the
+    // operator cannot act on.
+    const archived = thread("archived", {
+      archivedAt: 10,
+    } as Partial<NavigationThreadSummary>);
+    expect(
+      selectFilteredThreads({
+        selection: {},
+        threads: [archived],
+        summonedKeys: new Set(["codex:archived"]),
+      }),
+    ).toEqual([]);
+  });
+});

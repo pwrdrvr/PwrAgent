@@ -40,6 +40,14 @@ type SidebarSearchPopupProps = {
    */
   onJumpToRemoteThread?: (thread: NavigationThreadSummary) => void;
   onClose: () => void;
+  /**
+   * What picking a result does here, for the dialog's accessible name and
+   * the field's own label. The Star Map opens the same palette to fly its
+   * camera to a card rather than to scroll a list, and "Jump to thread"
+   * would describe an action that surface does not have.
+   */
+  label?: string;
+  placeholder?: string;
 };
 
 /**
@@ -59,6 +67,7 @@ type SidebarSearchPopupProps = {
  * longer needs the sidebar revealed underneath it to be visible at all.
  */
 export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement {
+  const label = props.label ?? "Jump to thread";
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -313,7 +322,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
         className="jump-palette__panel"
         role="dialog"
         aria-modal="true"
-        aria-label="Jump to thread"
+        aria-label={label}
         // Bound on the panel, not the field: pressing any non-focusable chrome
         // in here (the footer legend, the padding around the input) moves focus
         // to <body> in Chromium, and a handler on the input alone would leave
@@ -339,14 +348,14 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
           <input
             ref={inputRef}
             className="jump-palette__input"
-            aria-label="Jump to thread"
+            aria-label={label}
             aria-controls={listVisible ? listId : undefined}
             aria-activedescendant={
               listVisible ? rowId(activeIndex) : undefined
             }
             autoComplete="off"
             spellCheck={false}
-            placeholder="Jump to thread, PR #, branch, repo…"
+            placeholder={props.placeholder ?? `${label}, PR #, branch, repo…`}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
           />

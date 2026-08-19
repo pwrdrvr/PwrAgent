@@ -90,7 +90,18 @@ export function threadProjectLabel(thread: NavigationThreadSummary): string {
  */
 export function groupThreadsByProject(
   threadsByInstance: ReadonlyMap<string, readonly NavigationThreadSummary[]>,
-  params?: { now?: number },
+  params?: {
+    now?: number;
+    /**
+     * Identity keys the operator summoned from the ⌘K palette. A project
+     * body caps how many cards it seats, and recency is the wrong tie-break
+     * for a card that was asked for by name — so summoned threads sort to
+     * the front of their project, inside the cap. The instance lenses get
+     * the same guarantee from `selectFilteredThreads`; this lens re-sorts
+     * its pools, so it has to be told again.
+     */
+    summonedKeys?: ReadonlySet<string>;
+  },
 ): StarMapProject[] {
   const projects = new Map<string, StarMapProject>();
   for (const threads of threadsByInstance.values()) {
@@ -113,10 +124,21 @@ export function groupThreadsByProject(
     }
   }
   const now = params?.now ?? Date.now();
+  // Non-empty check first: see the same guard in `selectFilteredThreads`.
+  const summonedKeys =
+    params?.summonedKeys && params.summonedKeys.size > 0
+      ? params.summonedKeys
+      : undefined;
+  const summoned = (thread: NavigationThreadSummary): boolean =>
+    summonedKeys !== undefined
+    && summonedKeys.has(buildThreadIdentityKey(thread.source, thread.id));
   for (const project of projects.values()) {
-    project.threads.sort(
-      (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
-    );
+    project.threads.sort((left, right) => {
+      const leftSummoned = summoned(left);
+      const rightSummoned = summoned(right);
+      if (leftSummoned !== rightSummoned) return leftSummoned ? -1 : 1;
+      return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
+    });
     project.lastActivityAt = project.threads.reduce(
       (latest, thread) => Math.max(latest, thread.updatedAt ?? 0),
       0,
