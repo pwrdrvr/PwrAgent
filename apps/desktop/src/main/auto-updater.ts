@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import electronUpdater from "electron-updater";
 const { autoUpdater } = electronUpdater;
 import {
@@ -33,6 +33,12 @@ const GITHUB_RELEASES_URL =
   "https://api.github.com/repos/pwrdrvr/PwrAgent/releases?per_page=30";
 const RELEASE_FETCH_TIMEOUT_MS = 5_000;
 export const APP_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1_000;
+// The GitHub REST API allows 60 anonymous requests per hour per IP, shared by
+// every process on the machine. The renderer reads release versions on every
+// Settings mount, so main caches the release list and serves those reads from
+// memory instead of spending a request each time.
+export const APP_UPDATE_RELEASE_CACHE_TTL_MS = 15 * 60 * 1_000;
+const RATE_LIMIT_FALLBACK_BACKOFF_MS = 15 * 60 * 1_000;
 
 let initialized = false;
 let updateStatus: AppUpdateStatus = { status: "idle" };
@@ -45,6 +51,16 @@ let heldDownloadedUpdate:
   | { selection: UpdateSelectionKey; version: string }
   | undefined;
 const pendingDownloadChannelsByVersion = new Map<string, UpdateSelectionKey>();
+
+type ReleaseCacheEntry = {
+  releases: GitHubRelease[];
+  etag?: string;
+  fetchedAt: number;
+};
+
+let releaseCache: ReleaseCacheEntry | undefined;
+let releaseFetchInFlight: Promise<GitHubRelease[]> | undefined;
+let rateLimitResetAt: number | undefined;
 
 type GitHubRelease = {
   assets?: GitHubReleaseAsset[];
@@ -186,8 +202,17 @@ function configureAutoUpdaterFeedForRelease(release: GitHubRelease): void {
   log.info("configured auto-update feed for GitHub release", { tag });
 }
 
+// E2E launches the app with NODE_ENV=production, which would otherwise arm the
+// startup check, the hourly timer, and the Settings release read against the
+// live GitHub API. Every spinup would spend requests from the 60-per-hour
+// anonymous budget shared by the whole runner IP, and the release list would
+// make the UI depend on what happens to be published.
+function e2eUpdateChecksDisabled(): boolean {
+  return process.env.PWRAGENT_E2E === "1" && !app.isPackaged;
+}
+
 function productionUpdatesEnabled(): boolean {
-  return process.env.NODE_ENV === "production";
+  return process.env.NODE_ENV === "production" && !e2eUpdateChecksDisabled();
 }
 
 function developmentUpdateCheckResult(): AppUpdateCheckResult {
@@ -336,6 +361,7 @@ export async function checkForAppUpdatesNow(
       const release = await readAppUpdateReleaseForChannel(
         updateChannel,
         updateTrain,
+        trigger === "manual" || trigger === "menu" ? 0 : undefined,
       );
       const currentVersion = autoUpdater.currentVersion?.version ?? "unknown";
       if (!release?.tag_name) {
@@ -719,57 +745,176 @@ function releaseForSelection(
     : selected.stableLatest;
 }
 
-function githubReleaseHeaders(): HeadersInit {
+function githubReleaseHeaders(etag?: string): HeadersInit {
   const token = process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim();
   return {
     Accept: "application/vnd.github+json",
     "User-Agent": "PwrAgent",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    // A conditional request that answers 304 is not charged against the
+    // GitHub rate limit, so revalidation stays free while nothing ships.
+    ...(etag ? { "If-None-Match": etag } : {}),
   };
 }
 
-async function fetchGitHubReleases(signal?: AbortSignal): Promise<GitHubRelease[]> {
-  const response = await fetch(GITHUB_RELEASES_URL, {
-    headers: githubReleaseHeaders(),
-    ...(signal ? { signal } : {}),
-  });
-  if (!response.ok) {
-    throw new Error(`GitHub releases request failed with ${response.status}`);
-  }
-  const payload = await response.json();
-  return Array.isArray(payload)
-    ? payload.filter((release): release is GitHubRelease =>
-        typeof release === "object" && release !== null,
-      )
-    : [];
+function readResponseHeader(
+  response: Response,
+  name: string,
+): string | undefined {
+  return response.headers?.get?.(name) ?? undefined;
 }
 
-async function readAppUpdateReleaseForChannel(
-  updateChannel: DesktopUpdateChannel,
-  updateTrain: DesktopUpdateTrain,
-): Promise<GitHubRelease | undefined> {
+function rateLimitedError(resetAt: number): Error {
+  const resumesAt = new Date(resetAt).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return new Error(`GitHub rate limit reached. Update checks resume at ${resumesAt}.`);
+}
+
+/**
+ * The reset instant to back off until, or undefined when the failure is not a
+ * rate limit. A reset that is not in the future cannot be trusted — a skewed
+ * local clock would otherwise leave the backoff permanently disarmed — so it
+ * falls back to a fixed window.
+ */
+function rateLimitResetFromResponse(response: Response): number | undefined {
+  const status = response.status;
+  const rateLimited =
+    (status === 403 || status === 429)
+    && readResponseHeader(response, "x-ratelimit-remaining") === "0";
+  if (!rateLimited) {
+    return undefined;
+  }
+  const now = Date.now();
+  const resetAt =
+    Number(readResponseHeader(response, "x-ratelimit-reset")) * 1_000;
+  return Number.isFinite(resetAt) && resetAt > now
+    ? resetAt
+    : now + RATE_LIMIT_FALLBACK_BACKOFF_MS;
+}
+
+async function fetchGitHubReleases(): Promise<GitHubRelease[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), RELEASE_FETCH_TIMEOUT_MS);
   try {
-    const releases = await fetchGitHubReleases(controller.signal);
-    return releaseForSelection(
-      selectAppUpdateReleases(releases),
-      updateChannel,
-      updateTrain,
-    );
+    const response = await fetch(GITHUB_RELEASES_URL, {
+      headers: githubReleaseHeaders(releaseCache?.etag),
+      signal: controller.signal,
+    });
+    if (response.status === 304 && releaseCache) {
+      releaseCache = { ...releaseCache, fetchedAt: Date.now() };
+      rateLimitResetAt = undefined;
+      return releaseCache.releases;
+    }
+    if (!response.ok) {
+      const resetAt = rateLimitResetFromResponse(response);
+      if (resetAt === undefined) {
+        throw new Error(
+          `GitHub releases request failed with ${response.status}`,
+        );
+      }
+      rateLimitResetAt = resetAt;
+      log.warn("GitHub release rate limit reached", {
+        resetAt: new Date(resetAt).toISOString(),
+        status: response.status,
+      });
+      throw rateLimitedError(resetAt);
+    }
+    const payload = await response.json();
+    const releases = Array.isArray(payload)
+      ? payload.filter((release): release is GitHubRelease =>
+          typeof release === "object" && release !== null,
+        )
+      : [];
+    releaseCache = {
+      etag: readResponseHeader(response, "etag"),
+      fetchedAt: Date.now(),
+      releases,
+    };
+    rateLimitResetAt = undefined;
+    return releases;
   } finally {
     clearTimeout(timeout);
   }
 }
 
-export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVersions> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), RELEASE_FETCH_TIMEOUT_MS);
+/**
+ * Single owner of the GitHub release list. Every caller in main goes through
+ * this cache, and the renderer only ever reads it over IPC, so a Settings
+ * mount costs no network request.
+ */
+async function readGitHubReleases(
+  maxAgeMs = APP_UPDATE_RELEASE_CACHE_TTL_MS,
+): Promise<GitHubRelease[]> {
+  const now = Date.now();
+  const cacheAgeMs = releaseCache ? now - releaseCache.fetchedAt : undefined;
+  // A negative age means the wall clock moved backwards. Treat that entry as
+  // stale rather than fresh for the size of the jump.
+  if (
+    releaseCache
+    && cacheAgeMs !== undefined
+    && cacheAgeMs >= 0
+    && cacheAgeMs < maxAgeMs
+  ) {
+    return releaseCache.releases;
+  }
+  if (rateLimitResetAt !== undefined && now < rateLimitResetAt) {
+    // Spending a request that GitHub will reject only deepens the hole. Serve
+    // the last good list when we have one.
+    if (releaseCache) {
+      return releaseCache.releases;
+    }
+    throw rateLimitedError(rateLimitResetAt);
+  }
+  if (!releaseFetchInFlight) {
+    releaseFetchInFlight = fetchGitHubReleases().finally(() => {
+      releaseFetchInFlight = undefined;
+    });
+  }
   try {
-    const releases = await fetchGitHubReleases(controller.signal);
-    const selected = selectAppUpdateReleases(releases);
+    return await releaseFetchInFlight;
+  } catch (err) {
+    // The request that discovers the limit degrades the same way every later
+    // one does: last good list first, error only when there is none.
+    if (
+      releaseCache
+      && rateLimitResetAt !== undefined
+      && Date.now() < rateLimitResetAt
+    ) {
+      return releaseCache.releases;
+    }
+    throw err;
+  }
+}
+
+async function readAppUpdateReleaseForChannel(
+  updateChannel: DesktopUpdateChannel,
+  updateTrain: DesktopUpdateTrain,
+  maxAgeMs?: number,
+): Promise<GitHubRelease | undefined> {
+  const releases = await readGitHubReleases(maxAgeMs);
+  return releaseForSelection(
+    selectAppUpdateReleases(releases),
+    updateChannel,
+    updateTrain,
+  );
+}
+
+export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVersions> {
+  if (e2eUpdateChecksDisabled()) {
+    const unavailable = { unavailableReason: "Update checks are disabled." };
     return {
       fetchedAt: Date.now(),
+      stable: { latest: unavailable, prerelease: unavailable },
+      beta: { latest: unavailable, prerelease: unavailable },
+    };
+  }
+  try {
+    const releases = await readGitHubReleases();
+    const selected = selectAppUpdateReleases(releases);
+    return {
+      fetchedAt: releaseCache?.fetchedAt ?? Date.now(),
       stable: {
         latest: releaseInfoFromGitHubRelease(
           selected.stableLatest,
@@ -799,8 +944,6 @@ export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVe
       stable: { latest: unavailable, prerelease: unavailable },
       beta: { latest: unavailable, prerelease: unavailable },
     };
-  } finally {
-    clearTimeout(timeout);
   }
 }
 
