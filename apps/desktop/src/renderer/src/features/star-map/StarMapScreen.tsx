@@ -101,6 +101,7 @@ import {
 import type { StarMapCardMenuAction } from "./StarMapCardMenu";
 import { useStarMapChatCards } from "./useStarMapChatCards";
 import { IntakeDialog, type IntakeDialogTarget } from "./IntakeDialog";
+import { StarMapRenameDialog } from "./StarMapRenameDialog";
 import {
   readStoredPreferences,
   writeStoredPreferences,
@@ -385,6 +386,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
    */
   const viewportSizeRef = useRef(viewportSize);
   const [intakeTarget, setIntakeTarget] = useState<IntakeDialogTarget>();
+  // The card whose title the rename dialog is editing. The whole target,
+  // not just an id: the rename call needs the owning instance to route
+  // and to refresh, exactly like every other card action.
+  const [renameTarget, setRenameTarget] = useState<StarMapCardTarget>();
   // Which instance the operator is focused on. Selection is deliberately
   // view-local and unsynced: it is a "where am I looking" gesture, not a
   // property of the fleet the way card placement is.
@@ -453,6 +458,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const [archivedThreadKeys, setArchivedThreadKeys] = useState<Set<string>>(
     new Set(),
   );
+  /**
+   * Titles the operator just changed, held until the owning feed reports
+   * them. Same reasoning as `archivedThreadKeys`: a peer's feed refreshes
+   * on its own cadence, and a card still wearing its old title reads as a
+   * rename that quietly failed. Dropped on failure; released once the feed
+   * agrees.
+   */
+  const [renamedTitles, setRenamedTitles] = useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
   const [remoteRefreshNonce, setRemoteRefreshNonce] = useState(0);
   // Cards vary in height with their chip rows, so lanes stack from real
   // measurements - a fixed pitch clipped tall cards mid-glyph.
@@ -946,15 +961,30 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   const attentionByInstance = useMemo(() => {
-    const withoutArchived = (threads: NavigationThreadSummary[]) =>
-      archivedThreadKeys.size === 0
-        ? threads
-        : threads.filter(
-            (thread) =>
-              !archivedThreadKeys.has(
-                buildThreadIdentityKey(thread.source, thread.id),
-              ),
-          );
+    // One pass for both optimistic edits a card can be carrying: the
+    // archive that hid it, and the rename its feed has not echoed yet.
+    // Threads are rebuilt only while an edit is outstanding, so the
+    // ordinary case keeps the identities the feed handed over.
+    const withLocalEdits = (threads: NavigationThreadSummary[]) => {
+      const kept =
+        archivedThreadKeys.size === 0
+          ? threads
+          : threads.filter(
+              (thread) =>
+                !archivedThreadKeys.has(
+                  buildThreadIdentityKey(thread.source, thread.id),
+                ),
+            );
+      if (renamedTitles.size === 0) return kept;
+      return kept.map((thread) => {
+        const title = renamedTitles.get(
+          buildThreadIdentityKey(thread.source, thread.id),
+        );
+        return title === undefined || title === thread.title
+          ? thread
+          : { ...thread, title };
+      });
+    };
     const result = new Map<string, NavigationThreadSummary[]>();
     // The main-window snapshot also carries viewer-side pinned REMOTE
     // threads (Cmd+K unification). Those render under their owning
@@ -962,7 +992,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // locally-owned threads only, or pinned remote cards would double up.
     result.set(
       localInstanceId,
-      withoutArchived(
+      withLocalEdits(
         selectFilteredThreads({
           threads: props.localThreads.filter(
             (thread) =>
@@ -978,7 +1008,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     for (const [instanceId, threads] of remote.threadsByInstance) {
       result.set(
         instanceId,
-        withoutArchived(
+        withLocalEdits(
           selectFilteredThreads({
             threads,
             selection: filterSelection,
@@ -1005,7 +1035,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
       ) {
         continue;
       }
-      result.set(instanceId, [summon, ...present]);
+      // Merged in after `withLocalEdits`, so the optimistic title has to
+      // be applied here too — the same reason the archive check above is
+      // repeated rather than inherited.
+      const renamed = renamedTitles.get(key);
+      result.set(instanceId, [
+        renamed === undefined || renamed === summon.title
+          ? summon
+          : { ...summon, title: renamed },
+        ...present,
+      ]);
     }
     return result;
   }, [
@@ -1015,6 +1054,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     props.localThreads,
     props.sessionKeys,
     remote,
+    renamedTitles,
     summonedKeys,
     summonedThreads,
   ]);
@@ -1041,6 +1081,34 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // stable dep too — but size makes the "runs when the set grows or
     // shrinks" intent explicit and cannot loop through its own setState.
   }, [archivedThreadKeys.size, props.localThreads, remote]);
+
+  // Release an optimistic title once its feed reports the same one — or
+  // once the thread is gone, so a card that never comes back cannot pin a
+  // title on whatever later reuses its key.
+  useEffect(() => {
+    if (renamedTitles.size === 0) return;
+    const titleByKey = new Map<string, string>();
+    for (const thread of props.localThreads) {
+      titleByKey.set(
+        buildThreadIdentityKey(thread.source, thread.id),
+        thread.title,
+      );
+    }
+    for (const threads of remote.threadsByInstance.values()) {
+      for (const thread of threads) {
+        titleByKey.set(
+          buildThreadIdentityKey(thread.source, thread.id),
+          thread.title,
+        );
+      }
+    }
+    setRenamedTitles((current) => {
+      const kept = [...current].filter(
+        ([key, title]) => titleByKey.has(key) && titleByKey.get(key) !== title,
+      );
+      return kept.length === current.size ? current : new Map(kept);
+    });
+  }, [props.localThreads, remote, renamedTitles.size]);
 
   /**
    * Orbit-lens project clouds: each instance's threads grouped by project,
@@ -1913,6 +1981,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
           onSelect: () => openThreadFully(thread),
         },
       ];
+      if (desktopApi?.renameThread) {
+        actions.push({
+          key: "rename",
+          // Single-target like "Open in full view", and for the same kind
+          // of reason: one name across five cards is not a rename, it is
+          // five threads the operator can no longer tell apart.
+          label: "Rename thread…",
+          onSelect: () => setRenameTarget({ instanceId, thread }),
+        });
+      }
       // The unread subset, not the whole selection: an already-seen card
       // has nothing to mark, and the count says so. Same shape as the
       // thread list's `bulkArchivableThreads`.
@@ -1939,6 +2017,45 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   threadId: target.thread.id,
                 }),
               targets: unseenTargets,
+            });
+          },
+        });
+      }
+      // The mirror of the entry above, over the complement of that subset:
+      // a card already showing its cookie has nothing to mark unread. A
+      // thread with no `updatedAt` is skipped because unread is expressed
+      // by moving the seen watermark behind it, and there is nothing to
+      // move it behind.
+      const seenTargets = targets.all.filter(
+        (target) =>
+          !target.thread.inbox.inInbox && target.thread.updatedAt !== undefined,
+      );
+      if (desktopApi?.markThreadSeen && seenTargets.length > 0) {
+        actions.push({
+          key: "mark-unread",
+          label:
+            seenTargets.length > 1
+              ? `Mark ${seenTargets.length} threads as unread`
+              : "Mark as unread",
+          onSelect: () => {
+            runOnCardTargets({
+              describeFailure: (failed, total) =>
+                total === 1
+                  ? "Could not mark that thread unread"
+                  : `Could not mark ${failed} of ${total} threads unread`,
+              run: (target) =>
+                desktopApi.markThreadSeen?.({
+                  backend: target.thread.source,
+                  federationTarget:
+                    target.thread.federation?.ref.target
+                    ?? readRendererFederationTarget(),
+                  threadId: target.thread.id,
+                  // One tick behind the thread's own timestamp: the same
+                  // watermark the thread list writes, so both surfaces
+                  // mean the same thing by "unread".
+                  seenUpdatedAt: Math.max(0, (target.thread.updatedAt ?? 0) - 1),
+                }),
+              targets: seenTargets,
             });
           },
         });
@@ -3599,6 +3716,50 @@ export function StarMapScreen(props: StarMapScreenProps) {
             } else {
               setRemoteRefreshNonce((nonce) => nonce + 1);
             }
+          }}
+        />
+      ) : null}
+      {renameTarget ? (
+        <StarMapRenameDialog
+          currentTitle={renameTarget.thread.title}
+          onCancel={() => setRenameTarget(undefined)}
+          onSubmit={(name) => {
+            const target = renameTarget;
+            setRenameTarget(undefined);
+            const threadKey = buildThreadIdentityKey(
+              target.thread.source,
+              target.thread.id,
+            );
+            // Wear the new title NOW, for the same reason Archive hides
+            // its card now: the owning feed refreshes on its own cadence,
+            // and a card still showing the old title is indistinguishable
+            // from a rename that did not happen.
+            setRenamedTitles((current) => new Map(current).set(threadKey, name));
+            runOnCardTargets({
+              describeFailure: () => "Could not rename that thread",
+              run: (entry) =>
+                desktopApi
+                  ?.renameThread?.({
+                    backend: entry.thread.source,
+                    federationTarget:
+                      entry.thread.federation?.ref.target
+                      ?? readRendererFederationTarget(),
+                    name,
+                    threadId: entry.thread.id,
+                  })
+                  .catch((error: unknown) => {
+                    // The old title is the true one again.
+                    setRenamedTitles((current) => {
+                      if (!current.has(threadKey)) return current;
+                      const next = new Map(current);
+                      next.delete(threadKey);
+                      return next;
+                    });
+                    // Rethrown so the run still reports the failure.
+                    throw error;
+                  }),
+              targets: [target],
+            });
           }}
         />
       ) : null}

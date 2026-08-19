@@ -1151,6 +1151,147 @@ describe("StarMapScreen", () => {
     expect(archiveThread).not.toHaveBeenCalled();
   });
 
+  it("renames a thread from the card kebab and wears the new title at once", async () => {
+    const renameThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t1",
+      renamedAt: 1,
+    }));
+    const onRefreshLocalThreads = vi.fn();
+    render(
+      <StarMapScreen
+        desktopApi={{ ...buildDesktopApi(), renameThread } as unknown as DesktopApi}
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+        onRefreshLocalThreads={onRefreshLocalThreads}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open this instance \(Mac-Mini-M4\)/ }),
+      ).toBeTruthy();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Thread t1" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename thread…" }));
+
+    const input = screen.getByLabelText("Thread name") as HTMLInputElement;
+    // Seeded with the current title, so a small correction does not mean
+    // retyping the whole name.
+    expect(input.value).toBe("Thread t1");
+    fireEvent.change(input, { target: { value: "  Star chart cleanup  " } });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+    await waitFor(() => {
+      expect(renameThread).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          name: "Star chart cleanup",
+          threadId: "t1",
+        }),
+      );
+    });
+    // The props still carry the old title — the card must not wait for the
+    // feed to catch up before it shows the rename.
+    expect(
+      screen.getByRole("button", { name: "Open thread: Star chart cleanup" }),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(onRefreshLocalThreads).toHaveBeenCalled();
+    });
+  });
+
+  it("puts the old title back when a rename is refused", async () => {
+    const renameThread = vi.fn(async () => {
+      throw new Error("peer is offline");
+    });
+    render(
+      <StarMapScreen
+        desktopApi={{ ...buildDesktopApi(), renameThread } as unknown as DesktopApi}
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open this instance \(Mac-Mini-M4\)/ }),
+      ).toBeTruthy();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Thread t1" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename thread…" }));
+    fireEvent.change(screen.getByLabelText("Thread name"), {
+      target: { value: "Star chart cleanup" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/peer is offline/);
+    expect(
+      screen.getByRole("button", { name: "Open thread: Thread t1" }),
+    ).toBeTruthy();
+  });
+
+  it("marks a seen thread unread from the card kebab", async () => {
+    const markThreadSeen = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t1",
+      seenAt: 5,
+    }));
+    render(
+      <StarMapScreen
+        desktopApi={
+          { ...buildDesktopApi(), markThreadSeen } as unknown as DesktopApi
+        }
+        localThreads={[
+          {
+            ...unreadThread("t1"),
+            inbox: { inInbox: false },
+          } as NavigationThreadSummary,
+        ]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open this instance \(Mac-Mini-M4\)/ }),
+      ).toBeTruthy();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Thread t1" }),
+    );
+    // A seen card has nothing to mark seen, and the reverse entry is the
+    // one that applies.
+    expect(screen.queryByRole("menuitem", { name: "Mark as seen" })).toBeNull();
+    fireEvent.click(screen.getByRole("menuitem", { name: "Mark as unread" }));
+
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          threadId: "t1",
+          // One tick behind the thread's own `updatedAt`, the same
+          // watermark the thread list writes.
+          seenUpdatedAt: 99,
+        }),
+      );
+    });
+  });
+
   it("groups threads under project suns and swaps the project chip for the instance", async () => {
     window.localStorage.setItem(
       "pwragent.starMap.viewPreferences",
