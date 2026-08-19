@@ -111,6 +111,8 @@ function currentUpdateSelectionKey(): UpdateSelectionKey {
   return updateSelectionKey(currentUpdateTrain(), currentUpdateChannel());
 }
 
+let lastLoggedUpdatePosture: string | null = null;
+
 // `allowDowngrade` is the posture that lets an operator move *back* onto the
 // channel they picked after ending up on a newer build than that channel
 // serves. It stays alongside `allowPrerelease` so both halves of the feed
@@ -123,6 +125,15 @@ function configureAutoUpdaterChannel(
   autoUpdater.allowPrerelease =
     updateTrain === "beta" || updateChannel === "prerelease";
   autoUpdater.allowDowngrade = options.allowDowngrade === true;
+  // Startup configures the channel and then every check reconfigures it, so
+  // report the posture when it changes rather than once per update check. Both
+  // halves are keyed: flipping `allowDowngrade` alone is a real posture change.
+  const posture = `${updateSelectionKey(updateTrain, updateChannel)}:${autoUpdater.allowDowngrade}`;
+  if (posture === lastLoggedUpdatePosture) {
+    return;
+  }
+
+  lastLoggedUpdatePosture = posture;
   log.info("configured auto-update channel", {
     allowDowngrade: autoUpdater.allowDowngrade,
     allowPrerelease: autoUpdater.allowPrerelease,

@@ -1178,7 +1178,9 @@ function buildChannelConfig(params: {
 
   if (!enabled) {
     if (logStartupEligibility) {
-      log.info(`${channel}: disabled in settings — skipping`, {
+      // Every channel the operator never turned on reports here, so a disabled
+      // channel is debug detail; the startup log only states what did start.
+      log.debug(`${channel}: disabled in settings — skipping`, {
         channel,
       });
     }
