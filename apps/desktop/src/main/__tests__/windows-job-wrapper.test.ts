@@ -6,8 +6,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   formatWindowsJobStartupTelemetry,
-  prewarmWindowsJobWrapper,
   formatWindowsJobStartupTimeout,
+  prewarmWindowsJobWrapper,
   readWindowsJobStartupTelemetry,
   startWindowsJobReadyPoll,
   type WindowsJobStartupTimeout,
@@ -468,4 +468,43 @@ describe("prewarmWindowsJobWrapper", () => {
     },
     60_000,
   );
+
+  // Startup discards this promise with `void`, and a rejection before the main
+  // window appears is reported as a fatal boot failure. A host that cannot hand
+  // out a temp directory must therefore cost a cold launch, not a startup that
+  // refuses to continue.
+  it("settles when the wrapper cannot create its state directory", async () => {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", {
+      configurable: true,
+      value: "win32",
+    });
+    vi.stubEnv("SystemRoot", String.raw`C:\Windows`);
+    vi.resetModules();
+    vi.doMock("node:fs", async () => {
+      const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+      return {
+        ...actual,
+        default: actual,
+        mkdtempSync: () => {
+          throw new Error("no writable temp directory");
+        },
+      };
+    });
+
+    try {
+      const { prewarmWindowsJobWrapper: prewarmWithBrokenTemp } =
+        await import("../windows-job-wrapper");
+
+      await expect(prewarmWithBrokenTemp()).resolves.toBeUndefined();
+    } finally {
+      vi.doUnmock("node:fs");
+      vi.resetModules();
+      vi.unstubAllEnvs();
+      Object.defineProperty(process, "platform", {
+        configurable: true,
+        value: originalPlatform,
+      });
+    }
+  });
 });

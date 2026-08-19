@@ -764,50 +764,51 @@ let windowsJobWrapperPrewarm: Promise<void> | undefined;
  * and active-process drain a real command takes. Nothing about the ownership
  * boundary changes -- this only decides when its cold start happens.
  *
- * Best effort by construction. A failure means the next real launch is cold
- * again, which is exactly today's behavior, so no caller needs to handle it.
- * Repeat calls share the first call's promise.
+ * Best effort by construction: this never rejects. A failure means the next
+ * real launch is cold again, which is exactly today's behavior, so no caller
+ * needs to handle it. Repeat calls share the first call's promise.
  */
-export function prewarmWindowsJobWrapper(
-  options: { env?: NodeJS.ProcessEnv } = {},
-): Promise<void> {
-  windowsJobWrapperPrewarm ??= runWindowsJobWrapperPrewarm(
-    options.env ?? process.env,
-  );
+export function prewarmWindowsJobWrapper(): Promise<void> {
+  windowsJobWrapperPrewarm ??= runWindowsJobWrapperPrewarm();
   return windowsJobWrapperPrewarm;
 }
 
-async function runWindowsJobWrapperPrewarm(
-  env: NodeJS.ProcessEnv,
-): Promise<void> {
-  if (process.platform !== "win32") {
-    return;
-  }
-
-  // `CreateProcess` is given the executable directly and performs no path
-  // search, so a prewarm without an absolute target would only prove that the
-  // wrapper reports a launch failure quickly.
-  const systemRoot = readSystemRoot(env);
-  if (!systemRoot) {
-    return;
-  }
-
-  const launch = wrapCommandInWindowsJob({
-    args: ["/c", "exit", "0"],
-    command: path.win32.join(systemRoot, "System32", "cmd.exe"),
-    env,
-  });
+async function runWindowsJobWrapperPrewarm(): Promise<void> {
+  // Every failure mode settles the same way: warming is an optimization, so the
+  // whole attempt is inside one `catch`. Startup discards this promise with
+  // `void` and boot treats a stray rejection as a fatal boot failure, so a
+  // temp directory PwrAgent could not create -- or one it could not delete
+  // afterwards -- must never reach the operator as a startup error.
   try {
-    await execFile(launch.command, launch.args, {
-      encoding: "utf8",
-      env: launch.env,
-      // A hung prewarm host would otherwise outlive the app. The timeout kills
-      // PowerShell, which closes the Job and takes the target with it.
-      timeout: WINDOWS_JOB_PREWARM_TIMEOUT_MS,
+    if (process.platform !== "win32") {
+      return;
+    }
+
+    // `CreateProcess` is given the executable directly and performs no path
+    // search, so a prewarm without an absolute target would only prove that the
+    // wrapper reports a launch failure quickly.
+    const systemRoot = readSystemRoot(process.env);
+    if (!systemRoot) {
+      return;
+    }
+
+    const launch = wrapCommandInWindowsJob({
+      args: ["/c", "exit", "0"],
+      command: path.win32.join(systemRoot, "System32", "cmd.exe"),
+      env: process.env,
     });
+    try {
+      await execFile(launch.command, launch.args, {
+        encoding: "utf8",
+        env: launch.env,
+        // A hung prewarm host would otherwise outlive the app. The timeout
+        // kills PowerShell, which closes the Job and takes the target with it.
+        timeout: WINDOWS_JOB_PREWARM_TIMEOUT_MS,
+      });
+    } finally {
+      launch.cleanup();
+    }
   } catch {
-    // Warming is an optimization; the next real launch still owns its own tree.
-  } finally {
-    launch.cleanup();
+    // The next real launch is cold again, which is exactly today's behavior.
   }
 }
