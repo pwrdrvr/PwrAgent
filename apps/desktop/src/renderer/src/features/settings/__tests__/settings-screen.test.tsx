@@ -3922,6 +3922,64 @@ describe("SettingsScreen", () => {
     expect(settings.replaceSecret).not.toHaveBeenCalled();
   });
 
+  it("offers a switch back when the downloaded release is older than the running build", async () => {
+    const settings = createSettingsState(
+      createSnapshot({
+        updates: {
+          channel: { value: "latest", source: "config" },
+          train: { value: "stable", source: "config" },
+        },
+      }),
+    );
+    const desktopApi = {
+      checkForAppUpdates: vi.fn(async () => ({
+        status: "available" as const,
+        version: "1.0.2",
+        direction: "downgrade" as const,
+      })),
+      readAppUpdateReleaseVersions: vi.fn(async () => ({
+        fetchedAt: 1,
+        stable: {
+          latest: { version: "v1.0.2" },
+          prerelease: { version: "v1.0.2" },
+        },
+        beta: {
+          latest: { version: "v1.1.0-alpha.2" },
+          prerelease: { version: "v1.1.0-alpha.2" },
+        },
+      })),
+      readAppUpdateStatus: vi.fn(async () => ({
+        status: "downloaded" as const,
+        version: "1.0.2",
+        direction: "downgrade" as const,
+      })),
+      installAppUpdate: vi.fn(async () => ({ status: "restarting" as const })),
+    };
+
+    render(
+      <SettingsScreen
+        desktopApi={desktopApi}
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Restart to Switch (1.0.2)",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Restart to Update (1.0.2)" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Check for Update" }));
+    await waitFor(() => {
+      expect(desktopApi.checkForAppUpdates).toHaveBeenCalledTimes(1);
+    });
+    expect(await screen.findByText(/Switch to v1.0.2/)).toBeInTheDocument();
+  });
+
   it("shows a restart action when the selected channel version is already downloaded", async () => {
     const settings = createSettingsState(
       createSnapshot({

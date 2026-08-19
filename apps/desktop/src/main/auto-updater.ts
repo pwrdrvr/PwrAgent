@@ -10,6 +10,7 @@ import {
 } from "../shared/ipc";
 import type {
   AppUpdateCheckResult,
+  AppUpdateDirection,
   AppUpdateInstallResult,
   AppUpdateReleaseInfo,
   AppUpdateReleaseVersions,
@@ -110,17 +111,56 @@ function currentUpdateSelectionKey(): UpdateSelectionKey {
   return updateSelectionKey(currentUpdateTrain(), currentUpdateChannel());
 }
 
+// `allowDowngrade` is the posture that lets an operator move *back* onto the
+// channel they picked after ending up on a newer build than that channel
+// serves. It stays alongside `allowPrerelease` so both halves of the feed
+// posture are set — and logged — in one greppable place.
 function configureAutoUpdaterChannel(
   updateChannel: DesktopUpdateChannel = currentUpdateChannel(),
   updateTrain: DesktopUpdateTrain = currentUpdateTrain(),
+  options: { allowDowngrade?: boolean } = {},
 ): void {
   autoUpdater.allowPrerelease =
     updateTrain === "beta" || updateChannel === "prerelease";
+  autoUpdater.allowDowngrade = options.allowDowngrade === true;
   log.info("configured auto-update channel", {
+    allowDowngrade: autoUpdater.allowDowngrade,
     allowPrerelease: autoUpdater.allowPrerelease,
     updateChannel,
     updateTrain,
   });
+}
+
+// Direction is derived from the running version rather than threaded through
+// every call site, so the electron-updater event handlers — which only learn a
+// version string — classify a build the same way the check flow does.
+function updateDirectionForVersion(
+  version: string | undefined,
+): AppUpdateDirection | undefined {
+  const currentVersion = autoUpdater.currentVersion?.version;
+  // Both sides must parse. A placeholder such as the "unknown" the download
+  // progress handler can carry sorts below every real version in
+  // `compareSemver`, and must not be read as a downgrade.
+  if (!parseSemver(version) || !parseSemver(currentVersion)) {
+    return undefined;
+  }
+  return compareSemver(version, currentVersion) < 0 ? "downgrade" : undefined;
+}
+
+function withDirection<T extends { version: string }>(
+  result: T,
+): T & { direction?: AppUpdateDirection } {
+  const direction = updateDirectionForVersion(result.version);
+  return direction ? { ...result, direction } : result;
+}
+
+// Only an operator-initiated check may offer a downgrade. A background poll
+// that nagged someone back down every hour would fight an operator who
+// deliberately installed a newer build and left their channel alone; the
+// Settings "Check for updates" button, the app menu item, and the app
+// management tool are all explicit asks.
+function downgradeOfferAllowed(trigger: UpdateCheckTrigger): boolean {
+  return trigger === "manual" || trigger === "menu";
 }
 
 function configureAutoUpdaterFeedForRelease(release: GitHubRelease): void {
@@ -188,13 +228,22 @@ function downloadedUpdateMatchesChannel(
   if (heldDownloadedUpdate?.selection !== updateSelection) {
     return undefined;
   }
-  return { status: "downloaded", version: heldDownloadedUpdate.version };
+  return withDirection({
+    status: "downloaded" as const,
+    version: heldDownloadedUpdate.version,
+  });
 }
 
 function syncAutoInstallOnAppQuit(updateSelection: UpdateSelectionKey): void {
+  const eligibleDownload = downloadedUpdateMatchesChannel(updateSelection);
+  if (eligibleDownload?.direction === "downgrade") {
+    // Moving back down a channel is never something to do behind the
+    // operator's back on the next quit. It waits for the explicit restart.
+    autoUpdater.autoInstallOnAppQuit = false;
+    return;
+  }
   autoUpdater.autoInstallOnAppQuit =
-    downloadedUpdateMatchesChannel(updateSelection) !== undefined
-    || heldDownloadedUpdate === undefined;
+    eligibleDownload !== undefined || heldDownloadedUpdate === undefined;
 }
 
 function reconcileDownloadedUpdateEligibility(
@@ -233,8 +282,10 @@ function recordPendingDownloadChannel(
   pendingDownloadChannelsByVersion.set(version, updateSelection);
 }
 
+type UpdateCheckTrigger = "startup" | "periodic" | "manual" | "menu";
+
 export async function checkForAppUpdatesNow(
-  trigger: "startup" | "periodic" | "manual" | "menu" = "manual",
+  trigger: UpdateCheckTrigger = "manual",
 ): Promise<AppUpdateCheckResult> {
   if (!productionUpdatesEnabled()) {
     const result = developmentUpdateCheckResult();
@@ -287,7 +338,14 @@ export async function checkForAppUpdatesNow(
         return result;
       }
       const selectedVersion = release.tag_name.replace(/^v/i, "");
-      if (compareSemver(selectedVersion, currentVersion) <= 0) {
+      const selectedOrder = compareSemver(selectedVersion, currentVersion);
+      // `compareSemver` sorts a tag it cannot parse below every real version,
+      // so an unreadable tag looks identical to a deliberate downgrade. The
+      // `<= 0` guard this replaced declined both; keep declining the tag we
+      // cannot read rather than pointing the update feed at it.
+      const selectedIsOlder =
+        selectedOrder < 0 && parseSemver(selectedVersion) !== undefined;
+      if (selectedOrder <= 0 && !selectedIsOlder) {
         const result = { status: "no-update", version: currentVersion } as const;
         setUpdateStatusUnlessDownloaded(result);
         log.info("skipping app update check; selected release is not newer", {
@@ -298,6 +356,37 @@ export async function checkForAppUpdatesNow(
           updateTrain,
         });
         return result;
+      }
+      // A selection that resolves *older* than the running build means the
+      // operator is on a build their own channel no longer serves — the
+      // stranding this branch exists to undo. Offer the switch back rather
+      // than reporting "up to date" on a version they did not pick.
+      if (selectedIsOlder) {
+        if (!downgradeOfferAllowed(trigger)) {
+          const result = {
+            status: "no-update",
+            version: currentVersion,
+          } as const;
+          setUpdateStatusUnlessDownloaded(result);
+          log.info("skipping background downgrade offer; selection is older", {
+            currentVersion,
+            selectedRelease: release.tag_name,
+            trigger,
+            updateChannel,
+            updateTrain,
+          });
+          return result;
+        }
+        configureAutoUpdaterChannel(updateChannel, updateTrain, {
+          allowDowngrade: true,
+        });
+        log.info("offering a switch back to the selected channel", {
+          currentVersion,
+          selectedRelease: release.tag_name,
+          trigger,
+          updateChannel,
+          updateTrain,
+        });
       }
       configureAutoUpdaterFeedForRelease(release);
       updateCheckChannelInFlight = updateSelection;
@@ -318,7 +407,10 @@ export async function checkForAppUpdatesNow(
       if (result.updateInfo.version === currentVersion) {
         return { status: "no-update", version: currentVersion };
       }
-      return { status: "available", version: result.updateInfo.version };
+      return withDirection({
+        status: "available" as const,
+        version: result.updateInfo.version,
+      });
     } catch (err) {
       const result = {
         status: "error",
@@ -727,7 +819,9 @@ export function initAutoUpdater(): void {
   autoUpdater.on("update-available", (info) => {
     log.info("update-available", { version: info.version });
     recordPendingDownloadChannel(info.version, updateCheckChannelInFlight);
-    setUpdateStatus({ status: "available", version: info.version });
+    setUpdateStatus(
+      withDirection({ status: "available" as const, version: info.version }),
+    );
   });
   autoUpdater.on("update-not-available", (info) => {
     log.info("update-not-available", { version: info.version });
@@ -743,11 +837,13 @@ export function initAutoUpdater(): void {
       updateStatus.status === "available" || updateStatus.status === "downloading"
         ? updateStatus.version
         : "unknown";
-    setUpdateStatus({
-      status: "downloading",
-      version,
-      percent: Math.round(progress.percent),
-    });
+    setUpdateStatus(
+      withDirection({
+        status: "downloading" as const,
+        version,
+        percent: Math.round(progress.percent),
+      }),
+    );
   });
   autoUpdater.on("update-downloaded", (info) => {
     log.info("update-downloaded", { version: info.version });

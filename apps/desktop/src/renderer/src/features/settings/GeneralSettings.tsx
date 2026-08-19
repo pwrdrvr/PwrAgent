@@ -225,9 +225,13 @@ function updateResultText(result: AppUpdateCheckResult): string {
     return `You're up to date (v${result.version}).`;
   }
   if (result.status === "downloaded") {
-    return `Update ready: v${result.version}. Restart to install.`;
+    return result.direction === "downgrade"
+      ? `Switch ready: v${result.version}. Restart to switch.`
+      : `Update ready: v${result.version}. Restart to install.`;
   }
-  return `Update available: v${result.version}. Downloading in the background.`;
+  return result.direction === "downgrade"
+    ? `Switch to v${result.version}. Downloading in the background.`
+    : `Update available: v${result.version}. Downloading in the background.`;
 }
 
 function formatHotCpuStartDelay(delayMs: DesktopHotCpuProfileStartDelayMs): string {
@@ -444,6 +448,14 @@ export function GeneralSettings(props: {
   const checkForUpdates = props.desktopApi?.checkForAppUpdates;
   const downloadedVersion =
     updateStatus.status === "downloaded" ? updateStatus.version : undefined;
+  // A resolved selection that is older than the running build is a switch back
+  // onto the operator's own channel, not an update.
+  const downloadedIsSwitchBack =
+    updateStatus.status === "downloaded"
+    && updateStatus.direction === "downgrade";
+  const restartActionLabel = downloadedIsSwitchBack
+    ? "Restart to Switch"
+    : "Restart to Update";
   const handleCheckForUpdate = async () => {
     if (!checkForUpdates) {
       return;
@@ -727,7 +739,7 @@ export function GeneralSettings(props: {
                 {downloadedVersion ? (
                   <div className="settings-update-channel__restart">
                     <button
-                      aria-label={`Restart to Update (${downloadedVersion})`}
+                      aria-label={`${restartActionLabel} (${downloadedVersion})`}
                       className="button button--primary settings-update-channel__restart-button"
                       type="button"
                       disabled={
@@ -737,7 +749,7 @@ export function GeneralSettings(props: {
                         void handleRestartUpdate();
                       }}
                     >
-                      <span>Restart to Update</span>
+                      <span>{restartActionLabel}</span>
                       <span className="settings-update-channel__restart-version">
                         ({downloadedVersion})
                       </span>

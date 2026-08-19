@@ -43,6 +43,20 @@ describe("AppUpdateBanner", () => {
     expect(screen.getByRole("button", { name: "Restart" })).toBeEnabled();
   });
 
+  it("names a downgrade as a channel switch rather than an update", async () => {
+    renderBanner({
+      status: "downloaded",
+      version: "1.0.2",
+      direction: "downgrade",
+    });
+
+    expect(
+      await screen.findByText("Restart to switch to v1.0.2."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Switch ready")).toBeInTheDocument();
+    expect(screen.queryByText(/Restart to update/)).not.toBeInTheDocument();
+  });
+
   it("stays hidden before the update is ready to install", async () => {
     renderBanner({ status: "available", version: "1.2.3" });
 
