@@ -10,6 +10,7 @@ import { readRendererFederationTarget } from "../../lib/federation-window";
 import { isRemoteFederationTarget } from "@pwragent/shared";
 import { ThreadContextPanel } from "../thread-detail/ThreadContextPanel";
 import type { ContextTabId } from "../thread-detail/context-panels/context-tab";
+import { useStarMapCardContext } from "./star-map-card-context-store";
 import {
   CHAT_CARD_CONTEXT_SPINE_WIDTH,
   CHAT_CARD_TERMINAL_HEIGHT,
@@ -34,6 +35,9 @@ const LazyIntegratedTerminal = lazy(async () => {
  * the host drags — there is no second position to keep in sync.
  */
 export function StarMapContextCard(props: {
+  /** Host chat card's key: the session data the panels need is published
+      under it by the card that owns the thread session. */
+  cardKey: string;
   desktopApi?: DesktopApi;
   thread: NavigationThreadSummary;
   rect: ChatCardRect;
@@ -41,6 +45,11 @@ export function StarMapContextCard(props: {
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<ContextTabId>("info");
+  // Pricing rows and edited-file groups come out of the host's thread
+  // session. Read from a summary alone, Pricing claimed the thread had no
+  // usage at all and Edits claimed it had touched no files, while the full
+  // window showed both for the same thread.
+  const cardContext = useStarMapCardContext(props.cardKey);
   const style: CSSProperties = {
     left: `${props.rect.left}px`,
     top: `${props.rect.top}px`,
@@ -84,10 +93,13 @@ export function StarMapContextCard(props: {
       >
         <ThreadContextPanel
           activeTab={tab}
+          activeTurnId={cardContext.activeTurnId}
           backends={[]}
           desktopApi={props.desktopApi}
+          editedFileGroups={cardContext.editedFileGroups}
           onActiveTabChange={setTab}
           pinned
+          pricing={cardContext.pricing}
           thread={props.thread}
           width={props.rect.width - CHAT_CARD_CONTEXT_SPINE_WIDTH}
         />

@@ -3683,6 +3683,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 <div key={`satellites:${card.key}`}>
                   {card.contextOpen ? (
                     <StarMapContextCard
+                      cardKey={card.key}
                       desktopApi={props.desktopApi}
                       thread={card.thread}
                       rect={dockContextRect(card.rect)}

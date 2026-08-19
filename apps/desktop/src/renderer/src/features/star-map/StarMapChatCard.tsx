@@ -20,10 +20,15 @@ import {
 } from "../composer/CompactComposer";
 import { TranscriptList } from "../thread-detail/TranscriptList";
 import { useTranscriptWindow } from "../thread-detail/useTranscriptWindow";
+import { collectEditedFileGroups } from "../thread-detail/edited-file-groups";
 import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "../../lib/thread-history-limits";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { useThreadSessionState } from "../../lib/useThreadSessionState";
+import {
+  clearStarMapCardContext,
+  publishStarMapCardContext,
+} from "./star-map-card-context-store";
 import {
   clampChatCardRect,
   resizeChatCardRect,
@@ -119,6 +124,41 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
 
   const federationTarget =
     thread.federation?.ref.target ?? readRendererFederationTarget();
+
+  // The context satellite is a sibling rendered by the screen, so the session
+  // data its panels need has to be published rather than passed down. Only
+  // while the satellite is open: collecting edited-file groups walks the whole
+  // transcript, and a card with the rail closed should not pay for it on every
+  // streamed entry.
+  const contextOpen = props.contextOpen ?? false;
+  const editedFileGroups = useMemo(
+    () =>
+      contextOpen
+        ? collectEditedFileGroups({
+            entries: session.entries,
+            activeTurnId: session.activeTurnId,
+            forkCreatedAt: thread.forkSourceThreadId
+              ? thread.createdAt
+              : undefined,
+          })
+        : undefined,
+    [
+      contextOpen,
+      session.activeTurnId,
+      session.entries,
+      thread.createdAt,
+      thread.forkSourceThreadId,
+    ],
+  );
+  const pricing = session.response?.pricing;
+  useEffect(() => {
+    publishStarMapCardContext(cardKey, {
+      activeTurnId: session.activeTurnId,
+      editedFileGroups,
+      pricing,
+    });
+  }, [cardKey, editedFileGroups, pricing, session.activeTurnId]);
+  useEffect(() => () => clearStarMapCardContext(cardKey), [cardKey]);
 
   const beginDrag = useCallback(
     (event: ReactPointerEvent, kind: DragState["kind"]) => {
