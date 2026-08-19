@@ -40,14 +40,38 @@ let output = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? "bu
 let geistBoldPath = "build/fonts/Geist-Bold.ttf"
 let geistBoldName = registerFont(at: geistBoldPath)
 
+// COLOR SPACE DISCIPLINE — read before editing any value below.
+//
+// The bitmap rep this script draws into is .deviceRGB (see renderBackground).
+// NSColor(calibratedRed:...) declares a color in Apple's generic calibrated RGB
+// space, so every calibrated color gets converted on the way into the bitmap and
+// lands on a LIGHTER, more saturated value than the numbers say. That drift is
+// what produced the shipped #ef714a wordmark from a #E85A3A source, and the
+// earlier #ee894a bug before it.
+//
+// Every color here is therefore declared with `deviceRed:` and written as
+// n / 255.0 so the literal in the source IS the hex that lands in the PNG.
+// Do not reintroduce `calibratedRed:` in this file.
 struct Color {
-  static let background = NSColor(calibratedRed: 0.965, green: 0.965, blue: 0.965, alpha: 1)
-  static let pillBackground = NSColor(calibratedRed: 0.12, green: 0.12, blue: 0.12, alpha: 1)
-  static let text = NSColor(calibratedRed: 0.969, green: 0.953, blue: 0.922, alpha: 1)
-  static let muted = NSColor(calibratedRed: 0.549, green: 0.522, blue: 0.478, alpha: 1)
-  // Brand orange — design system: #E85A3A (rgb 232, 90, 58).
-  static let accent = NSColor(calibratedRed: 0.910, green: 0.353, blue: 0.227, alpha: 1)
-  static let arrowShaft = NSColor(calibratedRed: 0.910, green: 0.353, blue: 0.227, alpha: 1)
+  /// #f6f6f6 — light page. Kept light on purpose: the "PwrAgent" and
+  /// "Applications" icon labels are drawn by Finder and colored by the user's
+  /// appearance setting (near-black in Light Mode). A dark page would render
+  /// them black-on-black. Keep dark areas behind the wordmark only.
+  static let background = NSColor(deviceRed: 246 / 255.0, green: 246 / 255.0, blue: 246 / 255.0, alpha: 1)
+  /// #0a0a0a — near-black pill, matching the app titlebar surround. The same
+  /// accent orange on a lighter pill reads flatter (simultaneous contrast).
+  static let pillBackground = NSColor(deviceRed: 10 / 255.0, green: 10 / 255.0, blue: 10 / 255.0, alpha: 1)
+  /// #f7f3eb — warm wordmark white.
+  static let text = NSColor(deviceRed: 247 / 255.0, green: 243 / 255.0, blue: 235 / 255.0, alpha: 1)
+  /// #8c857a — subtitle grey, matches the app's --text-muted.
+  static let muted = NSColor(deviceRed: 140 / 255.0, green: 133 / 255.0, blue: 122 / 255.0, alpha: 1)
+  /// #ff8a1f — brand orange, matches the app's --accent. This is the single
+  /// source of truth for the wordmark and arrow; the installer and the app
+  /// titlebar must measure identical.
+  static let accent = NSColor(deviceRed: 255 / 255.0, green: 138 / 255.0, blue: 31 / 255.0, alpha: 1)
+  static let arrowShaft = NSColor(deviceRed: 255 / 255.0, green: 138 / 255.0, blue: 31 / 255.0, alpha: 1)
+  /// #737373 — "Drag to Applications" hint.
+  static let instruction = NSColor(deviceRed: 115 / 255.0, green: 115 / 255.0, blue: 115 / 255.0, alpha: 1)
 }
 
 func renderBackground() -> NSBitmapImageRep {
@@ -149,8 +173,7 @@ func renderBackground() -> NSBitmapImageRep {
   // "Drag to Applications" hint
   let instructionFont = NSFont.systemFont(ofSize: 12, weight: .medium)
   let instruction = "Drag to Applications"
-  let instrColor = NSColor(calibratedRed: 0.45, green: 0.45, blue: 0.45, alpha: 1)
-  let instrAttrs: [NSAttributedString.Key: Any] = [.font: instructionFont, .foregroundColor: instrColor]
+  let instrAttrs: [NSAttributedString.Key: Any] = [.font: instructionFont, .foregroundColor: Color.instruction]
   let instrSize = instruction.size(withAttributes: instrAttrs)
   instruction.draw(
     at: NSPoint(x: (w - instrSize.width) / 2, y: h - 366),
