@@ -77,6 +77,7 @@ const mainLogErrorMock = vi.fn();
 const initializeAppStateMock = vi.fn();
 const disposeAppStateMock = vi.fn();
 const isAppStateInitializedMock = vi.fn();
+const prewarmWindowsJobWrapperMock = vi.fn<() => Promise<void>>();
 const messagingRuntimeStartMock = vi.fn<() => Promise<void>>();
 const messagingLeaseStartMock = vi.fn<() => Promise<void>>();
 const messagingLeaseShutdownSyncMock = vi.fn();
@@ -191,6 +192,14 @@ vi.mock("electron", () => ({
 vi.mock("../window", () => ({
   createMainWindow: createMainWindowMock,
   syncHotCpuProfilersFromSettings: vi.fn(),
+}));
+
+// Unmocked, this launches a real PowerShell host and a real cmd.exe on Windows
+// for every `await import("../index")` below -- `vi.resetModules()` clears the
+// prewarm's memo between tests, so the launches are per import, not per worker,
+// and nothing here awaits or owns them.
+vi.mock("../windows-job-wrapper", () => ({
+  prewarmWindowsJobWrapper: prewarmWindowsJobWrapperMock,
 }));
 
 vi.mock("../app-menu-bridge", () => ({
@@ -527,6 +536,8 @@ describe("bootstrapApp", () => {
     disposeAppStateMock.mockReset();
     isAppStateInitializedMock.mockReset();
     isAppStateInitializedMock.mockReturnValue(true);
+    prewarmWindowsJobWrapperMock.mockReset();
+    prewarmWindowsJobWrapperMock.mockResolvedValue();
     messagingRuntimeStartMock.mockReset();
     messagingRuntimeStartMock.mockResolvedValue();
     messagingLeaseStartMock.mockReset();
@@ -627,6 +638,7 @@ describe("bootstrapApp", () => {
     await flushMicrotasks();
 
     expect(messagingLeaseStartMock).toHaveBeenCalledTimes(1);
+    expect(prewarmWindowsJobWrapperMock).toHaveBeenCalledTimes(1);
     expect(createMainWindowMock).toHaveBeenCalledWith({
       onShown: expect.any(Function),
       startupCpuProfiler: startupProfilerInstance,
