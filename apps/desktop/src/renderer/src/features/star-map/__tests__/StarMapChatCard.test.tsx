@@ -15,7 +15,9 @@ const RECT = { left: 40, top: 40, width: 420, height: 520 };
  * card must route both reads and writes to that instance without the
  * thread ever being pinned or merged into the local snapshot.
  */
-function remoteThread(): NavigationThreadSummary {
+function remoteThread(
+  overrides: Partial<NavigationThreadSummary> = {},
+): NavigationThreadSummary {
   return {
     id: "t-remote",
     title: "Remote work",
@@ -32,10 +34,13 @@ function remoteThread(): NavigationThreadSummary {
         target: { scope: "remote", instanceId: "pwr_peer" },
       },
     },
+    ...overrides,
   } as unknown as NavigationThreadSummary;
 }
 
-function localThread(): NavigationThreadSummary {
+function localThread(
+  overrides: Partial<NavigationThreadSummary> = {},
+): NavigationThreadSummary {
   return {
     id: "t-local",
     title: "Local work",
@@ -44,6 +49,7 @@ function localThread(): NavigationThreadSummary {
     source: "codex",
     inbox: { inInbox: false },
     updatedAt: 1,
+    ...overrides,
   } as unknown as NavigationThreadSummary;
 }
 
@@ -87,12 +93,23 @@ function renderCard(params: {
   );
 }
 
+/**
+ * The composer is a Tiptap editor, not a textarea. It exposes a `value`
+ * setter on its contenteditable node exactly so a controlled-input idiom
+ * still drives it, which is what `fireEvent.change` reaches here.
+ */
 async function typeAndSend(title: string, text: string) {
   const input = screen.getByRole("textbox", { name: `Message ${title}` });
   fireEvent.change(input, { target: { value: text } });
   fireEvent.keyDown(input, { key: "Enter" });
-  return input as HTMLTextAreaElement;
+  return input as HTMLElement & { value: string };
 }
+
+/**
+ * Text queries match the composer's own content, so a draft would satisfy a
+ * "this reached the transcript" assertion on its own.
+ */
+const IGNORE_COMPOSER = ".composer-tiptap-input, .composer-tiptap-input *";
 
 describe("StarMapChatCard transcript loading", () => {
   it("asks for the last few turns rather than the whole thread", async () => {
@@ -209,11 +226,10 @@ describe("StarMapChatCard send failures", () => {
       expect(input.value).toBe("do not lose me");
     });
     // The transcript must not keep a message for a turn that never ran.
-    // The composer is excluded because the restored draft lives there and
-    // text queries match textarea content.
+    // The composer is excluded because the restored draft lives there.
     await waitFor(() => {
       expect(
-        screen.queryByText("do not lose me", { ignore: "textarea" }),
+        screen.queryByText("do not lose me", { ignore: IGNORE_COMPOSER }),
       ).toBeNull();
     });
     expect((await screen.findByRole("alert")).textContent).toMatch(
@@ -230,10 +246,8 @@ describe("StarMapChatCard send failures", () => {
     renderCard({ desktopApi, thread: remoteThread() });
     await typeAndSend("Remote work", "in flight");
 
-    // Ignore the composer: a textarea's content matches text queries, and
-    // the draft would otherwise satisfy this on its own.
     expect(
-      await screen.findByText("in flight", { ignore: "textarea" }),
+      await screen.findByText("in flight", { ignore: IGNORE_COMPOSER }),
     ).toBeTruthy();
   });
 });
@@ -302,5 +316,146 @@ describe("satellite toggles", () => {
     // are the screen's to render; the card only carries the toggles.
     const { container } = renderToggleCard({ contextOpen: true });
     expect(container.querySelector(".context-rail")).toBeNull();
+  });
+});
+
+/**
+ * A card over a running turn. Sending here has to reach the live turn: a
+ * `startTurn` while one is in flight is not a second conversation, it is a
+ * message the operator loses.
+ */
+describe("StarMapChatCard steering a live turn", () => {
+  /**
+   * The session hook takes "is a turn running" from the navigation snapshot
+   * as well as the thread read, and resyncs from the snapshot — so a card is
+   * only busy when both say so.
+   */
+  const BUSY = { threadStatus: "active" } as Partial<NavigationThreadSummary>;
+
+  function busyApi(overrides: Partial<DesktopApi> = {}): DesktopApi {
+    return buildApi({
+      readThread: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "t-local",
+        // A window that opens a thread mid-turn only learns the turn is
+        // running from the hydrated snapshot, and it adopts one only when
+        // the thread itself reports active.
+        threadStatus: "active",
+        replay: {
+          entries: [
+            {
+              type: "message",
+              id: "m-live",
+              role: "assistant",
+              text: "working on it",
+              parts: [{ type: "text", text: "working on it" }],
+              createdAt: 1,
+              turn: { id: "turn-live", status: "in_progress" },
+            },
+          ],
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      })),
+      steerTurn: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "t-local",
+        turnId: "turn-live",
+        disposition: "steered" as const,
+      })),
+      ...overrides,
+    } as unknown as Partial<DesktopApi>);
+  }
+
+  it("steers the running turn instead of starting a second one", async () => {
+    const desktopApi = busyApi();
+    renderCard({ desktopApi, thread: localThread(BUSY) });
+    await screen.findByRole("button", { name: "Steer" });
+    await typeAndSend("Local work", "also check the logs");
+
+    await waitFor(() => {
+      expect(desktopApi.steerTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          expectedTurnId: "turn-live",
+          input: [{ type: "text", text: "also check the logs" }],
+          threadId: "t-local",
+        }),
+      );
+    });
+    expect(desktopApi.startTurn).not.toHaveBeenCalled();
+    expect(
+      await screen.findByText("Steered into the running turn."),
+    ).toBeTruthy();
+  });
+
+  it("says so when the backend held the message for the next turn", async () => {
+    const desktopApi = busyApi({
+      steerTurn: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "t-local",
+        turnId: "turn-live",
+        disposition: "queued",
+      })),
+    } as unknown as Partial<DesktopApi>);
+    renderCard({ desktopApi, thread: localThread(BUSY) });
+    await screen.findByRole("button", { name: "Steer" });
+    await typeAndSend("Local work", "and then deploy");
+
+    // Steered and queued are both accepted sends that land in different
+    // places, and only the backend knows which happened.
+    expect(await screen.findByText("Queued for the next turn.")).toBeTruthy();
+  });
+
+  it("gives the text back when the backend refuses to steer", async () => {
+    const desktopApi = busyApi({
+      steerTurn: vi.fn(async () => {
+        throw new Error("Selected backend does not support turn/steer");
+      }),
+    } as unknown as Partial<DesktopApi>);
+    renderCard({ desktopApi, thread: localThread(BUSY) });
+    await screen.findByRole("button", { name: "Steer" });
+    const input = await typeAndSend("Local work", "do not lose me");
+
+    await waitFor(() => {
+      expect(input.value).toBe("do not lose me");
+    });
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /does not support turn\/steer/,
+    );
+    await waitFor(() => {
+      expect(
+        screen.queryByText("do not lose me", { ignore: IGNORE_COMPOSER }),
+      ).toBeNull();
+    });
+  });
+
+  it("keeps a peer's steer pointed at that peer", async () => {
+    const desktopApi = busyApi();
+    renderCard({ desktopApi, thread: remoteThread(BUSY) });
+    await screen.findByRole("button", { name: "Steer" });
+    await typeAndSend("Remote work", "over there");
+
+    await waitFor(() => {
+      expect(desktopApi.steerTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          federationTarget: { scope: "remote", instanceId: "pwr_peer" },
+        }),
+      );
+    });
+  });
+
+  it("disables the control when the bridge cannot steer at all", async () => {
+    const desktopApi = busyApi({ steerTurn: undefined });
+    renderCard({ desktopApi, thread: localThread(BUSY) });
+    const steer = (await screen.findByRole("button", {
+      name: "Steer",
+    })) as HTMLButtonElement;
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    fireEvent.change(input, { target: { value: "no route for this" } });
+
+    await waitFor(() => {
+      expect(steer.disabled).toBe(true);
+    });
   });
 });

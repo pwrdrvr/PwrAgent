@@ -1,11 +1,14 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import type { ThreadExecutionMode } from "@pwragent/shared";
+import { ComposerTiptapInput } from "./ComposerTiptapInput";
+import type { ComposerSkillToken } from "./ComposerInputTypes";
 
 export type CompactComposerAction = {
   disabled?: boolean;
@@ -16,6 +19,12 @@ export type CompactComposerAction = {
 
 export type CompactComposerProps = {
   busy?: boolean;
+  /**
+   * Whether a send during a live turn can reach the backend at all. False
+   * disables the primary button while busy rather than letting the operator
+   * fire a send that is guaranteed to bounce.
+   */
+  canSteer?: boolean;
   disabled?: boolean;
   executionMode?: ThreadExecutionMode;
   /** Thread's current model, shown as ambient state rather than a control. */
@@ -39,6 +48,13 @@ const EXECUTION_MODE_LABELS: Record<ThreadExecutionMode, string> = {
 };
 
 /**
+ * Module-level so the identity is stable: the Tiptap input re-syncs its
+ * document whenever this prop changes identity, and a fresh `[]` on every
+ * render would make that run on every keystroke.
+ */
+const NO_SKILL_TOKENS: ComposerSkillToken[] = [];
+
+/**
  * Composer for surfaces with no vertical budget — currently the star map's
  * floating chat cards.
  *
@@ -47,6 +63,19 @@ const EXECUTION_MODE_LABELS: Record<ThreadExecutionMode, string> = {
  * launchpad state, and provider defaults that a floating card has no
  * access to. The two share a contract (send text, stop a running turn),
  * not an implementation.
+ *
+ * It does share the *input*: `ComposerTiptapInput` in markdown mode, the
+ * same editor the full composer types into. A card that renders a fully
+ * formatted transcript but takes replies through a plain textarea teaches
+ * the operator that backticks and fences do not work here, which is the
+ * opposite of true. The editor is not the expensive part of a card — each
+ * one already mounts a whole `TranscriptList` — so cards mount it eagerly
+ * rather than hydrating it on focus, which would cost a click and a caret
+ * every time the operator moved between cards.
+ *
+ * Mentions are the one thing left out: `$skill`, `@file`, and `#thread`
+ * need the backend list and directory index the card does not have, so no
+ * skill tokens are ever supplied and the trigger characters stay literal.
  *
  * Two moves buy back the height: secondary actions consolidate under a
  * single kebab, and model / reasoning effort render as right-aligned
@@ -58,6 +87,9 @@ export function CompactComposer(props: CompactComposerProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const { onSend } = props;
+  // Several cards can be open at once and the editor puts this on a DOM
+  // `id`; a shared literal would give the map duplicate ids.
+  const inputId = `compact-composer-${useId()}`;
 
   const ambient = [
     props.model,
@@ -79,12 +111,13 @@ export function CompactComposer(props: CompactComposerProps) {
     }
   }, [draft, onSend]);
 
+  // The editor forwards only the keys it does not claim itself: Enter
+  // without Shift or Alt (both of which insert a newline), and the arrows.
   const onKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLTextAreaElement>) => {
-      if (event.key === "Enter" && !event.shiftKey) {
-        event.preventDefault();
-        void send();
-      }
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (event.key !== "Enter" || event.metaKey || event.ctrlKey) return;
+      event.preventDefault();
+      void send();
     },
     [send],
   );
@@ -112,14 +145,15 @@ export function CompactComposer(props: CompactComposerProps) {
   return (
     <div className="compact-composer">
       <div className="compact-composer__field">
-        <textarea
-          aria-label={`Message ${props.threadTitle}`}
-          className="compact-composer__input"
+        <ComposerTiptapInput
           disabled={props.disabled}
-          onChange={(event) => setDraft(event.target.value)}
+          id={inputId}
+          label={`Message ${props.threadTitle}`}
+          markdownConversion
+          onChange={(value) => setDraft(value)}
           onKeyDown={onKeyDown}
           placeholder={props.placeholder ?? "Reply…"}
-          rows={2}
+          skillTokens={NO_SKILL_TOKENS}
           value={draft}
         />
         {ambient ? (
@@ -167,24 +201,31 @@ export function CompactComposer(props: CompactComposerProps) {
           </div>
         ) : null}
 
-        {props.busy ? (
+        {props.busy && props.onInterrupt ? (
           <button
-            className="compact-composer__send"
+            className="compact-composer__stop"
             onClick={props.onInterrupt}
             type="button"
           >
             Stop
           </button>
-        ) : (
-          <button
-            className="compact-composer__send"
-            disabled={props.disabled || draft.trim().length === 0}
-            onClick={() => void send()}
-            type="button"
-          >
-            Send
-          </button>
-        )}
+        ) : null}
+        {/* A live turn used to leave Stop as the only control, which read as
+            "you cannot say anything until this finishes". Sending stays
+            available and becomes a steer; the host reports back whether the
+            backend took it into the running turn or held it for the next. */}
+        <button
+          className="compact-composer__send"
+          disabled={
+            props.disabled
+            || draft.trim().length === 0
+            || (props.busy && props.canSteer === false)
+          }
+          onClick={() => void send()}
+          type="button"
+        >
+          {props.busy ? "Steer" : "Send"}
+        </button>
       </div>
     </div>
   );
