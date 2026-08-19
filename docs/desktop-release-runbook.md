@@ -96,10 +96,16 @@ Desktop Settings let operators pick a **channel** (Stable or Beta) and a
 
 | Settings slot | Tag | GitHub flag |
 |---|---|---|
-| Stable · Latest | `v1.0.5` | Latest |
+| Stable · Latest | `v1.0.5` | Latest (after promotion) |
 | Stable · Prerelease | `v1.0.6-prerelease.1` | Pre-release |
 | Beta · Latest | `v1.1.0-beta.3` | Pre-release |
 | Beta · Prerelease | `v1.1.0-alpha.7` | Pre-release |
+
+CI publishes **every** release as a GitHub `Pre-release`, including a
+suffix-free stable tag. A suffix-free tag left at `prerelease: true` lands in
+Stable · Prerelease, so Stable · Latest keeps serving the previous stable
+release until an operator promotes the new one. See
+[Promoting a release to Latest](#promoting-a-release-to-latest).
 
 Use `-prerelease.N` for Stable RCs. Use `-alpha.N` / `-beta.N` on `main`.
 Every `main` tag with a prerelease suffix must stay a GitHub Pre-release so
@@ -177,9 +183,10 @@ seven job definitions (the Linux package job fans out across two architectures):
    step.
 6. `Publish release assets`, which waits for successful macOS signing, both
    Linux packages, and the signed Windows installer. Only then does it create
-   the GitHub Release (as `Pre-release` for prerelease tags and normal/Latest
-   for stable tags), upload every platform's assets, and generate Linux
-   `SHA256SUMS`.
+   the GitHub Release — always as a `Pre-release`, whatever the tag suffix —
+   upload every platform's assets, and generate Linux `SHA256SUMS`. The step
+   then reads the release back and fails the job if GitHub did not record
+   `isPrerelease: true`.
 7. `Publish release notes`, which waits for successful all-platform asset
    publishing, extracts the matching `CHANGELOG.md` section, updates the
    GitHub Release body, and fails the workflow if the body still reads back as
@@ -201,9 +208,10 @@ The macOS environment-gated signing job:
 1. Verifies the prepared artifact SHA-256 from the build job output.
 2. Decodes `APPLE_API_KEY_BASE64` from the env to a temp `.p8` file.
 3. Patches the staged electron-builder GitHub `releaseType` from the desktop
-   package version: versions with a prerelease suffix such as `-beta.41` are
-   born as GitHub `Pre-release`, while stable versions are born as normal
-   releases.
+   package version. This rewrites the staged config only; the job packages with
+   `--publish never` and never creates a GitHub Release. The `Pre-release` flag
+   on the published release comes from `Publish release assets`, which always
+   passes `--prerelease`.
 4. Runs `electron-builder --mac --universal --publish never` from the
    downloaded artifact, without invoking `pnpm install`, `npx`, or dependency
    lifecycle scripts. `electron-builder` signs every
@@ -245,11 +253,12 @@ approval gate: after approval, continue watching the run through `Publish
 release notes`, then verify the final GitHub Release body is non-empty. If a
 monitor or handoff stops at an approval gate, resume after approval rather than
 treating the release as done.
-Prerelease-tagged versions such as `v1.0.0-beta.41` must be born as GitHub
-`Pre-release`, not edited afterward. Stable versions such as `v1.0.0` are born
-as normal releases so they can become Latest. GitHub excludes pre-release
-entries from `/releases/latest`, `PwrAgent.dmg`, and the default Electron
-updater feed.
+Every CI-published release is born as a GitHub `Pre-release`, including a
+suffix-free stable tag such as `v1.0.0`. Promotion to Latest is a separate
+operator action taken after the assets, updater metadata, and smoke checks are
+validated. GitHub excludes pre-release entries from `/releases/latest`,
+`PwrAgent.dmg`, and the default Electron updater feed, so a freshly published
+release reaches no Stable operator until that promotion.
 
 If the automated release-notes job fails or GitHub temporarily rejects the
 release edit, use this manual fallback after confirming the notes file contains
@@ -294,6 +303,43 @@ cd "$tmpdir"
 gh release download v1.0.0-beta.4 --repo pwrdrvr/PwrAgent --pattern "*arm64.dmg"
 mv PwrAgent-*-arm64.dmg PwrAgent.dmg
 gh release upload v1.0.0-beta.4 PwrAgent.dmg --repo pwrdrvr/PwrAgent --clobber
+```
+
+---
+
+## Promoting a release to Latest
+
+CI publishes every release as a GitHub `Pre-release`, so a freshly published
+build reaches nobody on Stable · Latest and serves nothing from
+`/releases/latest/download/`. Promotion is a deliberate operator action taken
+after the release is validated.
+
+Promote only once all of these hold:
+
+- Every platform asset the tag should carry is attached to the release.
+- The updater metadata (`latest-mac.yml`, `latest.yml`, `latest-linux*.yml`)
+  is attached and names the published version.
+- The release body carries the matching `CHANGELOG.md` entry.
+- The build has been smoke-checked on at least one machine.
+
+```bash
+gh release edit v<version> --repo pwrdrvr/PwrAgent --latest --prerelease=false
+```
+
+No retag is needed. Clearing the flag on a suffix-free tag moves it from
+Stable · Prerelease into Stable · Latest.
+
+**Promote suffix-free tags only.** `--latest` also repoints
+`/releases/latest/download/`, so promoting a suffixed tag such as
+`v1.1.0-beta.3` would hand the website a beta build while leaving the app's
+Stable · Latest slot on the previous stable — `selectChannelReleases` requires
+a candidate to be both suffix-free and non-prerelease. Leave suffixed tags as
+pre-releases.
+
+To undo a premature promotion, restore the flag:
+
+```bash
+gh release edit v<version> --repo pwrdrvr/PwrAgent --prerelease
 ```
 
 ---
