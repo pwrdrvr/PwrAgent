@@ -85,6 +85,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const rectRef = useRef(rect);
   rectRef.current = rect;
   const [sendError, setSendError] = useState<string | undefined>(undefined);
+  // Where a mid-turn send actually landed. The operator cannot tell a steer
+  // from a queue by looking at the transcript, and the answer differs by
+  // backend, so the card says which one happened.
+  const [sendNotice, setSendNotice] = useState<string | undefined>(undefined);
   // The card is draggable and clipped; a native `title` fights both, and
   // UI-THEME.md rules it out regardless.
   const titleTooltip = useViewportTooltip({ className: "viewport-tooltip" });
@@ -194,16 +198,92 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     }
   }, [bounds.width, bounds.height, cardKey, onRectChange]);
 
+  // The notice describes a turn ("steered into", "queued for the next"), so
+  // it is only true while that turn runs. Left alone it would sit on an idle
+  // card for hours claiming something is still in flight.
+  const threadBusy = session.threadBusy;
+  useEffect(() => {
+    if (!threadBusy) setSendNotice(undefined);
+  }, [threadBusy]);
+
+  const activeTurnId = session.activeTurnId;
+  /**
+   * Structural only: whether this bridge can steer at all. Deliberately NOT
+   * "and we know which turn to aim at" — that is a moment-to-moment fact,
+   * and gating the button on it disables the card's only send control in a
+   * state the operator cannot see or get out of. A send that cannot be
+   * aimed yet is reported, not silently unavailable.
+   *
+   * Backends that cannot steer reject the request, so even this is an
+   * optimistic gate rather than a capability check; the rejection is
+   * reported rather than swallowed.
+   */
+  const canSteer = Boolean(desktopApi?.steerTurn);
+
   /**
    * Returns whether the turn actually reached the backend. A peer can drop
    * mid-send, and when it does the operator must get their text back and
    * the transcript must not keep an optimistic message for a turn that
    * never started.
+   *
+   * While a turn is running this steers instead of starting a new turn.
+   * `steerTurn` reports back whether the backend injected the message into
+   * the running turn or held it for the next one; either way the operator
+   * gets to type during a turn, which starting a second turn would not
+   * allow.
    */
   const send = useCallback(
     async (text: string): Promise<boolean> => {
-      if (!desktopApi?.startTurn) return false;
       setSendError(undefined);
+      setSendNotice(undefined);
+
+      if (session.threadBusy) {
+        if (!desktopApi?.steerTurn) {
+          setSendError("This thread is busy and steering is unavailable.");
+          return false;
+        }
+        if (!activeTurnId) {
+          // Do NOT fall through to `startTurn` here. A thread can report
+          // busy before its turn id is hydrated — a peer's or a messaging
+          // adapter's turn does exactly that — and starting a turn in that
+          // window is the second-turn-on-a-running-thread this whole branch
+          // exists to prevent. The id arrives with the next thread read, so
+          // this is worth retrying rather than routing around.
+          setSendError(
+            "Still identifying the running turn — try again in a moment.",
+          );
+          return false;
+        }
+        const optimisticId = session.addOptimisticUserMessage(text);
+        try {
+          const response = await desktopApi.steerTurn({
+            backend: thread.source,
+            expectedTurnId: activeTurnId,
+            federationTarget,
+            input: [{ type: "text", text }],
+            // Main dedupes retries by request id, so it has to be fresh per
+            // attempt or a corrected resend would return the first result.
+            requestId: `star-map-chat-card:${cardKey}:${activeTurnId}:${Date.now()}`,
+            threadId: thread.id,
+          });
+          setSendNotice(
+            response.disposition === "queued"
+              ? "Queued for the next turn."
+              : "Steered into the running turn.",
+          );
+          return true;
+        } catch (error) {
+          session.removeOptimisticMessage(optimisticId);
+          setSendError(
+            error instanceof Error
+              ? error.message
+              : "Could not steer that turn.",
+          );
+          return false;
+        }
+      }
+
+      if (!desktopApi?.startTurn) return false;
       const optimisticId = session.addOptimisticUserMessage(text);
       try {
         await desktopApi.startTurn({
@@ -223,10 +303,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         return false;
       }
     },
-    [desktopApi, federationTarget, session, thread],
+    [activeTurnId, cardKey, desktopApi, federationTarget, session, thread],
   );
 
-  const activeTurnId = session.activeTurnId;
   const interrupt = useCallback(async () => {
     if (!desktopApi?.interruptTurn || !activeTurnId) return;
     try {
@@ -429,10 +508,15 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         <p className="star-map-chat-card__error" role="alert">
           {sendError}
         </p>
+      ) : sendNotice ? (
+        <p className="star-map-chat-card__notice" role="status">
+          {sendNotice}
+        </p>
       ) : undefined}
 
       <CompactComposer
         busy={session.threadBusy}
+        canSteer={canSteer}
         executionMode={thread.executionMode}
         model={thread.model}
         onInterrupt={() => void interrupt()}
