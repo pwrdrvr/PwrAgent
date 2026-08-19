@@ -152,6 +152,39 @@ describe("PwrAgent app management service", () => {
     });
   });
 
+  it("keeps the switch-back direction on the reported update status", async () => {
+    // Without this the agent describes a move back down onto the operator's
+    // selected channel as an ordinary update to a lower version.
+    checkForAppUpdatesNowMock.mockResolvedValue({
+      status: "available",
+      version: "1.0.2",
+      direction: "downgrade",
+    });
+    const { createPwrAgentAppManagementHandler } = await import(
+      "../agent-tools/pwragent-app-management-service"
+    );
+    const handler = createPwrAgentAppManagementHandler({ startedAt: 1_000 });
+
+    await expect(
+      handler({
+        operation: "manage_pwragent",
+        context: {},
+        args: { action: "upgrade_check" },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        result: {
+          status: "check_completed",
+          check: { status: "available", version: "1.0.2", direction: "downgrade" },
+        },
+        update: {
+          status: { status: "available", version: "1.0.2", direction: "downgrade" },
+        },
+      },
+    });
+  });
+
   it("uses update install when restarting with a downloaded update", async () => {
     readAppUpdateStatusMock.mockReturnValue({
       status: "downloaded",

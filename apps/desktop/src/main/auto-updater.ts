@@ -339,7 +339,13 @@ export async function checkForAppUpdatesNow(
       }
       const selectedVersion = release.tag_name.replace(/^v/i, "");
       const selectedOrder = compareSemver(selectedVersion, currentVersion);
-      if (selectedOrder === 0) {
+      // `compareSemver` sorts a tag it cannot parse below every real version,
+      // so an unreadable tag looks identical to a deliberate downgrade. The
+      // `<= 0` guard this replaced declined both; keep declining the tag we
+      // cannot read rather than pointing the update feed at it.
+      const selectedIsOlder =
+        selectedOrder < 0 && parseSemver(selectedVersion) !== undefined;
+      if (selectedOrder <= 0 && !selectedIsOlder) {
         const result = { status: "no-update", version: currentVersion } as const;
         setUpdateStatusUnlessDownloaded(result);
         log.info("skipping app update check; selected release is not newer", {
@@ -355,7 +361,7 @@ export async function checkForAppUpdatesNow(
       // operator is on a build their own channel no longer serves — the
       // stranding this branch exists to undo. Offer the switch back rather
       // than reporting "up to date" on a version they did not pick.
-      if (selectedOrder < 0) {
+      if (selectedIsOlder) {
         if (!downgradeOfferAllowed(trigger)) {
           const result = {
             status: "no-update",
