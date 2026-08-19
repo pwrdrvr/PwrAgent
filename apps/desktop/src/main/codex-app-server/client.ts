@@ -388,13 +388,16 @@ function describePayloadShape(payload: unknown): {
   return { payloadType: typeof payload };
 }
 
-/** Methods already reported by `logUnhandledCodexMessage`, warned about once. */
-const reportedUnknownNotificationMethods = new Set<string>();
-
 function logUnhandledCodexMessage(params: {
   kind: "notification" | "request";
   method: string;
   payload: unknown;
+  /**
+   * Methods this client has already warned about. Owned by the client rather
+   * than the module so a reconnect re-warns once, and so one test's unknown
+   * method cannot downgrade the next test's warning to a debug line.
+   */
+  reportedNotificationMethods: Set<string>;
 }): void {
   if (params.kind === "request") {
     codexClientLog.error("unhandled inbound codex request", {
@@ -415,8 +418,8 @@ function logUnhandledCodexMessage(params: {
   // A method we do not model is worth one warning, not one per delivery: Codex
   // pushes some of these (remoteControl/status/changed) on every connect, and
   // repeats add nothing once the shape has been recorded.
-  const alreadyReported = reportedUnknownNotificationMethods.has(params.method);
-  reportedUnknownNotificationMethods.add(params.method);
+  const alreadyReported = params.reportedNotificationMethods.has(params.method);
+  params.reportedNotificationMethods.add(params.method);
   const details = {
     method: params.method,
     ...describePayloadShape(params.payload),
@@ -5795,6 +5798,9 @@ export class CodexAppServerClient {
     StructuredRecordPredicate
   >();
 
+  /** Unknown notification methods already warned about on this connection. */
+  private readonly reportedUnknownNotificationMethods = new Set<string>();
+
   constructor(private readonly options: CodexClientOptions = {}) {
     this.connection = new JsonRpcConnection(
       new StdioJsonRpcTransport({
@@ -5824,6 +5830,7 @@ export class CodexAppServerClient {
           kind: "notification",
           method,
           payload: params,
+          reportedNotificationMethods: this.reportedUnknownNotificationMethods,
         });
       }
       if (method === "skills/changed") {
@@ -5872,6 +5879,7 @@ export class CodexAppServerClient {
           kind: "request",
           method,
           payload: params,
+          reportedNotificationMethods: this.reportedUnknownNotificationMethods,
         });
         throw new Error(`No desktop request handler registered for ${method}`);
       }
@@ -5881,6 +5889,7 @@ export class CodexAppServerClient {
           kind: "request",
           method,
           payload: params,
+          reportedNotificationMethods: this.reportedUnknownNotificationMethods,
         });
       }
 
