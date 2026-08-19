@@ -31,6 +31,11 @@ export function AppUpdateBanner(props: { desktopApi?: DesktopApi }) {
 
   const version =
     updateStatus.status === "downloaded" ? updateStatus.version : undefined;
+  // A downgrade is the operator moving back onto the channel they picked, not
+  // an update landing on them, so it gets its own wording.
+  const switchingBack =
+    updateStatus.status === "downloaded"
+    && updateStatus.direction === "downgrade";
 
   useEffect(() => {
     if (!version || dismissedVersion === version) {
@@ -61,9 +66,13 @@ export function AppUpdateBanner(props: { desktopApi?: DesktopApi }) {
   return (
     <aside className="app-update-banner" role="status" aria-live="polite">
       <div className="app-update-banner__content">
-        <p className="app-update-banner__eyebrow">Update ready</p>
+        <p className="app-update-banner__eyebrow">
+          {switchingBack ? "Switch ready" : "Update ready"}
+        </p>
         <p className="app-update-banner__message">
-          Restart to update to v{version}.
+          {switchingBack
+            ? `Restart to switch to v${version}.`
+            : `Restart to update to v${version}.`}
         </p>
         {restartError ? (
           <p className="app-update-banner__error">{restartError}</p>
@@ -84,7 +93,11 @@ export function AppUpdateBanner(props: { desktopApi?: DesktopApi }) {
           className="button button--ghost app-update-banner__dismiss"
           type="button"
           disabled={restarting}
-          aria-label="Dismiss update notification"
+          aria-label={
+            switchingBack
+              ? "Dismiss channel switch notification"
+              : "Dismiss update notification"
+          }
           onClick={() => setDismissedVersion(version)}
         >
           Dismiss
