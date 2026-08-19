@@ -10,10 +10,9 @@ import { CloseIcon } from "../../icons";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { PrChipContextMenu } from "./PrChipContextMenu";
 import {
+  prChipModifierClasses,
   prStatusLabel,
-  resolveCheckState,
-  resolveChipState,
-  resolveLifecycleState,
+  resolvePrChipPresentation,
 } from "./pr-chip-state";
 import { PrStatusCard } from "./PrStatusCard";
 
@@ -53,7 +52,10 @@ export function PrChip(props: PrChipProps) {
   const label = props.showRepoPrefix
     ? `${pr.org}/${pr.repo}#${pr.number}`
     : `#${pr.number}`;
-  const chipState = resolveChipState(pr);
+  const presentation = resolvePrChipPresentation(pr, {
+    withStatusPills: props.withStatusPills,
+  });
+  const chipState = presentation.chipState;
   const status = prStatusLabel(pr);
   // Creating this element is not rendering it: it stays an inert object until
   // `show` hands it to the portal on hover/focus, so a sidebar full of chips
@@ -103,30 +105,12 @@ export function PrChip(props: PrChipProps) {
     );
   }, [cardKey, pr, props.withStatusPills, tooltipVisible, updateTooltip]);
 
-  // Draft and merge-conflict ride ALONGSIDE the check-state dot color rather
-  // than replacing it: an OPEN draft keeps its real status color and gains a
-  // separate affordance bar, and a conflict recolors the dot red (see the
-  // `.pr-chip--draft` / `.pr-chip--conflicting` rules in app.css). Both only
-  // apply while the PR is open — a merged/closed chip owns its own dot color —
-  // and only when the chip is standalone; next to status pills the dot defers
-  // to them so it never disagrees with the "Checks …" pill.
-  const isOpen = resolveLifecycleState(pr) === "open";
-  const surfaceAffordances = isOpen && !props.withStatusPills;
-  const isDraft = surfaceAffordances && pr.reviewState === "draft";
-  const isConflicting = surfaceAffordances && pr.mergeState === "conflicting";
-  const hasFailingChecksStillRunning =
-    isOpen
-    && resolveCheckState(pr) === "failing"
-    && pr.checksStillRunning === true;
-  const className = [
-    "pr-chip",
-    `pr-chip--${chipState}`,
-    hasFailingChecksStillRunning ? "pr-chip--checks-running" : "",
-    isDraft ? "pr-chip--draft" : "",
-    isConflicting ? "pr-chip--conflicting" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
+  // `resolvePrChipPresentation` owns the draft / conflict / checks-running
+  // rules, including the "defer to the sibling status pills" case, so the
+  // composer's Tiptap-rendered chip reaches the same classes from the same
+  // reading of the PR.
+  const isDraft = presentation.isDraft;
+  const className = ["pr-chip", ...prChipModifierClasses(presentation)].join(" ");
 
   // role="button" span (not a real <button>) so the chip is legal HTML
   // inside the row's main <button>. stopPropagation prevents the row's
