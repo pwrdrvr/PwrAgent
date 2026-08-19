@@ -105,6 +105,18 @@ it cannot steal `/releases/latest` from the Stable train. Promote a smoked
 alpha by bumping `apps/desktop/package.json` and the CHANGELOG heading to
 the beta version, then tagging that commit. Do not retag the alpha SHA.
 
+**The suffix is load-bearing, not just the GitHub flag.** Stable · Latest
+resolves to the highest *suffix-free* non-prerelease tag, so a tag carrying
+`-alpha.N` / `-beta.N` / `-prerelease.N` can never become the feed every
+Stable operator is pushed onto — even if someone forgets the Pre-release
+checkbox at tag time. A mistagged `main` tag fails **closed**: it lands in no
+slot at all, and the Beta rows in Settings read "Unavailable" until the flag
+is corrected on the GitHub release. That is the symptom to look for after a
+`main` tag if Beta operators report seeing nothing new. The fallback to a
+suffixed tag applies only to a release set with no suffix-free stable at all
+(the pre-`v1.0.0` world, where every stable was a `v1.0.0-beta.N` published as
+GitHub Latest).
+
 ## Cutting a release (CI path — preferred)
 
 ```bash

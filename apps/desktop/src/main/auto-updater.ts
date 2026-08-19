@@ -531,6 +531,17 @@ function firstPrereleaseId(tag: string | undefined): string | undefined {
   return typeof parsed.pre[0] === "string" ? parsed.pre[0] : undefined;
 }
 
+// Stable Latest is the one slot every Stable operator is pushed onto, so it
+// must not depend on a checkbox a human sets by hand. A `main` tag that
+// shipped without its GitHub Pre-release flag looks exactly like a stable
+// release to `prerelease !== true`; the `-alpha.N` / `-beta.N` /
+// `-prerelease.N` suffix in the tag is the part the release process actually
+// controls, so a suffix-free tag is what qualifies for the slot.
+function isSuffixFreeStableTag(tag: string | undefined): boolean {
+  const parsed = parseSemver(tag);
+  return parsed !== undefined && parsed.pre.length === 0;
+}
+
 function isBetaTrainIdentifier(tag: string | undefined): boolean {
   const id = firstPrereleaseId(tag);
   return id === "alpha" || id === "beta";
@@ -599,7 +610,9 @@ export type SelectedUpdateReleases = {
 };
 
 // Resolve slots by semver identifier and GitHub Latest, not publish order:
-//   - stable latest      → highest GitHub non-prerelease (the 1.0 / normie feed)
+//   - stable latest      → highest suffix-free GitHub non-prerelease (the 1.0
+//                          / normie feed), falling back to the highest GitHub
+//                          non-prerelease when no suffix-free tag exists
 //   - stable prerelease  → max(stable latest, 1.0 `-prerelease` / legacy `-beta`)
 //   - beta latest        → highest `-beta` whose core is ahead of Stable Latest
 //   - beta prerelease    → max(beta latest, highest `-alpha` on a newer core)
@@ -612,9 +625,17 @@ export function selectChannelReleases(
   const byPrecedenceDesc = [...publicReleases].sort((a, b) =>
     compareSemver(b.tag_name, a.tag_name),
   );
-  const stableLatest = byPrecedenceDesc.find(
-    (release) => release.prerelease !== true,
-  );
+  // Two tiers, not one predicate: a suffix-free stable wins outright, so a
+  // mistagged `v1.1.0-alpha.1` cannot take the slot on precedence. The
+  // fallback only matters for a release set with no suffix-free tag at all —
+  // the pre-`v1.0.0` world, where every stable was a `v1.0.0-beta.N` tag
+  // published as GitHub Latest — and preserves the behavior those trains had.
+  const stableLatest =
+    byPrecedenceDesc.find(
+      (release) =>
+        release.prerelease !== true && isSuffixFreeStableTag(release.tag_name),
+    )
+    ?? byPrecedenceDesc.find((release) => release.prerelease !== true);
   const betaLatest = byPrecedenceDesc.find((release) =>
     isBetaLatestRelease(release, stableLatest, publicReleases),
   );
