@@ -324,6 +324,16 @@ type StarMapCardTarget = {
 };
 
 /**
+ * A title the operator changed from a card, before any feed has echoed it.
+ * Both halves are needed: `applied` is what the card shows, and `previous`
+ * is what the release watches for — see `renamedTitles`.
+ */
+type StarMapOptimisticTitle = {
+  applied: string;
+  previous: string;
+};
+
+/**
  * What one card's menu acts on: every target, and the subset an unread
  * action applies to. Resolved together because both are answers to the
  * same question — which cards is this menu about — and splitting them
@@ -459,14 +469,20 @@ export function StarMapScreen(props: StarMapScreenProps) {
     new Set(),
   );
   /**
-   * Titles the operator just changed, held until the owning feed reports
-   * them. Same reasoning as `archivedThreadKeys`: a peer's feed refreshes
-   * on its own cadence, and a card still wearing its old title reads as a
-   * rename that quietly failed. Dropped on failure; released once the feed
-   * agrees.
+   * Titles the operator just changed, held until a feed moves off the one
+   * the rename replaced. Same reasoning as `archivedThreadKeys`: a peer's
+   * feed refreshes on its own cadence, and a card still wearing its old
+   * title reads as a rename that quietly failed. Dropped on failure.
+   *
+   * `previous` is what makes the release safe. Releasing on "the feed
+   * reports MY title" would pin the card forever the moment anything else
+   * renamed the same thread — another window, or the backend retitling it
+   * — because the feed would then report a third title this window never
+   * matches against. Holding the replaced title instead means any move off
+   * it, to my name or to someone else's, hands the card back to the feed.
    */
   const [renamedTitles, setRenamedTitles] = useState<
-    ReadonlyMap<string, string>
+    ReadonlyMap<string, StarMapOptimisticTitle>
   >(() => new Map());
   const [remoteRefreshNonce, setRemoteRefreshNonce] = useState(0);
   // Cards vary in height with their chip rows, so lanes stack from real
@@ -977,12 +993,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
             );
       if (renamedTitles.size === 0) return kept;
       return kept.map((thread) => {
-        const title = renamedTitles.get(
+        const edit = renamedTitles.get(
           buildThreadIdentityKey(thread.source, thread.id),
         );
-        return title === undefined || title === thread.title
+        return edit === undefined || edit.applied === thread.title
           ? thread
-          : { ...thread, title };
+          : { ...thread, title: edit.applied };
       });
     };
     const result = new Map<string, NavigationThreadSummary[]>();
@@ -1038,11 +1054,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // Merged in after `withLocalEdits`, so the optimistic title has to
       // be applied here too — the same reason the archive check above is
       // repeated rather than inherited.
-      const renamed = renamedTitles.get(key);
+      const edit = renamedTitles.get(key);
       result.set(instanceId, [
-        renamed === undefined || renamed === summon.title
+        edit === undefined || edit.applied === summon.title
           ? summon
-          : { ...summon, title: renamed },
+          : { ...summon, title: edit.applied },
         ...present,
       ]);
     }
@@ -1082,12 +1098,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // shrinks" intent explicit and cannot loop through its own setState.
   }, [archivedThreadKeys.size, props.localThreads, remote]);
 
-  // Release an optimistic title once its feed reports the same one — or
-  // once the thread is gone, so a card that never comes back cannot pin a
-  // title on whatever later reuses its key.
+  // Release an optimistic title once a source has moved off the title the
+  // rename replaced — to this window's name, to someone else's, or to
+  // nothing at all when the thread is gone, so a card that never comes
+  // back cannot pin a title on whatever later reuses its key.
   useEffect(() => {
     if (renamedTitles.size === 0) return;
+    // Summons FIRST, so a feed that carries the same thread overwrites
+    // them. A summoned card can be the only source there is — a peer
+    // thread the federated search reached and this window has never
+    // fetched — and reading only the feeds would release its title
+    // immediately, undoing the rename on the very next render.
     const titleByKey = new Map<string, string>();
+    for (const [key, summon] of summonedThreads) {
+      titleByKey.set(key, summon.title);
+    }
     for (const thread of props.localThreads) {
       titleByKey.set(
         buildThreadIdentityKey(thread.source, thread.id),
@@ -1104,11 +1129,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
     }
     setRenamedTitles((current) => {
       const kept = [...current].filter(
-        ([key, title]) => titleByKey.has(key) && titleByKey.get(key) !== title,
+        ([key, edit]) => titleByKey.get(key) === edit.previous,
       );
       return kept.length === current.size ? current : new Map(kept);
     });
-  }, [props.localThreads, remote, renamedTitles.size]);
+    // On the map itself rather than its `.size`, unlike the archive
+    // release above: a second rename of the same card changes an entry
+    // without changing the count, and this effect reads the entries.
+  }, [props.localThreads, remote, renamedTitles, summonedThreads]);
 
   /**
    * Orbit-lens project clouds: each instance's threads grouped by project,
@@ -3734,7 +3762,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
             // its card now: the owning feed refreshes on its own cadence,
             // and a card still showing the old title is indistinguishable
             // from a rename that did not happen.
-            setRenamedTitles((current) => new Map(current).set(threadKey, name));
+            setRenamedTitles((current) => {
+              // A second rename before the first one landed keeps the
+              // ORIGINAL `previous`: `target.thread.title` is this
+              // window's own optimistic title by then, and no feed will
+              // ever report it back.
+              const previous =
+                current.get(threadKey)?.previous ?? target.thread.title;
+              return new Map(current).set(threadKey, {
+                applied: name,
+                previous,
+              });
+            });
             runOnCardTargets({
               describeFailure: () => "Could not rename that thread",
               run: (entry) =>

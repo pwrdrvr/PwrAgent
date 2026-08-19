@@ -1242,6 +1242,75 @@ describe("StarMapScreen", () => {
     ).toBeTruthy();
   });
 
+  it("hands the title back to the feed when someone else renames the thread", async () => {
+    // The optimistic title is released by the feed moving OFF the title
+    // the rename replaced — not by it reporting this window's name. A
+    // second window renaming the same thread reports a title this one
+    // never asked for, and watching for our own would pin the card to a
+    // name nothing agrees with for the life of the window.
+    const renameThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t1",
+      renamedAt: 1,
+    }));
+    const desktopApi = {
+      ...buildDesktopApi(),
+      renameThread,
+    } as unknown as DesktopApi;
+    const { rerender } = render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open this instance \(Mac-Mini-M4\)/ }),
+      ).toBeTruthy();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Actions for Thread t1" }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Rename thread…" }));
+    fireEvent.change(screen.getByLabelText("Thread name"), {
+      target: { value: "Star chart cleanup" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Rename" }));
+
+    await waitFor(() => {
+      expect(renameThread).toHaveBeenCalled();
+    });
+    expect(
+      screen.getByRole("button", { name: "Open thread: Star chart cleanup" }),
+    ).toBeTruthy();
+
+    rerender(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[
+          { ...unreadThread("t1"), title: "Renamed from the sidebar" },
+        ]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", {
+          name: "Open thread: Renamed from the sidebar",
+        }),
+      ).toBeTruthy();
+    });
+  });
+
   it("marks a seen thread unread from the card kebab", async () => {
     const markThreadSeen = vi.fn(async () => ({
       backend: "codex" as const,
