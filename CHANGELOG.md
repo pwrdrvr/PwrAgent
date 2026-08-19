@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.0.3 - 2026-08-19
+
+- Update Checks - Fixed update checks failing with a 403 and the Settings channel rows stuck on "Unavailable". PwrAgent now shares one cached GitHub release list across the whole app instead of refetching on every Settings visit and every check, revalidates it without spending a request, and when GitHub's hourly limit is reached it says when checks resume rather than showing a status code.
+- Update Channels - Stable Latest now only ever resolves to a suffix-free stable release, so an alpha, beta, or prerelease build can never be pushed to Stable installs even if it was published without the Pre-release flag set.
+- Update Channels - Switching back to your selected channel now works when that channel resolves older than the build you are running. A manual check offers "Switch to v1.0.2" and "Restart to Switch" instead of reporting you are up to date with no way back; the switch never installs silently on quit.
+- Startup Logs - Quieted the boot log, which wrote hundreds of per-pull-request and per-channel lines before the app finished starting. Nothing is lost - the detail is still collected under Help - Logs with debug collection on - and startup now records one line with app version, Electron, platform, and architecture.
+- Minor - Corrected the DMG installer background so its brand orange matches the app, and prewarmed the Windows process-ownership wrapper at startup so the first wrapped command no longer pays a cold-start delay.
+
 ## v1.0.2 - 2026-08-18
 
 - Updates - Added Stable and Beta update channels, each with Latest and Prerelease tracks. Stable installs stay insulated from 1.1 alpha and beta builds unless you opt into Beta.
