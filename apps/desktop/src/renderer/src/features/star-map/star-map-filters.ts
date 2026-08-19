@@ -205,9 +205,18 @@ export function selectFilteredThreads(params: {
   /** Identity keys the operator summoned from the ⌘K palette. */
   summonedKeys?: ReadonlySet<string>;
 }): NavigationThreadSummary[] {
+  // Guarded on the set being non-empty, which it is for every snapshot
+  // until the operator uses ⌘K: this runs per comparison inside a sort that
+  // itself runs per instance per navigation snapshot, and building an
+  // identity key for a lookup that cannot match is a string allocation per
+  // card per event for nothing.
+  const summonedKeys =
+    params.summonedKeys && params.summonedKeys.size > 0
+      ? params.summonedKeys
+      : undefined;
   const summoned = (thread: NavigationThreadSummary): boolean =>
-    params.summonedKeys?.has(buildThreadIdentityKey(thread.source, thread.id))
-    === true;
+    summonedKeys !== undefined
+    && summonedKeys.has(buildThreadIdentityKey(thread.source, thread.id));
   return params.threads
     .filter((thread) => thread.archivedAt === undefined)
     .filter(

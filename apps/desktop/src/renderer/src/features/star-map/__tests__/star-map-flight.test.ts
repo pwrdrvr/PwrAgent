@@ -7,7 +7,11 @@ import {
   starMapViewFocusedOn,
   STAR_MAP_FLIGHT_SCALE,
 } from "../star-map-flight";
-import { MAX_ZOOM, MIN_ZOOM } from "../star-map-view-geometry";
+import {
+  MAX_ZOOM,
+  MIN_ZOOM,
+  MIN_VISIBLE_FRACTION,
+} from "../star-map-view-geometry";
 
 const VIEWPORT = { width: 1280, height: 800 };
 
@@ -36,17 +40,28 @@ describe("starMapViewFocusedOn", () => {
     expect(view.y + 1550 * 2).toBeCloseTo(VIEWPORT.height / 2);
   });
 
-  it("clamps a card at the canvas edge back into reach", () => {
-    // Centring this card would leave the canvas almost entirely off-screen;
-    // the shared clamp is what keeps a strip of it grabbable.
+  it("keeps the canvas reachable when the rect is outside it", () => {
+    // Deliberately out of bounds, because a card INSIDE the canvas can
+    // never reach the clamp: centring one leaves at least
+    // `viewport/2 - canvas` of overlap, which is always more than the
+    // strip the clamp guarantees. The bound is a rail for the case where
+    // a rect and the canvas extent disagree — a lens whose canvas shrank
+    // under a rect measured against the previous one — and this pins that
+    // the flight goes through it rather than flying the map out of reach.
+    const canvas = { width: 6000, height: 4000 };
     const view = starMapViewFocusedOn({
-      rect: { x: 0, y: 0, width: 200, height: 100 },
-      canvas: { width: 6000, height: 4000 },
+      rect: { x: 12_000, y: 9_000, width: 200, height: 100 },
+      canvas,
       viewport: VIEWPORT,
       scale: 1,
     });
-    expect(view.x).toBeLessThanOrEqual(VIEWPORT.width * 0.85);
-    expect(view.y).toBeLessThanOrEqual(VIEWPORT.height * 0.85);
+    // Un-clamped this would be 640 - 12100 = -11460, 400 - 9050 = -8650:
+    // the canvas entirely off the left and top of the window.
+    expect(view.x).toBe(MIN_VISIBLE_FRACTION * VIEWPORT.width - canvas.width);
+    expect(view.y).toBe(MIN_VISIBLE_FRACTION * VIEWPORT.height - canvas.height);
+    // Which is to say: a strip of canvas is still on screen to grab.
+    expect(view.x + canvas.width).toBeGreaterThan(0);
+    expect(view.y + canvas.height).toBeGreaterThan(0);
   });
 });
 

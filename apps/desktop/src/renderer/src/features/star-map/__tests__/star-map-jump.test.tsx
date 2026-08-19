@@ -283,6 +283,72 @@ describe("Star Map ⌘K", () => {
     });
   });
 
+  it("flies to a peer's card without cloning it onto the local cloud", async () => {
+    // A card key names its OWNING instance, and the owner of a search hit
+    // is not always the instance the picker happens to be sitting on: this
+    // thread lives on pwr_remote, so its card is keyed pwr_remote::codex:r1
+    // while the pick knows only the thread. Resolving the card key from the
+    // local instance instead would miss the card that is already on the map
+    // — and then summon a duplicate of it under the local cloud.
+    const desktopApi = {
+      readFederationHealth: vi.fn(async () => ({
+        health: {
+          enabled: true,
+          role: "gateway",
+          status: "listening",
+          instanceId: "pwr_local",
+          localCelestialIcon: "sun",
+          localLabel: "Harold-MBP-M5-Max",
+          localProfileName: "default",
+          peers: [
+            {
+              id: "pwr_remote",
+              label: "Remote",
+              role: "client",
+              status: "connected",
+              capabilities: ["thread_navigation"],
+            },
+          ],
+        },
+      })),
+      getNavigationSnapshot: vi.fn(async () => ({
+        backend: "all",
+        fetchedAt: 1_000,
+        threads: [thread("r1", "Remote work")],
+        inboxThreadKeys: [],
+        directories: [],
+        launchpadDefaults: { backend: "codex", executionMode: "default" },
+      })),
+      onAgentEvent: vi.fn(() => () => undefined),
+    } as unknown as DesktopApi;
+
+    const { container } = render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[thread("t1", "Windows job wrapper")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    await screen.findByRole("button", { name: "Open thread: Remote work" });
+    const canvas = container.querySelector<HTMLElement>(".star-map__canvas");
+    const before = canvas?.style.transform;
+
+    await openPalette();
+    search("Remote work");
+    await pickResult(/Remote work/);
+
+    await waitFor(() => {
+      expect(canvas?.style.transform).not.toBe(before);
+    });
+    // Exactly one card: the peer's, not a summoned copy beside it.
+    expect(
+      screen.getAllByRole("button", { name: "Open thread: Remote work" }),
+    ).toHaveLength(1);
+  });
+
   it("offers the palette to the pointer as well as the keyboard", async () => {
     renderMap([thread("t1", "Windows job wrapper")]);
     fireEvent.click(

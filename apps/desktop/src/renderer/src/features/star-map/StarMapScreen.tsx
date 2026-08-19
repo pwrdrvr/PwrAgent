@@ -216,6 +216,43 @@ const STAR_MAP_LOCATED_MS = 1_600;
 const STAR_MAP_SUMMON_TIMEOUT_MS = 2_000;
 
 
+/**
+ * Which instance owns a thread: the peer that stamped it, or this one.
+ *
+ * Resolved on demand rather than captured, because `localInstanceId` is
+ * the placeholder `"local"` until federation health lands — anything that
+ * remembers the answer from before that moment is pointing at a cloud
+ * that no longer exists.
+ */
+function threadOwnerInstanceId(
+  thread: NavigationThreadSummary,
+  localInstanceId: string,
+): string {
+  const target = thread.federation?.ref.target;
+  return target && isRemoteFederationTarget(target)
+    ? target.instanceId
+    : localInstanceId;
+}
+
+/**
+ * A thread's card geometry, whichever instance is showing it.
+ *
+ * Card keys are `instanceId::threadKey` and the instance half moves under
+ * us (see `threadOwnerInstanceId`), so the lookup matches on the thread
+ * half — the same suffix match `openThread` and the chat tethers use. A
+ * thread is only ever drawn once: the local cloud takes locally-owned
+ * threads only, so a pinned remote row cannot double up.
+ */
+function rectForThreadKey(
+  rects: ReadonlyMap<string, SnapRect>,
+  threadKey: string,
+): SnapRect | undefined {
+  for (const [key, rect] of rects) {
+    if (key.endsWith(`::${threadKey}`)) return rect;
+  }
+  return undefined;
+}
+
 const STAR_FIELD = generateStarField(STAR_COUNT);
 
 /**
@@ -387,13 +424,20 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * instance's cloud even in that last case — and `selectFilteredThreads`
    * seats it ahead of the caps and outside the chips.
    *
+   * Deliberately the SUMMARY alone, with no instance id captured beside it:
+   * the local instance's durable id only arrives with federation health,
+   * and a pick made before it lands would file the card under the
+   * placeholder `"local"` cloud, which stops existing the moment health
+   * arrives. See the selection-drop effect below for the same hazard. The
+   * owning instance is resolved where the merge happens instead.
+   *
    * View-local and unsynced, like the selection and the expanded clouds: it
    * is "what I went looking for in this window", not a property of the
    * fleet. It lasts for the life of the window, which is the same lifetime
    * as the search that produced it.
    */
   const [summonedThreads, setSummonedThreads] = useState<
-    ReadonlyMap<string, { instanceId: string; thread: NavigationThreadSummary }>
+    ReadonlyMap<string, NavigationThreadSummary>
   >(new Map());
   const summonedKeys = useMemo(
     () => new Set(summonedThreads.keys()),
@@ -518,12 +562,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
     onCommit: commitView,
   });
   /**
-   * The card a pick is travelling to, by card key.
+   * The thread a pick is travelling to, by identity key.
    *
    * A pick cannot fly on the spot: a summoned card has no geometry until
    * the lens has laid it out, which is a render away at least. So the pick
-   * records the destination and this effect leaves as soon as the layout
-   * produces a rect for it.
+   * records the destination and the effect below leaves as soon as the
+   * layout produces a rect for it.
+   *
+   * The THREAD key, not the card key: a card key names its owning instance,
+   * and the local instance's id changes from `"local"` to its durable value
+   * when federation health lands. Rects are matched by suffix instead — the
+   * same thing `openThread` and the chat tethers already do, and for the
+   * same reason.
    */
   const [pendingFlight, setPendingFlight] = useState<string | undefined>();
 
@@ -943,12 +993,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // the search result itself. Front of the list, like every other summon,
     // so the caps cannot fold it away again.
     for (const summon of summonedThreads.values()) {
-      const key = buildThreadIdentityKey(
-        summon.thread.source,
-        summon.thread.id,
-      );
+      const key = buildThreadIdentityKey(summon.source, summon.id);
       if (archivedThreadKeys.has(key)) continue;
-      const present = result.get(summon.instanceId) ?? [];
+      const instanceId = threadOwnerInstanceId(summon, localInstanceId);
+      const present = result.get(instanceId) ?? [];
       if (
         present.some(
           (thread) =>
@@ -957,7 +1005,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       ) {
         continue;
       }
-      result.set(summon.instanceId, [summon.thread, ...present]);
+      result.set(instanceId, [summon, ...present]);
     }
     return result;
   }, [
@@ -2147,7 +2195,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   useEffect(() => {
     if (!pendingFlight) return;
-    const rect = flightRects.get(pendingFlight);
+    const rect = rectForThreadKey(flightRects, pendingFlight);
     if (!rect) {
       // The one place a summon cannot reach on its own: a cloud in the
       // orbit lens caps its cards per PROJECT, and seating the summoned
@@ -2155,23 +2203,22 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // bucket — a child in a long parent group can still land past the
       // cap. Unfold that cloud exactly as its "+N more" chip would, and
       // let the next layout answer with a rect.
-      if (!orbitMode) return;
-      const separator = pendingFlight.indexOf("::");
-      if (separator < 0) return;
-      const instanceId = pendingFlight.slice(0, separator);
-      const threadKey = pendingFlight.slice(separator + 2);
-      const cluster = clusterClouds
-        ?.get(instanceId)
-        ?.clusters.find(
+      if (!orbitMode || !clusterClouds) return;
+      for (const [instanceId, cloud] of clusterClouds) {
+        const cluster = cloud.clusters.find(
           (entry) =>
             entry.visibleCount < entry.threads.length
             && entry.threads.some(
               (thread) =>
-                buildThreadIdentityKey(thread.source, thread.id) === threadKey,
+                buildThreadIdentityKey(thread.source, thread.id)
+                === pendingFlight,
             ),
         );
-      if (!cluster) return;
-      toggleClusterExpanded(instanceId, cluster.key);
+        if (cluster) {
+          toggleClusterExpanded(instanceId, cluster.key);
+          return;
+        }
+      }
       return;
     }
     setPendingFlight(undefined);
@@ -2182,20 +2229,26 @@ export function StarMapScreen(props: StarMapScreenProps) {
     flight.flyTo(
       starMapViewFocusedOn({
         rect,
-        canvas: panZoomCanvas,
-        viewport: viewportSize,
+        canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+        viewport: { width: viewportSize.width, height: viewportSize.height },
         scale: starMapFlightScale(viewRef.current.scale),
       }),
     );
+    // Canvas and viewport enter as their measurements rather than as the
+    // objects holding them: `panZoomCanvas` is rebuilt every render in the
+    // radial lenses, and an effect keyed on its identity would re-run on
+    // every streamed update. Same shape as the wheel listener above.
   }, [
     clusterClouds,
     flight,
     flightRects,
     orbitMode,
-    panZoomCanvas,
+    panZoomCanvas.width,
+    panZoomCanvas.height,
     pendingFlight,
     toggleClusterExpanded,
-    viewportSize,
+    viewportSize.width,
+    viewportSize.height,
   ]);
 
   /**
@@ -2215,16 +2268,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const flyToThread = useCallback(
     (thread: NavigationThreadSummary) => {
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-      const target = thread.federation?.ref.target;
-      const instanceId =
-        target && isRemoteFederationTarget(target)
-          ? target.instanceId
-          : localInstanceId;
-      const cardKey = `${instanceId}::${threadKey}`;
-      if (!flightRects.has(cardKey)) {
+      if (!rectForThreadKey(flightRects, threadKey)) {
         setSummonedThreads((current) => {
           const next = new Map(current);
-          next.set(threadKey, { instanceId, thread });
+          next.set(threadKey, thread);
           return next;
         });
         markThreadEntering(threadKey);
@@ -2235,15 +2282,17 @@ export function StarMapScreen(props: StarMapScreenProps) {
           current === threadKey ? undefined : current,
         );
       }, STAR_MAP_LOCATED_MS);
-      setPendingFlight(cardKey);
+      setPendingFlight(threadKey);
       // A destination that never produces a rect must not sit waiting for
       // one: an unrelated snapshot minutes later would otherwise fly the
       // map somewhere the operator has long stopped expecting.
       window.setTimeout(() => {
-        setPendingFlight((current) => (current === cardKey ? undefined : current));
+        setPendingFlight((current) =>
+          current === threadKey ? undefined : current,
+        );
       }, STAR_MAP_SUMMON_TIMEOUT_MS);
     },
-    [flightRects, localInstanceId, markThreadEntering],
+    [flightRects, markThreadEntering],
   );
 
   /**

@@ -124,9 +124,14 @@ export function groupThreadsByProject(
     }
   }
   const now = params?.now ?? Date.now();
+  // Non-empty check first: see the same guard in `selectFilteredThreads`.
+  const summonedKeys =
+    params?.summonedKeys && params.summonedKeys.size > 0
+      ? params.summonedKeys
+      : undefined;
   const summoned = (thread: NavigationThreadSummary): boolean =>
-    params?.summonedKeys?.has(buildThreadIdentityKey(thread.source, thread.id))
-    === true;
+    summonedKeys !== undefined
+    && summonedKeys.has(buildThreadIdentityKey(thread.source, thread.id));
   for (const project of projects.values()) {
     project.threads.sort((left, right) => {
       const leftSummoned = summoned(left);

@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  type RefObject,
+} from "react";
 import {
   interpolateStarMapView,
   starMapFlightIsNoop,
@@ -116,5 +122,9 @@ export function useStarMapFlight(params: {
     };
   }, []);
 
-  return { flyTo, cancel };
+  // Memoised as one object: consumers put `cancel` in the dependency list
+  // of a `useEffect` that registers a non-passive wheel listener, and a
+  // fresh literal every render would tear that listener down and re-add it
+  // on every streamed update. Same rule as `useStarMapArrangement`.
+  return useMemo(() => ({ flyTo, cancel }), [cancel, flyTo]);
 }
