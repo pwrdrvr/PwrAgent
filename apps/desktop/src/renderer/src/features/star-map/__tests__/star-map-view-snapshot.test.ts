@@ -235,6 +235,13 @@ describe("buildStarMapViewSnapshot", () => {
     // One of the two is drawn; the other is folded away on some body.
     expect(alpha.visibleCount).toBe(1);
     expect(alpha.hiddenCount).toBe(1);
+    // Every member names its cloud here too. Without this the one reference
+    // the tool exists to resolve — "the others in its cloud" — is
+    // unanswerable in this lens.
+    expect(snapshot.threads.map((entry) => entry.cloudKey)).toEqual([
+      "alpha",
+      "alpha",
+    ]);
   });
 
   it("marks pinned threads and the attention categories the chips filter on", () => {

@@ -9,6 +9,7 @@ import type {
 import {
   DEFAULT_STAR_MAP_CAPTURE_MAX_WIDTH,
   DEFAULT_STAR_MAP_VIEW_MAX_THREADS,
+  MAX_STAR_MAP_CAPTURE_BYTES,
 } from "@pwragent/shared";
 import type { PwrAgentStarMapHandler } from "../agent-tools/pwragent-star-map-agent-tools";
 import {
@@ -78,7 +79,19 @@ function readViewResponse(
   });
   const threads = ordered.slice(0, maxThreads);
   const truncatedThreadCount = ordered.length - threads.length;
-  const keptKeys = new Set(threads.map((thread) => thread.threadKey));
+  // Instance membership taken from the WHOLE snapshot, not from the capped
+  // list: a selected card the cap dropped is still a card the operator is
+  // pointing at, and reporting a shorter selection than they hold is how an
+  // Agent ends up acting on five of forty gathered threads.
+  const instanceKeys = args.instanceId
+    ? new Set(
+        snapshot.threads
+          .filter((thread) => matchesInstance(thread.instanceId))
+          .map((thread) => thread.threadKey),
+      )
+    : undefined;
+  const narrowToInstance = (keys: string[]): string[] =>
+    instanceKeys ? keys.filter((key) => instanceKeys.has(key)) : keys;
 
   return {
     ok: true,
@@ -96,10 +109,10 @@ function readViewResponse(
         ),
         threads,
         // Selection and open cards are reported as the operator holds them,
-        // narrowed only by an explicit instance filter — a selected card the
-        // thread cap dropped is still a card the operator is pointing at.
-        selectedThreadKeys: snapshot.selectedThreadKeys.filter(
-          (key) => keptKeys.has(key) || !args.instanceId,
+        // narrowed only by an explicit instance filter.
+        selectedThreadKeys: narrowToInstance(snapshot.selectedThreadKeys),
+        openChatCardThreadKeys: narrowToInstance(
+          snapshot.openChatCardThreadKeys,
         ),
       },
     },
@@ -117,9 +130,26 @@ async function captureResponse(
       error: { code: "star_map_not_open", message: NOT_OPEN_MESSAGE },
     };
   }
-  const result = await capture({
+  let result = await capture({
     maxWidth: args.maxWidth ?? DEFAULT_STAR_MAP_CAPTURE_MAX_WIDTH,
   });
+  if (result && result.png.byteLength > MAX_STAR_MAP_CAPTURE_BYTES) {
+    // A wide capture of a dense map encodes to megabytes, and base64 adds a
+    // third on top before it reaches the model. Halve the long edge once
+    // rather than handing back a tool result that size.
+    result =
+      (await capture({ maxWidth: Math.max(320, Math.floor(result.width / 2)) }))
+      ?? result;
+  }
+  if (result && result.png.byteLength > MAX_STAR_MAP_CAPTURE_BYTES) {
+    return {
+      ok: false,
+      error: {
+        code: "capture_failed",
+        message: `The capture encoded to ${Math.round(result.png.byteLength / 1_024)} KB, over the ${Math.round(MAX_STAR_MAP_CAPTURE_BYTES / 1_024)} KB limit for a tool result. Call again with a smaller maxWidth, or use read_star_map_view.`,
+      },
+    };
+  }
   if (!result) {
     return {
       ok: false,
