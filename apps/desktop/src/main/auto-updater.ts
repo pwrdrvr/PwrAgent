@@ -32,6 +32,12 @@ const GITHUB_RELEASES_URL =
   "https://api.github.com/repos/pwrdrvr/PwrAgent/releases?per_page=30";
 const RELEASE_FETCH_TIMEOUT_MS = 5_000;
 export const APP_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1_000;
+// The GitHub REST API allows 60 anonymous requests per hour per IP, shared by
+// every process on the machine. The renderer reads release versions on every
+// Settings mount, so main caches the release list and serves those reads from
+// memory instead of spending a request each time.
+export const APP_UPDATE_RELEASE_CACHE_TTL_MS = 15 * 60 * 1_000;
+const RATE_LIMIT_FALLBACK_BACKOFF_MS = 15 * 60 * 1_000;
 
 let initialized = false;
 let updateStatus: AppUpdateStatus = { status: "idle" };
@@ -44,6 +50,16 @@ let heldDownloadedUpdate:
   | { selection: UpdateSelectionKey; version: string }
   | undefined;
 const pendingDownloadChannelsByVersion = new Map<string, UpdateSelectionKey>();
+
+type ReleaseCacheEntry = {
+  releases: GitHubRelease[];
+  etag?: string;
+  fetchedAt: number;
+};
+
+let releaseCache: ReleaseCacheEntry | undefined;
+let releaseFetchInFlight: Promise<GitHubRelease[]> | undefined;
+let rateLimitResetAt: number | undefined;
 
 type GitHubRelease = {
   assets?: GitHubReleaseAsset[];
@@ -274,6 +290,7 @@ export async function checkForAppUpdatesNow(
       const release = await readAppUpdateReleaseForChannel(
         updateChannel,
         updateTrain,
+        trigger === "manual" || trigger === "menu" ? 0 : undefined,
       );
       const currentVersion = autoUpdater.currentVersion?.version ?? "unknown";
       if (!release?.tag_name) {
@@ -595,57 +612,134 @@ function releaseForSelection(
     : selected.stableLatest;
 }
 
-function githubReleaseHeaders(): HeadersInit {
+function githubReleaseHeaders(etag?: string): HeadersInit {
   const token = process.env.GH_TOKEN?.trim() || process.env.GITHUB_TOKEN?.trim();
   return {
     Accept: "application/vnd.github+json",
     "User-Agent": "PwrAgent",
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    // A conditional request that answers 304 is not charged against the
+    // GitHub rate limit, so revalidation stays free while nothing ships.
+    ...(etag ? { "If-None-Match": etag } : {}),
   };
 }
 
-async function fetchGitHubReleases(signal?: AbortSignal): Promise<GitHubRelease[]> {
-  const response = await fetch(GITHUB_RELEASES_URL, {
-    headers: githubReleaseHeaders(),
-    ...(signal ? { signal } : {}),
-  });
-  if (!response.ok) {
-    throw new Error(`GitHub releases request failed with ${response.status}`);
-  }
-  const payload = await response.json();
-  return Array.isArray(payload)
-    ? payload.filter((release): release is GitHubRelease =>
-        typeof release === "object" && release !== null,
-      )
-    : [];
+function readResponseHeader(
+  response: Response,
+  name: string,
+): string | undefined {
+  return response.headers?.get?.(name) ?? undefined;
 }
 
-async function readAppUpdateReleaseForChannel(
-  updateChannel: DesktopUpdateChannel,
-  updateTrain: DesktopUpdateTrain,
-): Promise<GitHubRelease | undefined> {
+function rateLimitedError(resetAt: number): Error {
+  const resumesAt = new Date(resetAt).toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return new Error(`GitHub rate limit reached. Update checks resume at ${resumesAt}.`);
+}
+
+function releaseRequestError(response: Response): Error {
+  const status = response.status;
+  const rateLimited =
+    (status === 403 || status === 429)
+    && readResponseHeader(response, "x-ratelimit-remaining") === "0";
+  if (!rateLimited) {
+    return new Error(`GitHub releases request failed with ${status}`);
+  }
+  const resetSeconds = Number(readResponseHeader(response, "x-ratelimit-reset"));
+  rateLimitResetAt =
+    Number.isFinite(resetSeconds) && resetSeconds > 0
+      ? resetSeconds * 1_000
+      : Date.now() + RATE_LIMIT_FALLBACK_BACKOFF_MS;
+  log.warn("GitHub release rate limit reached", {
+    resetAt: new Date(rateLimitResetAt).toISOString(),
+    status,
+  });
+  return rateLimitedError(rateLimitResetAt);
+}
+
+async function fetchGitHubReleases(): Promise<GitHubRelease[]> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), RELEASE_FETCH_TIMEOUT_MS);
   try {
-    const releases = await fetchGitHubReleases(controller.signal);
-    return releaseForSelection(
-      selectAppUpdateReleases(releases),
-      updateChannel,
-      updateTrain,
-    );
+    const response = await fetch(GITHUB_RELEASES_URL, {
+      headers: githubReleaseHeaders(releaseCache?.etag),
+      signal: controller.signal,
+    });
+    if (response.status === 304 && releaseCache) {
+      releaseCache = { ...releaseCache, fetchedAt: Date.now() };
+      rateLimitResetAt = undefined;
+      return releaseCache.releases;
+    }
+    if (!response.ok) {
+      throw releaseRequestError(response);
+    }
+    const payload = await response.json();
+    const releases = Array.isArray(payload)
+      ? payload.filter((release): release is GitHubRelease =>
+          typeof release === "object" && release !== null,
+        )
+      : [];
+    releaseCache = {
+      etag: readResponseHeader(response, "etag"),
+      fetchedAt: Date.now(),
+      releases,
+    };
+    rateLimitResetAt = undefined;
+    return releases;
   } finally {
     clearTimeout(timeout);
   }
 }
 
+/**
+ * Single owner of the GitHub release list. Every caller in main goes through
+ * this cache, and the renderer only ever reads it over IPC, so a Settings
+ * mount costs no network request.
+ */
+async function readGitHubReleases(
+  maxAgeMs = APP_UPDATE_RELEASE_CACHE_TTL_MS,
+): Promise<GitHubRelease[]> {
+  const now = Date.now();
+  if (releaseCache && now - releaseCache.fetchedAt < maxAgeMs) {
+    return releaseCache.releases;
+  }
+  if (rateLimitResetAt !== undefined && now < rateLimitResetAt) {
+    // Spending a request that GitHub will reject only deepens the hole. Serve
+    // the last good list when we have one.
+    if (releaseCache) {
+      return releaseCache.releases;
+    }
+    throw rateLimitedError(rateLimitResetAt);
+  }
+  if (!releaseFetchInFlight) {
+    releaseFetchInFlight = fetchGitHubReleases().finally(() => {
+      releaseFetchInFlight = undefined;
+    });
+  }
+  return await releaseFetchInFlight;
+}
+
+async function readAppUpdateReleaseForChannel(
+  updateChannel: DesktopUpdateChannel,
+  updateTrain: DesktopUpdateTrain,
+  maxAgeMs?: number,
+): Promise<GitHubRelease | undefined> {
+  const releases = await readGitHubReleases(maxAgeMs);
+  return releaseForSelection(
+    selectAppUpdateReleases(releases),
+    updateChannel,
+    updateTrain,
+  );
+}
+
 export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVersions> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), RELEASE_FETCH_TIMEOUT_MS);
   try {
-    const releases = await fetchGitHubReleases(controller.signal);
+    const releases = await readGitHubReleases();
     const selected = selectAppUpdateReleases(releases);
     return {
-      fetchedAt: Date.now(),
+      fetchedAt: releaseCache?.fetchedAt ?? Date.now(),
       stable: {
         latest: releaseInfoFromGitHubRelease(
           selected.stableLatest,
@@ -675,8 +769,6 @@ export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVe
       stable: { latest: unavailable, prerelease: unavailable },
       beta: { latest: unavailable, prerelease: unavailable },
     };
-  } finally {
-    clearTimeout(timeout);
   }
 }
 

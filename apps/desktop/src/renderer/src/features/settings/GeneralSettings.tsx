@@ -276,6 +276,12 @@ export function GeneralSettings(props: {
       const result = await checkForUpdates();
       setUpdateResult(result);
       setUpdateStatus(result);
+      // The check refreshed the main-process release cache, so this read is
+      // served from memory and clears any stale Unavailable slot labels.
+      const versions = await props.desktopApi?.readAppUpdateReleaseVersions?.();
+      if (versions) {
+        setReleaseVersions(versions);
+      }
     } catch (err) {
       setUpdateResult({
         status: "error",
