@@ -43,6 +43,12 @@ export function StarMapContextCard(props: {
   rect: ChatCardRect;
   zIndex: number;
   onClose: () => void;
+  /** The operator's Settings -> Pricing choices. Without them the rail
+      falls back to its own defaults, which shows a thread's spend on a
+      surface the operator switched off and prices it in the wrong
+      currency for a Codex-credits account. */
+  pricingDisplayOptions?: { codexCredits: boolean; usd: boolean };
+  threadPricingSummaryEnabled?: boolean;
 }) {
   const [tab, setTab] = useState<ContextTabId>("info");
   // Pricing rows and edited-file groups come out of the host's thread
@@ -100,7 +106,9 @@ export function StarMapContextCard(props: {
           onActiveTabChange={setTab}
           pinned
           pricing={cardContext.pricing}
+          pricingDisplayOptions={props.pricingDisplayOptions}
           thread={props.thread}
+          threadPricingSummaryEnabled={props.threadPricingSummaryEnabled}
           width={props.rect.width - CHAT_CARD_CONTEXT_SPINE_WIDTH}
         />
       </div>

@@ -1,8 +1,5 @@
 import { useCallback, useSyncExternalStore } from "react";
-import type {
-  ThreadPricingSummary,
-  ThreadUsageLineRecord,
-} from "@pwragent/shared";
+import type { AppServerReadThreadResponse } from "@pwragent/shared";
 import type { EditedFileGroup } from "../thread-detail/edited-file-groups";
 
 /**
@@ -17,10 +14,7 @@ import type { EditedFileGroup } from "../thread-detail/edited-file-groups";
 export type StarMapCardContextSnapshot = {
   activeTurnId?: string;
   editedFileGroups?: EditedFileGroup[];
-  pricing?: {
-    lines: ThreadUsageLineRecord[];
-    summaries: ThreadPricingSummary[];
-  };
+  pricing?: AppServerReadThreadResponse["pricing"];
 };
 
 /**

@@ -95,6 +95,17 @@ export function StarMapWindow() {
           thinkingThreadKeys: session.thinkingThreadKeys,
         }}
         localInstanceLabel={settings.snapshot?.federation.instanceLabel.value}
+        pricingDisplayOptions={{
+          codexCredits:
+            settings.snapshot?.experimental.threadPricingDisplayCodexCredits
+              ?.value ?? false,
+          usd:
+            settings.snapshot?.experimental.threadPricingDisplayUsd?.value
+            ?? true,
+        }}
+        threadPricingSummaryEnabled={
+          settings.snapshot?.experimental.threadPricingSummary?.value ?? true
+        }
         onOpenLocalThread={(thread) => {
           void desktopApi?.openStarMapThreadInMainWindow?.({
             backend: thread.source,

@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type {
   AppServerThreadEntry,
@@ -99,7 +105,19 @@ function buildApi(entries: AppServerThreadEntry[] = []): DesktopApi {
 
 /** The screen's arrangement: the card owns the session, the satellite docks
     beside it as a sibling. */
-function renderCardWithContextSatellite(desktopApi: DesktopApi) {
+/** The satellite's own subtree. Scoping every assertion to it is what keeps
+    the test about the satellite rather than about the window containing the
+    text somewhere. */
+function satellite() {
+  return within(
+    screen.getByRole("region", { name: "Thread context: Local work" }),
+  );
+}
+
+function renderCardWithContextSatellite(
+  desktopApi: DesktopApi,
+  options?: { threadPricingSummaryEnabled?: boolean },
+) {
   return render(
     <>
       <StarMapChatCard
@@ -125,6 +143,7 @@ function renderCardWithContextSatellite(desktopApi: DesktopApi) {
         rect={CONTEXT_RECT}
         zIndex={40}
         onClose={() => undefined}
+        threadPricingSummaryEnabled={options?.threadPricingSummaryEnabled}
       />
     </>,
   );
@@ -143,10 +162,28 @@ describe("star map context satellite data", () => {
       expect(desktopApi.readThread).toHaveBeenCalled();
     });
 
-    fireEvent.click(screen.getByRole("tab", { name: "Pricing" }));
+    fireEvent.click(satellite().getByRole("tab", { name: "Pricing" }));
 
-    expect(await screen.findByText("Pricing summary")).toBeTruthy();
-    expect(screen.queryByText("No usage pricing recorded yet.")).toBeNull();
+    expect(await satellite().findByText("Pricing summary")).toBeTruthy();
+    expect(
+      satellite().queryByText("No usage pricing recorded yet."),
+    ).toBeNull();
+  });
+
+  it("honors the operator's pricing setting rather than the rail default", async () => {
+    // The map reads the same Settings -> Pricing switch the full window
+    // does. Left unplumbed, the satellite defaulted to "on" and showed a
+    // thread's spend on a surface the operator had switched off.
+    const desktopApi = buildApi();
+    renderCardWithContextSatellite(desktopApi, {
+      threadPricingSummaryEnabled: false,
+    });
+
+    await waitFor(() => {
+      expect(desktopApi.readThread).toHaveBeenCalled();
+    });
+
+    expect(satellite().queryByRole("tab", { name: "Pricing" })).toBeNull();
   });
 
   it("shows the turn's edited files, collected from the host's transcript", async () => {
@@ -157,9 +194,11 @@ describe("star map context satellite data", () => {
       expect(desktopApi.readThread).toHaveBeenCalled();
     });
 
-    fireEvent.click(screen.getByRole("tab", { name: "Edits" }));
+    fireEvent.click(satellite().getByRole("tab", { name: "Edits" }));
 
-    expect(await screen.findByText("Edited 1 file")).toBeTruthy();
-    expect(screen.getByText("Update StarMapSatelliteCards.tsx")).toBeTruthy();
+    expect(await satellite().findByText("Edited 1 file")).toBeTruthy();
+    expect(
+      satellite().getByText("Update StarMapSatelliteCards.tsx"),
+    ).toBeTruthy();
   });
 });

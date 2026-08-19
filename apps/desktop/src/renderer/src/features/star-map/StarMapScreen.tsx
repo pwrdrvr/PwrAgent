@@ -365,6 +365,9 @@ type StarMapScreenProps = {
   onFocusLocalInstance: () => void;
   /** Refresh the App's navigation snapshot (after intake creates locally). */
   onRefreshLocalThreads?: () => void;
+  /** Settings -> Pricing, for the chat cards' context satellites. */
+  pricingDisplayOptions?: { codexCredits: boolean; usd: boolean };
+  threadPricingSummaryEnabled?: boolean;
 };
 
 /**
@@ -3685,7 +3688,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     <StarMapContextCard
                       cardKey={card.key}
                       desktopApi={props.desktopApi}
+                      pricingDisplayOptions={props.pricingDisplayOptions}
                       thread={card.thread}
+                      threadPricingSummaryEnabled={
+                        props.threadPricingSummaryEnabled
+                      }
                       rect={dockContextRect(card.rect)}
                       zIndex={cardZ}
                       onClose={() => chatCards.toggleContext(card.key)}
