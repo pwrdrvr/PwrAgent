@@ -67,6 +67,10 @@ export default defineConfig({
             "apps/desktop/src/preload/__tests__/**/*.test.ts",
             "apps/desktop/src/shared/__tests__/**/*.test.ts"
           ],
+          // Windows only in effect: warms the Job-object wrapper that owns
+          // `git worktree remove` so its one-time PowerShell + helper-compile
+          // cold start is not billed to whichever test reaches it first.
+          globalSetup: ["apps/desktop/src/test-setup/windows-job-wrapper-prewarm.ts"],
           setupFiles: [
             // Inert unless PWRAGENT_DEV_SQLITE_WRITE_METRICS is set; see
             // `pnpm test:sqlite-writes`.
