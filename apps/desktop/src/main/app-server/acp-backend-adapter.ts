@@ -1935,6 +1935,14 @@ export class AcpBackendAdapter {
         && cached?.installStatus === "installed"
         && cached.version === agent.version
         && acpAgentLaunchIdentity(cached) === acpAgentLaunchIdentity(agent);
+      // A PwrAgent-supplied Grok build follows the verified GitHub release
+      // feed, so a cached vendor-updater result must not ride along with it.
+      // Dropping both fields together keeps a status written while a vendor
+      // binary was active from reappearing once the managed build becomes the
+      // runtime, and keeps `updateCommand` from outliving the status it
+      // describes.
+      const carriesVendorUpdate =
+        sameRuntime && !isPwrAgentOwnedGrokRuntime(agent);
       return {
         ...agent,
         installedAt: cached?.installedAt ?? agent.installedAt,
@@ -1951,18 +1959,10 @@ export class AcpBackendAdapter {
         ...(sameRuntime && cached?.lastDiscoveryError !== undefined
           ? { lastDiscoveryError: cached.lastDiscoveryError }
           : {}),
-        // A PwrAgent-supplied Grok build follows the verified GitHub release
-        // feed, so a cached vendor-updater result must not ride along with it.
-        // Dropping it here keeps a status written while a vendor binary was
-        // active from reappearing once the managed build becomes the runtime.
-        ...(sameRuntime
-          && cached?.update !== undefined
-          && !isPwrAgentOwnedGrokRuntime(agent)
+        ...(carriesVendorUpdate && cached?.update !== undefined
           ? { update: cached.update }
           : {}),
-        ...(sameRuntime
-          && cached?.updateCommand !== undefined
-          && !isPwrAgentOwnedGrokRuntime(agent)
+        ...(carriesVendorUpdate && cached?.updateCommand !== undefined
           ? { updateCommand: cached.updateCommand }
           : {}),
       };

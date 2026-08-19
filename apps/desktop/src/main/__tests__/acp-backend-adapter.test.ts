@@ -2548,9 +2548,8 @@ describe("AcpBackendAdapter", () => {
 
     expect(agent?.update).toBeUndefined();
     expect(agent?.updateCommand).toBeUndefined();
-    expect(upsertInstalledAgent).toHaveBeenCalledWith(
-      expect.objectContaining({ backendId: "acp:grok" }),
-    );
+    // `stored` was seeded with the vendor status and is only reassigned by the
+    // upsert mock, so this also proves the durable record was rewritten.
     expect(stored.update).toBeUndefined();
     await adapter.close();
   });

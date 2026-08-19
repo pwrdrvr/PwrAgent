@@ -30,12 +30,17 @@ describe("buildGrokCliUpdateNotice", () => {
   it("builds a version-keyed durable update notice", () => {
     const onOpenUpdatePage = vi.fn();
     const notice = buildGrokCliUpdateNotice({
-      entry: grokEntry({
-        status: "available",
-        checkedAt: 100,
-        currentVersion: "0.2.118",
-        latestVersion: "1.0.0",
-      }),
+      entry: grokEntry(
+        {
+          status: "available",
+          checkedAt: 100,
+          currentVersion: "0.2.118",
+          latestVersion: "1.0.0",
+        },
+        // An installed entry always carries the discovered version, and it
+        // matches the version the check ran against.
+        { version: "0.2.118" },
+      ),
       now: 200,
       onOpenUpdatePage,
       onDismiss: vi.fn(),
