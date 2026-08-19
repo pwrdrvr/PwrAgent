@@ -492,7 +492,7 @@ import type {
 } from "../shared/app-metadata";
 
 function recordPreloadLog(
-  level: "info" | "warn",
+  level: "debug" | "info" | "warn",
   message: string,
   details?: unknown,
 ): void {
@@ -566,7 +566,7 @@ async function invokeWithStartupProfileTiming<T>(
   }
 }
 
-recordPreloadLog("info", "start", {
+recordPreloadLog("debug", "start", {
   contextIsolated: process.contextIsolated,
   platform: process.platform,
   electron: process.versions.electron
@@ -1754,7 +1754,7 @@ if (process.contextIsolated) {
     "__pwragentLogFilePath",
     bootstrapLogFilePath,
   );
-  recordPreloadLog("info", "exposed context bridge", {
+  recordPreloadLog("debug", "exposed context bridge", {
     keyCount: Object.keys(desktopApi).length
   });
 } else {

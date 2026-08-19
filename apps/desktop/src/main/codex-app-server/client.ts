@@ -388,6 +388,9 @@ function describePayloadShape(payload: unknown): {
   return { payloadType: typeof payload };
 }
 
+/** Methods already reported by `logUnhandledCodexMessage`, warned about once. */
+const reportedUnknownNotificationMethods = new Set<string>();
+
 function logUnhandledCodexMessage(params: {
   kind: "notification" | "request";
   method: string;
@@ -409,11 +412,22 @@ function logUnhandledCodexMessage(params: {
     return;
   }
 
-  codexClientLog.warn("unknown codex notification", {
+  // A method we do not model is worth one warning, not one per delivery: Codex
+  // pushes some of these (remoteControl/status/changed) on every connect, and
+  // repeats add nothing once the shape has been recorded.
+  const alreadyReported = reportedUnknownNotificationMethods.has(params.method);
+  reportedUnknownNotificationMethods.add(params.method);
+  const details = {
     method: params.method,
     ...describePayloadShape(params.payload),
     payload: params.payload,
-  });
+  };
+  if (alreadyReported) {
+    codexClientLog.debug("unknown codex notification", details);
+    return;
+  }
+
+  codexClientLog.warn("unknown codex notification", details);
 }
 
 function logSkillsChangedNotification(params: {
@@ -6438,16 +6452,20 @@ export class CodexAppServerClient {
       const parsedResult = parseConsumedCodexModelListResponse(result);
       const models = extractGeneratedModelOptions(parsedResult);
       codexClientLog.info("model/list", {
-        rawModels: summarizeGeneratedModelList(parsedResult),
         normalizedModelIds: models.map((model) => model.id),
+      });
+      codexClientLog.debug("model/list raw models", {
+        rawModels: summarizeGeneratedModelList(parsedResult),
       });
       return models;
     }
 
     const models = extractModelOptions(result);
     codexClientLog.info("model/list", {
-      rawModels: summarizeRawModelList(result),
       normalizedModelIds: models.map((model) => model.id),
+    });
+    codexClientLog.debug("model/list raw models", {
+      rawModels: summarizeRawModelList(result),
     });
 
     return models;
