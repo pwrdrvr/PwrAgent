@@ -681,9 +681,12 @@ describe("auto updater", () => {
     fetchMock.mockResolvedValue(rateLimitedResponse(resetAt));
     await vi.advanceTimersByTimeAsync(updater.APP_UPDATE_RELEASE_CACHE_TTL_MS + 1);
 
-    // One request discovers the limit; later reads must not spend another.
-    await updater.readAppUpdateReleaseVersions();
+    // One request discovers the limit; that read already degrades to the
+    // cached list, and later reads must not spend another request.
+    const discovering = await updater.readAppUpdateReleaseVersions();
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(discovering.stable.latest.version).toBe("v1.0.0-beta.8");
+    expect(discovering.stable.latest.unavailableReason).toBeUndefined();
 
     const stale = await updater.readAppUpdateReleaseVersions();
     expect(fetchMock).toHaveBeenCalledTimes(2);

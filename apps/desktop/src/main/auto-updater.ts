@@ -748,7 +748,20 @@ async function readGitHubReleases(
       releaseFetchInFlight = undefined;
     });
   }
-  return await releaseFetchInFlight;
+  try {
+    return await releaseFetchInFlight;
+  } catch (err) {
+    // The request that discovers the limit degrades the same way every later
+    // one does: last good list first, error only when there is none.
+    if (
+      releaseCache
+      && rateLimitResetAt !== undefined
+      && Date.now() < rateLimitResetAt
+    ) {
+      return releaseCache.releases;
+    }
+    throw err;
+  }
 }
 
 async function readAppUpdateReleaseForChannel(
