@@ -286,13 +286,17 @@ function UpdateResultStatus({ result }: { result: AppUpdateCheckResult }) {
   if (result.status === "downloaded") {
     return (
       <p className="settings-empty">
-        Update ready: v{result.version}. Restart to install.
+        {result.direction === "downgrade"
+          ? `Switch ready: v${result.version}. Restart to switch.`
+          : `Update ready: v${result.version}. Restart to install.`}
       </p>
     );
   }
   return (
     <p className="settings-empty">
-      Update available: v{result.version}. Downloading in the background.
+      {result.direction === "downgrade"
+        ? `Switch to v${result.version}. Downloading in the background.`
+        : `Update available: v${result.version}. Downloading in the background.`}
     </p>
   );
 }

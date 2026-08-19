@@ -372,6 +372,30 @@ The "Check for updates" button in **Settings → About** invokes
 `autoUpdater.checkForUpdates()` — useful for verifying the feed is reachable
 without waiting for the auto-check on next launch.
 
+### Switching back to a channel that is behind the running build
+
+An operator can end up running a build that is newer than the channel they
+have selected — the usual route is a prerelease auto-update landing a `main`
+alpha on a machine whose selection later resolves to the Stable train. That
+build serves no forward update on the selected channel, so the app treats the
+older selected release as a **switch back** rather than "no update":
+
+- The check sets `autoUpdater.allowDowngrade = true` for that check only,
+  points the feed at the selected release, and downloads it. Every check that
+  resolves to a newer release sets `allowDowngrade` back to `false`.
+- The offer is made only for an operator-initiated check — the Settings
+  "Check for Update" button, the app menu **Check for Updates**, or the app
+  management tool. Startup and hourly background checks still report
+  "You're up to date" so an operator who deliberately installed a newer build
+  is not asked to move back down on every poll. Tell an operator who is
+  stranded to press "Check for Update" after selecting their channel.
+- A downloaded switch back never installs on quit. `autoInstallOnAppQuit`
+  stays `false` for it, so it applies only when the operator presses
+  **Restart to Switch**.
+- Surfaces say "Switch to v1.0.2" and "Restart to Switch" instead of the
+  update wording, because the operator is moving onto the channel they picked.
+- A selected release equal to the running version is still "no update".
+
 Phase 2 distribution channel migration removes the token requirement entirely.
 See [desktop-distribution-phase-2-runbook.md](desktop-distribution-phase-2-runbook.md).
 
