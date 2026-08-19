@@ -208,14 +208,23 @@ function toToolUpdateStatus(
     case "skipped":
       return { status: "skipped", reason: status.reason };
     case "no-update":
+      return { status: "no-update", version: status.version };
+    // `direction` has to survive the conversion, or the tool reports a switch
+    // back onto the operator's selected channel as an ordinary update and the
+    // agent describes a move backwards as forward progress.
     case "available":
     case "downloaded":
-      return { status: status.status, version: status.version };
+      return {
+        status: status.status,
+        version: status.version,
+        ...(status.direction ? { direction: status.direction } : {}),
+      };
     case "downloading":
       return {
         status: "downloading",
         version: status.version,
         ...(status.percent !== undefined ? { percent: status.percent } : {}),
+        ...(status.direction ? { direction: status.direction } : {}),
       };
     case "error":
       return { status: "error", message: status.message };
