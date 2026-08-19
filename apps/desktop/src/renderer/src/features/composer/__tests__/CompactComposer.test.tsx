@@ -52,6 +52,18 @@ describe("CompactComposer", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it("does not send on Enter while disabled", () => {
+    // The button checks `disabled`; the key path has to agree. A disabled
+    // `<textarea>` used to swallow the keydown natively, but the editor only
+    // stops taking new text — a field focused before it was disabled still
+    // forwards Enter.
+    const { onSend } = renderComposer({ disabled: true });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    fireEvent.change(input, { target: { value: "should not go" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("shows model, effort, and access mode as one ambient string", () => {
     renderComposer({
       executionMode: "full-access",

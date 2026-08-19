@@ -116,10 +116,14 @@ export function CompactComposer(props: CompactComposerProps) {
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
       if (event.key !== "Enter" || event.metaKey || event.ctrlKey) return;
+      // The button checks this too. A disabled `<textarea>` used to swallow
+      // the keydown for us; the editor only stops taking new text, and still
+      // forwards Enter from a field that was focused before it was disabled.
+      if (props.disabled) return;
       event.preventDefault();
       void send();
     },
-    [send],
+    [props.disabled, send],
   );
 
   // Click-away and Escape close the kebab. Without this the menu survives

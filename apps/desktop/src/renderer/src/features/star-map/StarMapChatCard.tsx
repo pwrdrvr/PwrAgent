@@ -198,14 +198,27 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     }
   }, [bounds.width, bounds.height, cardKey, onRectChange]);
 
+  // The notice describes a turn ("steered into", "queued for the next"), so
+  // it is only true while that turn runs. Left alone it would sit on an idle
+  // card for hours claiming something is still in flight.
+  const threadBusy = session.threadBusy;
+  useEffect(() => {
+    if (!threadBusy) setSendNotice(undefined);
+  }, [threadBusy]);
+
   const activeTurnId = session.activeTurnId;
   /**
-   * A live turn is steerable when the bridge offers `steerTurn` and we know
-   * which turn to aim at. Backends that cannot steer reject the request, so
-   * this is an optimistic gate, not a capability check — the rejection is
+   * Structural only: whether this bridge can steer at all. Deliberately NOT
+   * "and we know which turn to aim at" — that is a moment-to-moment fact,
+   * and gating the button on it disables the card's only send control in a
+   * state the operator cannot see or get out of. A send that cannot be
+   * aimed yet is reported, not silently unavailable.
+   *
+   * Backends that cannot steer reject the request, so even this is an
+   * optimistic gate rather than a capability check; the rejection is
    * reported rather than swallowed.
    */
-  const canSteer = Boolean(desktopApi?.steerTurn && activeTurnId);
+  const canSteer = Boolean(desktopApi?.steerTurn);
 
   /**
    * Returns whether the turn actually reached the backend. A peer can drop
@@ -224,9 +237,21 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       setSendError(undefined);
       setSendNotice(undefined);
 
-      if (session.threadBusy && activeTurnId) {
+      if (session.threadBusy) {
         if (!desktopApi?.steerTurn) {
           setSendError("This thread is busy and steering is unavailable.");
+          return false;
+        }
+        if (!activeTurnId) {
+          // Do NOT fall through to `startTurn` here. A thread can report
+          // busy before its turn id is hydrated — a peer's or a messaging
+          // adapter's turn does exactly that — and starting a turn in that
+          // window is the second-turn-on-a-running-thread this whole branch
+          // exists to prevent. The id arrives with the next thread read, so
+          // this is worth retrying rather than routing around.
+          setSendError(
+            "Still identifying the running turn — try again in a moment.",
+          );
           return false;
         }
         const optimisticId = session.addOptimisticUserMessage(text);

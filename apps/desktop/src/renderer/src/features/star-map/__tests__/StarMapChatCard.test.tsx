@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -70,11 +70,13 @@ function buildApi(overrides: Partial<DesktopApi> = {}): DesktopApi {
   } as unknown as DesktopApi;
 }
 
-function renderCard(params: {
+type CardParams = {
   desktopApi: DesktopApi;
   thread: NavigationThreadSummary;
-}) {
-  render(
+};
+
+function card(params: CardParams) {
+  return (
     <StarMapChatCard
       cardKey="card-1"
       desktopApi={params.desktopApi}
@@ -89,8 +91,13 @@ function renderCard(params: {
       onToggleContext={() => undefined}
       onToggleTerminal={() => undefined}
       zIndex={40}
-    />,
+    />
   );
+}
+
+function renderCard(params: CardParams) {
+  const view = render(card(params));
+  return view;
 }
 
 /**
@@ -442,6 +449,94 @@ describe("StarMapChatCard steering a live turn", () => {
           federationTarget: { scope: "remote", instanceId: "pwr_peer" },
         }),
       );
+    });
+  });
+
+  it("refuses to start a second turn before the running one is identified", async () => {
+    // A thread reports busy from the navigation snapshot before any turn id
+    // is hydrated — a peer's or a messaging adapter's turn does exactly
+    // this. Starting a turn in that window is the second-turn-on-a-running-
+    // thread the steer path exists to prevent.
+    const desktopApi = busyApi({
+      readThread: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "t-local",
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      })),
+    } as unknown as Partial<DesktopApi>);
+    renderCard({ desktopApi, thread: localThread(BUSY) });
+    const input = await typeAndSend("Local work", "do not double-turn");
+
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /Still identifying the running turn/,
+    );
+    expect(desktopApi.startTurn).not.toHaveBeenCalled();
+    expect(desktopApi.steerTurn).not.toHaveBeenCalled();
+    // Nothing reached the backend, so the operator keeps what they typed.
+    await waitFor(() => {
+      expect(input.value).toBe("do not double-turn");
+    });
+  });
+
+  it("leaves the control live so that refusal is reachable", async () => {
+    // Disabling here would hide the state behind a dead button the operator
+    // can neither use nor understand.
+    const desktopApi = busyApi({
+      readThread: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "t-local",
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      })),
+    } as unknown as Partial<DesktopApi>);
+    renderCard({ desktopApi, thread: localThread(BUSY) });
+    const steer = (await screen.findByRole("button", {
+      name: "Steer",
+    })) as HTMLButtonElement;
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    fireEvent.change(input, { target: { value: "let me through" } });
+
+    await waitFor(() => {
+      expect(steer.disabled).toBe(false);
+    });
+  });
+
+  it("drops the landing notice once that turn is over", async () => {
+    // The notice describes a turn. Left alone it would sit on an idle card
+    // for hours still claiming something is in flight.
+    let emit: ((event: unknown) => void) | undefined;
+    const desktopApi = busyApi({
+      onAgentEvent: vi.fn((listener: (event: unknown) => void) => {
+        emit = listener;
+        return () => undefined;
+      }),
+    } as unknown as Partial<DesktopApi>);
+    renderCard({ desktopApi, thread: localThread(BUSY) });
+    await screen.findByRole("button", { name: "Steer" });
+    await typeAndSend("Local work", "also check the logs");
+    expect(
+      await screen.findByText("Steered into the running turn."),
+    ).toBeTruthy();
+
+    act(() => {
+      emit?.({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: { threadId: "t-local", turnId: "turn-live" },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("Steered into the running turn.")).toBeNull();
     });
   });
 
