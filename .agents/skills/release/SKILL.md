@@ -39,14 +39,20 @@ Read these files before changing release metadata:
 - Desktop Settings expose two axes: **channel** (Stable or Beta) and
   **track** (Latest or Prerelease). Encode those slots in the tag suffix
   so GitHub `/releases/latest` stays on the Stable Latest train:
-  - Stable Latest: `v1.0.5` (no suffix; GitHub Latest)
+  - Stable Latest: `v1.0.5` (no suffix; GitHub Latest after promotion)
   - Stable Prerelease: `v1.0.6-prerelease.1` (GitHub Pre-release)
   - Beta Latest: `v1.1.0-beta.3` (GitHub Pre-release; smoke-checked `main`)
   - Beta Prerelease: `v1.1.0-alpha.7` (GitHub Pre-release; may not install)
 - Keep `-prerelease.N` for Stable RCs. Do not reuse `-beta` for 1.0 RCs;
   `-beta` is the Beta Latest identifier.
+- CI publishes every release as a GitHub `Pre-release`, whatever the tag
+  suffix. A suffix-free tag left at `prerelease: true` lands in Stable
+  Prerelease, so Stable Latest keeps serving the previous stable release until
+  an operator promotes the new one. Promotion is the documented final step of
+  a release; see "Promote To Latest" below.
 - `main` tags with a prerelease suffix must stay GitHub Pre-release so they
-  never steal `/releases/latest` from the Stable train.
+  never steal `/releases/latest` from the Stable train. Never promote a
+  suffixed tag.
 - To promote a smoked alpha to beta, bump `apps/desktop/package.json` and
   add a CHANGELOG heading from `X.Y.Z-alpha.N` to `X.Y.Z-beta.M`, commit,
   and tag that commit. The tree can otherwise match the alpha. Do not add
@@ -316,12 +322,14 @@ link to the latest release without knowing the current version. Do not remove
 or replace it with an arch-suffixed DMG.
 
 The workflow replaces electron-builder's empty/default release notes after
-release assets are published. Prerelease-tagged versions such as
-`v1.0.0-beta.41` must be born as GitHub `Pre-release`; stable versions such as
-`v1.0.0` must be born as normal releases so they can become Latest. GitHub
-excludes pre-release entries from `/releases/latest`, which also excludes them
-from `https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg`
-and the default Electron updater feed.
+release assets are published. Every release is born as a GitHub `Pre-release`,
+including a suffix-free stable tag such as `v1.0.0`; the publish step passes
+`--prerelease` unconditionally and fails the job if GitHub did not honor it.
+GitHub excludes pre-release entries from `/releases/latest`, which also excludes
+them from
+`https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg`
+and the default Electron updater feed. Promotion to Latest is a separate
+operator action, not part of the workflow.
 
 This release-note publication is required, not cosmetic. Electron-builder may
 leave the body empty or duplicate the tag name. If the workflow release-notes
@@ -337,10 +345,7 @@ gh release edit v<version> \
   --notes-file .local/release/v<version>/RELEASE_NOTES.md
 ```
 
-Only use `gh release edit --prerelease` as a corrective fallback if a
-prerelease-tagged version was not born as `Pre-release`.
-
-Verify the final release body before calling the release complete:
+Verify the final release body before calling the publish step complete:
 
 ```bash
 gh release view v<version> --json name,body,isPrerelease \
@@ -348,7 +353,41 @@ gh release view v<version> --json name,body,isPrerelease \
 ```
 
 The `bodyLength` must be greater than zero and the title/body must match the
-approved changelog entry.
+approved changelog entry. `isPrerelease` must be `true` at this point — that is
+the expected published state for every tag, not a failure signal. If it reads
+`false`, the publish step's own assertion should already have failed the job;
+investigate before going further.
+
+## Promote To Latest
+
+Promotion is the final step of a stable release and is always an explicit
+operator action. Do not promote without the user asking for it.
+
+Promote only a suffix-free tag, and only once all of these hold:
+
+- Every platform asset the tag should carry is attached to the release.
+- The updater metadata (`latest-mac.yml`, `latest.yml`, `latest-linux*.yml`)
+  is attached and names the published version.
+- The release body carries the matching `CHANGELOG.md` entry.
+- The build has been smoke-checked on at least one machine.
+
+```bash
+gh release edit v<version> --repo pwrdrvr/PwrAgent --latest --prerelease=false
+```
+
+No retag is needed. Clearing the flag moves a suffix-free tag from Stable
+Prerelease into Stable Latest.
+
+Never run this on a suffixed tag such as `v1.1.0-beta.3`. `--latest` repoints
+`/releases/latest/download/`, so it would hand the website a beta build while
+leaving the app's Stable Latest slot on the previous stable — the updater
+requires a candidate to be both suffix-free and non-prerelease.
+
+To undo a premature promotion, restore the flag:
+
+```bash
+gh release edit v<version> --repo pwrdrvr/PwrAgent --prerelease
+```
 
 ## Local Fallback
 
