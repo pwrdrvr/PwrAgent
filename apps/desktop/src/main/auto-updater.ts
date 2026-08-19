@@ -1,4 +1,4 @@
-import { BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow, ipcMain } from "electron";
 import electronUpdater from "electron-updater";
 const { autoUpdater } = electronUpdater;
 import {
@@ -151,8 +151,17 @@ function configureAutoUpdaterFeedForRelease(release: GitHubRelease): void {
   log.info("configured auto-update feed for GitHub release", { tag });
 }
 
+// E2E launches the app with NODE_ENV=production, which would otherwise arm the
+// startup check, the hourly timer, and the Settings release read against the
+// live GitHub API. Every spinup would spend requests from the 60-per-hour
+// anonymous budget shared by the whole runner IP, and the release list would
+// make the UI depend on what happens to be published.
+function e2eUpdateChecksDisabled(): boolean {
+  return process.env.PWRAGENT_E2E === "1" && !app.isPackaged;
+}
+
 function productionUpdatesEnabled(): boolean {
-  return process.env.NODE_ENV === "production";
+  return process.env.NODE_ENV === "production" && !e2eUpdateChecksDisabled();
 }
 
 function developmentUpdateCheckResult(): AppUpdateCheckResult {
@@ -639,24 +648,26 @@ function rateLimitedError(resetAt: number): Error {
   return new Error(`GitHub rate limit reached. Update checks resume at ${resumesAt}.`);
 }
 
-function releaseRequestError(response: Response): Error {
+/**
+ * The reset instant to back off until, or undefined when the failure is not a
+ * rate limit. A reset that is not in the future cannot be trusted — a skewed
+ * local clock would otherwise leave the backoff permanently disarmed — so it
+ * falls back to a fixed window.
+ */
+function rateLimitResetFromResponse(response: Response): number | undefined {
   const status = response.status;
   const rateLimited =
     (status === 403 || status === 429)
     && readResponseHeader(response, "x-ratelimit-remaining") === "0";
   if (!rateLimited) {
-    return new Error(`GitHub releases request failed with ${status}`);
+    return undefined;
   }
-  const resetSeconds = Number(readResponseHeader(response, "x-ratelimit-reset"));
-  rateLimitResetAt =
-    Number.isFinite(resetSeconds) && resetSeconds > 0
-      ? resetSeconds * 1_000
-      : Date.now() + RATE_LIMIT_FALLBACK_BACKOFF_MS;
-  log.warn("GitHub release rate limit reached", {
-    resetAt: new Date(rateLimitResetAt).toISOString(),
-    status,
-  });
-  return rateLimitedError(rateLimitResetAt);
+  const now = Date.now();
+  const resetAt =
+    Number(readResponseHeader(response, "x-ratelimit-reset")) * 1_000;
+  return Number.isFinite(resetAt) && resetAt > now
+    ? resetAt
+    : now + RATE_LIMIT_FALLBACK_BACKOFF_MS;
 }
 
 async function fetchGitHubReleases(): Promise<GitHubRelease[]> {
@@ -673,7 +684,18 @@ async function fetchGitHubReleases(): Promise<GitHubRelease[]> {
       return releaseCache.releases;
     }
     if (!response.ok) {
-      throw releaseRequestError(response);
+      const resetAt = rateLimitResetFromResponse(response);
+      if (resetAt === undefined) {
+        throw new Error(
+          `GitHub releases request failed with ${response.status}`,
+        );
+      }
+      rateLimitResetAt = resetAt;
+      log.warn("GitHub release rate limit reached", {
+        resetAt: new Date(resetAt).toISOString(),
+        status: response.status,
+      });
+      throw rateLimitedError(resetAt);
     }
     const payload = await response.json();
     const releases = Array.isArray(payload)
@@ -702,7 +724,15 @@ async function readGitHubReleases(
   maxAgeMs = APP_UPDATE_RELEASE_CACHE_TTL_MS,
 ): Promise<GitHubRelease[]> {
   const now = Date.now();
-  if (releaseCache && now - releaseCache.fetchedAt < maxAgeMs) {
+  const cacheAgeMs = releaseCache ? now - releaseCache.fetchedAt : undefined;
+  // A negative age means the wall clock moved backwards. Treat that entry as
+  // stale rather than fresh for the size of the jump.
+  if (
+    releaseCache
+    && cacheAgeMs !== undefined
+    && cacheAgeMs >= 0
+    && cacheAgeMs < maxAgeMs
+  ) {
     return releaseCache.releases;
   }
   if (rateLimitResetAt !== undefined && now < rateLimitResetAt) {
@@ -735,6 +765,14 @@ async function readAppUpdateReleaseForChannel(
 }
 
 export async function readAppUpdateReleaseVersions(): Promise<AppUpdateReleaseVersions> {
+  if (e2eUpdateChecksDisabled()) {
+    const unavailable = { unavailableReason: "Update checks are disabled." };
+    return {
+      fetchedAt: Date.now(),
+      stable: { latest: unavailable, prerelease: unavailable },
+      beta: { latest: unavailable, prerelease: unavailable },
+    };
+  }
   try {
     const releases = await readGitHubReleases();
     const selected = selectAppUpdateReleases(releases);

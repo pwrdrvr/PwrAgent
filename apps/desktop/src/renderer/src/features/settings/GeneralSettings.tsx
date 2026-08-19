@@ -277,10 +277,16 @@ export function GeneralSettings(props: {
       setUpdateResult(result);
       setUpdateStatus(result);
       // The check refreshed the main-process release cache, so this read is
-      // served from memory and clears any stale Unavailable slot labels.
-      const versions = await props.desktopApi?.readAppUpdateReleaseVersions?.();
-      if (versions) {
-        setReleaseVersions(versions);
+      // served from memory and clears any stale Unavailable slot labels. It is
+      // cosmetic: failing it must not overwrite the check result above.
+      try {
+        const versions =
+          await props.desktopApi?.readAppUpdateReleaseVersions?.();
+        if (versions) {
+          setReleaseVersions(versions);
+        }
+      } catch {
+        // Keep the check result the operator just asked for.
       }
     } catch (err) {
       setUpdateResult({
