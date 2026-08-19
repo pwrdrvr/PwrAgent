@@ -973,11 +973,13 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /\.star-map__filters,\s*\.star-map__filters \*,[\s\S]*?\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
     );
-    // The intake dialog is body-portaled and full-window, so its scrim
-    // overlaps the strip's rect and would otherwise turn a dismiss-click
-    // near the top into a window drag.
+    // The card-level dialogs are body-portaled and full-window, so their
+    // scrim overlaps the strip's rect and would otherwise turn a
+    // dismiss-click near the top into a window drag. Both are named here:
+    // a second dialog that forgets the punch-out fails the same way the
+    // first one would have.
     expect(css).toMatch(
-      /\.star-map-intake,\s*\.star-map-intake \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
+      /\.star-map-intake,\s*\.star-map-intake \*,\s*\.star-map-rename,\s*\.star-map-rename \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
     );
     // The edge brightens whenever the sky moves under it — pointer pan and
     // keyboard flight alike — and the strip disappears in fullscreen, where

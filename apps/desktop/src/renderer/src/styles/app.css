@@ -11446,8 +11446,11 @@ textarea,
   border-style: dashed;
 }
 
-/* AI intake dialog: a small centered chat panel over the map. */
-.star-map-intake {
+/* AI intake dialog: a small centered chat panel over the map. The rename
+   dialog is the same shell — one panel shape for every card-level modal on
+   the map, so a second one cannot drift from the first. */
+.star-map-intake,
+.star-map-rename {
   position: fixed;
   inset: 0;
   z-index: 140;
@@ -11462,11 +11465,14 @@ textarea,
    dismissing the dialog. Punching out the whole overlay is fine — a modal
    is the one time the window has no business moving. */
 .star-map-intake,
-.star-map-intake * {
+.star-map-intake *,
+.star-map-rename,
+.star-map-rename * {
   -webkit-app-region: no-drag;
 }
 
-.star-map-intake__backdrop {
+.star-map-intake__backdrop,
+.star-map-rename__backdrop {
   position: absolute;
   inset: 0;
   border: none;
@@ -11474,7 +11480,8 @@ textarea,
   cursor: default;
 }
 
-.star-map-intake__panel {
+.star-map-intake__panel,
+.star-map-rename__panel {
   display: flex;
   position: relative;
   flex-direction: column;
@@ -11487,14 +11494,16 @@ textarea,
   box-shadow: var(--shadow-popover);
 }
 
-.star-map-intake__header {
+.star-map-intake__header,
+.star-map-rename__header {
   display: flex;
   align-items: center;
   gap: 8px;
   color: var(--text-primary);
 }
 
-.star-map-intake__target {
+.star-map-intake__target,
+.star-map-rename__title {
   flex: 1;
   overflow: hidden;
   font-size: 13px;
@@ -11503,7 +11512,8 @@ textarea,
   white-space: nowrap;
 }
 
-.star-map-intake__close {
+.star-map-intake__close,
+.star-map-rename__close {
   border: none;
   padding: 2px 6px;
   border-radius: 6px;
@@ -11512,12 +11522,14 @@ textarea,
   cursor: pointer;
 }
 
-.star-map-intake__close:hover {
+.star-map-intake__close:hover,
+.star-map-rename__close:hover {
   background: var(--bg-row-active);
   color: var(--text-primary);
 }
 
-.star-map-intake__input {
+.star-map-intake__input,
+.star-map-rename__input {
   width: 100%;
   padding: 8px 10px;
   border: 1px solid var(--border-subtle);
@@ -11529,7 +11541,8 @@ textarea,
   resize: vertical;
 }
 
-.star-map-intake__input:focus-visible {
+.star-map-intake__input:focus-visible,
+.star-map-rename__input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
@@ -11574,13 +11587,15 @@ textarea,
   font-size: 11px;
 }
 
-.star-map-intake__footer {
+.star-map-intake__footer,
+.star-map-rename__footer {
   display: flex;
   align-items: center;
   gap: 10px;
 }
 
-.star-map-intake__status {
+.star-map-intake__status,
+.star-map-rename__status {
   flex: 1;
   overflow: hidden;
   color: var(--text-muted);
@@ -11589,7 +11604,8 @@ textarea,
   white-space: nowrap;
 }
 
-.star-map-intake__status.is-failed {
+.star-map-intake__status.is-failed,
+.star-map-rename__status.is-failed {
   color: var(--danger-text);
 }
 
