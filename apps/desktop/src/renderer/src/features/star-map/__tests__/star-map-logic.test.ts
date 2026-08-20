@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   federatedThreadIdentityKey,
@@ -5,11 +8,16 @@ import {
 } from "@pwragent/shared";
 import { threadAttentionCategories } from "../attention";
 import {
+  cardRiseDelays,
   cloudDetentRadius,
   computeStarMapLayout,
   computeCardSlots,
   generateStarField,
   resolveCardDragOffset,
+  STAR_MAP_RISE_DURATION_MS,
+  STAR_MAP_RISE_GROUP_STEP_MS,
+  STAR_MAP_RISE_MAX_GROUPS,
+  STAR_MAP_RISE_TOTAL_MS,
   visibleCardCount,
   type StarMapCardSlot,
 } from "../star-map-layout";
@@ -382,5 +390,118 @@ describe("resolveCardDragOffset", () => {
     // The resistance already absorbed stays behind as a constant lag.
     expect(near).toBeLessThan(detentRadius + 400);
     expect(near).toBeGreaterThan(detentRadius + 200);
+  });
+});
+
+describe("cardRiseDelays", () => {
+  const allInView = (count: number) =>
+    cardRiseDelays(new Array<boolean>(count).fill(true));
+
+  it("deals only the cards in view, and skips the rest", () => {
+    // Budget spent on a card the operator cannot see is budget spent on
+    // nothing, and counting them made an in-view group depend on how many
+    // cards happened to be parked off to the side.
+    const delays = cardRiseDelays([false, true, false, true, false]);
+    expect([delays[0], delays[2], delays[4]]).toEqual([0, 0, 0]);
+    // The two in view take the first two beats between them — asserting
+    // only the zeroes above would hold just as well for an all-zero deal,
+    // which is every card popping at once.
+    expect([delays[1], delays[3]].sort((a, b) => a - b)).toEqual([
+      0,
+      STAR_MAP_RISE_GROUP_STEP_MS,
+    ]);
+  });
+
+  it("lands the last card on budget however large the cloud is", () => {
+    // The regression this exists for: an orbit cloud is capped per
+    // cluster, not per cloud, so a per-card step grew without bound.
+    for (const count of [1, 2, 8, 40, 160, 1_000]) {
+      const last = Math.max(...allInView(count));
+      expect(last + STAR_MAP_RISE_DURATION_MS).toBeLessThanOrEqual(
+        STAR_MAP_RISE_TOTAL_MS,
+      );
+    }
+  });
+
+  it("uses whole group steps, never a per-card slide", () => {
+    for (const delay of allInView(50)) {
+      expect(delay % STAR_MAP_RISE_GROUP_STEP_MS).toBe(0);
+    }
+  });
+
+  it("keeps the groups within one card of each other", () => {
+    const delays = allInView(50);
+    const sizes = new Map<number, number>();
+    for (const delay of delays) {
+      sizes.set(delay, (sizes.get(delay) ?? 0) + 1);
+    }
+    expect(sizes.size).toBe(STAR_MAP_RISE_MAX_GROUPS);
+    const counts = [...sizes.values()];
+    expect(Math.max(...counts) - Math.min(...counts)).toBeLessThanOrEqual(1);
+  });
+
+  it("scatters each group instead of sweeping the card order", () => {
+    // The complaint this answers: stepping by index reads as one wipe,
+    // because clusters are seated contiguously so index order is roughly
+    // spatial. Neighbours therefore must NOT share a beat wholesale.
+    const delays = allInView(50);
+    // The property that separates a scatter from a wipe is that the delay
+    // does not rise with the index. Both the old per-card step and an
+    // ordered deal are monotonic; only a scramble is not.
+    const monotonic = delays.every(
+      (delay, index) => index === 0 || delay >= delays[index - 1],
+    );
+    expect(monotonic).toBe(false);
+    // Each group must also reach across the cloud rather than owning a
+    // contiguous run of it.
+    for (let group = 0; group < STAR_MAP_RISE_MAX_GROUPS; group += 1) {
+      const members = delays.flatMap((delay, index) =>
+        delay === group * STAR_MAP_RISE_GROUP_STEP_MS ? [index] : [],
+      );
+      expect(members.length).toBeGreaterThan(0);
+      const span = members[members.length - 1] - members[0];
+      expect(span).toBeGreaterThan(delays.length / 2);
+    }
+    // Nor may it be the plain round-robin over the card order. That also
+    // spans the cloud, but it is periodic: in a ring, lighting every Nth
+    // seat is a rotating pattern rather than a scatter.
+    const roundRobin = delays.map(
+      (_, index) =>
+        (index % STAR_MAP_RISE_MAX_GROUPS) * STAR_MAP_RISE_GROUP_STEP_MS,
+    );
+    expect(delays).not.toEqual(roundRobin);
+  });
+
+  it("gives a cloud smaller than one group per card its own beats", () => {
+    // Small clouds keep the settle they always had rather than flattening
+    // to a single switch-on.
+    const delays = cardRiseDelays([true, true, true]);
+    expect(new Set(delays).size).toBe(3);
+  });
+
+  it("deals the same cards the same way every call", () => {
+    // Determinism only: the same `onScreen` in, the same delays out. It is
+    // NOT a guarantee that a mounted card keeps its beat — the deal moves
+    // when the view or the card slots move, and freezing it after the
+    // first paint is StarMapThreadCard's job, pinned in
+    // star-map-performance.test.
+    expect(allInView(50)).toEqual(allInView(50));
+  });
+
+  it("matches the duration app.css actually animates", () => {
+    // The budget is delay + duration, so a duration edited in the
+    // stylesheet alone silently pushes the last card past the total.
+    const css = readFileSync(
+      path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../../../styles/app.css",
+      ),
+      "utf8",
+    );
+    const rule = /\.star-map-card-shell \{[^}]*animation:\s*star-map-rise\s+(\d+)ms/.exec(
+      css,
+    );
+    expect(rule).not.toBeNull();
+    expect(Number(rule![1])).toBe(STAR_MAP_RISE_DURATION_MS);
   });
 });

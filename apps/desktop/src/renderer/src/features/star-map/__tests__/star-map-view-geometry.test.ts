@@ -3,11 +3,13 @@ import {
   MAX_ZOOM,
   MIN_VISIBLE_FRACTION,
   MIN_ZOOM,
+  STAR_MAP_IN_VIEW_MARGIN,
   STAR_MAP_OVERVIEW_ZOOM,
   STAR_MAP_SKY_PARALLAX,
   centerStarMapView,
   clampStarMapView,
   isOverviewZoom,
+  isPointInView,
   overviewChromeScale,
   placeStarMapView,
   starMapSkyOffset,
@@ -312,5 +314,87 @@ describe("starMapSkyOffset", () => {
       x: 0,
       y: 0,
     });
+  });
+});
+
+describe("isPointInView", () => {
+  const centred: StarMapView = { x: 0, y: 0, scale: 1 };
+
+  it("maps a canvas point through translate-then-scale", () => {
+    // transform-origin is 0 0, so the point paints at
+    // `canvas * scale + view`, not `(canvas + view) * scale`. Getting the
+    // order backwards only shows up away from the origin.
+    const view: StarMapView = { x: 100, y: 50, scale: 0.5 };
+    // 2000 * 0.5 + 100 = 1100, inside a 1280-wide window.
+    expect(
+      isPointInView({
+        point: { x: 2000, y: 200 },
+        view,
+        viewport: VIEWPORT,
+        margin: 0,
+      }),
+    ).toBe(true);
+    // The other order would be (2000 + 100) * 0.5 = 1050 — also inside,
+    // so pin a point the two readings disagree about: 2400 * 0.5 + 100 =
+    // 1300 is outside, while (2400 + 100) * 0.5 = 1250 would be inside.
+    expect(
+      isPointInView({
+        point: { x: 2400, y: 200 },
+        view,
+        viewport: VIEWPORT,
+        margin: 0,
+      }),
+    ).toBe(false);
+  });
+
+  it("accepts an anchor just outside the window", () => {
+    // A card is anchored by its top-centre, so the anchor leaves the
+    // window before the card does. The margin is what keeps a half-visible
+    // card in the entrance.
+    expect(
+      isPointInView({
+        point: { x: -STAR_MAP_IN_VIEW_MARGIN + 1, y: 400 },
+        view: centred,
+        viewport: VIEWPORT,
+      }),
+    ).toBe(true);
+    expect(
+      isPointInView({
+        point: { x: -STAR_MAP_IN_VIEW_MARGIN - 1, y: 400 },
+        view: centred,
+        viewport: VIEWPORT,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects a point past the far edge on either axis", () => {
+    expect(
+      isPointInView({
+        point: { x: VIEWPORT.width + 400, y: 400 },
+        view: centred,
+        viewport: VIEWPORT,
+      }),
+    ).toBe(false);
+    expect(
+      isPointInView({
+        point: { x: 400, y: VIEWPORT.height + 400 },
+        view: centred,
+        viewport: VIEWPORT,
+      }),
+    ).toBe(false);
+  });
+
+  it("pulls far more of the canvas into view as the map zooms out", () => {
+    const point = { x: 4000, y: 3000 };
+    expect(
+      isPointInView({ point, view: centred, viewport: VIEWPORT }),
+    ).toBe(false);
+    expect(
+      isPointInView({
+        point,
+        view: { x: 0, y: 0, scale: MIN_ZOOM },
+        viewport: VIEWPORT,
+      }),
+    ).toBe(true);
   });
 });

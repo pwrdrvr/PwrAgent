@@ -201,6 +201,39 @@ export function starMapSkyOffset(params: {
 }
 
 /**
+ * Viewport-pixel slack around the window when deciding whether a card is
+ * worth animating. A card is anchored by its top-centre, so the anchor can
+ * sit a card's width outside the window while the card itself is partly
+ * inside it - and being generous here is free, because the only cost of a
+ * false positive is one more card in an entrance group.
+ */
+export const STAR_MAP_IN_VIEW_MARGIN = 160;
+
+/**
+ * Whether a canvas point currently falls inside the window.
+ *
+ * `transform-origin` is `0 0`, so the canvas point `(x, y)` paints at
+ * `(x * scale + view.x, y * scale + view.y)` - the same mapping the module
+ * header describes for the canvas rect as a whole.
+ */
+export function isPointInView(params: {
+  point: { x: number; y: number };
+  view: StarMapView;
+  viewport: StarMapViewBox;
+  margin?: number;
+}): boolean {
+  const margin = params.margin ?? STAR_MAP_IN_VIEW_MARGIN;
+  const screenX = params.point.x * params.view.scale + params.view.x;
+  const screenY = params.point.y * params.view.scale + params.view.y;
+  return (
+    screenX >= -margin
+    && screenX <= params.viewport.width + margin
+    && screenY >= -margin
+    && screenY <= params.viewport.height + margin
+  );
+}
+
+/**
  * The view that puts the middle of the canvas in the middle of the window
  * at 1:1. The fallback for `placeStarMapView` when the lens has no body to
  * open on, and the shape "Reset view" restores through it.
