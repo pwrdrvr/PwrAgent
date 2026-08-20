@@ -2193,6 +2193,28 @@ export function StarMapScreen(props: StarMapScreenProps) {
     () => new Set(chatCards.cards.map((card) => card.key)),
     [chatCards.cards],
   );
+  /**
+   * Live summaries for the open chat cards. `useStarMapChatCards` stores
+   * the summary captured at open time and never reconciles it, which was
+   * fine while cards only displayed the transcript — but the composer's
+   * settings chip and menu read (and write) model / effort / access from
+   * the summary, so a frozen copy would never reflect the very change the
+   * menu just made. Card keys are thread identity keys, so the lookup is
+   * direct. Undefined while no card is open so the map costs nothing then.
+   */
+  const liveChatCardThreads = useMemo(() => {
+    if (chatCards.cards.length === 0) return undefined;
+    const byKey = new Map<string, NavigationThreadSummary>();
+    for (const thread of props.localThreads) {
+      byKey.set(buildThreadIdentityKey(thread.source, thread.id), thread);
+    }
+    for (const threads of remote.threadsByInstance.values()) {
+      for (const thread of threads) {
+        byKey.set(buildThreadIdentityKey(thread.source, thread.id), thread);
+      }
+    }
+    return byKey;
+  }, [chatCards.cards.length, props.localThreads, remote.threadsByInstance]);
   const { desktopApi, onFocusLocalInstance, onOpenLocalThread } = props;
   const openInstance = useCallback(
     (instanceId: string) => {
@@ -4277,7 +4299,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
             finds the open chats exactly where they were left, which is the
             whole point of opening five of them and scooting off. */}
         {chatCards.cards.map((card) => {
-          const target = card.thread.federation?.ref.target;
+          // The card list stores the summary captured at open time, but the
+          // composer's settings chip reads model / effort / access from it,
+          // so serve the freshest row the feeds carry and fall back to the
+          // stored snapshot when the thread has left its feed.
+          const liveThread = liveChatCardThreads?.get(card.key) ?? card.thread;
+          const target = liveThread.federation?.ref.target;
           const cardInstanceId =
             target && isRemoteFederationTarget(target)
               ? target.instanceId
@@ -4299,7 +4326,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               onRaise={chatCards.raise}
               onRectChange={chatCards.setRect}
               rect={card.rect}
-              thread={card.thread}
+              thread={liveThread}
               scale={view.scale}
               bounds={panZoomCanvas}
               contextOpen={card.contextOpen}

@@ -13193,7 +13193,9 @@ textarea,
   cursor: pointer;
 }
 
-.compact-composer__chip:hover,
+/* Hover affordance only where a click does something — the static
+   informational variant keeps the resting look. */
+.compact-composer__chip:hover:not(.compact-composer__chip--static),
 .compact-composer__chip.is-open {
   border-color: var(--accent-border);
   background: var(--bg-panel-hover);
@@ -13223,19 +13225,33 @@ textarea,
   color: var(--text-muted);
 }
 
-/* Full access keeps its warning color as the one accent segment; the rest
-   of the chip stays neutral so the signal cannot be missed. */
-.compact-composer__chip-segment--danger {
-  color: var(--accent);
+/* Full Access carries the solid-accent warning fill wherever it appears —
+   chip segment, root-menu value, submenu option. Accent as fill with
+   `--button-text`, never accent as text, per the accent-ramp rules. */
+.compact-composer__danger-pill {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--button-text);
+  font-size: 10px;
   font-weight: 600;
 }
 
-.compact-composer__chip-chevron {
-  display: none;
+/* One chevron recipe for the chip and the menu rows; the chip's is
+   hover/open-gated below. */
+.compact-composer__chip-chevron,
+.compact-composer__menu-chevron {
   flex: 0 0 auto;
   align-items: center;
   color: var(--text-muted);
   line-height: 0;
+}
+
+.compact-composer__chip-chevron {
+  display: none;
 }
 
 .compact-composer__chip:hover .compact-composer__chip-chevron,
@@ -13332,7 +13348,11 @@ textarea,
 
 /* Anchored to the chip and opening upward, in-card for the same reason as
    the mention list above; capped with its own scroll so a long model list
-   opens over the transcript rather than out of the card. */
+   opens over the transcript rather than out of the card. The cap must fit
+   the smallest card the geometry allows (CHAT_CARD_MIN_HEIGHT, 280px):
+   the menu bottom sits ~36px above the card bottom and the title bar takes
+   ~31px, so anything taller than ~213px would be clipped by the card's
+   `overflow: hidden` — scrolled content can't help a clipped box. */
 .compact-composer__menu-list {
   display: flex;
   position: absolute;
@@ -13342,7 +13362,7 @@ textarea,
   flex-direction: column;
   min-width: 210px;
   max-width: 280px;
-  max-height: 252px;
+  max-height: 200px;
   padding: 4px;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -13400,11 +13420,6 @@ textarea,
   text-overflow: ellipsis;
 }
 
-.compact-composer__menu-label--danger {
-  color: var(--accent);
-  font-weight: 600;
-}
-
 .compact-composer__menu-value {
   flex: 0 1 auto;
   min-width: 0;
@@ -13415,24 +13430,8 @@ textarea,
   text-overflow: ellipsis;
 }
 
-/* Full Access carries the solid-accent warning fill in the value slot,
-   the same signal as the main composer's danger chip. */
-.compact-composer__menu-value--danger {
-  flex: 0 0 auto;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--accent);
-  color: var(--button-text);
-  font-size: 9px;
-  font-weight: 600;
-}
-
 .compact-composer__menu-chevron {
   display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  color: var(--text-muted);
-  line-height: 0;
 }
 
 /* Leading 12px column — empty until the row is the current selection,
@@ -13468,8 +13467,8 @@ textarea,
   font-size: 11px;
 }
 
-/* Same switch anatomy as the thread-options menu toggle, at the card's
-   scale. */
+/* Same switch anatomy (and motion) as the thread-options menu toggle, at
+   the card's scale. */
 .compact-composer__menu-toggle {
   display: inline-flex;
   flex: 0 0 auto;
@@ -13481,6 +13480,9 @@ textarea,
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   background: var(--bg-input);
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
 }
 
 .compact-composer__menu-toggle-thumb {
@@ -13488,6 +13490,9 @@ textarea,
   height: 10px;
   border-radius: 50%;
   background: var(--text-muted);
+  transition:
+    transform 120ms ease,
+    background 120ms ease;
 }
 
 .compact-composer__menu-toggle.is-checked {
@@ -13501,20 +13506,24 @@ textarea,
   background: var(--button-text);
 }
 
-/* Send wears the main composer's action-pill recipe
+/* Send and Stop wear the main composer's action-pill recipe
    (.composer__actions .button / .composer__primary-action), scaled to the
    card's 22px control height, so the strip reads as one family with the
-   full view. */
-.compact-composer__send {
+   full view. Shared metrics here; each button carries only its own tone. */
+.compact-composer__send,
+.compact-composer__stop {
   flex: 0 0 auto;
   min-height: 22px;
   padding: 2px 12px;
-  border: 1px solid var(--accent-border);
   border-radius: 999px;
-  background: var(--bg-row-active);
-  color: var(--accent-bright);
   font-size: 11px;
   cursor: pointer;
+}
+
+.compact-composer__send {
+  border: 1px solid var(--accent-border);
+  background: var(--bg-row-active);
+  color: var(--accent-bright);
 }
 
 .compact-composer__send:hover:not(:disabled) {
@@ -13533,15 +13542,9 @@ textarea,
 /* Sits beside Send during a live turn, so it reads as the secondary of the
    two rather than as a second accent button competing with it. */
 .compact-composer__stop {
-  flex: 0 0 auto;
-  min-height: 22px;
-  padding: 2px 12px;
   border: 1px solid var(--border-subtle);
-  border-radius: 999px;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 11px;
-  cursor: pointer;
 }
 
 .compact-composer__stop:hover {

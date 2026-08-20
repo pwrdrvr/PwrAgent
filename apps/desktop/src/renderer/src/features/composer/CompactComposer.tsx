@@ -1,14 +1,19 @@
 import {
   useCallback,
-  useEffect,
   useId,
-  useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
 import type { ThreadExecutionMode } from "@pwragent/shared";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ChevronUpIcon,
+} from "../../icons";
+import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
+import { useDismissableMenu } from "./ComposerDropdown";
 import {
   useComposerMentions,
   type ComposerMentionSources,
@@ -32,6 +37,11 @@ export type CompactComposerSettingsOption = {
  * supplied, so a host exposes exactly what its thread can actually change.
  */
 export type CompactComposerSettingsMenu = {
+  /**
+   * The host's option fetch failed. Keeps the setting rows visible so the
+   * failure is reportable in place instead of the rows silently vanishing.
+   */
+  loadFailed?: boolean;
   /** True while the host is still fetching the option lists. */
   loading?: boolean;
   /**
@@ -84,32 +94,16 @@ export type CompactComposerProps = {
   threadTitle: string;
 };
 
-const EXECUTION_MODE_LABELS: Record<ThreadExecutionMode, string> = {
-  default: "Default",
-  "full-access": "Full access",
-};
-
 type SettingsMenuView = "access" | "model" | "reasoning" | "root";
 
-function ChevronIcon(props: { direction: "back" | "forward" | "up" }) {
-  const path =
-    props.direction === "up"
-      ? "M3 10l5-5 5 5"
-      : props.direction === "back"
-        ? "M10 3L5 8l5 5"
-        : "M6 3l5 5-5 5";
-  return (
-    <svg aria-hidden="true" fill="none" height="10" viewBox="0 0 16 16" width="10">
-      <path
-        d={path}
-        stroke="currentColor"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth="1.75"
-      />
-    </svg>
-  );
-}
+const MENU_VIEW_TITLES: Record<
+  Exclude<SettingsMenuView, "root">,
+  string
+> = {
+  access: "Access",
+  model: "Model",
+  reasoning: "Reasoning",
+};
 
 /**
  * Composer for surfaces with no vertical budget — currently the star map's
@@ -149,7 +143,11 @@ export function CompactComposer(props: CompactComposerProps) {
   });
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<SettingsMenuView>("root");
-  const menuRef = useRef<HTMLDivElement | null>(null);
+  // Click-away and Escape close the menu, same hook as the composer
+  // dropdowns. Without it the menu survives a click on the transcript
+  // behind it and covers the conversation.
+  const closeMenu = useCallback(() => setMenuOpen(false), []);
+  const menuRef = useDismissableMenu<HTMLDivElement>(menuOpen, closeMenu);
   const { onSend } = props;
   // Several cards can be open at once and the editor puts this on a DOM
   // `id`; a shared literal would give the map duplicate ids.
@@ -159,7 +157,7 @@ export function CompactComposer(props: CompactComposerProps) {
   const settingsOnOpen = settings?.onOpen;
 
   const accessLabel = props.executionMode
-    ? EXECUTION_MODE_LABELS[props.executionMode]
+    ? formatExecutionModeLabel(props.executionMode)
     : undefined;
   const chipSegments = [
     props.model
@@ -213,24 +211,6 @@ export function CompactComposer(props: CompactComposerProps) {
     [mentions, props.disabled, send],
   );
 
-  // Click-away and Escape close the menu. Without this it survives a click
-  // on the transcript behind it and covers the conversation.
-  useEffect(() => {
-    if (!menuOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
-    };
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setMenuOpen(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [menuOpen]);
-
   const toggleMenu = useCallback(() => {
     if (!menuOpen) {
       setMenuView("root");
@@ -239,21 +219,30 @@ export function CompactComposer(props: CompactComposerProps) {
     setMenuOpen(!menuOpen);
   }, [menuOpen, settingsOnOpen]);
 
-  const closeAndSelect = useCallback((select: () => void) => {
-    setMenuOpen(false);
-    select();
-  }, []);
+  const closeAndSelect = useCallback(
+    (select: () => void) => {
+      closeMenu();
+      select();
+    },
+    [closeMenu],
+  );
 
   const actions = props.secondaryActions ?? [];
-  // A section renders only when its mutation callback exists; the option
-  // lists may still be loading the first time the menu opens.
+  // A section renders only when its mutation callback exists. The option
+  // lists may still be loading the first time the menu opens, and a failed
+  // load keeps the rows visible so the failure is reported in place rather
+  // than the rows silently vanishing.
   const modelSection = Boolean(
     settings?.onSelectModel
-      && (settings.loading || (settings.models?.length ?? 0) > 0),
+      && (settings.loading
+        || settings.loadFailed
+        || (settings.models?.length ?? 0) > 0),
   );
   const reasoningSection = Boolean(
     settings?.onSelectReasoningEffort
-      && (settings.loading || (settings.reasoningEfforts?.length ?? 0) > 0),
+      && (settings.loading
+        || settings.loadFailed
+        || (settings.reasoningEfforts?.length ?? 0) > 0),
   );
   const fastSection = Boolean(
     settings?.onToggleFastMode && settings.supportsFastMode,
@@ -273,7 +262,7 @@ export function CompactComposer(props: CompactComposerProps) {
   ) => (
     <button
       aria-haspopup="menu"
-      className="compact-composer__menu-item compact-composer__menu-item--setting"
+      className="compact-composer__menu-item"
       onClick={() => setMenuView(view)}
       role="menuitem"
       type="button"
@@ -281,7 +270,7 @@ export function CompactComposer(props: CompactComposerProps) {
       <span className="compact-composer__menu-label">{label}</span>
       {value}
       <span aria-hidden="true" className="compact-composer__menu-chevron">
-        <ChevronIcon direction="forward" />
+        <ChevronRightIcon size={10} />
       </span>
     </button>
   );
@@ -295,7 +284,7 @@ export function CompactComposer(props: CompactComposerProps) {
   }) => (
     <button
       aria-checked={params.checked}
-      className="compact-composer__menu-item compact-composer__menu-item--option"
+      className="compact-composer__menu-item"
       key={params.key}
       onClick={() => closeAndSelect(params.onSelect)}
       role="menuitemradio"
@@ -304,14 +293,12 @@ export function CompactComposer(props: CompactComposerProps) {
       <span aria-hidden="true" className="compact-composer__menu-check">
         {params.checked ? "✓" : ""}
       </span>
-      <span
-        className={
-          params.danger
-            ? "compact-composer__menu-label compact-composer__menu-label--danger"
-            : "compact-composer__menu-label"
-        }
-      >
-        {params.label}
+      <span className="compact-composer__menu-label">
+        {params.danger ? (
+          <span className="compact-composer__danger-pill">{params.label}</span>
+        ) : (
+          params.label
+        )}
       </span>
     </button>
   );
@@ -325,68 +312,86 @@ export function CompactComposer(props: CompactComposerProps) {
         type="button"
       >
         <span aria-hidden="true" className="compact-composer__menu-chevron">
-          <ChevronIcon direction="back" />
+          <ChevronLeftIcon size={10} />
         </span>
         Back
       </button>
-      <div className="compact-composer__menu-eyebrow">{title}</div>
+      {/* The menu container carries the view's name; the visible eyebrow
+          is decoration on top of it, not a menu child in its own right. */}
+      <div aria-hidden="true" className="compact-composer__menu-eyebrow">
+        {title}
+      </div>
       {rows}
     </>
   );
 
+  // A disabled menuitem, not a bare div: `role="menu"` only admits menu
+  // children, and this notice has to be announced too.
   const emptySubmenuNotice = (
-    <div className="compact-composer__menu-empty">
-      {settings?.loading ? "Loading options…" : "No options available."}
+    <div
+      aria-disabled="true"
+      className="compact-composer__menu-empty"
+      role="menuitem"
+    >
+      {settings?.loading
+        ? "Loading options…"
+        : settings?.loadFailed
+          ? "Couldn't load options."
+          : "No options available."}
     </div>
   );
 
-  let menuContent: ReactNode;
-  if (menuView === "model") {
-    const options = settings?.models ?? [];
-    menuContent = submenu(
-      "Model",
-      options.length
-        ? options.map((option) =>
-            optionRow({
-              checked: option.id === props.model,
-              key: option.id,
-              label: option.label ?? option.id,
-              onSelect: () => settings?.onSelectModel?.(option.id),
-            }),
-          )
-        : emptySubmenuNotice,
-    );
-  } else if (menuView === "reasoning") {
-    const efforts = settings?.reasoningEfforts ?? [];
-    menuContent = submenu(
-      "Reasoning",
-      efforts.length
-        ? efforts.map((effort) =>
-            optionRow({
-              checked: effort === props.reasoningEffort,
-              key: effort,
-              label: effort,
-              onSelect: () => settings?.onSelectReasoningEffort?.(effort),
-            }),
-          )
-        : emptySubmenuNotice,
-    );
-  } else if (menuView === "access") {
-    const modes = settings?.executionModes ?? [];
-    menuContent = submenu(
-      "Access",
-      modes.map((entry) =>
-        optionRow({
-          checked: entry.mode === props.executionMode,
-          danger: entry.mode === "full-access",
-          key: entry.mode,
-          label: entry.label,
-          onSelect: () => settings?.onSelectExecutionMode?.(entry.mode),
-        }),
-      ),
-    );
-  } else {
-    menuContent = (
+  // Built only while the menu is open: this component re-renders per
+  // keystroke, and a closed menu must not cost an element tree per key.
+  const menuBody = (): ReactNode => {
+    if (menuView === "model") {
+      const options = settings?.models ?? [];
+      return submenu(
+        MENU_VIEW_TITLES.model,
+        options.length
+          ? options.map((option) =>
+              optionRow({
+                checked: option.id === props.model,
+                key: option.id,
+                label: option.label ?? option.id,
+                onSelect: () => settings?.onSelectModel?.(option.id),
+              }),
+            )
+          : emptySubmenuNotice,
+      );
+    }
+    if (menuView === "reasoning") {
+      const efforts = settings?.reasoningEfforts ?? [];
+      return submenu(
+        MENU_VIEW_TITLES.reasoning,
+        efforts.length
+          ? efforts.map((effort) =>
+              optionRow({
+                checked: effort === props.reasoningEffort,
+                key: effort,
+                label: effort,
+                onSelect: () => settings?.onSelectReasoningEffort?.(effort),
+              }),
+            )
+          : emptySubmenuNotice,
+      );
+    }
+    if (menuView === "access") {
+      const modes = settings?.executionModes ?? [];
+      return submenu(
+        MENU_VIEW_TITLES.access,
+        modes.map((entry) =>
+          optionRow({
+            checked: entry.mode === props.executionMode,
+            danger: entry.mode === "full-access",
+            key: entry.mode,
+            label: entry.label,
+            onSelect: () => settings?.onSelectExecutionMode?.(entry.mode),
+          }),
+        ),
+      );
+    }
+    return (
       <>
         {modelSection
           ? settingRow(
@@ -409,7 +414,7 @@ export function CompactComposer(props: CompactComposerProps) {
         {fastSection ? (
           <button
             aria-checked={Boolean(props.fastMode)}
-            className="compact-composer__menu-item compact-composer__menu-item--setting"
+            className="compact-composer__menu-item"
             onClick={() => settings?.onToggleFastMode?.(!props.fastMode)}
             role="menuitemcheckbox"
             type="button"
@@ -431,22 +436,19 @@ export function CompactComposer(props: CompactComposerProps) {
           ? settingRow(
               "Access",
               props.executionMode === "full-access" ? (
-                <span className="compact-composer__menu-value compact-composer__menu-value--danger">
+                <span className="compact-composer__danger-pill">
                   {accessLabel}
                 </span>
               ) : (
                 <span className="compact-composer__menu-value">
-                  {accessLabel ?? "Default"}
+                  {accessLabel ?? formatExecutionModeLabel("default")}
                 </span>
               ),
               "access",
             )
           : null}
         {hasSettingsRows && actions.length > 0 ? (
-          <div
-            aria-hidden="true"
-            className="compact-composer__menu-separator"
-          />
+          <div className="compact-composer__menu-separator" role="separator" />
         ) : null}
         {actions.map((action) => (
           <button
@@ -454,7 +456,7 @@ export function CompactComposer(props: CompactComposerProps) {
             disabled={action.disabled}
             key={action.key}
             onClick={() => {
-              setMenuOpen(false);
+              closeMenu();
               action.onSelect();
             }}
             role="menuitem"
@@ -465,7 +467,7 @@ export function CompactComposer(props: CompactComposerProps) {
         ))}
       </>
     );
-  }
+  };
 
   const chipContent =
     chipSegments.length > 0 ? (
@@ -480,7 +482,7 @@ export function CompactComposer(props: CompactComposerProps) {
             <span
               className={
                 segment.danger
-                  ? "compact-composer__chip-segment compact-composer__chip-segment--danger"
+                  ? "compact-composer__danger-pill"
                   : "compact-composer__chip-segment"
               }
             >
@@ -494,6 +496,15 @@ export function CompactComposer(props: CompactComposerProps) {
       // bare glyph is the old kebab's, on the chip's own geometry.
       <span aria-hidden="true">⋯</span>
     );
+
+  // Keep the visible readout inside the accessible name (label-in-name):
+  // a voice-control user saying "click Full Access" must land here.
+  const chipLabel =
+    chipSegments.length > 0
+      ? `Thread settings: ${chipSegments
+          .map((segment) => segment.text)
+          .join(" · ")}`
+      : "Thread settings";
 
   return (
     <div className="compact-composer">
@@ -525,7 +536,7 @@ export function CompactComposer(props: CompactComposerProps) {
             <button
               aria-expanded={menuOpen}
               aria-haspopup="menu"
-              aria-label="Thread settings"
+              aria-label={chipLabel}
               className={
                 menuOpen
                   ? "compact-composer__chip is-open"
@@ -539,23 +550,29 @@ export function CompactComposer(props: CompactComposerProps) {
                 aria-hidden="true"
                 className="compact-composer__chip-chevron"
               >
-                <ChevronIcon direction="up" />
+                <ChevronUpIcon size={10} />
               </span>
             </button>
             {/* Same in-card anchoring rule as the mention popover above. */}
             {menuOpen ? (
-              <div className="compact-composer__menu-list" role="menu">
-                {menuContent}
+              <div
+                aria-label={
+                  menuView === "root"
+                    ? "Thread settings"
+                    : MENU_VIEW_TITLES[menuView]
+                }
+                className="compact-composer__menu-list"
+                role="menu"
+              >
+                {menuBody()}
               </div>
             ) : null}
           </div>
         ) : chipSegments.length > 0 ? (
           // No menu to open (a host with no actions and no settings), so
-          // the chip is informational only.
-          <span
-            aria-hidden="true"
-            className="compact-composer__chip compact-composer__chip--static"
-          >
+          // the chip is informational only — plain readable text, no
+          // interactive affordance.
+          <span className="compact-composer__chip compact-composer__chip--static">
             {chipContent}
           </span>
         ) : null}

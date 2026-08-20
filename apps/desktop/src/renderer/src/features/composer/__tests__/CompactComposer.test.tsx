@@ -75,10 +75,11 @@ describe("CompactComposer", () => {
       reasoningEffort: "high",
     });
     // Segments, not one joined string: the access segment carries its own
-    // warning treatment.
+    // warning treatment. Labels come from formatExecutionModeLabel so every
+    // surface names the modes identically.
     expect(screen.getByText("gpt-5-codex")).toBeTruthy();
     expect(screen.getByText("high")).toBeTruthy();
-    expect(screen.getByText("Full access")).toBeTruthy();
+    expect(screen.getByText("Full Access")).toBeTruthy();
   });
 
   it("omits optional chip and menu chrome when unconfigured", () => {
@@ -181,8 +182,8 @@ describe("CompactComposer settings menu", () => {
     > = {},
   ) => ({
     executionModes: [
-      { label: "Default access", mode: "default" as const },
-      { label: "Full access", mode: "full-access" as const },
+      { label: "Default Access", mode: "default" as const },
+      { label: "Full Access", mode: "full-access" as const },
     ],
     models: [
       { id: "gpt-5-codex", label: "gpt-5-codex" },
@@ -198,7 +199,9 @@ describe("CompactComposer settings menu", () => {
   });
 
   function openMenu() {
-    fireEvent.click(screen.getByRole("button", { name: "Thread settings" }));
+    // The chip's accessible name carries the visible readout after the
+    // "Thread settings:" prefix (label-in-name), so match on the prefix.
+    fireEvent.click(screen.getByRole("button", { name: /^Thread settings/ }));
   }
 
   it("asks the host to load options when the menu opens", () => {
@@ -251,10 +254,26 @@ describe("CompactComposer settings menu", () => {
     openMenu();
     fireEvent.click(screen.getByRole("menuitem", { name: /Access/ }));
     fireEvent.click(
-      screen.getByRole("menuitemradio", { name: "Full access" }),
+      screen.getByRole("menuitemradio", { name: "Full Access" }),
     );
     expect(menu.onSelectExecutionMode).toHaveBeenCalledWith("full-access");
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("keeps setting rows visible and reports a failed option load", () => {
+    // A failed describe must not make the rows silently vanish — the
+    // submenu says the load failed instead.
+    renderComposer({
+      settingsMenu: settingsMenu({
+        loadFailed: true,
+        loading: false,
+        models: undefined,
+        reasoningEfforts: undefined,
+      }),
+    });
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Model/ }));
+    expect(screen.getByText("Couldn't load options.")).toBeTruthy();
   });
 
   it("returns to the root view through Back", () => {

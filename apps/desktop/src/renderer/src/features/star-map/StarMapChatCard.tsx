@@ -10,11 +10,12 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
-  type BackendLaunchpadOptions,
   type CelestialIconId,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
+import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { useBackendSummaries } from "../../lib/useBackendSummaries";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   CompactComposer,
@@ -460,38 +461,81 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   }, [interrupt]);
 
   /**
-   * Launchpad options for the settings chip's menu, described once per card
-   * and only when the menu first opens — a card the operator only reads
-   * never pays for the backend describe. `listBackends` takes the card's
-   * federation target, so a card over a peer's thread lists the peer's
-   * models.
+   * Backend describe for the settings chip's menu, shared through
+   * `useBackendSummaries` so the card follows the app's refresh events and
+   * provider-status agent events instead of caching one describe forever.
+   * Disabled until the menu first opens — a card the operator only reads
+   * never pays for the describe. The hook takes the card's federation
+   * target, so a card over a peer's thread lists the peer's models.
    */
-  const [backendOptions, setBackendOptions] = useState<
-    BackendLaunchpadOptions | undefined
-  >();
-  const [backendOptionsState, setBackendOptionsState] = useState<
-    "error" | "idle" | "loaded" | "loading"
-  >("idle");
-  const loadBackendOptions = useCallback(() => {
-    if (backendOptionsState === "loading" || backendOptionsState === "loaded") {
-      return;
+  // For callbacks and effects that need the latest summary without taking
+  // the whole object as a dependency — the composer's memo boundary rests
+  // on its props staying stable across snapshot refreshes.
+  const threadRef = useRef(thread);
+  threadRef.current = thread;
+
+  const [settingsMenuOpened, setSettingsMenuOpened] = useState(false);
+  const backendSummaries = useBackendSummaries(desktopApi, {
+    enabled: settingsMenuOpened,
+    federationTarget,
+  });
+  const backendSummariesRef = useRef(backendSummaries);
+  backendSummariesRef.current = backendSummaries;
+  const onSettingsMenuOpen = useCallback(() => {
+    setSettingsMenuOpened(true);
+    // A failed describe retries on the next open through the hook's
+    // exported refresh path (a plain re-list for remote targets).
+    if (backendSummariesRef.current.error) {
+      void backendSummariesRef.current.refreshAcpAgents();
     }
-    if (!desktopApi?.listBackends) return;
-    setBackendOptionsState("loading");
-    desktopApi
-      .listBackends({ federationTarget })
-      .then((response) => {
-        const backend = response.backends.find(
-          (entry) => entry.kind === thread.source,
-        );
-        setBackendOptions(backend?.launchpadOptions);
-        setBackendOptionsState("loaded");
-      })
-      .catch(() => {
-        // Retried on the next open; the submenus report the empty state.
-        setBackendOptionsState("error");
-      });
-  }, [backendOptionsState, desktopApi, federationTarget, thread.source]);
+  }, []);
+  const backendSummary = backendSummaries.backends.find(
+    (entry) => entry.kind === thread.source,
+  );
+
+  /**
+   * Optimistic view of the chip's settings between a menu selection and
+   * the thread-state bus round-trip. Mirrors the optimistic snapshot patch
+   * `useThreadNavigation.setThreadModelSettings` applies, which this
+   * surface cannot reach; without it the chip lags a click behind and a
+   * second Fast-mode click re-sends the same value instead of toggling.
+   * Entries drop as soon as the live summary reflects them, and the whole
+   * overlay clears when a mutation fails.
+   */
+  const [optimisticSettings, setOptimisticSettings] = useState<
+    Partial<
+      Pick<
+        NavigationThreadSummary,
+        "executionMode" | "fastMode" | "model" | "reasoningEffort"
+      >
+    >
+  >({});
+  const threadId = thread.id;
+  const threadSource = thread.source;
+  const threadModel = optimisticSettings.model ?? thread.model;
+  const threadReasoningEffort =
+    optimisticSettings.reasoningEffort ?? thread.reasoningEffort;
+  const threadFastMode = optimisticSettings.fastMode ?? thread.fastMode;
+  const threadExecutionMode =
+    optimisticSettings.executionMode ?? thread.executionMode;
+  useEffect(() => {
+    // Via the ref so the effect can key on the four scalar fields alone.
+    const summary = threadRef.current;
+    setOptimisticSettings((current) => {
+      const kept = Object.entries(current).filter(
+        ([key, value]) =>
+          summary[key as keyof NavigationThreadSummary] !== value,
+      );
+      return kept.length === Object.keys(current).length
+        ? current
+        : Object.fromEntries(kept);
+    });
+  }, [
+    thread.executionMode,
+    thread.fastMode,
+    thread.model,
+    thread.reasoningEffort,
+  ]);
 
   /**
    * The settings chip's menu: the same mutations the full composer's chip
@@ -499,109 +543,132 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
    * handoff and environments need the handoff dialog and launchpad state —
    * those stay behind Open in full view).
    *
-   * Deliberately delta-stable: nothing here reads the streaming session, so
-   * the memo boundary on the composer holds through a running turn.
+   * Deliberately delta-stable: nothing here reads the streaming session,
+   * and the deps are scalars, so the memo boundary on the composer holds
+   * through a running turn and across snapshot refreshes.
    */
   const settingsMenu = useMemo<CompactComposerSettingsMenu | undefined>(() => {
     if (!desktopApi) return undefined;
+    const setModelSettings = desktopApi.setThreadModelSettings;
+    const setExecutionMode = desktopApi.setThreadExecutionMode;
     const patchModelSettings = (
       patch: Partial<
         Pick<NavigationThreadSummary, "model" | "reasoningEffort" | "fastMode">
       >,
     ) => {
+      if (!setModelSettings) return;
+      setOptimisticSettings((current) => ({
+        ...current,
+        ...("model" in patch && patch.model !== undefined
+          ? { model: patch.model }
+          : {}),
+        ...("reasoningEffort" in patch && patch.reasoningEffort !== undefined
+          ? { reasoningEffort: patch.reasoningEffort }
+          : {}),
+        ...("fastMode" in patch && patch.fastMode !== undefined
+          ? { fastMode: patch.fastMode }
+          : {}),
+      }));
       // Same request construction as useThreadNavigation's
       // setThreadModelSettings: carry the current model when the patch does
-      // not name one, and only send fastMode for Codex threads.
-      void desktopApi
-        .setThreadModelSettings?.({
-          backend: thread.source,
-          federationTarget,
-          threadId: thread.id,
-          ...("model" in patch
-            ? { model: patch.model }
-            : thread.model
-              ? { model: thread.model }
-              : {}),
-          ...("reasoningEffort" in patch
-            ? { reasoningEffort: patch.reasoningEffort }
+      // not name one, and only send fastMode for Codex threads. The carried
+      // model is the optimistic one, so a reasoning or fast change made
+      // before a model change round-trips cannot revert the model.
+      void setModelSettings({
+        backend: threadSource,
+        federationTarget,
+        threadId,
+        ...("model" in patch
+          ? { model: patch.model }
+          : threadModel
+            ? { model: threadModel }
             : {}),
-          ...(thread.source === "codex" && "fastMode" in patch
-            ? { fastMode: patch.fastMode }
-            : {}),
-        })
-        .catch((error: unknown) => {
-          setSendError(
-            error instanceof Error
-              ? error.message
-              : "Could not change model settings.",
-          );
-        });
+        ...("reasoningEffort" in patch
+          ? { reasoningEffort: patch.reasoningEffort }
+          : {}),
+        ...(threadSource === "codex" && "fastMode" in patch
+          ? { fastMode: patch.fastMode }
+          : {}),
+      }).catch((error: unknown) => {
+        setOptimisticSettings({});
+        setSendError(
+          error instanceof Error
+            ? error.message
+            : "Could not change model settings.",
+        );
+      });
     };
-    const models = backendOptions?.models;
+    const launchpadOptions = backendSummary?.launchpadOptions;
+    const models = launchpadOptions?.models;
     const currentModelOption = models?.find(
-      (option) => option.id === thread.model,
+      (option) => option.id === threadModel,
     );
     const reasoningEfforts =
       currentModelOption?.reasoningEfforts
-      ?? backendOptions?.reasoningEfforts
+      ?? launchpadOptions?.reasoningEfforts
       ?? [];
     const supportsReasoning =
       currentModelOption?.supportsReasoning
-      ?? Boolean(backendOptions?.reasoningEfforts?.length);
+      ?? Boolean(launchpadOptions?.reasoningEfforts?.length);
     const supportsFast =
-      thread.source === "codex"
+      threadSource === "codex"
         ? currentModelOption?.supportsFast
-          ?? backendOptions?.supportsFastMode
+          ?? launchpadOptions?.supportsFastMode
           ?? false
         : false;
-    const canPatchModelSettings = Boolean(desktopApi.setThreadModelSettings);
+    // Only the modes the backend actually describes as available — the
+    // same filter the full composer applies, so an ACP thread with no
+    // approval-mode support is never offered a Full access row.
+    const availableExecutionModes = backendSummary?.executionModes
+      .filter((mode) => mode.available)
+      .map((mode) => ({
+        label: formatExecutionModeLabel(mode.mode),
+        mode: mode.mode,
+      }));
     return {
-      loading:
-        Boolean(desktopApi.listBackends)
-        && (backendOptionsState === "idle" || backendOptionsState === "loading"),
-      onOpen: loadBackendOptions,
-      executionModes: desktopApi.setThreadExecutionMode
-        ? [
-            { label: "Default access", mode: "default" as const },
-            { label: "Full access", mode: "full-access" as const },
-          ]
-        : undefined,
+      loading: Boolean(desktopApi.listBackends) && !backendSummaries.loaded,
+      loadFailed: Boolean(backendSummaries.error),
+      onOpen: onSettingsMenuOpen,
+      executionModes: setExecutionMode ? availableExecutionModes : undefined,
       models: models?.map((option) => ({
         id: option.id,
         label: option.label,
       })),
       reasoningEfforts: supportsReasoning ? reasoningEfforts : [],
       supportsFastMode: supportsFast,
-      onSelectExecutionMode: desktopApi.setThreadExecutionMode
+      onSelectExecutionMode: setExecutionMode
         ? (mode) => {
-            void desktopApi
-              .setThreadExecutionMode?.({
-                backend: thread.source,
-                executionMode: mode,
-                federationTarget,
-                threadId: thread.id,
-              })
-              .catch((error: unknown) => {
-                setSendError(
-                  error instanceof Error
-                    ? error.message
-                    : "Could not change access mode.",
-                );
-              });
+            setOptimisticSettings((current) => ({
+              ...current,
+              executionMode: mode,
+            }));
+            void setExecutionMode({
+              backend: threadSource,
+              executionMode: mode,
+              federationTarget,
+              threadId,
+            }).catch((error: unknown) => {
+              setOptimisticSettings({});
+              setSendError(
+                error instanceof Error
+                  ? error.message
+                  : "Could not change access mode.",
+              );
+            });
           }
         : undefined,
-      onSelectModel: canPatchModelSettings
+      onSelectModel: setModelSettings
         ? (model) => {
             // Mirror the full composer's model change: a model that cannot
             // reason clears the effort, one that cannot go fast clears fast.
             const nextOption = models?.find((option) => option.id === model);
             const nextSupportsReasoning =
               nextOption?.supportsReasoning
-              ?? Boolean(backendOptions?.reasoningEfforts?.length);
+              ?? Boolean(launchpadOptions?.reasoningEfforts?.length);
             const nextSupportsFast =
-              thread.source === "codex"
+              threadSource === "codex"
                 ? nextOption?.supportsFast
-                  ?? backendOptions?.supportsFastMode
+                  ?? launchpadOptions?.supportsFastMode
                   ?? false
                 : false;
             patchModelSettings({
@@ -611,21 +678,24 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             });
           }
         : undefined,
-      onSelectReasoningEffort: canPatchModelSettings
+      onSelectReasoningEffort: setModelSettings
         ? (reasoningEffort) => patchModelSettings({ reasoningEffort })
         : undefined,
       onToggleFastMode:
-        canPatchModelSettings && thread.source === "codex"
+        setModelSettings && threadSource === "codex"
           ? (enabled) => patchModelSettings({ fastMode: enabled })
           : undefined,
     };
   }, [
-    backendOptions,
-    backendOptionsState,
+    backendSummaries.error,
+    backendSummaries.loaded,
+    backendSummary,
     desktopApi,
     federationTarget,
-    loadBackendOptions,
-    thread,
+    onSettingsMenuOpen,
+    threadId,
+    threadModel,
+    threadSource,
   ]);
 
   /**
@@ -645,9 +715,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         onSelect: () => {
           void desktopApi
             .compactThread?.({
-              backend: thread.source,
+              backend: threadSource,
               federationTarget,
-              threadId: thread.id,
+              threadId,
             })
             .catch((error: unknown) => {
               setSendError(
@@ -662,10 +732,19 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     entries.push({
       key: "open-full",
       label: "Open in full view",
-      onSelect: () => onOpenFull(thread),
+      // Via the ref so a snapshot refresh does not re-mint the actions and
+      // re-render the memoized composer.
+      onSelect: () => onOpenFull(threadRef.current),
     });
     return entries;
-  }, [desktopApi, federationTarget, onOpenFull, session.threadBusy, thread]);
+  }, [
+    desktopApi,
+    federationTarget,
+    onOpenFull,
+    session.threadBusy,
+    threadId,
+    threadSource,
+  ]);
 
   const style: CSSProperties = {
     left: `${rect.left}px`,
@@ -796,13 +875,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       <MemoizedCompactComposer
         busy={session.threadBusy}
         canSteer={canSteer}
-        executionMode={thread.executionMode}
-        fastMode={thread.fastMode}
+        executionMode={threadExecutionMode}
+        fastMode={threadFastMode}
         mentionSources={mentionSources}
-        model={thread.model}
+        model={threadModel}
         onInterrupt={onInterrupt}
         onSend={send}
-        reasoningEffort={thread.reasoningEffort}
+        reasoningEffort={threadReasoningEffort}
         secondaryActions={secondaryActions}
         settingsMenu={settingsMenu}
         threadTitle={thread.title}

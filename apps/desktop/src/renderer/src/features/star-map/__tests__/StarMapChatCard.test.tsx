@@ -712,7 +712,10 @@ describe("StarMapChatCard settings menu", () => {
             available: true,
             methods: [],
             capabilities: {},
-            executionModes: [],
+            executionModes: [
+              { mode: "default", label: "Default Access", available: true },
+              { mode: "full-access", label: "Full Access", available: true },
+            ],
             launchpadOptions: {
               models: [
                 { id: "gpt-5-codex", supportsFast: true },
@@ -732,7 +735,7 @@ describe("StarMapChatCard settings menu", () => {
 
   async function openSettingsMenu() {
     fireEvent.click(
-      await screen.findByRole("button", { name: "Thread settings" }),
+      await screen.findByRole("button", { name: /^Thread settings/ }),
     );
   }
 
@@ -747,6 +750,7 @@ describe("StarMapChatCard settings menu", () => {
       expect(desktopApi.listBackends).toHaveBeenCalledTimes(1);
     });
     expect(desktopApi.listBackends).toHaveBeenCalledWith({
+      includeUnavailable: true,
       federationTarget: { scope: "remote", instanceId: "pwr_peer" },
     });
 
@@ -787,7 +791,7 @@ describe("StarMapChatCard settings menu", () => {
 
     fireEvent.click(await screen.findByRole("menuitem", { name: /Access/ }));
     fireEvent.click(
-      await screen.findByRole("menuitemradio", { name: "Full access" }),
+      await screen.findByRole("menuitemradio", { name: "Full Access" }),
     );
     await waitFor(() => {
       expect(desktopApi.setThreadExecutionMode).toHaveBeenCalledWith({
@@ -797,6 +801,42 @@ describe("StarMapChatCard settings menu", () => {
         threadId: "t-local",
       });
     });
+  });
+
+  it("hides Access when the backend describes only one available mode", async () => {
+    // The ACP shape: the registry describes no full-access mode, and
+    // setThreadExecutionMode would be an acknowledged no-op — so the menu
+    // must not offer a working-looking Full Access row.
+    const desktopApi = settingsApi({
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1,
+        backends: [
+          {
+            kind: "codex",
+            label: "Codex",
+            available: true,
+            methods: [],
+            capabilities: {},
+            executionModes: [
+              { mode: "default", label: "Default Access", available: true },
+              { mode: "full-access", label: "Full Access", available: false },
+            ],
+            launchpadOptions: {
+              models: [{ id: "gpt-5-codex", supportsFast: true }],
+              reasoningEfforts: ["low", "high"],
+              supportsFastMode: true,
+            },
+          },
+        ],
+      })),
+    } as unknown as Partial<DesktopApi>);
+    renderCard({ desktopApi, thread: localThread({ model: "gpt-5-codex" }) });
+    await openSettingsMenu();
+
+    // The fast toggle only renders once the describe landed, so its
+    // presence proves Access's absence is a decision, not a race.
+    await screen.findByRole("menuitemcheckbox", { name: "Fast mode" });
+    expect(screen.queryByRole("menuitem", { name: /Access/ })).toBeNull();
   });
 
   it("toggles fast mode for a model that supports it", async () => {
