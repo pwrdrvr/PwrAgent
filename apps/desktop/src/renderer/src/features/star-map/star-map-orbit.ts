@@ -431,23 +431,11 @@ export function computeOrbitPlacement(params: {
  * A chat card is a scrollable window that now lives INSIDE the canvas, so
  * its wheel events reach the viewport listener — which preventDefaults
  * every one of them and turns it into a pan. That silently took scrolling
- * away from every open transcript. A focused transcript owns the wheel too,
- * even when the pointer is elsewhere. Pinch-zoom (ctrl+wheel) is deliberately
+ * away from every open transcript. Pinch-zoom (ctrl+wheel) is deliberately
  * NOT routed through here: it is unambiguously a map gesture, and a
  * transcript cannot consume it.
  */
-export function shouldPanOnWheel(
-  target: EventTarget | null,
-  focusedTarget: EventTarget | null = null,
-): boolean {
-  if (
-    focusedTarget instanceof Element
-    && focusedTarget.closest(
-      ".star-map-chat-card__transcript, .star-map-satellite-card",
-    )
-  ) {
-    return false;
-  }
+export function shouldPanOnWheel(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return true;
   // Satellites scroll too: the context rail's panels and the terminal's
   // buffer both own their wheel.

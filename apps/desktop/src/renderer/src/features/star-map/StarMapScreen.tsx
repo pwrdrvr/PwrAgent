@@ -1911,10 +1911,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       if (event.ctrlKey) {
         wheelOwner = "canvas";
       } else if (!wheelOwner) {
-        const focusedTarget = element.contains(document.activeElement)
-          ? document.activeElement
-          : null;
-        wheelOwner = shouldPanOnWheel(event.target, focusedTarget)
+        wheelOwner = shouldPanOnWheel(event.target)
           ? "canvas"
           : "embedded";
       }

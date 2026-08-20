@@ -713,6 +713,20 @@ describe("star map chat cards in map space", () => {
     await waitFor(() => {
       expect(canvas.style.transform).not.toBe(before);
     });
+
+    // Focus is sticky after the pointer leaves a transcript, but a fresh
+    // wheel sequence over bare sky still belongs to the canvas.
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    transcript.tabIndex = 0;
+    transcript.focus();
+    const beforeFocusedSkyGesture = canvas.style.transform;
+    fireEvent.wheel(
+      container.querySelector(".star-map__viewport") as HTMLElement,
+      { deltaX: 120 },
+    );
+    await waitFor(() => {
+      expect(canvas.style.transform).not.toBe(beforeFocusedSkyGesture);
+    });
   });
 
   it("keeps an in-flight trackpad pan when a transcript moves under it", async () => {
