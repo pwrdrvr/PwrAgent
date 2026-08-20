@@ -28713,9 +28713,18 @@ a.transcript-message__messaging-origin:focus-visible {
 .rbac-graph__cols {
   position: relative;
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 120px;
+  /* minmax(0, 1fr), not 1fr: the auto minimum is the column's min-content
+     width, which the card descriptions push far past the panel width. That
+     overflowed the third column out of a container that cannot scroll. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* The gap is wire room, so it scales with the window instead of pinning
+     120px of empty space while the cards starve. */
+  column-gap: clamp(36px, 4.5vw, 96px);
+  row-gap: 0;
   z-index: 2;
+}
+.rbac-col {
+  min-width: 0;
 }
 .rbac-graph__svg {
   position: absolute;
@@ -28787,6 +28796,7 @@ a.transcript-message__messaging-origin:focus-visible {
   position: relative;
   display: flex;
   align-items: center;
+  min-width: 0;
   gap: 10px;
   padding: 10px 12px;
   border: 1px solid var(--border-subtle);
@@ -28795,6 +28805,9 @@ a.transcript-message__messaging-origin:focus-visible {
   cursor: pointer;
   text-align: left;
   width: 100%;
+  /* Clip rather than spill: the badge and count pills do not shrink, so a very
+     narrow panel would otherwise push them outside the card border. */
+  overflow: hidden;
   transition: border-color 140ms ease, background 140ms ease;
 }
 .rbac-node:hover {
@@ -28855,14 +28868,24 @@ a.transcript-message__messaging-origin:focus-visible {
 .rbac-node__name {
   font: 600 12.5px/1.2 var(--font-sans);
   color: var(--text-primary);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  display: flex; align-items: center; gap: 6px;
+  /* Wraps instead of clipping: the badge and count pills are fixed width, so
+     a nowrap name loses its tail on a narrow panel with no ellipsis — a flex
+     container does not apply text-overflow to its anonymous text run. */
+  display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px;
+  overflow-wrap: break-word;
 }
 .rbac-node__sub {
   font: 500 11px/1.3 var(--font-mono);
   color: var(--text-muted);
   margin-top: 2px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  /* Wrap and clamp to three lines, with the full text on the element's
+     title. A nowrap sub-line makes the whole column's min-content width the
+     full description, which is what overflowed the grid. */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 .rbac-node__badge {
   font: 600 9px/1 var(--font-sans);
