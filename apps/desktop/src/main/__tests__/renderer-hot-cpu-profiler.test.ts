@@ -107,24 +107,126 @@ function deferred<T = void>() {
   return { promise, resolve, reject };
 }
 
+/**
+ * Progress-based synchronization for the sampling loop.
+ *
+ * `vi.waitFor` polls against a wall-clock budget (1s by default) while one
+ * sampling iteration awaits real disk writes, so on a loaded CI runner the
+ * budget expires before the loop has advanced and this suite flakes while
+ * passing locally. It is also not side-effect free under fake timers: it
+ * advances them between retries, which drives the very loop being measured
+ * (see the sample-count comment further down for the flake that caused).
+ *
+ * Waiting on the profiler's own `onSampleCaptured` signal removes the clock
+ * from both problems — the wait ends when the work actually finishes, bounded
+ * only by the test timeout, and nothing is stepped forward to find that out.
+ */
+function createSampleTracker() {
+  let captured = 0;
+  let waiters: Array<{
+    label: string;
+    ready: () => boolean;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  }> = [];
+
+  function flush(): void {
+    waiters = waiters.filter((waiter) => {
+      // A predicate that throws would otherwise escape through the profiler's
+      // `finally`, rejecting the sampling chain and leaving this wait pending
+      // forever. Fail the wait that owns the predicate instead.
+      let ready: boolean;
+      try {
+        ready = waiter.ready();
+      } catch (error) {
+        waiter.reject(error);
+        return false;
+      }
+      if (!ready) return true;
+      waiter.resolve();
+      return false;
+    });
+  }
+
+  async function waitUntil(ready: () => boolean, label: string): Promise<void> {
+    if (ready()) return;
+    await new Promise<void>((resolve, reject) => {
+      waiters.push({ label, ready, resolve, reject });
+    });
+  }
+
+  return {
+    onSampleCaptured: () => {
+      captured += 1;
+      flush();
+    },
+    /**
+     * Waits still outstanding. Non-empty only after a test has already failed,
+     * since every wait is awaited — see the afterEach that reports them.
+     */
+    pendingLabels: (): string[] =>
+      waiters.map((waiter) => `${waiter.label} (after ${captured} samples)`),
+    waitUntil,
+    /** Resolves once `target` sampling iterations have fully completed. */
+    async waitForCount(target: number): Promise<void> {
+      await waitUntil(() => captured >= target, `${target} completed samples`);
+    },
+  };
+}
+
 describe("RendererHotCpuProfiler", () => {
   const cleanups: Array<() => Promise<void>> = [];
   const profilers: RendererHotCpuProfiler[] = [];
 
+  const sampleTrackers = new WeakMap<
+    RendererHotCpuProfiler,
+    ReturnType<typeof createSampleTracker>
+  >();
+
   function createProfiler(
     options: ConstructorParameters<typeof RendererHotCpuProfiler>[0],
   ): RendererHotCpuProfiler {
-    const profiler = new RendererHotCpuProfiler(options);
+    const tracker = createSampleTracker();
+    const profiler = new RendererHotCpuProfiler({
+      ...options,
+      onSampleCaptured: () => {
+        options.onSampleCaptured?.();
+        tracker.onSampleCaptured();
+      },
+    });
+    sampleTrackers.set(profiler, tracker);
     profilers.push(profiler);
     return profiler;
   }
 
+  /** Sampling-progress tracker for a profiler built by `createProfiler`. */
+  function samplesOf(
+    profiler: RendererHotCpuProfiler,
+  ): ReturnType<typeof createSampleTracker> {
+    const tracker = sampleTrackers.get(profiler);
+    if (!tracker) {
+      throw new Error("Profiler was not created through createProfiler().");
+    }
+    return tracker;
+  }
+
   afterEach(async () => {
     vi.useRealTimers();
-    await Promise.all(
-      profilers.splice(0).map((profiler) => profiler.stop("test-cleanup")),
+    const created = profilers.splice(0);
+    const pendingWaits = created.flatMap(
+      (profiler) => sampleTrackers.get(profiler)?.pendingLabels() ?? [],
     );
+    await Promise.all(created.map((profiler) => profiler.stop("test-cleanup")));
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+    if (pendingWaits.length > 0) {
+      // Reachable only when the test has already failed, because every wait is
+      // awaited. It turns an opaque "Test timed out in 5000ms" into the name of
+      // the thing that never happened — the diagnostic `vi.waitFor` used to
+      // give for free by reporting the assertion it was retrying.
+      throw new Error(
+        `Sampling waits never resolved: ${pendingWaits.join("; ")}`,
+      );
+    }
   });
 
   it("records a renderer CPU profile after sustained hot samples", async () => {
@@ -169,9 +271,11 @@ describe("RendererHotCpuProfiler", () => {
     });
 
     await profiler.start();
-    await vi.waitFor(() => {
-      expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
-    });
+    await samplesOf(profiler).waitUntil(
+      () => debuggerApi.attach.mock.calls.length > 0,
+      "debugger attach",
+    );
+    expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
 
     expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(1, "Profiler.enable");
     expect(debuggerApi.sendCommand).toHaveBeenNthCalledWith(2, "Profiler.start");
@@ -260,7 +364,9 @@ describe("RendererHotCpuProfiler", () => {
 
     const { target } = createTarget();
     const profileWritten = deferred();
+    const profileWriteStarted = deferred();
     const onProfileWritten = vi.fn(async () => {
+      profileWriteStarted.resolve();
       await profileWritten.promise;
     });
     let nowCallCount = 0;
@@ -284,9 +390,11 @@ describe("RendererHotCpuProfiler", () => {
     });
 
     await profiler.start();
-    await vi.waitFor(() => {
-      expect(onProfileWritten).toHaveBeenCalledTimes(1);
-    });
+    // Not a sample-progress wait: sampling is paused for the duration of a
+    // profile, so the loop publishes nothing more until the profile ends —
+    // and this test deliberately holds `onProfileWritten` open forever.
+    await profileWriteStarted.promise;
+    expect(onProfileWritten).toHaveBeenCalledTimes(1);
 
     let stopResolved = false;
     const stopPromise = profiler.stop("test-complete").then(() => {
@@ -435,17 +543,20 @@ describe("RendererHotCpuProfiler", () => {
     try {
       await profiler.start();
       await vi.advanceTimersByTimeAsync(0);
-      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(1));
+      await samplesOf(profiler).waitForCount(1);
+      expect(getAppMetrics).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(config.intervalMs);
-      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(2));
+      await samplesOf(profiler).waitForCount(2);
+      expect(getAppMetrics).toHaveBeenCalledTimes(2);
       await vi.advanceTimersByTimeAsync(config.intervalMs);
-      await vi.waitFor(() => expect(debuggerApi.attach).toHaveBeenCalledWith("1.3"));
+      await samplesOf(profiler).waitForCount(3);
+      expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
 
       expect(debuggerApi.sendCommand).toHaveBeenCalledWith("Profiler.start");
       expect(getAppMetrics).toHaveBeenCalledTimes(3);
-      // `Profiler.start` precedes async profile-start bookkeeping. Wait until
-      // its duration timer is registered before asking fake timers to run it.
-      await vi.waitFor(() => expect(vi.getTimerCount()).toBe(1));
+      // The sample signal fires after profile-start bookkeeping has armed the
+      // duration timer, so it is already the only pending timer here.
+      expect(vi.getTimerCount()).toBe(1);
 
       await vi.advanceTimersByTimeAsync(config.intervalMs * 4);
       expect(getAppMetrics).toHaveBeenCalledTimes(3);
@@ -456,7 +567,8 @@ describe("RendererHotCpuProfiler", () => {
       await vi.waitFor(() => expect(debuggerApi.detach).toHaveBeenCalled());
 
       await vi.advanceTimersByTimeAsync(config.intervalMs);
-      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(4));
+      await samplesOf(profiler).waitForCount(4);
+      expect(getAppMetrics).toHaveBeenCalledTimes(4);
 
       // Stop the profiler BEFORE asserting the sample file. The sampler is a
       // self-rescheduling setTimeout loop, and `vi.waitFor` advances fake
@@ -577,9 +689,11 @@ describe("RendererHotCpuProfiler", () => {
     });
 
     await profiler.start();
-    await vi.waitFor(() => {
-      expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
-    });
+    await samplesOf(profiler).waitUntil(
+      () => debuggerApi.attach.mock.calls.length > 0,
+      "debugger attach",
+    );
+    expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
     await profiler.stop("test-complete");
 
     const events = (await fs.readFile(sessionResult.session.eventsPath, "utf8"))
@@ -642,9 +756,11 @@ describe("RendererHotCpuProfiler", () => {
     });
 
     await profiler.start();
-    await vi.waitFor(() => {
-      expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
-    });
+    await samplesOf(profiler).waitUntil(
+      () => debuggerApi.attach.mock.calls.length > 0,
+      "debugger attach",
+    );
+    expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
     await profiler.stop("test-complete");
 
     const events = (await fs.readFile(sessionResult.session.eventsPath, "utf8"))
@@ -718,12 +834,13 @@ describe("RendererHotCpuProfiler", () => {
       await profiler.start();
 
       await vi.advanceTimersByTimeAsync(config.startDelayMs);
-      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(1));
+      await samplesOf(profiler).waitForCount(1);
       await vi.advanceTimersByTimeAsync(config.intervalMs);
-      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(2));
+      await samplesOf(profiler).waitForCount(2);
       await vi.advanceTimersByTimeAsync(config.intervalMs);
-      await vi.waitFor(() => expect(getAppMetrics).toHaveBeenCalledTimes(3));
-      await vi.waitFor(() => expect(debuggerApi.attach).toHaveBeenCalledWith("1.3"));
+      await samplesOf(profiler).waitForCount(3);
+      expect(getAppMetrics).toHaveBeenCalledTimes(3);
+      expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
       await vi.advanceTimersByTimeAsync(config.profileDurationMs);
 
       await vi.waitFor(() => {
@@ -924,8 +1041,10 @@ describe("RendererHotCpuProfiler", () => {
     if (!sessionResult.ok) return;
 
     const startSnapshot = deferred();
+    const startSnapshotRequested = deferred();
     const { target, debuggerApi } = createTarget();
     target.takeHeapSnapshot.mockImplementation(async () => {
+      startSnapshotRequested.resolve();
       await startSnapshot.promise;
     });
     let nowCallCount = 0;
@@ -948,9 +1067,11 @@ describe("RendererHotCpuProfiler", () => {
     });
 
     await profiler.start();
-    await vi.waitFor(() => {
-      expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(1);
-    });
+    // Not a sample-progress wait: the start snapshot is awaited inside the
+    // sampling iteration and this test holds it open, so the iteration never
+    // completes. Wait on the snapshot request instead.
+    await startSnapshotRequested.promise;
+    expect(target.takeHeapSnapshot).toHaveBeenCalledTimes(1);
 
     const stopProfiler = profiler.stop("settings-disabled");
     await vi.waitFor(() => {
@@ -1010,23 +1131,9 @@ describe("RendererHotCpuProfiler", () => {
     });
 
     await profiler.start();
-    await vi.waitFor(async () => {
-      const events = (await fs.readFile(sessionResult.session.eventsPath, "utf8"))
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
-
-      expect(events).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "profile-skipped",
-            detail: expect.objectContaining({
-              reason: "debugger-already-attached",
-            }),
-          }),
-        ]),
-      );
-    });
+    // The skip is recorded inside the sampling iteration that would have
+    // started the profile, so three completed samples settle this file.
+    await samplesOf(profiler).waitForCount(3);
 
     expect(debuggerApi.attach).not.toHaveBeenCalled();
 

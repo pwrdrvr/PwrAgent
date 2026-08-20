@@ -71,6 +71,7 @@ export class RendererHotCpuProfiler {
   private readonly logger: Logger;
   private readonly now: () => Date;
   private readonly onHeapSnapshotLimitReached?: () => void | Promise<void>;
+  private readonly onSampleCaptured?: () => void;
   private readonly onProfileWritten?: (
     event: HotCpuProfileCapturedEvent,
   ) => void | Promise<void>;
@@ -107,6 +108,17 @@ export class RendererHotCpuProfiler {
     now?: () => Date;
     onHeapSnapshotLimitReached?: () => void | Promise<void>;
     onProfileWritten?: (event: HotCpuProfileCapturedEvent) => void | Promise<void>;
+    /**
+     * Fires once per completed sampling iteration, after the sample has been
+     * written and any profile it triggered has started.
+     *
+     * The loop is a self-rescheduling timer whose body awaits real disk
+     * writes, so it publishes no progress an observer can wait on. Without
+     * this, a test can only poll on a wall-clock budget and hope the machine
+     * is fast enough — which is exactly how this suite flaked on loaded CI
+     * while passing locally. Unused in production.
+     */
+    onSampleCaptured?: () => void;
   }) {
     this.config = options.config;
     this.getAppMetrics = options.getAppMetrics;
@@ -114,6 +126,7 @@ export class RendererHotCpuProfiler {
     this.now = options.now ?? (() => new Date());
     this.onHeapSnapshotLimitReached = options.onHeapSnapshotLimitReached;
     this.onProfileWritten = options.onProfileWritten;
+    this.onSampleCaptured = options.onSampleCaptured;
     this.session = options.session;
     this.target = options.target;
   }
@@ -290,6 +303,9 @@ export class RendererHotCpuProfiler {
       } else {
         this.samplingPausedForProfile = true;
       }
+      // After rescheduling, so an observer woken here already sees the next
+      // timer armed and can assert on timer state without a second wait.
+      this.onSampleCaptured?.();
     }
   }
 
