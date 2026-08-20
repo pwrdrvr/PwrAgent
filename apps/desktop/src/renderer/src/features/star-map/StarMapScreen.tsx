@@ -3171,6 +3171,25 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // mounting mid-gesture can be grouped against a view one frame stale,
     // and the worst that costs is one card in the wrong beat of a 500ms
     // entrance. Reading the ref would make render impure for no gain.
+    //
+    // KNOWN LIMIT, deliberately not papered over here: this deal is not
+    // frozen once a card's entrance has begun. `view` and `slots` both
+    // move inside the 500ms window — the placement effect above re-runs on
+    // every canvas resize during a load — so a card can be re-dealt from
+    // one beat to a later one while it is mid-fade. `star-map-rise` fills
+    // `backwards`, which makes a raised delay the animation's BEFORE
+    // phase: measured in Chromium with the clock pinned 100ms into the
+    // 200ms fade, `animation-delay: 0` computes to opacity 0.5 and 300ms
+    // computes to opacity 0. The card blanks and fades again.
+    //
+    // Freezing each card's delay at its first paint does NOT fix this, and
+    // was tried: the map places its own view across renders that land
+    // after that paint, so the frozen value is the pre-placement one, in
+    // which every card reads as off-screen and the whole cloud flattens
+    // back to a single switch-on. A real fix has to decide when the
+    // entrance may start relative to the map settling its view — either
+    // gate the entrance on a settled view, or stagger by mounting the
+    // groups rather than by delaying them. Both are their own change.
     const riseDelays = cardRiseDelays(
       placements.map((placement) =>
         isPointInView({

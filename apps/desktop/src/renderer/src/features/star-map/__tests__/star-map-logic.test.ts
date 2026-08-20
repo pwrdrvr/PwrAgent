@@ -397,14 +397,19 @@ describe("cardRiseDelays", () => {
   const allInView = (count: number) =>
     cardRiseDelays(new Array<boolean>(count).fill(true));
 
-  it("gives an off-screen card no delay at all", () => {
+  it("deals only the cards in view, and skips the rest", () => {
     // Budget spent on a card the operator cannot see is budget spent on
     // nothing, and counting them made an in-view group depend on how many
     // cards happened to be parked off to the side.
     const delays = cardRiseDelays([false, true, false, true, false]);
-    expect(delays[0]).toBe(0);
-    expect(delays[2]).toBe(0);
-    expect(delays[4]).toBe(0);
+    expect([delays[0], delays[2], delays[4]]).toEqual([0, 0, 0]);
+    // The two in view take the first two beats between them — asserting
+    // only the zeroes above would hold just as well for an all-zero deal,
+    // which is every card popping at once.
+    expect([delays[1], delays[3]].sort((a, b) => a - b)).toEqual([
+      0,
+      STAR_MAP_RISE_GROUP_STEP_MS,
+    ]);
   });
 
   it("lands the last card on budget however large the cloud is", () => {
@@ -474,7 +479,12 @@ describe("cardRiseDelays", () => {
     expect(new Set(delays).size).toBe(3);
   });
 
-  it("is deterministic, so a re-render cannot re-deal a card", () => {
+  it("deals the same cards the same way every call", () => {
+    // Determinism only: the same `onScreen` in, the same delays out. It is
+    // NOT a guarantee that a mounted card keeps its beat — the deal moves
+    // when the view or the card slots move, and freezing it after the
+    // first paint is StarMapThreadCard's job, pinned in
+    // star-map-performance.test.
     expect(allInView(50)).toEqual(allInView(50));
   });
 
