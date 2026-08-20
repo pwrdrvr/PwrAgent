@@ -5,36 +5,44 @@ description: Safely restart the local PwrAgent Electron development app after pu
 
 # PwrAgent Dev Restart
 
-Use this skill when the running Electron app must be stopped and restarted from a freshly updated checkout, especially after merging a PR into `~/github/PwrAgnt`.
+Use this skill when the running Electron app must be stopped and restarted from a freshly updated checkout, especially after merging a PR.
+
+Run the commands below from the checkout you want to restart. The script derives
+its default root from its own location, so it targets the checkout it ships in,
+including a git worktree.
 
 ## Workflow
 
 1. Confirm the target checkout is updated and clean enough to run:
 
    ```bash
-   git -C /Users/huntharo/github/PwrAgnt status --short --branch
-   git -C /Users/huntharo/github/PwrAgnt log -1 --oneline --decorate
+   git status --short --branch
+   ```
+
+   ```bash
+   git log -1 --oneline --decorate
    ```
 
 2. Dry-run the restart to see which processes would be stopped:
 
    ```bash
-   .agents/skills/pwragent-dev-restart/scripts/restart-pwragent-dev.zsh \
-     schedule --root /Users/huntharo/github/PwrAgnt --delay 30 --dry-run
+   .agents/skills/pwragent-dev-restart/scripts/restart-pwragent-dev.zsh schedule --delay 30 --dry-run
    ```
 
 3. Schedule the restart and answer the user before the delay expires:
 
    ```bash
-   .agents/skills/pwragent-dev-restart/scripts/restart-pwragent-dev.zsh \
-     schedule --root /Users/huntharo/github/PwrAgnt --delay 30
+   .agents/skills/pwragent-dev-restart/scripts/restart-pwragent-dev.zsh schedule --delay 30
    ```
 
 4. After the delay, verify the app came back:
 
    ```bash
-   tail -120 /Users/huntharo/github/PwrAgnt/.local/pwragent-dev-restart.log
-   pgrep -fl '/Users/huntharo/github/PwrAgnt|PwrAgent|pnpm.*dev|electron-vite'
+   tail -120 .local/pwragent-dev-restart.log
+   ```
+
+   ```bash
+   pgrep -fl "$PWD|PwrAgent|pnpm.*dev|electron-vite"
    ```
 
 ## Script Notes
@@ -44,6 +52,12 @@ Use this skill when the running Electron app must be stopped and restarted from 
 - It excludes Codex helper processes whose serialized command payloads mention the checkout path but are not part of the PwrAgent dev process tree.
 - With `--detach-start`, the script starts the dev command in a detached `tmux` session when `tmux` is available. This survives parent command cleanup while keeping the dev logs in the configured restart log.
 - It uses a `nohup` sleep wrapper for the delayed timer. Do not use `launchctl submit` here: launchd can keep descendant `pnpm dev` processes in the submitted job context and relaunch them after they exit.
-- Default root is `/Users/huntharo/github/PwrAgnt`.
+- Default root is derived from the script location: the checkout that contains
+  `.agents/skills/pwragent-dev-restart/scripts/restart-pwragent-dev.zsh`. Pass
+  `--root PATH` to target a different checkout.
+- The root must be a pnpm workspace root (`package.json` and
+  `pnpm-workspace.yaml`). The script stops processes whose command line matches
+  the root path, so it refuses a broad root that would match unrelated
+  processes.
 - Default log is `<root>/.local/pwragent-dev-restart.log`.
 - Use `--dry-run` before scheduling unless the user explicitly asks to restart immediately.

@@ -43,7 +43,9 @@ if [[ -z "$mode" || "$mode" == "--help" || "$mode" == "-h" ]]; then
 fi
 shift
 
-root="/Users/huntharo/github/PwrAgnt"
+# The script lives at <root>/.agents/skills/pwragent-dev-restart/scripts/,
+# so the checkout root is five directory levels above it.
+root="${0:A:h:h:h:h:h}"
 delay="30"
 log_path=""
 dry_run="false"
@@ -85,6 +87,12 @@ done
 
 root="${root:A}"
 [[ -d "$root" ]] || die "root does not exist: $root"
+
+# `matching_pids` uses the root path as a `pgrep -f` pattern, so a broad root
+# such as `/` or `$HOME` would match and kill unrelated processes. Require the
+# root to look like the pnpm workspace this script is meant to restart.
+[[ -f "$root/package.json" && -f "$root/pnpm-workspace.yaml" ]] \
+  || die "root is not a PwrAgent checkout: $root"
 
 if [[ -z "$log_path" ]]; then
   log_path="$root/.local/pwragent-dev-restart.log"
@@ -130,6 +138,10 @@ is_restart_excluded_process() {
   [[ "$command" == *"/.codex/computer-use/"* ]] && return 0
   [[ "$command" == *"SkyComputerUseClient"* ]] && return 0
   [[ "$command" == *"turn-ended"* ]] && return 0
+  # Coding-agent CLI sessions carry the checkout path in their arguments for the
+  # same reason. They are not part of the PwrAgent dev process tree.
+  [[ "$command" == *"/Application Support/Claude/claude-code/"* ]] && return 0
+  [[ "$command" == *"/Claude.app/Contents/Helpers/disclaimer"* ]] && return 0
   return 1
 }
 
