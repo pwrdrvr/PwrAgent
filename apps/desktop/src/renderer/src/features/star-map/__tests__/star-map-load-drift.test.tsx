@@ -163,14 +163,34 @@ function projectCloudScreenPosition(label: string): { x: number; y: number } {
   const canvas = document.querySelector(".star-map__canvas") as HTMLElement;
   if (!canvas) throw new Error("canvas not found");
   const view = parseTransform(canvas.style.transform);
-  const name = [...document.querySelectorAll(".star-map-project__name")].find(
-    (node) => node.textContent === label,
-  );
-  const cloud = name?.closest(".star-map__project-cloud") as HTMLElement | null;
-  if (!cloud) throw new Error(`project not on the map: ${label}`);
+  // Two projects can share a display label — `threadProjectLabel` names a
+  // project after its repo folder, and two checkouts of the same repo have
+  // the same folder name — so an ambiguous match is an unusable fixture
+  // rather than a cloud to measure.
+  const names = [
+    ...document.querySelectorAll(".star-map-project__name"),
+  ].filter((node) => node.textContent === label);
+  if (names.length === 0) throw new Error(`project not on the map: ${label}`);
+  if (names.length > 1) {
+    throw new Error(`more than one project labelled ${label}`);
+  }
+  const cloud = names[0].closest(
+    ".star-map__project-cloud",
+  ) as HTMLElement | null;
+  if (!cloud) throw new Error(`project cloud not found: ${label}`);
+  const left = Number.parseFloat(cloud.style.left);
+  const top = Number.parseFloat(cloud.style.top);
+  // A cloud positioned any other way — by a transform, say, the way the
+  // body inside it already centres itself — parses to NaN, and `toEqual`
+  // counts NaN equal to NaN. Every assertion built on this would then pass
+  // while measuring nothing, which is the failure this whole file is
+  // written to avoid.
+  if (!Number.isFinite(left) || !Number.isFinite(top)) {
+    throw new Error(`project ${label} is not positioned by left/top`);
+  }
   return {
-    x: view.x + Number.parseFloat(cloud.style.left) * view.scale,
-    y: view.y + Number.parseFloat(cloud.style.top) * view.scale,
+    x: view.x + left * view.scale,
+    y: view.y + top * view.scale,
   };
 }
 
