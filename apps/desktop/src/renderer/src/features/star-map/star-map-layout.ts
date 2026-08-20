@@ -174,6 +174,43 @@ export function computeCardSlots(
 }
 
 /**
+ * Total wall time a cloud's entrance may occupy, from the first card's
+ * first frame to the last card's last one.
+ *
+ * `star-map-rise` carries `backwards`, so a card holds `opacity: 0`
+ * through its delay: the stagger is not decoration layered over visible
+ * cards, it is how long each card stays blank. A flat `index * step` is
+ * therefore only safe while the card count is bounded, and in the orbit
+ * lens it is not - clusters cap at ORBIT_MAX_CARDS_PER_GROUP but their
+ * COUNT does not, so a cloud of forty small projects staggered at 45ms
+ * left its last card invisible for over seven seconds and read as data
+ * still arriving.
+ */
+export const STAR_MAP_RISE_TOTAL_MS = 500;
+/** Duration of `star-map-rise`; pinned to app.css by star-map-logic.test. */
+export const STAR_MAP_RISE_DURATION_MS = 380;
+/** Per-card step, used whole while the cloud can afford it. */
+export const STAR_MAP_RISE_STEP_MS = 45;
+
+/**
+ * Entrance delay for one card of a `count`-card cloud.
+ *
+ * A cloud small enough to fit inside the budget keeps the full step, so
+ * the constellation settle is unchanged where it was never the problem.
+ * A larger one compresses the step instead of dropping the stagger, which
+ * keeps the sweep direction legible while landing every card on budget.
+ */
+export function cardRiseDelayMs(params: {
+  index: number;
+  count: number;
+}): number {
+  const spread = STAR_MAP_RISE_TOTAL_MS - STAR_MAP_RISE_DURATION_MS;
+  const gaps = Math.max(1, params.count - 1);
+  const step = Math.min(STAR_MAP_RISE_STEP_MS, spread / gaps);
+  return Math.round(params.index * step);
+}
+
+/**
  * How many cards fit between the instance anchor and the bottom of the
  * viewport. Always yields at least one so a lane never renders empty when
  * it has something to show.

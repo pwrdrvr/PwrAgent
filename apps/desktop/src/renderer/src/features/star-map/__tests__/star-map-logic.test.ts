@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   federatedThreadIdentityKey,
@@ -5,11 +8,15 @@ import {
 } from "@pwragent/shared";
 import { threadAttentionCategories } from "../attention";
 import {
+  cardRiseDelayMs,
   cloudDetentRadius,
   computeStarMapLayout,
   computeCardSlots,
   generateStarField,
   resolveCardDragOffset,
+  STAR_MAP_RISE_DURATION_MS,
+  STAR_MAP_RISE_STEP_MS,
+  STAR_MAP_RISE_TOTAL_MS,
   visibleCardCount,
   type StarMapCardSlot,
 } from "../star-map-layout";
@@ -382,5 +389,63 @@ describe("resolveCardDragOffset", () => {
     // The resistance already absorbed stays behind as a constant lag.
     expect(near).toBeLessThan(detentRadius + 400);
     expect(near).toBeGreaterThan(detentRadius + 200);
+  });
+});
+
+describe("cardRiseDelayMs", () => {
+  it("keeps the full step while the cloud fits inside the budget", () => {
+    // Three cards span two gaps at 45ms, so nothing about the settle a
+    // small cloud already had needs to change.
+    expect(cardRiseDelayMs({ index: 0, count: 3 })).toBe(0);
+    expect(cardRiseDelayMs({ index: 1, count: 3 })).toBe(
+      STAR_MAP_RISE_STEP_MS,
+    );
+    expect(cardRiseDelayMs({ index: 2, count: 3 })).toBe(
+      STAR_MAP_RISE_STEP_MS * 2,
+    );
+  });
+
+  it("lands the last card on budget however large the cloud is", () => {
+    // The regression this exists for: an orbit cloud is capped per
+    // cluster, not per cloud, so `index * 45` grew without bound.
+    for (const count of [1, 2, 8, 40, 160, 1_000]) {
+      const last = cardRiseDelayMs({ index: count - 1, count });
+      expect(last + STAR_MAP_RISE_DURATION_MS).toBeLessThanOrEqual(
+        STAR_MAP_RISE_TOTAL_MS,
+      );
+    }
+    // 160 cards at the old flat step blanked the tail for over 7s.
+    expect(cardRiseDelayMs({ index: 159, count: 160 })).toBeLessThan(159 * 45);
+  });
+
+  it("compresses the step rather than dropping the stagger", () => {
+    // A cap (`Math.min(index * 45, spread)`) would fire every card past
+    // the cap together, which loses the sweep the animation is for.
+    const count = 160;
+    const delays = Array.from({ length: count }, (_, index) =>
+      cardRiseDelayMs({ index, count }),
+    );
+    expect(delays[0]).toBe(0);
+    expect(delays[count - 1]).toBeGreaterThan(0);
+    for (let index = 1; index < count; index += 1) {
+      expect(delays[index]).toBeGreaterThanOrEqual(delays[index - 1]);
+    }
+  });
+
+  it("matches the duration app.css actually animates", () => {
+    // The budget is delay + duration, so a duration edited in the
+    // stylesheet alone silently pushes the last card past 500ms.
+    const css = readFileSync(
+      path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "../../../styles/app.css",
+      ),
+      "utf8",
+    );
+    const rule = /\.star-map-card-shell \{[^}]*animation:\s*star-map-rise\s+(\d+)ms/.exec(
+      css,
+    );
+    expect(rule).not.toBeNull();
+    expect(Number(rule![1])).toBe(STAR_MAP_RISE_DURATION_MS);
   });
 });

@@ -33,6 +33,7 @@ import {
   type StarMapSessionKeys,
 } from "./attention";
 import {
+  cardRiseDelayMs,
   cloudDetentRadius,
   computeCardSlots,
   computeStarMapLayout,
@@ -3078,7 +3079,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   : undefined
               }
               hasUnsentDraft={props.draftThreadKeys?.[threadKey] === true}
-              riseDelayMs={index * 45}
+              // Budgeted, not per-card: `star-map-rise` blanks a card
+              // through its delay, and an orbit cloud has no card cap.
+              riseDelayMs={cardRiseDelayMs({ index, count: visible.length })}
               entering={enteringThreadKeys.has(threadKey)}
               located={locatedThreadKey === threadKey}
               instanceIcon={celestialIcons.iconFor(
