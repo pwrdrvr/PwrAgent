@@ -1116,402 +1116,428 @@ export class StateDb {
     db.pragma("busy_timeout = 5000");
     db.pragma("foreign_keys = ON");
 
+    const userVersion = db.pragma("user_version", { simple: true }) as number;
+    const freshDatabase = userVersion === 0;
+    if (freshDatabase) {
+      // Has to precede the first write and cannot be set from inside a
+      // transaction, so it stays outside the wrapper below.
+      db.pragma("auto_vacuum = INCREMENTAL");
+    }
+
     // Migrations are wrapped in transactions so a partial failure
     // (mid-DDL crash, transient disk error) rolls back cleanly and the
     // next launch retries from the previous user_version. Without the
     // transaction the table could exist with the old user_version, and
     // the next launch would throw "table already exists" on retry.
-    const userVersion = db.pragma("user_version", { simple: true }) as number;
-    if (userVersion === 0) {
-      db.pragma("auto_vacuum = INCREMENTAL");
-      db.transaction(() => {
-        db.exec(SCHEMA_V1);
-        if (options?.profileName) {
-          db.prepare("UPDATE meta SET value = ? WHERE key = 'profile_name'").run(
-            options.profileName,
-          );
-        }
-        db.pragma("user_version = 1");
-      })();
+    const applySchema = (): void => {
+      if (freshDatabase) {
+        db.transaction(() => {
+          db.exec(SCHEMA_V1);
+          if (options?.profileName) {
+            db.prepare("UPDATE meta SET value = ? WHERE key = 'profile_name'").run(
+              options.profileName,
+            );
+          }
+          db.pragma("user_version = 1");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 2) {
+        db.transaction(() => {
+          db.exec(SCHEMA_V2);
+          db.pragma("user_version = 2");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 3) {
+        db.transaction(() => {
+          db.exec(SCHEMA_V3);
+          db.pragma("user_version = 3");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 4) {
+        db.transaction(() => {
+          db.exec(SCHEMA_V4);
+          db.pragma("user_version = 4");
+        })();
+      }
+      ensureCurrentSchema(db);
+      if ((db.pragma("user_version", { simple: true }) as number) < 5) {
+        db.transaction(() => {
+          db.pragma("user_version = 5");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 6) {
+        db.transaction(() => {
+          db.exec(COMPOSER_DRAFT_RECOVERY_SCHEMA);
+          db.pragma("user_version = 6");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 7) {
+        db.transaction(() => {
+          // Directory pin persistence — see plan
+          // 2026-05-09-002-feat-directory-pinning-plan.md Unit B.
+          // Additive table, no data migration; the same DDL also
+          // lives in `ensureCurrentSchema` so re-instantiated dbs
+          // converge.
+          db.exec(DIRECTORY_OVERLAY_SCHEMA);
+          db.pragma("user_version = 7");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 8) {
+        db.transaction(() => {
+          db.exec(MESSAGING_TOPIC_MANAGEMENT_SCHEMA);
+          db.pragma("user_version = 8");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 9) {
+        db.transaction(() => {
+          db.exec(ACP_AGENT_SCHEMA);
+          db.pragma("user_version = 9");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 10) {
+        db.transaction(() => {
+          db.exec(ACP_SESSION_SCHEMA);
+          db.pragma("user_version = 10");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 11) {
+        db.transaction(() => {
+          db.exec(AUTOMATION_SCHEMA);
+          db.pragma("user_version = 11");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 12) {
+        db.transaction(() => {
+          db.exec(MESSAGING_ACTIVITY_SUMMARY_SCHEMA);
+          db.pragma("user_version = 12");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 13) {
+        db.transaction(() => {
+          db.exec(THREAD_SEARCH_SCHEMA);
+          db.pragma("user_version = 13");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 14) {
+        db.transaction(() => {
+          db.exec(PR_STATUS_CACHE_SCHEMA);
+          db.exec(PR_LOOKUP_CACHE_SCHEMA);
+          db.pragma("user_version = 14");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 15) {
+        db.transaction(() => {
+          ensurePullRequestProviderColumns(db);
+          db.pragma("user_version = 15");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 16) {
+        db.transaction(() => {
+          db.exec(THREAD_GIT_WORKING_STATE_SCHEMA);
+          db.pragma("user_version = 16");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 17) {
+        db.transaction(() => {
+          db.exec(THREAD_USAGE_PRICING_SCHEMA);
+          db.pragma("user_version = 17");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 18) {
+        db.transaction(() => {
+          ensureThreadUsagePricingProviderScope(db);
+          db.pragma("user_version = 18");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 19) {
+        db.transaction(() => {
+          ensureThreadUsagePricingCumulativeColumns(db);
+          db.pragma("user_version = 19");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 20) {
+        db.transaction(() => {
+          repairThreadUsageLineCreatedAt(db);
+          db.pragma("user_version = 20");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 21) {
+        db.transaction(() => {
+          ensureThreadUsagePricingIndexes(db);
+          db.pragma("user_version = 21");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 22) {
+        db.transaction(() => {
+          repairTokenUsagePricing(db);
+          db.pragma("user_version = 22");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 23) {
+        db.transaction(() => {
+          // Inbound-run idempotency: promote source_event_key to a column +
+          // index so duplicate provider deliveries can be deduped. Additive;
+          // the same column/index also live in AUTOMATION_SCHEMA so
+          // re-instantiated dbs converge.
+          ensureAutomationRunSourceEventKey(db);
+          db.pragma("user_version = 23");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 24) {
+        db.transaction(() => {
+          // Observed context-replay tallies on the usage line. DEPRECATED (see
+          // issue #947): the tally has since moved to thread_usage_turns (v25), but
+          // these columns are still dual-written during the transition so older
+          // locally-run builds keep working. Additive; the same columns also live
+          // in THREAD_USAGE_PRICING_SCHEMA so re-instantiated dbs converge.
+          ensureThreadUsageObservedReplayColumns(db);
+          db.pragma("user_version = 24");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 25) {
+        db.transaction(() => {
+          // Relocate the observed context-replay tally onto thread_usage_turns —
+          // the per-turn record hydration refreshes via COALESCE, immune to the
+          // usage *line* supersession lifecycle. Additive columns that also live in
+          // THREAD_USAGE_PRICING_SCHEMA; the ALTERs are guarded by tableColumnExists
+          // so a fresh db (schema already carries them) no-ops.
+          ensureThreadUsageTurnObservedReplayColumns(db);
+          db.pragma("user_version = 25");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 26) {
+        db.transaction(() => {
+          ensureThreadUsageAttributedColumn(db);
+          db.pragma("user_version = 26");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 27) {
+        db.transaction(() => {
+          db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
+          db.pragma("user_version = 27");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 28) {
+        db.transaction(() => {
+          repairTokenUsagePricing(db);
+          db.pragma("user_version = 28");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 29) {
+        db.transaction(() => {
+          repairTokenUsagePricing(db);
+          db.pragma("user_version = 29");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 30) {
+        db.transaction(() => {
+          ensureThreadMessageOriginSchema(db);
+          db.pragma("user_version = 30");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 31) {
+        db.transaction(() => {
+          ensureThreadMessageOriginSchema(db);
+          db.pragma("user_version = 31");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 32) {
+        db.transaction(() => {
+          repairTokenUsagePricing(db);
+          db.pragma("user_version = 32");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 33) {
+        db.transaction(() => {
+          db.exec(MESSAGING_DEFAULT_AGENT_ASSIGNMENT_SCHEMA);
+          db.pragma("user_version = 33");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 34) {
+        db.transaction(() => {
+          db.exec(PR_AUTO_DISPATCH_SCHEMA);
+          db.pragma("user_version = 34");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 35) {
+        db.transaction(() => {
+          db.exec(MESSAGING_OBSERVED_SURFACE_SCHEMA);
+          backfillObservedMessagingSurfaces(db);
+          db.pragma("user_version = 35");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 36) {
+        db.transaction(() => {
+          db.exec(PR_STATUS_WATCH_SCHEMA);
+          db.exec(`
+            DELETE FROM pr_auto_dispatch_claims
+            WHERE rowid NOT IN (
+              SELECT MIN(rowid)
+              FROM pr_auto_dispatch_claims
+              GROUP BY pr_key, fingerprint
+            );
+          `);
+          db.exec(PR_AUTO_DISPATCH_SCHEMA);
+          db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
+          db.pragma("user_version = 36");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 37) {
+        db.transaction(() => {
+          db.exec(PR_AUTO_DISPATCH_BUDGET_SCHEMA);
+          db.pragma("user_version = 37");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 38) {
+        db.transaction(() => {
+          db.exec(FEDERATION_SCHEMA);
+          db.pragma("user_version = 38");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 39) {
+        db.transaction(() => {
+          db.exec(SCHEDULED_THREAD_ACTION_SCHEMA);
+          db.pragma("user_version = 39");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 40) {
+        db.transaction(() => {
+          ensureScheduledThreadActionMetadataColumns(db);
+          db.pragma("user_version = 40");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 41) {
+        db.transaction(() => {
+          // Working-state semantics now account for deleted squash-merged PR
+          // heads. Cached pre-v41 counts can therefore show false unpushed
+          // badges indefinitely for worktrees outside the startup probe budget.
+          // This table is derived state and is safe to repopulate lazily.
+          db.prepare("DELETE FROM thread_git_working_state").run();
+          db.pragma("user_version = 41");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 42) {
+        db.transaction(() => {
+          repairReenrolledFederationPeerRevocations(db);
+          db.pragma("user_version = 42");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 43) {
+        db.transaction(() => {
+          // Viewer-owned pins of remote federated threads (Cmd+K "add to my
+          // list"). Deliberately local-only state: the owning instance never
+          // learns it has been pinned.
+          db.exec(REMOTE_THREAD_PIN_SCHEMA);
+          db.pragma("user_version = 43");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 44) {
+        db.transaction(() => {
+          db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
+          db.pragma("user_version = 44");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 45) {
+        db.transaction(() => {
+          // Revoking a peer used to hard-delete its pins. Tombstone them
+          // instead so a re-enrollment can restore the operator's list.
+          ensureRemoteThreadPinRevokedAtColumn(db);
+          db.pragma("user_version = 45");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 46) {
+        db.transaction(() => {
+          // Routing knowledge is broader than the curated pin list: agent tools
+          // also create and discover remote threads that the viewer never pins.
+          db.exec(REMOTE_THREAD_TARGET_SCHEMA);
+          db.exec(`
+  INSERT OR IGNORE INTO remote_thread_targets(
+    instance_id,
+    backend,
+    thread_id,
+    instance_label,
+    first_seen_at,
+    last_seen_at
+  )
+  SELECT
+    remote_thread_pins.instance_id,
+    remote_thread_pins.backend,
+    remote_thread_pins.thread_id,
+    COALESCE(federation_peers.label, remote_thread_pins.instance_id),
+    remote_thread_pins.added_at,
+    remote_thread_pins.added_at
+  FROM remote_thread_pins
+  LEFT JOIN federation_peers
+    ON federation_peers.peer_id = remote_thread_pins.instance_id
+  `);
+          db.pragma("user_version = 46");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 47) {
+        db.transaction(() => {
+          db.exec(REMOTE_DIRECTORY_OVERLAY_SCHEMA);
+          db.pragma("user_version = 47");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 48) {
+        db.transaction(() => {
+          db.pragma("user_version = 48");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 49) {
+        db.transaction(() => {
+          migrateRawThreadIdentityKeysToLegacyStorage(db);
+          db.pragma("user_version = 49");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 50) {
+        db.transaction(() => {
+          // Additive table, no data migration; the same DDL also lives in
+          // `ensureCurrentSchema` so re-instantiated dbs converge.
+          db.exec(ACP_AVAILABLE_COMMANDS_SCHEMA);
+          db.pragma("user_version = 50");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 51) {
+        db.transaction(() => {
+          ensureThreadToolIncidentExplorerSchema(db);
+          db.pragma("user_version = 51");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 52) {
+        db.transaction(() => {
+          repairCodexTurnUsageFromCumulativeSnapshots(db);
+          db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
+        })();
+      }
+      // Keep current-version databases converged without asking pre-v36 profiles
+      // to install the unique index before the migration above removes duplicates.
+      db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
+    };
+
+    // A brand-new file has no previous version to fall back to, so the
+    // per-version commits buy it nothing — they only cost 52 commits, and 52
+    // WAL flushes, to reach a shape one commit could write. Creating inside a
+    // single transaction turns the nested `db.transaction()` calls into
+    // savepoints, so the ladder above stays the one source of truth for the
+    // schema while a fresh database costs one commit. It is also stricter than
+    // the old path: a creation that fails part-way now leaves no half-built
+    // file behind instead of a file stamped with whichever version it reached.
+    //
+    // An upgrade keeps its per-version commits, where the granularity is the
+    // whole point: a partial failure there has a previous user_version to
+    // resume from on the next launch.
+    if (freshDatabase) {
+      db.transaction(applySchema)();
+    } else {
+      applySchema();
     }
-    if ((db.pragma("user_version", { simple: true }) as number) < 2) {
-      db.transaction(() => {
-        db.exec(SCHEMA_V2);
-        db.pragma("user_version = 2");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 3) {
-      db.transaction(() => {
-        db.exec(SCHEMA_V3);
-        db.pragma("user_version = 3");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 4) {
-      db.transaction(() => {
-        db.exec(SCHEMA_V4);
-        db.pragma("user_version = 4");
-      })();
-    }
-    ensureCurrentSchema(db);
-    if ((db.pragma("user_version", { simple: true }) as number) < 5) {
-      db.transaction(() => {
-        db.pragma("user_version = 5");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 6) {
-      db.transaction(() => {
-        db.exec(COMPOSER_DRAFT_RECOVERY_SCHEMA);
-        db.pragma("user_version = 6");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 7) {
-      db.transaction(() => {
-        // Directory pin persistence — see plan
-        // 2026-05-09-002-feat-directory-pinning-plan.md Unit B.
-        // Additive table, no data migration; the same DDL also
-        // lives in `ensureCurrentSchema` so re-instantiated dbs
-        // converge.
-        db.exec(DIRECTORY_OVERLAY_SCHEMA);
-        db.pragma("user_version = 7");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 8) {
-      db.transaction(() => {
-        db.exec(MESSAGING_TOPIC_MANAGEMENT_SCHEMA);
-        db.pragma("user_version = 8");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 9) {
-      db.transaction(() => {
-        db.exec(ACP_AGENT_SCHEMA);
-        db.pragma("user_version = 9");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 10) {
-      db.transaction(() => {
-        db.exec(ACP_SESSION_SCHEMA);
-        db.pragma("user_version = 10");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 11) {
-      db.transaction(() => {
-        db.exec(AUTOMATION_SCHEMA);
-        db.pragma("user_version = 11");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 12) {
-      db.transaction(() => {
-        db.exec(MESSAGING_ACTIVITY_SUMMARY_SCHEMA);
-        db.pragma("user_version = 12");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 13) {
-      db.transaction(() => {
-        db.exec(THREAD_SEARCH_SCHEMA);
-        db.pragma("user_version = 13");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 14) {
-      db.transaction(() => {
-        db.exec(PR_STATUS_CACHE_SCHEMA);
-        db.exec(PR_LOOKUP_CACHE_SCHEMA);
-        db.pragma("user_version = 14");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 15) {
-      db.transaction(() => {
-        ensurePullRequestProviderColumns(db);
-        db.pragma("user_version = 15");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 16) {
-      db.transaction(() => {
-        db.exec(THREAD_GIT_WORKING_STATE_SCHEMA);
-        db.pragma("user_version = 16");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 17) {
-      db.transaction(() => {
-        db.exec(THREAD_USAGE_PRICING_SCHEMA);
-        db.pragma("user_version = 17");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 18) {
-      db.transaction(() => {
-        ensureThreadUsagePricingProviderScope(db);
-        db.pragma("user_version = 18");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 19) {
-      db.transaction(() => {
-        ensureThreadUsagePricingCumulativeColumns(db);
-        db.pragma("user_version = 19");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 20) {
-      db.transaction(() => {
-        repairThreadUsageLineCreatedAt(db);
-        db.pragma("user_version = 20");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 21) {
-      db.transaction(() => {
-        ensureThreadUsagePricingIndexes(db);
-        db.pragma("user_version = 21");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 22) {
-      db.transaction(() => {
-        repairTokenUsagePricing(db);
-        db.pragma("user_version = 22");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 23) {
-      db.transaction(() => {
-        // Inbound-run idempotency: promote source_event_key to a column +
-        // index so duplicate provider deliveries can be deduped. Additive;
-        // the same column/index also live in AUTOMATION_SCHEMA so
-        // re-instantiated dbs converge.
-        ensureAutomationRunSourceEventKey(db);
-        db.pragma("user_version = 23");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 24) {
-      db.transaction(() => {
-        // Observed context-replay tallies on the usage line. DEPRECATED (see
-        // issue #947): the tally has since moved to thread_usage_turns (v25), but
-        // these columns are still dual-written during the transition so older
-        // locally-run builds keep working. Additive; the same columns also live
-        // in THREAD_USAGE_PRICING_SCHEMA so re-instantiated dbs converge.
-        ensureThreadUsageObservedReplayColumns(db);
-        db.pragma("user_version = 24");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 25) {
-      db.transaction(() => {
-        // Relocate the observed context-replay tally onto thread_usage_turns —
-        // the per-turn record hydration refreshes via COALESCE, immune to the
-        // usage *line* supersession lifecycle. Additive columns that also live in
-        // THREAD_USAGE_PRICING_SCHEMA; the ALTERs are guarded by tableColumnExists
-        // so a fresh db (schema already carries them) no-ops.
-        ensureThreadUsageTurnObservedReplayColumns(db);
-        db.pragma("user_version = 25");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 26) {
-      db.transaction(() => {
-        ensureThreadUsageAttributedColumn(db);
-        db.pragma("user_version = 26");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 27) {
-      db.transaction(() => {
-        db.exec(THREAD_TOOL_ACCOUNTING_SCHEMA);
-        db.pragma("user_version = 27");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 28) {
-      db.transaction(() => {
-        repairTokenUsagePricing(db);
-        db.pragma("user_version = 28");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 29) {
-      db.transaction(() => {
-        repairTokenUsagePricing(db);
-        db.pragma("user_version = 29");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 30) {
-      db.transaction(() => {
-        ensureThreadMessageOriginSchema(db);
-        db.pragma("user_version = 30");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 31) {
-      db.transaction(() => {
-        ensureThreadMessageOriginSchema(db);
-        db.pragma("user_version = 31");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 32) {
-      db.transaction(() => {
-        repairTokenUsagePricing(db);
-        db.pragma("user_version = 32");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 33) {
-      db.transaction(() => {
-        db.exec(MESSAGING_DEFAULT_AGENT_ASSIGNMENT_SCHEMA);
-        db.pragma("user_version = 33");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 34) {
-      db.transaction(() => {
-        db.exec(PR_AUTO_DISPATCH_SCHEMA);
-        db.pragma("user_version = 34");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 35) {
-      db.transaction(() => {
-        db.exec(MESSAGING_OBSERVED_SURFACE_SCHEMA);
-        backfillObservedMessagingSurfaces(db);
-        db.pragma("user_version = 35");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 36) {
-      db.transaction(() => {
-        db.exec(PR_STATUS_WATCH_SCHEMA);
-        db.exec(`
-          DELETE FROM pr_auto_dispatch_claims
-          WHERE rowid NOT IN (
-            SELECT MIN(rowid)
-            FROM pr_auto_dispatch_claims
-            GROUP BY pr_key, fingerprint
-          );
-        `);
-        db.exec(PR_AUTO_DISPATCH_SCHEMA);
-        db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
-        db.pragma("user_version = 36");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 37) {
-      db.transaction(() => {
-        db.exec(PR_AUTO_DISPATCH_BUDGET_SCHEMA);
-        db.pragma("user_version = 37");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 38) {
-      db.transaction(() => {
-        db.exec(FEDERATION_SCHEMA);
-        db.pragma("user_version = 38");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 39) {
-      db.transaction(() => {
-        db.exec(SCHEDULED_THREAD_ACTION_SCHEMA);
-        db.pragma("user_version = 39");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 40) {
-      db.transaction(() => {
-        ensureScheduledThreadActionMetadataColumns(db);
-        db.pragma("user_version = 40");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 41) {
-      db.transaction(() => {
-        // Working-state semantics now account for deleted squash-merged PR
-        // heads. Cached pre-v41 counts can therefore show false unpushed
-        // badges indefinitely for worktrees outside the startup probe budget.
-        // This table is derived state and is safe to repopulate lazily.
-        db.prepare("DELETE FROM thread_git_working_state").run();
-        db.pragma("user_version = 41");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 42) {
-      db.transaction(() => {
-        repairReenrolledFederationPeerRevocations(db);
-        db.pragma("user_version = 42");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 43) {
-      db.transaction(() => {
-        // Viewer-owned pins of remote federated threads (Cmd+K "add to my
-        // list"). Deliberately local-only state: the owning instance never
-        // learns it has been pinned.
-        db.exec(REMOTE_THREAD_PIN_SCHEMA);
-        db.pragma("user_version = 43");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 44) {
-      db.transaction(() => {
-        db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
-        db.pragma("user_version = 44");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 45) {
-      db.transaction(() => {
-        // Revoking a peer used to hard-delete its pins. Tombstone them
-        // instead so a re-enrollment can restore the operator's list.
-        ensureRemoteThreadPinRevokedAtColumn(db);
-        db.pragma("user_version = 45");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 46) {
-      db.transaction(() => {
-        // Routing knowledge is broader than the curated pin list: agent tools
-        // also create and discover remote threads that the viewer never pins.
-        db.exec(REMOTE_THREAD_TARGET_SCHEMA);
-        db.exec(`
-INSERT OR IGNORE INTO remote_thread_targets(
-  instance_id,
-  backend,
-  thread_id,
-  instance_label,
-  first_seen_at,
-  last_seen_at
-)
-SELECT
-  remote_thread_pins.instance_id,
-  remote_thread_pins.backend,
-  remote_thread_pins.thread_id,
-  COALESCE(federation_peers.label, remote_thread_pins.instance_id),
-  remote_thread_pins.added_at,
-  remote_thread_pins.added_at
-FROM remote_thread_pins
-LEFT JOIN federation_peers
-  ON federation_peers.peer_id = remote_thread_pins.instance_id
-`);
-        db.pragma("user_version = 46");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 47) {
-      db.transaction(() => {
-        db.exec(REMOTE_DIRECTORY_OVERLAY_SCHEMA);
-        db.pragma("user_version = 47");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 48) {
-      db.transaction(() => {
-        db.pragma("user_version = 48");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 49) {
-      db.transaction(() => {
-        migrateRawThreadIdentityKeysToLegacyStorage(db);
-        db.pragma("user_version = 49");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 50) {
-      db.transaction(() => {
-        // Additive table, no data migration; the same DDL also lives in
-        // `ensureCurrentSchema` so re-instantiated dbs converge.
-        db.exec(ACP_AVAILABLE_COMMANDS_SCHEMA);
-        db.pragma("user_version = 50");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 51) {
-      db.transaction(() => {
-        ensureThreadToolIncidentExplorerSchema(db);
-        db.pragma("user_version = 51");
-      })();
-    }
-    if ((db.pragma("user_version", { simple: true }) as number) < 52) {
-      db.transaction(() => {
-        repairCodexTurnUsageFromCumulativeSnapshots(db);
-        db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
-      })();
-    }
-    // Keep current-version databases converged without asking pre-v36 profiles
-    // to install the unique index before the migration above removes duplicates.
-    db.exec(PR_AUTO_DISPATCH_GLOBAL_FINGERPRINT_INDEX);
 
     // Dev-only write accounting, attached only after schema setup so the
-    // report ranks steady-state writes. Migrations commit once per version on
-    // a fresh database, which on a suite that opens a temp db per test would
-    // otherwise swamp the signal — the heaviest "writer" would just be
-    // whichever file opened the most databases. Off unless
+    // report ranks steady-state writes. Creating a database still commits
+    // once, and an upgrade once per version, which on a suite that opens a
+    // temp db per test would otherwise skew the signal toward whichever file
+    // opened the most databases. Off unless
     // PWRAGENT_DEV_SQLITE_WRITE_METRICS is set, and
     // `rejectDevOnlyEnvVarsInProduction` clears that variable on packaged
     // builds before anything reads it, so a shipped app never patches its db.
