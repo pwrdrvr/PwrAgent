@@ -54,6 +54,7 @@ import {
   filterSlashCommandCandidates,
   findSlashCommandTrigger,
   normalizeSlashCommandName,
+  slashCommandMatchesText,
   type ComposerSlashCommand,
 } from "./composer-slash-commands";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
@@ -606,6 +607,19 @@ export function useComposerMentions(params: {
       (event.key === "Enter" && !event.shiftKey && !event.altKey)
       || (event.key === "Tab" && !event.shiftKey)
     ) {
+      if (
+        event.key === "Enter"
+        && kind === "commands"
+        && slashTrigger
+        && commandOptions.some((command) =>
+          slashCommandMatchesText(command, `/${slashTrigger.query}`)
+        )
+      ) {
+        // An exact command is already runnable. Leave Enter to the composer
+        // send path; Tab and pointer selection still perform insertion so
+        // autocomplete remains useful while the operator is composing one.
+        return false;
+      }
       event.preventDefault();
       commit(activeOption);
       return true;

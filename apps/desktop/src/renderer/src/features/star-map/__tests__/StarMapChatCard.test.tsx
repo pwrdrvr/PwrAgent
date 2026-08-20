@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -267,7 +274,38 @@ describe("StarMapChatCard slash commands", () => {
   });
 
   it.each(["codex", "acp:grok"] as const)(
-    "routes PwrAgent /review through the %s review API",
+    "opens the review setup on the first Enter for %s",
+    async (backend) => {
+      const startReview = vi.fn(async () => ({
+        backend,
+        threadId: "t-local",
+        reviewThreadId: "review-1",
+        turnId: "turn-review-1",
+      }));
+      const desktopApi = buildApi({ startReview });
+      renderCard({
+        desktopApi,
+        thread: localThread({ source: backend }),
+      });
+      const input = screen.getByRole("textbox", {
+        name: "Message Local work",
+      });
+      fireEvent.change(input, { target: { value: "/review" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(
+        await screen.findByRole("dialog", {
+          name: "Start review for Local work",
+        }),
+      ).toBeTruthy();
+      expect(input.getAttribute("contenteditable")).toBe("false");
+      expect(startReview).not.toHaveBeenCalled();
+      expect(desktopApi.startTurn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["codex", "acp:grok"] as const)(
+    "submits the configured review through the %s review API",
     async (backend) => {
       const startReview = vi.fn(async () => ({
         backend,
@@ -285,6 +323,15 @@ describe("StarMapChatCard slash commands", () => {
       });
       fireEvent.change(input, { target: { value: "/review" } });
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
+      const dialog = await screen.findByRole("dialog", {
+        name: "Start review for Local work",
+      });
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: /Current changes/ }),
+      );
+      fireEvent.click(
+        within(dialog).getByRole("button", { name: "Start review" }),
+      );
 
       await waitFor(() => {
         expect(startReview).toHaveBeenCalledWith({
@@ -294,30 +341,171 @@ describe("StarMapChatCard slash commands", () => {
           delivery: "inline",
         });
       });
-      expect(desktopApi.startTurn).not.toHaveBeenCalled();
+      await waitFor(() => {
+        expect(
+          screen.queryByRole("dialog", {
+            name: "Start review for Local work",
+          }),
+        ).toBeNull();
+      });
     },
   );
 
-  it("routes Codex /compact through thread compaction", async () => {
-    const compactThread = vi.fn(async () => ({
-      backend: "codex" as const,
-      threadId: "t-local",
-      turnId: "turn-compact-1",
-    }));
-    const desktopApi = buildApi({ compactThread });
+  it("locks only the chat card that owns the review setup", async () => {
+    const firstApi = buildApi({ startReview: vi.fn() });
+    const secondApi = buildApi();
+    render(
+      <>
+        {card({ desktopApi: firstApi, thread: localThread() })}
+        <StarMapChatCard
+          cardKey="card-2"
+          desktopApi={secondApi}
+          onClose={() => undefined}
+          onOpenFull={() => undefined}
+          onRaise={() => undefined}
+          onRectChange={() => undefined}
+          rect={{ ...RECT, left: 500 }}
+          thread={localThread({ id: "t-second", title: "Other work" })}
+          scale={1}
+          bounds={{ width: 4000, height: 3000 }}
+          onToggleContext={() => undefined}
+          onToggleTerminal={() => undefined}
+          zIndex={41}
+        />
+      </>,
+    );
+    const firstInput = screen.getByRole("textbox", {
+      name: "Message Local work",
+    });
+    const secondInput = screen.getByRole("textbox", {
+      name: "Message Other work",
+    });
+    fireEvent.change(firstInput, { target: { value: "/review" } });
+    fireEvent.keyDown(firstInput, { key: "Enter" });
+    await screen.findByRole("dialog", { name: "Start review for Local work" });
+
+    expect(firstInput.getAttribute("contenteditable")).toBe("false");
+    expect(secondInput.getAttribute("contenteditable")).toBe("true");
+    fireEvent.change(secondInput, { target: { value: "still interactive" } });
+    fireEvent.keyDown(secondInput, { key: "Enter" });
+    await waitFor(() => {
+      expect(secondApi.startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          threadId: "t-second",
+          input: [{ type: "text", text: "still interactive" }],
+        }),
+      );
+    });
+  });
+
+  it("cancels the review setup and re-enables its composer", async () => {
+    const desktopApi = buildApi({ startReview: vi.fn() });
     renderCard({ desktopApi, thread: localThread() });
     const input = screen.getByRole("textbox", { name: "Message Local work" });
-    fireEvent.change(input, { target: { value: "/compact" } });
-    fireEvent.click(screen.getByRole("button", { name: "Send" }));
-
-    await waitFor(() => {
-      expect(compactThread).toHaveBeenCalledWith({
-        backend: "codex",
-        threadId: "t-local",
-      });
+    fireEvent.change(input, { target: { value: "/review" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const dialog = await screen.findByRole("dialog", {
+      name: "Start review for Local work",
     });
-    expect(desktopApi.startTurn).not.toHaveBeenCalled();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    expect(
+      screen.queryByRole("dialog", { name: "Start review for Local work" }),
+    ).toBeNull();
+    expect(input.getAttribute("contenteditable")).toBe("true");
+    expect(desktopApi.startReview).not.toHaveBeenCalled();
   });
+
+  it("closes review setup without disabling the card's terminal control", async () => {
+    const onToggleTerminal = vi.fn();
+    const desktopApi = buildApi({ startReview: vi.fn() });
+    render(
+      <StarMapChatCard
+        cardKey="card-1"
+        desktopApi={desktopApi}
+        onClose={() => undefined}
+        onOpenFull={() => undefined}
+        onRaise={() => undefined}
+        onRectChange={() => undefined}
+        rect={RECT}
+        thread={localThread()}
+        scale={1}
+        bounds={{ width: 4000, height: 3000 }}
+        onToggleContext={() => undefined}
+        onToggleTerminal={onToggleTerminal}
+        zIndex={40}
+      />,
+    );
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    fireEvent.change(input, { target: { value: "/review" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const dialog = await screen.findByRole("dialog", {
+      name: "Start review for Local work",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Open terminal/ }));
+    expect(onToggleTerminal).toHaveBeenCalledWith("card-1");
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Close review setup" }),
+    );
+    expect(
+      screen.queryByRole("dialog", { name: "Start review for Local work" }),
+    ).toBeNull();
+    expect(input.getAttribute("contenteditable")).toBe("true");
+  });
+
+  it.each([false, true])(
+    "routes Codex /compact on the first Enter with provider commands loaded=%s",
+    async (commandsLoaded) => {
+      const compactThread = vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "t-local",
+        turnId: "turn-compact-1",
+      }));
+      const desktopApi = buildApi({
+        compactThread,
+        ...(commandsLoaded
+          ? {
+              listSkills: vi.fn(async () => ({
+                backend: "codex" as const,
+                fetchedAt: 1,
+                data: [
+                  {
+                    commands: [
+                      {
+                        backend: "codex" as const,
+                        description: "Compact the thread",
+                        name: "compact",
+                        scope: "session" as const,
+                        source: "provider" as const,
+                      },
+                    ],
+                    skills: [],
+                  },
+                ],
+              })),
+            }
+          : {}),
+      });
+      renderCard({ desktopApi, thread: localThread() });
+      const input = screen.getByRole("textbox", {
+        name: "Message Local work",
+      });
+      fireEvent.change(input, { target: { value: "/compact" } });
+      if (commandsLoaded) {
+        await screen.findByRole("option", { name: /\/compact/i });
+      }
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => {
+        expect(compactThread).toHaveBeenCalledWith({
+          backend: "codex",
+          threadId: "t-local",
+        });
+      });
+      expect(desktopApi.startTurn).not.toHaveBeenCalled();
+    },
+  );
 
   it("sends an ACP-native slash command to the ACP session", async () => {
     const startTurn = vi.fn(async () => ({

@@ -44,6 +44,10 @@ import {
   resizeChatCardRect,
   type ChatCardRect,
 } from "./star-map-chat-card-geometry";
+import {
+  StarMapReviewSetup,
+  type StarMapReviewRequest,
+} from "./StarMapReviewSetup";
 
 export type StarMapChatCardProps = {
   cardKey: string;
@@ -117,6 +121,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const rectRef = useRef(rect);
   rectRef.current = rect;
   const [sendError, setSendError] = useState<string | undefined>(undefined);
+  const [reviewSetupOpen, setReviewSetupOpen] = useState(false);
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+  const [reviewError, setReviewError] = useState<string | undefined>(undefined);
   // Where a mid-turn send actually landed. The operator cannot tell a steer
   // from a queue by looking at the transcript, and the answer differs by
   // backend, so the card says which one happened.
@@ -222,6 +229,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const threadSkills = useThreadSkills({ desktopApi, thread });
   const navigationSources = useComposerMentionSources({ desktopApi });
   const ensureSkillsLoaded = threadSkills.ensureLoaded;
+  const ensureNavigationLoaded = navigationSources.ensureLoaded;
   const mentionSources = useMemo<ComposerMentionSources>(
     () => ({
       commands: [
@@ -239,7 +247,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       ],
       currentThreadKey: buildThreadIdentityKey(thread.source, thread.id),
       directories: navigationSources.directories,
-      ensureNavigationLoaded: navigationSources.ensureLoaded,
+      ensureNavigationLoaded,
       ensureSkillsLoaded: () => {
         void ensureSkillsLoaded();
       },
@@ -251,7 +259,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       desktopApi,
       ensureSkillsLoaded,
       navigationSources.directories,
-      navigationSources.ensureLoaded,
+      ensureNavigationLoaded,
       navigationSources.threads,
       threadSkills.providerCommands,
       threadSkills.skills,
@@ -360,6 +368,46 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
    */
   const canSteer = Boolean(desktopApi?.steerTurn);
 
+  const closeReviewSetup = useCallback(() => {
+    if (reviewSubmitting) return;
+    setReviewError(undefined);
+    setReviewSetupOpen(false);
+  }, [reviewSubmitting]);
+
+  const submitReviewSetup = useCallback(
+    async (request: StarMapReviewRequest): Promise<void> => {
+      if (sessionRef.current.threadBusy) {
+        setReviewError("Cannot start a review while a turn is in progress.");
+        return;
+      }
+      if (!desktopApi?.startReview) {
+        setReviewError("Review is not available for this thread.");
+        return;
+      }
+      setReviewError(undefined);
+      setReviewSubmitting(true);
+      try {
+        await desktopApi.startReview({
+          backend: thread.source,
+          federationTarget,
+          threadId: thread.id,
+          ...request,
+          delivery: "inline",
+        });
+        setReviewSetupOpen(false);
+      } catch (error) {
+        setReviewError(
+          error instanceof Error
+            ? error.message
+            : "Could not start that review.",
+        );
+      } finally {
+        setReviewSubmitting(false);
+      }
+    },
+    [desktopApi, federationTarget, thread.id, thread.source],
+  );
+
   /**
    * Returns whether the turn actually reached the backend. A peer can drop
    * mid-send, and when it does the operator must get their text back and
@@ -386,6 +434,12 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         if (!desktopApi?.startReview) {
           setSendError("Review is not available for this thread.");
           return false;
+        }
+        if (text.trim().toLowerCase() === "/review") {
+          setReviewError(undefined);
+          setReviewSetupOpen(true);
+          ensureNavigationLoaded();
+          return true;
         }
         try {
           await desktopApi.startReview({
@@ -503,6 +557,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       cardKey,
       desktopApi,
       federationTarget,
+      ensureNavigationLoaded,
       thread.id,
       thread.source,
     ],
@@ -910,53 +965,68 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         </button>
       </header>
 
-      <div className="star-map-chat-card__transcript">
-        <TranscriptList
-          activeTurnId={session.activeTurnId}
-          activeTurnStartedAt={session.activeTurnStartedAt}
-          desktopApi={desktopApi}
-          entries={transcriptWindow.visibleEntries}
-          error={session.error}
-          loading={session.loading}
-          loadingMore={session.loadingMore}
-          onLoadOlder={transcriptWindow.loadOlder}
-          pagination={transcriptWindow.visiblePagination}
-          parentThreadId={thread.id}
-          pendingAssistantMessage={session.pendingAssistantMessage}
-          pendingMcpInteraction={session.pendingMcpInteraction}
-          pendingRequest={session.pendingRequest}
-          pendingStatusText={session.pendingStatusText}
-          pendingUserInput={session.pendingUserInput}
-          runningTurnUsageText={session.runningTurnUsageText}
-          threadId={thread.id}
-          transientMessages={session.transientMessages}
+      <div className="star-map-chat-card__body">
+        <div className="star-map-chat-card__transcript">
+          <TranscriptList
+            activeTurnId={session.activeTurnId}
+            activeTurnStartedAt={session.activeTurnStartedAt}
+            desktopApi={desktopApi}
+            entries={transcriptWindow.visibleEntries}
+            error={session.error}
+            loading={session.loading}
+            loadingMore={session.loadingMore}
+            onLoadOlder={transcriptWindow.loadOlder}
+            pagination={transcriptWindow.visiblePagination}
+            parentThreadId={thread.id}
+            pendingAssistantMessage={session.pendingAssistantMessage}
+            pendingMcpInteraction={session.pendingMcpInteraction}
+            pendingRequest={session.pendingRequest}
+            pendingStatusText={session.pendingStatusText}
+            pendingUserInput={session.pendingUserInput}
+            runningTurnUsageText={session.runningTurnUsageText}
+            threadId={thread.id}
+            transientMessages={session.transientMessages}
+          />
+        </div>
+
+        {sendError ? (
+          <p className="star-map-chat-card__error" role="alert">
+            {sendError}
+          </p>
+        ) : sendNotice ? (
+          <p className="star-map-chat-card__notice" role="status">
+            {sendNotice}
+          </p>
+        ) : undefined}
+
+        <MemoizedCompactComposer
+          busy={session.threadBusy}
+          canSteer={canSteer}
+          disabled={reviewSetupOpen}
+          executionMode={threadExecutionMode}
+          fastMode={threadFastMode}
+          mentionSources={mentionSources}
+          model={threadModel}
+          onInterrupt={onInterrupt}
+          onSend={send}
+          reasoningEffort={threadReasoningEffort}
+          secondaryActions={secondaryActions}
+          settingsMenu={settingsMenu}
+          threadTitle={thread.title}
         />
+
+        {reviewSetupOpen ? (
+          <StarMapReviewSetup
+            busy={session.threadBusy}
+            directories={navigationSources.directories}
+            error={reviewError}
+            onCancel={closeReviewSetup}
+            onSubmit={submitReviewSetup}
+            submitting={reviewSubmitting}
+            thread={thread}
+          />
+        ) : null}
       </div>
-
-      {sendError ? (
-        <p className="star-map-chat-card__error" role="alert">
-          {sendError}
-        </p>
-      ) : sendNotice ? (
-        <p className="star-map-chat-card__notice" role="status">
-          {sendNotice}
-        </p>
-      ) : undefined}
-
-      <MemoizedCompactComposer
-        busy={session.threadBusy}
-        canSteer={canSteer}
-        executionMode={threadExecutionMode}
-        fastMode={threadFastMode}
-        mentionSources={mentionSources}
-        model={threadModel}
-        onInterrupt={onInterrupt}
-        onSend={send}
-        reasoningEffort={threadReasoningEffort}
-        secondaryActions={secondaryActions}
-        settingsMenu={settingsMenu}
-        threadTitle={thread.title}
-      />
 
       {titleTooltip.tooltipNode}
       <span

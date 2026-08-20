@@ -91,6 +91,53 @@ describe("CompactComposer", () => {
     });
   });
 
+  it.each([
+    ["review", "PwrAgent"],
+    ["compact", "Codex"],
+  ])("sends exact /%s on the first Enter", async (command, sourceLabel) => {
+    const { onSend } = renderComposer({
+      mentionSources: {
+        commands: [
+          {
+            name: command,
+            description: `Run ${command}`,
+            sourceLabel,
+          },
+        ],
+      },
+    });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    fireEvent.change(input, { target: { value: `/${command}` } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledTimes(1);
+      expect(onSend).toHaveBeenCalledWith(`/${command}`);
+    });
+  });
+
+  it("keeps Tab as autocomplete insertion for an exact slash command", async () => {
+    const { onSend } = renderComposer({
+      mentionSources: {
+        commands: [
+          {
+            name: "review",
+            description: "Review current changes",
+            sourceLabel: "PwrAgent",
+          },
+        ],
+      },
+    });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    fireEvent.change(input, { target: { value: "/review" } });
+    fireEvent.keyDown(input, { key: "Tab" });
+
+    await waitFor(() => {
+      expect((input as HTMLTextAreaElement).value).toBe("/review ");
+    });
+    expect(onSend).not.toHaveBeenCalled();
+  });
+
   it("shows model, effort, and access mode as the status chip", () => {
     renderComposer({
       executionMode: "full-access",

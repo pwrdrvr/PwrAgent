@@ -53,3 +53,18 @@ export function filterSlashCommandCandidates(
     );
   });
 }
+
+export function slashCommandMatchesText(
+  command: ComposerSlashCommand,
+  text: string,
+): boolean {
+  const normalizedText = text.toLowerCase();
+  const commandName = `/${normalizeSlashCommandName(command.name)}`;
+  return (
+    commandName.toLowerCase() === normalizedText
+    || (command.aliases ?? []).some(
+      (alias) =>
+        `/${normalizeSlashCommandName(alias)}`.toLowerCase() === normalizedText,
+    )
+  );
+}
