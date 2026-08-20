@@ -27,12 +27,12 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 }));
 
 vi.mock("../profile", () => ({
-  resolveActiveProfileName: vi.fn(() => "sstk"),
+  resolveActiveProfileName: vi.fn(() => "work"),
 }));
 
 vi.mock("../log", () => ({
   getMainLogFilePath: vi.fn(
-    () => "/Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
+    () => "/Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
   ),
   isMainLogDebugCollectionEnabled: vi.fn(() => false),
   setMainLogDebugCollectionEnabled: vi.fn(),
@@ -69,10 +69,10 @@ describe("app metadata", () => {
     expect(resolveDefaultCodexHome).not.toHaveBeenCalled();
     expect(resolveStartupCodexHome).toHaveBeenCalledOnce();
     expect(metadata).toMatchObject({
-      activeProfileName: "sstk",
+      activeProfileName: "work",
       codexProfilePath: "/Users/operator/.codex/profiles/work",
       logFilePath:
-        "/Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
+        "/Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
       rendererProcessId: 4101,
     });
   });

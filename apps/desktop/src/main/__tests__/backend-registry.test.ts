@@ -10446,7 +10446,7 @@ script = "echo setup"
 
   it("does not let non-backfilling cheap list cache suppress navigation backfill", async () => {
     const projectA = "/Users/huntharo/projects/ProjectA";
-    const worktreePath = "/Users/huntharo/.codex/profiles/sstk/worktrees/wt1/ProjectA";
+    const worktreePath = "/Users/huntharo/.codex/profiles/work/worktrees/wt1/ProjectA";
     const cheapThread: AppServerThreadSummary = {
       id: "thread-1",
       title: "ProjectA worktree",
@@ -10644,7 +10644,7 @@ script = "echo setup"
   it("lets fresh Codex local metadata replace stale overlay worktree relationships", async () => {
     const projectA = "/Users/huntharo/projects/ProjectA";
     const staleWorktreePath =
-      "/Users/huntharo/.codex/profiles/sstk/worktrees/wt1/ProjectA";
+      "/Users/huntharo/.codex/profiles/work/worktrees/wt1/ProjectA";
     const localThread: AppServerThreadSummary = {
       id: "thread-1",
       title: "ProjectA local",
@@ -10778,7 +10778,7 @@ script = "echo setup"
   it("preserves legacy handoff overlays while synchronizing stale worktree Codex metadata", async () => {
     const projectA = "/Users/huntharo/projects/ProjectA";
     const codexWorktreePath =
-      "/Users/huntharo/.codex/profiles/sstk/worktrees/original/ProjectA";
+      "/Users/huntharo/.codex/profiles/work/worktrees/original/ProjectA";
     const handoffWorktreePath = "/Users/huntharo/projects/ProjectA/.worktrees/thread-1";
     const worktreeThread: AppServerThreadSummary = {
       id: "thread-1",
@@ -10847,7 +10847,7 @@ script = "echo setup"
   it("does not backfill stale Codex worktree metadata over a legacy handoff overlay", async () => {
     const projectA = "/Users/huntharo/projects/ProjectA";
     const codexWorktreePath =
-      "/Users/huntharo/.codex/profiles/sstk/worktrees/original/ProjectA";
+      "/Users/huntharo/.codex/profiles/work/worktrees/original/ProjectA";
     const handoffWorktreePath = "/Users/huntharo/projects/ProjectA/.worktrees/thread-1";
     const cheapThread: AppServerThreadSummary = {
       id: "thread-1",
@@ -29270,7 +29270,7 @@ script = "printf setup"
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-none-env-"));
     const repoPath = path.join(root, "catalog-review");
     const ignoredCwd = path.join(root, "other-project");
-    const scratchPath = path.join(root, "profiles", "sstk", "projects", "2026-06-30-c2acd2");
+    const scratchPath = path.join(root, "profiles", "work", "projects", "2026-06-30-c2acd2");
     try {
       await mkdir(repoPath, { recursive: true });
       await mkdir(ignoredCwd, { recursive: true });

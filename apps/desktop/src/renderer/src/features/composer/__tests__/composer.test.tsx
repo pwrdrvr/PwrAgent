@@ -9740,7 +9740,7 @@ describe("Composer", () => {
               label: "kube-manifests",
               path: "/Users/huntharo/infra/kube-manifests",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+                "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
             },
           ],
           inbox: { inInbox: false },
@@ -9758,7 +9758,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Review project"), {
       target: {
         value:
-          "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+          "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       },
     });
 
@@ -9783,7 +9783,7 @@ describe("Composer", () => {
         target: { type: "baseBranch", branch: "origin/develop" },
         delivery: "inline",
         cwd:
-          "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+          "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       });
     });
   });
@@ -9870,7 +9870,7 @@ describe("Composer", () => {
               label: "kube-manifests",
               path: "/Users/huntharo/infra/kube-manifests",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+                "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
             },
           ],
           inbox: { inInbox: false },
@@ -9885,7 +9885,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Review project"), {
       target: {
         value:
-          "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+          "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       },
     });
     fireEvent.click(screen.getByRole("button", { name: /Review one commit by SHA/i }));
@@ -9912,7 +9912,7 @@ describe("Composer", () => {
         target: { type: "commit", sha: kubeCommit.sha, title: null },
         delivery: "inline",
         cwd:
-          "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+          "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       });
     });
   });
@@ -13928,7 +13928,7 @@ describe("Composer", () => {
           key: "subthread:codex:thread-parent:new-worktree",
           kind: "directory",
           label: "ExampleApp",
-          path: "/Users/huntharo/.codex/profiles/sstk/worktrees/mqs3ew3f/ExampleApp",
+          path: "/Users/huntharo/.codex/profiles/work/worktrees/mqs3ew3f/ExampleApp",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -13967,7 +13967,7 @@ describe("Composer", () => {
           directoryKey: "subthread:codex:thread-parent:new-worktree",
           directoryKind: "directory",
           directoryLabel: "ExampleApp",
-          directoryPath: "/Users/huntharo/.codex/profiles/sstk/worktrees/mqs3ew3f/ExampleApp",
+          directoryPath: "/Users/huntharo/.codex/profiles/work/worktrees/mqs3ew3f/ExampleApp",
           backend: "codex",
           executionMode: "default",
           prompt: "",

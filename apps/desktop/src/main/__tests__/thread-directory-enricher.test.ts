@@ -108,8 +108,8 @@ describe("createThreadDirectoryEnricher", () => {
   });
 
   it("recovers the home repo from a worktree .git file when git worktree list fails", async () => {
-    const projectPath = "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75tdnu/PwrAgnt/apps/desktop";
-    const worktreePath = "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75tdnu/PwrAgnt";
+    const projectPath = "/Users/huntharo/.codex/profiles/work/worktrees/mp75tdnu/PwrAgnt/apps/desktop";
+    const worktreePath = "/Users/huntharo/.codex/profiles/work/worktrees/mp75tdnu/PwrAgnt";
     const dotGitPath = `${worktreePath}/.git`;
     vi.doMock("node:fs/promises", () => ({
       access: vi.fn(async (targetPath: string) => {
@@ -140,7 +140,7 @@ describe("createThreadDirectoryEnricher", () => {
             return;
           }
           callback(null, {
-            stdout: "/Users/huntharo/.codex/profiles/sstk/worktrees/mp75tdnu/PwrAgnt\n",
+            stdout: "/Users/huntharo/.codex/profiles/work/worktrees/mp75tdnu/PwrAgnt\n",
             stderr: "",
           });
         },

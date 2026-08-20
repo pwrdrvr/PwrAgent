@@ -743,7 +743,7 @@ describe("ThreadView", () => {
               label: "kube-manifests",
               path: "/Users/huntharo/infra/kube-manifests",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+                "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
             },
           ],
           inbox: { inInbox: true },
@@ -766,7 +766,7 @@ describe("ThreadView", () => {
     fireEvent.change(screen.getByLabelText("Review project"), {
       target: {
         value:
-          "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+          "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       },
     });
 
@@ -786,7 +786,7 @@ describe("ThreadView", () => {
         target: { type: "baseBranch", branch: "origin/develop" },
         delivery: "inline",
         cwd:
-          "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+          "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       });
     });
   });

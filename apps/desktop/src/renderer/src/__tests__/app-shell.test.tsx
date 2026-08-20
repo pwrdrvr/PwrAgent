@@ -3184,10 +3184,10 @@ describe("App", () => {
           nodeVersion: "24.0.0",
           mainProcessId: 4100,
           rendererProcessId: 4101,
-          activeProfileName: "sstk",
+          activeProfileName: "work",
           logFilePath:
-            "/Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
-          codexProfilePath: "/Users/operator/.codex/profiles/sstk",
+            "/Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
+          codexProfilePath: "/Users/operator/.codex/profiles/work",
         }),
         readThread: async () => ({
           backend: "codex" as const,
@@ -3218,11 +3218,11 @@ describe("App", () => {
         "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
         "Provider/backend: codex",
         "Thread title: Fix handoff project paths and diagnostics",
-        "PwrAgent profile: sstk",
+        "PwrAgent profile: work",
         "Main process PID: 4100",
         "Renderer process PID: 4101",
-        "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
-        "Codex profile path: /Users/operator/.codex/profiles/sstk",
+        "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
+        "Codex profile path: /Users/operator/.codex/profiles/work",
       ].join("\n"));
     });
   });

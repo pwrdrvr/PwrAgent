@@ -1532,10 +1532,10 @@ describe("SettingsScreen", () => {
             nodeVersion: "24.0.0",
             mainProcessId: 4100,
             rendererProcessId: 4101,
-            activeProfileName: "sstk",
+            activeProfileName: "work",
             logFilePath:
-              "/Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
-            codexProfilePath: "/Users/operator/.codex/profiles/sstk",
+              "/Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
+            codexProfilePath: "/Users/operator/.codex/profiles/work",
           })),
         }}
         initialSection="troubleshooting"
@@ -1552,10 +1552,10 @@ describe("SettingsScreen", () => {
 
     await waitFor(() => {
       expect(copyText).toHaveBeenCalledWith([
-        "PwrAgent profile: sstk",
+        "PwrAgent profile: work",
         "Main process PID: 4100",
         "Renderer process PID: 4101",
-        "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-sstk.main.log",
+        "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
       ].join("\n"));
     });
   });

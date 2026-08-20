@@ -3010,7 +3010,7 @@ describe("ThreadContextPanel", () => {
             label: "kube-manifests",
             path: "/Users/huntharo/github/kube-manifests",
             worktreePath:
-              "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+              "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
             gitBranch: "fix/channelsv2-live-pods",
           },
         ],
