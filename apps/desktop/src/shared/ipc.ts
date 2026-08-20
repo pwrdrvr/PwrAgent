@@ -59,6 +59,8 @@ export const PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL =
   "app-server:pr-auto-dispatch-budget-changed";
 export const GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL =
   "app-server:github-pr-saml-enforcement";
+export const MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL =
+  "acp:managed-grok-signature-rejected";
 export const GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL =
   "app-server:github-pr-authentication-failure";
 export const APP_SERVER_ARCHIVE_THREAD_CHANNEL = "app-server:archive-thread";

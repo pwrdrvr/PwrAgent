@@ -15,6 +15,7 @@ import type {
   CodexProtocolCaptureStatus,
 } from "../../../shared/codex-protocol-capture";
 import type { HotCpuProfileCapturedEvent } from "../../../shared/hot-cpu-profile";
+import type { ManagedGrokSignatureRejectedEvent } from "../../../shared/managed-grok-signature";
 import type {
   GithubPrAuthenticationFailureEvent,
   GithubPrSamlEnforcementEvent,
@@ -1138,6 +1139,9 @@ export type DesktopApi = {
   ) => () => void;
   onGithubPrAuthenticationFailure?: (
     callback: (event: GithubPrAuthenticationFailureEvent) => void,
+  ) => () => void;
+  onManagedGrokSignatureRejected?: (
+    callback: (event: ManagedGrokSignatureRejectedEvent) => void,
   ) => () => void;
   /**
    * Subscription for main → renderer appearance broadcasts. Fired

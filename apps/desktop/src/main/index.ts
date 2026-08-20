@@ -154,6 +154,7 @@ import {
 import type { AutoVacuumConversion } from "./state/state-db";
 import { prewarmWindowsJobWrapper } from "./windows-job-wrapper";
 import { createMainWindow, syncHotCpuProfilersFromSettings } from "./window";
+import { registerManagedGrokSignatureRejectionBroadcast } from "./managed-grok-signature-broadcast";
 import { subscribersForChannel } from "./window-channels";
 import { requestOpenNewThread } from "./window-open-new-thread";
 import { requestOpenSettings } from "./window-open-settings";
@@ -1152,6 +1153,7 @@ export function bootstrapApp(): void {
     await startupCpuProfiler.start();
     recordStartupProfileEvent({ type: "app-when-ready" });
     installDevelopmentDockIcon();
+    registerManagedGrokSignatureRejectionBroadcast();
     // Boot decision — resolves which profile (if any) this Electron
     // instance should open into. When the decision is `open` we run
     // the today-style flow into an existing profile dir. Anything
