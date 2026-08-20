@@ -123,20 +123,35 @@ function deferred<T = void>() {
  */
 function createSampleTracker() {
   let captured = 0;
-  let waiters: Array<{ ready: () => boolean; resolve: () => void }> = [];
+  let waiters: Array<{
+    label: string;
+    ready: () => boolean;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  }> = [];
 
   function flush(): void {
     waiters = waiters.filter((waiter) => {
-      if (!waiter.ready()) return true;
+      // A predicate that throws would otherwise escape through the profiler's
+      // `finally`, rejecting the sampling chain and leaving this wait pending
+      // forever. Fail the wait that owns the predicate instead.
+      let ready: boolean;
+      try {
+        ready = waiter.ready();
+      } catch (error) {
+        waiter.reject(error);
+        return false;
+      }
+      if (!ready) return true;
       waiter.resolve();
       return false;
     });
   }
 
-  async function waitUntil(ready: () => boolean): Promise<void> {
+  async function waitUntil(ready: () => boolean, label: string): Promise<void> {
     if (ready()) return;
-    await new Promise<void>((resolve) => {
-      waiters.push({ ready, resolve });
+    await new Promise<void>((resolve, reject) => {
+      waiters.push({ label, ready, resolve, reject });
     });
   }
 
@@ -145,11 +160,16 @@ function createSampleTracker() {
       captured += 1;
       flush();
     },
-    capturedCount: () => captured,
+    /**
+     * Waits still outstanding. Non-empty only after a test has already failed,
+     * since every wait is awaited — see the afterEach that reports them.
+     */
+    pendingLabels: (): string[] =>
+      waiters.map((waiter) => `${waiter.label} (after ${captured} samples)`),
     waitUntil,
     /** Resolves once `target` sampling iterations have fully completed. */
     async waitForCount(target: number): Promise<void> {
-      await waitUntil(() => captured >= target);
+      await waitUntil(() => captured >= target, `${target} completed samples`);
     },
   };
 }
@@ -192,10 +212,21 @@ describe("RendererHotCpuProfiler", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
-    await Promise.all(
-      profilers.splice(0).map((profiler) => profiler.stop("test-cleanup")),
+    const created = profilers.splice(0);
+    const pendingWaits = created.flatMap(
+      (profiler) => sampleTrackers.get(profiler)?.pendingLabels() ?? [],
     );
+    await Promise.all(created.map((profiler) => profiler.stop("test-cleanup")));
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+    if (pendingWaits.length > 0) {
+      // Reachable only when the test has already failed, because every wait is
+      // awaited. It turns an opaque "Test timed out in 5000ms" into the name of
+      // the thing that never happened — the diagnostic `vi.waitFor` used to
+      // give for free by reporting the assertion it was retrying.
+      throw new Error(
+        `Sampling waits never resolved: ${pendingWaits.join("; ")}`,
+      );
+    }
   });
 
   it("records a renderer CPU profile after sustained hot samples", async () => {
@@ -242,6 +273,7 @@ describe("RendererHotCpuProfiler", () => {
     await profiler.start();
     await samplesOf(profiler).waitUntil(
       () => debuggerApi.attach.mock.calls.length > 0,
+      "debugger attach",
     );
     expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
 
@@ -659,6 +691,7 @@ describe("RendererHotCpuProfiler", () => {
     await profiler.start();
     await samplesOf(profiler).waitUntil(
       () => debuggerApi.attach.mock.calls.length > 0,
+      "debugger attach",
     );
     expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
     await profiler.stop("test-complete");
@@ -725,6 +758,7 @@ describe("RendererHotCpuProfiler", () => {
     await profiler.start();
     await samplesOf(profiler).waitUntil(
       () => debuggerApi.attach.mock.calls.length > 0,
+      "debugger attach",
     );
     expect(debuggerApi.attach).toHaveBeenCalledWith("1.3");
     await profiler.stop("test-complete");
