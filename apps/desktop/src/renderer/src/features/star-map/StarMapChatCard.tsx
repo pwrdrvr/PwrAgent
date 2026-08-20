@@ -28,6 +28,7 @@ import { useThreadSessionState } from "../../lib/useThreadSessionState";
 import {
   clearStarMapCardContext,
   publishStarMapCardContext,
+  useStarMapCardContextDemand,
 } from "./star-map-card-context-store";
 import {
   clampChatCardRect,
@@ -126,14 +127,18 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     thread.federation?.ref.target ?? readRendererFederationTarget();
 
   // The context satellite is a sibling rendered by the screen, so the session
-  // data its panels need has to be published rather than passed down. Only
-  // while the satellite is open: collecting edited-file groups walks the whole
-  // transcript, and a card with the rail closed should not pay for it on every
-  // streamed entry.
-  const contextOpen = props.contextOpen ?? false;
+  // data its panels need has to be published rather than passed down.
+  //
+  // Gated on a live subscriber rather than on `contextOpen`: collecting
+  // edited-file groups walks the whole transcript, so a card would otherwise
+  // redo it on every streamed entry for a rail nobody can see. The two differ
+  // — the map unmounts every satellite at overview zoom without clearing the
+  // flag — and the subscriber is the one that answers "is anything reading
+  // this?".
+  const contextDemand = useStarMapCardContextDemand(cardKey);
   const editedFileGroups = useMemo(
     () =>
-      contextOpen
+      contextDemand
         ? collectEditedFileGroups({
             entries: session.entries,
             activeTurnId: session.activeTurnId,
@@ -143,7 +148,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           })
         : undefined,
     [
-      contextOpen,
+      contextDemand,
       session.activeTurnId,
       session.entries,
       thread.createdAt,
@@ -152,12 +157,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   );
   const pricing = session.response?.pricing;
   useEffect(() => {
+    if (!contextDemand) return;
     publishStarMapCardContext(cardKey, {
       activeTurnId: session.activeTurnId,
       editedFileGroups,
       pricing,
     });
-  }, [cardKey, editedFileGroups, pricing, session.activeTurnId]);
+  }, [cardKey, contextDemand, editedFileGroups, pricing, session.activeTurnId]);
   useEffect(() => () => clearStarMapCardContext(cardKey), [cardKey]);
 
   const beginDrag = useCallback(

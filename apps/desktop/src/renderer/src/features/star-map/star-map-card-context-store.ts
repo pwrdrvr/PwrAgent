@@ -39,9 +39,21 @@ const EMPTY_SNAPSHOT: StarMapCardContextSnapshot = {};
 
 const snapshots = new Map<string, StarMapCardContextSnapshot>();
 const listeners = new Map<string, Set<() => void>>();
+/**
+ * Woken when any card's subscriber set opens or empties, so a card can stop
+ * deriving data nobody is going to read. One global set rather than one per
+ * card: demand changes when a rail opens, closes, or leaves the zoom level
+ * that renders it, which is operator-paced, while the data it gates is
+ * per-streamed-entry.
+ */
+const demandListeners = new Set<() => void>();
 
 function notify(cardKey: string): void {
   for (const listener of listeners.get(cardKey) ?? []) listener();
+}
+
+function notifyDemand(): void {
+  for (const listener of demandListeners) listener();
 }
 
 export function publishStarMapCardContext(
@@ -72,9 +84,11 @@ export function useStarMapCardContext(
         listeners.set(cardKey, keyListeners);
       }
       keyListeners.add(listener);
+      notifyDemand();
       return () => {
         keyListeners.delete(listener);
         if (keyListeners.size === 0) listeners.delete(cardKey);
+        notifyDemand();
       };
     },
     [cardKey],
@@ -83,6 +97,31 @@ export function useStarMapCardContext(
   // per call makes `useSyncExternalStore` loop forever.
   const getSnapshot = useCallback(
     () => snapshots.get(cardKey) ?? EMPTY_SNAPSHOT,
+    [cardKey],
+  );
+  return useSyncExternalStore(subscribe, getSnapshot);
+}
+
+/**
+ * Whether anything is currently reading this card's context.
+ *
+ * The card derives edited-file groups by walking its whole transcript, which
+ * it would otherwise redo on every streamed entry whether or not the result
+ * can be seen. `contextOpen` is not that question: the star map drops every
+ * satellite at overview zoom while leaving the flag set, so a card whose rail
+ * is "open" can have no rail mounted at all. Subscription is the honest
+ * signal — no subscriber, no work.
+ */
+export function useStarMapCardContextDemand(cardKey: string): boolean {
+  const subscribe = useCallback((listener: () => void) => {
+    demandListeners.add(listener);
+    return () => {
+      demandListeners.delete(listener);
+    };
+  }, []);
+  // A boolean, so repeated calls compare equal and cannot loop the store.
+  const getSnapshot = useCallback(
+    () => (listeners.get(cardKey)?.size ?? 0) > 0,
     [cardKey],
   );
   return useSyncExternalStore(subscribe, getSnapshot);
