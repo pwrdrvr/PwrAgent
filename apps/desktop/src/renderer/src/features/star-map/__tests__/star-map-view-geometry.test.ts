@@ -9,6 +9,7 @@ import {
   clampStarMapView,
   isOverviewZoom,
   overviewChromeScale,
+  placeStarMapView,
   starMapSkyOffset,
   type StarMapView,
 } from "../star-map-view-geometry";
@@ -112,6 +113,101 @@ describe("centerStarMapView", () => {
       const centered = centerStarMapView({ canvas, viewport: VIEWPORT });
       expect(clamp(centered, canvas)).toEqual(centered);
     }
+  });
+});
+
+describe("placeStarMapView", () => {
+  /**
+   * The canvas is the bounding box of what a lens laid out, shifted into
+   * positive space, so it grows on whichever side the new content landed
+   * and its middle slides by half of that. An anchor is a body, and it
+   * moves with the box — which is why the anchored view is the one that
+   * holds a loading map still.
+   */
+  const before = {
+    canvas: { width: 900, height: 700 },
+    anchor: { x: 450, y: 350 },
+  };
+  const after = {
+    canvas: { width: 1600, height: 1100 },
+    anchor: { x: 900, y: 620 },
+  };
+
+  /** Where the anchor lands in the window under a placed view. */
+  function anchorOnScreen(step: typeof before) {
+    const view = placeStarMapView({
+      anchor: step.anchor,
+      canvas: step.canvas,
+      viewport: VIEWPORT,
+    });
+    return {
+      x: view.x + step.anchor.x * view.scale,
+      y: view.y + step.anchor.y * view.scale,
+    };
+  }
+
+  it("opens on the anchor rather than on the middle of the canvas", () => {
+    expect(anchorOnScreen(before)).toEqual({
+      x: VIEWPORT.width / 2,
+      y: VIEWPORT.height / 2,
+    });
+  });
+
+  it("leaves the anchor where it was when the canvas grows around it", () => {
+    expect(anchorOnScreen(after)).toEqual(anchorOnScreen(before));
+    // The view itself must move to do that — an unchanged view here would
+    // mean the test was passing on a canvas that never grew.
+    expect(placeStarMapView({ ...after, viewport: VIEWPORT })).not.toEqual(
+      placeStarMapView({ ...before, viewport: VIEWPORT }),
+    );
+  });
+
+  it("centres the canvas when there is no body to open on", () => {
+    // An empty map, before health has landed: no anchor exists yet, and
+    // the middle of the canvas is the only point there is.
+    expect(
+      placeStarMapView({ canvas: CANVAS, viewport: VIEWPORT }),
+    ).toEqual(centerStarMapView({ canvas: CANVAS, viewport: VIEWPORT }));
+  });
+
+  it("keeps a column lens at the top edge, anchor or not", () => {
+    // Lanes bodies sit on a fixed row with their columns growing downward,
+    // so the anchor governs x only; centring its y would open the map
+    // already scrolled past the bodies.
+    const view = placeStarMapView({
+      anchor: { x: 900, y: 620 },
+      canvas: after.canvas,
+      viewport: VIEWPORT,
+      topAnchored: true,
+    });
+    expect(view.y).toBe(0);
+    expect(view.x + 900).toBe(VIEWPORT.width / 2);
+  });
+
+  it("produces a view the clamp accepts unchanged", () => {
+    // Any anchor inside the canvas, including one hard against an edge.
+    for (const anchor of [
+      { x: 0, y: 0 },
+      { x: 450, y: 350 },
+      { x: 900, y: 700 },
+    ]) {
+      const placed = placeStarMapView({
+        anchor,
+        canvas: before.canvas,
+        viewport: VIEWPORT,
+      });
+      expect(clamp(placed, before.canvas)).toEqual(placed);
+    }
+  });
+
+  it("falls back to the canvas centre for a nonsense anchor", () => {
+    expect(
+      placeStarMapView({
+        anchor: { x: Number.NaN, y: 0 },
+        canvas: CANVAS,
+        viewport: VIEWPORT,
+      }),
+    ).toEqual(centerStarMapView({ canvas: CANVAS, viewport: VIEWPORT }));
   });
 });
 
