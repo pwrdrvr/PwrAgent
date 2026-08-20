@@ -49,7 +49,13 @@ including a git worktree.
 
 - The script stops processes matching the target checkout path and their bounded parent dev-server chain, then starts `pnpm dev:dev` from the checkout.
 - The script discovers running processes by checkout path. It does not require a pidfile or a previous skill-started instance.
-- It excludes Codex helper processes whose serialized command payloads mention the checkout path but are not part of the PwrAgent dev process tree.
+- It excludes helper and coding-agent CLI processes whose serialized command
+  payloads mention the checkout path but are not part of the PwrAgent dev
+  process tree.
+- It also never signals its own ancestors. The shell or agent session that
+  starts the restart is usually a grandparent or higher, and its command line
+  can contain the checkout path. `schedule` passes that protected pid set to the
+  detached `restart-now` child, which is reparented and cannot discover it.
 - With `--detach-start`, the script starts the dev command in a detached `tmux` session when `tmux` is available. This survives parent command cleanup while keeping the dev logs in the configured restart log.
 - It uses a `nohup` sleep wrapper for the delayed timer. Do not use `launchctl submit` here: launchd can keep descendant `pnpm dev` processes in the submitted job context and relaunch them after they exit.
 - Default root is derived from the script location: the checkout that contains
