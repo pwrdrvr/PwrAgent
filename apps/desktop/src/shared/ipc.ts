@@ -62,6 +62,8 @@ export const GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL =
 export const GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL =
   "app-server:github-pr-authentication-failure";
 export const APP_SERVER_ARCHIVE_THREAD_CHANNEL = "app-server:archive-thread";
+export const APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL =
+  "app-server:resolve-missing-codex-threads";
 export const APP_SERVER_RESTORE_THREAD_CHANNEL = "app-server:restore-thread";
 export const APP_SERVER_ARCHIVE_WORKTREE_CHANNEL = "app-server:archive-worktree";
 export const APP_SERVER_RESTORE_WORKTREE_CHANNEL = "app-server:restore-worktree";

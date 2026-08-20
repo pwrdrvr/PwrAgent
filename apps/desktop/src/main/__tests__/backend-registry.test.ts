@@ -44730,4 +44730,273 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       await registry.canonicalizeNavigationThreadPullRequests(threads),
     ).toBe(threads);
   });
+
+  /**
+   * The audit runs on a debounce and then archives through several awaited
+   * hops. Stepping the clock in slices drains those microtasks; a single jump
+   * fires the timer and returns before the archive completes.
+   */
+  async function flushMissingCodexThreadAudit(): Promise<void> {
+    for (let step = 0; step < 50; step += 1) {
+      await vi.advanceTimersByTimeAsync(100);
+    }
+  }
+
+  function buildMissingThreadFixture(params: {
+    missingThreadIds: string[];
+    presentThreadIds: string[];
+  }) {
+    const buildThread = (id: string): AppServerThreadSummary => ({
+      id,
+      title: `Thread ${id}`,
+      titleSource: "explicit",
+      linkedDirectories: [
+        {
+          id: `directory:/repo/${id}`,
+          label: id,
+          path: `/repo/${id}`,
+          kind: "local",
+        },
+      ],
+      projectKey: `/repo/${id}`,
+      source: "codex",
+      updatedAt: 2,
+    });
+    const overlays = Object.fromEntries(
+      params.missingThreadIds.map((id) => [
+        buildThreadIdentityKey("codex", id),
+        {
+          backend: "codex" as const,
+          threadId: id,
+          executionMode: "default" as const,
+          // A handoff directory whose path differs from the provider CWD is
+          // what schedules the workspace synchronization this audit hangs off.
+          extraLinkedDirectories: [
+            {
+              id: `pwragent-handoff:codex:${id}`,
+              label: id,
+              path: `/repo/${id}`,
+              worktreePath: `/worktrees/${id}`,
+              kind: "worktree" as const,
+            },
+          ],
+        },
+      ]),
+    );
+    return {
+      overlays,
+      threads: [
+        ...params.missingThreadIds.map(buildThread),
+        ...params.presentThreadIds.map(buildThread),
+      ],
+    };
+  }
+
+  class MissingThreadCodexClient extends MockBackendClient {
+    constructor(
+      private readonly missingThreadIds: Set<string>,
+      options: ConstructorParameters<typeof MockBackendClient>[0],
+    ) {
+      super(options);
+    }
+
+    updateThreadWorkspaceCallCount = 0;
+    readonly archivedThreadIds: string[] = [];
+
+    override async updateThreadWorkspace(params: {
+      threadId: string;
+      cwd: string;
+    }): Promise<{ threadId: string }> {
+      this.updateThreadWorkspaceCallCount += 1;
+      if (this.missingThreadIds.has(params.threadId)) {
+        throw new Error(
+          `json-rpc error (-32600): thread not found: ${params.threadId}`,
+        );
+      }
+      return { threadId: params.threadId };
+    }
+
+    override async archiveThread(params: {
+      threadId: string;
+    }): Promise<{ threadId: string }> {
+      this.archivedThreadIds.push(params.threadId);
+      if (this.missingThreadIds.has(params.threadId)) {
+        throw new Error(
+          `json-rpc error (-32600): thread not found: ${params.threadId}`,
+        );
+      }
+      return { threadId: params.threadId };
+    }
+  }
+
+  it("archives Codex threads reported missing when they are a small share of the profile", async () => {
+    vi.useFakeTimers();
+    try {
+      const missingThreadIds = new Set(["thread-missing"]);
+      const fixture = buildMissingThreadFixture({
+        missingThreadIds: [...missingThreadIds],
+        presentThreadIds: ["a", "b", "c", "d", "e", "f", "g", "h", "i"],
+      });
+      const codexClient = new MissingThreadCodexClient(missingThreadIds, {
+        initializeResult: { methods: ["thread/list", "thread/archive"] },
+        threads: fixture.threads,
+      });
+      const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => {
+        events.push(event);
+      });
+
+      await registry.listThreads({ backend: "codex", forceRefresh: true });
+      await flushMissingCodexThreadAudit();
+
+      expect(codexClient.archivedThreadIds).toEqual(["thread-missing"]);
+      const update = events.find(
+        (event) =>
+          event.notification.method === "codex/missingThreads/updated",
+      );
+      expect(update?.notification.params).toMatchObject({
+        archivedCount: 1,
+        failedCount: 0,
+        missingCount: 1,
+        status: "archived",
+        threadIds: ["thread-missing"],
+        totalCount: 10,
+      });
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId: "thread-missing",
+        }),
+      ).resolves.toMatchObject({ archiveTombstonedAt: expect.any(Number) });
+
+      await registry.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("asks before archiving when Codex reports more than a fifth of the profile missing", async () => {
+    vi.useFakeTimers();
+    try {
+      const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
+      const fixture = buildMissingThreadFixture({
+        missingThreadIds: [...missingThreadIds],
+        presentThreadIds: ["a", "b", "c"],
+      });
+      const codexClient = new MissingThreadCodexClient(missingThreadIds, {
+        initializeResult: { methods: ["thread/list", "thread/archive"] },
+        threads: fixture.threads,
+      });
+      const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => {
+        events.push(event);
+      });
+
+      await registry.listThreads({ backend: "codex", forceRefresh: true });
+      await flushMissingCodexThreadAudit();
+
+      expect(codexClient.archivedThreadIds).toEqual([]);
+      const update = events.find(
+        (event) =>
+          event.notification.method === "codex/missingThreads/updated",
+      );
+      expect(update?.notification.params).toMatchObject({
+        missingCount: 2,
+        status: "confirmationRequired",
+        totalCount: 5,
+      });
+      expect(
+        (update?.notification.params as { threadIds: string[] }).threadIds.sort(),
+      ).toEqual(["thread-missing-1", "thread-missing-2"]);
+
+      await registry.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops retrying missing Codex threads the operator chose to keep", async () => {
+    vi.useFakeTimers();
+    try {
+      const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
+      const fixture = buildMissingThreadFixture({
+        missingThreadIds: [...missingThreadIds],
+        presentThreadIds: ["a", "b", "c"],
+      });
+      const codexClient = new MissingThreadCodexClient(missingThreadIds, {
+        initializeResult: { methods: ["thread/list", "thread/archive"] },
+        threads: fixture.threads,
+      });
+      const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+      await registry.listThreads({ backend: "codex", forceRefresh: true });
+      await flushMissingCodexThreadAudit();
+      const callsBeforeAnswer = codexClient.updateThreadWorkspaceCallCount;
+      expect(callsBeforeAnswer).toBe(2);
+
+      await expect(
+        registry.resolveMissingCodexThreads({
+          action: "keep",
+          threadIds: ["thread-missing-1", "thread-missing-2"],
+        }),
+      ).resolves.toEqual({
+        action: "keep",
+        archivedThreadIds: [],
+        failedThreadIds: [],
+      });
+
+      await registry.listThreads({ backend: "codex", forceRefresh: true });
+      await flushMissingCodexThreadAudit();
+
+      expect(codexClient.updateThreadWorkspaceCallCount).toBe(callsBeforeAnswer);
+      expect(codexClient.archivedThreadIds).toEqual([]);
+
+      await registry.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("archives the missing Codex threads once when both windows answer the prompt", async () => {
+    vi.useFakeTimers();
+    try {
+      const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
+      const fixture = buildMissingThreadFixture({
+        missingThreadIds: [...missingThreadIds],
+        presentThreadIds: ["a", "b", "c"],
+      });
+      const codexClient = new MissingThreadCodexClient(missingThreadIds, {
+        initializeResult: { methods: ["thread/list", "thread/archive"] },
+        threads: fixture.threads,
+      });
+      const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+      await registry.listThreads({ backend: "codex", forceRefresh: true });
+      await flushMissingCodexThreadAudit();
+
+      const threadIds = ["thread-missing-1", "thread-missing-2"];
+      const first = await registry.resolveMissingCodexThreads({
+        action: "archive",
+        threadIds,
+      });
+      const second = await registry.resolveMissingCodexThreads({
+        action: "archive",
+        threadIds,
+      });
+
+      expect(first.archivedThreadIds.sort()).toEqual(threadIds);
+      expect(second.archivedThreadIds).toEqual([]);
+      expect(codexClient.archivedThreadIds.sort()).toEqual(threadIds);
+
+      await registry.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

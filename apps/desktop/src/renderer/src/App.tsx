@@ -114,6 +114,8 @@ import {
   threadActionErrorNoticeId,
   type ThreadActionErrorKind,
 } from "./features/notifications/thread-action-error-notice";
+import { buildCodexMissingThreadsNotice } from "./features/notifications/codex-missing-threads-notice";
+import type { CodexMissingThreadsSignal } from "./features/notifications/codex-missing-threads-notice";
 import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-auto-dispatch-budget-notice";
 import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNotices";
 import { GrokCliUpdateNotice } from "./features/notifications/GrokCliUpdateNotice";
@@ -927,6 +929,34 @@ function DesktopAppShell(props: {
             threadLink,
           }),
         });
+        return;
+      }
+      if (event.notification.method === "codex/missingThreads/updated") {
+        const signal = event.notification.params as CodexMissingThreadsSignal;
+        const resolve = (action: "archive" | "keep") => {
+          dispatchAppNotice({
+            type: "dismiss",
+            id: "codex-missing-threads:confirmation",
+          });
+          void desktopApi
+            .resolveMissingCodexThreads?.({
+              action,
+              threadIds: signal.threadIds,
+            })
+            .catch(() => {
+              // The main process logs the failure. Re-showing the prompt here
+              // would fight the operator's answer; the audit runs again on the
+              // next launch if the threads are still missing.
+            });
+        };
+        const notice = buildCodexMissingThreadsNotice({
+          onArchive: () => resolve("archive"),
+          onKeep: () => resolve("keep"),
+          signal,
+        });
+        if (notice) {
+          dispatchAppNotice({ type: "show", notice });
+        }
         return;
       }
       // Params are cast explicitly: the AppServerNotification union is too

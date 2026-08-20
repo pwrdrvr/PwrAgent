@@ -151,6 +151,8 @@ import {
   type ListWorktreeUnpublishedCommitsResponse,
   type GetWorktreeUnpublishedCommitDiffRequest,
   type GetWorktreeUnpublishedCommitDiffResponse,
+  type ResolveMissingCodexThreadsRequest,
+  type ResolveMissingCodexThreadsResponse,
   type RestoreThreadRequest,
   type RestoreThreadResponse,
   type ThreadGitWorkingState,
@@ -215,6 +217,7 @@ import {
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
   APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL,
+  APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL,
   APP_SERVER_RESTORE_THREAD_CHANNEL,
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
@@ -1839,6 +1842,25 @@ class DesktopAppServerService {
       cleanupCount: response.cleanup.length,
     });
 
+    return response;
+  }
+
+  async resolveMissingCodexThreads(
+    request: ResolveMissingCodexThreadsRequest,
+  ): Promise<ResolveMissingCodexThreadsResponse> {
+    const response = await getDesktopBackendRegistry()
+      .resolveMissingCodexThreads(request);
+    for (const threadId of response.archivedThreadIds) {
+      await getDesktopFederationRuntime().ungroupRemoteChildrenOfArchivedThread({
+        backend: "codex",
+        parentThreadId: threadId,
+      });
+    }
+    logDebug("resolveMissingCodexThreads", {
+      action: response.action,
+      archivedCount: response.archivedThreadIds.length,
+      failedCount: response.failedThreadIds.length,
+    });
     return response;
   }
 
@@ -7545,6 +7567,16 @@ export function registerAppServerIpcHandlers(): void {
       return await appServerService.archiveThread(request);
     },
   );
+  ipcMain.removeHandler(APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL);
+  ipcMain.handle(
+    APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL,
+    async (
+      _event,
+      request: ResolveMissingCodexThreadsRequest,
+    ): Promise<ResolveMissingCodexThreadsResponse> => {
+      return await appServerService.resolveMissingCodexThreads(request);
+    },
+  );
   ipcMain.removeHandler(APP_SERVER_RESTORE_THREAD_CHANNEL);
   ipcMain.handle(
     APP_SERVER_RESTORE_THREAD_CHANNEL,
@@ -8305,6 +8337,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   ipcMain.removeHandler(APP_SERVER_GET_THREAD_FILE_DIFF_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_ARCHIVE_THREAD_CHANNEL);
+  ipcMain.removeHandler(APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL);
   ipcMain.removeHandler(APP_SERVER_RESTORE_THREAD_CHANNEL);
   ipcMain.removeHandler(THREAD_MIGRATION_LIST_SOURCES_CHANNEL);
   ipcMain.removeHandler(THREAD_MIGRATION_LIST_SOURCE_THREADS_CHANNEL);

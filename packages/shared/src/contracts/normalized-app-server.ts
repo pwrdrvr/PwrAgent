@@ -746,6 +746,23 @@ export type ArchiveThreadResponse = {
   cleanup: ArchiveThreadCleanupResult[];
 };
 
+/**
+ * Answers a `codex/missingThreads/updated` confirmation prompt. `archive`
+ * tombstones the threads Codex lost; `keep` leaves them in place and stops
+ * PwrAgent from re-asking for the rest of the session, which is the right
+ * answer when this PwrAgent profile is pointed at the wrong Codex profile.
+ */
+export type ResolveMissingCodexThreadsRequest = {
+  action: "archive" | "keep";
+  threadIds: ThreadIdentifier[];
+};
+
+export type ResolveMissingCodexThreadsResponse = {
+  action: "archive" | "keep";
+  archivedThreadIds: ThreadIdentifier[];
+  failedThreadIds: ThreadIdentifier[];
+};
+
 export type RestoreThreadRequest = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
@@ -1258,6 +1275,25 @@ export type AppServerNotification =
         recoveryError?: string;
         removedMessageIdCount?: number;
         backupPath?: string;
+      };
+    }
+  | {
+      /**
+       * Codex reported `thread not found` for threads that its `thread/list`
+       * still returns. `archived` reports the cleanup PwrAgent already
+       * performed; `confirmationRequired` means the missing share was large
+       * enough to look like a Codex profile mismatch, so the operator decides.
+       */
+      method: "codex/missingThreads/updated";
+      params: {
+        status: "archived" | "confirmationRequired";
+        threadIds: string[];
+        missingCount: number;
+        totalCount: number;
+        /** Active PwrAgent profile, so the prompt can name what is affected. */
+        profileName: string;
+        archivedCount?: number;
+        failedCount?: number;
       };
     }
   | {

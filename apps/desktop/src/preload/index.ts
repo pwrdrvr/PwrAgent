@@ -263,6 +263,8 @@ import type {
   SetCodexThreadEnvironmentResponse,
   RestoreWorktreeRequest,
   RestoreWorktreeResponse,
+  ResolveMissingCodexThreadsRequest,
+  ResolveMissingCodexThreadsResponse,
   RestoreThreadRequest,
   RestoreThreadResponse,
   RunAutomationNowResponse,
@@ -516,6 +518,7 @@ import {
   APP_SERVER_ARCHIVE_WORKTREE_CHANNEL,
   APP_SERVER_HANDOFF_THREAD_WORKSPACE_CHANNEL,
   APP_SERVER_PERSIST_THREAD_USAGE_ACTIVITY_CHANNEL,
+  APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL,
   APP_SERVER_RESTORE_THREAD_CHANNEL,
   APP_SERVER_RESTORE_WORKTREE_CHANNEL,
   APP_SERVER_RENAME_THREAD_CHANNEL,
@@ -1407,6 +1410,13 @@ const desktopApi = Object.freeze({
     request: ArchiveThreadRequest,
   ): Promise<ArchiveThreadResponse> =>
     await ipcRenderer.invoke(APP_SERVER_ARCHIVE_THREAD_CHANNEL, request),
+  resolveMissingCodexThreads: async (
+    request: ResolveMissingCodexThreadsRequest,
+  ): Promise<ResolveMissingCodexThreadsResponse> =>
+    await ipcRenderer.invoke(
+      APP_SERVER_RESOLVE_MISSING_CODEX_THREADS_CHANNEL,
+      request,
+    ),
   restoreThread: async (
     request: RestoreThreadRequest,
   ): Promise<RestoreThreadResponse> =>
