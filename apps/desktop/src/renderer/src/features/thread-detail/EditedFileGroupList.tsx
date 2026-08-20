@@ -21,6 +21,7 @@ import { TranscriptDiff } from "./TranscriptDiff";
 import { DiffStat } from "../../lib/DiffStat";
 import { EditGroupCommitBadge } from "./EditGroupCommitBadge";
 import {
+  editedFileKey,
   flattenEditedFileGroups,
   type EditedFileGroup,
 } from "./edited-file-groups";
@@ -429,7 +430,7 @@ export function EditedFileList(props: {
   return (
     <ul className="live-work-rail__file-list">
       {props.details.map((detail) => (
-        <li key={detail.id} className="live-work-rail__file-row">
+        <li key={editedFileKey(detail)} className="live-work-rail__file-row">
           <EditedFileRow detail={detail} />
         </li>
       ))}
