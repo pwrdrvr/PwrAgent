@@ -984,6 +984,33 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /\.star-map-intake,\s*\.star-map-intake \*,\s*\.star-map-rename,\s*\.star-map-rename \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
     );
+    // The floating card layers (chat + satellite) render outside the
+    // canvas at z-indexes above the strip, so inside its band they are
+    // genuinely on top and clickable — they keep the opt-out or the OS
+    // swallows their clicks as window drags.
+    expect(css).toMatch(
+      /\.star-map-chat-card,\s*\.star-map-chat-card \*,\s*\.star-map-satellite-card,\s*\.star-map-satellite-card \*\s*\{[^}]*-webkit-app-region:\s*no-drag;/,
+    );
+    // Canvas residents must NOT opt out. They paint BELOW the glass (the
+    // transformed canvas is its own stacking context under the strip), so
+    // in the band they are never interactive — but drag regions are rect
+    // unions independent of z-order, so a canvas card whose rect clips
+    // into the band would punch an invisible card-width dead hole in the
+    // window's only drag handle. That was a shipped bug: a ~200px strip
+    // next to the filter chips that refused to drag the window.
+    for (const canvasResident of [
+      "\\.star-map-card",
+      "\\.star-map-instance",
+      "\\.star-map-load-card",
+      "\\.star-map__cluster-label",
+      "\\.star-map__cluster-overflow",
+    ]) {
+      expect(css).not.toMatch(
+        new RegExp(
+          `${canvasResident}[^{}]*\\{[^}]*-webkit-app-region:\\s*no-drag`,
+        ),
+      );
+    }
     // The edge brightens whenever the sky moves under it — pointer pan and
     // keyboard flight alike — and the strip disappears in fullscreen, where
     // there is no window to drag.
