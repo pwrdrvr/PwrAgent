@@ -282,13 +282,11 @@ export function registerFederationIpcHandlers(): void {
     async (
       _event,
       request: GenerateFederationInviteRequest = {},
-    ): Promise<GenerateFederationInviteResponse> => {
-      const tailscale = await readInviteTailscaleAdvertisement();
-      return await getDesktopFederationRuntime().generateInvite({
+    ): Promise<GenerateFederationInviteResponse> =>
+      await getDesktopFederationRuntime().generateInvite({
         ...request,
-        ...(tailscale ? { tailscale } : {}),
-      });
-    },
+        readTailscaleAdvertisement: readInviteTailscaleAdvertisement,
+      }),
   );
   ipcMain.handle(
     FEDERATION_IMPORT_INVITE_CHANNEL,

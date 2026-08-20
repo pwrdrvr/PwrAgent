@@ -108,10 +108,33 @@ describe("buildFederationAdvertisedEndpoints", () => {
     ]);
   });
 
-  it("prefers a configured Serve URL over the raw tailnet dial", () => {
+  it("keeps the raw tailnet dial behind a configured Serve URL", () => {
+    // A Serve handler is configured outside the app and can drift out of
+    // date; when it does, the raw dial is the only tailnet path left.
     expect(
       buildFederationAdvertisedEndpoints(
         inputs({
+          tailscale: {
+            dnsName: "studio.tail1234.ts.net",
+            serveUrl: "wss://studio.tail1234.ts.net/pwragent-federation",
+          },
+        }),
+      ),
+    ).toEqual([
+      "ws://studio.local:47830",
+      "wss://studio.tail1234.ts.net/pwragent-federation",
+      "ws://studio.tail1234.ts.net:47830",
+      "ws://192.168.4.115:47830",
+    ]);
+  });
+
+  it("omits the raw tailnet dial when the listener is pinned to one address", () => {
+    // The tailnet interface is not bound, so that endpoint could never answer.
+    // The Serve handler still can — it proxies from the tailnet to loopback.
+    expect(
+      buildFederationAdvertisedEndpoints(
+        inputs({
+          listenHost: "192.168.4.115",
           tailscale: {
             dnsName: "studio.tail1234.ts.net",
             serveUrl: "wss://studio.tail1234.ts.net/pwragent-federation",
@@ -239,6 +262,21 @@ describe("buildFederationAdvertisedEndpoints", () => {
     expect(
       buildFederationAdvertisedEndpoints(inputs({ listenHost: "127.0.0.1" })),
     ).toEqual(["ws://127.0.0.1:47830"]);
+  });
+
+  it("never carries a loopback literal behind a public URL", () => {
+    // On another machine that literal reaches the client's OWN listener. A
+    // gateway-identity mismatch is an auth-class failure, which aborts the
+    // endpoint walk rather than falling through, so a tunnel that is briefly
+    // down would surface as a permanently rejected pairing.
+    expect(
+      buildFederationAdvertisedEndpoints(
+        inputs({
+          listenHost: "127.0.0.1",
+          publicUrl: "wss://federation.example.com",
+        }),
+      ),
+    ).toEqual(["wss://federation.example.com"]);
   });
 
   it("de-duplicates a public URL that repeats a synthesized endpoint", () => {

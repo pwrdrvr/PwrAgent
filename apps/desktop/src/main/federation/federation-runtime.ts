@@ -1456,11 +1456,15 @@ export class DesktopFederationRuntime {
     label?: string;
     ttlMs?: number;
     /**
-     * Tailnet identity to advertise, injected by the caller. The Tailscale
-     * service reaches back into this runtime to verify the listener, so
-     * reading it from here would close a dependency cycle.
+     * Reads the tailnet identity to advertise. Injected by the caller because
+     * the Tailscale service reaches back into this runtime to verify the
+     * listener, so reading it from here would close a dependency cycle. It
+     * stays a thunk so an operator who pinned an explicit advertised list
+     * never pays for a Tailscale CLI spawn whose result is discarded.
      */
-    tailscale?: FederationTailscaleAdvertisement;
+    readTailscaleAdvertisement?: () => Promise<
+      FederationTailscaleAdvertisement | undefined
+    >;
   }): Promise<{ invite: string; expiresAt: number }> {
     const settings = await getDesktopSettingsService().readSettings();
     const mode = settings.federation.mode.value;
@@ -1475,7 +1479,10 @@ export class DesktopFederationRuntime {
     const gatewayEndpoints =
       advertisedEndpoints.length > 0
         ? advertisedEndpoints
-        : this.defaultAdvertisedEndpoints(settings, request.tailscale);
+        : await this.defaultAdvertisedEndpoints(
+            settings,
+            request.readTailscaleAdvertisement,
+          );
     const gatewayUrl = gatewayEndpoints[0];
     if (!gatewayUrl) {
       throw new Error("Federation gateway URL is not configured.");
@@ -1519,11 +1526,25 @@ export class DesktopFederationRuntime {
    * literal that has since moved leaves every enrolled client dialing a
    * stranger. See federation-advertised-endpoints.ts for the ordering rules.
    */
-  private defaultAdvertisedEndpoints(
+  private async defaultAdvertisedEndpoints(
     settings: DesktopSettingsSnapshot,
-    tailscale?: FederationTailscaleAdvertisement,
-  ): string[] {
+    readTailscaleAdvertisement?: () => Promise<
+      FederationTailscaleAdvertisement | undefined
+    >,
+  ): Promise<string[]> {
     const publicUrl = settings.federation.publicUrl.value.trim();
+    if (!publicUrl && !this.listenUrl) {
+      // Nothing designated a URL and no listener is up to name. Minting an
+      // invite here would hand a peer endpoints that cannot answer until the
+      // bind is repaired — most often another instance already holds the port,
+      // since every profile defaults to the same one. Say that instead.
+      throw new Error(
+        this.gatewayListenerError
+          ? `Federation gateway is not listening: ${this.gatewayListenerError}`
+          : "Federation gateway is not listening yet. Wait for it to start, or set a Public URL.",
+      );
+    }
+    const tailscale = await readTailscaleAdvertisement?.();
     const endpoints = buildFederationAdvertisedEndpoints({
       listenHost: settings.federation.listenHost.value,
       listenPort: settings.federation.listenPort.value,

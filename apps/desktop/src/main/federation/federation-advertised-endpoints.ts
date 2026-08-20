@@ -51,7 +51,8 @@ export type FederationInterfaceAddress = {
  * bridges for VMs and Internet Sharing, container bridges, and the link-local
  * radios macOS uses for AirDrop. They are not marked `internal`, so without
  * this list a machine running Docker or a VM advertises an address that every
- * client dials and every client times out on. VPN tunnels are deliberately
+ * client dials and every client times out on. `veth` also covers the Windows
+ * Hyper-V switches named `vEthernet (...)`. VPN tunnels are deliberately
  * absent — a corporate tunnel can be a real path, and Tailscale's own address
  * is handled by the CGNAT rule below.
  */
@@ -65,7 +66,6 @@ const HOST_ONLY_INTERFACE_PREFIXES = [
   "llw",
   "lxcbr",
   "veth",
-  "vethernet",
   "virbr",
   "vmenet",
   "vmnet",
@@ -124,10 +124,14 @@ export function buildFederationAdvertisedEndpoints(
   if (publicUrl) candidates.push(publicUrl);
 
   if (LOOPBACK_LISTEN_HOSTS.has(listenHost)) {
-    // A loopback-bound gateway serves nothing off this machine. Advertising
-    // its name or LAN literals would hand every client an endpoint that
-    // refuses, so keep the invite honest about the binding instead.
-    candidates.push(formatEndpoint(listenHost, port));
+    // A loopback-bound gateway serves nothing off this machine, so the honest
+    // answer is the loopback URL itself — an invite imported by a second
+    // profile on this same box still connects through it. It must never be
+    // appended behind a public URL, though: on another machine that literal
+    // reaches the client's OWN listener, and a gateway-identity mismatch is an
+    // auth-class failure, which aborts the endpoint walk rather than falling
+    // through to the next candidate.
+    if (!publicUrl) candidates.push(formatEndpoint(listenHost, port));
     return finalizeEndpoints(candidates);
   }
 
@@ -137,15 +141,19 @@ export function buildFederationAdvertisedEndpoints(
   });
   if (hostname) candidates.push(formatEndpoint(hostname, port));
 
-  const tailnet = tailscaleCandidate(inputs.tailscale, port);
-  if (tailnet) candidates.push(tailnet);
+  const tailnet = tailscaleCandidates({
+    tailscale: inputs.tailscale,
+    listenHost,
+    port,
+  });
+  candidates.push(...tailnet);
 
   candidates.push(
     ...literalCandidates({
       listenHost,
       port,
       interfaceAddresses: inputs.interfaceAddresses ?? [],
-      hasTailnetCandidate: tailnet !== undefined,
+      hasTailnetCandidate: tailnet.length > 0,
     }),
   );
 
@@ -154,9 +162,9 @@ export function buildFederationAdvertisedEndpoints(
 
 /**
  * Narrows a Tailscale status to what an invite can advertise. A Serve or
- * Funnel handler is preferred over the raw tailnet dial because the operator
- * configured it deliberately and it survives a firewall that blocks the
- * federation port on the tailnet interface.
+ * Funnel handler is carried only once configured; it is ordered ahead of the
+ * raw tailnet dial because the operator set it up deliberately and it survives
+ * a firewall that blocks the federation port on the tailnet interface.
  */
 export function federationTailscaleAdvertisementFromStatus(
   status: FederationTailscaleStatus,
@@ -189,15 +197,33 @@ export function collectFederationInterfaceAddresses(): FederationInterfaceAddres
   return collected;
 }
 
-function tailscaleCandidate(
-  tailscale: FederationTailscaleAdvertisement | undefined,
-  port: number,
-): string | undefined {
-  const serveUrl = tailscale?.serveUrl?.trim();
-  if (serveUrl) return serveUrl;
-  const dnsName = tailscale?.dnsName?.trim().replace(/\.$/, "");
-  if (!dnsName || !DNS_NAME_PATTERN.test(dnsName)) return undefined;
-  return formatEndpoint(dnsName, port);
+/**
+ * Tailnet paths to this gateway, the operator's Serve handler first.
+ *
+ * Both are emitted when both apply: a Serve handler is configured separately
+ * from the app and can drift out of date, and when it does the raw dial is the
+ * only tailnet path left. The raw dial is conditional, though — it reaches the
+ * federation port on the tailnet interface, which only a wildcard listener
+ * binds. Behind a listener pinned to one address it can never answer, so it
+ * would cost every client a connect timeout on every reconnect cycle.
+ */
+function tailscaleCandidates(params: {
+  tailscale: FederationTailscaleAdvertisement | undefined;
+  listenHost: string;
+  port: number;
+}): string[] {
+  const candidates: string[] = [];
+  const serveUrl = params.tailscale?.serveUrl?.trim();
+  if (serveUrl) candidates.push(serveUrl);
+  const dnsName = params.tailscale?.dnsName?.trim().replace(/\.$/, "");
+  if (
+    dnsName
+    && DNS_NAME_PATTERN.test(dnsName)
+    && WILDCARD_LISTEN_HOSTS.has(params.listenHost)
+  ) {
+    candidates.push(formatEndpoint(dnsName, params.port));
+  }
+  return candidates;
 }
 
 function literalCandidates(params: {
