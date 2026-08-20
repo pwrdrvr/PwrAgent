@@ -15,6 +15,7 @@ import {
 } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { formatBackendLabel } from "../../lib/backend-label";
 import { useBackendSummaries } from "../../lib/useBackendSummaries";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
@@ -29,6 +30,7 @@ import { useTranscriptWindow } from "../thread-detail/useTranscriptWindow";
 import { collectEditedFileGroups } from "../thread-detail/edited-file-groups";
 import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "../../lib/thread-history-limits";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { parseReviewCommand } from "../../../../shared/review-command";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { useThreadSessionState } from "../../lib/useThreadSessionState";
 import { useThreadSkills } from "../../lib/useThreadSkills";
@@ -222,6 +224,19 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const ensureSkillsLoaded = threadSkills.ensureLoaded;
   const mentionSources = useMemo<ComposerMentionSources>(
     () => ({
+      commands: [
+        {
+          name: "review",
+          description: "Review current staged, unstaged, and untracked changes",
+          sourceLabel: "PwrAgent",
+        },
+        ...threadSkills.providerCommands.map((command) => ({
+          aliases: command.aliases,
+          description: command.description,
+          name: command.name,
+          sourceLabel: formatBackendLabel(command.backend ?? thread.source),
+        })),
+      ],
       currentThreadKey: buildThreadIdentityKey(thread.source, thread.id),
       directories: navigationSources.directories,
       ensureNavigationLoaded: navigationSources.ensureLoaded,
@@ -238,6 +253,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       navigationSources.directories,
       navigationSources.ensureLoaded,
       navigationSources.threads,
+      threadSkills.providerCommands,
       threadSkills.skills,
       thread.id,
       thread.source,
@@ -360,6 +376,61 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     async (text: string): Promise<boolean> => {
       setSendError(undefined);
       setSendNotice(undefined);
+
+      const reviewCommand = parseReviewCommand(text);
+      if (reviewCommand) {
+        if (sessionRef.current.threadBusy) {
+          setSendError("Cannot start a review while a turn is in progress.");
+          return false;
+        }
+        if (!desktopApi?.startReview) {
+          setSendError("Review is not available for this thread.");
+          return false;
+        }
+        try {
+          await desktopApi.startReview({
+            backend: thread.source,
+            federationTarget,
+            threadId: thread.id,
+            target: reviewCommand.target,
+            delivery: "inline",
+          });
+          return true;
+        } catch (error) {
+          setSendError(
+            error instanceof Error
+              ? error.message
+              : "Could not start that review.",
+          );
+          return false;
+        }
+      }
+
+      if (text.trim().toLowerCase() === "/compact") {
+        if (sessionRef.current.threadBusy) {
+          setSendError("Cannot compact while a turn is in progress.");
+          return false;
+        }
+        if (!desktopApi?.compactThread) {
+          setSendError("Compaction is not available for this thread.");
+          return false;
+        }
+        try {
+          await desktopApi.compactThread({
+            backend: thread.source,
+            federationTarget,
+            threadId: thread.id,
+          });
+          return true;
+        } catch (error) {
+          setSendError(
+            error instanceof Error
+              ? error.message
+              : "Could not compact the thread.",
+          );
+          return false;
+        }
+      }
 
       if (sessionRef.current.threadBusy) {
         if (!desktopApi?.steerTurn) {

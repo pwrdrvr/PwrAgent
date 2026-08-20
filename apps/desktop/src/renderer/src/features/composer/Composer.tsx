@@ -169,6 +169,7 @@ import {
   serializeDraftWithSkillTokens,
 } from "./composer-mention-tokens";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
+import { findSlashCommandTrigger } from "./composer-slash-commands";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectPicker } from "./ProjectPicker";
 import {
@@ -1127,27 +1128,6 @@ function buildConfiguredReviewCommand(
         displayText: "Review custom instructions",
       }
     : undefined;
-}
-
-function findSlashCommandTrigger(text: string, caret: number): {
-  end: number;
-  query: string;
-  start: number;
-} | undefined {
-  const prefix = text.slice(0, caret);
-  if (/\s$/.test(prefix)) {
-    return undefined;
-  }
-  const match = /^\/([^\r\n]*)$/.exec(prefix);
-  if (!match) {
-    return undefined;
-  }
-
-  return {
-    start: 0,
-    end: caret,
-    query: match[1] ?? "",
-  };
 }
 
 function formatDraftPreview(draft: QueuedTurnDraft): string {

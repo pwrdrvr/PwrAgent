@@ -220,6 +220,132 @@ describe("StarMapChatCard federation routing", () => {
   });
 });
 
+describe("StarMapChatCard slash commands", () => {
+  it.each([
+    ["Codex", "codex", "compact"],
+    ["ACP", "acp:grok", "session-info"],
+  ] as const)("loads and offers %s provider commands", async (
+    _provider,
+    backend,
+    command,
+  ) => {
+    const listSkills = vi.fn(async () => ({
+      backend,
+      fetchedAt: 1,
+      data: [
+        {
+          commands: [
+            {
+              name: command,
+              description: `Run ${command}`,
+              backend,
+              scope: "session" as const,
+              source: "provider" as const,
+            },
+          ],
+          skills: [],
+        },
+      ],
+    }));
+    const desktopApi = buildApi({ listSkills });
+    const thread = localThread({ source: backend });
+    renderCard({ desktopApi, thread });
+
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Message Local work" }),
+      { target: { value: `/${command.slice(0, 3)}` } },
+    );
+
+    await waitFor(() => {
+      expect(listSkills).toHaveBeenCalledWith(
+        expect.objectContaining({ backend, threadId: "t-local" }),
+      );
+    });
+    expect(
+      await screen.findByRole("option", { name: new RegExp(`/${command}`, "i") }),
+    ).toBeTruthy();
+  });
+
+  it.each(["codex", "acp:grok"] as const)(
+    "routes PwrAgent /review through the %s review API",
+    async (backend) => {
+      const startReview = vi.fn(async () => ({
+        backend,
+        threadId: "t-local",
+        reviewThreadId: "review-1",
+        turnId: "turn-review-1",
+      }));
+      const desktopApi = buildApi({ startReview });
+      renderCard({
+        desktopApi,
+        thread: localThread({ source: backend }),
+      });
+      const input = screen.getByRole("textbox", {
+        name: "Message Local work",
+      });
+      fireEvent.change(input, { target: { value: "/review" } });
+      fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+      await waitFor(() => {
+        expect(startReview).toHaveBeenCalledWith({
+          backend,
+          threadId: "t-local",
+          target: { type: "uncommittedChanges" },
+          delivery: "inline",
+        });
+      });
+      expect(desktopApi.startTurn).not.toHaveBeenCalled();
+    },
+  );
+
+  it("routes Codex /compact through thread compaction", async () => {
+    const compactThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t-local",
+      turnId: "turn-compact-1",
+    }));
+    const desktopApi = buildApi({ compactThread });
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    fireEvent.change(input, { target: { value: "/compact" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(compactThread).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "t-local",
+      });
+    });
+    expect(desktopApi.startTurn).not.toHaveBeenCalled();
+  });
+
+  it("sends an ACP-native slash command to the ACP session", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "acp:grok" as const,
+      threadId: "t-local",
+      turnId: "turn-acp-1",
+    }));
+    const desktopApi = buildApi({ startTurn });
+    renderCard({
+      desktopApi,
+      thread: localThread({ source: "acp:grok" }),
+    });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    fireEvent.change(input, { target: { value: "/session-info" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "acp:grok",
+          threadId: "t-local",
+          input: [{ type: "text", text: "/session-info" }],
+        }),
+      );
+    });
+  });
+});
+
 describe("StarMapChatCard send failures", () => {
   it("restores the draft and rolls back its optimistic message when the peer refuses", async () => {
     const desktopApi = buildApi({

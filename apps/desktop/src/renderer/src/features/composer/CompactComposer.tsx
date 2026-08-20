@@ -72,7 +72,7 @@ export type CompactComposerProps = {
   /** Thread's current fast-mode state, shown on the chip menu's toggle. */
   fastMode?: boolean;
   /**
-   * Populations the `$` / `@` / `#` popovers pick from. Optional on
+   * Populations the `$` / `/` / `@` / `#` popovers pick from. Optional on
    * purpose: a host that supplies nothing keeps the trigger characters as
    * literal prose, so adopting this component never requires them.
    */
@@ -124,10 +124,11 @@ const MENU_VIEW_TITLES: Record<
  * rather than hydrating it on focus, which would cost a click and a caret
  * every time the operator moved between cards.
  *
- * Mentions come from `useComposerMentions`, driven by whatever populations
- * the host can honestly supply through `mentionSources`. Nothing about the
- * pickers is re-implemented here: the triggers, ranking, token minting and
- * markdown serialization are the same modules the full composer calls.
+ * Mentions and slash commands come from `useComposerMentions`, driven by
+ * whatever populations the host can honestly supply through `mentionSources`.
+ * Nothing about the pickers is re-implemented here: the triggers, ranking,
+ * token minting and markdown serialization are the same modules the full
+ * composer calls.
  *
  * Model / reasoning / access render as a chip on a status strip below the
  * field — a strip, not ambient text inside the field, because the field

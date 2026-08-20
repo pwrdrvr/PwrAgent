@@ -68,6 +68,29 @@ describe("CompactComposer", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
+  it("inserts a slash command from the shared autocomplete", async () => {
+    renderComposer({
+      mentionSources: {
+        commands: [
+          {
+            name: "session-info",
+            description: "Show ACP session details",
+            sourceLabel: "Grok",
+          },
+        ],
+      },
+    });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    fireEvent.change(input, { target: { value: "/ses" } });
+    fireEvent.click(
+      screen.getByRole("option", { name: /\/session-info/i }),
+    );
+
+    await waitFor(() => {
+      expect((input as HTMLTextAreaElement).value).toBe("/session-info ");
+    });
+  });
+
   it("shows model, effort, and access mode as the status chip", () => {
     renderComposer({
       executionMode: "full-access",
