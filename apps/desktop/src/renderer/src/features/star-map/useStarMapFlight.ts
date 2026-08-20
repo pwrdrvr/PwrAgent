@@ -44,6 +44,13 @@ function prefersReducedMotion(): boolean {
  * first, so the two never fight over the transform. Under
  * `prefers-reduced-motion` the flight lands immediately instead of
  * travelling; the operator still arrives, the sky just does not slide.
+ *
+ * Being the only writer is what makes `stepByCanvasDelta` necessary. A
+ * running leg is two views captured at launch, so it is the one writer that
+ * does NOT read the live ref per frame — which is right for the operator
+ * (nothing may deflect a flight) and wrong for the map's own contents,
+ * which can move the destination out from under a leg that is still
+ * travelling to it.
  */
 export function useStarMapFlight(params: {
   /** Where the view is right now, shared with every other writer. */
@@ -55,6 +62,7 @@ export function useStarMapFlight(params: {
 }): {
   flyTo: (target: StarMapView) => void;
   cancel: () => void;
+  stepByCanvasDelta: (delta: { x: number; y: number }) => void;
 } {
   const callbacksRef = useRef({
     onPaint: params.onPaint,
@@ -68,16 +76,69 @@ export function useStarMapFlight(params: {
   });
 
   const frameRef = useRef(0);
+  /**
+   * The leg currently being flown: where it left from and where it lands,
+   * both in viewport pixels, or undefined when nothing is flying.
+   *
+   * Held in a ref and mutated in place rather than captured in `flyTo`'s
+   * closure, because `stepByCanvasDelta` has to reach the same two views
+   * the next frame will interpolate between.
+   */
+  const legRef = useRef<{ from: StarMapView; to: StarMapView } | undefined>(
+    undefined,
+  );
   const { liveViewRef } = params;
 
   const cancel = useCallback(() => {
     if (!frameRef.current) return;
     cancelAnimationFrame(frameRef.current);
     frameRef.current = 0;
+    legRef.current = undefined;
     // The distance already flown is real: commit it, or the next render
     // snaps the canvas back to wherever the last commit left it.
     callbacksRef.current.onCommit(liveViewRef.current);
   }, [liveViewRef]);
+
+  /**
+   * Move a running leg with the map underneath it.
+   *
+   * The map's contents can re-base while a flight is in the air: the
+   * radial lenses normalise their canvas around what they laid out, so a
+   * peer snapshot or an unfolded cloud moves every body — the card being
+   * flown to included — by the same amount, and the screen answers that by
+   * stepping the view back. A leg captured before the re-base knows
+   * nothing about it, and paints straight over that step on its next
+   * frame: the map jumps back to the shift the screen just cancelled, once
+   * per snapshot for the whole flight.
+   *
+   * Both ends move. `from` because the flight has to stay continuous with
+   * the frame already on screen; `to` because a destination expressed as
+   * "centre this card" has moved exactly as far as the card did, so a leg
+   * that kept its original target would land next to the card it was asked
+   * to find.
+   *
+   * The delta is in CANVAS units, and each end converts it with its OWN
+   * scale. A leg is not one view but two, and they need not share a zoom:
+   * `starMapFlightScale` pulls a flight launched below 1:1 back to 1:1, so
+   * an overview-zoom pick runs 0.3 → 1.0 and the same canvas shift is
+   * three times as many viewport pixels at the destination as at the
+   * launch. Handing this one pre-multiplied pixel step — the live view's,
+   * which is neither end's — corrected the landing by a third of what the
+   * card actually moved, which is the whole bug this exists to fix.
+   *
+   * A no-op when nothing is flying, so callers need not ask first.
+   */
+  const stepByCanvasDelta = useCallback(
+    (delta: { x: number; y: number }) => {
+      const leg = legRef.current;
+      if (!leg) return;
+      leg.from.x -= delta.x * leg.from.scale;
+      leg.from.y -= delta.y * leg.from.scale;
+      leg.to.x -= delta.x * leg.to.scale;
+      leg.to.y -= delta.y * leg.to.scale;
+    },
+    [],
+  );
 
   const flyTo = useCallback(
     (target: StarMapView) => {
@@ -87,9 +148,14 @@ export function useStarMapFlight(params: {
       }
       const from = liveViewRef.current;
       if (starMapFlightIsNoop(from, target) || prefersReducedMotion()) {
+        legRef.current = undefined;
         callbacksRef.current.onCommit(target);
         return;
       }
+      // Copies, because `stepByCanvasDelta` moves both ends in place and
+      // neither the live view ref nor the caller's target is ours to write.
+      const leg = { from: { ...from }, to: { ...target } };
+      legRef.current = leg;
       let start = 0;
       const step = (now: number) => {
         // The first frame has no previous timestamp to measure against, so
@@ -101,11 +167,14 @@ export function useStarMapFlight(params: {
         );
         if (progress >= 1) {
           frameRef.current = 0;
-          callbacksRef.current.onCommit(target);
+          legRef.current = undefined;
+          // The leg's own target, not the caller's: a re-base mid-flight
+          // moved the card, and this is where the card ended up.
+          callbacksRef.current.onCommit(leg.to);
           return;
         }
         callbacksRef.current.onPaint(
-          interpolateStarMapView(from, target, progress),
+          interpolateStarMapView(leg.from, leg.to, progress),
         );
         frameRef.current = requestAnimationFrame(step);
       };
@@ -119,6 +188,7 @@ export function useStarMapFlight(params: {
       if (!frameRef.current) return;
       cancelAnimationFrame(frameRef.current);
       frameRef.current = 0;
+      legRef.current = undefined;
     };
   }, []);
 
@@ -126,5 +196,8 @@ export function useStarMapFlight(params: {
   // of a `useEffect` that registers a non-passive wheel listener, and a
   // fresh literal every render would tear that listener down and re-add it
   // on every streamed update. Same rule as `useStarMapArrangement`.
-  return useMemo(() => ({ flyTo, cancel }), [cancel, flyTo]);
+  return useMemo(
+    () => ({ flyTo, cancel, stepByCanvasDelta }),
+    [cancel, flyTo, stepByCanvasDelta],
+  );
 }
