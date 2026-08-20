@@ -219,12 +219,18 @@ async function expectTopBandLaidOut(mapWindow: Page, at: string): Promise<void> 
       );
     };
     const band = document.querySelector(".star-map__top-band");
-    const right = band
-      ? Math.max(
-          ...[...band.querySelectorAll("button")]
-            .filter((el) => el.getBoundingClientRect().width > 0)
-            .map((el) => el.getBoundingClientRect().right),
+    // Only what is on screen. The hidden rendering is parked at the band's
+    // corner at its full natural width so the fit stays measurable, and
+    // counting it would fail this for a row nobody can see.
+    const onScreen = band
+      ? [...band.querySelectorAll("button")].filter(
+          (el) =>
+            el.getBoundingClientRect().width > 0
+            && getComputedStyle(el).visibility !== "hidden",
         )
+      : [];
+    const right = onScreen.length
+      ? Math.max(...onScreen.map((el) => el.getBoundingClientRect().right))
       : 0;
     return {
       menu: showing(".star-map__filter-menu"),

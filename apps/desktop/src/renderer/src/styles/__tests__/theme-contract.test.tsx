@@ -1053,6 +1053,16 @@ describe("Tangerine Terminal theme contract", () => {
     expect(hiddenRule).toContain("width: max-content;");
     expect(hiddenRule).not.toContain("display: none;");
 
+    // The strip clips a row that has outgrown it, but the clip edge falls
+    // exactly on the first and last chip's box and the focus ring is drawn
+    // OUTSIDE that box (2px at `outline-offset: 1px`). With plain
+    // `overflow: hidden` the ring on the edge chips lost its outer 3px —
+    // measured as three fully blank pixel columns where the accent should
+    // be — and no axe rule covers it.
+    expect(stripRule).toContain("overflow: clip;");
+    expect(stripRule).toContain("overflow-clip-margin: 4px;");
+    expect(stripRule).not.toContain("overflow: hidden;");
+
     // The collapsed menu is the only thing that appears rather than
     // disappears, so it is hidden by default and shown by the state class.
     expect(extractRuleBody(css, ".star-map__filter-menu")).toContain(

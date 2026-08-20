@@ -12708,30 +12708,35 @@ textarea,
 /* `nowrap`: wrapping was the first answer to a strip that did not fit,
    and it put a second row of chips over the star field and doubled the
    height of the band to show information already on it. The band is one
-   row; when the row runs out, chips leave it rather than stacking. */
+   row; when the row runs out, chips leave it rather than stacking.
+
+   The clip is on the STRIP and not on the slot around it: the collapsed
+   popover is a descendant of the slot, and clipping there would cut the
+   panel off at the band. It only ever matters until the first measurement
+   lands anyway - it keeps an unmeasured row from widening the band and
+   shoving the actions slot off the window.
+
+   `clip` with a margin rather than `hidden`, because the clip edge falls
+   exactly on the first and last chip's box and the focus ring is drawn
+   OUTSIDE that box (2px at `outline-offset: 1px`). Under `hidden` the ring
+   on the edge chips lost its outer 3px - three blank pixel columns where
+   the accent should be - and no axe rule covers that. 4px clears the ring
+   and still clips a runaway row. */
 .star-map__filter-strip {
   display: flex;
   flex-wrap: nowrap;
   gap: 6px;
+  overflow: clip;
+  overflow-clip-margin: 4px;
 }
 
 /* Chips hold their size. Flex shrinking is the other way a row that does
    not fit can fail: instead of a chip leaving, every chip narrows, the
    labels wrap inside them ("Needs / input"), and the band grows a second
    line anyway - the exact outcome the strip stopped wrapping to avoid.
-   Degradation here is a chip leaving the row, never the row squeezing.
-
-   The clip is on the STRIP and not on the slot around it: the collapsed
-   popover is a descendant of the slot, and clipping there would cut the
-   panel off at the band. It only ever matters for the frame before the
-   first measurement lands anyway - it keeps an unmeasured row from
-   widening the band and shoving the actions slot off the window. */
+   Degradation here is a chip leaving the row, never the row squeezing. */
 .star-map__filter-strip > * {
   flex-shrink: 0;
-}
-
-.star-map__filter-strip {
-  overflow: hidden;
 }
 
 /* Anchor for the collapsed popover, same shape as `.star-map__view-options`

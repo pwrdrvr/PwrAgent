@@ -102,6 +102,55 @@ describe("resolveFilterFit", () => {
     ).toBe("full");
   });
 
+  it("counts the Clear button, which is in the row but is not a chip", () => {
+    // Clear renders the moment anything is filtered, sits in the strip
+    // beside the chips, and never leaves with them when the row reduces.
+    // Measured: 50px plus its 6px gap. Leaving it out reported a row of
+    // 661px that actually needed 717px, and the strip's clip sliced the
+    // trailing chip in half with nothing to say it had.
+    const CLEAR = 50 + GAP;
+    expect(
+      resolveFilterFit({
+        available: REAL_ROW,
+        chipWidths: REAL_CHIPS,
+        droppable: new Set(),
+        gap: GAP,
+        reserved: CLEAR,
+      }),
+    ).not.toBe("full");
+    expect(
+      resolveFilterFit({
+        available: REAL_ROW + CLEAR,
+        chipWidths: REAL_CHIPS,
+        droppable: new Set(),
+        gap: GAP,
+        reserved: CLEAR,
+      }),
+    ).toBe("full");
+    // And it is still charged for on the reduced row, which is the case
+    // that actually bit: dropping two chips does not drop Clear.
+    const reduced =
+      REAL_ROW - REAL_CHIPS[1]! - REAL_CHIPS[2]! - GAP * 2 + CLEAR;
+    expect(
+      resolveFilterFit({
+        available: reduced - 1,
+        chipWidths: REAL_CHIPS,
+        droppable: new Set([1, 2]),
+        gap: GAP,
+        reserved: CLEAR,
+      }),
+    ).toBe("collapsed");
+    expect(
+      resolveFilterFit({
+        available: reduced,
+        chipWidths: REAL_CHIPS,
+        droppable: new Set([1, 2]),
+        gap: GAP,
+        reserved: CLEAR,
+      }),
+    ).toBe("reduced");
+  });
+
   it("counts the gaps, not just the chips", () => {
     // Six gaps between seven chips. Sizing on chip widths alone is off by
     // 36px here — enough to overflow the row it just declared a fit.

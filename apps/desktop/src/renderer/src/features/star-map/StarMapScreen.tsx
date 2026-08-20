@@ -1351,15 +1351,25 @@ export function StarMapScreen(props: StarMapScreenProps) {
       taken += bandGap * siblings;
 
       const stripStyle = getComputedStyle(strip);
-      const chips = [...strip.children].filter((child) =>
-        child.classList.contains("star-map__filter-chip"),
-      );
+      const stripGap = parseFloat(stripStyle.columnGap) || 0;
+      const chips: number[] = [];
+      // Everything in the row that is not a chip - the "Clear" button -
+      // costs its width plus its gap, and unlike a chip it never leaves
+      // when the row is reduced. Left out, the row measures 56px narrower
+      // than it is and the clip below silently slices the last chip.
+      let reserved = 0;
+      for (const child of strip.children) {
+        const width = child.getBoundingClientRect().width;
+        if (child.classList.contains("star-map__filter-chip")) chips.push(width);
+        else reserved += width + stripGap;
+      }
       setFilterFit(
         resolveFilterFit({
           available: band.getBoundingClientRect().width - taken,
-          chipWidths: chips.map((chip) => chip.getBoundingClientRect().width),
+          chipWidths: chips,
           droppable: droppableFilters,
-          gap: parseFloat(stripStyle.columnGap) || 0,
+          gap: stripGap,
+          reserved,
         }),
       );
     };
@@ -1369,7 +1379,20 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // initial measure still runs there.
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
+    // The band's width comes from the window, so watching it alone only
+    // catches resizes. What the strip NEEDS can change without the window
+    // moving at all: `--font-sans` leads with a web font, so the first
+    // layout measures fallback metrics and every box changes when the real
+    // face arrives, and macOS fullscreen drops the chrome's 80px stoplight
+    // reservation in place. Watching the two boxes whose content decides
+    // the fit catches both. No feedback loop: a fit change moves the
+    // strip's own width, but the measurement reads the chips' natural
+    // widths and the band's, neither of which the fit alters, so the
+    // second pass resolves the same state and React bails on the set.
     observer.observe(band);
+    observer.observe(strip);
+    const chrome = band.firstElementChild;
+    if (chrome && chrome !== strip.parentElement) observer.observe(chrome);
     return () => observer.disconnect();
     // Counts and selection change chip widths and what may be dropped, so
     // both have to re-measure.

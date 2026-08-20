@@ -47,19 +47,29 @@ export function resolveFilterFit(params: {
   droppable: ReadonlySet<number>;
   /** Flex gap between chips, in px. */
   gap: number;
+  /**
+   * Everything else in the row, plus one gap each: the "Clear" button,
+   * which appears the moment anything is filtered and never leaves with
+   * the chips. Measuring only the chips reports a row 56px narrower than
+   * it is, and the strip's clip then slices the trailing chip in half
+   * with nothing to say it did.
+   */
+  reserved?: number;
 }): StarMapFilterFit {
-  const { available, chipWidths, droppable, gap } = params;
+  const { available, chipWidths, droppable, gap, reserved = 0 } = params;
   // A measurement that has not happened yet reads as zero. Showing
   // everything is the honest starting state: the strip is what the band
   // is for, and one frame of overflow beats one frame of a collapsed
   // menu that then expands.
   if (available <= 0 || chipWidths.length === 0) return "full";
-  if (rowWidth(chipWidths, gap) <= available) return "full";
+  if (rowWidth(chipWidths, gap) + reserved <= available) return "full";
 
   const kept = chipWidths.filter((_, index) => !droppable.has(index));
   // Dropping every chip is not "reduced", it is an empty strip wearing
   // the strip's label — collapse instead, so the control is still there.
-  if (kept.length > 0 && rowWidth(kept, gap) <= available) return "reduced";
+  if (kept.length > 0 && rowWidth(kept, gap) + reserved <= available) {
+    return "reduced";
+  }
 
   return "collapsed";
 }
