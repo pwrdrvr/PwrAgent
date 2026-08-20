@@ -8,9 +8,11 @@ import {
   waitFor,
   within
 } from "@testing-library/react";
+import { resolveNewThreadBackend } from "@pwragent/shared";
 import type {
   AgentEvent,
   AppServerBackendKind,
+  BackendSummary,
   CreateScheduledThreadActionRequest,
   DesktopPwrAgentProfileSummary,
   DesktopSettingsSnapshot,
@@ -2706,6 +2708,44 @@ describe("App", () => {
   });
 
   it("keeps the startup thread selection instead of opening the workspace composer", async () => {
+    const startupBackends: BackendSummary[] = [
+      {
+        kind: "codex",
+        // `BackendSummary.source` is the discovery channel ("builtin" | "acp"),
+        // not the backend kind — and `selectableNewThreadBackends` reads it.
+        source: "builtin",
+        label: "Codex",
+        available: true,
+        methods: ["thread/start", "turn/start"],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: true,
+          transcriptPagination: true,
+          toolUse: true,
+          approvalRequests: true,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [
+          {
+            mode: "default",
+            label: "Default Access",
+            available: true,
+            isDefault: true,
+          },
+        ],
+      },
+    ];
+    // Pin the precondition this test depends on: the startup landing effect
+    // reaches the guard under test only when a backend can create a thread.
+    // An unselectable fixture sends it down the onboarding branch instead,
+    // where every assertion below passes without exercising the guard.
+    expect(resolveNewThreadBackend(startupBackends)).toBeDefined();
     const ensureDirectoryLaunchpad = vi.fn(async () => ({
       launchpad: {
         directoryKey: "workspace:new-thread",
@@ -2754,37 +2794,7 @@ describe("App", () => {
         }),
         listBackends: async () => ({
           fetchedAt: Date.now(),
-          backends: [
-            {
-              kind: "codex" as const,
-              source: "codex" as const,
-              label: "Codex",
-              available: true,
-              methods: ["thread/start", "turn/start"],
-              capabilities: {
-                listThreads: true,
-                createThread: true,
-                resumeThread: true,
-                renameThread: true,
-                readThread: true,
-                startTurn: true,
-                interruptTurn: true,
-                steerTurn: true,
-                transcriptPagination: true,
-                toolUse: true,
-                approvalRequests: true,
-                multiDirectoryThreads: true,
-              },
-              executionModes: [
-                {
-                  mode: "default" as const,
-                  label: "Default Access",
-                  available: true,
-                  isDefault: true,
-                },
-              ],
-            },
-          ],
+          backends: startupBackends,
         }),
         getNavigationSnapshot: async () => ({
           backend: "all" as const,
@@ -2818,14 +2828,16 @@ describe("App", () => {
 
     render(<App />);
 
-    const threadRow = await screen.findByRole("button", { name: "Existing thread" });
     await waitFor(() => {
-      expect(threadRow).toHaveAttribute("aria-pressed", "true");
+      expect(
+        screen.getByRole("button", { name: "Existing thread" }),
+      ).toHaveAttribute("aria-pressed", "true");
     });
     // Three flushes cover the startup landing decision: the backend list
     // resolves, the effect runs, and `ensureDirectoryLaunchpad` would have
-    // settled. Without them a launchpad that opens one tick later reads as
-    // "never opened" and the regression passes unnoticed.
+    // settled. Measured against the unguarded effect — the launchpad opens
+    // inside this window — so the negative assertions below are load-bearing
+    // rather than merely early.
     await flushReactUpdates();
     await flushReactUpdates();
     await flushReactUpdates();
