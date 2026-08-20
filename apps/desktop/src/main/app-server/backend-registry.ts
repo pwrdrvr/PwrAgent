@@ -4907,7 +4907,7 @@ const CODEX_MISSING_THREAD_CONFIRMATION_RATIO = 0.2;
  * synchronization rejects. Coalesce a startup burst into one decision so the
  * ratio is computed against every thread Codex lost, not the first one.
  */
-const CODEX_MISSING_THREAD_EVALUATION_DELAY_MS = 2_000;
+export const CODEX_MISSING_THREAD_EVALUATION_DELAY_MS = 2_000;
 
 /**
  * Codex answers any thread-scoped request for a thread it can no longer
@@ -6919,14 +6919,22 @@ export class DesktopBackendRegistry {
    * Threads Codex answered `thread not found` for during this session. An id
    * stays here once it lands, whatever the audit decides, so a later
    * `thread/list` cannot reschedule the retries this set exists to suppress.
-   * Only a successful thread-scoped write clears one.
+   * Because the scheduler skips these threads, nothing it does can clear one;
+   * only an operator-driven workspace handoff, which bypasses the scheduler,
+   * can prove the thread came back. Otherwise the suppression lasts the
+   * session, and a restart re-audits from scratch.
    */
   private readonly missingCodexThreadIds = new Set<string>();
   /** The subset still awaiting an archive-or-keep outcome. */
   private readonly unresolvedMissingCodexThreadIds = new Set<string>();
   private missingCodexThreadEvaluationTimer?: ReturnType<typeof setTimeout>;
   private missingCodexThreadEvaluation?: Promise<void>;
-  private missingCodexThreadPromptOpen = false;
+  /**
+   * Set once the operator answers a missing-thread prompt with "keep". That
+   * answer means they suspect a Codex profile mismatch, so nothing may be
+   * auto-archived afterwards: every later audit asks instead of deciding.
+   */
+  private missingCodexThreadsKeptThisSession = false;
   /**
    * Visible (non-tombstoned, non-archived) Codex thread count from the most
    * recent full `thread/list`. It is the denominator for the missing-thread
@@ -24436,6 +24444,12 @@ export class DesktopBackendRegistry {
         cwd,
       });
     });
+    // A thread Codex can write to is a thread Codex still has. Clearing here
+    // rather than in the scheduler's success path is what makes this
+    // reachable: the scheduler skips every thread already recorded missing, so
+    // only a caller that bypasses it — an operator-driven workspace handoff —
+    // can prove the thread came back.
+    this.clearMissingCodexThread(params.threadId);
   }
 
   private schedulePendingCodexWorkspaceCwdSyncs(params: {
@@ -24493,9 +24507,6 @@ export class DesktopBackendRegistry {
       cwd: params.cwd,
     })
       .then(() => {
-        // A thread Codex can write to is a thread Codex still has. Clear any
-        // earlier verdict so a reconnected profile recovers on its own.
-        this.clearMissingCodexThread(params.threadId);
         this.invalidateThreadListCache("codex");
       })
       .catch((error) => {
@@ -24522,6 +24533,32 @@ export class DesktopBackendRegistry {
       cwd: params.cwd,
       promise,
     });
+  }
+
+  /**
+   * Resolves once no missing-thread work is in flight: every pending workspace
+   * CWD synchronization has settled — that rejection is what records a missing
+   * thread and arms the audit — and any running audit has finished.
+   *
+   * This exists because the work is deliberately fire-and-forget, so nothing a
+   * caller awaits tells it when the audit has run. A test that instead pumped
+   * fake timers for a fixed number of ticks was guessing how many awaited hops
+   * the archive path takes; that count differs by platform, and the Windows job
+   * flaked on it (#1793). Loop rather than assume one pass drains everything:
+   * the audit archives through `listThreads`, which can schedule further
+   * synchronizations. The bound is a runaway guard — reaching it means
+   * something is re-arming without converging, which is a bug worth seeing.
+   */
+  async whenMissingCodexThreadWorkSettledForTests(): Promise<void> {
+    for (let pass = 0; pass < 10; pass += 1) {
+      const pendingSyncs = [...this.pendingCodexWorkspaceCwdSyncs.values()];
+      const evaluation = this.missingCodexThreadEvaluation;
+      if (pendingSyncs.length === 0 && !evaluation) {
+        return;
+      }
+      await Promise.all(pendingSyncs.map((pending) => pending.promise));
+      await evaluation;
+    }
   }
 
   private isCodexThreadKnownMissing(threadId: string): boolean {
@@ -24580,7 +24617,7 @@ export class DesktopBackendRegistry {
   }
 
   private async auditMissingCodexThreads(): Promise<void> {
-    if (this.closed || this.missingCodexThreadPromptOpen) {
+    if (this.closed) {
       return;
     }
     const threadIds = [...this.unresolvedMissingCodexThreadIds];
@@ -24593,11 +24630,19 @@ export class DesktopBackendRegistry {
     // asks the operator rather than archiving on a guess.
     const totalCount = Math.max(this.codexVisibleThreadCount, threadIds.length);
     const ratio = threadIds.length / totalCount;
-    if (ratio > CODEX_MISSING_THREAD_CONFIRMATION_RATIO) {
-      this.missingCodexThreadPromptOpen = true;
+    // The audit only runs when a thread is newly missing, so re-emitting is
+    // not a loop: it revises a prompt the operator has not answered yet. The
+    // notice id is stable, so the renderer replaces rather than stacks. This
+    // is also the recovery path when the first prompt was emitted before any
+    // window had subscribed to the event channel.
+    if (
+      ratio > CODEX_MISSING_THREAD_CONFIRMATION_RATIO
+      || this.missingCodexThreadsKeptThisSession
+    ) {
       backendRegistryLog.warn(
-        "Codex missing-thread share exceeds the automatic archive threshold",
+        "Codex missing threads need an operator decision",
         {
+          keptThisSession: this.missingCodexThreadsKeptThisSession,
           missingCount: threadIds.length,
           totalCount,
           threadIds,
@@ -24677,10 +24722,10 @@ export class DesktopBackendRegistry {
         threadId.trim()
         && this.unresolvedMissingCodexThreadIds.delete(threadId),
     );
-    this.missingCodexThreadPromptOpen = false;
     if (request.action === "keep") {
       // The ids stay in `missingCodexThreadIds`, which is what keeps the
-      // thread visible, its retries suspended, and this prompt closed.
+      // thread visible and its retries suspended.
+      this.missingCodexThreadsKeptThisSession = true;
       backendRegistryLog.warn("keeping Codex threads reported missing", {
         threadCount: threadIds.length,
       });

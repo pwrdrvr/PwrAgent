@@ -1,5 +1,13 @@
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
 
+/**
+ * The confirmation notice replaces the toast's own dismiss control with its
+ * two answers, so whatever dismisses it must agree with this id exactly — a
+ * mismatch strands the operator with a prompt they cannot close.
+ */
+export const CODEX_MISSING_THREADS_CONFIRMATION_NOTICE_ID =
+  "codex-missing-threads:confirmation";
+
 export type CodexMissingThreadsSignal = {
   status: "archived" | "confirmationRequired";
   threadIds: string[];
@@ -86,8 +94,8 @@ export function buildCodexMissingThreadsNotice(params: {
     ],
     autoDismiss: false,
     detail:
-      "Archiving removes them from this PwrAgent profile and can be undone from the Archived lens. Leaving them alone changes nothing and stops this prompt until the next launch.",
-    id: "codex-missing-threads:confirmation",
+      "Archiving removes them from this PwrAgent profile and can be undone from the Archived lens. Leaving them alone changes nothing, and nothing else is archived automatically for the rest of this session.",
+    id: CODEX_MISSING_THREADS_CONFIRMATION_NOTICE_ID,
     message: `${share} of the threads in PwrAgent profile "${signal.profileName}" (${signal.missingCount} of ${signal.totalCount}) are reported missing by Codex. That is expected if those Codex sessions were deleted, but it also happens when a PwrAgent profile is connected to the wrong Codex profile.`,
     title: "Threads missing from Codex",
     tone: "warning",

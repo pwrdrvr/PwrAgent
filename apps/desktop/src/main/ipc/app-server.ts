@@ -1851,10 +1851,20 @@ class DesktopAppServerService {
     const response = await getDesktopBackendRegistry()
       .resolveMissingCodexThreads(request);
     for (const threadId of response.archivedThreadIds) {
-      await getDesktopFederationRuntime().ungroupRemoteChildrenOfArchivedThread({
-        backend: "codex",
-        parentThreadId: threadId,
-      });
+      // The archives are already committed. One unreachable peer must not
+      // skip the ungrouping the remaining threads still need, nor reject a
+      // call whose result the caller uses to report what happened.
+      try {
+        await getDesktopFederationRuntime().ungroupRemoteChildrenOfArchivedThread({
+          backend: "codex",
+          parentThreadId: threadId,
+        });
+      } catch (error) {
+        logDebug("resolveMissingCodexThreads remote ungroup failed", {
+          error: error instanceof Error ? error.message : String(error),
+          threadId,
+        });
+      }
     }
     logDebug("resolveMissingCodexThreads", {
       action: response.action,
