@@ -1,7 +1,15 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { STAR_MAP_ESTIMATED_CARD_HEIGHT } from "../star-map-layout";
 import { MIN_VISIBLE_FRACTION } from "../star-map-view-geometry";
 import { StarMapScreen } from "../StarMapScreen";
 
@@ -9,10 +17,21 @@ import { StarMapScreen } from "../StarMapScreen";
  * The map must never move under the operator.
  *
  * Panning is how you work a map bigger than the window: you put the corner
- * you care about on screen and then act on it. Archiving a card from that
- * corner changes a cloud's card count, which changes the canvas size — and
- * the canvas size used to be an input to the "centre the view" effect, so
- * the act of tidying up threw away where you were looking.
+ * you care about on screen and then act on it. Archiving from that corner
+ * changes what the lens lays out, which changes the canvas — and the canvas
+ * was an input to the "centre the view" effect, so the act of tidying up
+ * threw away where you were looking.
+ *
+ * Measured against the CONTENT, not against the transform. Both halves of
+ * that matter. The transform is not the promise: orbit and projects
+ * normalise the canvas around what they laid out, so a body's canvas
+ * position moves when a cloud's extent changes and the transform has to
+ * move by exactly as much for the map to hold still — an assertion that the
+ * transform is byte-identical fails a map that behaved perfectly. And it is
+ * not evidence either: a fixture whose bodies never move passes it with the
+ * whole mechanism deleted. So each test below pins its own precondition
+ * first, by asserting the body's CANVAS position really did move, and only
+ * then that its SCREEN position did not.
  */
 
 function buildDesktopApi(overrides: Partial<DesktopApi> = {}): DesktopApi {
@@ -131,13 +150,44 @@ function screenPositionOf(project: string): { x: number; y: number } {
   return onScreen(cloud, label);
 }
 
+/**
+ * Where a cloud sits on the untransformed canvas — the number the view has
+ * to cancel. Read to pin a fixture's precondition: a content change that
+ * leaves this alone asks nothing of the view, so a map that held still
+ * proves nothing about whether it can.
+ */
+function canvasPositionOf(project: string): { x: number; y: number } {
+  const label = screen.getByRole("button", {
+    name: new RegExp(`Select the ${project} cards`),
+  });
+  const cloud = label.closest(".star-map__cloud") as HTMLElement | null;
+  if (!cloud) throw new Error(`no cloud around the ${project} label`);
+  return {
+    x: Number.parseFloat(cloud.style.left),
+    y: Number.parseFloat(cloud.style.top),
+  };
+}
+
 /** Where a project body sits in viewport pixels, in the projects lens. */
 function projectScreenPosition(project: string): { x: number; y: number } {
+  return onScreen(projectBody(project));
+}
+
+/** The same body's untransformed canvas position — see `canvasPositionOf`. */
+function projectCanvasPosition(project: string): { x: number; y: number } {
+  const body = projectBody(project);
+  return {
+    x: Number.parseFloat(body.style.left),
+    y: Number.parseFloat(body.style.top),
+  };
+}
+
+function projectBody(project: string): HTMLElement {
   const body = screen
     .getByText(project)
     .closest(".star-map__project-cloud") as HTMLElement | null;
   if (!body) throw new Error(`no project cloud around ${project}`);
-  return onScreen(body);
+  return body;
 }
 
 function onScreen(...placed: HTMLElement[]): { x: number; y: number } {
@@ -163,6 +213,68 @@ async function flushFrame() {
       requestAnimationFrame(() => resolve(undefined));
     });
   });
+}
+
+/**
+ * Run frames until a ⌘K flight lands.
+ *
+ * Frames rather than a `waitFor`: the flight is driven by
+ * `requestAnimationFrame` and paints the canvas transform directly, so
+ * there is no React update to wait on until it commits its landing. The
+ * flight takes half a second of frames, and the cap is well past that so a
+ * flight that never lands fails on the assertion rather than by hanging.
+ */
+async function settleFlight() {
+  let unchanged = 0;
+  for (let frames = 0; frames < 200 && unchanged < 4; frames += 1) {
+    const before = canvas().style.transform;
+    await flushFrame();
+    unchanged = canvas().style.transform === before ? unchanged + 1 : 0;
+  }
+}
+
+/**
+ * ⌘K, search, and pick the result. Scoped to the dialog: a thread already
+ * on the map also has a card button carrying its title.
+ */
+async function flyToThread(query: string) {
+  fireEvent.keyDown(window, { key: "k", metaKey: true });
+  const palette = await screen.findByRole("dialog", { name: "Fly to thread" });
+  fireEvent.change(screen.getByRole("textbox", { name: "Fly to thread" }), {
+    target: { value: query },
+  });
+  fireEvent.click(
+    await within(palette).findByRole("button", {
+      name: new RegExp(`Thread ${query}`),
+    }),
+  );
+}
+
+/**
+ * The middle of a card in viewport pixels.
+ *
+ * Cards are centred on their slot horizontally and hang from it
+ * vertically, so the middle is half an (unmeasured, therefore estimated)
+ * card below the slot — the same composition `star-map-jump` measures a
+ * landing with.
+ */
+function cardCenterOnScreen(threadKey: string): { x: number; y: number } {
+  const shell = document.querySelector<HTMLElement>(
+    `[data-thread-key="${threadKey}"]`,
+  );
+  const cloud = shell?.closest<HTMLElement>(".star-map__cloud");
+  if (!shell || !cloud) throw new Error(`no card for ${threadKey}`);
+  const view = readTransform();
+  const canvasX =
+    Number.parseFloat(cloud.style.left) + Number.parseFloat(shell.style.left);
+  const canvasY =
+    Number.parseFloat(cloud.style.top)
+    + Number.parseFloat(shell.style.top)
+    + STAR_MAP_ESTIMATED_CARD_HEIGHT / 2;
+  return {
+    x: view.x + canvasX * view.scale,
+    y: view.y + canvasY * view.scale,
+  };
 }
 
 /** The canvas's untransformed size, as the screen sized the element. */
@@ -202,25 +314,35 @@ describe("star map view stability", () => {
     window.localStorage.removeItem("pwragent.starMap.filterSelection");
   });
 
-  it("keeps the operator's pan when a card is archived away (orbit)", async () => {
+  /**
+   * Archiving the LAST thread of a cloud, rather than one of many.
+   *
+   * Losing one card of several moves nothing at all now — cloud seats,
+   * extents and centres are carried forward (see star-map-clusters), which
+   * is why this fixture empties a whole cloud instead. That is also the
+   * archive the operator notices: the cloud leaves, the instance's extent
+   * closes up, and orbit re-bases the canvas around what is left.
+   */
+  it("keeps the operator's pan when archiving empties a cloud (orbit)", async () => {
     seedLayout("orbit");
-    const { rerender } = renderMap({ threads: threads(9) });
+    const kept = threadsIn("PwrSnap", 6);
+    const { rerender } = renderMap({
+      threads: [...kept, ...threadsIn("PwrAgent", 3)],
+    });
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: /Open this instance/ }),
+        screen.getByRole("button", { name: /Select the PwrAgent cards/ }),
       ).toBeTruthy();
     });
 
     pan(-320, -180);
-    const panned = canvas().style.transform;
-    expect(panned).toMatch(/translate/);
+    const laidOut = canvasPositionOf("PwrSnap");
+    const onScreenBefore = screenPositionOf("PwrSnap");
 
-    // Archiving removes the thread and the owning cloud re-fetches. The
-    // map must stay exactly where the operator put it.
     rerender(
       <StarMapScreen
         desktopApi={buildDesktopApi()}
-        localThreads={threads(8)}
+        localThreads={kept}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
         onOpenLocalThread={() => undefined}
@@ -230,30 +352,56 @@ describe("star map view stability", () => {
 
     await waitFor(() => {
       expect(
-        screen.queryByRole("button", { name: /Open thread: Thread t8/ }),
+        screen.queryByRole("button", { name: /Select the PwrAgent cards/ }),
       ).toBeNull();
     });
-    expect(canvas().style.transform).toBe(panned);
+
+    // Precondition: the canvas really did re-base under the surviving
+    // cloud. Without this the assertion below holds for a map that cannot
+    // compensate at all.
+    expect(canvasPositionOf("PwrSnap").x).not.toBeCloseTo(laidOut.x, 3);
+    // And the operator is still looking at the same thing.
+    const onScreenAfter = screenPositionOf("PwrSnap");
+    expect(onScreenAfter.x).toBeCloseTo(onScreenBefore.x, 6);
+    expect(onScreenAfter.y).toBeCloseTo(onScreenBefore.y, 6);
   });
 
-  it("keeps the operator's zoom when the cloud resizes", async () => {
+  /**
+   * The same archive at 2x, which is where the units are decided.
+   *
+   * The anchor moves in canvas units and the view moves in viewport
+   * pixels, so the step has to carry the scale. At 1:1 the two are the
+   * same number and a missing factor is invisible; here it is the whole
+   * difference between holding still and sliding by the shift again.
+   */
+  it("keeps the operator's zoom when archiving empties a cloud (orbit)", async () => {
     seedLayout("orbit");
-    const { rerender } = renderMap({ threads: threads(9) });
+    const kept = threadsIn("PwrSnap", 6);
+    const { rerender } = renderMap({
+      threads: [...kept, ...threadsIn("PwrAgent", 3)],
+    });
     await waitFor(() => {
       expect(
-        screen.getByRole("button", { name: /Open this instance/ }),
+        screen.getByRole("button", { name: /Select the PwrAgent cards/ }),
       ).toBeTruthy();
     });
 
     const viewport = document.querySelector(".star-map__viewport")!;
-    fireEvent.wheel(viewport, { deltaY: -240, ctrlKey: true, clientX: 400, clientY: 300 });
-    const zoomed = canvas().style.transform;
-    expect(zoomed).toMatch(/scale\((?!1\))/);
+    fireEvent.wheel(viewport, {
+      deltaY: -240,
+      ctrlKey: true,
+      clientX: 400,
+      clientY: 300,
+    });
+    const zoomed = readTransform().scale;
+    expect(zoomed).toBeGreaterThan(1);
+    const laidOut = canvasPositionOf("PwrSnap");
+    const onScreenBefore = screenPositionOf("PwrSnap");
 
     rerender(
       <StarMapScreen
         desktopApi={buildDesktopApi()}
-        localThreads={threads(5)}
+        localThreads={kept}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
         onOpenLocalThread={() => undefined}
@@ -263,10 +411,16 @@ describe("star map view stability", () => {
 
     await waitFor(() => {
       expect(
-        screen.queryByRole("button", { name: /Open thread: Thread t8/ }),
+        screen.queryByRole("button", { name: /Select the PwrAgent cards/ }),
       ).toBeNull();
     });
-    expect(canvas().style.transform).toBe(zoomed);
+
+    expect(canvasPositionOf("PwrSnap").x).not.toBeCloseTo(laidOut.x, 3);
+    // Nothing here may re-zoom: the step is a translation only.
+    expect(readTransform().scale).toBe(zoomed);
+    const onScreenAfter = screenPositionOf("PwrSnap");
+    expect(onScreenAfter.x).toBeCloseTo(onScreenBefore.x, 6);
+    expect(onScreenAfter.y).toBeCloseTo(onScreenBefore.y, 6);
   });
 
   it("still centres when the operator switches layout", async () => {
@@ -310,20 +464,30 @@ describe("star map view stability", () => {
     expect(canvas().style.transform).not.toBe(before);
   });
 
-  it("keeps the operator's pan when a card is archived away (projects)", async () => {
+  /**
+   * Losing a whole project, for the same reason the orbit pair empties a
+   * whole cloud: this lens seats one body per repo, so archiving some of a
+   * repo's threads leaves every body exactly where it was. Taking the last
+   * one closes an arm and re-bases the canvas around what is left.
+   */
+  it("keeps the operator's pan when archiving empties a project (projects)", async () => {
     seedLayout("projects");
-    const { rerender } = renderMap({ threads: threads(9) });
+    const kept = threadsIn("PwrSnap", 6);
+    const { rerender } = renderMap({
+      threads: [...kept, ...threadsIn("PwrAgent", 3)],
+    });
     await waitFor(() => {
-      expect(screen.getByText("PwrSnap")).toBeTruthy();
+      expect(screen.getByText("PwrAgent")).toBeTruthy();
     });
 
     pan(-300, -200);
+    const laidOut = projectCanvasPosition("PwrSnap");
     const before = projectScreenPosition("PwrSnap");
 
     rerender(
       <StarMapScreen
         desktopApi={buildDesktopApi()}
-        localThreads={threads(4)}
+        localThreads={kept}
         sessionKeys={{}}
         localInstanceLabel="Mac-Mini-M4"
         onOpenLocalThread={() => undefined}
@@ -332,10 +496,13 @@ describe("star map view stability", () => {
     );
 
     await waitFor(() => {
-      expect(
-        screen.queryByRole("button", { name: /Open thread: Thread t8/ }),
-      ).toBeNull();
+      expect(screen.queryByText("PwrAgent")).toBeNull();
     });
+
+    // Precondition: the surviving body really did move on the canvas. Only
+    // the y axis does here — the arms converge on a core that keeps its x
+    // — so this is the axis that makes the pair below mean anything.
+    expect(projectCanvasPosition("PwrSnap").y).not.toBeCloseTo(laidOut.y, 3);
     // Against the body rather than the raw transform: this lens re-seats
     // its projects from scratch and normalises the canvas around them, so
     // the transform has to change by exactly that shift for the map to
@@ -515,6 +682,64 @@ describe("star map view stability", () => {
     const landed = screenPositionOf("PwrAgent");
     expect(landed.x).toBeCloseTo(before.x, 6);
     expect(landed.y).toBeCloseTo(before.y, 6);
+  });
+
+  /**
+   * A ⌘K flight is the one writer that does not re-read the live view: it
+   * interpolates between two views captured when it launched, so it paints
+   * straight over anything that moved the view since. A relayout mid-flight
+   * therefore hit it twice over — the step holding the map still was undone
+   * on the very next frame, and the destination, which is "the middle of
+   * the window on THIS card", still named where the card used to be. The
+   * flight arrived next to the card the operator had asked for.
+   *
+   * Asserted at the landing rather than per frame, because the landing is
+   * the promise ⌘K makes and it is the one moment the map is supposed to
+   * be somewhere specific.
+   */
+  it("lands on the card it was asked for when a cloud arrives mid-flight", async () => {
+    seedLayout("orbit");
+    const held = [...threadsIn("PwrSnap", 6), ...threadsIn("PwrAgent", 3)];
+    const { rerender } = renderMap({ threads: held });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Select the PwrAgent cards/ }),
+      ).toBeTruthy();
+    });
+
+    await flyToThread("PwrAgent-2");
+    // Two frames in, so the flight is genuinely in the air rather than
+    // still sitting on its launch view.
+    await flushFrame();
+    await flushFrame();
+    const laidOut = canvasPositionOf("PwrAgent");
+
+    // A thread lands in a repo the map has never seen: a new cloud is
+    // seated and the canvas origin moves under the flight.
+    rerender(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={[...held, ...threadsIn("PwrDrvr", 4)]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Select the PwrDrvr cards/ }),
+      ).toBeTruthy();
+    });
+    // Precondition: the destination really did move while it was being
+    // flown to.
+    expect(canvasPositionOf("PwrAgent").x).not.toBeCloseTo(laidOut.x, 3);
+
+    await settleFlight();
+
+    const arrived = cardCenterOnScreen("codex:PwrAgent-2");
+    expect(arrived.x).toBeCloseTo(VIEWPORT.width / 2, 6);
+    expect(arrived.y).toBeCloseTo(VIEWPORT.height / 2, 6);
   });
 });
 

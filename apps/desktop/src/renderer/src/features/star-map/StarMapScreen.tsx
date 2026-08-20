@@ -1982,6 +1982,24 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * that placement, so the step lands in the same paint as the layout that
    * needed it.
    *
+   * Cancelling that shift is the only thing this may do: it never places,
+   * centres, or zooms. It does bound, and that is worth being explicit
+   * about, because `clampStarMapView` says in as many words that it is
+   * not to be re-run on a content change.
+   *
+   * The distinction is that a clamp of an ALREADY-COMPENSATED view is a
+   * rescue rather than a placement — the shape `centerStarMapView`
+   * describes and declines to build. `clampStarMapView` is a no-op on
+   * every view inside its bounds, and the step lands inside them for any
+   * view the operator can still use: it preserves each body's screen
+   * position, so a map they were looking at is a map they are still
+   * looking at. It can only bite when the canvas SHRANK under a view
+   * parked hard against the edge that lost the content — folding an
+   * expanded cloud back up while pinned to the far corner — and there the
+   * choice is a bounded slide or a window of empty sky recoverable only
+   * by "Reset view". The slide wins, and it is the reason the canvas size
+   * is still an input here.
+   *
    * Lanes is exempt: its canvas grows down and to the right from a fixed
    * corner, so nothing it lays out moves what is already drawn.
    */
@@ -2004,15 +2022,25 @@ export function StarMapScreen(props: StarMapScreenProps) {
     if (dx === 0 && dy === 0) return;
     const current = viewRef.current;
     const step = { x: dx * current.scale, y: dy * current.scale };
-    // A drag in flight measures its travel from a base of its own, and
-    // repaints from it on the very next frame. Step that base too — in
-    // place, because the drag holds this object — or the frame would
-    // compute over the top of this and put the jump back.
+    // Both gestures that integrate off a captured base repaint from it on
+    // the very next frame, so each has to be stepped along with the view
+    // or that frame computes over the top of this and puts the jump back.
+    // The keyboard camera needs nothing: it re-reads the live view every
+    // frame, so it is already composing with whatever landed since the
+    // last one.
+    //
+    // The drag's base is stepped in place, because the drag holds this
+    // object.
     const panBase = panBaseRef.current;
     if (panBase) {
       panBase.x -= step.x;
       panBase.y -= step.y;
     }
+    // A ⌘K flight carries both ends of its leg, and its destination is a
+    // card that moved with everything else. Stepped by the whole `step`
+    // even when the clamp below rescues the view by less: the card moved
+    // that far, so that is where the flight has to land.
+    flight.stepBy(step);
     commitView(
       clampStarMapView({
         view: { ...current, x: current.x - step.x, y: current.y - step.y },
@@ -2022,6 +2050,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     );
   }, [
     commitView,
+    flight,
     heldAnchor,
     panZoomCanvas.height,
     panZoomCanvas.width,
