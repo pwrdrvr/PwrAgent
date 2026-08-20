@@ -2862,7 +2862,7 @@ describe("DesktopMessagingRuntime", () => {
       actor: {
         platformUserId: "8460800771",
         displayName: "Harold Hunt",
-        username: "huntharo",
+        username: "fixtureuser",
       },
       args: [token],
       channel: {
@@ -2918,7 +2918,7 @@ describe("DesktopMessagingRuntime", () => {
       conversationKind: "topic",
       conversationParentId: "-1003841603622",
       conversationBucketId: "-1003841603622",
-      actorUsername: "huntharo",
+      actorUsername: "fixtureuser",
     });
     const { getDesktopMessagingStore } = await import(
       "../messaging/desktop-messaging-store"

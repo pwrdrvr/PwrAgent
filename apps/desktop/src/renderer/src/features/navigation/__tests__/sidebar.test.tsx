@@ -159,8 +159,8 @@ const sharedThread = {
     {
       id: "dir-a",
       label: "PwrAgent",
-      path: "/Users/huntharo/pwrdrvr/PwrAgent",
-      worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
+      path: "/Users/fixture-user/pwrdrvr/PwrAgent",
+      worktreePath: "/Users/fixture-user/.codex/worktrees/0f38/PwrAgent",
       kind: "worktree" as const,
     },
   ],
@@ -188,7 +188,7 @@ const localThread = {
     {
       id: "dir-local",
       label: "PwrAgent",
-      path: "/Users/huntharo/pwrdrvr/PwrAgent",
+      path: "/Users/fixture-user/pwrdrvr/PwrAgent",
       kind: "local" as const,
     },
   ],
@@ -207,10 +207,10 @@ const updatedSinceSeenThread = {
 
 const directories: NavigationDirectorySummary[] = [
   {
-    key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+    key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
     kind: "directory",
     label: "PwrAgent",
-    path: "/Users/huntharo/pwrdrvr/PwrAgent",
+    path: "/Users/fixture-user/pwrdrvr/PwrAgent",
     threadKeys: ["codex:thread-1"],
     needsAttentionCount: 1,
     latestUpdatedAt: sharedThread.updatedAt,
@@ -435,16 +435,16 @@ describe("Sidebar", () => {
         {
           id: "dir-projectb",
           label: "ProjectB",
-          path: "/Users/huntharo/pwrdrvr/ProjectB",
+          path: "/Users/fixture-user/pwrdrvr/ProjectB",
           kind: "local" as const,
         },
       ],
     };
     const projectBDirectory: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/pwrdrvr/ProjectB",
+      key: "directory:/Users/fixture-user/pwrdrvr/ProjectB",
       kind: "directory",
       label: "ProjectB",
-      path: "/Users/huntharo/pwrdrvr/ProjectB",
+      path: "/Users/fixture-user/pwrdrvr/ProjectB",
       threadKeys: ["codex:thread-in-projectb"],
       needsAttentionCount: 0,
       latestUpdatedAt: nextThread.updatedAt,
@@ -631,16 +631,16 @@ describe("Sidebar", () => {
         {
           id: "dir-projectb",
           label: "ProjectB",
-          path: "/Users/huntharo/pwrdrvr/ProjectB",
+          path: "/Users/fixture-user/pwrdrvr/ProjectB",
           kind: "local" as const,
         },
       ],
     };
     const projectBWithoutThread: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/pwrdrvr/ProjectB",
+      key: "directory:/Users/fixture-user/pwrdrvr/ProjectB",
       kind: "directory",
       label: "ProjectB",
-      path: "/Users/huntharo/pwrdrvr/ProjectB",
+      path: "/Users/fixture-user/pwrdrvr/ProjectB",
       threadKeys: [],
       needsAttentionCount: 0,
       latestUpdatedAt: refreshedThread.updatedAt,
@@ -1868,7 +1868,7 @@ describe("Sidebar", () => {
         {
           id: "dir-a",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "local" as const,
         },
       ],
@@ -1936,29 +1936,29 @@ describe("Sidebar", () => {
         {
           id: "dir-pwrgit",
           label: "PwrGit",
-          path: "/Users/huntharo/github/PwrGit",
-          worktreePath: "/Users/huntharo/.codex/worktrees/pwrgit/PwrGit",
+          path: "/Users/fixture-user/github/PwrGit",
+          worktreePath: "/Users/fixture-user/.codex/worktrees/pwrgit/PwrGit",
           kind: "worktree" as const,
         },
         {
           id: "dir-pwragnt",
           label: "PwrAgnt",
-          path: "/Users/huntharo/github/PwrAgnt",
+          path: "/Users/fixture-user/github/PwrAgnt",
           kind: "local" as const,
         },
         {
           id: "dir-pwrsnap",
           label: "PwrSnap",
-          path: "/Users/huntharo/github/PwrSnap",
+          path: "/Users/fixture-user/github/PwrSnap",
           kind: "local" as const,
         },
       ],
     };
     const pwrGitDirectory: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/github/PwrGit",
+      key: "directory:/Users/fixture-user/github/PwrGit",
       kind: "directory",
       label: "PwrGit",
-      path: "/Users/huntharo/github/PwrGit",
+      path: "/Users/fixture-user/github/PwrGit",
       threadKeys: ["codex:thread-multiple-directories"],
       needsAttentionCount: 0,
       latestUpdatedAt: multiDirectoryThread.updatedAt,
@@ -2084,7 +2084,7 @@ describe("Sidebar", () => {
           directoryKey: directories[0]!.key,
           directoryKind: "directory",
           directoryLabel: "PwrAgent",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -2125,7 +2125,7 @@ describe("Sidebar", () => {
           directoryKey: directories[0]!.key,
           directoryKind: "directory",
           directoryLabel: "PwrAgent",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "Pending work",
@@ -4750,7 +4750,7 @@ describe("Sidebar", () => {
         {
           id: "dir-b",
           label: "ProjectB",
-          path: "/Users/huntharo/pwrdrvr/ProjectB",
+          path: "/Users/fixture-user/pwrdrvr/ProjectB",
           kind: "local" as const,
         },
       ],
@@ -4762,10 +4762,10 @@ describe("Sidebar", () => {
       pinnedRank: undefined,
     };
     const projectBDirectory: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/pwrdrvr/ProjectB",
+      key: "directory:/Users/fixture-user/pwrdrvr/ProjectB",
       kind: "directory",
       label: "ProjectB",
-      path: "/Users/huntharo/pwrdrvr/ProjectB",
+      path: "/Users/fixture-user/pwrdrvr/ProjectB",
       threadKeys: ["codex:thread-project-b-pinned", "codex:thread-project-b-unpinned"],
       needsAttentionCount: 0,
       latestUpdatedAt: projectBPinnedThread.updatedAt,
@@ -5050,7 +5050,7 @@ describe("Sidebar", () => {
     expect(copyText).toHaveBeenNthCalledWith(1, "thread-1");
     expect(copyText).toHaveBeenNthCalledWith(
       2,
-      "/Users/huntharo/.codex/worktrees/0f38/PwrAgent"
+      "/Users/fixture-user/.codex/worktrees/0f38/PwrAgent"
     );
     expect(copyText).toHaveBeenNthCalledWith(3, "codex/thread-centric-ui");
   });
@@ -5069,7 +5069,7 @@ describe("Sidebar", () => {
               {
                 id: "dir-a",
                 label: "PwrAgent",
-                path: "/Users/huntharo/pwrdrvr/PwrAgent",
+                path: "/Users/fixture-user/pwrdrvr/PwrAgent",
                 kind: "local" as const,
               },
             ],
@@ -5086,7 +5086,7 @@ describe("Sidebar", () => {
               {
                 id: "dir-a",
                 label: "PwrAgent",
-                path: "/Users/huntharo/pwrdrvr/PwrAgent",
+                path: "/Users/fixture-user/pwrdrvr/PwrAgent",
                 kind: "local" as const,
               },
             ],
@@ -5391,7 +5391,7 @@ describe("Sidebar", () => {
     });
     fireEvent.mouseEnter(directoryChip);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "/Users/huntharo/.codex/worktrees/0f38/PwrAgent\nClick to copy to clipboard"
+      "/Users/fixture-user/.codex/worktrees/0f38/PwrAgent\nClick to copy to clipboard"
     );
     fireEvent.mouseLeave(directoryChip);
 
@@ -5416,7 +5416,7 @@ describe("Sidebar", () => {
 
     expect(copyText).toHaveBeenNthCalledWith(
       1,
-      "/Users/huntharo/.codex/worktrees/0f38/PwrAgent"
+      "/Users/fixture-user/.codex/worktrees/0f38/PwrAgent"
     );
     expect(copyText).toHaveBeenNthCalledWith(2, "codex/thread-centric-ui");
     expect(
@@ -5539,7 +5539,7 @@ describe("Sidebar", () => {
         creatingThread={undefined}
         runtimeIdentity={{
           branch: "codex/fix-thread-naming-ephemeral",
-          cwd: "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352",
+          cwd: "/Users/fixture-user/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352",
         }}
         selectedItemKey="codex:thread-1"
         threads={[sharedThread]}
@@ -5556,7 +5556,7 @@ describe("Sidebar", () => {
     const cwdButton = screen.getByRole("button", { name: "Copy working directory" });
     fireEvent.mouseEnter(cwdButton);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
-      "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352\nClick to copy to clipboard"
+      "/Users/fixture-user/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352\nClick to copy to clipboard"
     );
     fireEvent.mouseLeave(cwdButton);
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
@@ -5576,7 +5576,7 @@ describe("Sidebar", () => {
 
     expect(copyText).toHaveBeenNthCalledWith(
       1,
-      "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352"
+      "/Users/fixture-user/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352"
     );
     expect(copyText).toHaveBeenNthCalledWith(2, "codex/fix-thread-naming-ephemeral");
     expect(await screen.findAllByText("PwrAgent")).not.toHaveLength(0);
@@ -5601,7 +5601,7 @@ describe("Sidebar", () => {
         creatingThread={undefined}
         runtimeIdentity={{
           commitSha: "ab12cd3344556677889900aabbccddeeff001122",
-          cwd: "/Users/huntharo/.codex/worktrees/5d4b/PwrAgent",
+          cwd: "/Users/fixture-user/.codex/worktrees/5d4b/PwrAgent",
           detachedHead: true,
         }}
         selectedItemKey="codex:thread-1"
@@ -5698,30 +5698,30 @@ describe("Sidebar directory pinning", () => {
   }
 
   const projectADirectory: NavigationDirectorySummary = {
-    key: "directory:/Users/huntharo/pwrdrvr/ProjectA",
+    key: "directory:/Users/fixture-user/pwrdrvr/ProjectA",
     kind: "directory",
     label: "ProjectA",
-    path: "/Users/huntharo/pwrdrvr/ProjectA",
+    path: "/Users/fixture-user/pwrdrvr/ProjectA",
     threadKeys: [],
     needsAttentionCount: 0,
     latestUpdatedAt: 1000,
   };
 
   const projectBDirectory: NavigationDirectorySummary = {
-    key: "directory:/Users/huntharo/pwrdrvr/ProjectB",
+    key: "directory:/Users/fixture-user/pwrdrvr/ProjectB",
     kind: "directory",
     label: "ProjectB",
-    path: "/Users/huntharo/pwrdrvr/ProjectB",
+    path: "/Users/fixture-user/pwrdrvr/ProjectB",
     threadKeys: [],
     needsAttentionCount: 0,
     latestUpdatedAt: 2000,
   };
 
   const workspaceDirectory: NavigationDirectorySummary = {
-    key: "workspace:/Users/huntharo/code",
+    key: "workspace:/Users/fixture-user/code",
     kind: "workspace",
     label: "Workspace",
-    path: "/Users/huntharo/code",
+    path: "/Users/fixture-user/code",
     threadKeys: [],
     needsAttentionCount: 0,
     latestUpdatedAt: 500,
@@ -5808,7 +5808,7 @@ describe("Sidebar directory pinning", () => {
     key: "subthread:codex:thread-parent:same-worktree",
     kind: "directory",
     label: "media-service",
-    path: "/Users/huntharo/pwrdrvr/media-service",
+    path: "/Users/fixture-user/pwrdrvr/media-service",
     threadKeys: [],
     needsAttentionCount: 0,
     latestUpdatedAt: 4000,
@@ -6457,10 +6457,10 @@ describe("Sidebar directory pinning", () => {
       pinnedRank: "2048",
     };
     const pinnedBottom: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/pwrdrvr/ProjectC",
+      key: "directory:/Users/fixture-user/pwrdrvr/ProjectC",
       kind: "directory",
       label: "ProjectC",
-      path: "/Users/huntharo/pwrdrvr/ProjectC",
+      path: "/Users/fixture-user/pwrdrvr/ProjectC",
       threadKeys: [],
       needsAttentionCount: 0,
       latestUpdatedAt: 3000,
@@ -6564,10 +6564,10 @@ describe("Sidebar directory pinning", () => {
       pinnedRank: "2048",
     };
     const pinnedBottom: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/pwrdrvr/ProjectC",
+      key: "directory:/Users/fixture-user/pwrdrvr/ProjectC",
       kind: "directory",
       label: "ProjectC",
-      path: "/Users/huntharo/pwrdrvr/ProjectC",
+      path: "/Users/fixture-user/pwrdrvr/ProjectC",
       threadKeys: [],
       needsAttentionCount: 0,
       latestUpdatedAt: 3000,

@@ -3092,7 +3092,7 @@ describe("useThreadSessionState", () => {
                   actor: {
                     platformUserId: "U012345",
                     displayName: "Hunter",
-                    username: "huntharo",
+                    username: "fixtureuser",
                   },
                 },
               },
@@ -3130,7 +3130,7 @@ describe("useThreadSessionState", () => {
             actor: {
               platformUserId: "U012345",
               displayName: "Hunter",
-              username: "huntharo",
+              username: "fixtureuser",
             },
           },
         },
@@ -13615,7 +13615,7 @@ describe("useThreadSessionState", () => {
             turnId: "turn-1",
             itemId: "call-file-change",
             delta:
-              "Success. Updated the following files:\nA /Users/huntharo/github/PwrAgent/.local/PR.md\nD /Users/huntharo/github/PwrAgent/.local/PR.md\n",
+              "Success. Updated the following files:\nA /Users/fixture-user/github/PwrAgent/.local/PR.md\nD /Users/fixture-user/github/PwrAgent/.local/PR.md\n",
           },
         },
       });
@@ -13630,7 +13630,7 @@ describe("useThreadSessionState", () => {
       expect.objectContaining({
         kind: "write",
         label: "Recreated PR.md",
-        path: "/Users/huntharo/github/PwrAgent/.local/PR.md",
+        path: "/Users/fixture-user/github/PwrAgent/.local/PR.md",
       }),
     ]);
   });

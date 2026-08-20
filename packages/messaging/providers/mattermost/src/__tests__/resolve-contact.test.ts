@@ -13,7 +13,7 @@ describe("Mattermost resolveContact", () => {
       new Response(
         JSON.stringify({
           id: "user-1",
-          username: "huntharo",
+          username: "fixtureuser",
           first_name: "Harold",
           last_name: "Hunt",
         }),
@@ -33,8 +33,8 @@ describe("Mattermost resolveContact", () => {
     expect(result).toMatchObject({
       status: "ok",
       id: "user-1",
-      displayName: "Harold Hunt (@huntharo)",
-      handle: "@huntharo",
+      displayName: "Harold Hunt (@fixtureuser)",
+      handle: "@fixtureuser",
       detail: "user",
     });
     const [url, init] = fetchMock.mock.calls[0]!;

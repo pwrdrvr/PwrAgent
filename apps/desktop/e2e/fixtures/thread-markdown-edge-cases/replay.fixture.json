@@ -79,7 +79,7 @@
         {
           "name": "frontend-design",
           "description": "Design and verify renderer UI work.",
-          "path": "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+          "path": "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md",
           "enabled": true
         }
       ]
@@ -94,7 +94,7 @@
             "type": "message",
             "id": "message-1",
             "role": "assistant",
-            "text": "Emoji check 😎\nSingle newline survives.\n\n*Italic text* and ~~struck text~~ with `inline code`.\n\n````md\n```ts\nconst marker = \"**not bold**\";\n```\n[$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)\n![Preview](https://example.com/inside-code.png)\n````\n\nBack outside the block."
+            "text": "Emoji check 😎\nSingle newline survives.\n\n*Italic text* and ~~struck text~~ with `inline code`.\n\n````md\n```ts\nconst marker = \"**not bold**\";\n```\n[$frontend-design](/Users/fixture-user/.codex/skills/frontend-design/SKILL.md)\n![Preview](https://example.com/inside-code.png)\n````\n\nBack outside the block."
           },
           {
             "type": "message",
@@ -107,7 +107,7 @@
           {
             "id": "message-1",
             "role": "assistant",
-            "text": "Emoji check 😎\nSingle newline survives.\n\n*Italic text* and ~~struck text~~ with `inline code`.\n\n````md\n```ts\nconst marker = \"**not bold**\";\n```\n[$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)\n![Preview](https://example.com/inside-code.png)\n````\n\nBack outside the block."
+            "text": "Emoji check 😎\nSingle newline survives.\n\n*Italic text* and ~~struck text~~ with `inline code`.\n\n````md\n```ts\nconst marker = \"**not bold**\";\n```\n[$frontend-design](/Users/fixture-user/.codex/skills/frontend-design/SKILL.md)\n![Preview](https://example.com/inside-code.png)\n````\n\nBack outside the block."
           },
           {
             "id": "message-2",

@@ -76,7 +76,7 @@ describe("findDirectoryReferenceTrigger", () => {
   });
 
   it("does not trigger inside an email address", () => {
-    const text = "mail huntharo@gmail.com";
+    const text = "mail fixtureuser@example.com";
     expect(findDirectoryReferenceTrigger(text, text.length)).toBeUndefined();
   });
 
@@ -127,19 +127,19 @@ describe("filterDirectoryReferenceCandidates", () => {
 
 describe("fileLabelFromPath", () => {
   it("returns the basename of a posix path", () => {
-    expect(fileLabelFromPath("/Users/huntharo/notes/notes.txt")).toBe(
+    expect(fileLabelFromPath("/Users/fixture-user/notes/notes.txt")).toBe(
       "notes.txt",
     );
   });
 
   it("returns the basename of a windows path", () => {
-    expect(fileLabelFromPath("C:\\Users\\huntharo\\notes\\report.pdf")).toBe(
+    expect(fileLabelFromPath("C:\\Users\\fixture-user\\notes\\report.pdf")).toBe(
       "report.pdf",
     );
   });
 
   it("ignores a trailing separator", () => {
-    expect(fileLabelFromPath("/Users/huntharo/notes/")).toBe("notes");
+    expect(fileLabelFromPath("/Users/fixture-user/notes/")).toBe("notes");
   });
 
   it("returns a bare name unchanged", () => {

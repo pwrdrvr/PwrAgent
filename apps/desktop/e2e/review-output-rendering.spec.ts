@@ -67,7 +67,7 @@ test("renders captured Codex review findings once in the review card", async () 
     );
     await expect(reviewCard).toContainText("features/composer/Composer.tsx");
     await expect(reviewCard).not.toContainText(
-      "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main-moja6ucz"
+      "/Users/fixture-user/github/PwrAgent/.worktrees/launchpad-pwragent-main-moja6ucz"
     );
     await expect(reviewCard).toContainText("Lines 971-979");
 
@@ -138,7 +138,7 @@ test("wraps unstripped long review paths and strips paths inside the thread dire
       "apps/desktop/src/renderer/src/features/composer/Composer.tsx"
     );
     await expect(reviewCard).not.toContainText(
-      "/Users/huntharo/work/PwrAgent/apps/desktop"
+      "/Users/fixture-user/work/PwrAgent/apps/desktop"
     );
 
     const outsidePathLink = reviewCard.getByRole("link", {

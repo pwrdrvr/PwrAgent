@@ -37,7 +37,7 @@ class MockTransport implements JsonRpcTransport {
     if (payload.method === "initialize") {
       const result: InitializeResponse = {
         userAgent: "codex_cli_rs/1.0.0 (Mac OS 26.0; arm64)",
-        codexHome: "/Users/huntharo/.codex",
+        codexHome: "/Users/fixture-user/.codex",
         platformFamily: "unix",
         platformOs: "macos",
       };

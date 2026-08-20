@@ -9,7 +9,7 @@ describe("Telegram resolveContact", () => {
           first_name: "Harold",
           last_name: "Hunt",
           type: "private",
-          username: "huntharo",
+          username: "fixtureuser",
         })),
       },
     };
@@ -23,8 +23,8 @@ describe("Telegram resolveContact", () => {
     expect(result).toMatchObject({
       status: "ok",
       id: "8460800771",
-      displayName: "Harold Hunt (@huntharo)",
-      handle: "@huntharo",
+      displayName: "Harold Hunt (@fixtureuser)",
+      handle: "@fixtureuser",
       detail: "private",
     });
     expect(bot.api.getChat).toHaveBeenCalledExactlyOnceWith("8460800771");

@@ -670,7 +670,7 @@ describe("discord adapter", () => {
         actor: {
           displayName: "Harold",
           platformUserId: TEST_USER_ID,
-          username: "huntharo",
+          username: "fixtureuser",
         },
         channel: {
           channel: "discord",
@@ -1062,7 +1062,7 @@ describe("discord adapter", () => {
         type: 3,
         user: {
           id: TEST_USER_ID,
-          username: "huntharo",
+          username: "fixtureuser",
         },
       },
     });
@@ -1426,7 +1426,7 @@ describe("discord adapter", () => {
           type: 3,
           user: {
             id: TEST_USER_ID,
-            username: "huntharo",
+            username: "fixtureuser",
           },
         },
       });
@@ -1483,7 +1483,7 @@ describe("discord adapter", () => {
           type: 3,
           user: {
             id: TEST_USER_ID,
-            username: "huntharo",
+            username: "fixtureuser",
           },
         },
       });
@@ -1548,7 +1548,7 @@ describe("discord adapter", () => {
           type: 2,
           user: {
             id: TEST_USER_ID,
-            username: "huntharo",
+            username: "fixtureuser",
           },
         },
       });
@@ -1974,7 +1974,7 @@ function messageDispatch(params: {
     author: {
       bot: params.authorBot,
       id: TEST_USER_ID,
-      username: "huntharo",
+      username: "fixtureuser",
     },
     channel_id: TEST_CHANNEL_ID,
     channel_type: 0,
@@ -1999,7 +1999,7 @@ function discordAudit(): MessagingAuditContext {
     actor: {
       displayName: "Harold",
       platformUserId: "user-1",
-      username: "huntharo",
+      username: "fixtureuser",
     },
     channel: {
       channel: "discord",

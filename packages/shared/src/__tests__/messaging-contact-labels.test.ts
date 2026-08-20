@@ -7,8 +7,8 @@ import {
 
 describe("messaging contact label sanitization", () => {
   it("keeps recognizable plain contact labels", () => {
-    expect(sanitizeMessagingContactLabel("Harold Hunt (@huntharo)")).toBe(
-      "Harold Hunt (@huntharo)",
+    expect(sanitizeMessagingContactLabel("Harold Hunt (@fixtureuser)")).toBe(
+      "Harold Hunt (@fixtureuser)",
     );
   });
 

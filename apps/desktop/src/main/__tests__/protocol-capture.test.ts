@@ -498,7 +498,7 @@ describe("ProtocolCaptureStore", () => {
           params: {
             archived: false,
             limit: 100,
-            cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+            cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
           },
         }),
       })}\n`,
@@ -507,7 +507,7 @@ describe("ProtocolCaptureStore", () => {
 
     const records = await readProtocolCaptureFile(capturePath, [
       {
-        match: "/Users/huntharo",
+        match: "/Users/fixture-user",
         replace: "/repo-user",
       },
     ]);

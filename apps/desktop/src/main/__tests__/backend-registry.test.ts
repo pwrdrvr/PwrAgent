@@ -3960,18 +3960,18 @@ describe("DesktopBackendRegistry", () => {
     });
 
     const response = await registry.trustCodexProject({
-      projectPath: "/Users/huntharo/github/PwrAgnt",
-      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+      projectPath: "/Users/fixture-user/github/PwrAgnt",
+      configPath: "/Users/fixture-user/.codex/profiles/acp-smoke/config.toml",
     });
 
     expect(response).toEqual({
-      projectPath: "/Users/huntharo/github/PwrAgnt",
-      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+      projectPath: "/Users/fixture-user/github/PwrAgnt",
+      configPath: "/Users/fixture-user/.codex/profiles/acp-smoke/config.toml",
       trusted: true,
     });
     expect(codexClient.lastTrustProjectParams).toEqual({
-      projectPath: "/Users/huntharo/github/PwrAgnt",
-      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+      projectPath: "/Users/fixture-user/github/PwrAgnt",
+      configPath: "/Users/fixture-user/.codex/profiles/acp-smoke/config.toml",
     });
 
     await registry.close();
@@ -4065,8 +4065,8 @@ describe("DesktopBackendRegistry", () => {
       params: {
         summary: "Project-local config is disabled.",
         details: null,
-        trustedProjectPath: "/Users/huntharo/github/PwrAgnt",
-        configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+        trustedProjectPath: "/Users/fixture-user/github/PwrAgnt",
+        configPath: "/Users/fixture-user/.codex/profiles/acp-smoke/config.toml",
       },
     });
 
@@ -4078,16 +4078,16 @@ describe("DesktopBackendRegistry", () => {
           params: {
             summary: "Project-local config is disabled.",
             details: null,
-            trustedProjectPath: "/Users/huntharo/github/PwrAgnt",
-            configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+            trustedProjectPath: "/Users/fixture-user/github/PwrAgnt",
+            configPath: "/Users/fixture-user/.codex/profiles/acp-smoke/config.toml",
           },
         },
       },
     });
 
     await registry.trustCodexProject({
-      projectPath: "/Users/huntharo/github/PwrAgnt",
-      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+      projectPath: "/Users/fixture-user/github/PwrAgnt",
+      configPath: "/Users/fixture-user/.codex/profiles/acp-smoke/config.toml",
     });
 
     expect(registry.getLatestCodexConfigWarning()).toEqual({});
@@ -10211,9 +10211,9 @@ script = "echo setup"
   });
 
   it("deduplicates identical linked directories in thread summaries", async () => {
-    const repoPath = "/Users/huntharo/projects/PwrAgent";
-    const firstWorktreePath = "/Users/huntharo/.codex/worktrees/wt1/PwrAgent";
-    const secondWorktreePath = "/Users/huntharo/.codex/worktrees/wt2/PwrAgent";
+    const repoPath = "/Users/fixture-user/projects/PwrAgent";
+    const firstWorktreePath = "/Users/fixture-user/.codex/worktrees/wt1/PwrAgent";
+    const secondWorktreePath = "/Users/fixture-user/.codex/worktrees/wt2/PwrAgent";
     const codexClient = new MockBackendClient({
       threads: [
         {
@@ -10275,9 +10275,9 @@ script = "echo setup"
   });
 
   it("backfills Codex worktree parent directories so directory view shows one project", async () => {
-    const projectA = "/Users/huntharo/projects/ProjectA";
-    const worktree1 = "/Users/huntharo/.codex/worktrees/wt1/ProjectA";
-    const worktree2 = "/Users/huntharo/.codex/worktrees/wt2/ProjectA";
+    const projectA = "/Users/fixture-user/projects/ProjectA";
+    const worktree1 = "/Users/fixture-user/.codex/worktrees/wt1/ProjectA";
+    const worktree2 = "/Users/fixture-user/.codex/worktrees/wt2/ProjectA";
     const nestedWorktreeCwd = `${worktree2}/apps`;
     const cheapThreads: AppServerThreadSummary[] = [
       {
@@ -10446,8 +10446,8 @@ script = "echo setup"
   });
 
   it("does not let non-backfilling cheap list cache suppress navigation backfill", async () => {
-    const projectA = "/Users/huntharo/projects/ProjectA";
-    const worktreePath = "/Users/huntharo/.codex/profiles/sstk/worktrees/wt1/ProjectA";
+    const projectA = "/Users/fixture-user/projects/ProjectA";
+    const worktreePath = "/Users/fixture-user/.codex/profiles/work/worktrees/wt1/ProjectA";
     const cheapThread: AppServerThreadSummary = {
       id: "thread-1",
       title: "ProjectA worktree",
@@ -10520,12 +10520,12 @@ script = "echo setup"
   });
 
   it("skips Codex directory backfill when the overlay owns a handoff workspace", async () => {
-    const projectA = "/Users/huntharo/projects/ProjectA";
+    const projectA = "/Users/fixture-user/projects/ProjectA";
     // The provider still reports the pre-handoff worktree. That directory was
     // removed when the workspace moved to a freshly hashed worktree, so
     // enrichment resolves nothing from it and reports no linked directories.
-    const staleWorktreePath = "/Users/huntharo/.codex/worktrees/mse9d2vb/ProjectA";
-    const handoffWorktreePath = "/Users/huntharo/.codex/worktrees/msf1iq9n/ProjectA";
+    const staleWorktreePath = "/Users/fixture-user/.codex/worktrees/mse9d2vb/ProjectA";
+    const handoffWorktreePath = "/Users/fixture-user/.codex/worktrees/msf1iq9n/ProjectA";
     const codexClient = new MockBackendClient({
       threads: [
         {
@@ -10602,7 +10602,7 @@ script = "echo setup"
   });
 
   it("keeps aggregate list cache sensitive to Codex directory backfill", async () => {
-    const worktreePath = "/Users/huntharo/.codex/worktrees/wt1/ProjectA";
+    const worktreePath = "/Users/fixture-user/.codex/worktrees/wt1/ProjectA";
     const codexClient = new MockBackendClient({
       threads: [
         {
@@ -10643,9 +10643,9 @@ script = "echo setup"
   });
 
   it("lets fresh Codex local metadata replace stale overlay worktree relationships", async () => {
-    const projectA = "/Users/huntharo/projects/ProjectA";
+    const projectA = "/Users/fixture-user/projects/ProjectA";
     const staleWorktreePath =
-      "/Users/huntharo/.codex/profiles/sstk/worktrees/wt1/ProjectA";
+      "/Users/fixture-user/.codex/profiles/work/worktrees/wt1/ProjectA";
     const localThread: AppServerThreadSummary = {
       id: "thread-1",
       title: "ProjectA local",
@@ -10711,8 +10711,8 @@ script = "echo setup"
   });
 
   it("preserves legacy handoff overlays while synchronizing stale local Codex metadata", async () => {
-    const projectA = "/Users/huntharo/projects/ProjectA";
-    const handoffWorktreePath = "/Users/huntharo/projects/ProjectA/.worktrees/thread-1";
+    const projectA = "/Users/fixture-user/projects/ProjectA";
+    const handoffWorktreePath = "/Users/fixture-user/projects/ProjectA/.worktrees/thread-1";
     const localThread: AppServerThreadSummary = {
       id: "thread-1",
       title: "ProjectA local",
@@ -10777,10 +10777,10 @@ script = "echo setup"
   });
 
   it("preserves legacy handoff overlays while synchronizing stale worktree Codex metadata", async () => {
-    const projectA = "/Users/huntharo/projects/ProjectA";
+    const projectA = "/Users/fixture-user/projects/ProjectA";
     const codexWorktreePath =
-      "/Users/huntharo/.codex/profiles/sstk/worktrees/original/ProjectA";
-    const handoffWorktreePath = "/Users/huntharo/projects/ProjectA/.worktrees/thread-1";
+      "/Users/fixture-user/.codex/profiles/work/worktrees/original/ProjectA";
+    const handoffWorktreePath = "/Users/fixture-user/projects/ProjectA/.worktrees/thread-1";
     const worktreeThread: AppServerThreadSummary = {
       id: "thread-1",
       title: "ProjectA worktree",
@@ -10846,10 +10846,10 @@ script = "echo setup"
   });
 
   it("does not backfill stale Codex worktree metadata over a legacy handoff overlay", async () => {
-    const projectA = "/Users/huntharo/projects/ProjectA";
+    const projectA = "/Users/fixture-user/projects/ProjectA";
     const codexWorktreePath =
-      "/Users/huntharo/.codex/profiles/sstk/worktrees/original/ProjectA";
-    const handoffWorktreePath = "/Users/huntharo/projects/ProjectA/.worktrees/thread-1";
+      "/Users/fixture-user/.codex/profiles/work/worktrees/original/ProjectA";
+    const handoffWorktreePath = "/Users/fixture-user/projects/ProjectA/.worktrees/thread-1";
     const cheapThread: AppServerThreadSummary = {
       id: "thread-1",
       title: "ProjectA worktree",
@@ -10935,8 +10935,8 @@ script = "echo setup"
   });
 
   it("retains a handoff overlay after Codex acknowledges the same workspace", async () => {
-    const projectA = "/Users/huntharo/projects/ProjectA";
-    const handoffWorktreePath = "/Users/huntharo/projects/ProjectA/.worktrees/thread-1";
+    const projectA = "/Users/fixture-user/projects/ProjectA";
+    const handoffWorktreePath = "/Users/fixture-user/projects/ProjectA/.worktrees/thread-1";
     const worktreeThread: AppServerThreadSummary = {
       id: "thread-1",
       title: "ProjectA worktree",
@@ -11000,8 +11000,8 @@ script = "echo setup"
   });
 
   it("keeps an acknowledged handoff worktree authoritative when native review restores stale local metadata", async () => {
-    const projectA = "/Users/huntharo/projects/ProjectA";
-    const handoffWorktreePath = "/Users/huntharo/.codex/worktrees/thread-1/ProjectA";
+    const projectA = "/Users/fixture-user/projects/ProjectA";
+    const handoffWorktreePath = "/Users/fixture-user/.codex/worktrees/thread-1/ProjectA";
     const handoffDirectory: ThreadOverlayState["extraLinkedDirectories"][number] = {
       id: "pwragent-handoff:codex:thread-1",
       label: "ProjectA",
@@ -12671,14 +12671,14 @@ command = "pnpm grok"
     });
 
     const updated = await registry.updateDirectoryLaunchpad({
-      directoryKey: "directory:/Users/huntharo/github/PwrAgnt",
+      directoryKey: "directory:/Users/fixture-user/github/PwrAgnt",
       patch: { prompt: "Late composer update" },
     });
 
     expect(updated.launchpad).toMatchObject({
       directoryKind: "directory",
       directoryLabel: "PwrAgnt",
-      directoryPath: "/Users/huntharo/github/PwrAgnt",
+      directoryPath: "/Users/fixture-user/github/PwrAgnt",
       prompt: "Late composer update",
     });
 
@@ -13543,7 +13543,7 @@ command = "pnpm test"
             cwd: root,
             setupStatus: "completed",
             shellEnvironment: {
-              PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+              PATH: "/Users/fixture-user/.nvm/versions/node/v24.14.1/bin:/usr/bin",
             },
             selectedActionIdByEnvironmentId: {
               environment: "dev",
@@ -13594,7 +13594,7 @@ command = "pnpm test"
         codexEnvironmentRuntime: {
           environmentId: "environment",
           shellEnvironment: {
-            PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+            PATH: "/Users/fixture-user/.nvm/versions/node/v24.14.1/bin:/usr/bin",
           },
           selectedActionIdByEnvironmentId: {
             environment: "test",
@@ -15009,8 +15009,8 @@ script = "printf setup-output"
       setupStatus: "completed",
       setupCommand: "nvm use",
       shellEnvironment: {
-        PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
-        NVM_DIR: "/Users/huntharo/.nvm",
+        PATH: "/Users/fixture-user/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+        NVM_DIR: "/Users/fixture-user/.nvm",
       },
       selectedActionIdByEnvironmentId: {
         pwragent: "start-dev",
@@ -15810,8 +15810,8 @@ command = "pnpm dev"
       environmentName: "Env",
       executionTarget: "local",
       shellEnvironment: {
-        PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
-        NVM_DIR: "/Users/huntharo/.nvm",
+        PATH: "/Users/fixture-user/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+        NVM_DIR: "/Users/fixture-user/.nvm",
       },
     };
     const registry = new DesktopBackendRegistry({
@@ -18276,7 +18276,7 @@ command = "pnpm dev"
         {
           id: "thread-title",
           title:
-            "# AGENTS.md instructions for /Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main-moj56ty6",
+            "# AGENTS.md instructions for /Users/fixture-user/github/PwrAgent/.worktrees/launchpad-pwragent-main-moj56ty6",
           titleSource: "derived",
           linkedDirectories: [],
           source: "codex",
@@ -29271,7 +29271,7 @@ script = "printf setup"
     const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-none-env-"));
     const repoPath = path.join(root, "catalog-review");
     const ignoredCwd = path.join(root, "other-project");
-    const scratchPath = path.join(root, "profiles", "sstk", "projects", "2026-06-30-c2acd2");
+    const scratchPath = path.join(root, "profiles", "work", "projects", "2026-06-30-c2acd2");
     try {
       await mkdir(repoPath, { recursive: true });
       await mkdir(ignoredCwd, { recursive: true });
@@ -43941,7 +43941,7 @@ script = "printf setup"
               status: "inProgress",
               changes: [
                 {
-                  path: "/Users/huntharo/huntharo_rocks.txt",
+                  path: "/Users/fixture-user/fixtureuser_rocks.txt",
                   kind: {
                     type: "update",
                     unified_diff:
@@ -43949,7 +43949,7 @@ script = "printf setup"
                   },
                 },
                 {
-                  path: "/tmp/huntharo_rocks.txt",
+                  path: "/tmp/fixtureuser_rocks.txt",
                   kind: {
                     type: "add",
                     content: "first dumb line\nsecond dumb line\n",
@@ -43978,24 +43978,24 @@ script = "printf setup"
       const call = desktopNotificationServiceMock.notifyApproval.mock.calls[0]?.[0];
       expect(call?.intent.context).toMatchObject({
         action: "update",
-        path: "/Users/huntharo/huntharo_rocks.txt",
+        path: "/Users/fixture-user/fixtureuser_rocks.txt",
         diff: "@@ -1 +1 @@\n-old dumb sentence\n+new dumb sentence",
       });
       expect(call?.intent.context?.files).toEqual([
         expect.objectContaining({
           action: "update",
-          path: "/Users/huntharo/huntharo_rocks.txt",
+          path: "/Users/fixture-user/fixtureuser_rocks.txt",
           diff: "@@ -1 +1 @@\n-old dumb sentence\n+new dumb sentence",
         }),
         expect.objectContaining({
           action: "add",
-          path: "/tmp/huntharo_rocks.txt",
+          path: "/tmp/fixtureuser_rocks.txt",
           diff: expect.stringContaining("+second dumb line"),
         }),
       ]);
       expect(call?.intent.body).toContain("Files:");
-      expect(call?.intent.body).toContain("- /Users/huntharo/huntharo_rocks.txt (update)");
-      expect(call?.intent.body).toContain("- /tmp/huntharo_rocks.txt (add)");
+      expect(call?.intent.body).toContain("- /Users/fixture-user/fixtureuser_rocks.txt (update)");
+      expect(call?.intent.body).toContain("- /tmp/fixtureuser_rocks.txt (add)");
       expect(call?.intent.body).toContain("Diff: 2 files, +3 -1");
 
       await registry.close();

@@ -33,7 +33,7 @@ describe("Discord resolveContact", () => {
   it("formats user names from the REST API", async () => {
     getMock.mockResolvedValue({
       id: "1177378744822943744",
-      username: "huntharo",
+      username: "fixtureuser",
       global_name: "Harold",
       discriminator: "0",
     });
@@ -46,8 +46,8 @@ describe("Discord resolveContact", () => {
     expect(result).toMatchObject({
       status: "ok",
       id: "1177378744822943744",
-      displayName: "Harold (@huntharo)",
-      handle: "@huntharo",
+      displayName: "Harold (@fixtureuser)",
+      handle: "@fixtureuser",
       detail: "user",
     });
     expect(setTokenMock).toHaveBeenCalledExactlyOnceWith("BotTokenABC");

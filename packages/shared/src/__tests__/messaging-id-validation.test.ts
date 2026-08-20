@@ -36,13 +36,13 @@ describe("messaging ID validators", () => {
   });
 
   it("rejects username confusions and mixed-shape values", () => {
-    for (const value of ["@huntharo", "huntharo", " 8460800771", "8460800771 "]) {
+    for (const value of ["@fixtureuser", "fixtureuser", " 8460800771", "8460800771 "]) {
       expect(validateTelegramPositiveId(value).ok).toBe(false);
     }
     expect(validateTelegramSupergroupId("8460800771").ok).toBe(false);
     expect(validateTelegramSupergroupId("-3841603622").ok).toBe(false);
     expect(validateTelegramGroupChatId("8460800771").ok).toBe(false);
-    expect(validateDiscordSnowflake("@huntharo").ok).toBe(false);
+    expect(validateDiscordSnowflake("@fixtureuser").ok).toBe(false);
     expect(validateDiscordSnowflake("8460800771").ok).toBe(false);
     expect(validateMattermostId("UserName").ok).toBe(false);
     expect(validateMattermostId("abcdefghijklmnopqrstu1234").ok).toBe(false);

@@ -129,21 +129,21 @@ async function createDirectoryLaunchpadSkillsFixture(): Promise<{
                   {
                     name: "frontend-design",
                     description: "Design and verify renderer UI work.",
-                    path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+                    path: "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md",
                     enabled: true,
                     scope: "user",
                   },
                   {
                     name: "ce:brainstorm",
                     description: "Explore requirements before writing implementation plans.",
-                    path: "/Users/huntharo/.codex/skills/ce-brainstorm/SKILL.md",
+                    path: "/Users/fixture-user/.codex/skills/ce-brainstorm/SKILL.md",
                     enabled: true,
                     scope: "user",
                   },
                   {
                     name: "ce:plan",
                     description: "Transform requirements into implementation plans.",
-                    path: "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+                    path: "/Users/fixture-user/.codex/skills/ce-plan/SKILL.md",
                     enabled: true,
                     scope: "user",
                   },
@@ -205,7 +205,7 @@ async function seedPersistedDirectoryLaunchpad(params: {
             directoryPath: params.repoDir,
             backend: "codex",
             executionMode: "full-access",
-            prompt: "[$ce:brainstorm](/Users/huntharo/.codex/skills/ce-brainstorm/SKILL.md) ",
+            prompt: "[$ce:brainstorm](/Users/fixture-user/.codex/skills/ce-brainstorm/SKILL.md) ",
             workMode: "worktree",
             branchName: "main",
             reasoningEffort: "high",
@@ -686,7 +686,7 @@ test("directory launchpad Tiptap composer selects focused skills as undoable inl
     await expect(chip).toBeVisible();
     await expect(chip).toHaveAttribute(
       "data-tooltip",
-      /\/Users\/huntharo\/\.codex\/skills\/frontend-design\/SKILL\.md$/,
+      /\/Users\/fixture-user\/\.codex\/skills\/frontend-design\/SKILL\.md$/,
     );
     // The commit leaves one guaranteed space after the chip.
     await expect(tiptapInput).toHaveAttribute("data-value", " ");

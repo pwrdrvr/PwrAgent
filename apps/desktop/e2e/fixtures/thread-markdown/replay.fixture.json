@@ -79,7 +79,7 @@
         {
           "name": "frontend-design",
           "description": "Design and verify renderer UI work.",
-          "path": "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+          "path": "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md",
           "enabled": true
         }
       ]
@@ -94,7 +94,7 @@
             "type": "message",
             "id": "message-1",
             "role": "user",
-            "text": "Inspect [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md) and open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)."
+            "text": "Inspect [$frontend-design](/Users/fixture-user/.codex/skills/frontend-design/SKILL.md) and open [`ce:work`](/Users/fixture-user/.codex/skills/ce-work/SKILL.md)."
           },
           {
             "type": "message",
@@ -107,7 +107,7 @@
           {
             "id": "message-1",
             "role": "user",
-            "text": "Inspect [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md) and open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)."
+            "text": "Inspect [$frontend-design](/Users/fixture-user/.codex/skills/frontend-design/SKILL.md) and open [`ce:work`](/Users/fixture-user/.codex/skills/ce-work/SKILL.md)."
           },
           {
             "id": "message-2",
@@ -115,7 +115,7 @@
             "text": "# Transcript heading 1\n\n## Transcript heading 2\n\n### Transcript heading 3\n\n#### Transcript heading 4\n\n##### Transcript heading 5\n\n###### Transcript heading 6\n\nThe desktop client now renders **markdown** in transcript messages.\n\n- Preserves file links\n- Preserves [external links](https://example.com/transcript)\n- Keeps ![Transcript preview](https://example.com/preview.png) inert"
           }
         ],
-        "lastUserMessage": "Inspect [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md) and open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md).",
+        "lastUserMessage": "Inspect [$frontend-design](/Users/fixture-user/.codex/skills/frontend-design/SKILL.md) and open [`ce:work`](/Users/fixture-user/.codex/skills/ce-work/SKILL.md).",
         "lastAssistantMessage": "The desktop client now renders **markdown** in transcript messages.",
         "pagination": {
           "supportsPagination": false,

@@ -21,10 +21,10 @@ describe("buildThreadUrl", () => {
         backend: "codex",
         instanceId: "pwr_harold",
         messageId: "user:turn-9",
-        profile: "sstk",
+        profile: "work",
       }),
     ).toBe(
-      "pwragent://thread/019f5d79?backend=codex&instanceId=pwr_harold&messageId=user%3Aturn-9&profile=sstk",
+      "pwragent://thread/019f5d79?backend=codex&instanceId=pwr_harold&messageId=user%3Aturn-9&profile=work",
     );
   });
 
@@ -46,7 +46,7 @@ describe("parseThreadUrl", () => {
       backend: "codex",
       instanceId: "pwr_harold",
       messageId: "message-17",
-      profile: "sstk",
+      profile: "work",
     } as const;
 
     expect(parseThreadUrl(buildThreadUrl(ref))).toEqual(ref);

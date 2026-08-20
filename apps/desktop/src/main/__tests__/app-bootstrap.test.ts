@@ -415,7 +415,7 @@ describe("createMainWindow", () => {
       "context-menu",
       {},
       {
-        linkURL: "file:///Users/huntharo/project/AGENTS.md:12",
+        linkURL: "file:///Users/fixture-user/project/AGENTS.md:12",
         x: 40,
         y: 64,
       }
@@ -439,7 +439,7 @@ describe("createMainWindow", () => {
     click?.();
 
     expect(clipboardWriteTextMock).toHaveBeenCalledWith(
-      "file:///Users/huntharo/project/AGENTS.md:12"
+      "file:///Users/fixture-user/project/AGENTS.md:12"
     );
   });
 

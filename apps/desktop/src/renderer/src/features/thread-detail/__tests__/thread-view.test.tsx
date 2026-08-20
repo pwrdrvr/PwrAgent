@@ -587,7 +587,7 @@ describe("ThreadView", () => {
           {
             name: "frontend-design",
             description: "Design and verify renderer UI work.",
-            path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+            path: "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md",
             enabled: true,
           },
         ]}
@@ -596,7 +596,7 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Inspect [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)."
+            text: "Inspect [$frontend-design](/Users/fixture-user/.codex/skills/frontend-design/SKILL.md)."
           },
           {
             type: "activity",
@@ -683,10 +683,10 @@ describe("ThreadView", () => {
       },
     };
     const kubeDirectory: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/infra/kube-manifests",
+      key: "directory:/Users/fixture-user/infra/kube-manifests",
       kind: "directory",
       label: "kube-manifests",
-      path: "/Users/huntharo/infra/kube-manifests",
+      path: "/Users/fixture-user/infra/kube-manifests",
       threadKeys: ["codex:thread-1"],
       needsAttentionCount: 0,
       gitStatus: {
@@ -738,12 +738,12 @@ describe("ThreadView", () => {
                 "/Users/example/.codex/profiles/sample/worktrees/tree-delta/catalog-service",
             },
             {
-              id: "/Users/huntharo/infra/kube-manifests",
+              id: "/Users/fixture-user/infra/kube-manifests",
               kind: "worktree",
               label: "kube-manifests",
-              path: "/Users/huntharo/infra/kube-manifests",
+              path: "/Users/fixture-user/infra/kube-manifests",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+                "/Users/fixture-user/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
             },
           ],
           inbox: { inInbox: true },
@@ -766,7 +766,7 @@ describe("ThreadView", () => {
     fireEvent.change(screen.getByLabelText("Review project"), {
       target: {
         value:
-          "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+          "/Users/fixture-user/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       },
     });
 
@@ -786,7 +786,7 @@ describe("ThreadView", () => {
         target: { type: "baseBranch", branch: "origin/develop" },
         delivery: "inline",
         cwd:
-          "/Users/huntharo/.codex/profiles/sstk/worktrees/mrctwp7f/kube-manifests",
+          "/Users/fixture-user/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       });
     });
   });
@@ -1970,10 +1970,10 @@ describe("ThreadView", () => {
       },
     ] satisfies MessagingPlatformStatus[];
     const selectedDirectory = {
-      key: "directory:/Users/huntharo/github/PwrAgnt",
+      key: "directory:/Users/fixture-user/github/PwrAgnt",
       kind: "directory",
       label: "PwrAgnt",
-      path: "/Users/huntharo/github/PwrAgnt",
+      path: "/Users/fixture-user/github/PwrAgnt",
       threadKeys: ["thread-1", "thread-2"],
       needsAttentionCount: 0,
       gitStatus: {
@@ -2474,7 +2474,7 @@ describe("ThreadView", () => {
       key: "subthread:codex:thread-parent:new-worktree",
       kind: "directory",
       label: "PwrAgnt",
-      path: "/Users/huntharo/pwrdrvr/PwrAgnt",
+      path: "/Users/fixture-user/pwrdrvr/PwrAgnt",
       threadKeys: [],
       needsAttentionCount: 0,
     } satisfies NavigationDirectorySummary;
@@ -2525,7 +2525,7 @@ describe("ThreadView", () => {
       key: "subthread:codex:thread-parent:same-worktree",
       kind: "directory",
       label: "PwrAgnt",
-      path: "/Users/huntharo/.codex/worktrees/mpsmzvdh/PwrAgnt",
+      path: "/Users/fixture-user/.codex/worktrees/mpsmzvdh/PwrAgnt",
       threadKeys: [],
       needsAttentionCount: 0,
     } satisfies NavigationDirectorySummary;
@@ -2873,17 +2873,17 @@ describe("ThreadView", () => {
             type: "message",
             id: "message-image-1",
             role: "user",
-            text: "Open [Transcript screenshot](/Users/huntharo/.codex/worktrees/pwrsnap/latest.png).",
+            text: "Open [Transcript screenshot](/Users/fixture-user/.codex/worktrees/pwrsnap/latest.png).",
             parts: [
               {
                 type: "text",
-                text: "Open [Transcript screenshot](/Users/huntharo/.codex/worktrees/pwrsnap/latest.png).",
+                text: "Open [Transcript screenshot](/Users/fixture-user/.codex/worktrees/pwrsnap/latest.png).",
               },
               {
                 type: "image",
                 url: dataUrl,
                 alt: "Transcript screenshot",
-                sourceUrl: "file:///Users/huntharo/.codex/worktrees/pwrsnap/latest.png",
+                sourceUrl: "file:///Users/fixture-user/.codex/worktrees/pwrsnap/latest.png",
               }
             ]
           }
