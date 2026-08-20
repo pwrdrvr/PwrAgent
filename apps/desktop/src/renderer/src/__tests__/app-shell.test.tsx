@@ -8,9 +8,11 @@ import {
   waitFor,
   within
 } from "@testing-library/react";
+import { resolveNewThreadBackend } from "@pwragent/shared";
 import type {
   AgentEvent,
   AppServerBackendKind,
+  BackendSummary,
   CreateScheduledThreadActionRequest,
   DesktopPwrAgentProfileSummary,
   DesktopSettingsSnapshot,
@@ -2598,7 +2600,7 @@ describe("App", () => {
     });
   });
 
-  it("opens a directory-less composer on startup with a usable ACP backend", async () => {
+  it("opens a directory-less composer on startup when no thread can be selected", async () => {
     const ensureDirectoryLaunchpad = vi.fn(async () => ({
       launchpad: {
         directoryKey: "workspace:new-thread",
@@ -2676,6 +2678,128 @@ describe("App", () => {
           backend: "all" as const,
           fetchedAt: Date.now(),
           unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        ensureDirectoryLaunchpad,
+        onAgentEvent: () => () => undefined,
+      },
+    });
+
+    render(<App />);
+
+    expect(
+      await screen.findByRole("textbox", { name: "New thread" }),
+    ).toBeInTheDocument();
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "workspace:new-thread",
+      directoryKind: "workspace",
+      directoryLabel: "Workspaces",
+      directoryPath: undefined,
+      preferredBackend: "acp:grok",
+    });
+    await flushReactUpdates();
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the startup thread selection instead of opening the workspace composer", async () => {
+    const startupBackends: BackendSummary[] = [
+      {
+        kind: "codex",
+        // `BackendSummary.source` is the discovery channel ("builtin" | "acp"),
+        // not the backend kind — and `selectableNewThreadBackends` reads it.
+        source: "builtin",
+        label: "Codex",
+        available: true,
+        methods: ["thread/start", "turn/start"],
+        capabilities: {
+          listThreads: true,
+          createThread: true,
+          resumeThread: true,
+          renameThread: true,
+          readThread: true,
+          startTurn: true,
+          interruptTurn: true,
+          steerTurn: true,
+          transcriptPagination: true,
+          toolUse: true,
+          approvalRequests: true,
+          multiDirectoryThreads: true,
+        },
+        executionModes: [
+          {
+            mode: "default",
+            label: "Default Access",
+            available: true,
+            isDefault: true,
+          },
+        ],
+      },
+    ];
+    // Pin the precondition this test depends on: the startup landing effect
+    // reaches the guard under test only when a backend can create a thread.
+    // An unselectable fixture sends it down the onboarding branch instead,
+    // where every assertion below passes without exercising the guard.
+    expect(resolveNewThreadBackend(startupBackends)).toBeDefined();
+    const ensureDirectoryLaunchpad = vi.fn(async () => ({
+      launchpad: {
+        directoryKey: "workspace:new-thread",
+        directoryKind: "workspace" as const,
+        directoryLabel: "Workspaces",
+        backend: "codex" as const,
+        executionMode: "default" as const,
+        prompt: "",
+        workMode: "local" as const,
+        createdAt: 1,
+        updatedAt: 2,
+      },
+      defaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        readSettings: async () => ({
+          snapshot: {
+            general: {
+              appearance: {
+                theme: { value: "system", source: "default" },
+                density: { value: "mission-control", source: "default" },
+                sidebarTextSize: { value: "md", source: "default" },
+                transcriptTextSize: { value: "md", source: "default" },
+              },
+            },
+            onboarding: {
+              completed: { value: true, source: "config" },
+              completedSource: { value: "migrated", source: "default" },
+            },
+            imageUploads: {
+              pastedImageMaxPatches: { value: 1536, source: "default" },
+            },
+            experimental: {
+              fullAccessRiskWarningDismissed: {
+                value: false,
+                source: "default",
+              },
+            },
+          } as DesktopSettingsSnapshot,
+        }),
+        listBackends: async () => ({
+          fetchedAt: Date.now(),
+          backends: startupBackends,
+        }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
           inboxThreadKeys: ["codex:thread-existing"],
           threads: [
             {
@@ -2704,18 +2828,24 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(
-      await screen.findByRole("textbox", { name: "New thread" }),
-    ).toBeInTheDocument();
-    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
-      directoryKey: "workspace:new-thread",
-      directoryKind: "workspace",
-      directoryLabel: "Workspaces",
-      directoryPath: undefined,
-      preferredBackend: "acp:grok",
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: "Existing thread" }),
+      ).toHaveAttribute("aria-pressed", "true");
     });
+    // Three flushes cover the startup landing decision: the backend list
+    // resolves, the effect runs, and `ensureDirectoryLaunchpad` would have
+    // settled. Measured against the unguarded effect — the launchpad opens
+    // inside this window — so the negative assertions below are load-bearing
+    // rather than merely early.
     await flushReactUpdates();
-    expect(ensureDirectoryLaunchpad).toHaveBeenCalledTimes(1);
+    await flushReactUpdates();
+    await flushReactUpdates();
+    expect(ensureDirectoryLaunchpad).not.toHaveBeenCalled();
+    expect(screen.queryByRole("textbox", { name: "New thread" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Existing thread" }),
+    ).toHaveAttribute("aria-pressed", "true");
   });
 
   it("preserves replay fixture navigation instead of opening the startup composer", async () => {

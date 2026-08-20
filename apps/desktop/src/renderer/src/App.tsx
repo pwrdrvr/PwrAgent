@@ -1819,6 +1819,14 @@ function DesktopAppShell(props: {
     }
 
     startupLandingStateRef.current = "complete";
+    if (navigation.selectedThreadKey) {
+      // Navigation already landed on a thread: a selection restored across a
+      // renderer reload, or the snapshot's fallback pick. Swapping that for
+      // the workspace composer flashes the thread's transcript and leaves a
+      // back entry pointing at it, so the composer is the startup landing
+      // only when there is no thread to show.
+      return;
+    }
     setMainView("thread");
     void openWorkspaceLaunchpad(startupBackend.kind);
   }, [
@@ -1826,6 +1834,7 @@ function DesktopAppShell(props: {
     backendSummaries.loaded,
     desktopApi,
     navigation.loaded,
+    navigation.selectedThreadKey,
     onboardingOpen,
     openWorkspaceLaunchpad,
     settings.snapshot?.onboarding?.completed.value,
