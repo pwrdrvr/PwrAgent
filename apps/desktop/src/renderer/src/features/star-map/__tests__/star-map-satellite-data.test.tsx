@@ -82,6 +82,7 @@ function editEntries(): AppServerThreadEntry[] {
  */
 function buildApi(entries: AppServerThreadEntry[] = []): DesktopApi {
   return {
+    platform: "darwin",
     readThread: vi.fn(async () => ({
       backend: "codex",
       threadId: "t-local",
@@ -224,6 +225,15 @@ describe("star map context satellite data", () => {
     expect(satellite().queryByRole("tab", { name: "Pricing" })).toBeNull();
   });
 
+  it("names the desktop platform on the Info tab rather than \"Unknown\"", async () => {
+    // Info renders `platform` verbatim. Unpassed, the map's rail called
+    // every machine "Unknown" while the full window named it.
+    const desktopApi = buildApi();
+    renderCardWithContextSatellite(desktopApi);
+
+    expect(await satellite().findByText("darwin")).toBeTruthy();
+  });
+
   it("shows the host instance's AI providers, not an unavailable rail", async () => {
     // The satellite was handed `backends={[]}`, so the providers tab read
     // "Status unavailable" on a machine whose providers were fine.
@@ -234,6 +244,22 @@ describe("star map context satellite data", () => {
 
     expect(await satellite().findByText("OpenAI")).toBeTruthy();
     expect(satellite().queryByText("Status unavailable")).toBeNull();
+  });
+
+  it("reads a peer thread's providers from the peer, not from this window", async () => {
+    // The point of reading per satellite rather than once for the window:
+    // a map holds cards over several instances at once, so the providers
+    // shown under a peer's card have to be that peer's.
+    const desktopApi = buildApi();
+    renderCardWithContextSatellite(desktopApi, { remote: true });
+
+    await waitFor(() => {
+      expect(desktopApi.listBackends).toHaveBeenCalledWith(
+        expect.objectContaining({
+          federationTarget: { scope: "remote", instanceId: "pwr_peer" },
+        }),
+      );
+    });
   });
 
   it("reads the provider list once per thread, not once per render", async () => {

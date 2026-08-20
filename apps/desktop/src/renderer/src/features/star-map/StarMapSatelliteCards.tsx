@@ -140,6 +140,9 @@ export function StarMapContextCard(props: {
           editedFilesDock="sidebar"
           onActiveTabChange={setTab}
           pinned
+          // The Info tab prints this verbatim as its "Desktop" row, and
+          // falls back to "Unknown" when it is absent.
+          platform={props.desktopApi?.platform}
           pricing={cardContext.pricing}
           pricingDisplayOptions={props.pricingDisplayOptions}
           thread={props.thread}
