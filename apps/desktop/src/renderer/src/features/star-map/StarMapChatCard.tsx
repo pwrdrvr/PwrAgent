@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -78,6 +79,23 @@ type DragState = {
 };
 
 /**
+ * The composer, behind a memo boundary.
+ *
+ * The card re-renders once per streamed delta — Codex emits fixed 8 KiB
+ * chunks at roughly 444 a second — because that is what the transcript is
+ * for. The composer's own state almost never moves during a turn, so
+ * dragging it through the same renders is pure waste, multiplied by every
+ * card the map has open.
+ *
+ * The boundary lives here rather than inside `CompactComposer` because it
+ * only pays off while this host keeps the props it passes referentially
+ * stable, and those two facts should be reviewable together. Everything
+ * below that feeds it is memoized or ref-read for exactly that reason.
+ * `star-map-chat-card-render-cost.test.tsx` pins the result.
+ */
+const MemoizedCompactComposer = memo(CompactComposer);
+
+/**
  * One chat card, anchored in the star map.
  *
  * The card owns its own thread session rather than borrowing App's single
@@ -111,6 +129,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
     thread,
   });
+  // The session is a fresh object literal on every render of a hook that
+  // re-renders per streamed delta, so any callback that closes over it
+  // rebinds at streaming rate. `send` reads three of its members and needs
+  // them current at call time, not at bind time — which is what a ref gives
+  // — so it reads through here and depends on scalars instead.
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
 
   // Cap what actually mounts. Same window the full thread view uses, so a
   // card over a long thread holds tens of entries rather than thousands.
@@ -126,8 +151,14 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     threadKey: buildThreadIdentityKey(thread.source, thread.id),
   });
 
-  const federationTarget =
-    thread.federation?.ref.target ?? readRendererFederationTarget();
+  // `readRendererFederationTarget` mints a fresh object per call, so in a
+  // federation window an unmemoized read would rebind every callback that
+  // routes through it on each render.
+  const threadFederationTarget = thread.federation?.ref.target;
+  const federationTarget = useMemo(
+    () => threadFederationTarget ?? readRendererFederationTarget(),
+    [threadFederationTarget],
+  );
 
   // The context satellite is a sibling rendered by the screen, so the session
   // data its panels need has to be published rather than passed down.
@@ -327,7 +358,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       setSendError(undefined);
       setSendNotice(undefined);
 
-      if (session.threadBusy) {
+      if (sessionRef.current.threadBusy) {
         if (!desktopApi?.steerTurn) {
           setSendError("This thread is busy and steering is unavailable.");
           return false;
@@ -344,7 +375,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           );
           return false;
         }
-        const optimisticId = session.addOptimisticUserMessage(text);
+        const optimisticId = sessionRef.current.addOptimisticUserMessage(text);
         try {
           const response = await desktopApi.steerTurn({
             backend: thread.source,
@@ -363,7 +394,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           );
           return true;
         } catch (error) {
-          session.removeOptimisticMessage(optimisticId);
+          sessionRef.current.removeOptimisticMessage(optimisticId);
           setSendError(
             error instanceof Error
               ? error.message
@@ -374,7 +405,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       }
 
       if (!desktopApi?.startTurn) return false;
-      const optimisticId = session.addOptimisticUserMessage(text);
+      const optimisticId = sessionRef.current.addOptimisticUserMessage(text);
       try {
         await desktopApi.startTurn({
           backend: thread.source,
@@ -384,7 +415,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         });
         return true;
       } catch (error) {
-        session.removeOptimisticMessage(optimisticId);
+        sessionRef.current.removeOptimisticMessage(optimisticId);
         setSendError(
           error instanceof Error
             ? error.message
@@ -393,7 +424,14 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         return false;
       }
     },
-    [activeTurnId, cardKey, desktopApi, federationTarget, session, thread],
+    [
+      activeTurnId,
+      cardKey,
+      desktopApi,
+      federationTarget,
+      thread.id,
+      thread.source,
+    ],
   );
 
   const interrupt = useCallback(async () => {
@@ -410,7 +448,14 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         error instanceof Error ? error.message : "Could not interrupt the turn.",
       );
     }
-  }, [activeTurnId, desktopApi, federationTarget, thread]);
+  }, [activeTurnId, desktopApi, federationTarget, thread.id, thread.source]);
+
+  // The composer takes a plain `() => void`; an inline arrow here would be
+  // a fresh prop on every render and would defeat the memo boundary on its
+  // own.
+  const onInterrupt = useCallback(() => {
+    void interrupt();
+  }, [interrupt]);
 
   /**
    * Everything the card can do with only a thread summary and the desktop
@@ -604,13 +649,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         </p>
       ) : undefined}
 
-      <CompactComposer
+      <MemoizedCompactComposer
         busy={session.threadBusy}
         canSteer={canSteer}
         executionMode={thread.executionMode}
         mentionSources={mentionSources}
         model={thread.model}
-        onInterrupt={() => void interrupt()}
+        onInterrupt={onInterrupt}
         onSend={send}
         reasoningEffort={thread.reasoningEffort}
         secondaryActions={secondaryActions}
