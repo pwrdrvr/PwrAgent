@@ -19,19 +19,19 @@ describe("useThreadSkills", () => {
       fetchedAt: Date.now(),
       data: [
         {
-          cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+          cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
           skills: [
             {
               name: "local-fix",
               description: "Project-local skill",
-              path: "/Users/huntharo/pwrdrvr/PwrAgent/.agents/skills/local-fix/SKILL.md",
+              path: "/Users/fixture-user/pwrdrvr/PwrAgent/.agents/skills/local-fix/SKILL.md",
               scope: "local",
               enabled: true,
             },
             {
               name: "frontend-design",
               description: "User skill",
-              path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+              path: "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md",
               scope: "user",
               enabled: true,
             },
@@ -48,10 +48,10 @@ describe("useThreadSkills", () => {
       useThreadSkills({
         desktopApi,
         launchpad: {
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryKey: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           directoryKind: "directory",
           directoryLabel: "PwrAgent",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -69,8 +69,8 @@ describe("useThreadSkills", () => {
 
     expect(listSkills).toHaveBeenCalledWith({
       backend: "codex",
-      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
-      cwds: ["/Users/huntharo/pwrdrvr/PwrAgent"],
+      cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
+      cwds: ["/Users/fixture-user/pwrdrvr/PwrAgent"],
     });
 
     await waitFor(() => {
@@ -82,9 +82,9 @@ describe("useThreadSkills", () => {
   });
 
   it.each([
-    { backend: "acp:grok" as const, directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent" },
-    { backend: "acp:kimi" as const, directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent" },
-    { backend: "codex" as const, directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent" },
+    { backend: "acp:grok" as const, directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent" },
+    { backend: "acp:kimi" as const, directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent" },
+    { backend: "codex" as const, directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent" },
   ])(
     "loads provider commands for an unborn $backend launchpad draft",
     async ({ backend, directoryPath }) => {
@@ -157,10 +157,10 @@ describe("useThreadSkills", () => {
       useThreadSkills({
         desktopApi: { listSkills },
         launchpad: {
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryKey: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           directoryKind: "directory",
           directoryLabel: "PwrAgent",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
           backend: "acp:grok",
           executionMode: "default",
           prompt: "",
@@ -178,8 +178,8 @@ describe("useThreadSkills", () => {
 
     expect(listSkills).toHaveBeenCalledWith({
       backend: "acp:grok",
-      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
-      cwds: ["/Users/huntharo/pwrdrvr/PwrAgent"],
+      cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
+      cwds: ["/Users/fixture-user/pwrdrvr/PwrAgent"],
     });
   });
 
@@ -288,7 +288,7 @@ describe("useThreadSkills", () => {
               {
                 name: "old-skill",
                 description: "Old skill",
-                path: "/Users/huntharo/.codex/skills/old-skill/SKILL.md",
+                path: "/Users/fixture-user/.codex/skills/old-skill/SKILL.md",
                 scope: "user" as const,
                 enabled: true,
               },
@@ -305,7 +305,7 @@ describe("useThreadSkills", () => {
               {
                 name: "new-skill",
                 description: "New skill",
-                path: "/Users/huntharo/.codex/skills/new-skill/SKILL.md",
+                path: "/Users/fixture-user/.codex/skills/new-skill/SKILL.md",
                 scope: "user" as const,
                 enabled: true,
               },
@@ -392,7 +392,7 @@ describe("useThreadSkills", () => {
             {
               name,
               description: name,
-              path: `/Users/huntharo/.codex/skills/${name}/SKILL.md`,
+              path: `/Users/fixture-user/.codex/skills/${name}/SKILL.md`,
               scope: "user",
               enabled: true,
             },

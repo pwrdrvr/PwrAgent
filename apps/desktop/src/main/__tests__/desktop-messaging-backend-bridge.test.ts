@@ -321,7 +321,7 @@ describe("DesktopMessagingBackendBridge", () => {
         actor: {
           platformUserId: "U012345",
           displayName: "Hunter",
-          username: "huntharo",
+          username: "fixtureuser",
         },
       },
     };

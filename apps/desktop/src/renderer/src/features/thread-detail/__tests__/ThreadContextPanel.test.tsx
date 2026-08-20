@@ -2918,15 +2918,15 @@ describe("ThreadContextPanel", () => {
             id: "worktree-dir",
             kind: "worktree",
             label: "PwrAgent",
-            path: "/Users/huntharo/github/PwrAgent",
+            path: "/Users/fixture-user/github/PwrAgent",
             worktreePath:
-              "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main-molpnvyk",
+              "/Users/fixture-user/github/PwrAgent/.worktrees/launchpad-pwragent-main-molpnvyk",
           },
           {
             id: "local-dir",
             kind: "local",
             label: "LocalOnly",
-            path: "/Users/huntharo/github/PwrAgent",
+            path: "/Users/fixture-user/github/PwrAgent",
           },
         ],
       },
@@ -2934,12 +2934,12 @@ describe("ThreadContextPanel", () => {
 
     fireEvent.mouseEnter(screen.getByLabelText("Path for PwrAgent"));
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "/Users/huntharo/github/PwrAgent",
+      "/Users/fixture-user/github/PwrAgent",
     );
 
     fireEvent.mouseLeave(screen.getByLabelText("Path for PwrAgent"));
     fireEvent.mouseEnter(screen.getByLabelText("Path for worktree PwrAgent"));
-    expect(screen.getByRole("tooltip")).toHaveTextContent("/Users/huntharo/github");
+    expect(screen.getByRole("tooltip")).toHaveTextContent("/Users/fixture-user/github");
     expect(screen.getByRole("tooltip")).toHaveTextContent(
       "launchpad-pwragent-main-molpnvyk",
     );
@@ -2947,7 +2947,7 @@ describe("ThreadContextPanel", () => {
     fireEvent.mouseLeave(screen.getByLabelText("Path for worktree PwrAgent"));
     fireEvent.mouseEnter(screen.getByLabelText("Path for local LocalOnly"));
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "/Users/huntharo/github/PwrAgent",
+      "/Users/fixture-user/github/PwrAgent",
     );
   });
 
@@ -2962,25 +2962,25 @@ describe("ThreadContextPanel", () => {
             id: "repo-dir",
             kind: "worktree",
             label: "PwrAgent",
-            path: "/Users/huntharo/github/PwrAgent",
+            path: "/Users/fixture-user/github/PwrAgent",
             worktreePath:
-              "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main",
+              "/Users/fixture-user/github/PwrAgent/.worktrees/launchpad-pwragent-main",
           },
           {
             id: "repo-dir-duplicate",
             kind: "worktree",
             label: "PwrAgent",
-            path: "/Users/huntharo/github/PwrAgent",
+            path: "/Users/fixture-user/github/PwrAgent",
             worktreePath:
-              "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main",
+              "/Users/fixture-user/github/PwrAgent/.worktrees/launchpad-pwragent-main",
           },
           {
             id: "repo-dir-other-worktree",
             kind: "worktree",
             label: "PwrAgent Other",
-            path: "/Users/huntharo/github/PwrAgent",
+            path: "/Users/fixture-user/github/PwrAgent",
             worktreePath:
-              "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-other",
+              "/Users/fixture-user/github/PwrAgent/.worktrees/launchpad-pwragent-other",
           },
         ],
       },
@@ -3002,15 +3002,15 @@ describe("ThreadContextPanel", () => {
             id: "primary-dir",
             kind: "local",
             label: "PwrAgent",
-            path: "/Users/huntharo/github/PwrAgent",
+            path: "/Users/fixture-user/github/PwrAgent",
           },
           {
             id: "kube-dir",
             kind: "worktree",
             label: "kube-manifests",
-            path: "/Users/huntharo/github/kube-manifests",
+            path: "/Users/fixture-user/github/kube-manifests",
             worktreePath:
-              "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
+              "/Users/fixture-user/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
             gitBranch: "fix/channelsv2-live-pods",
           },
         ],
@@ -3038,21 +3038,21 @@ describe("ThreadContextPanel", () => {
       pinned: true,
       thread: {
         ...baseThread,
-        projectKey: "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main",
+        projectKey: "/Users/fixture-user/github/PwrAgent/.worktrees/launchpad-pwragent-main",
         linkedDirectories: [
           {
             id: "primary-dir",
             kind: "worktree",
             label: "PwrAgent",
-            path: "/Users/huntharo/github/PwrAgent",
+            path: "/Users/fixture-user/github/PwrAgent",
             worktreePath:
-              "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main",
+              "/Users/fixture-user/github/PwrAgent/.worktrees/launchpad-pwragent-main",
           },
           {
             id: "agent-kit-dir",
             kind: "local",
             label: "agent-kit",
-            path: "/Users/huntharo/github/agent-kit",
+            path: "/Users/fixture-user/github/agent-kit",
           },
         ],
       },
@@ -3070,7 +3070,7 @@ describe("ThreadContextPanel", () => {
           id: "agent-kit-dir",
           kind: "local",
           label: "agent-kit",
-          path: "/Users/huntharo/github/agent-kit",
+          path: "/Users/fixture-user/github/agent-kit",
         },
       });
     });
@@ -3099,7 +3099,7 @@ describe("ThreadContextPanel", () => {
             id: "agent-kit-dir",
             kind: "local",
             label: "agent-kit",
-            path: "/Users/huntharo/github/agent-kit",
+            path: "/Users/fixture-user/github/agent-kit",
           },
         ],
       },

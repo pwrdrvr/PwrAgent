@@ -354,7 +354,7 @@ describe("derive PR states", () => {
 describe("parseGhAuthStatus", () => {
   // Pinned against `gh auth status --hostname github.com` from gh 2.88.1.
   const loggedInOutput = `github.com
-  ✓ Logged in to github.com account huntharo (keyring)
+  ✓ Logged in to github.com account fixtureuser (keyring)
   - Active account: true
   - Git operations protocol: ssh
   - Token: gho_************************************
@@ -368,7 +368,7 @@ describe("parseGhAuthStatus", () => {
     });
     expect(result.installed).toBe(true);
     expect(result.loggedIn).toBe(true);
-    expect(result.account).toBe("huntharo");
+    expect(result.account).toBe("fixtureuser");
     expect(result.scopes).toEqual(["repo", "read:org", "workflow"]);
     expect(result.hasRepoScope).toBe(true);
     expect(result.reason).toBeUndefined();
@@ -790,7 +790,7 @@ describe("GithubPrFetcher", () => {
       const probeGhAvailable = vi.fn(async () => true);
       const runGhAuthStatus = vi.fn(async () => ({
         stdout:
-          "github.com\n  ✓ Logged in to github.com account huntharo\n  - Token scopes: 'gist', 'repo', 'workflow'\n",
+          "github.com\n  ✓ Logged in to github.com account fixtureuser\n  - Token scopes: 'gist', 'repo', 'workflow'\n",
         stderr: "",
         ok: true,
       }));
@@ -822,7 +822,7 @@ describe("GithubPrFetcher", () => {
       const probeGhAvailable = vi.fn(async () => true);
       const runGhAuthStatus = vi.fn(async () => ({
         stdout:
-          "github.com\n  ✓ Logged in to github.com account huntharo\n  - Token scopes: 'repo'\n",
+          "github.com\n  ✓ Logged in to github.com account fixtureuser\n  - Token scopes: 'repo'\n",
         stderr: "",
         ok: true,
       }));
@@ -851,7 +851,7 @@ describe("GithubPrFetcher", () => {
         });
         return {
           stdout:
-            "github.com\n  ✓ Logged in to github.com account huntharo\n  - Token scopes: 'repo'\n",
+            "github.com\n  ✓ Logged in to github.com account fixtureuser\n  - Token scopes: 'repo'\n",
           stderr: "",
           ok: true,
         };

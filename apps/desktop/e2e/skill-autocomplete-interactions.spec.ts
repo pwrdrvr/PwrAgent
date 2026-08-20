@@ -109,7 +109,7 @@ test("thread reply Tiptap skill autocomplete filters and commits the reported mu
         input: [
           {
             type: "text",
-            text: `${seededDraft ?? ""}[$ce:plan](/Users/huntharo/.codex/skills/ce-plan/SKILL.md)`.trim(),
+            text: `${seededDraft ?? ""}[$ce:plan](/Users/fixture-user/.codex/skills/ce-plan/SKILL.md)`.trim(),
           },
         ],
       });
@@ -276,7 +276,7 @@ test("thread reply Tiptap Tab insertion keeps caret after chip and copy-paste pr
     await expect(chip).toBeVisible();
     await expect(chip).toHaveAttribute(
       "data-skill-path",
-      "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+      "/Users/fixture-user/.codex/skills/ce-plan/SKILL.md",
     );
 
     await textbox.focus();
@@ -319,7 +319,7 @@ test("thread reply Tiptap Tab insertion keeps caret after chip and copy-paste pr
     })).toHaveCount(0);
     await expect(pastedChip).toHaveAttribute(
       "data-skill-path",
-      "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+      "/Users/fixture-user/.codex/skills/ce-plan/SKILL.md",
     );
   } finally {
     await app.close();

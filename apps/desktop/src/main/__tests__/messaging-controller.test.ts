@@ -6394,7 +6394,7 @@ describe("MessagingController", () => {
     });
 
     harness.delivered.length = 0;
-    await harness.controller.handleInboundEvent(buildTextEvent("@huntharo_bot"));
+    await harness.controller.handleInboundEvent(buildTextEvent("@fixtureuser_bot"));
 
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "confirmation",

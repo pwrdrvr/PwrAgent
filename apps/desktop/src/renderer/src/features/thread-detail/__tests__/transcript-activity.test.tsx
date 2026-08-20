@@ -13,15 +13,15 @@ describe("TranscriptActivity", () => {
   it("shows a direct activity path relative to the longest thread directory", async () => {
     const copyText = vi.fn(async () => undefined);
     const absolutePath =
-      "/Users/huntharo/.pwragent/worktrees/ms2ai7od/PwrAgnt/apps/desktop/src/main/acp/acp-runtime-capabilities.ts";
+      "/Users/fixture-user/.pwragent/worktrees/ms2ai7od/PwrAgnt/apps/desktop/src/main/acp/acp-runtime-capabilities.ts";
     const label = `Read \`${absolutePath}\``;
 
     render(
       <TranscriptActivity
         desktopApi={{ copyText }}
         directoryPaths={[
-          "/Users/huntharo/pwrdrvr/PwrAgnt",
-          "/Users/huntharo/.pwragent/worktrees/ms2ai7od/PwrAgnt",
+          "/Users/fixture-user/pwrdrvr/PwrAgnt",
+          "/Users/fixture-user/.pwragent/worktrees/ms2ai7od/PwrAgnt",
         ]}
         entry={{
           type: "activity",

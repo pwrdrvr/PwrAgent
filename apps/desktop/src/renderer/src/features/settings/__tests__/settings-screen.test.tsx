@@ -2034,11 +2034,11 @@ describe("SettingsScreen", () => {
           updatedAt: 2_000,
           linkedDirectories: [
             {
-              id: "/Users/huntharo/.codex/worktrees/mp7efuda/PwrSnap",
+              id: "/Users/fixture-user/.codex/worktrees/mp7efuda/PwrSnap",
               label: "PwrSnap",
-              path: "/Users/huntharo/.codex/worktrees/mp7efuda/PwrSnap",
+              path: "/Users/fixture-user/.codex/worktrees/mp7efuda/PwrSnap",
               worktreePath:
-                "/Users/huntharo/.codex/worktrees/mp7efuda/PwrSnap",
+                "/Users/fixture-user/.codex/worktrees/mp7efuda/PwrSnap",
               kind: "worktree" as const,
             },
           ],
@@ -2053,11 +2053,11 @@ describe("SettingsScreen", () => {
           updatedAt: 2_000,
           linkedDirectories: [
             {
-              id: "/Users/huntharo/.codex/worktrees/mp32wplq/PwrSnap",
+              id: "/Users/fixture-user/.codex/worktrees/mp32wplq/PwrSnap",
               label: "PwrSnap",
-              path: "/Users/huntharo/.codex/worktrees/mp32wplq/PwrSnap",
+              path: "/Users/fixture-user/.codex/worktrees/mp32wplq/PwrSnap",
               worktreePath:
-                "/Users/huntharo/.codex/worktrees/mp32wplq/PwrSnap",
+                "/Users/fixture-user/.codex/worktrees/mp32wplq/PwrSnap",
               kind: "worktree" as const,
             },
           ],
@@ -2094,7 +2094,7 @@ describe("SettingsScreen", () => {
   });
 
   it("groups active-profile scratch projects as Workspaces and hides inactive profile roots", async () => {
-    const activeWorkspaceRoot = "/Users/huntharo/.pwragent/profiles/dev/projects";
+    const activeWorkspaceRoot = "/Users/fixture-user/.pwragent/profiles/dev/projects";
     const listThreads = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: 3_000,
@@ -2134,9 +2134,9 @@ describe("SettingsScreen", () => {
           updatedAt: 3_000,
           linkedDirectories: [
             {
-              id: "/Users/huntharo/.pwragnt/projects",
+              id: "/Users/fixture-user/.pwragnt/projects",
               label: "projects",
-              path: "/Users/huntharo/.pwragnt/projects",
+              path: "/Users/fixture-user/.pwragnt/projects",
               kind: "local" as const,
             },
           ],
@@ -2907,7 +2907,7 @@ describe("SettingsScreen", () => {
       command: "/opt/homebrew/bin/gh",
       version: "2.88.1",
       loggedIn: true,
-      account: "huntharo",
+      account: "fixtureuser",
       scopes: ["repo"],
       hasRepoScope: true,
       discovery: snapshot.applications.gh.discovery,
@@ -3297,7 +3297,7 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add" })[0]!);
     const telegramUserIds = screen.getByLabelText("Authorized User IDs ID 1");
-    fireEvent.change(telegramUserIds, { target: { value: "@huntharo" } });
+    fireEvent.change(telegramUserIds, { target: { value: "@fixtureuser" } });
     fireEvent.blur(telegramUserIds);
 
     expect(
@@ -3307,7 +3307,7 @@ describe("SettingsScreen", () => {
     expect(settings.writeConfig).not.toHaveBeenCalledWith({
       messaging: {
         telegram: {
-          authorizedUserIds: [{ id: "@huntharo", displayName: "" }],
+          authorizedUserIds: [{ id: "@fixtureuser", displayName: "" }],
         },
       },
     });
@@ -3315,7 +3315,7 @@ describe("SettingsScreen", () => {
     fireEvent.change(telegramUserIds, { target: { value: "8460800771" } });
     fireEvent.change(
       screen.getByLabelText("Authorized User IDs display name 1"),
-      { target: { value: "Harold (@huntharo)" } },
+      { target: { value: "Harold (@fixtureuser)" } },
     );
     fireEvent.blur(telegramUserIds);
 
@@ -3324,7 +3324,7 @@ describe("SettingsScreen", () => {
         messaging: {
           telegram: {
             authorizedUserIds: [
-              { id: "8460800771", displayName: "Harold (@huntharo)" },
+              { id: "8460800771", displayName: "Harold (@fixtureuser)" },
             ],
           },
         },
@@ -3402,8 +3402,8 @@ describe("SettingsScreen", () => {
     const resolveMessagingContact = vi.fn(async () => ({
       status: "ok" as const,
       id: "8460800771",
-      displayName: "Harold (@huntharo)",
-      handle: "@huntharo",
+      displayName: "Harold (@fixtureuser)",
+      handle: "@fixtureuser",
     }));
     const desktopApi = {
       resolveMessagingContact,
@@ -3435,7 +3435,7 @@ describe("SettingsScreen", () => {
         messaging: {
           telegram: {
             authorizedUserIds: [
-              { id: "8460800771", displayName: "Harold (@huntharo)" },
+              { id: "8460800771", displayName: "Harold (@fixtureuser)" },
             ],
           },
         },
@@ -3443,7 +3443,7 @@ describe("SettingsScreen", () => {
     });
     expect(
       screen.getByLabelText("Authorized User IDs display name 1"),
-    ).toHaveValue("Harold (@huntharo)");
+    ).toHaveValue("Harold (@fixtureuser)");
   });
 
   it("copies generated pairing messages through the clipboard fallback", async () => {
@@ -3640,7 +3640,7 @@ describe("SettingsScreen", () => {
         id: "8460800771",
         displayName: "Harold Hunt",
         phoneNumber: "+15551234567",
-        username: "huntharo",
+        username: "fixtureuser",
       },
       observedChat: {
         id: "8460800771",
@@ -3690,7 +3690,7 @@ describe("SettingsScreen", () => {
     const requestCard = request.closest(".settings-pairing__request");
     expect(requestCard).not.toBeNull();
     expect(requestCard).toHaveTextContent("User ID 8460800771");
-    expect(requestCard).toHaveTextContent("@huntharo");
+    expect(requestCard).toHaveTextContent("@fixtureuser");
     expect(requestCard).toHaveTextContent("Phone +15551234567");
     expect(requestCard).toHaveTextContent("DM peer ID 8460800771");
 
@@ -4260,7 +4260,7 @@ describe("SettingsScreen", () => {
       resolveLookup?.({
         status: "ok",
         id: "8460800771",
-        displayName: "Harold (@huntharo)",
+        displayName: "Harold (@fixtureuser)",
       });
     });
 
@@ -4269,7 +4269,7 @@ describe("SettingsScreen", () => {
       messaging: {
         telegram: {
           authorizedUserIds: [
-            { id: "8460800771", displayName: "Harold (@huntharo)" },
+            { id: "8460800771", displayName: "Harold (@fixtureuser)" },
           ],
         },
       },
@@ -4286,7 +4286,7 @@ describe("SettingsScreen", () => {
           ...snapshot.messaging.telegram,
           authorizedUserIds: {
             value: [
-              { id: "@huntharo", displayName: "Wrong person" },
+              { id: "@fixtureuser", displayName: "Wrong person" },
               { id: "8460800771", displayName: "Harold" },
             ],
             source: "config",
@@ -4303,7 +4303,7 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    expect(screen.getByText("@huntharo")).toBeInTheDocument();
+    expect(screen.getByText("@fixtureuser")).toBeInTheDocument();
     expect(screen.getByText(/That looks like a Telegram username/)).toBeInTheDocument();
     fireEvent.click(
       screen.getByRole("button", {

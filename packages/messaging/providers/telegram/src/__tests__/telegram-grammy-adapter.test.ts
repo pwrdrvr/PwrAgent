@@ -621,7 +621,7 @@ describe("TelegramAdapter callback persistence", () => {
         from: {
           first_name: "Harold",
           id: 42,
-          username: "huntharo",
+          username: "fixtureuser",
         },
         message_id: 500,
         text: "before",
@@ -643,7 +643,7 @@ describe("TelegramAdapter callback persistence", () => {
         from: {
           first_name: "Harold",
           id: 42,
-          username: "huntharo",
+          username: "fixtureuser",
         },
         message_id: 501,
         text: "after",
@@ -687,7 +687,7 @@ describe("TelegramAdapter callback persistence", () => {
         from: {
           first_name: "Harold",
           id: 42,
-          username: "huntharo",
+          username: "fixtureuser",
         },
         message_id: 502,
         message_thread_id: 77,

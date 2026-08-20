@@ -102,7 +102,7 @@ describe("registerDirectoryFromDisk", () => {
       (cwd: string, args: string[]) => Promise<string>
     >(async (_cwd, args) => {
       if (args[0] === "rev-parse" && args[1] === "--show-toplevel") {
-        return "/Users/huntharo/code/PwrAgent";
+        return "/Users/fixture-user/code/PwrAgent";
       }
       if (args[0] === "rev-parse" && args[1] === "--abbrev-ref") {
         return "main";
@@ -111,7 +111,7 @@ describe("registerDirectoryFromDisk", () => {
     });
 
     const result = await registerDirectoryFromDisk(
-      { path: "/Users/huntharo/code/PwrAgent" },
+      { path: "/Users/fixture-user/code/PwrAgent" },
       {
         ensureDirectoryLaunchpad: ensure,
         runGit,
@@ -120,15 +120,15 @@ describe("registerDirectoryFromDisk", () => {
     );
 
     assertOk(result);
-    expect(result.directoryPath).toBe("/Users/huntharo/code/PwrAgent");
-    expect(result.directoryKey).toBe("directory:/Users/huntharo/code/PwrAgent");
+    expect(result.directoryPath).toBe("/Users/fixture-user/code/PwrAgent");
+    expect(result.directoryKey).toBe("directory:/Users/fixture-user/code/PwrAgent");
     expect(result.directoryLabel).toBe("PwrAgent");
     expect(result.currentBranch).toBe("main");
     expect(ensure).toHaveBeenCalledExactlyOnceWith({
-      directoryKey: "directory:/Users/huntharo/code/PwrAgent",
+      directoryKey: "directory:/Users/fixture-user/code/PwrAgent",
       directoryKind: "directory",
       directoryLabel: "PwrAgent",
-      directoryPath: "/Users/huntharo/code/PwrAgent",
+      directoryPath: "/Users/fixture-user/code/PwrAgent",
       currentBranch: "main",
       preferredBackend: undefined,
       registeredAt: expect.any(Number),

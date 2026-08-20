@@ -94,18 +94,18 @@ describe("ThreadMarkdown", () => {
   it("renders markdown formatting and local file links", () => {
     render(
       <ThreadMarkdown
-        text={"Use **bold** text and open [`AGENTS.md`](/Users/huntharo/PwrAgent/AGENTS.md)."}
+        text={"Use **bold** text and open [`AGENTS.md`](/Users/fixture-user/PwrAgent/AGENTS.md)."}
       />
     );
 
     expect(screen.getByText("bold", { selector: "strong" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
       "href",
-      "file:///Users/huntharo/PwrAgent/AGENTS.md"
+      "file:///Users/fixture-user/PwrAgent/AGENTS.md"
     );
     expect(screen.getByRole("link", { name: "AGENTS.md" })).toHaveAttribute(
       "title",
-      "/Users/huntharo/PwrAgent/AGENTS.md"
+      "/Users/fixture-user/PwrAgent/AGENTS.md"
     );
     expect(
       screen.getByRole("link", { name: "AGENTS.md" }).querySelector('[role="button"]')
@@ -128,12 +128,12 @@ describe("ThreadMarkdown", () => {
   it("tildifies PwrAgent file-link tooltips inside the home directory", () => {
     const windowWithHomeDir = window as Window & { __pwragentHomeDir?: string };
     const previousHomeDir = windowWithHomeDir.__pwragentHomeDir;
-    windowWithHomeDir.__pwragentHomeDir = "/Users/huntharo";
+    windowWithHomeDir.__pwragentHomeDir = "/Users/fixture-user";
 
     try {
       render(
         <ThreadMarkdown
-          text={"Open [`AGENTS.md`](/Users/huntharo/PwrAgent/AGENTS.md)."}
+          text={"Open [`AGENTS.md`](/Users/fixture-user/PwrAgent/AGENTS.md)."}
         />
       );
 
@@ -149,7 +149,7 @@ describe("ThreadMarkdown", () => {
   it("shows a POSIX home-relative path in the PwrAgent document header", async () => {
     const windowWithHomeDir = window as Window & { __pwragentHomeDir?: string };
     const previousHomeDir = windowWithHomeDir.__pwragentHomeDir;
-    windowWithHomeDir.__pwragentHomeDir = "/Users/huntharo";
+    windowWithHomeDir.__pwragentHomeDir = "/Users/fixture-user";
 
     try {
       render(
@@ -160,7 +160,7 @@ describe("ThreadMarkdown", () => {
               content: "# AGENTS",
             })),
           }}
-          text={"Open [`AGENTS.md`](/Users/huntharo/PwrAgent/AGENTS.md)."}
+          text={"Open [`AGENTS.md`](/Users/fixture-user/PwrAgent/AGENTS.md)."}
         />
       );
 
@@ -348,7 +348,7 @@ describe("ThreadMarkdown", () => {
   it("opens Markdown-linked images in PwrAgent instead of the configured editor", () => {
     const onOpenImage = vi.fn();
     const openApplication = vi.fn(async () => ({ opened: true as const }));
-    const sourceUrl = "file:///Users/huntharo/.codex/worktrees/pwrgit/build/dmg-background.png";
+    const sourceUrl = "file:///Users/fixture-user/.codex/worktrees/pwrgit/build/dmg-background.png";
     const imagePart = {
       type: "image" as const,
       url: `pwragent-image://file/${encodeURIComponent(sourceUrl)}`,
@@ -383,7 +383,7 @@ describe("ThreadMarkdown", () => {
         desktopApi={{ openApplication }}
         imageParts={[imagePart]}
         onOpenImage={onOpenImage}
-        text={"The branded DMG background is at [dmg-background.png](/Users/huntharo/.codex/worktrees/pwrgit/build/dmg-background.png)."}
+        text={"The branded DMG background is at [dmg-background.png](/Users/fixture-user/.codex/worktrees/pwrgit/build/dmg-background.png)."}
       />
     );
 
@@ -595,11 +595,11 @@ describe("ThreadMarkdown", () => {
           {
             name: "frontend-design",
             description: "Design and verify renderer UI work.",
-            path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+            path: "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md",
             enabled: true,
           },
         ]}
-        text={"Load [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)"}
+        text={"Load [$frontend-design](/Users/fixture-user/.codex/skills/frontend-design/SKILL.md)"}
       />
     );
 
@@ -609,11 +609,11 @@ describe("ThreadMarkdown", () => {
 
   it("hydrates inline-code skill tokens from the live skill inventory", () => {
     const inspectSkillPath = [
-      "/Users/huntharo/github/PwrSuiteLab/.agents/skills",
+      "/Users/fixture-user/github/PwrSuiteLab/.agents/skills",
       "inspect-macos-gha-runner/SKILL.md",
     ].join("/");
     const manageSkillPath = [
-      "/Users/huntharo/github/PwrSuiteLab/.agents/skills",
+      "/Users/fixture-user/github/PwrSuiteLab/.agents/skills",
       "manage-macos-gha-runner/SKILL.md",
     ].join("/");
 
@@ -650,7 +650,7 @@ describe("ThreadMarkdown", () => {
 
   it("renders explicit SKILL.md links as chips without live skill inventory", () => {
     const skillPath = [
-      "/Users/huntharo/.codex/plugins/cache/openai-curated-remote/github",
+      "/Users/fixture-user/.codex/plugins/cache/openai-curated-remote/github",
       "0.1.8-2841cf9749ae/skills/yeet/SKILL.md",
     ].join("/");
     const { container } = render(
@@ -674,7 +674,7 @@ describe("ThreadMarkdown", () => {
 
   it("labels a SKILL.md link with its skill directory name", () => {
     const skillPath = [
-      "/Users/huntharo/pwrdrvr/PwrSuiteLab/.agents/skills",
+      "/Users/fixture-user/pwrdrvr/PwrSuiteLab/.agents/skills",
       "restart-wedged-macos-gha-runner/SKILL.md",
     ].join("/");
 
@@ -686,7 +686,7 @@ describe("ThreadMarkdown", () => {
   });
 
   it("shows skill paths and replaces text selection with skill file actions", async () => {
-    const skillPath = "/Users/huntharo/.codex/skills/frontend-design/SKILL.md";
+    const skillPath = "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md";
     const openApplication = vi.fn(async () => ({ opened: true as const }));
     const openMarkdownFileViewer = vi.fn(async () => ({ opened: true as const }));
     const readMarkdownFile = vi.fn(async () => ({
@@ -889,12 +889,12 @@ describe("ThreadMarkdown", () => {
           {
             name: "frontend-design",
             description: "Design and verify renderer UI work.",
-            path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+            path: "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md",
             enabled: true,
           },
         ]}
         text={
-          "````md\n```ts\nconst marker = \"**not bold**\";\n```\n[$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)\n![Preview](https://example.com/inside-code.png)\n````"
+          "````md\n```ts\nconst marker = \"**not bold**\";\n```\n[$frontend-design](/Users/fixture-user/.codex/skills/frontend-design/SKILL.md)\n![Preview](https://example.com/inside-code.png)\n````"
         }
       />
     );
@@ -1219,13 +1219,13 @@ describe("ThreadMarkdown", () => {
 
   it("renders composer directory references as chips", () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const { container } = render(
         <ThreadMarkdown
           text={
             "[@agent-kit](~/pwrdrvr/agent-kit) and "
-            + "[@PwrAgnt](/Users/huntharo/pwrdrvr/PwrAgnt) are projects."
+            + "[@PwrAgnt](/Users/fixture-user/pwrdrvr/PwrAgnt) are projects."
           }
         />
       );
@@ -1246,7 +1246,7 @@ describe("ThreadMarkdown", () => {
 
   it("decodes percent-encoded directory reference paths in the chip tooltip", () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const { container } = render(
         <ThreadMarkdown text={"[@repo](~/Backup%20%2850%25%20old%29/repo) has it."} />

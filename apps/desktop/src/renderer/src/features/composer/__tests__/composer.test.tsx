@@ -480,26 +480,26 @@ const autocompleteRegressionSkills = [
     name: "adversarial-document-reviewer",
     description:
       "Conditional document-review persona, selected when the document has >5 requirements or implementation units, makes significant architectural decisions.",
-    path: "/Users/huntharo/.codex/skills/adversarial-document-reviewer/SKILL.md",
+    path: "/Users/fixture-user/.codex/skills/adversarial-document-reviewer/SKILL.md",
     enabled: true,
   },
   {
     name: "ce:brainstorm",
     description:
       "Explore requirements and approaches through collaborative dialogue before writing a right-sized requirements document and planning implementation.",
-    path: "/Users/huntharo/.codex/skills/ce-brainstorm/SKILL.md",
+    path: "/Users/fixture-user/.codex/skills/ce-brainstorm/SKILL.md",
     enabled: true,
   },
   {
     name: "ce:compound",
     description: "Document a recently solved problem to compound your team's knowledge.",
-    path: "/Users/huntharo/.codex/skills/ce-compound/SKILL.md",
+    path: "/Users/fixture-user/.codex/skills/ce-compound/SKILL.md",
     enabled: true,
   },
   {
     name: "ce:plan",
     description: "Transform feature descriptions or requirements into structured implementation plans.",
-    path: "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+    path: "/Users/fixture-user/.codex/skills/ce-plan/SKILL.md",
     enabled: true,
   },
 ];
@@ -8265,7 +8265,7 @@ describe("Composer", () => {
         {
           type: "localFile",
           name: "Jeep",
-          path: "/Users/huntharo/Downloads/Jeep",
+          path: "/Users/fixture-user/Downloads/Jeep",
           pdfRenderProfile: "high",
         },
       ],
@@ -8357,7 +8357,7 @@ describe("Composer", () => {
               {
                 type: "localFile",
                 name: "Jeep",
-                path: "/Users/huntharo/Downloads/Jeep",
+                path: "/Users/fixture-user/Downloads/Jeep",
                 pdfRenderProfile: "high",
               },
             ],
@@ -8371,7 +8371,7 @@ describe("Composer", () => {
 
   it("hydrates a restored queued PDF reference before releasing it", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const draftStore = createComposerDraftStore();
       draftStore.setQueuedTurn("thread:codex:thread-1", {
@@ -8382,8 +8382,8 @@ describe("Composer", () => {
         fileAttachments: [],
       });
       const inspectPdfReferencePaths = vi.fn(async () => ({
-        filePaths: ["/Users/huntharo/Downloads/Jeep"],
-        pdfPaths: ["/Users/huntharo/Downloads/Jeep"],
+        filePaths: ["/Users/fixture-user/Downloads/Jeep"],
+        pdfPaths: ["/Users/fixture-user/Downloads/Jeep"],
       }));
       const startTurn = vi.fn(async (request: StartTurnRequest) => ({
         backend: request.backend,
@@ -8421,7 +8421,7 @@ describe("Composer", () => {
               {
                 type: "localFile",
                 name: "Jeep",
-                path: "/Users/huntharo/Downloads/Jeep",
+                path: "/Users/fixture-user/Downloads/Jeep",
               },
             ],
           }),
@@ -8493,7 +8493,7 @@ describe("Composer", () => {
 
   it("rehydrates local PDF previews when queued and steer drafts return to Composer", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const draftStore = createComposerDraftStore();
       draftStore.setQueuedTurn("thread:codex:thread-1", {
@@ -8512,8 +8512,8 @@ describe("Composer", () => {
         fileAttachments: [],
       });
       const inspectPdfReferencePaths = vi.fn(async () => ({
-        filePaths: ["/Users/huntharo/Downloads/Jeep"],
-        pdfPaths: ["/Users/huntharo/Downloads/Jeep"],
+        filePaths: ["/Users/fixture-user/Downloads/Jeep"],
+        pdfPaths: ["/Users/fixture-user/Downloads/Jeep"],
       }));
       const renderComposerPdfPreview = vi
         .fn()
@@ -8560,7 +8560,7 @@ describe("Composer", () => {
 
       await waitFor(() => {
         expect(inspectPdfReferencePaths).toHaveBeenCalledWith({
-          paths: ["/Users/huntharo/Downloads/Jeep"],
+          paths: ["/Users/fixture-user/Downloads/Jeep"],
         });
         expect(
           within(screen.getByTestId("composer-tiptap-input"))
@@ -8570,7 +8570,7 @@ describe("Composer", () => {
       });
       await waitFor(() => {
         expect(renderComposerPdfPreview).toHaveBeenCalledWith({
-          path: "/Users/huntharo/Downloads/Jeep",
+          path: "/Users/fixture-user/Downloads/Jeep",
         });
       });
 
@@ -8590,7 +8590,7 @@ describe("Composer", () => {
       await waitFor(() => {
         expect(renderComposerPdfPreview).toHaveBeenLastCalledWith({
           knownFileIdentity: "queued-pdf-v1",
-          path: "/Users/huntharo/Downloads/Jeep",
+          path: "/Users/fixture-user/Downloads/Jeep",
         });
       });
       expect(inspectPdfReferencePaths).toHaveBeenCalledTimes(1);
@@ -9689,10 +9689,10 @@ describe("Composer", () => {
       },
     };
     const kubeDirectory: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/infra/kube-manifests",
+      key: "directory:/Users/fixture-user/infra/kube-manifests",
       kind: "directory",
       label: "kube-manifests",
-      path: "/Users/huntharo/infra/kube-manifests",
+      path: "/Users/fixture-user/infra/kube-manifests",
       threadKeys: ["codex:thread-1"],
       needsAttentionCount: 0,
       gitStatus: {
@@ -9735,12 +9735,12 @@ describe("Composer", () => {
                 "/Users/example/.codex/profiles/sample/worktrees/tree-delta/catalog-service",
             },
             {
-              id: "/Users/huntharo/infra/kube-manifests",
+              id: "/Users/fixture-user/infra/kube-manifests",
               kind: "worktree",
               label: "kube-manifests",
-              path: "/Users/huntharo/infra/kube-manifests",
+              path: "/Users/fixture-user/infra/kube-manifests",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
+                "/Users/fixture-user/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
             },
           ],
           inbox: { inInbox: false },
@@ -9758,7 +9758,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Review project"), {
       target: {
         value:
-          "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
+          "/Users/fixture-user/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       },
     });
 
@@ -9783,7 +9783,7 @@ describe("Composer", () => {
         target: { type: "baseBranch", branch: "origin/develop" },
         delivery: "inline",
         cwd:
-          "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
+          "/Users/fixture-user/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       });
     });
   });
@@ -9823,10 +9823,10 @@ describe("Composer", () => {
       },
     };
     const kubeDirectory: NavigationDirectorySummary = {
-      key: "directory:/Users/huntharo/infra/kube-manifests",
+      key: "directory:/Users/fixture-user/infra/kube-manifests",
       kind: "directory",
       label: "kube-manifests",
-      path: "/Users/huntharo/infra/kube-manifests",
+      path: "/Users/fixture-user/infra/kube-manifests",
       threadKeys: ["codex:thread-1"],
       needsAttentionCount: 0,
       gitStatus: {
@@ -9865,12 +9865,12 @@ describe("Composer", () => {
                 "/Users/example/.codex/profiles/sample/worktrees/tree-delta/catalog-service",
             },
             {
-              id: "/Users/huntharo/infra/kube-manifests",
+              id: "/Users/fixture-user/infra/kube-manifests",
               kind: "worktree",
               label: "kube-manifests",
-              path: "/Users/huntharo/infra/kube-manifests",
+              path: "/Users/fixture-user/infra/kube-manifests",
               worktreePath:
-                "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
+                "/Users/fixture-user/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
             },
           ],
           inbox: { inInbox: false },
@@ -9885,7 +9885,7 @@ describe("Composer", () => {
     fireEvent.change(screen.getByLabelText("Review project"), {
       target: {
         value:
-          "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
+          "/Users/fixture-user/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       },
     });
     fireEvent.click(screen.getByRole("button", { name: /Review one commit by SHA/i }));
@@ -9912,7 +9912,7 @@ describe("Composer", () => {
         target: { type: "commit", sha: kubeCommit.sha, title: null },
         delivery: "inline",
         cwd:
-          "/Users/huntharo/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
+          "/Users/fixture-user/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       });
     });
   });
@@ -10845,10 +10845,10 @@ describe("Composer", () => {
           startReview,
         }}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -10905,10 +10905,10 @@ describe("Composer", () => {
           startReview: vi.fn(),
         }}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -10961,10 +10961,10 @@ describe("Composer", () => {
           startReview: vi.fn(),
         }}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -11022,10 +11022,10 @@ describe("Composer", () => {
           startReview,
         }}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -11091,10 +11091,10 @@ describe("Composer", () => {
           startReview,
         }}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -11153,10 +11153,10 @@ describe("Composer", () => {
           startReview,
         }}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -11633,10 +11633,10 @@ describe("Composer", () => {
           startReview,
         }}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -11717,10 +11717,10 @@ describe("Composer", () => {
           startReview: vi.fn(),
         }}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -11832,10 +11832,10 @@ describe("Composer", () => {
           startReview,
         }}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -11906,10 +11906,10 @@ describe("Composer", () => {
           startReview,
         }}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -12587,10 +12587,10 @@ describe("Composer", () => {
         disabled={false}
         fullAccessRiskWarningDismissed
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: ["codex:thread-1"],
           needsAttentionCount: 0,
           gitStatus: {
@@ -12615,7 +12615,7 @@ describe("Composer", () => {
             {
               id: "dir-1",
               label: "PwrAgent",
-              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              path: "/Users/fixture-user/pwrdrvr/PwrAgent",
               kind: "local",
             },
           ],
@@ -12648,8 +12648,8 @@ describe("Composer", () => {
       expect(onHandoffThreadWorkspace).toHaveBeenCalledWith({
         direction: "local-to-worktree",
         strategy: "detached-changes",
-        repositoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
-        sourcePath: "/Users/huntharo/pwrdrvr/PwrAgent",
+        repositoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
+        sourcePath: "/Users/fixture-user/pwrdrvr/PwrAgent",
         sourceBranch: "feat/thread-workspace-handoff-plan",
       });
     });
@@ -13273,10 +13273,10 @@ describe("Composer", () => {
           },
         ]}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -13286,10 +13286,10 @@ describe("Composer", () => {
           },
         }}
         launchpad={{
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryKey: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           directoryKind: "directory",
           directoryLabel: "PwrAgent",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -13314,7 +13314,7 @@ describe("Composer", () => {
 
     await waitFor(() => {
       expect(onUpdateLaunchpad).toHaveBeenCalledWith(
-        "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+        "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
         expect.objectContaining({ workMode: "worktree" }),
         { stickySettingsChanged: true }
       );
@@ -13331,7 +13331,7 @@ describe("Composer", () => {
           key: "subthread:codex:thread-parent:new-worktree",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: [],
           needsAttentionCount: 0,
         }}
@@ -13339,7 +13339,7 @@ describe("Composer", () => {
           directoryKey: "subthread:codex:thread-parent:new-worktree",
           directoryKind: "directory",
           directoryLabel: "PwrAgent",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -13367,7 +13367,7 @@ describe("Composer", () => {
       directoryKey: "subthread:codex:thread-parent:new-worktree",
       directoryKind: "directory" as const,
       directoryLabel: "PwrAgent",
-      directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+      directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
       backend: "codex" as const,
       executionMode: "default" as const,
       prompt: "",
@@ -13386,7 +13386,7 @@ describe("Composer", () => {
           key: "subthread:codex:thread-parent:new-worktree",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: [],
           needsAttentionCount: 0,
         }}
@@ -13410,7 +13410,7 @@ describe("Composer", () => {
           key: "subthread:codex:thread-parent:new-worktree",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: [],
           needsAttentionCount: 0,
         }}
@@ -13432,7 +13432,7 @@ describe("Composer", () => {
           key: "subthread:codex:thread-parent:same-worktree",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/.codex/worktrees/mpsmzvdh/PwrAgnt",
+          path: "/Users/fixture-user/.codex/worktrees/mpsmzvdh/PwrAgnt",
           threadKeys: [],
           needsAttentionCount: 0,
         }}
@@ -13440,7 +13440,7 @@ describe("Composer", () => {
           directoryKey: "subthread:codex:thread-parent:same-worktree",
           directoryKind: "directory",
           directoryLabel: "PwrAgent",
-          directoryPath: "/Users/huntharo/.codex/worktrees/mpsmzvdh/PwrAgnt",
+          directoryPath: "/Users/fixture-user/.codex/worktrees/mpsmzvdh/PwrAgnt",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -13470,18 +13470,18 @@ describe("Composer", () => {
           backendSummary("codex"),
         ]}
         directory={{
-          key: "directory:/Users/huntharo/.pwragent/projects",
+          key: "directory:/Users/fixture-user/.pwragent/projects",
           kind: "directory",
           label: "Projects",
-          path: "/Users/huntharo/.pwragent/projects",
+          path: "/Users/fixture-user/.pwragent/projects",
           threadKeys: [],
           needsAttentionCount: 0,
         }}
         launchpad={{
-          directoryKey: "directory:/Users/huntharo/.pwragent/projects",
+          directoryKey: "directory:/Users/fixture-user/.pwragent/projects",
           directoryKind: "directory",
           directoryLabel: "Projects",
-          directoryPath: "/Users/huntharo/.pwragent/projects",
+          directoryPath: "/Users/fixture-user/.pwragent/projects",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -13513,10 +13513,10 @@ describe("Composer", () => {
         backends={[backendSummary("codex")]}
         desktopApi={{ refreshDirectoryGitStatuses } as DesktopApi}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/UnbornRepo",
+          key: "directory:/Users/fixture-user/pwrdrvr/UnbornRepo",
           kind: "directory",
           label: "UnbornRepo",
-          path: "/Users/huntharo/pwrdrvr/UnbornRepo",
+          path: "/Users/fixture-user/pwrdrvr/UnbornRepo",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -13529,10 +13529,10 @@ describe("Composer", () => {
           },
         }}
         launchpad={{
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/UnbornRepo",
+          directoryKey: "directory:/Users/fixture-user/pwrdrvr/UnbornRepo",
           directoryKind: "directory",
           directoryLabel: "UnbornRepo",
-          directoryPath: "/Users/huntharo/pwrdrvr/UnbornRepo",
+          directoryPath: "/Users/fixture-user/pwrdrvr/UnbornRepo",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -13557,7 +13557,7 @@ describe("Composer", () => {
     );
     fireEvent.pointerEnter(workspaceMode.closest(".composer-dropdown")!);
     expect(refreshDirectoryGitStatuses).toHaveBeenCalledExactlyOnceWith({
-      directoryKeys: ["directory:/Users/huntharo/pwrdrvr/UnbornRepo"],
+      directoryKeys: ["directory:/Users/fixture-user/pwrdrvr/UnbornRepo"],
       force: true,
     });
     expect(screen.queryByRole("option", { name: "New worktree" })).not.toBeInTheDocument();
@@ -13568,10 +13568,10 @@ describe("Composer", () => {
       <Composer
         backends={[backendSummary("codex")]}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -13586,10 +13586,10 @@ describe("Composer", () => {
           },
         }}
         launchpad={{
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryKey: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           directoryKind: "directory",
           directoryLabel: "PwrAgent",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -13640,10 +13640,10 @@ describe("Composer", () => {
       <Composer
         backends={[backendSummary("codex")]}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -13653,10 +13653,10 @@ describe("Composer", () => {
           },
         }}
         launchpad={{
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryKey: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           directoryKind: "directory",
           directoryLabel: "PwrAgent",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -13705,10 +13705,10 @@ describe("Composer", () => {
       <Composer
         backends={[backendSummary("codex")]}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -13718,10 +13718,10 @@ describe("Composer", () => {
           },
         }}
         launchpad={{
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryKey: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           directoryKind: "directory",
           directoryLabel: "PwrAgent",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -13848,10 +13848,10 @@ describe("Composer", () => {
       <Composer
         backends={[backendSummary("codex")]}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -13871,10 +13871,10 @@ describe("Composer", () => {
           },
         }}
         launchpad={{
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryKey: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           directoryKind: "directory",
           directoryLabel: "PwrAgent",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -13928,7 +13928,7 @@ describe("Composer", () => {
           key: "subthread:codex:thread-parent:new-worktree",
           kind: "directory",
           label: "ExampleApp",
-          path: "/Users/huntharo/.codex/profiles/work/worktrees/mqs3ew3f/ExampleApp",
+          path: "/Users/fixture-user/.codex/profiles/work/worktrees/mqs3ew3f/ExampleApp",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -13967,7 +13967,7 @@ describe("Composer", () => {
           directoryKey: "subthread:codex:thread-parent:new-worktree",
           directoryKind: "directory",
           directoryLabel: "ExampleApp",
-          directoryPath: "/Users/huntharo/.codex/profiles/work/worktrees/mqs3ew3f/ExampleApp",
+          directoryPath: "/Users/fixture-user/.codex/profiles/work/worktrees/mqs3ew3f/ExampleApp",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -14010,10 +14010,10 @@ describe("Composer", () => {
       <Composer
         backends={[backendSummary("codex")]}
         directory={{
-          key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -14031,10 +14031,10 @@ describe("Composer", () => {
           },
         }}
         launchpad={{
-          directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryKey: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
           directoryKind: "directory",
           directoryLabel: "PwrAgent",
-          directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+          directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -14076,7 +14076,7 @@ describe("Composer", () => {
           key: "subthread:codex:thread-parent:new-worktree",
           kind: "directory",
           label: "PwrAgent",
-          path: "/Users/huntharo/.codex/worktrees/mq8mwn78/PwrAgnt",
+          path: "/Users/fixture-user/.codex/worktrees/mq8mwn78/PwrAgnt",
           threadKeys: [],
           needsAttentionCount: 0,
           gitStatus: {
@@ -14089,7 +14089,7 @@ describe("Composer", () => {
           directoryKey: "subthread:codex:thread-parent:new-worktree",
           directoryKind: "directory",
           directoryLabel: "PwrAgent",
-          directoryPath: "/Users/huntharo/.codex/worktrees/mq8mwn78/PwrAgnt",
+          directoryPath: "/Users/fixture-user/.codex/worktrees/mq8mwn78/PwrAgnt",
           backend: "codex",
           executionMode: "default",
           prompt: "",
@@ -14964,7 +14964,7 @@ describe("Composer", () => {
 
   it("rebuilds a directory chip from a prompt-only launchpad restore", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const launchpad: NavigationLaunchpadDraft = {
         directoryKey: "directory:/repo",
@@ -15009,7 +15009,7 @@ describe("Composer", () => {
       });
       expect(within(richInput).getByText("@agent-kit")).toHaveAttribute(
         "data-skill-path",
-        "/Users/huntharo/pwrdrvr/agent-kit"
+        "/Users/fixture-user/pwrdrvr/agent-kit"
       );
 
       await clickButton("Start thread");
@@ -15027,7 +15027,7 @@ describe("Composer", () => {
           ],
           undefined,
           undefined,
-          ["/Users/huntharo/pwrdrvr/agent-kit"]
+          ["/Users/fixture-user/pwrdrvr/agent-kit"]
         );
       });
     } finally {
@@ -15098,7 +15098,7 @@ describe("Composer", () => {
 
   it("mints file chips from the @ popover's Add file… action", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const launchpad: NavigationLaunchpadDraft = {
         directoryKey: "directory:/repo",
@@ -15124,7 +15124,7 @@ describe("Composer", () => {
       };
       const pickFileFromDisk = vi.fn(async () => ({
         canceled: false as const,
-        paths: ["/Users/huntharo/notes/spec.md"],
+        paths: ["/Users/fixture-user/notes/spec.md"],
       }));
       const onMaterializeLaunchpad = vi.fn(
         async (..._args: unknown[]) => undefined,
@@ -15173,7 +15173,7 @@ describe("Composer", () => {
       expect(chip).toHaveAttribute("data-mention-kind", "file");
       expect(chip).toHaveAttribute(
         "data-skill-path",
-        "/Users/huntharo/notes/spec.md"
+        "/Users/fixture-user/notes/spec.md"
       );
       expect(
         screen.queryByRole("listbox", { name: "Directories" })
@@ -15194,7 +15194,7 @@ describe("Composer", () => {
         {
           type: "localFile",
           name: "spec.md",
-          path: "/Users/huntharo/notes/spec.md",
+          path: "/Users/fixture-user/notes/spec.md",
         },
       ]);
     } finally {
@@ -15205,7 +15205,7 @@ describe("Composer", () => {
 
   it("mints a directory chip from the @ popover's Add directory… action", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const launchpad: NavigationLaunchpadDraft = {
         directoryKey: "directory:/repo",
@@ -15231,7 +15231,7 @@ describe("Composer", () => {
       };
       const onPickDirectoryForReference = vi.fn(async () => ({
         label: "agent-kit",
-        path: "/Users/huntharo/pwrdrvr/agent-kit",
+        path: "/Users/fixture-user/pwrdrvr/agent-kit",
       }));
 
       render(
@@ -15264,7 +15264,7 @@ describe("Composer", () => {
       expect(chip).toHaveAttribute("data-mention-kind", "directory");
       expect(chip).toHaveAttribute(
         "data-skill-path",
-        "/Users/huntharo/pwrdrvr/agent-kit"
+        "/Users/fixture-user/pwrdrvr/agent-kit"
       );
     } finally {
       delete (window as unknown as { __pwragentHomeDir?: string })
@@ -15274,11 +15274,11 @@ describe("Composer", () => {
 
   it("attaches picked files to the tray from the + Add reference menu", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const pickFileFromDisk = vi.fn(async () => ({
         canceled: false as const,
-        paths: ["/Users/huntharo/notes/spec.md"],
+        paths: ["/Users/fixture-user/notes/spec.md"],
       }));
 
       render(
@@ -15348,8 +15348,8 @@ describe("Composer", () => {
   it("attaches a recent file to the tray from the reference picker's Files tab", async () => {
     const listRecentFileReferences = vi.fn(async () => ({
       files: [
-        { label: "notes.md", path: "/Users/huntharo/notes/notes.md" },
-        { label: "todo.txt", path: "/Users/huntharo/notes/todo.txt" },
+        { label: "notes.md", path: "/Users/fixture-user/notes/notes.md" },
+        { label: "todo.txt", path: "/Users/fixture-user/notes/todo.txt" },
       ],
     }));
     const recordRecentFileReferences = vi.fn(async () => undefined);
@@ -15401,7 +15401,7 @@ describe("Composer", () => {
       screen.queryByRole("dialog", { name: "Add reference" })
     ).not.toBeInTheDocument();
     expect(recordRecentFileReferences).toHaveBeenCalledWith({
-      paths: ["/Users/huntharo/notes/notes.md"],
+      paths: ["/Users/fixture-user/notes/notes.md"],
     });
   });
 
@@ -15469,7 +15469,7 @@ describe("Composer", () => {
 
   it("routes the combined macOS picker's entries to tray pills and directory chips", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const launchpad: NavigationLaunchpadDraft = {
         directoryKey: "directory:/repo",
@@ -15497,11 +15497,11 @@ describe("Composer", () => {
         canceled: false as const,
         entries: [
           {
-            path: "/Users/huntharo/notes/spec.md",
+            path: "/Users/fixture-user/notes/spec.md",
             kind: "file" as const,
           },
           {
-            path: "/Users/huntharo/pwrdrvr/agent-kit",
+            path: "/Users/fixture-user/pwrdrvr/agent-kit",
             kind: "directory" as const,
           },
         ],
@@ -15555,7 +15555,7 @@ describe("Composer", () => {
 
       expect(pickReferenceFromDisk).toHaveBeenCalledOnce();
       expect(registerDirectoryFromDisk).toHaveBeenCalledWith({
-        path: "/Users/huntharo/pwrdrvr/agent-kit",
+        path: "/Users/fixture-user/pwrdrvr/agent-kit",
       });
       // File → tray pill; directory → editor chip.
       expect(await screen.findByText("spec.md")).toBeInTheDocument();
@@ -16099,7 +16099,7 @@ describe("Composer", () => {
           {
             name: "frontend-design",
             description: "Design and verify renderer UI work.",
-            path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+            path: "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md",
             enabled: true,
           },
         ]}
@@ -16134,7 +16134,7 @@ describe("Composer", () => {
         input: [
           {
             type: "text",
-            text: "Use [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md)",
+            text: "Use [$frontend-design](/Users/fixture-user/.codex/skills/frontend-design/SKILL.md)",
           },
         ],
       });
@@ -16157,25 +16157,25 @@ describe("Composer", () => {
           {
             name: "adversarial-document-reviewer",
             description: "Conditional reviewer used for CE document stress-testing.",
-            path: "/Users/huntharo/.codex/skills/adversarial-document-reviewer/SKILL.md",
+            path: "/Users/fixture-user/.codex/skills/adversarial-document-reviewer/SKILL.md",
             enabled: true,
           },
           {
             name: "ce:plan",
             description: "Transform requirements into implementation plans.",
-            path: "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+            path: "/Users/fixture-user/.codex/skills/ce-plan/SKILL.md",
             enabled: true,
           },
           {
             name: "ce:work",
             description: "Execute implementation plans.",
-            path: "/Users/huntharo/.codex/skills/ce-work/SKILL.md",
+            path: "/Users/fixture-user/.codex/skills/ce-work/SKILL.md",
             enabled: true,
           },
           {
             name: "architecture-strategist",
             description: "Analyzes patterns and design integrity.",
-            path: "/Users/huntharo/.codex/skills/architecture-strategist/SKILL.md",
+            path: "/Users/fixture-user/.codex/skills/architecture-strategist/SKILL.md",
             enabled: true,
           },
         ]}
@@ -16266,7 +16266,7 @@ describe("Composer", () => {
             {
               type: "text",
               text: expect.stringMatching(
-                /Let's use \[\$ce:plan\]\(\/Users\/huntharo\/\.codex\/skills\/ce-plan\/SKILL\.md\)$/,
+                /Let's use \[\$ce:plan\]\(\/Users\/fixture-user\/\.codex\/skills\/ce-plan\/SKILL\.md\)$/,
               ),
             },
           ],
@@ -16848,7 +16848,7 @@ describe("Composer", () => {
           {
             name: "ce:plan",
             description: "Turn feature descriptions into implementation plans.",
-            path: "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+            path: "/Users/fixture-user/.codex/skills/ce-plan/SKILL.md",
             enabled: true,
           },
         ]}
@@ -16879,7 +16879,7 @@ describe("Composer", () => {
         input: [
           {
             type: "text",
-            text: "Use [$ce:plan](/Users/huntharo/.codex/skills/ce-plan/SKILL.md)",
+            text: "Use [$ce:plan](/Users/fixture-user/.codex/skills/ce-plan/SKILL.md)",
           },
         ],
       });
@@ -16911,8 +16911,8 @@ describe("Composer", () => {
           id: "dir-worktree",
           kind: "worktree",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
-          worktreePath: "/Users/huntharo/.codex/worktrees/child/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
+          worktreePath: "/Users/fixture-user/.codex/worktrees/child/PwrAgent",
         },
       ],
       inbox: { inInbox: false },
@@ -18261,7 +18261,7 @@ describe("Composer", () => {
 
   it("attaches a dropped non-image file as a path-only reference and appends it to the sent text", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const startTurn = vi.fn(async () => ({
         backend: "codex" as const,
@@ -18274,7 +18274,7 @@ describe("Composer", () => {
         <Composer
           desktopApi={{
             onAgentEvent: () => () => undefined,
-            getPathForFile: (file: File) => `/Users/huntharo/notes/${file.name}`,
+            getPathForFile: (file: File) => `/Users/fixture-user/notes/${file.name}`,
             startTurn,
           }}
           disabled={false}
@@ -18317,7 +18317,7 @@ describe("Composer", () => {
               {
                 type: "localFile",
                 name: "notes.txt",
-                path: "/Users/huntharo/notes/notes.txt",
+                path: "/Users/fixture-user/notes/notes.txt",
               },
             ],
           })
@@ -18335,7 +18335,7 @@ describe("Composer", () => {
 
   it("keeps a 400 MB unsupported TIFF drop as a path-only file reference", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const startTurn = vi.fn(async () => ({
         backend: "codex" as const,
@@ -18353,7 +18353,7 @@ describe("Composer", () => {
         <Composer
           desktopApi={{
             onAgentEvent: () => () => undefined,
-            getPathForFile: () => "/Users/huntharo/Scans/large-scan.tiff",
+            getPathForFile: () => "/Users/fixture-user/Scans/large-scan.tiff",
             startTurn,
           }}
           disabled={false}
@@ -18396,7 +18396,7 @@ describe("Composer", () => {
             {
               type: "localFile",
               name: "large-scan.tiff",
-              path: "/Users/huntharo/Scans/large-scan.tiff",
+              path: "/Users/fixture-user/Scans/large-scan.tiff",
             },
           ],
         });
@@ -18409,7 +18409,7 @@ describe("Composer", () => {
 
   it("shows the PDF analysis indicator for an extensionless explicit file reference", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const inspectPdfReferencePaths = vi.fn(async ({ paths }: { paths: string[] }) => ({
         filePaths: paths,
@@ -18423,7 +18423,7 @@ describe("Composer", () => {
         <Composer
           desktopApi={{
             onAgentEvent: () => () => undefined,
-            getPathForFile: () => "/Users/huntharo/Downloads/Jeep",
+            getPathForFile: () => "/Users/fixture-user/Downloads/Jeep",
             inspectPdfReferencePaths,
           }}
           disabled={false}
@@ -18454,7 +18454,7 @@ describe("Composer", () => {
 
       await waitFor(() => {
         expect(inspectPdfReferencePaths).toHaveBeenCalledWith({
-          paths: ["/Users/huntharo/Downloads/Jeep"],
+          paths: ["/Users/fixture-user/Downloads/Jeep"],
         });
       });
       expect(await screen.findByText(/PDF analysis is on\./)).toBeInTheDocument();
@@ -18466,9 +18466,9 @@ describe("Composer", () => {
 
   it("shows an explicit PDF's local first-page preview without adding it to the turn", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
-      const pdfPath = "/Users/huntharo/Downloads/Jeep";
+      const pdfPath = "/Users/fixture-user/Downloads/Jeep";
       const inspectPdfReferencePaths = vi.fn(async () => ({
         filePaths: [pdfPath],
         pdfPaths: [pdfPath],
@@ -18580,9 +18580,9 @@ describe("Composer", () => {
 
   it("does not auto-render a PDF preview while PDF analysis is off", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
-      const pdfPath = "/Users/huntharo/Downloads/Jeep";
+      const pdfPath = "/Users/fixture-user/Downloads/Jeep";
       const inspectPdfReferencePaths = vi.fn(async () => ({
         filePaths: [pdfPath],
         pdfPaths: [pdfPath],
@@ -18649,9 +18649,9 @@ describe("Composer", () => {
 
   it("shows PDF preview loading and retry states when local rendering fails", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
-      const pdfPath = "/Users/huntharo/Downloads/Jeep";
+      const pdfPath = "/Users/fixture-user/Downloads/Jeep";
       const preview = createDeferred<{
         dataUrl: string;
         fileIdentity: string;
@@ -18719,10 +18719,10 @@ describe("Composer", () => {
 
   it("does not infer PDF analysis from a reference filename suffix", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const inspectPdfReferencePaths = vi.fn(async () => ({
-        filePaths: ["/Users/huntharo/Downloads/not-a-pdf.pdf"],
+        filePaths: ["/Users/fixture-user/Downloads/not-a-pdf.pdf"],
         pdfPaths: [],
       }));
 
@@ -18759,7 +18759,7 @@ describe("Composer", () => {
 
       await waitFor(() => {
         expect(inspectPdfReferencePaths).toHaveBeenCalledWith({
-          paths: ["/Users/huntharo/Downloads/not-a-pdf.pdf"],
+          paths: ["/Users/fixture-user/Downloads/not-a-pdf.pdf"],
         });
         expect(
           within(screen.getByTestId("composer-tiptap-input"))
@@ -18776,11 +18776,11 @@ describe("Composer", () => {
 
   it("hydrates pasted local PDF references before Send without duplicate attachments", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const referencedPaths = [
-        "/Users/huntharo/Downloads/Jeep",
-        "/Users/huntharo/Downloads/JeepRubicon.pdf",
+        "/Users/fixture-user/Downloads/Jeep",
+        "/Users/fixture-user/Downloads/JeepRubicon.pdf",
       ];
       const inspectPdfReferencePaths = vi.fn(async () => ({
         filePaths: referencedPaths,
@@ -18865,12 +18865,12 @@ describe("Composer", () => {
         {
           type: "localFile",
           name: "JeepRubicon.pdf",
-          path: "/Users/huntharo/Downloads/JeepRubicon.pdf",
+          path: "/Users/fixture-user/Downloads/JeepRubicon.pdf",
         },
         {
           type: "localFile",
           name: "Jeep",
-          path: "/Users/huntharo/Downloads/Jeep",
+          path: "/Users/fixture-user/Downloads/Jeep",
         },
       ]);
       expect(request?.input[0]).toEqual({
@@ -18886,7 +18886,7 @@ describe("Composer", () => {
 
   it("shares a pending pasted-reference inspection with an immediate Send", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const inspection = createDeferred<{
         filePaths: string[];
@@ -18932,7 +18932,7 @@ describe("Composer", () => {
 
       await waitFor(() => {
         expect(inspectPdfReferencePaths).toHaveBeenCalledWith({
-          paths: ["/Users/huntharo/Downloads/Jeep"],
+          paths: ["/Users/fixture-user/Downloads/Jeep"],
         });
       });
       const form = screen.getByTestId("composer-tiptap-input").closest("form");
@@ -18944,8 +18944,8 @@ describe("Composer", () => {
 
       await act(async () => {
         inspection.resolve({
-          filePaths: ["/Users/huntharo/Downloads/Jeep"],
-          pdfPaths: ["/Users/huntharo/Downloads/Jeep"],
+          filePaths: ["/Users/fixture-user/Downloads/Jeep"],
+          pdfPaths: ["/Users/fixture-user/Downloads/Jeep"],
         });
         await inspection.promise;
       });
@@ -18958,7 +18958,7 @@ describe("Composer", () => {
               {
                 type: "localFile",
                 name: "Jeep",
-                path: "/Users/huntharo/Downloads/Jeep",
+                path: "/Users/fixture-user/Downloads/Jeep",
               },
             ],
           }),
@@ -19000,7 +19000,7 @@ describe("Composer", () => {
     );
 
     fireEvent.change(screen.getByRole("textbox", { name: "Reply" }), {
-      target: { value: "Compare /Users/huntharo/Downloads/Jeep" },
+      target: { value: "Compare /Users/fixture-user/Downloads/Jeep" },
     });
     await flushReactUpdates();
 
@@ -19010,7 +19010,7 @@ describe("Composer", () => {
 
   it("hydrates a restored extensionless PDF reference before sending", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const draftStore = createComposerDraftStore();
       draftStore.set("thread:codex:thread-1", {
@@ -19021,8 +19021,8 @@ describe("Composer", () => {
         skillTokens: [],
       });
       const inspectPdfReferencePaths = vi.fn(async () => ({
-        filePaths: ["/Users/huntharo/Downloads/Jeep"],
-        pdfPaths: ["/Users/huntharo/Downloads/Jeep"],
+        filePaths: ["/Users/fixture-user/Downloads/Jeep"],
+        pdfPaths: ["/Users/fixture-user/Downloads/Jeep"],
       }));
       const renderComposerPdfPreview = vi.fn(async () => ({
         dataUrl: "data:image/png;base64,UEZERg==",
@@ -19062,7 +19062,7 @@ describe("Composer", () => {
 
       await waitFor(() => {
         expect(inspectPdfReferencePaths).toHaveBeenCalledWith({
-          paths: ["/Users/huntharo/Downloads/Jeep"],
+          paths: ["/Users/fixture-user/Downloads/Jeep"],
         });
       });
       const richInput = screen.getByTestId("composer-tiptap-input");
@@ -19076,7 +19076,7 @@ describe("Composer", () => {
       ).toBeInTheDocument();
       await waitFor(() => {
         expect(renderComposerPdfPreview).toHaveBeenCalledWith({
-          path: "/Users/huntharo/Downloads/Jeep",
+          path: "/Users/fixture-user/Downloads/Jeep",
         });
       });
 
@@ -19090,7 +19090,7 @@ describe("Composer", () => {
               {
                 type: "localFile",
                 name: "Jeep",
-                path: "/Users/huntharo/Downloads/Jeep",
+                path: "/Users/fixture-user/Downloads/Jeep",
               },
             ],
           }),
@@ -19104,7 +19104,7 @@ describe("Composer", () => {
 
   it("sends a files-only draft as just the reference block", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const startTurn = vi.fn(async () => ({
         backend: "codex" as const,
@@ -19117,7 +19117,7 @@ describe("Composer", () => {
         <Composer
           desktopApi={{
             onAgentEvent: () => () => undefined,
-            getPathForFile: (file: File) => `/Users/huntharo/notes/${file.name}`,
+            getPathForFile: (file: File) => `/Users/fixture-user/notes/${file.name}`,
             startTurn,
           }}
           disabled={false}
@@ -19154,7 +19154,7 @@ describe("Composer", () => {
               {
                 type: "localFile",
                 name: "notes.txt",
-                path: "/Users/huntharo/notes/notes.txt",
+                path: "/Users/fixture-user/notes/notes.txt",
               },
             ],
           })
@@ -19168,7 +19168,7 @@ describe("Composer", () => {
 
   it("removes a file attachment via its pill remove button", async () => {
     (window as unknown as { __pwragentHomeDir?: string }).__pwragentHomeDir =
-      "/Users/huntharo";
+      "/Users/fixture-user";
     try {
       const notesFile = new File(["notes"], "notes.txt", { type: "text/plain" });
 
@@ -19176,7 +19176,7 @@ describe("Composer", () => {
         <Composer
           desktopApi={{
             onAgentEvent: () => () => undefined,
-            getPathForFile: (file: File) => `/Users/huntharo/notes/${file.name}`,
+            getPathForFile: (file: File) => `/Users/fixture-user/notes/${file.name}`,
           }}
           disabled={false}
           skills={[]}
@@ -19273,7 +19273,7 @@ describe("Composer", () => {
           {
             name: "ce:plan",
             description: "Turn feature descriptions into implementation plans.",
-            path: "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+            path: "/Users/fixture-user/.codex/skills/ce-plan/SKILL.md",
             enabled: true,
           },
         ]}
@@ -19317,7 +19317,7 @@ describe("Composer", () => {
           return {
             name: `ce:test-${suffix}`,
             description: `Generated test skill ${suffix}`,
-            path: `/Users/huntharo/.codex/skills/ce-test-${suffix}/SKILL.md`,
+            path: `/Users/fixture-user/.codex/skills/ce-test-${suffix}/SKILL.md`,
             enabled: true,
           };
         })}
@@ -19374,7 +19374,7 @@ describe("Composer", () => {
           {
             name: "ce:plan",
             description: "Turn feature descriptions into implementation plans.",
-            path: "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+            path: "/Users/fixture-user/.codex/skills/ce-plan/SKILL.md",
             enabled: true,
           },
         ]}

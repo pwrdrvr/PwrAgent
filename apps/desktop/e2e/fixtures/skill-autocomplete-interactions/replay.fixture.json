@@ -38,7 +38,7 @@
             {
               "id": "pwragent-fixture",
               "label": "PwrAgent",
-              "path": "/Users/huntharo/github/PwrAgent",
+              "path": "/Users/fixture-user/github/PwrAgent",
               "kind": "local"
             }
           ],
@@ -95,89 +95,89 @@
       "method": "skills/list",
       "result": [
         {
-          "cwd": "/Users/huntharo/github/PwrAgent",
+          "cwd": "/Users/fixture-user/github/PwrAgent",
           "skills": [
             {
               "name": "adversarial-document-reviewer",
               "description": "Conditional document-review persona, selected when the document has >5 requirements or implementation units.",
-              "path": "/Users/huntharo/.codex/skills/adversarial-document-reviewer/SKILL.md",
+              "path": "/Users/fixture-user/.codex/skills/adversarial-document-reviewer/SKILL.md",
               "enabled": true,
               "scope": "user"
             },
             {
               "name": "ce:brainstorm",
               "description": "Explore requirements and approaches through collaborative dialogue before writing a right-sized requirements document and planning implementation.",
-              "path": "/Users/huntharo/.codex/skills/ce-brainstorm/SKILL.md",
+              "path": "/Users/fixture-user/.codex/skills/ce-brainstorm/SKILL.md",
               "enabled": true,
               "scope": "user"
             },
             {
               "name": "ce:compound",
               "description": "Document a recently solved problem to compound your team's knowledge.",
-              "path": "/Users/huntharo/.codex/skills/ce-compound/SKILL.md",
+              "path": "/Users/fixture-user/.codex/skills/ce-compound/SKILL.md",
               "enabled": true,
               "scope": "user"
             },
             {
               "name": "ce:plan",
               "description": "Transform feature descriptions or requirements into structured implementation plans.",
-              "path": "/Users/huntharo/.codex/skills/ce-plan/SKILL.md",
+              "path": "/Users/fixture-user/.codex/skills/ce-plan/SKILL.md",
               "enabled": true,
               "scope": "user"
             },
             {
               "name": "zz-scroll-skill-01",
               "description": "Generated skill 01 for autocomplete paging coverage.",
-              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-01/SKILL.md",
+              "path": "/Users/fixture-user/.codex/skills/zz-scroll-skill-01/SKILL.md",
               "enabled": true,
               "scope": "user"
             },
             {
               "name": "zz-scroll-skill-02",
               "description": "Generated skill 02 for autocomplete paging coverage.",
-              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-02/SKILL.md",
+              "path": "/Users/fixture-user/.codex/skills/zz-scroll-skill-02/SKILL.md",
               "enabled": true,
               "scope": "user"
             },
             {
               "name": "zz-scroll-skill-03",
               "description": "Generated skill 03 for autocomplete paging coverage.",
-              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-03/SKILL.md",
+              "path": "/Users/fixture-user/.codex/skills/zz-scroll-skill-03/SKILL.md",
               "enabled": true,
               "scope": "user"
             },
             {
               "name": "zz-scroll-skill-04",
               "description": "Generated skill 04 for autocomplete paging coverage.",
-              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-04/SKILL.md",
+              "path": "/Users/fixture-user/.codex/skills/zz-scroll-skill-04/SKILL.md",
               "enabled": true,
               "scope": "user"
             },
             {
               "name": "zz-scroll-skill-05",
               "description": "Generated skill 05 for autocomplete paging coverage.",
-              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-05/SKILL.md",
+              "path": "/Users/fixture-user/.codex/skills/zz-scroll-skill-05/SKILL.md",
               "enabled": true,
               "scope": "user"
             },
             {
               "name": "zz-scroll-skill-06",
               "description": "Generated skill 06 for autocomplete paging coverage.",
-              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-06/SKILL.md",
+              "path": "/Users/fixture-user/.codex/skills/zz-scroll-skill-06/SKILL.md",
               "enabled": true,
               "scope": "user"
             },
             {
               "name": "zz-scroll-skill-07",
               "description": "Generated skill 07 for autocomplete paging coverage.",
-              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-07/SKILL.md",
+              "path": "/Users/fixture-user/.codex/skills/zz-scroll-skill-07/SKILL.md",
               "enabled": true,
               "scope": "user"
             },
             {
               "name": "zz-scroll-skill-08",
               "description": "Generated skill 08 for autocomplete paging coverage.",
-              "path": "/Users/huntharo/.codex/skills/zz-scroll-skill-08/SKILL.md",
+              "path": "/Users/fixture-user/.codex/skills/zz-scroll-skill-08/SKILL.md",
               "enabled": true,
               "scope": "user"
             }

@@ -31,15 +31,15 @@
           "title": "Review path wrapping",
           "titleSource": "explicit",
           "summary": "Review renderer path wrapping regression",
-          "projectKey": "/Users/huntharo/work/PwrAgent",
+          "projectKey": "/Users/fixture-user/work/PwrAgent",
           "source": "codex",
           "executionMode": "default",
           "gitBranch": "fix/review-path-wrapping",
           "linkedDirectories": [
             {
-              "id": "directory:/Users/huntharo/work/PwrAgent",
+              "id": "directory:/Users/fixture-user/work/PwrAgent",
               "label": "PwrAgent",
-              "path": "/Users/huntharo/work/PwrAgent",
+              "path": "/Users/fixture-user/work/PwrAgent",
               "kind": "local"
             }
           ],
@@ -61,7 +61,7 @@
             "type": "review",
             "id": "review-path-wrapping-result",
             "displayText": "Code review",
-            "review": "The review renderer should keep file locations readable without widening the transcript.\n\nFull review comments:\n\n- [P3] Keep linked directory paths compact — /Users/huntharo/work/PwrAgent/apps/desktop/src/renderer/src/features/composer/Composer.tsx:2013-2014\n  Paths inside the thread directory should render relative to that directory and keep the full absolute target in the link destination.\n\n- [P0] Wrap external review file paths — /Volumes/ExternalReviewArchive/OutsideRepositoryPathWithAnExcessivelyLongSingleFilenameSegmentThatMustWrapInsideTheReviewRendererBecauseItCannotBeReducedByTheCurrentWorkingDirectoryBoundary.tsx:88-91\n  Paths outside the current working directory cannot be shortened by prefix stripping, so the location row must wrap the long linked filename instead of overflowing horizontally."
+            "review": "The review renderer should keep file locations readable without widening the transcript.\n\nFull review comments:\n\n- [P3] Keep linked directory paths compact — /Users/fixture-user/work/PwrAgent/apps/desktop/src/renderer/src/features/composer/Composer.tsx:2013-2014\n  Paths inside the thread directory should render relative to that directory and keep the full absolute target in the link destination.\n\n- [P0] Wrap external review file paths — /Volumes/ExternalReviewArchive/OutsideRepositoryPathWithAnExcessivelyLongSingleFilenameSegmentThatMustWrapInsideTheReviewRendererBecauseItCannotBeReducedByTheCurrentWorkingDirectoryBoundary.tsx:88-91\n  Paths outside the current working directory cannot be shortened by prefix stripping, so the location row must wrap the long linked filename instead of overflowing horizontally."
           }
         ],
         "messages": [],

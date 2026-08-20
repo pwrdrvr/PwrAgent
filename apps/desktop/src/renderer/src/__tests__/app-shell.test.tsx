@@ -1157,10 +1157,10 @@ describe("App", () => {
             params: {
               summary:
                 "Project-local config, hooks, and exec policies are disabled.\n" +
-                "To load project-local config, hooks, and exec policies, add /Users/huntharo/github/PwrAgnt as a trusted project in /Users/huntharo/.codex/profiles/acp-smoke/config.toml.",
+                "To load project-local config, hooks, and exec policies, add /Users/fixture-user/github/PwrAgnt as a trusted project in /Users/fixture-user/.codex/profiles/acp-smoke/config.toml.",
               details: null,
-              trustedProjectPath: "/Users/huntharo/github/PwrAgnt",
-              configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+              trustedProjectPath: "/Users/fixture-user/github/PwrAgnt",
+              configPath: "/Users/fixture-user/.codex/profiles/acp-smoke/config.toml",
             },
           },
         });
@@ -1174,8 +1174,8 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(trustCodexProject).toHaveBeenCalledWith({
-        projectPath: "/Users/huntharo/github/PwrAgnt",
-        configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+        projectPath: "/Users/fixture-user/github/PwrAgnt",
+        configPath: "/Users/fixture-user/.codex/profiles/acp-smoke/config.toml",
       });
     });
     await waitFor(() => {
@@ -1198,10 +1198,10 @@ describe("App", () => {
           params: {
             summary:
               "Project-local config, hooks, and exec policies are disabled.\n" +
-              "To load project-local config, hooks, and exec policies, add /Users/huntharo/github/PwrAgnt as a trusted project in /Users/huntharo/.codex/profiles/acp-smoke/config.toml.",
+              "To load project-local config, hooks, and exec policies, add /Users/fixture-user/github/PwrAgnt as a trusted project in /Users/fixture-user/.codex/profiles/acp-smoke/config.toml.",
             details: null,
-            trustedProjectPath: "/Users/huntharo/github/PwrAgnt",
-            configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+            trustedProjectPath: "/Users/fixture-user/github/PwrAgnt",
+            configPath: "/Users/fixture-user/.codex/profiles/acp-smoke/config.toml",
           },
         },
       },
@@ -1242,8 +1242,8 @@ describe("App", () => {
 
     await waitFor(() => {
       expect(trustCodexProject).toHaveBeenCalledWith({
-        projectPath: "/Users/huntharo/github/PwrAgnt",
-        configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+        projectPath: "/Users/fixture-user/github/PwrAgnt",
+        configPath: "/Users/fixture-user/.codex/profiles/acp-smoke/config.toml",
       });
     });
   });
@@ -1683,12 +1683,12 @@ describe("App", () => {
       fetchedAt: Date.now(),
       data: [
         {
-          cwd: "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
+          cwd: "/Users/fixture-user/.codex/worktrees/0f38/PwrAgent",
           skills: [
             {
               name: "frontend-design",
               description: "Design and verify renderer UI work.",
-              path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+              path: "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md",
               enabled: true
             }
           ]
@@ -1805,7 +1805,7 @@ describe("App", () => {
         copyText,
         getRuntimeIdentity: async () => ({
           branch: "codex/fix-thread-naming-ephemeral",
-          cwd: "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352",
+          cwd: "/Users/fixture-user/pwrdrvr/PwrAgent/.worktrees/pwragent-fix-thread-naming-moioth2352",
         }),
         ping: () => "pong",
         listSkills,
@@ -1891,10 +1891,10 @@ describe("App", () => {
               gitBranch: "codex/build-codex-client",
               linkedDirectories: [
                 {
-                  id: "/Users/huntharo/pwrdrvr/PwrAgent",
+                  id: "/Users/fixture-user/pwrdrvr/PwrAgent",
                   label: "PwrAgent",
-                  path: "/Users/huntharo/pwrdrvr/PwrAgent",
-                  worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
+                  path: "/Users/fixture-user/pwrdrvr/PwrAgent",
+                  worktreePath: "/Users/fixture-user/.codex/worktrees/0f38/PwrAgent",
                   kind: "worktree"
                 }
               ],
@@ -1987,8 +1987,8 @@ describe("App", () => {
     fireEvent.click(
       within(context).getByRole("button", { name: "Copy path for worktree PwrAgent" })
     );
-    expect(copyText).toHaveBeenNthCalledWith(1, "/Users/huntharo/pwrdrvr/PwrAgent");
-    expect(copyText).toHaveBeenNthCalledWith(2, "/Users/huntharo/.codex/worktrees/0f38/PwrAgent");
+    expect(copyText).toHaveBeenNthCalledWith(1, "/Users/fixture-user/pwrdrvr/PwrAgent");
+    expect(copyText).toHaveBeenNthCalledWith(2, "/Users/fixture-user/.codex/worktrees/0f38/PwrAgent");
     expect(screen.getAllByText("Codex app server").length).toBeGreaterThan(0);
     fireEvent.click(within(context).getByRole("tab", { name: "Thread info" }));
     expect(screen.getByText("darwin")).toBeInTheDocument();
@@ -2052,19 +2052,19 @@ describe("App", () => {
       fetchedAt: Date.now(),
       data: [
         {
-          cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+          cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
           skills: [
             {
               name: "frontend-design",
               description: "Design and verify renderer UI work.",
-              path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+              path: "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md",
               enabled: true,
               scope: "user",
             },
             {
               name: "desktop-e2e-fixture-seeding",
               description: "Replay-backed desktop E2E fixtures.",
-              path: "/Users/huntharo/pwrdrvr/PwrAgent/.agents/skills/desktop-e2e-fixture-seeding/SKILL.md",
+              path: "/Users/fixture-user/pwrdrvr/PwrAgent/.agents/skills/desktop-e2e-fixture-seeding/SKILL.md",
               enabled: true,
               scope: "local",
             },
@@ -2124,10 +2124,10 @@ describe("App", () => {
           threads: [],
           directories: [
             {
-              key: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+              key: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
               kind: "directory" as const,
               label: "PwrAgent",
-              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              path: "/Users/fixture-user/pwrdrvr/PwrAgent",
               threadKeys: [],
               needsAttentionCount: 0,
               gitStatus: {
@@ -2136,10 +2136,10 @@ describe("App", () => {
                 syncState: "in-sync" as const,
               },
               launchpad: {
-                directoryKey: "directory:/Users/huntharo/pwrdrvr/PwrAgent",
+                directoryKey: "directory:/Users/fixture-user/pwrdrvr/PwrAgent",
                 directoryKind: "directory" as const,
                 directoryLabel: "PwrAgent",
-                directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+                directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
                 backend: "codex" as const,
                 executionMode: "default" as const,
                 prompt: "",
@@ -2169,7 +2169,7 @@ describe("App", () => {
             directoryKey,
             directoryKind: "directory" as const,
             directoryLabel: "PwrAgent",
-            directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+            directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
             backend: "codex" as const,
             executionMode: "default" as const,
             prompt: typeof patch.prompt === "string" ? patch.prompt : "",
@@ -2205,8 +2205,8 @@ describe("App", () => {
     await waitFor(() => {
       expect(listSkills).toHaveBeenCalledWith({
         backend: "codex",
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
-        cwds: ["/Users/huntharo/pwrdrvr/PwrAgent"],
+        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
+        cwds: ["/Users/fixture-user/pwrdrvr/PwrAgent"],
       });
     });
 
@@ -3562,7 +3562,7 @@ describe("App", () => {
           threads: [
             {
               id: "thread-1",
-              title: "Use X Search to find stats on huntharo's latest tweets for me",
+              title: "Use X Search to find stats on fixtureuser's latest tweets for me",
               titleSource: "explicit",
               summary,
               source: "acp:grok",
@@ -3593,7 +3593,7 @@ describe("App", () => {
                 type: "message",
                 id: "message-1",
                 role: "user",
-                text: "Use X Search to find stats on huntharo's latest tweets for me"
+                text: "Use X Search to find stats on fixtureuser's latest tweets for me"
               },
               {
                 type: "message",
@@ -3606,7 +3606,7 @@ describe("App", () => {
               {
                 id: "message-1",
                 role: "user",
-                text: "Use X Search to find stats on huntharo's latest tweets for me"
+                text: "Use X Search to find stats on fixtureuser's latest tweets for me"
               },
               {
                 id: "message-2",
@@ -3637,7 +3637,7 @@ describe("App", () => {
     expect(
       await screen.findByRole("heading", {
         level: 2,
-        name: "Use X Search to find stats on huntharo's latest tweets for me"
+        name: "Use X Search to find stats on fixtureuser's latest tweets for me"
       })
     ).toBeInTheDocument();
 
@@ -5042,12 +5042,12 @@ describe("App", () => {
   });
 
   it("restores an unsubmitted project launchpad from thread history", async () => {
-    const directoryKey = "directory:/Users/huntharo/pwrdrvr/PwrAgent";
+    const directoryKey = "directory:/Users/fixture-user/pwrdrvr/PwrAgent";
     let launchpad = {
       directoryKey,
       directoryKind: "directory" as const,
       directoryLabel: "PwrAgent",
-      directoryPath: "/Users/huntharo/pwrdrvr/PwrAgent",
+      directoryPath: "/Users/fixture-user/pwrdrvr/PwrAgent",
       backend: "codex" as const,
       executionMode: "full-access" as const,
       prompt: "",
@@ -5155,9 +5155,9 @@ describe("App", () => {
               source: "codex" as const,
               linkedDirectories: [
                 {
-                  id: "/Users/huntharo/pwrdrvr/PwrAgent",
+                  id: "/Users/fixture-user/pwrdrvr/PwrAgent",
                   label: "PwrAgent",
-                  path: "/Users/huntharo/pwrdrvr/PwrAgent",
+                  path: "/Users/fixture-user/pwrdrvr/PwrAgent",
                   kind: "local" as const,
                 },
               ],
@@ -5174,9 +5174,9 @@ describe("App", () => {
               source: "codex" as const,
               linkedDirectories: [
                 {
-                  id: "/Users/huntharo/pwrdrvr/PwrAgent",
+                  id: "/Users/fixture-user/pwrdrvr/PwrAgent",
                   label: "PwrAgent",
-                  path: "/Users/huntharo/pwrdrvr/PwrAgent",
+                  path: "/Users/fixture-user/pwrdrvr/PwrAgent",
                   kind: "local" as const,
                 },
               ],
@@ -5192,7 +5192,7 @@ describe("App", () => {
               key: directoryKey,
               kind: "directory" as const,
               label: "PwrAgent",
-              path: "/Users/huntharo/pwrdrvr/PwrAgent",
+              path: "/Users/fixture-user/pwrdrvr/PwrAgent",
               threadKeys: ["codex:thread-1", "codex:thread-2"],
               needsAttentionCount: 2,
             },

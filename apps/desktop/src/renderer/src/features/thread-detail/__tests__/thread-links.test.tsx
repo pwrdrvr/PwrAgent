@@ -77,8 +77,8 @@ describe("thread links in transcript markdown", () => {
               id: "dir-worktree",
               kind: "worktree",
               label: "PwrAgent",
-              path: "/Users/huntharo/pwrdrvr/PwrAgent",
-              worktreePath: "/Users/huntharo/.codex/worktrees/thread-menu/PwrAgent",
+              path: "/Users/fixture-user/pwrdrvr/PwrAgent",
+              worktreePath: "/Users/fixture-user/.codex/worktrees/thread-menu/PwrAgent",
             },
           ],
         })],
@@ -164,8 +164,8 @@ describe("thread links in transcript markdown", () => {
           id: "dir-worktree",
           kind: "worktree",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
-          worktreePath: "/Users/huntharo/.codex/worktrees/thread-menu/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
+          worktreePath: "/Users/fixture-user/.codex/worktrees/thread-menu/PwrAgent",
         },
       ],
     }, "RELATED query deranking issue")).toEqual([
@@ -188,7 +188,7 @@ describe("thread links in transcript markdown", () => {
       },
       {
         label: "Copy Thread Directory",
-        copyValue: "/Users/huntharo/.codex/worktrees/thread-menu/PwrAgent",
+        copyValue: "/Users/fixture-user/.codex/worktrees/thread-menu/PwrAgent",
       },
     ]);
   });
@@ -202,30 +202,30 @@ describe("thread links in transcript markdown", () => {
           id: "dir-local",
           kind: "local",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
         },
         {
           id: "dir-worktree",
           kind: "worktree",
           label: "Docs",
-          path: "/Users/huntharo/pwrdrvr/docs.pwragent.ai",
-          worktreePath: "/Users/huntharo/.codex/worktrees/docs/docs.pwragent.ai",
+          path: "/Users/fixture-user/pwrdrvr/docs.pwragent.ai",
+          worktreePath: "/Users/fixture-user/.codex/worktrees/docs/docs.pwragent.ai",
         },
         {
           id: "dir-duplicate",
           kind: "local",
           label: "Duplicate",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
         },
       ],
     }, "RELATED query deranking issue").slice(3)).toEqual([
       {
         label: "Copy Thread Directory — PwrAgent (local)",
-        copyValue: "/Users/huntharo/pwrdrvr/PwrAgent",
+        copyValue: "/Users/fixture-user/pwrdrvr/PwrAgent",
       },
       {
         label: "Copy Thread Directory — Docs (worktree)",
-        copyValue: "/Users/huntharo/.codex/worktrees/docs/docs.pwragent.ai",
+        copyValue: "/Users/fixture-user/.codex/worktrees/docs/docs.pwragent.ai",
       },
     ]);
   });

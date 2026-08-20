@@ -514,7 +514,7 @@ describe("buildPendingRequestApprovalContext", () => {
         requestId: "request-1",
         changes: [
           {
-            path: "/Users/huntharo/huntharo_rocks.txt",
+            path: "/Users/fixture-user/fixtureuser_rocks.txt",
             kind: {
               type: "update",
               unified_diff: "@@ -1 +1 @@\n-old\n+new",
@@ -530,14 +530,14 @@ describe("buildPendingRequestApprovalContext", () => {
       }),
     ).toMatchObject({
       action: "update",
-      path: "/Users/huntharo/huntharo_rocks.txt",
-      displayPath: "/Users/huntharo/huntharo_rocks.txt",
+      path: "/Users/fixture-user/fixtureuser_rocks.txt",
+      displayPath: "/Users/fixture-user/fixtureuser_rocks.txt",
       diff: "@@ -1 +1 @@\n-old\n+new",
       files: [
         {
           action: "update",
-          path: "/Users/huntharo/huntharo_rocks.txt",
-          displayPath: "/Users/huntharo/huntharo_rocks.txt",
+          path: "/Users/fixture-user/fixtureuser_rocks.txt",
+          displayPath: "/Users/fixture-user/fixtureuser_rocks.txt",
           diff: "@@ -1 +1 @@\n-old\n+new",
         },
       ],

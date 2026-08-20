@@ -627,7 +627,7 @@ describe("TranscriptList", () => {
                 actor: {
                   platformUserId: "U012345",
                   displayName: "Hunter",
-                  username: "huntharo",
+                  username: "fixtureuser",
                 },
               },
             },
@@ -641,7 +641,7 @@ describe("TranscriptList", () => {
 
     expect(screen.getByText("Messaging")).toBeInTheDocument();
     const origin = screen.getByLabelText(
-      "Discord: PwrAgent / #signals-chat / api-search circuit breaker timeout · Hunter (@huntharo)",
+      "Discord: PwrAgent / #signals-chat / api-search circuit breaker timeout · Hunter (@fixtureuser)",
     );
     expect(origin).toHaveTextContent(
       "PwrAgent / #signals-chat / api-search circuit breaker timeout",
@@ -662,7 +662,7 @@ describe("TranscriptList", () => {
       [
         "Discord",
         "PwrAgent / #signals-chat / api-search circuit breaker timeout",
-        "Hunter (@huntharo)",
+        "Hunter (@fixtureuser)",
         "Open in Discord",
       ].join("\n"),
     );
@@ -777,7 +777,7 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Open [`ce:work`](/Users/huntharo/.codex/skills/ce-work/SKILL.md)\n\n- **Check Unit 4**\n- Keep Unit 3 isolated"
+            text: "Open [`ce:work`](/Users/fixture-user/.codex/skills/ce-work/SKILL.md)\n\n- **Check Unit 4**\n- Keep Unit 3 isolated"
           },
           {
             type: "activity",
@@ -1164,7 +1164,7 @@ describe("TranscriptList", () => {
             type: "message",
             id: "message-1",
             role: "user",
-            text: "Load [$frontend-design](/Users/huntharo/.codex/skills/frontend-design/SKILL.md) and **keep** the current styling."
+            text: "Load [$frontend-design](/Users/fixture-user/.codex/skills/frontend-design/SKILL.md) and **keep** the current styling."
           },
           {
             type: "message",
@@ -1184,7 +1184,7 @@ describe("TranscriptList", () => {
           {
             name: "frontend-design",
             description: "Design and verify renderer UI work.",
-            path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+            path: "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md",
             enabled: true,
           },
         ]}
@@ -4731,7 +4731,7 @@ Implementation notes remain in a readable bubble.`;
             prompt: "Approve file edit?",
             changes: [
               {
-                path: "/Users/huntharo/huntharo_rocks.txt",
+                path: "/Users/fixture-user/fixtureuser_rocks.txt",
                 kind: {
                   type: "update",
                   unified_diff:
@@ -4747,7 +4747,7 @@ Implementation notes remain in a readable bubble.`;
     );
 
     expect(screen.getByRole("group", { name: "Pending approval" })).toBeInTheDocument();
-    expect(screen.getByText(/File: \/Users\/huntharo\/huntharo_rocks\.txt/)).toBeInTheDocument();
+    expect(screen.getByText(/File: \/Users\/fixture-user\/fixtureuser_rocks\.txt/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Hide diff/ })).toBeInTheDocument();
     expect(screen.getByText(/new dumb sentence/)).toBeInTheDocument();
   });

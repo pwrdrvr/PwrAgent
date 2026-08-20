@@ -67,13 +67,13 @@ function createModelListResponse(models: Model[]): ModelListResponse {
 class MockTransport implements JsonRpcTransport {
   static instances: MockTransport[] = [];
   static serverVersion = "1.0.0";
-  static codexHome = "/Users/huntharo/.codex";
+  static codexHome = "/Users/fixture-user/.codex";
   static readThreadErrorByThreadId = new Map<string, { code: number; message: string }>();
   static readThreadResultByThreadId = new Map<string, unknown>();
   static threadStartResult: unknown = {
     thread: {
       id: "thread-3",
-      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd"
+      cwd: "/Users/fixture-user/.pwragent/projects/2026-04-16-ab12cd"
     },
     model: "gpt-5.4"
   };
@@ -81,15 +81,15 @@ class MockTransport implements JsonRpcTransport {
     thread: {
       id: "thread-fork",
       forkedFromId: "thread-2",
-      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
     },
     model: "gpt-5.4",
-    cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+    cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
   };
   static threadResumeResult: unknown = {
     threadId: "thread-2",
     threadName: "Ship desktop shell",
-    cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
+    cwd: "/Users/fixture-user/pwrdrvr/PwrAgent"
   };
   static turnStartResult: unknown = {
     thread: {
@@ -119,7 +119,7 @@ class MockTransport implements JsonRpcTransport {
   static configValueWriteResult: ConfigWriteResponse = {
     status: "ok",
     version: "1",
-    filePath: "/Users/huntharo/.codex/config.toml",
+    filePath: "/Users/fixture-user/.codex/config.toml",
     overriddenMetadata: null,
   };
   static configReadResult: unknown = {
@@ -266,7 +266,7 @@ class MockTransport implements JsonRpcTransport {
                       id: "thread-missing-worktree",
                       name: "Investigate chunk file errors",
                       updatedAt: 1_776_000_000,
-                      cwd: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
+                      cwd: "/Users/fixture-user/.codex/worktrees/0cb4/web-app",
                     }
                   ]
             }
@@ -356,7 +356,7 @@ class MockTransport implements JsonRpcTransport {
                       updatedAt: params.params?.useStateDbOnly
                         ? 1_779_507_033
                         : 1_779_552_074,
-                      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+                      cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
                     },
                   ],
             },
@@ -379,7 +379,7 @@ class MockTransport implements JsonRpcTransport {
                       name: "Untitled thread",
                       preview: "Why do all the worktree-hashes start with `moi`?",
                       updatedAt: 1_777_401_255,
-                      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+                      cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
                     },
                   ],
             },
@@ -403,7 +403,7 @@ class MockTransport implements JsonRpcTransport {
                       preview:
                         "Let's make a button with an animated jaguar sipping tea. Just for grins.",
                       updatedAt: 1_777_401_256,
-                      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+                      cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
                     },
                   ],
             },
@@ -425,7 +425,7 @@ class MockTransport implements JsonRpcTransport {
                         id: "thread-archived-page-2",
                         name: "Archived page two",
                         updatedAt: 1_776_300_000,
-                        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+                        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
                       },
                     ]
                   : params.params?.archived
@@ -434,7 +434,7 @@ class MockTransport implements JsonRpcTransport {
                           id: "thread-archived-page-1",
                           name: "Archived page one",
                           updatedAt: 1_776_400_000,
-                          cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+                          cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
                         },
                       ]
                     : [],
@@ -568,14 +568,14 @@ class MockTransport implements JsonRpcTransport {
                   preview:
                     "Name this thread something funny and spunky. Something about potatoes.",
                   updatedAt: 1_763_500_500,
-                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+                  cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
                 },
                 {
                   id: "thread-archive",
                   name: "Retired archived thread",
                   preview: "This one should not appear in the active navigation list.",
                   updatedAt: 1_763_500_250,
-                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+                  cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
                 }
               ]
             }
@@ -597,7 +597,7 @@ class MockTransport implements JsonRpcTransport {
                 status: { type: "active", activeFlags: [] },
                 updatedAt: 1_763_500_000,
                 session: {
-                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
+                  cwd: "/Users/fixture-user/pwrdrvr/PwrAgent"
                 }
               },
               {
@@ -607,7 +607,7 @@ class MockTransport implements JsonRpcTransport {
                 text: "Do not leak this planning prompt into the thread browser",
                 updatedAt: 1_763_400_000,
                 session: {
-                  cwd: "/Users/huntharo/pwrdrvr/openclaw-codex-app-server"
+                  cwd: "/Users/fixture-user/pwrdrvr/openclaw-codex-app-server"
                 }
               },
               {
@@ -616,7 +616,7 @@ class MockTransport implements JsonRpcTransport {
                   "Name this thread something funny and spunky. Something about potatoes.",
                 updatedAt: 1_763_500_100,
                 session: {
-                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
+                  cwd: "/Users/fixture-user/pwrdrvr/PwrAgent"
                 }
               },
               {
@@ -625,7 +625,7 @@ class MockTransport implements JsonRpcTransport {
                 preview: "Investigate why new Codex threads keep showing as untitled",
                 updatedAt: 1_763_500_050,
                 session: {
-                  cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
+                  cwd: "/Users/fixture-user/pwrdrvr/PwrAgent"
                 }
               }
             ]
@@ -1071,13 +1071,13 @@ class MockTransport implements JsonRpcTransport {
           result: {
             data: [
               {
-                cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+                cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
                 skills: [
                   {
                     name: "frontend-design",
                     description: "Design and verify renderer UI work.",
                     shortDescription: "Renderer UI design workflow.",
-                    path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+                    path: "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md",
                     scope: "user",
                     enabled: true,
                   },
@@ -1150,13 +1150,13 @@ describe("CodexAppServerClient", () => {
     codexClientLogWarn.mockClear();
     MockTransport.instances.length = 0;
     MockTransport.serverVersion = "1.0.0";
-    MockTransport.codexHome = "/Users/huntharo/.codex";
+    MockTransport.codexHome = "/Users/fixture-user/.codex";
     MockTransport.readThreadErrorByThreadId.clear();
     MockTransport.readThreadResultByThreadId.clear();
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-3",
-        cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd"
+        cwd: "/Users/fixture-user/.pwragent/projects/2026-04-16-ab12cd"
       },
       model: "gpt-5.4"
     };
@@ -1164,15 +1164,15 @@ describe("CodexAppServerClient", () => {
       thread: {
         id: "thread-fork",
         forkedFromId: "thread-2",
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
       },
       model: "gpt-5.4",
-      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
     };
     MockTransport.threadResumeResult = {
       threadId: "thread-2",
       threadName: "Ship desktop shell",
-      cwd: "/Users/huntharo/pwrdrvr/PwrAgent"
+      cwd: "/Users/fixture-user/pwrdrvr/PwrAgent"
     };
     MockTransport.turnStartResult = {
       thread: {
@@ -1197,7 +1197,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.configValueWriteResult = {
       status: "ok",
       version: "1",
-      filePath: "/Users/huntharo/.codex/config.toml",
+      filePath: "/Users/fixture-user/.codex/config.toml",
       overriddenMetadata: null,
     };
     MockTransport.configReadResult = {
@@ -1286,7 +1286,7 @@ describe("CodexAppServerClient", () => {
 
     await expect(
       client.readConfiguredMcpServerNames({
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
       }),
     ).resolves.toEqual(["context7", "github"]);
 
@@ -1297,7 +1297,7 @@ describe("CodexAppServerClient", () => {
       method: "config/read",
       params: {
         includeLayers: false,
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
       },
     }));
     expect(observedMessages.join("\n")).not.toContain("never-forward-me");
@@ -1317,10 +1317,10 @@ describe("CodexAppServerClient", () => {
         projectKey
           ? [
               {
-                id: "/Users/huntharo/pwrdrvr/PwrAgent",
+                id: "/Users/fixture-user/pwrdrvr/PwrAgent",
                 label: "PwrAgent",
-                path: "/Users/huntharo/pwrdrvr/PwrAgent",
-                worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
+                path: "/Users/fixture-user/pwrdrvr/PwrAgent",
+                worktreePath: "/Users/fixture-user/.codex/worktrees/0f38/PwrAgent",
                 kind: "worktree"
               }
             ]
@@ -1343,10 +1343,10 @@ describe("CodexAppServerClient", () => {
       source: "codex",
       linkedDirectories: [
         {
-          id: "/Users/huntharo/pwrdrvr/PwrAgent",
+          id: "/Users/fixture-user/pwrdrvr/PwrAgent",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
-          worktreePath: "/Users/huntharo/.codex/worktrees/0f38/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
+          worktreePath: "/Users/fixture-user/.codex/worktrees/0f38/PwrAgent",
           kind: "worktree"
         }
       ]
@@ -1397,9 +1397,9 @@ describe("CodexAppServerClient", () => {
     const threadDirectoryEnricher = vi.fn(async () => ({
       linkedDirectories: [
         {
-          id: "/Users/huntharo/pwrdrvr/PwrAgent",
+          id: "/Users/fixture-user/pwrdrvr/PwrAgent",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "local" as const,
         },
       ],
@@ -1416,12 +1416,12 @@ describe("CodexAppServerClient", () => {
     expect(threadDirectoryEnricher).not.toHaveBeenCalled();
     expect(primaryThread).toMatchObject({
       id: "thread-2",
-      projectKey: "/Users/huntharo/pwrdrvr/PwrAgent",
+      projectKey: "/Users/fixture-user/pwrdrvr/PwrAgent",
       linkedDirectories: [
         {
-          id: "/Users/huntharo/pwrdrvr/PwrAgent",
+          id: "/Users/fixture-user/pwrdrvr/PwrAgent",
           label: "PwrAgent",
-          path: "/Users/huntharo/pwrdrvr/PwrAgent",
+          path: "/Users/fixture-user/pwrdrvr/PwrAgent",
           kind: "local",
         },
       ],
@@ -1521,16 +1521,16 @@ describe("CodexAppServerClient", () => {
         name: "PwrSnap sizzle reel",
         originator: "pwrsnap",
         updatedAt: 1_777_500_000,
-        cwd: "/Users/huntharo/Documents/PwrSnap/Chats/2026-05-30-004-chat-2026-05-30",
-        path: "/Users/huntharo/.codex/sessions/never-read-pwrsnap.jsonl",
+        cwd: "/Users/fixture-user/Documents/PwrSnap/Chats/2026-05-30-004-chat-2026-05-30",
+        path: "/Users/fixture-user/.codex/sessions/never-read-pwrsnap.jsonl",
       },
       {
         id: "thread-pwragent",
         name: "PwrAgent workspace chat",
         originator: "pwragent-desktop",
         updatedAt: 1_777_400_000,
-        cwd: "/Users/huntharo/.pwragent/profiles/default/projects/2026-05-30-ab12cd",
-        path: "/Users/huntharo/.codex/sessions/never-read-pwragent.jsonl",
+        cwd: "/Users/fixture-user/.pwragent/profiles/default/projects/2026-05-30-ab12cd",
+        path: "/Users/fixture-user/.codex/sessions/never-read-pwragent.jsonl",
       },
     ]);
     const { CodexAppServerClient } = await import("../codex-app-server/client");
@@ -1557,7 +1557,7 @@ describe("CodexAppServerClient", () => {
     expect(threads.map((thread) => thread.id)).toEqual(["thread-pwragent"]);
     expect(threadDirectoryEnricher).toHaveBeenCalledTimes(1);
     expect(threadDirectoryEnricher).toHaveBeenCalledWith(
-      "/Users/huntharo/.pwragent/profiles/default/projects/2026-05-30-ab12cd",
+      "/Users/fixture-user/.pwragent/profiles/default/projects/2026-05-30-ab12cd",
     );
 
     await client.close();
@@ -1570,14 +1570,14 @@ describe("CodexAppServerClient", () => {
         name: "External app chat",
         originator: "another-app",
         updatedAt: 1_777_500_000,
-        cwd: "/Users/huntharo/Documents/OtherApp/Chats/one",
+        cwd: "/Users/fixture-user/Documents/OtherApp/Chats/one",
       },
       {
         id: "thread-codex-desktop",
         name: "Codex Desktop thread",
         originator: "Codex Desktop",
         updatedAt: 1_777_400_000,
-        cwd: "/Users/huntharo/github/PwrAgent",
+        cwd: "/Users/fixture-user/github/PwrAgent",
       },
     ]);
     const { CodexAppServerClient } = await import("../codex-app-server/client");
@@ -1611,7 +1611,7 @@ describe("CodexAppServerClient", () => {
         preview:
           '<runtime_context source="pwrsnap" note="runtime-generated, not user-authored">...',
         updatedAt: 1_780_282_928,
-        cwd: "/Users/huntharo/Documents/PwrSnap/Chats/2026-06-01-001-chat-2026-05-31",
+        cwd: "/Users/fixture-user/Documents/PwrSnap/Chats/2026-06-01-001-chat-2026-05-31",
         source: "vscode",
       },
       {
@@ -1619,7 +1619,7 @@ describe("CodexAppServerClient", () => {
         name: "PwrSnap Capture Metadata Worker",
         preview: "Capture metadata:\n- Source application name: Electron",
         updatedAt: 1_780_272_250,
-        cwd: "/Users/huntharo/Documents/PwrSnap/Chats/.capture-metadata",
+        cwd: "/Users/fixture-user/Documents/PwrSnap/Chats/.capture-metadata",
         source: "vscode",
       },
       {
@@ -1627,7 +1627,7 @@ describe("CodexAppServerClient", () => {
         name: "Fix PwrSnap export",
         preview: "Work on the product codebase.",
         updatedAt: 1_780_200_000,
-        cwd: "/Users/huntharo/github/PwrSnap",
+        cwd: "/Users/fixture-user/github/PwrSnap",
         source: "vscode",
       },
       {
@@ -1635,7 +1635,7 @@ describe("CodexAppServerClient", () => {
         name: "PwrAgent workspace chat",
         preview: "Normal Codex thread",
         updatedAt: 1_780_100_000,
-        cwd: "/Users/huntharo/github/PwrAgnt",
+        cwd: "/Users/fixture-user/github/PwrAgnt",
         source: "vscode",
       },
     ]);
@@ -1665,8 +1665,8 @@ describe("CodexAppServerClient", () => {
       "thread-pwragent",
     ]);
     expect(threadDirectoryEnricher).toHaveBeenCalledTimes(2);
-    expect(threadDirectoryEnricher).toHaveBeenCalledWith("/Users/huntharo/github/PwrSnap");
-    expect(threadDirectoryEnricher).toHaveBeenCalledWith("/Users/huntharo/github/PwrAgnt");
+    expect(threadDirectoryEnricher).toHaveBeenCalledWith("/Users/fixture-user/github/PwrSnap");
+    expect(threadDirectoryEnricher).toHaveBeenCalledWith("/Users/fixture-user/github/PwrAgnt");
 
     await client.close();
   });
@@ -1820,13 +1820,13 @@ describe("CodexAppServerClient", () => {
     expect(threads).toEqual([
       expect.objectContaining({
         id: "thread-missing-worktree",
-        projectKey: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
+        projectKey: "/Users/fixture-user/.codex/worktrees/0cb4/web-app",
         linkedDirectories: [
           {
-            id: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
+            id: "/Users/fixture-user/.codex/worktrees/0cb4/web-app",
             label: "web-app",
-            path: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
-            worktreePath: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
+            path: "/Users/fixture-user/.codex/worktrees/0cb4/web-app",
+            worktreePath: "/Users/fixture-user/.codex/worktrees/0cb4/web-app",
             kind: "worktree",
           },
         ],
@@ -2422,7 +2422,7 @@ describe("CodexAppServerClient", () => {
         // Windows that turns the Unix literal into a drive-prefixed path.
         // Compare against the resolved form so the mock matches on both
         // platforms (path.resolve is a no-op for absolute POSIX paths).
-        if (targetPath === path.resolve("/Users/huntharo/.codex/worktrees/0cb4/web-app")) {
+        if (targetPath === path.resolve("/Users/fixture-user/.codex/worktrees/0cb4/web-app")) {
           throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
         }
       })
@@ -2452,7 +2452,7 @@ describe("CodexAppServerClient", () => {
       expect(threads).toEqual([
         expect.objectContaining({
           id: "thread-missing-worktree",
-          projectKey: "/Users/huntharo/.codex/worktrees/0cb4/web-app",
+          projectKey: "/Users/fixture-user/.codex/worktrees/0cb4/web-app",
           linkedDirectories: []
         })
       ]);
@@ -2704,9 +2704,9 @@ describe("CodexAppServerClient", () => {
         projectKey
           ? [
               {
-                id: "/Users/huntharo/pwrdrvr/PwrAgent",
+                id: "/Users/fixture-user/pwrdrvr/PwrAgent",
                 label: "PwrAgent",
-                path: "/Users/huntharo/pwrdrvr/PwrAgent",
+                path: "/Users/fixture-user/pwrdrvr/PwrAgent",
                 kind: "local"
               }
             ]
@@ -2754,9 +2754,9 @@ describe("CodexAppServerClient", () => {
         linkedDirectories: projectKey
           ? [
               {
-                id: "/Users/huntharo/pwrdrvr/PwrAgent",
+                id: "/Users/fixture-user/pwrdrvr/PwrAgent",
                 label: "PwrAgent",
-                path: "/Users/huntharo/pwrdrvr/PwrAgent",
+                path: "/Users/fixture-user/pwrdrvr/PwrAgent",
                 worktreePath: projectKey,
                 kind: "worktree",
               },
@@ -2820,9 +2820,9 @@ describe("CodexAppServerClient", () => {
         linkedDirectories: projectKey
           ? [
               {
-                id: "/Users/huntharo/pwrdrvr/PwrAgent",
+                id: "/Users/fixture-user/pwrdrvr/PwrAgent",
                 label: "PwrAgent",
-                path: "/Users/huntharo/pwrdrvr/PwrAgent",
+                path: "/Users/fixture-user/pwrdrvr/PwrAgent",
                 worktreePath: projectKey,
                 kind: "worktree",
               },
@@ -5093,7 +5093,7 @@ describe("CodexAppServerClient", () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const reviewSummary =
       "The queued-review behavior introduces draft/attachment loss in realistic active-turn workflows.";
-    const reviewText = `${reviewSummary}\n\nFull review comments:\n\n- [P2] Preserve the live draft after starting a queued review — /Users/huntharo/.codex/worktrees/mp1febj4/PwrAgnt/apps/desktop/src/renderer/src/features/composer/Composer.tsx:1673-1677\n  When this path is reached from sendQueuedTurn, the user may already have started composing another reply while the review waited in the queue.`;
+    const reviewText = `${reviewSummary}\n\nFull review comments:\n\n- [P2] Preserve the live draft after starting a queued review — /Users/fixture-user/.codex/worktrees/mp1febj4/PwrAgnt/apps/desktop/src/renderer/src/features/composer/Composer.tsx:1673-1677\n  When this path is reached from sendQueuedTurn, the user may already have started composing another reply while the review waited in the queue.`;
     MockTransport.readThreadResultByThreadId.set("thread-summary-review", {
       thread: {
         turns: [
@@ -6213,7 +6213,7 @@ describe("CodexAppServerClient", () => {
       jsonrpc: "2.0",
       method: "skills/changed",
       params: {
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
         reason: "fileChanged"
       }
     });
@@ -6230,7 +6230,7 @@ describe("CodexAppServerClient", () => {
         initialized: true,
         expectedFollowup: "call skills/list when refreshed skill metadata is needed",
         payload: {
-          cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+          cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
           reason: "fileChanged"
         }
       })
@@ -6243,7 +6243,7 @@ describe("CodexAppServerClient", () => {
       {
         method: "skills/changed",
         params: {
-          cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+          cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
           reason: "fileChanged"
         }
       }
@@ -6278,8 +6278,8 @@ describe("CodexAppServerClient", () => {
       params: {
         summary:
           "Project-local config, hooks, and exec policies are disabled in the following folders until the project is trusted, but skills still load.\n" +
-          "    1. /Users/huntharo/.codex/worktrees/mp9wyft8/PwrAgnt/.codex\n" +
-          "       To load project-local config, hooks, and exec policies, add /Users/huntharo/github/PwrAgnt as a trusted project in /Users/huntharo/.codex/profiles/acp-smoke/config.toml.\n",
+          "    1. /Users/fixture-user/.codex/worktrees/mp9wyft8/PwrAgnt/.codex\n" +
+          "       To load project-local config, hooks, and exec policies, add /Users/fixture-user/github/PwrAgnt as a trusted project in /Users/fixture-user/.codex/profiles/acp-smoke/config.toml.\n",
         details: null
       }
     });
@@ -6294,8 +6294,8 @@ describe("CodexAppServerClient", () => {
       {
         method: "configWarning",
         params: expect.objectContaining({
-          trustedProjectPath: "/Users/huntharo/github/PwrAgnt",
-          configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml",
+          trustedProjectPath: "/Users/fixture-user/github/PwrAgnt",
+          configPath: "/Users/fixture-user/.codex/profiles/acp-smoke/config.toml",
           details: null
         })
       }
@@ -6313,23 +6313,23 @@ describe("CodexAppServerClient", () => {
     });
 
     const response = await client.trustProject({
-      projectPath: "/Users/huntharo/github/PwrAgnt",
-      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml"
+      projectPath: "/Users/fixture-user/github/PwrAgnt",
+      configPath: "/Users/fixture-user/.codex/profiles/acp-smoke/config.toml"
     });
 
     expect(response).toEqual({
-      projectPath: "/Users/huntharo/github/PwrAgnt",
-      configPath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml"
+      projectPath: "/Users/fixture-user/github/PwrAgnt",
+      configPath: "/Users/fixture-user/.codex/profiles/acp-smoke/config.toml"
     });
     expect(MockTransport.lastConfigValueWritePayload).toEqual({
       keyPath: "projects",
       value: {
-        "/Users/huntharo/github/PwrAgnt": {
+        "/Users/fixture-user/github/PwrAgnt": {
           trust_level: "trusted"
         }
       },
       mergeStrategy: "upsert",
-      filePath: "/Users/huntharo/.codex/profiles/acp-smoke/config.toml"
+      filePath: "/Users/fixture-user/.codex/profiles/acp-smoke/config.toml"
     });
 
     await client.close();
@@ -6564,7 +6564,7 @@ describe("CodexAppServerClient", () => {
     });
 
     const skills = await client.listSkills({
-      cwds: ["/Users/huntharo/pwrdrvr/PwrAgent"],
+      cwds: ["/Users/fixture-user/pwrdrvr/PwrAgent"],
     });
 
     expect(skills).toEqual([
@@ -6578,13 +6578,13 @@ describe("CodexAppServerClient", () => {
             source: "provider",
           },
         ],
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
         skills: [
           {
             name: "frontend-design",
             description: "Design and verify renderer UI work.",
             shortDescription: "Renderer UI design workflow.",
-            path: "/Users/huntharo/.codex/skills/frontend-design/SKILL.md",
+            path: "/Users/fixture-user/.codex/skills/frontend-design/SKILL.md",
             scope: "user",
             enabled: true,
           },
@@ -6909,7 +6909,7 @@ describe("CodexAppServerClient", () => {
     });
 
     const created = await client.startThread({
-      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd"
+      cwd: "/Users/fixture-user/.pwragent/projects/2026-04-16-ab12cd"
     });
 
     expect(created).toEqual({
@@ -6928,7 +6928,7 @@ describe("CodexAppServerClient", () => {
     });
 
     await client.startThread({
-      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+      cwd: "/Users/fixture-user/.pwragent/projects/2026-04-16-ab12cd",
       threadSource: "user",
     });
 
@@ -6936,7 +6936,7 @@ describe("CodexAppServerClient", () => {
       .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
       .find((payload) => payload.method === "thread/start");
     expect(request?.params).toMatchObject({
-      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+      cwd: "/Users/fixture-user/.pwragent/projects/2026-04-16-ab12cd",
       threadSource: "user",
     });
 
@@ -6953,7 +6953,7 @@ describe("CodexAppServerClient", () => {
 
     const forked = await client.forkThread({
       threadId: "thread-2",
-      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
       model: "gpt-5.5",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
@@ -6965,8 +6965,8 @@ describe("CodexAppServerClient", () => {
         executionTarget: "local",
         shellEnvironment: {
           ELECTRON_RENDERER_URL: "http://localhost:5175",
-          PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
-          NVM_DIR: "/Users/huntharo/.nvm",
+          PATH: "/Users/fixture-user/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+          NVM_DIR: "/Users/fixture-user/.nvm",
         },
       },
     });
@@ -6979,8 +6979,8 @@ describe("CodexAppServerClient", () => {
       .find((payload) => payload.method === "thread/fork");
     expect(request?.params).toMatchObject({
       threadId: "thread-2",
-      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
-      runtimeWorkspaceRoots: ["/Users/huntharo/pwrdrvr/PwrAgent"],
+      cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
+      runtimeWorkspaceRoots: ["/Users/fixture-user/pwrdrvr/PwrAgent"],
       model: "gpt-5.5",
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
@@ -6988,8 +6988,8 @@ describe("CodexAppServerClient", () => {
       config: {
         fast_mode: true,
         "shell_environment_policy.set.PATH":
-          "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
-        "shell_environment_policy.set.NVM_DIR": "/Users/huntharo/.nvm",
+          "/Users/fixture-user/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+        "shell_environment_policy.set.NVM_DIR": "/Users/fixture-user/.nvm",
       },
       excludeTurns: true,
       threadSource: "user",
@@ -7044,7 +7044,7 @@ describe("CodexAppServerClient", () => {
     });
 
     await client.startThread({
-      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+      cwd: "/Users/fixture-user/.pwragent/projects/2026-04-16-ab12cd",
       dynamicTools: [
         {
           type: "namespace",
@@ -7073,7 +7073,7 @@ describe("CodexAppServerClient", () => {
       .find((payload) => payload.method === "thread/start");
 
     expect(startPayload?.params).toMatchObject({
-      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+      cwd: "/Users/fixture-user/.pwragent/projects/2026-04-16-ab12cd",
       dynamicTools: [
         {
           type: "namespace",
@@ -7328,16 +7328,16 @@ describe("CodexAppServerClient", () => {
     });
 
     await client.startThread({
-      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
       codexEnvironmentRuntime: {
         environmentId: "env",
         environmentName: "Env",
         executionTarget: "local",
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
         shellEnvironment: {
           ELECTRON_RENDERER_URL: "http://localhost:5175",
-          PATH: "/Users/huntharo/.nvm/versions/node/v26.0.0/bin:/usr/bin",
-          NVM_DIR: "/Users/huntharo/.nvm",
+          PATH: "/Users/fixture-user/.nvm/versions/node/v26.0.0/bin:/usr/bin",
+          NVM_DIR: "/Users/fixture-user/.nvm",
         },
       },
     });
@@ -7349,11 +7349,11 @@ describe("CodexAppServerClient", () => {
       .find((payload) => payload.method === "thread/start");
 
     expect(startPayload?.params).toMatchObject({
-      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
       config: {
         "shell_environment_policy.set.PATH":
-          "/Users/huntharo/.nvm/versions/node/v26.0.0/bin:/usr/bin",
-        "shell_environment_policy.set.NVM_DIR": "/Users/huntharo/.nvm",
+          "/Users/fixture-user/.nvm/versions/node/v26.0.0/bin:/usr/bin",
+        "shell_environment_policy.set.NVM_DIR": "/Users/fixture-user/.nvm",
       },
     });
     expect(
@@ -7374,7 +7374,7 @@ describe("CodexAppServerClient", () => {
     });
 
     await client.startThread({
-      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
       defaultModeRequestUserInput: true,
     });
 
@@ -7385,7 +7385,7 @@ describe("CodexAppServerClient", () => {
       .find((payload) => payload.method === "thread/start");
 
     expect(startPayload?.params).toMatchObject({
-      cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+      cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
       config: {
         "features.default_mode_request_user_input": true,
       },
@@ -7411,7 +7411,7 @@ describe("CodexAppServerClient", () => {
     });
 
     const created = await client.startThread({
-      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+      cwd: "/Users/fixture-user/.pwragent/projects/2026-04-16-ab12cd",
       approvalPolicy: "never",
       sandbox: "danger-full-access",
     });
@@ -7445,7 +7445,7 @@ describe("CodexAppServerClient", () => {
     });
 
     const created = await client.startThread({
-      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+      cwd: "/Users/fixture-user/.pwragent/projects/2026-04-16-ab12cd",
       model: "gpt-5.5",
       fastMode: true,
     });
@@ -7585,7 +7585,7 @@ describe("CodexAppServerClient", () => {
         {
           type: "localFile",
           name: "Jeep",
-          path: "/Users/huntharo/Downloads/Jeep",
+          path: "/Users/fixture-user/Downloads/Jeep",
           mimeType: "text/plain",
           sizeBytes: 12,
           textPreview: "hello world\n",
@@ -7601,7 +7601,7 @@ describe("CodexAppServerClient", () => {
       | { text?: string }
       | undefined;
     expect(fileContext?.text).toContain(
-      "Jeep: /Users/huntharo/Downloads/Jeep (Type: text/plain | Size: 12 B)",
+      "Jeep: /Users/fixture-user/Downloads/Jeep (Type: text/plain | Size: 12 B)",
     );
     expect(fileContext?.text).toContain(
       "<pwragent-local-file-preview>\nhello world\n\n</pwragent-local-file-preview>",
@@ -7622,7 +7622,7 @@ describe("CodexAppServerClient", () => {
       {
         type: "mention",
         name: "Jeep",
-        path: "/Users/huntharo/Downloads/Jeep",
+        path: "/Users/fixture-user/Downloads/Jeep",
       },
     ]);
     expect(turnStart?.params?.input).not.toContainEqual(
@@ -7649,7 +7649,7 @@ describe("CodexAppServerClient", () => {
     });
 
     const created = await client.startThread({
-      cwd: "/Users/huntharo/.pwragent/projects/2026-04-16-ab12cd",
+      cwd: "/Users/fixture-user/.pwragent/projects/2026-04-16-ab12cd",
     });
     await client.startTurn({
       threadId: created.threadId,
@@ -7685,7 +7685,7 @@ describe("CodexAppServerClient", () => {
           tempDir,
           "sessions/2026/04/27/rollout-2026-04-27T23-32-43-019dd225-74fb-7a83-b4e4-5970680d9382.jsonl"
         ),
-        cwd: "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main-moi2lzw4",
+        cwd: "/Users/fixture-user/github/PwrAgent/.worktrees/launchpad-pwragent-main-moi2lzw4",
         preview: "",
         name: null,
         updatedAt: 1_777_347_163,
@@ -7702,7 +7702,7 @@ describe("CodexAppServerClient", () => {
       });
 
       await client.startThread({
-        cwd: "/Users/huntharo/github/PwrAgent/.worktrees/launchpad-pwragent-main-moi2lzw4",
+        cwd: "/Users/fixture-user/github/PwrAgent/.worktrees/launchpad-pwragent-main-moi2lzw4",
       });
       await client.startTurn({
         threadId: "019dd225-74fb-7a83-b4e4-5970680d9382",
@@ -7774,7 +7774,7 @@ describe("CodexAppServerClient", () => {
       thread: {
         id: "thread-profile-home",
         path: path.join(codexHome, "sessions/thread-profile-home.jsonl"),
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
         preview: "Use selected Codex home for helper state",
         name: "Untitled thread",
         updatedAt: 1_777_401_255,
@@ -7792,7 +7792,7 @@ describe("CodexAppServerClient", () => {
       });
 
       await client.startThread({
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
       });
       await client.close();
 
@@ -7821,7 +7821,7 @@ describe("CodexAppServerClient", () => {
       thread: {
         id: "thread-placeholder-title",
         path: path.join(tempDir, "sessions/thread-placeholder-title.jsonl"),
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
         preview: "Why do all the worktree-hashes start with `moi`?",
         name: "Untitled thread",
         updatedAt: 1_777_401_255,
@@ -7838,7 +7838,7 @@ describe("CodexAppServerClient", () => {
       });
 
       await client.startThread({
-        cwd: "/Users/huntharo/pwrdrvr/PwrAgent",
+        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
       });
       await client.close();
 
@@ -8638,7 +8638,7 @@ describe("CodexAppServerClient", () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.threadStartResult = {
       thread: { id: "thread-title-helper" },
-      instructionSources: ["/Users/huntharo/.codex/AGENTS.md"],
+      instructionSources: ["/Users/fixture-user/.codex/AGENTS.md"],
     };
     MockTransport.turnStartResult = {
       thread: { id: "thread-title-helper" },
@@ -9091,8 +9091,8 @@ describe("CodexAppServerClient", () => {
         cwd: "/repo/app/.worktrees/thread-2/app",
         shellEnvironment: {
           ELECTRON_RENDERER_URL: "http://localhost:5175",
-          PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
-          NVM_DIR: "/Users/huntharo/.nvm",
+          PATH: "/Users/fixture-user/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+          NVM_DIR: "/Users/fixture-user/.nvm",
         },
       },
     });
@@ -9128,8 +9128,8 @@ describe("CodexAppServerClient", () => {
       cwd: "/repo/app/.worktrees/thread-2/app",
       config: {
         "shell_environment_policy.set.PATH":
-          "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
-        "shell_environment_policy.set.NVM_DIR": "/Users/huntharo/.nvm",
+          "/Users/fixture-user/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+        "shell_environment_policy.set.NVM_DIR": "/Users/fixture-user/.nvm",
       },
     });
     expect(
@@ -9268,7 +9268,7 @@ describe("CodexAppServerClient", () => {
         environmentName: "Env",
         executionTarget: "local",
         shellEnvironment: {
-          PATH: "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+          PATH: "/Users/fixture-user/.nvm/versions/node/v24.14.1/bin:/usr/bin",
         },
       },
     });
@@ -9291,7 +9291,7 @@ describe("CodexAppServerClient", () => {
           config: {
             fast_mode: true,
             "shell_environment_policy.set.PATH":
-              "/Users/huntharo/.nvm/versions/node/v24.14.1/bin:/usr/bin",
+              "/Users/fixture-user/.nvm/versions/node/v24.14.1/bin:/usr/bin",
           },
         }),
       }),

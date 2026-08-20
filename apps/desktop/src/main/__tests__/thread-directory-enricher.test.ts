@@ -13,8 +13,8 @@ describe("createThreadDirectoryEnricher", () => {
   });
 
   it("resolves the home repo, preserves the worktree path, and caches repeated lookups", async () => {
-    const projectPath = "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one/apps";
-    const dotGitPath = "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one/.git";
+    const projectPath = "/Users/fixture-user/pwrdrvr/PwrAgent/.worktrees/feature-one/apps";
+    const dotGitPath = "/Users/fixture-user/pwrdrvr/PwrAgent/.worktrees/feature-one/.git";
     // The enricher resolves currentPath (and joins ".git" onto the resolved
     // path) before calling access, so compare against the resolved forms to
     // match on Windows as well as POSIX.
@@ -28,7 +28,7 @@ describe("createThreadDirectoryEnricher", () => {
       throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
     });
     const readFileMock = vi.fn(async () =>
-      "gitdir: /Users/huntharo/pwrdrvr/PwrAgent/.git/worktrees/feature-one\n"
+      "gitdir: /Users/fixture-user/pwrdrvr/PwrAgent/.git/worktrees/feature-one\n"
     );
     const execFileMock = vi.fn(
       (
@@ -39,7 +39,7 @@ describe("createThreadDirectoryEnricher", () => {
       ) => {
         if (args.includes("--show-toplevel")) {
           callback(null, {
-            stdout: "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one\n",
+            stdout: "/Users/fixture-user/pwrdrvr/PwrAgent/.worktrees/feature-one\n",
             stderr: "",
           });
           return;
@@ -47,8 +47,8 @@ describe("createThreadDirectoryEnricher", () => {
         if (args.includes("worktree")) {
           callback(null, {
             stdout: [
-              "worktree /Users/huntharo/pwrdrvr/PwrAgent",
-              "worktree /Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one",
+              "worktree /Users/fixture-user/pwrdrvr/PwrAgent",
+              "worktree /Users/fixture-user/pwrdrvr/PwrAgent/.worktrees/feature-one",
             ].join("\n"),
             stderr: "",
           });
@@ -87,10 +87,10 @@ describe("createThreadDirectoryEnricher", () => {
     expect(first).toEqual({
       linkedDirectories: [
         {
-          id: expectedDir("/Users/huntharo/pwrdrvr/PwrAgent"),
-          path: expectedDir("/Users/huntharo/pwrdrvr/PwrAgent"),
+          id: expectedDir("/Users/fixture-user/pwrdrvr/PwrAgent"),
+          path: expectedDir("/Users/fixture-user/pwrdrvr/PwrAgent"),
           worktreePath: expectedDir(
-            "/Users/huntharo/pwrdrvr/PwrAgent/.worktrees/feature-one",
+            "/Users/fixture-user/pwrdrvr/PwrAgent/.worktrees/feature-one",
           ),
           label: "PwrAgent",
           kind: "worktree",
@@ -108,8 +108,8 @@ describe("createThreadDirectoryEnricher", () => {
   });
 
   it("recovers the home repo from a worktree .git file when git worktree list fails", async () => {
-    const projectPath = "/Users/huntharo/.codex/profiles/work/worktrees/mp75tdnu/PwrAgnt/apps/desktop";
-    const worktreePath = "/Users/huntharo/.codex/profiles/work/worktrees/mp75tdnu/PwrAgnt";
+    const projectPath = "/Users/fixture-user/.codex/profiles/work/worktrees/mp75tdnu/PwrAgnt/apps/desktop";
+    const worktreePath = "/Users/fixture-user/.codex/profiles/work/worktrees/mp75tdnu/PwrAgnt";
     const dotGitPath = `${worktreePath}/.git`;
     vi.doMock("node:fs/promises", () => ({
       access: vi.fn(async (targetPath: string) => {
@@ -124,7 +124,7 @@ describe("createThreadDirectoryEnricher", () => {
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       }),
       readFile: vi.fn(async () =>
-        "gitdir: /Users/huntharo/pwrdrvr/PwrAgnt/.git/worktrees/PwrAgnt\n"
+        "gitdir: /Users/fixture-user/pwrdrvr/PwrAgnt/.git/worktrees/PwrAgnt\n"
       ),
     }));
     vi.doMock("node:child_process", () => ({
@@ -140,7 +140,7 @@ describe("createThreadDirectoryEnricher", () => {
             return;
           }
           callback(null, {
-            stdout: "/Users/huntharo/.codex/profiles/work/worktrees/mp75tdnu/PwrAgnt\n",
+            stdout: "/Users/fixture-user/.codex/profiles/work/worktrees/mp75tdnu/PwrAgnt\n",
             stderr: "",
           });
         },
@@ -155,8 +155,8 @@ describe("createThreadDirectoryEnricher", () => {
     await expect(enricher(projectPath)).resolves.toEqual({
       linkedDirectories: [
         {
-          id: expectedDir("/Users/huntharo/pwrdrvr/PwrAgnt"),
-          path: expectedDir("/Users/huntharo/pwrdrvr/PwrAgnt"),
+          id: expectedDir("/Users/fixture-user/pwrdrvr/PwrAgnt"),
+          path: expectedDir("/Users/fixture-user/pwrdrvr/PwrAgnt"),
           worktreePath: expectedDir(worktreePath),
           label: "PwrAgnt",
           kind: "worktree",
@@ -280,14 +280,14 @@ describe("createThreadDirectoryEnricher", () => {
     const enricher = createThreadDirectoryEnricher();
 
     await expect(
-      enricher("/Users/huntharo/.codex/worktrees/missing/PwrAgent"),
+      enricher("/Users/fixture-user/.codex/worktrees/missing/PwrAgent"),
     ).resolves.toEqual({
       linkedDirectories: [],
     });
   });
 
   it("does not cache a miss, so a directory created later resolves immediately", async () => {
-    const projectPath = "/Users/huntharo/.pwragent/profiles/default/projects";
+    const projectPath = "/Users/fixture-user/.pwragent/profiles/default/projects";
     let directoryExists = false;
     vi.doMock("node:fs/promises", () => ({
       // The scratch projects root is created lazily by the first thread that
