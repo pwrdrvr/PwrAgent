@@ -1,17 +1,30 @@
 # Changelog
 
-## v1.1.0-alpha.1 - 2026-08-18
+## v1.1.0-alpha.1 - 2026-08-20
 
-- Messaging Access Control - Added role-based access control for messaging actors and destinations, with configurable capabilities, a dedicated Access Control pane, auditable decisions, and fail-closed behavior for invalid configured policy.
-- Messaging Automations - Rebuilt the Automations interface into an operator-ready workflow with a clear list/editor, condition-based inbound filters, scoped sender access, execution identity, routing, and lifecycle visibility.
-- Slack Operations - Added agent/binding identity to Slack replies and opt-in Live Working Updates cards, so one rate-aware Thinking Steps card can show an agent's progress without filling the channel with streaming messages.
-- Messaging Files - Added the `send_messaging_file` Dynamic Tool, allowing agents to deliver approved local files through a connected messaging surface.
-- Secure Federation - Added profile-to-profile federation with enrolled identities and a Noise-encrypted control channel; supports local endpoints, Tailscale Serve/Funnel, and Cloudflare Tunnel with optional Access-token and mTLS edge controls.
-- Remote Threads and Terminals - Added mounted remote threads, reusable remote viewer windows, live transcript and image synchronization, and integrated terminals relayed across federation.
-- Star Map - Added the full-screen Star Map mission-control surface for local and remote work, with project clouds, instance/load cards, chat cards, filters, keyboard navigation, layout controls, drag, snap, and multi-select.
-- Grok Build - Added a managed downloadable Grok Build runtime with update controls, improved steering, rewind and budget support, Working Updates, and image inputs.
-- CI Monitor Auto-Fixer - Added GitHub pull-request monitoring that can wake the owning agent on CI failures or merge conflicts and dispatch bounded repair work, with linked failed-run context.
-- Operator Work Queue - Added Attention and Drafts lenses so live, review-ready, unread, and unsent work can be triaged without losing the normal Inbox/Recents flows.
+This is the first 1.1 release, and it is an alpha on the Beta channel's
+Prerelease track. It carries every fix shipped in 1.0.1 through 1.0.3,
+including signed Windows installers and Linux DEB packages.
+
+- Secure Federation - Added profile-to-profile federation so separate PwrAgent instances can see and drive each other's work. Enrolled identities are exchanged over a Noise-encrypted control channel, with local, Tailscale Serve/Funnel, Cloudflare Tunnel, and SSH transports, multi-path gateway endpoints, and optional Access-token and mTLS edge controls.
+- Remote Threads and Terminals - Federated threads can be mounted, pinned, and opened in reusable remote viewer windows, with live transcript, image, and pull-request synchronization, nested child threads across instances, integrated remote terminals over a relayed PTY, and one unified Cmd/Ctrl+K search across every connected instance.
+- Star Map - Added the full-screen Star Map mission-control surface for local and remote work. Threads orbit as cards in orbit, projects-as-suns, and galactic lenses, with project clouds, per-instance load and control cards, floating chat cards with a real Markdown composer and mid-turn sends, faceted filter chips, WASD flight, pan and zoom, drag, snapping and alignment guides, marquee multi-select, and fly-to-thread from Cmd/Ctrl+K.
+- Messaging Automations - Rebuilt Automations into an operator-ready workflow: a clear list and editor organized around what each automation runs as, condition-list inbound filters, scoped sender access, explicit execution identity, routing, and lifecycle visibility. Automations were validated end to end against Slack.
+- Slack - Added a branded Slack App Home, agent and binding identity on replies, and opt-in Live Working Updates cards so one rate-aware Thinking Steps card shows an agent's progress instead of filling the channel with streaming messages. Also added Settings-managed routes, persisted sender labels, private terminal responses, and final assistant image delivery.
+- Messaging Access Control - Added role-based access control for messaging actors and destinations, with a configurable capability catalog, a dedicated Access Control pane with a permission graph, auditable decisions, and fail-closed behavior on invalid policy. Existing setups keep working unchanged until a policy is defined.
+- Messaging Files - Added the `send_messaging_file` agent tool, letting an agent deliver an approved local file through a connected messaging surface.
+- Grok Build - Added a managed, downloadable PwrDrvr Grok Build runtime with signature verification and in-app update controls, plus ACP steering, rewind, and budget support, Working Updates, image inputs, and end-to-end PwrAgent review on Grok.
+- CI Monitor and Auto-Fixer - Added GitHub pull-request monitoring that wakes the owning agent on CI failures or merge conflicts and dispatches bounded repair turns, with linked failed-run context on the auto-fix card, dispatch limits, clear repair ownership, and a settings pane to tune it.
+- Attention and Drafts - Added the Attention and Drafts lenses so live, review-ready, unread, and unsent work can be triaged without disturbing the normal Inbox and Recents flows, including per-machine turn counts and unsent-draft chips on thread rows.
+- Tool-Output Accounting - Added a tool-output incident explorer with replay-cost visualization, warnings when tool use is amplifying replay cost, one consolidated warning card per thread, and a dedicated tool-call tracking tab.
+- Managed Review - Managed review now runs on Grok and Kimi as well as Codex, with per-review provider, model, and reasoning overrides and review tool activity shown directly in the transcript.
+- Transcript and Composer - Added LaTeX math rendering, a transcript image gallery, explicit PDF attachment previews with bounded local PDF analysis, rich-text HTML copy, inline code copy, hash thread references and chipified pasted references, navigable tool messages, a compact live run strip above the composer, and adjustable transcript density and text size.
+- MCP and Sub-agents - Added Codex MCP server management, status, and reload in Settings, PwrSnap MCP connections, native Codex agent thread and sub-agent disclosure, read-only sub-agent transcript windows, and the ability to stop a running sub-agent.
+- Usage and Pricing - Added configurable usage alerts, captured Codex account usage, and added release pricing settings.
+- Scheduling - New thread starts can now be scheduled, and scheduled thread actions survive restarts.
+- Performance - Kept live transcript updates, review derivation, history paging, and edited-file grouping linear as threads grow, batched live token-usage and tool-invocation writes, filled Star Map clouds on a frame budget, and added a checked-in SQLite write-volume budget for the whole run.
+- Reliability - Kept the startup thread on screen instead of flashing the composer, stopped an endless retry for threads Codex no longer has, and repaired Windows Authenticode verification for the bundled Grok runtime at both packaging and launch.
+- Minor - Added a Dock profile launcher, a Git settings tab, a troubleshooting settings section, protocol capture controls, sidebar multi-selection, mark-unread, archived-thread filtering, directory active-thread counts, per-line log copy, and copyable local diagnostics.
 
 ## v1.0.0-beta.50 - 2026-07-31
 
