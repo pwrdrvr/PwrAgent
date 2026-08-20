@@ -10,12 +10,15 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
+  isRemoteFederationTarget,
   type CelestialIconId,
+  type NavigationLaunchpadFileAttachment,
   type NavigationLaunchpadImageAttachment,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
 import { useBackendSummaries } from "../../lib/useBackendSummaries";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
@@ -361,20 +364,41 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     async (
       text: string,
       imageAttachments: NavigationLaunchpadImageAttachment[] = [],
+      fileAttachments: NavigationLaunchpadFileAttachment[] = [],
     ): Promise<boolean> => {
       setSendError(undefined);
       setSendNotice(undefined);
+      const fileReferences = fileAttachments
+        .map((attachment) =>
+          buildDirectoryReferenceMarkdown({
+            label: attachment.label,
+            path: attachment.path,
+          }),
+        )
+        .join("\n");
+      const displayText = fileReferences
+        ? text
+          ? `${text}\n\n${fileReferences}`
+          : fileReferences
+        : text;
       const imageParts = imageAttachments.map((attachment, index) => ({
         alt: attachment.name || `Pasted image ${index + 1}`,
         type: "image" as const,
         url: attachment.url,
       }));
       const input = [
-        ...(text ? [{ type: "text" as const, text }] : []),
+        ...(displayText
+          ? [{ type: "text" as const, text: displayText }]
+          : []),
         ...imageAttachments.map((attachment) => ({
           name: attachment.name,
           type: "image" as const,
           url: attachment.url,
+        })),
+        ...fileAttachments.map((attachment) => ({
+          name: attachment.label,
+          path: attachment.path,
+          type: "localFile" as const,
         })),
       ];
 
@@ -396,7 +420,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           return false;
         }
         const optimisticId = sessionRef.current.addOptimisticUserMessage(
-          text,
+          displayText,
           imageParts,
         );
         try {
@@ -429,7 +453,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
 
       if (!desktopApi?.startTurn) return false;
       const optimisticId = sessionRef.current.addOptimisticUserMessage(
-        text,
+        displayText,
         imageParts,
       );
       try {
@@ -897,13 +921,17 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
 
       <MemoizedCompactComposer
         busy={session.threadBusy}
+        canAttachLocalFiles={
+          !federationTarget || !isRemoteFederationTarget(federationTarget)
+        }
         canSteer={canSteer}
         executionMode={threadExecutionMode}
         fastMode={threadFastMode}
+        getPathForFile={desktopApi?.getPathForFile}
         mentionSources={mentionSources}
         model={threadModel}
         normalizeImageForUpload={desktopApi?.normalizeImageForUpload}
-        onImageError={setSendError}
+        onAttachmentError={setSendError}
         onInterrupt={onInterrupt}
         onSend={send}
         reasoningEffort={threadReasoningEffort}

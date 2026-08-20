@@ -278,6 +278,123 @@ describe("StarMapChatCard federation routing", () => {
       );
     });
   });
+
+  it("preserves an animated GIF instead of normalizing it", async () => {
+    const desktopApi = buildApi();
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const image = new File(["GIF89a"], "animated.gif", {
+      type: "image/gif",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [image],
+        getData: () => "",
+        items: [
+          {
+            getAsFile: () => image,
+            kind: "file",
+            type: "image/gif",
+          },
+        ],
+        types: ["Files"],
+      },
+    });
+    await screen.findByRole("img", { name: "animated.gif" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(desktopApi.startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: [
+            {
+              type: "image",
+              name: "animated.gif",
+              url: "data:image/gif;base64,R0lGODlh",
+            },
+          ],
+        }),
+      );
+    });
+  });
+
+  it("sends a pasted PDF through the existing local-file turn path", async () => {
+    const desktopApi = buildApi({
+      getPathForFile: vi.fn(() => "/tmp/brief.pdf"),
+    });
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const pdf = new File(["%PDF-1.7"], "brief.pdf", {
+      type: "application/pdf",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [pdf],
+        getData: () => "",
+        items: [
+          {
+            getAsFile: () => pdf,
+            kind: "file",
+            type: "application/pdf",
+          },
+        ],
+        types: ["Files"],
+      },
+    });
+    expect(await screen.findByText("brief.pdf")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(desktopApi.startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: [
+            {
+              type: "text",
+              text: "[@brief.pdf](/tmp/brief.pdf)",
+            },
+            {
+              name: "brief.pdf",
+              path: "/tmp/brief.pdf",
+              type: "localFile",
+            },
+          ],
+        }),
+      );
+    });
+  });
+
+  it("does not attach a local PDF to a remote thread", async () => {
+    const getPathForFile = vi.fn(() => "/tmp/brief.pdf");
+    const desktopApi = buildApi({ getPathForFile });
+    renderCard({ desktopApi, thread: remoteThread() });
+    const input = screen.getByRole("textbox", { name: "Message Remote work" });
+    const pdf = new File(["%PDF-1.7"], "brief.pdf", {
+      type: "application/pdf",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [pdf],
+        getData: () => "",
+        items: [
+          {
+            getAsFile: () => pdf,
+            kind: "file",
+            type: "application/pdf",
+          },
+        ],
+        types: ["Files"],
+      },
+    });
+
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /another instance/,
+    );
+    expect(getPathForFile).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Attached files")).toBeNull();
+  });
 });
 
 describe("StarMapChatCard send failures", () => {
