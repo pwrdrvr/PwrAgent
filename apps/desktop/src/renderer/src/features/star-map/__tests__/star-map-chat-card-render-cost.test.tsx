@@ -55,7 +55,7 @@ function streamingApi(overrides: Partial<DesktopApi> = {}): {
   desktopApi: DesktopApi;
   emitDelta: (index: number) => void;
 } {
-  const listeners: Array<(event: unknown) => void> = [];
+  const listeners = new Set<(event: unknown) => void>();
   const desktopApi = {
     readThread: vi.fn(async () => ({
       backend: "codex",
@@ -72,9 +72,16 @@ function streamingApi(overrides: Partial<DesktopApi> = {}): {
       threadId: "t-local",
       turnId: "turn-live",
     })),
+    // The teardown has to actually remove the listener. `useThreadSkills`
+    // re-subscribes whenever its thread target changes, so a no-op
+    // unsubscribe leaves the old listener in place and every later delta is
+    // delivered more than once — which would quietly turn the transcript
+    // guard below into a trivially true assertion.
     onAgentEvent: vi.fn((listener: (event: unknown) => void) => {
-      listeners.push(listener);
-      return () => undefined;
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     }),
     ...overrides,
   } as unknown as DesktopApi;
@@ -92,7 +99,7 @@ function streamingApi(overrides: Partial<DesktopApi> = {}): {
         },
       },
     };
-    for (const listener of listeners) listener(event);
+    for (const listener of [...listeners]) listener(event);
   };
 
   return { desktopApi, emitDelta };
@@ -227,23 +234,59 @@ describe("StarMapChatCard streaming render cost", () => {
     });
   });
 
-  it("keeps the kebab actions wired through the stream", async () => {
+  it("closes the kebab's compaction door once the stream makes it busy", async () => {
+    // The kebab is where a frozen composer does real damage. Compaction
+    // rewrites history, so `secondaryActions` gates it on `threadBusy`; a
+    // card still rendering the pre-turn array would leave that door open
+    // mid-turn. Asserting on an action whose props never change — "Open in
+    // full view" — would pass against a composer that had stopped
+    // re-rendering entirely, so the disabled state is the real assertion.
     const onOpenFull = vi.fn();
-    const { desktopApi, emitDelta } = streamingApi();
+    const { desktopApi, emitDelta } = streamingApi({
+      compactThread: vi.fn(async () => undefined),
+      // Idle at mount, so the gate has somewhere to move from. The shared
+      // fake hydrates as already-running.
+      readThread: vi.fn(async () => ({
+        backend: "codex",
+        threadId: "t-local",
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      })),
+    } as unknown as Partial<DesktopApi>);
     renderCard(desktopApi, onOpenFull);
     await screen.findByRole("textbox", { name: "Message Local work" });
     await settleInitialRead(desktopApi);
+
+    fireEvent.click(await screen.findByRole("button", { name: "More actions" }));
+    const compact = (await screen.findByRole("menuitem", {
+      name: "Compact thread",
+    })) as HTMLButtonElement;
+    expect(compact.disabled).toBe(false);
+
     for (let index = 0; index < 5; index += 1) {
       act(() => {
         emitDelta(index);
       });
     }
 
-    fireEvent.click(await screen.findByRole("button", { name: "More actions" }));
-    fireEvent.click(
-      await screen.findByRole("menuitem", { name: "Open in full view" }),
-    );
+    await waitFor(() => {
+      expect(
+        (
+          screen.getByRole("menuitem", {
+            name: "Compact thread",
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(true);
+    });
+    expect(desktopApi.compactThread).not.toHaveBeenCalled();
 
+    // And the actions that do not change still fire.
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Open in full view" }),
+    );
     expect(onOpenFull).toHaveBeenCalledTimes(1);
   });
 });
