@@ -153,6 +153,13 @@ const NO_THREADS: readonly NavigationThreadSummary[] = [];
  * would fly the camera.
  */
 export function useComposerMentions(params: {
+  /**
+   * Mirrors the host's own disabled state. A disabled composer still
+   * forwards keys from a field that was focused before it was disabled, so
+   * without this a popover stays live and Enter commits a chip into a
+   * composer that is refusing new text.
+   */
+  disabled?: boolean;
   sources?: ComposerMentionSources;
 }): ComposerMentions {
   const { sources } = params;
@@ -282,11 +289,29 @@ export function useComposerMentions(params: {
         : kind === "hash"
           ? hashOptions.length
           : 0;
-  // Escape retires one popover, identified by what it was offering. Any
-  // edit moves the query and re-arms it, which is what makes Escape read
-  // as "not this one" rather than "no more mentions in this message".
-  const dismissKey = kind ? `${kind}:${query}` : undefined;
-  const open = Boolean(kind) && dismissKey !== dismissedKey;
+  const activeTrigger =
+    kind === "skills"
+      ? skillTrigger
+      : kind === "directories"
+        ? directoryTrigger
+        : kind === "hash"
+          ? hashTrigger
+          : undefined;
+  /**
+   * Identity of the popover Escape retires: its kind, the trigger's
+   * position, and the query.
+   *
+   * The offsets are not decoration. Keyed on the query alone, dismissing
+   * `$dep` once would suppress every later `$dep` in the same message —
+   * and, with the retirement below, a backspace-and-retype of the same
+   * word too. The full composer keys its `dismissedAutocompleteKey` the
+   * same way for the same reason.
+   */
+  const dismissKey = activeTrigger
+    ? `${kind}:${activeTrigger.start}:${activeTrigger.end}:${query}`
+    : undefined;
+  const open =
+    Boolean(kind) && !params.disabled && dismissKey !== dismissedKey;
   const activeOption = Math.min(activeIndex, Math.max(optionCount - 1, 0));
 
   const skillsTriggered = Boolean(skillTrigger);
@@ -333,6 +358,14 @@ export function useComposerMentions(params: {
     setColdHashAnchors((current) => (current.size === 0 ? current : new Set()));
   }, [draft]);
 
+  // A dismissal belongs to the trigger it was made against. Without this
+  // it outlives that trigger and silently suppresses a later popover the
+  // operator never dismissed.
+  useEffect(() => {
+    if (!dismissedKey) return;
+    if (!dismissKey || dismissKey !== dismissedKey) setDismissedKey(undefined);
+  }, [dismissKey, dismissedKey]);
+
   // The highlight belongs to one query. Resetting it here rather than in
   // `handleChange` is deliberate: the editor re-emits unchanged content on
   // caret moves, and resetting there sent every arrow key straight back to
@@ -340,6 +373,23 @@ export function useComposerMentions(params: {
   useEffect(() => {
     setActiveIndex(0);
   }, [dismissKey]);
+
+  // The popover deliberately survives a blur — clicking into the card's
+  // transcript to check something should not throw away a half-typed
+  // mention. But the editor's key handler is then out of the loop, so
+  // without a window-scope listener Escape stops closing the popover and
+  // it sits over the transcript with no way out but editing the draft.
+  useEffect(() => {
+    if (!open) return;
+    const dismissOnEscape = (event: globalThis.KeyboardEvent): void => {
+      // Already handled by the editor path, which prevents the default.
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      setDismissedKey(dismissKey);
+    };
+    window.addEventListener("keydown", dismissOnEscape);
+    return () => window.removeEventListener("keydown", dismissOnEscape);
+  }, [dismissKey, open]);
 
   useEffect(() => {
     if (!open) return;
@@ -475,6 +525,10 @@ export function useComposerMentions(params: {
     }
     if (event.key === "Escape") {
       event.preventDefault();
+      // Stop here as well: the star map layer's own Escape handler sits on
+      // an ancestor and clears the operator's gathered card selection.
+      // Closing a popover is not also a request to drop that selection.
+      event.stopPropagation();
       setDismissedKey(dismissKey);
       return true;
     }

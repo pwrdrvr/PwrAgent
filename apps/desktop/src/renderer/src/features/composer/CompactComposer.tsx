@@ -86,7 +86,10 @@ const EXECUTION_MODE_LABELS: Record<ThreadExecutionMode, string> = {
  * state to be aware of, not controls to reach for.
  */
 export function CompactComposer(props: CompactComposerProps) {
-  const mentions = useComposerMentions({ sources: props.mentionSources });
+  const mentions = useComposerMentions({
+    disabled: props.disabled,
+    sources: props.mentionSources,
+  });
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const { onSend } = props;

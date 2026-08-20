@@ -364,6 +364,82 @@ describe("CompactComposer markdown", () => {
       expect(onSend).toHaveBeenCalledWith("run $dep");
     });
 
+    it("reopens for the same query later in the same message", () => {
+      // Dismissing one `$dep` must not retire every later `$dep`. Keyed on
+      // the query alone, Escape poisoned that word for the rest of the
+      // message and the picker silently refused to open again.
+      const { onSend } = renderComposer({ mentionSources: { skills: SKILLS } });
+      const input = openPicker("run $dep");
+      fireEvent.keyDown(input, { key: "Escape" });
+      expect(screen.queryByRole("listbox")).toBeNull();
+
+      fireEvent.change(input, { target: { value: "run $dep and $dep" } });
+      expect(screen.getByRole("listbox")).toBeTruthy();
+      expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it("reopens after backspacing over a dismissed trigger and retyping", () => {
+      const { onSend } = renderComposer({ mentionSources: { skills: SKILLS } });
+      const input = openPicker("run $dep");
+      fireEvent.keyDown(input, { key: "Escape" });
+
+      // Same offsets as the dismissed trigger, so only retiring the
+      // dismissal when the trigger moves gets this right.
+      fireEvent.change(input, { target: { value: "run $de" } });
+      fireEvent.change(input, { target: { value: "run $dep" } });
+      expect(screen.getByRole("listbox")).toBeTruthy();
+      expect(onSend).not.toHaveBeenCalled();
+    });
+
+    it("still closes on Escape once focus has left the editor", () => {
+      // The popover deliberately survives a blur, so the editor's key
+      // handler is out of the loop — without a window-scope listener the
+      // list sits over the card's transcript with no way to dismiss it.
+      renderComposer({ mentionSources: { skills: SKILLS } });
+      openPicker("run $dep");
+      expect(screen.getByRole("listbox")).toBeTruthy();
+
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(screen.queryByRole("listbox")).toBeNull();
+    });
+
+    it("does not open a picker on a disabled composer", () => {
+      // A disabled composer still forwards keys from a field focused
+      // before it was disabled, so an un-gated popover would let Enter
+      // commit a chip into a composer that is refusing new text.
+      renderComposer({ disabled: true, mentionSources: { skills: SKILLS } });
+      const input = screen.getByRole("textbox", {
+        name: "Message Thread t1",
+      });
+      fireEvent.change(input, { target: { value: "run $dep" } });
+      expect(screen.queryByRole("listbox")).toBeNull();
+    });
+
+    it("keeps a consumed Escape from reaching the host", () => {
+      // The star map layer's Escape handler sits on an ancestor and clears
+      // the operator's gathered card selection. Closing a popover is not
+      // also a request to drop that selection.
+      const onKeyDown = vi.fn();
+      render(
+        <div onKeyDown={onKeyDown}>
+          <CompactComposer
+            mentionSources={{ skills: SKILLS }}
+            onSend={vi.fn()}
+            threadTitle="Thread t1"
+          />
+        </div>,
+      );
+      const input = screen.getByRole("textbox", {
+        name: "Message Thread t1",
+      });
+      fireEvent.change(input, { target: { value: "run $dep" } });
+      onKeyDown.mockClear();
+
+      fireEvent.keyDown(input, { key: "Escape" });
+      expect(screen.queryByRole("listbox")).toBeNull();
+      expect(onKeyDown).not.toHaveBeenCalled();
+    });
+
     it("points the editor at the open listbox and its active row", () => {
       renderComposer({ mentionSources: { skills: SKILLS } });
       const input = openPicker("run $de");
