@@ -11,6 +11,7 @@ import {
 import {
   buildThreadIdentityKey,
   type CelestialIconId,
+  type NavigationLaunchpadImageAttachment,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
@@ -357,9 +358,25 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
    * allow.
    */
   const send = useCallback(
-    async (text: string): Promise<boolean> => {
+    async (
+      text: string,
+      imageAttachments: NavigationLaunchpadImageAttachment[] = [],
+    ): Promise<boolean> => {
       setSendError(undefined);
       setSendNotice(undefined);
+      const imageParts = imageAttachments.map((attachment, index) => ({
+        alt: attachment.name || `Pasted image ${index + 1}`,
+        type: "image" as const,
+        url: attachment.url,
+      }));
+      const input = [
+        ...(text ? [{ type: "text" as const, text }] : []),
+        ...imageAttachments.map((attachment) => ({
+          name: attachment.name,
+          type: "image" as const,
+          url: attachment.url,
+        })),
+      ];
 
       if (sessionRef.current.threadBusy) {
         if (!desktopApi?.steerTurn) {
@@ -378,13 +395,16 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           );
           return false;
         }
-        const optimisticId = sessionRef.current.addOptimisticUserMessage(text);
+        const optimisticId = sessionRef.current.addOptimisticUserMessage(
+          text,
+          imageParts,
+        );
         try {
           const response = await desktopApi.steerTurn({
             backend: thread.source,
             expectedTurnId: activeTurnId,
             federationTarget,
-            input: [{ type: "text", text }],
+            input,
             // Main dedupes retries by request id, so it has to be fresh per
             // attempt or a corrected resend would return the first result.
             requestId: `star-map-chat-card:${cardKey}:${activeTurnId}:${Date.now()}`,
@@ -408,13 +428,16 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       }
 
       if (!desktopApi?.startTurn) return false;
-      const optimisticId = sessionRef.current.addOptimisticUserMessage(text);
+      const optimisticId = sessionRef.current.addOptimisticUserMessage(
+        text,
+        imageParts,
+      );
       try {
         await desktopApi.startTurn({
           backend: thread.source,
           federationTarget,
           threadId: thread.id,
-          input: [{ type: "text", text }],
+          input,
         });
         return true;
       } catch (error) {
@@ -879,6 +902,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         fastMode={threadFastMode}
         mentionSources={mentionSources}
         model={threadModel}
+        normalizeImageForUpload={desktopApi?.normalizeImageForUpload}
+        onImageError={setSendError}
         onInterrupt={onInterrupt}
         onSend={send}
         reasoningEffort={threadReasoningEffort}

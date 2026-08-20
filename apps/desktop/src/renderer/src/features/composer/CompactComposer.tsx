@@ -2,16 +2,33 @@ import {
   useCallback,
   useId,
   useState,
+  type ClipboardEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode,
 } from "react";
-import type { ThreadExecutionMode } from "@pwragent/shared";
+import type {
+  NavigationLaunchpadImageAttachment,
+  ThreadExecutionMode,
+} from "@pwragent/shared";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
   ChevronUpIcon,
+  CloseIcon,
 } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import {
+  normalizeImageFile,
+  type ImageFallbackRequest,
+  type ImageFallbackResponse,
+} from "../../lib/image-normalization";
+import {
+  formatPastedImageAlt,
+  formatPastedImageName,
+  getImageFilesFromDataTransfer,
+  isGifFile,
+  readFileAsImageDataUrl,
+} from "./composer-image-files";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { useDismissableMenu } from "./ComposerDropdown";
 import {
@@ -79,12 +96,20 @@ export type CompactComposerProps = {
   mentionSources?: ComposerMentionSources;
   /** Thread's current model, the chip's leading segment. */
   model?: string;
+  normalizeImageForUpload?: (
+    request: ImageFallbackRequest,
+  ) => Promise<ImageFallbackResponse>;
+  onImageError?: (message?: string) => void;
   onInterrupt?: () => void;
   /**
    * Resolve `false` to hand the text back to the input — a send that never
    * reached the backend must not cost the operator what they typed.
    */
-  onSend: (text: string) => void | boolean | Promise<boolean | void>;
+  onSend: (
+    text: string,
+    images?: NavigationLaunchpadImageAttachment[],
+  ) => void | boolean | Promise<boolean | void>;
+  pastedImageMaxPatches?: number;
   placeholder?: string;
   reasoningEffort?: string;
   /** Rendered at the bottom of the settings chip's menu. */
@@ -95,6 +120,8 @@ export type CompactComposerProps = {
 };
 
 type SettingsMenuView = "access" | "model" | "reasoning" | "root";
+
+const MAX_COMPACT_COMPOSER_IMAGE_ATTACHMENTS = 5;
 
 const MENU_VIEW_TITLES: Record<
   Exclude<SettingsMenuView, "root">,
@@ -143,12 +170,21 @@ export function CompactComposer(props: CompactComposerProps) {
   });
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<SettingsMenuView>("root");
+  const [imageAttachments, setImageAttachments] = useState<
+    NavigationLaunchpadImageAttachment[]
+  >([]);
+  const [normalizingImages, setNormalizingImages] = useState(false);
   // Click-away and Escape close the menu, same hook as the composer
   // dropdowns. Without it the menu survives a click on the transcript
   // behind it and covers the conversation.
   const closeMenu = useCallback(() => setMenuOpen(false), []);
   const menuRef = useDismissableMenu<HTMLDivElement>(menuOpen, closeMenu);
-  const { onSend } = props;
+  const {
+    normalizeImageForUpload,
+    onImageError,
+    onSend,
+    pastedImageMaxPatches,
+  } = props;
   // Several cards can be open at once and the editor puts this on a DOM
   // `id`; a shared literal would give the map duplicate ids.
   const inputId = `compact-composer-${useId()}`;
@@ -181,16 +217,101 @@ export function CompactComposer(props: CompactComposerProps) {
     // The serialized text, not the plain draft: a mention chip is
     // zero-width until this splices its markdown back in.
     const text = mentions.text.trim();
-    if (!text) return;
+    if ((!text && imageAttachments.length === 0) || normalizingImages) return;
     // Clear optimistically so the input frees up immediately, then put the
     // draft back — chips and all — if the send turned out to fail.
     const previous = mentions.snapshot;
+    const previousImages = imageAttachments;
     mentions.clear();
-    const delivered = await onSend(text);
+    setImageAttachments([]);
+    const delivered = await (
+      previousImages.length > 0
+        ? onSend(text, previousImages)
+        : onSend(text)
+    );
     if (delivered === false) {
       mentions.restore(previous);
+      setImageAttachments(previousImages);
     }
-  }, [mentions, onSend]);
+  }, [imageAttachments, mentions, normalizingImages, onSend]);
+
+  const onPaste = useCallback(
+    (event: ClipboardEvent<HTMLElement>) => {
+      const pastedImages = getImageFilesFromDataTransfer(event.clipboardData);
+      if (pastedImages.length === 0) return;
+
+      event.preventDefault();
+      onImageError?.(undefined);
+      const remaining =
+        MAX_COMPACT_COMPOSER_IMAGE_ATTACHMENTS - imageAttachments.length;
+      if (remaining <= 0) {
+        onImageError?.(
+          `You can attach up to ${MAX_COMPACT_COMPOSER_IMAGE_ATTACHMENTS} images per message.`,
+        );
+        return;
+      }
+      const accepted = pastedImages.slice(0, remaining);
+      if (accepted.length < pastedImages.length) {
+        onImageError?.(
+          `You can attach up to ${MAX_COMPACT_COMPOSER_IMAGE_ATTACHMENTS} images per message.`,
+        );
+      }
+
+      setNormalizingImages(true);
+      void Promise.all(
+        accepted.map(async ({ file, type }, index) => {
+          const fallbackName = formatPastedImageName(type, index);
+          if (isGifFile(file, type)) {
+            return {
+              id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+              name: file.name || fallbackName,
+              size: file.size,
+              type: "image/gif",
+              url: await readFileAsImageDataUrl(file, "image/gif"),
+            };
+          }
+
+          const normalized = await normalizeImageFile(file, {
+            fallback: normalizeImageForUpload,
+            maxPatchCount: pastedImageMaxPatches,
+            sourceMimeType: type,
+          });
+          return {
+            height: normalized.height,
+            id: `pasted-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 8)}`,
+            name: file.name || fallbackName,
+            size: normalized.size,
+            type: normalized.mimeType,
+            url: normalized.dataUrl,
+            width: normalized.width,
+          };
+        }),
+      )
+        .then((attachments) => {
+          setImageAttachments((current) => [
+            ...current,
+            ...attachments.filter(
+              (attachment) =>
+                !current.some((existing) => existing.url === attachment.url),
+            ),
+          ].slice(0, MAX_COMPACT_COMPOSER_IMAGE_ATTACHMENTS));
+        })
+        .catch((error: unknown) => {
+          onImageError?.(
+            error instanceof Error
+              ? error.message
+              : "The pasted image could not be read.",
+          );
+        })
+        .finally(() => setNormalizingImages(false));
+    },
+    [
+      imageAttachments.length,
+      normalizeImageForUpload,
+      onImageError,
+      pastedImageMaxPatches,
+    ],
+  );
 
   // The editor forwards the keys it does not claim itself: Enter without
   // Shift or Alt (both of which insert a newline), the arrows, and anything
@@ -520,6 +641,7 @@ export function CompactComposer(props: CompactComposerProps) {
           markdownConversion
           onChange={mentions.handleChange}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
           placeholder={props.placeholder ?? "Reply…"}
           skillTokens={mentions.skillTokens}
           value={mentions.draft}
@@ -529,6 +651,35 @@ export function CompactComposer(props: CompactComposerProps) {
             selector every camera-gesture guard tests against. */}
         {mentions.popover}
       </div>
+
+      {imageAttachments.length > 0 ? (
+        <div
+          aria-label="Pasted images"
+          className="compact-composer__attachments"
+        >
+          {imageAttachments.map((attachment, index) => (
+            <div className="compact-composer__attachment" key={attachment.id}>
+              <img
+                alt={formatPastedImageAlt(attachment, index)}
+                className="compact-composer__attachment-preview"
+                src={attachment.url}
+              />
+              <button
+                aria-label={`Remove ${attachment.name}`}
+                className="compact-composer__attachment-remove"
+                onClick={() => {
+                  setImageAttachments((current) =>
+                    current.filter((candidate) => candidate.id !== attachment.id),
+                  );
+                }}
+                type="button"
+              >
+                <CloseIcon aria-hidden="true" size={10} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       <div className="compact-composer__strip">
         {hasMenu ? (
@@ -596,7 +747,11 @@ export function CompactComposer(props: CompactComposerProps) {
           className="compact-composer__send"
           disabled={
             props.disabled
-            || mentions.text.trim().length === 0
+            || normalizingImages
+            || (
+              mentions.text.trim().length === 0
+              && imageAttachments.length === 0
+            )
             || (props.busy && props.canSteer === false)
           }
           onClick={() => void send()}

@@ -11,6 +11,24 @@ import {
   DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT,
 } from "../../../lib/thread-history-limits";
 
+vi.mock("../../../lib/image-normalization", () => ({
+  normalizeImageFile: vi.fn(async (file: File) => ({
+    conversionPath: "renderer" as const,
+    dataUrl: "data:image/png;base64,c3Rhci1tYXA=",
+    height: 24,
+    mimeType: "image/png" as const,
+    original: {
+      height: 24,
+      mimeType: file.type,
+      name: file.name,
+      size: file.size,
+      width: 32,
+    },
+    size: file.size,
+    width: 32,
+  })),
+}));
+
 const RECT = { left: 40, top: 40, width: 420, height: 520 };
 
 /**
@@ -217,6 +235,48 @@ describe("StarMapChatCard federation routing", () => {
     expect(request.threadId).toBe("t-local");
     // No per-thread ref, so nothing overrides the renderer's own target.
     expect(request.federationTarget).toBeUndefined();
+  });
+
+  it("pastes a PNG into the outgoing turn", async () => {
+    const desktopApi = buildApi();
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const image = new File(["star-map"], "star-map.png", {
+      type: "image/png",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [image],
+        getData: () => "",
+        items: [
+          {
+            getAsFile: () => image,
+            kind: "file",
+            type: "image/png",
+          },
+        ],
+        types: ["Files"],
+      },
+    });
+    await screen.findByRole("img", { name: "star-map.png" });
+    fireEvent.change(input, { target: { value: "What is wrong here?" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(desktopApi.startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: [
+            { type: "text", text: "What is wrong here?" },
+            {
+              type: "image",
+              name: "star-map.png",
+              url: "data:image/png;base64,c3Rhci1tYXA=",
+            },
+          ],
+        }),
+      );
+    });
   });
 });
 
