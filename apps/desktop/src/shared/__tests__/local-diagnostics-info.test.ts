@@ -16,9 +16,9 @@ const metadata: AppMetadata = {
   nodeVersion: "24.0.0",
   mainProcessId: 4100,
   rendererProcessId: 4101,
-  activeProfileName: "work",
-  logFilePath: "/Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
-  codexProfilePath: "/Users/operator/.codex/profiles/work",
+  activeProfileName: "personal",
+  logFilePath: "/Users/operator/Library/Logs/PwrAgent/profile-personal.main.log",
+  codexProfilePath: "/Users/operator/.codex/profiles/personal",
 };
 
 describe("local diagnostics info", () => {
@@ -38,11 +38,11 @@ describe("local diagnostics info", () => {
       "Project directory/worktree path: /Users/operator/.codex/worktrees/abc/PwrAgent",
       "Provider/backend: codex",
       "Thread title: Fix handoff project paths and diagnostics",
-      "PwrAgent profile: work",
+      "PwrAgent profile: personal",
       "Main process PID: 4100",
       "Renderer process PID: 4101",
-      "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
-      "Codex profile path: /Users/operator/.codex/profiles/work",
+      "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-personal.main.log",
+      "Codex profile path: /Users/operator/.codex/profiles/personal",
     ].join("\n"));
   });
 
@@ -106,10 +106,10 @@ describe("local diagnostics info", () => {
       "Federation routing target: remote:owner-instance",
       "Federation source backend: codex",
       "Federation source thread ID: remote-thread",
-      "Viewer PwrAgent profile: work",
+      "Viewer PwrAgent profile: personal",
       "Viewer main process PID: 4100",
       "Viewer renderer process PID: 4101",
-      "Viewer PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
+      "Viewer PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-personal.main.log",
     ].join("\n"));
     expect(output).not.toContain("machine ID");
     expect(output).not.toContain("OS version");
@@ -209,10 +209,10 @@ describe("local diagnostics info", () => {
       "Federation routing target: remote:remote-viewer-instance",
       "Federation source backend: codex",
       "Federation source thread ID: direct-remote-thread",
-      "Viewer PwrAgent profile: work",
+      "Viewer PwrAgent profile: personal",
       "Viewer main process PID: 4100",
       "Viewer renderer process PID: 4101",
-      "Viewer PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
+      "Viewer PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-personal.main.log",
     ].join("\n"));
   });
 
@@ -258,16 +258,16 @@ describe("local diagnostics info", () => {
     expect(output).toContain(
       "Thread owner federation instance ID: thread-owner-instance",
     );
-    expect(output).toContain("Viewer PwrAgent profile: work");
+    expect(output).toContain("Viewer PwrAgent profile: personal");
     expect(output).toContain("Viewer main process PID: 4100");
   });
 
   it("formats the Troubleshooting payload with profile, PIDs, and log path", () => {
     expect(buildTroubleshootingDiagnosticsInfo(metadata)).toBe([
-      "PwrAgent profile: work",
+      "PwrAgent profile: personal",
       "Main process PID: 4100",
       "Renderer process PID: 4101",
-      "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-work.main.log",
+      "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-personal.main.log",
     ].join("\n"));
   });
 
