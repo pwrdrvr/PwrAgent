@@ -19,6 +19,22 @@ export type ProjectLayout = {
   projects: ProjectPlacement[];
 };
 
+/**
+ * The galaxy with nothing in it.
+ *
+ * Shared and frozen so a caller holding it across renders holds the same
+ * object: `anchorBody` memoises on `projectLayout.core`, and a fresh
+ * literal per render would churn that identity for a lens that is not
+ * even drawing projects.
+ */
+export const EMPTY_PROJECT_LAYOUT: ProjectLayout = Object.freeze({
+  arms: [],
+  canvasHeight: 0,
+  canvasWidth: 0,
+  core: { x: 0, y: 0 },
+  projects: [],
+});
+
 /** Clearance between two projects' outermost cards. */
 const PROJECT_GAP = 72;
 const CANVAS_PADDING = 160;
@@ -80,7 +96,14 @@ function armAngle(index: number, radius: number): number {
 
 /**
  * Bearing offset for probe `index`: 0, then alternating either side of
- * the arm in equal steps, out to half the angular pitch between arms.
+ * the arm in equal steps.
+ *
+ * The step is a `BEARING_PROBES`-th of the angular pitch between arms, so
+ * the widest offset reaches `floor(BEARING_PROBES / 2)` steps — 6/7 of
+ * the way to the midpoint between two arms at the current seven, and
+ * asymptotically the midpoint as the count grows. It deliberately stops
+ * short: a project that swung past the midpoint would be seated nearer
+ * the NEXT arm than its own.
  */
 function bearingOffset(index: number): number {
   if (index <= 0) return 0;
@@ -146,15 +169,7 @@ export function computeProjectLayout(params: {
     mass?: number;
   }[];
 }): ProjectLayout {
-  if (params.projects.length === 0) {
-    return {
-      arms: [],
-      canvasHeight: 0,
-      canvasWidth: 0,
-      core: { x: 0, y: 0 },
-      projects: [],
-    };
-  }
+  if (params.projects.length === 0) return EMPTY_PROJECT_LAYOUT;
 
   // Seat order IS radial order now, so the ordering is enforced here
   // rather than trusted from the caller: with mass no longer naming a
@@ -250,8 +265,15 @@ export function computeProjectLayout(params: {
 }
 
 /**
- * The faint arms drawn behind the projects. Sampled from the same spiral
- * the seats use, so a project always sits on the arm it appears to.
+ * The faint arms drawn behind the projects, sampled from the same spiral
+ * the seats are read from.
+ *
+ * A project no longer sits exactly ON its arm: `bearingOffset` fans a
+ * crowded seat up to `floor(BEARING_PROBES / 2)` steps either side, which
+ * is what lets a light cloud tuck into a gap instead of queueing at the
+ * rim. The arms are the galaxy's grain, not a rail — do not re-derive a
+ * project's position from a sampled arm point, and do not "fix" a project
+ * that looks off-arm by removing the sweep.
  */
 function buildArms(params: {
   offsetX: number;

@@ -83,7 +83,10 @@ import {
   groupThreadsByProject,
   instanceIdByThreadKey,
 } from "./star-map-projects";
-import { computeProjectLayout } from "./star-map-project-layout";
+import {
+  computeProjectLayout,
+  EMPTY_PROJECT_LAYOUT,
+} from "./star-map-project-layout";
 import { StarMapProjectBody } from "./StarMapProjectBody";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { StarMapChatCard } from "./StarMapChatCard";
@@ -162,6 +165,24 @@ const PROJECT_CLUSTER_SCOPE = "project:";
 
 function projectClusterScope(projectKey: string): string {
   return `${PROJECT_CLUSTER_SCOPE}${projectKey}`;
+}
+
+/**
+ * Accessible name for a parent/child cloud's pill.
+ *
+ * Shared by both lenses so the two cannot drift, and counting rather than
+ * interpolating a fixed plural: a parent with exactly one child is the
+ * commonest shape there is, and "its 1 replies" is what a screen reader
+ * would have said.
+ */
+function parentClusterSelectLabel(params: {
+  label: string;
+  threadCount: number;
+}): string {
+  const replies = Math.max(0, params.threadCount - 1);
+  return `Select the ${params.label} thread and its ${replies} ${
+    replies === 1 ? "reply" : "replies"
+  }`;
 }
 
 /** Breathing room past the longest column / widest lane when panning. */
@@ -1384,25 +1405,31 @@ export function StarMapScreen(props: StarMapScreenProps) {
     return clouds;
   }, [cardHeights, expandedClusters, projects, projectsMode]);
 
-  const projectLayout = useMemo(
-    () =>
-      computeProjectLayout({
-        cardWidth: ORBIT_CARD_WIDTH,
-        projects: projects.map((project) => {
-          const cloud = projectClouds?.get(project.key);
-          return {
-            key: project.key,
-            cardCount: cloud?.threads.length ?? project.threads.length,
-            // Spacing tracks the seated clouds, exactly as instance
-            // spacing does — see the `extents` argument to
-            // `computeOrbitPlacement`.
-            extent: cloud?.extent,
-            mass: project.mass,
-          };
-        }),
+  /**
+   * Gated on the lens like `projectClouds`, and for a sharper reason than
+   * saving work: without the clouds the card count falls back to a
+   * project's FULL thread list, so the other lenses would pack the whole
+   * galaxy over every thread in the fleet on every streamed delta and
+   * throw the result away — every reader below is behind `projectsMode`.
+   */
+  const projectLayout = useMemo(() => {
+    if (!projectClouds) return EMPTY_PROJECT_LAYOUT;
+    return computeProjectLayout({
+      cardWidth: ORBIT_CARD_WIDTH,
+      projects: projects.map((project) => {
+        const cloud = projectClouds.get(project.key);
+        return {
+          key: project.key,
+          cardCount: cloud?.threads.length ?? 0,
+          // Spacing tracks the seated clouds, exactly as instance
+          // spacing does — see the `extents` argument to
+          // `computeOrbitPlacement`.
+          extent: cloud?.extent,
+          mass: project.mass,
+        };
       }),
-    [projectClouds, projects],
-  );
+    });
+  }, [projectClouds, projects]);
 
   /**
    * A filtered-to-nothing map is otherwise indistinguishable from a
@@ -3043,16 +3070,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, []);
 
   /**
-   * A cloud's label pill selects its visible cards as one group, so the
-   * existing group drag moves the whole cloud. Only visible cards join —
-   * a hidden card has no shell to move, and a selection entry that cannot
-   * be seen would surface as a card teleporting on some later expand.
-   */
-  /**
    * Select every card in the list, or clear them if they are all already
    * selected. Takes keys rather than a cloud because the two lenses scope
    * cards differently: an instance's cloud is all one instance's cards,
    * while a project pools cards from every machine in the federation.
+   *
+   * Which keys a caller passes is the caller's business — both pills
+   * below pass their cloud's VISIBLE cards, for the reason on
+   * `toggleClusterSelection`.
    */
   const toggleCardKeySelection = useCallback((keys: readonly string[]) => {
     if (keys.length === 0) return;
@@ -3067,6 +3092,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
     });
   }, []);
 
+  /**
+   * A cloud's label pill selects its visible cards as one group, so the
+   * existing group drag moves the whole cloud. Only visible cards join —
+   * a hidden card has no shell to move, and a selection entry that cannot
+   * be seen would surface as a card teleporting on some later expand.
+   */
   const toggleClusterSelection = useCallback(
     (instanceId: string, cluster: StarMapClusterPlacement) => {
       toggleCardKeySelection(
@@ -3733,9 +3764,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
               aria-pressed={allSelected}
               aria-label={
                 cluster.isParentGroup
-                  ? `Select the ${cluster.label} thread and its ${
-                      cluster.threads.length - 1
-                    } replies`
+                  ? parentClusterSelectLabel({
+                      label: cluster.label,
+                      threadCount: cluster.threads.length,
+                    })
                   : `Select the ${cluster.label} cards (${cluster.threads.length} threads)`
               }
               onClick={() =>
@@ -4172,9 +4204,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
                             : {}),
                         }}
                         aria-pressed={allSelected}
-                        aria-label={`Select the ${cluster.label} thread and its ${
-                          cluster.threads.length - 1
-                        } replies`}
+                        aria-label={parentClusterSelectLabel({
+                          label: cluster.label,
+                          threadCount: cluster.threads.length,
+                        })}
                         onClick={() => toggleCardKeySelection(clusterCardKeys)}
                       >
                         <span

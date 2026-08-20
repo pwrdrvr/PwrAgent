@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { computeProjectLayout } from "../star-map-project-layout";
+import {
+  computeProjectLayout,
+  EMPTY_PROJECT_LAYOUT,
+} from "../star-map-project-layout";
 
 /**
  * Projects-lens galaxy packing.
@@ -135,10 +138,16 @@ describe("computeProjectLayout", () => {
     expect(layoutOf(projects)).toEqual(layoutOf(projects));
   });
 
-  it("returns an empty galaxy for an empty fleet", () => {
-    const layout = layoutOf([]);
-    expect(layout.projects).toEqual([]);
-    expect(layout.arms).toEqual([]);
-    expect(layout.canvasWidth).toBe(0);
+  /**
+   * Identity, not just shape. `anchorBody` in StarMapScreen memoises on
+   * `projectLayout.core`, and the lenses that are not drawing projects
+   * hold this same constant — a fresh literal per call would churn that
+   * dependency on every render for a lens with no projects on screen.
+   */
+  it("returns the shared empty galaxy for an empty fleet", () => {
+    expect(layoutOf([])).toBe(EMPTY_PROJECT_LAYOUT);
+    expect(EMPTY_PROJECT_LAYOUT.projects).toEqual([]);
+    expect(EMPTY_PROJECT_LAYOUT.arms).toEqual([]);
+    expect(EMPTY_PROJECT_LAYOUT.canvasWidth).toBe(0);
   });
 });

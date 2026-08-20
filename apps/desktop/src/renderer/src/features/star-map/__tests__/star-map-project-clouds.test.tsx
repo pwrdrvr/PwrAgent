@@ -162,10 +162,10 @@ describe("star map projects lens clouds", () => {
     ]);
 
     await screen.findByRole("button", {
-      name: "Select the Alpha root thread and its 1 replies",
+      name: "Select the Alpha root thread and its 1 reply",
     });
     await screen.findByRole("button", {
-      name: "Select the Beta root thread and its 1 replies",
+      name: "Select the Beta root thread and its 1 reply",
     });
   });
 
@@ -189,7 +189,7 @@ describe("star map projects lens clouds", () => {
         container.querySelector('[data-card-key="pwr_local::codex:p1"]'),
       ).not.toBeNull();
     });
-    const name = "Select the Root work thread and its 1 replies";
+    const name = "Select the Root work thread and its 1 reply";
     await screen.findByRole("button", { name });
 
     fireEvent.click(screen.getByRole("button", { name }));
