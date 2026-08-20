@@ -246,8 +246,10 @@ export function centerStarMapView(params: {
  * would open the map already scrolled past the bodies with nothing but
  * card tails on screen.
  *
- * Clamped, so an anchor near an edge — or a top anchor on a canvas that is
- * shorter than the window — still lands somewhere legal.
+ * Always clamped, so an anchor near an edge — or a top anchor on a canvas
+ * that is shorter than the window — still lands somewhere legal. The clamp
+ * is a no-op on a centred view at every canvas size, so the unanchored
+ * result is unchanged by passing through it.
  */
 export function placeStarMapView(params: {
   canvas: StarMapViewBox;
@@ -256,23 +258,24 @@ export function placeStarMapView(params: {
   /** Canvas-space point to open on; the canvas centre when absent. */
   anchor?: { x: number; y: number };
 }): StarMapView {
-  const centered = centerStarMapView({
-    canvas: params.canvas,
-    viewport: params.viewport,
-  });
-  const anchored =
+  const anchor =
     params.anchor
     && Number.isFinite(params.anchor.x)
     && Number.isFinite(params.anchor.y)
-      ? {
-          scale: centered.scale,
-          x: params.viewport.width / 2 - params.anchor.x,
-          y: params.viewport.height / 2 - params.anchor.y,
-        }
-      : centered;
-  if (!params.topAnchored && anchored === centered) return centered;
+      ? params.anchor
+      : undefined;
+  const placed = anchor
+    ? {
+        scale: 1,
+        x: params.viewport.width / 2 - anchor.x,
+        y: params.viewport.height / 2 - anchor.y,
+      }
+    : centerStarMapView({
+        canvas: params.canvas,
+        viewport: params.viewport,
+      });
   return clampStarMapView({
-    view: params.topAnchored ? { ...anchored, y: 0 } : anchored,
+    view: params.topAnchored ? { ...placed, y: 0 } : placed,
     canvas: params.canvas,
     viewport: params.viewport,
   });

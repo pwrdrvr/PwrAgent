@@ -1525,15 +1525,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
    *
    * `anchorBody` comes off a layout that is recomputed for every streamed
    * update, so its identity churns even when the body has not moved a
-   * pixel. Keying the placement below on the coordinates instead of on the
-   * object is the same rule `panZoomCanvas` follows two lines up, and for
-   * the same reason: an effect keyed on the identity would re-place — and
-   * so re-render the whole map — on every delta.
+   * pixel. Hoisting the two coordinates out and memoising on those is the
+   * same rule `panZoomCanvas` follows two lines up, and for the same
+   * reason: an effect keyed on the identity would re-place — and so
+   * re-render the whole map — on every delta.
    */
+  const anchorX = anchorBody?.x;
+  const anchorY = anchorBody?.y;
   const viewAnchor = useMemo(
-    () => (anchorBody ? { x: anchorBody.x, y: anchorBody.y } : undefined),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [anchorBody?.x, anchorBody?.y],
+    () =>
+      anchorX === undefined || anchorY === undefined
+        ? undefined
+        : { x: anchorX, y: anchorY },
+    [anchorX, anchorY],
   );
 
   // Trackpad: two-finger drag pans, pinch (ctrl+wheel) zooms about the
@@ -1644,14 +1648,29 @@ export function StarMapScreen(props: StarMapScreenProps) {
    */
   useLayoutEffect(() => {
     if (operatorMovedViewRef.current) return;
-    commitView(
-      placeStarMapView({
-        anchor: viewAnchor,
-        canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
-        viewport: { width: viewportSize.width, height: viewportSize.height },
-        topAnchored: topAnchoredView,
-      }),
-    );
+    const placed = placeStarMapView({
+      anchor: viewAnchor,
+      canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+      viewport: { width: viewportSize.width, height: viewportSize.height },
+      topAnchored: topAnchoredView,
+    });
+    // Most resizes during a load do not move the anchor: a cloud growing
+    // downward changes the canvas height without changing the bounding
+    // box's top-left, so the placement lands exactly where the view
+    // already is. Committing it anyway would hand React a new object and
+    // re-render every card on the map — synchronously, ahead of paint,
+    // once per card measurement. Nothing is skipped by leaving early: the
+    // live ref and the DOM only ever disagree during a gesture, and a
+    // gesture owns the view, which the line above already returned on.
+    const current = viewRef.current;
+    if (
+      placed.x === current.x
+      && placed.y === current.y
+      && placed.scale === current.scale
+    ) {
+      return;
+    }
+    commitView(placed);
   }, [
     commitView,
     topAnchoredView,
