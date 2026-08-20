@@ -110,6 +110,11 @@ export function useComposerMentionSources(params: {
   }, []);
 
   const ensureLoaded = useCallback((): void => {
+    // Both guards are load-bearing, and not only against redundant work: a
+    // host builds its sources object from the population this returns, so a
+    // completed load changes that object's identity and re-runs whatever
+    // effect asked for the load. Unguarded, that is a fetch loop rather
+    // than a one-shot.
     if (inFlight || Date.now() - cachedAt < NAVIGATION_STALE_MS) {
       return;
     }

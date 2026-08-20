@@ -647,6 +647,22 @@ describe("StarMapChatCard mentions", () => {
     });
   });
 
+  it("settles a whole picker session on one snapshot fetch", async () => {
+    // Load-bearing, and not only for caching: the sources memo changes
+    // identity when the fetch lands, which re-runs the effect that asked
+    // for it. Without the cache's staleness guard that is a fetch loop,
+    // and it would run at typing speed rather than showing up as an error.
+    const desktopApi = mentionApi();
+    renderCard({ desktopApi, thread: localThread() });
+    await screen.findByRole("button", { name: "Send" });
+
+    for (const value of ["look in @", "look in @a", "look in @ap"]) {
+      fireEvent.change(composer(), { target: { value } });
+      await screen.findByRole("option");
+    }
+    expect(desktopApi.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it("never offers the thread the card is already on", async () => {
     // On a bare `#` the current thread would otherwise take the first row,
     // and referencing it tells the agent nothing it does not have.
