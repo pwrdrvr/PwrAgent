@@ -70,6 +70,7 @@ import type {
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
   buildCodexFastModeMismatchNotificationParams,
+  CODEX_MISSING_THREAD_EVALUATION_DELAY_MS,
   DesktopBackendRegistry,
   getCodexFastModeMismatchWarning,
 } from "../app-server/backend-registry";
@@ -44732,14 +44733,42 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
   });
 
   /**
-   * The audit runs on a debounce and then archives through several awaited
-   * hops. Stepping the clock in slices drains those microtasks; a single jump
-   * fires the timer and returns before the archive completes.
+   * Runs the missing-thread audit to completion.
+   *
+   * Each wait is for a specific thing, not for a guessed amount of time. The
+   * first settles the fire-and-forget workspace synchronizations, whose
+   * rejections are what arm the audit at all. The clock then advances by
+   * exactly the debounce so the audit starts. The second settles the audit
+   * itself, however many awaited hops its archive path happens to take — the
+   * count differs by platform, and pumping a fixed number of fake-timer ticks
+   * instead is what made this flaky on Windows (#1793).
    */
-  async function flushMissingCodexThreadAudit(): Promise<void> {
-    for (let step = 0; step < 50; step += 1) {
-      await vi.advanceTimersByTimeAsync(100);
-    }
+  /**
+   * Runs the missing-thread audit to completion. Each wait is for a specific
+   * thing rather than for a guessed amount of time, and the two waits cover
+   * different failures:
+   *
+   * - The FIRST settles the fire-and-forget workspace synchronizations. Their
+   *   rejections are what arm the audit, so without this the clock can advance
+   *   past the debounce before the timer is armed — after which the timer is
+   *   due 2s into a future that never arrives, the audit never runs, and the
+   *   archive assertion sees an empty list. That is the reported Windows
+   *   symptom (#1793), and it is the wait that is NOT load-bearing on macOS:
+   *   locally the rejection has always landed first.
+   * - The SECOND settles the audit itself, however many awaited hops its
+   *   archive path takes. This one IS load-bearing everywhere — drop it and
+   *   the test fails locally, because the audit is still running when the
+   *   debounce timer fires.
+   *
+   * The pump this replaces (50 ticks of 100ms) satisfied the second by budget
+   * — the audit settled by tick 20 — and the first only by luck of ordering.
+   */
+  async function settleMissingCodexThreadAudit(
+    registry: DesktopBackendRegistry,
+  ): Promise<void> {
+    await registry.whenMissingCodexThreadWorkSettledForTests();
+    await vi.advanceTimersByTimeAsync(CODEX_MISSING_THREAD_EVALUATION_DELAY_MS);
+    await registry.whenMissingCodexThreadWorkSettledForTests();
   }
 
   function buildMissingThreadFixture(params: {
@@ -44849,13 +44878,20 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       });
 
       await registry.listThreads({ backend: "codex", forceRefresh: true });
-      await flushMissingCodexThreadAudit();
+      await settleMissingCodexThreadAudit(registry);
 
-      expect(codexClient.archivedThreadIds).toEqual(["thread-missing"]);
+      // Assert the decision before its effect. A bare empty-archive failure
+      // cannot tell "the audit never ran" from "the audit ran and asked
+      // instead", and those have completely different causes.
       const update = events.find(
         (event) =>
           event.notification.method === "codex/missingThreads/updated",
       );
+      expect(update?.notification.params).toMatchObject({
+        status: "archived",
+        totalCount: 10,
+      });
+      expect(codexClient.archivedThreadIds).toEqual(["thread-missing"]);
       expect(update?.notification.params).toMatchObject({
         archivedCount: 1,
         failedCount: 0,
@@ -44897,7 +44933,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       });
 
       await registry.listThreads({ backend: "codex", forceRefresh: true });
-      await flushMissingCodexThreadAudit();
+      await settleMissingCodexThreadAudit(registry);
 
       expect(codexClient.archivedThreadIds).toEqual([]);
       const update = events.find(
@@ -44935,7 +44971,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
 
       await registry.listThreads({ backend: "codex", forceRefresh: true });
-      await flushMissingCodexThreadAudit();
+      await settleMissingCodexThreadAudit(registry);
       const callsBeforeAnswer = codexClient.updateThreadWorkspaceCallCount;
       expect(callsBeforeAnswer).toBe(2);
 
@@ -44951,7 +44987,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       });
 
       await registry.listThreads({ backend: "codex", forceRefresh: true });
-      await flushMissingCodexThreadAudit();
+      await settleMissingCodexThreadAudit(registry);
 
       expect(codexClient.updateThreadWorkspaceCallCount).toBe(callsBeforeAnswer);
       expect(codexClient.archivedThreadIds).toEqual([]);
@@ -44978,7 +45014,7 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
 
       await registry.listThreads({ backend: "codex", forceRefresh: true });
-      await flushMissingCodexThreadAudit();
+      await settleMissingCodexThreadAudit(registry);
 
       const threadIds = ["thread-missing-1", "thread-missing-2"];
       const first = await registry.resolveMissingCodexThreads({
@@ -44993,6 +45029,148 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
       expect(first.archivedThreadIds.sort()).toEqual(threadIds);
       expect(second.archivedThreadIds).toEqual([]);
       expect(codexClient.archivedThreadIds.sort()).toEqual(threadIds);
+
+      await registry.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("re-asks when another Codex thread goes missing after an unanswered prompt", async () => {
+    vi.useFakeTimers();
+    try {
+      const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
+      const fixture = buildMissingThreadFixture({
+        missingThreadIds: ["thread-missing-1", "thread-missing-2"],
+        presentThreadIds: ["a", "b", "c"],
+      });
+      const codexClient = new MissingThreadCodexClient(missingThreadIds, {
+        initializeResult: { methods: ["thread/list", "thread/archive"] },
+        threads: fixture.threads,
+      });
+      const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => {
+        events.push(event);
+      });
+
+      // The first prompt is emitted before any window subscribes. Nothing
+      // answers it, so a latched flag would disable the audit for the session.
+      await registry.listThreads({ backend: "codex", forceRefresh: true });
+      await settleMissingCodexThreadAudit(registry);
+      expect(
+        events.filter(
+          (event) =>
+            event.notification.method === "codex/missingThreads/updated",
+        ),
+      ).toHaveLength(1);
+
+      missingThreadIds.add("thread-missing-3");
+      const extended = buildMissingThreadFixture({
+        missingThreadIds: [
+          "thread-missing-1",
+          "thread-missing-2",
+          "thread-missing-3",
+        ],
+        presentThreadIds: ["a", "b", "c"],
+      });
+      codexClient.setThreads(extended.threads);
+      await overlayStore.addLinkedDirectory({
+        backend: "codex",
+        threadId: "thread-missing-3",
+        directory: {
+          id: "pwragent-handoff:codex:thread-missing-3",
+          label: "thread-missing-3",
+          path: "/repo/thread-missing-3",
+          worktreePath: "/worktrees/thread-missing-3",
+          kind: "worktree",
+        },
+      });
+
+      await registry.listThreads({ backend: "codex", forceRefresh: true });
+      await settleMissingCodexThreadAudit(registry);
+
+      const updates = events.filter(
+        (event) => event.notification.method === "codex/missingThreads/updated",
+      );
+      expect(updates).toHaveLength(2);
+      expect(updates[1]?.notification.params).toMatchObject({
+        status: "confirmationRequired",
+      });
+
+      await registry.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never auto-archives again once the operator has kept missing threads", async () => {
+    vi.useFakeTimers();
+    try {
+      const missingThreadIds = new Set(["thread-missing-1", "thread-missing-2"]);
+      const fixture = buildMissingThreadFixture({
+        missingThreadIds: ["thread-missing-1", "thread-missing-2"],
+        presentThreadIds: ["a", "b", "c"],
+      });
+      const codexClient = new MissingThreadCodexClient(missingThreadIds, {
+        initializeResult: { methods: ["thread/list", "thread/archive"] },
+        threads: fixture.threads,
+      });
+      const overlayStore = createOverlayStoreMock({ overlays: fixture.overlays });
+      const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+      const events: AgentEvent[] = [];
+      registry.onEvent((event) => {
+        events.push(event);
+      });
+
+      await registry.listThreads({ backend: "codex", forceRefresh: true });
+      await settleMissingCodexThreadAudit(registry);
+      // 2 of 5 is above the threshold, so this round asks.
+      expect(codexClient.archivedThreadIds).toEqual([]);
+
+      await registry.resolveMissingCodexThreads({
+        action: "keep",
+        threadIds: ["thread-missing-1", "thread-missing-2"],
+      });
+
+      missingThreadIds.add("thread-missing-3");
+      const extended = buildMissingThreadFixture({
+        missingThreadIds: [
+          "thread-missing-1",
+          "thread-missing-2",
+          "thread-missing-3",
+        ],
+        presentThreadIds: ["a", "b", "c"],
+      });
+      codexClient.setThreads(extended.threads);
+      await overlayStore.addLinkedDirectory({
+        backend: "codex",
+        threadId: "thread-missing-3",
+        directory: {
+          id: "pwragent-handoff:codex:thread-missing-3",
+          label: "thread-missing-3",
+          path: "/repo/thread-missing-3",
+          worktreePath: "/worktrees/thread-missing-3",
+          kind: "worktree",
+        },
+      });
+
+      await registry.listThreads({ backend: "codex", forceRefresh: true });
+      await settleMissingCodexThreadAudit(registry);
+
+      // 1 of 5 is at or under the threshold, so the ratio alone would archive
+      // it. The operator already said the Codex profile may be wrong, and
+      // deciding for them now would archive a thread from the very profile
+      // they asked us to leave alone.
+      expect(codexClient.archivedThreadIds).toEqual([]);
+      const updates = events.filter(
+        (event) => event.notification.method === "codex/missingThreads/updated",
+      );
+      expect(updates.at(-1)?.notification.params).toMatchObject({
+        status: "confirmationRequired",
+        threadIds: ["thread-missing-3"],
+      });
 
       await registry.close();
     } finally {

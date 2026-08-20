@@ -114,7 +114,10 @@ import {
   threadActionErrorNoticeId,
   type ThreadActionErrorKind,
 } from "./features/notifications/thread-action-error-notice";
-import { buildCodexMissingThreadsNotice } from "./features/notifications/codex-missing-threads-notice";
+import {
+  buildCodexMissingThreadsNotice,
+  CODEX_MISSING_THREADS_CONFIRMATION_NOTICE_ID,
+} from "./features/notifications/codex-missing-threads-notice";
 import type { CodexMissingThreadsSignal } from "./features/notifications/codex-missing-threads-notice";
 import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-auto-dispatch-budget-notice";
 import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNotices";
@@ -936,7 +939,7 @@ function DesktopAppShell(props: {
         const resolve = (action: "archive" | "keep") => {
           dispatchAppNotice({
             type: "dismiss",
-            id: "codex-missing-threads:confirmation",
+            id: CODEX_MISSING_THREADS_CONFIRMATION_NOTICE_ID,
           });
           void desktopApi
             .resolveMissingCodexThreads?.({
