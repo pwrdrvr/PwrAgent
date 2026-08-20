@@ -976,6 +976,30 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /\.star-map__top-band > \*,\s*\.star-map__top-band > \* \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/,
     );
+    // …except the wordmark, which is brand, not a control: on macOS
+    // pressing it must drag the window like the main window's masthead
+    // brand, never start a text selection. The compound scope
+    // out-specifies the band rule's universal legs, so source order is
+    // free. darwin-only, because the glass strip the rule belongs to only
+    // renders there — on Windows the band sits over the sky below the
+    // painted titlebar, and on Linux the OS frame ignores drag regions,
+    // where `pointer-events: none` alone would turn a wordmark press into
+    // a canvas pan.
+    const brandOverride = extractRuleBody(
+      css,
+      ':root[data-platform="darwin"] .star-map__chrome .sidebar__brand,\n'
+        + ':root[data-platform="darwin"] .star-map__chrome .sidebar__brand *',
+    );
+    expect(brandOverride).toContain("-webkit-app-region: drag;");
+    expect(brandOverride).toContain("pointer-events: none;");
+    // The dedicated window locks chrome text selection at the root the way
+    // `.app-shell` does — dragging across the wordmark or a chip label must
+    // not paint a selection. Copyable content opts back in per component.
+    // Asserted per form: a bare `toContain("user-select: none;")` is
+    // satisfied by the `-webkit-` line's substring alone.
+    const mapWindowRule = extractRuleBody(css, ".star-map-window");
+    expect(mapWindowRule).toContain("-webkit-user-select: none;");
+    expect(mapWindowRule).toMatch(/(?<!-)user-select: none;/);
     // The card-level dialogs are body-portaled and full-window, so their
     // scrim overlaps the strip's rect and would otherwise turn a
     // dismiss-click near the top into a window drag. Both are named here:
@@ -984,6 +1008,43 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /\.star-map-intake,\s*\.star-map-intake \*,\s*\.star-map-rename,\s*\.star-map-rename \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
     );
+    // The ⌘K jump palette is the third body-portaled overlay whose top
+    // edge overlaps a drag strip — the map's glass strip, and the main
+    // window's masthead/thread-header band — so it rides the same
+    // punch-out rule as intake/rename.
+    expect(css).toMatch(
+      /\.jump-palette,\s*\.jump-palette \*,\s*\.star-map-intake,/,
+    );
+    // Canvas residents must NOT opt out. Every map resident — thread
+    // cards, instances, cluster labels, load cards, AND the chat cards
+    // with their satellites (the JSX at their render site puts them
+    // INSIDE `.star-map__canvas`, whatever older comments claimed) —
+    // paints below the glass in the canvas stacking context, so in the
+    // band none of them is interactive. But drag regions are rect unions
+    // independent of z-order, so a resident whose rect clips into the
+    // band would punch an invisible card-width dead hole in the window's
+    // only drag handle. That was a shipped bug: a ~200px strip next to
+    // the filter chips that refused to drag the window.
+    //
+    // Comments are stripped first so a class named in prose cannot start
+    // a match, and each token is a deliberate prefix: the ban covers
+    // every BEM descendant and modifier of the family.
+    const cssSansComments = css.replace(/\/\*[\s\S]*?\*\//g, "");
+    for (const canvasResident of [
+      "\\.star-map-card",
+      "\\.star-map-instance",
+      "\\.star-map-load-card",
+      "\\.star-map-chat-card",
+      "\\.star-map-satellite-card",
+      "\\.star-map__cluster-label",
+      "\\.star-map__cluster-overflow",
+    ]) {
+      expect(cssSansComments).not.toMatch(
+        new RegExp(
+          `${canvasResident}[^{}]*\\{[^}]*-webkit-app-region:\\s*no-drag`,
+        ),
+      );
+    }
     // The edge brightens whenever the sky moves under it — pointer pan and
     // keyboard flight alike — and the strip disappears in fullscreen, where
     // there is no window to drag.
