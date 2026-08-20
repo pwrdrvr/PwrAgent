@@ -50,6 +50,10 @@ import {
   FEDERATION_TAILSCALE_STATUS_CHANNEL,
 } from "../../shared/ipc";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
+import {
+  federationTailscaleAdvertisementFromStatus,
+  type FederationTailscaleAdvertisement,
+} from "../federation/federation-advertised-endpoints";
 import { getFederationTailscaleService } from "../federation/federation-tailscale";
 import { createFederationWindow } from "../federation/federation-window";
 
@@ -278,8 +282,13 @@ export function registerFederationIpcHandlers(): void {
     async (
       _event,
       request: GenerateFederationInviteRequest = {},
-    ): Promise<GenerateFederationInviteResponse> =>
-      await getDesktopFederationRuntime().generateInvite(request),
+    ): Promise<GenerateFederationInviteResponse> => {
+      const tailscale = await readInviteTailscaleAdvertisement();
+      return await getDesktopFederationRuntime().generateInvite({
+        ...request,
+        ...(tailscale ? { tailscale } : {}),
+      });
+    },
   );
   ipcMain.handle(
     FEDERATION_IMPORT_INVITE_CHANNEL,
@@ -334,6 +343,37 @@ export function registerFederationIpcHandlers(): void {
       });
     },
   );
+}
+
+/**
+ * How long invite generation waits for Tailscale before advertising without
+ * a tailnet endpoint. Generating an invite is a button press and `readStatus`
+ * shells out to the CLI, so a hung daemon must not hold the click for the
+ * command timeout — the cost of giving up is one endpoint fewer in the
+ * invite, and the operator can still paste a tailnet URL by hand.
+ */
+const INVITE_TAILSCALE_BUDGET_MS = 2_000;
+
+async function readInviteTailscaleAdvertisement(): Promise<
+  FederationTailscaleAdvertisement | undefined
+> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    const status = await Promise.race([
+      getFederationTailscaleService().readStatus(),
+      new Promise<undefined>((resolve) => {
+        timer = setTimeout(() => resolve(undefined), INVITE_TAILSCALE_BUDGET_MS);
+      }),
+    ]);
+    return status
+      ? federationTailscaleAdvertisementFromStatus(status)
+      : undefined;
+  } catch {
+    // A tailnet endpoint is a bonus path, never a precondition for enrolling.
+    return undefined;
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 /**

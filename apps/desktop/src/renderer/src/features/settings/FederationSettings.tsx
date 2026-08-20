@@ -623,7 +623,7 @@ export function FederationSettings(props: FederationSettingsProps) {
           />
           <SettingsField
             label="Advertised endpoints"
-            sub="Gateway mode: endpoints written into new enrollment invites, one per line. Defaults to the Public URL when empty."
+            sub="Gateway mode: endpoints written into new enrollment invites, one per line. Leave empty to advertise this machine's name, its tailnet name, and its current addresses — names keep working after the address changes."
             control={
               <textarea
                 aria-label="Advertised endpoints"
