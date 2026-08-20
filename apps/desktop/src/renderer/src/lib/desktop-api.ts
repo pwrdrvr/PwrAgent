@@ -287,6 +287,8 @@ import type {
   SetCodexThreadEnvironmentResponse,
   RestoreWorktreeRequest,
   RestoreWorktreeResponse,
+  ResolveMissingCodexThreadsRequest,
+  ResolveMissingCodexThreadsResponse,
   RestoreThreadRequest,
   RestoreThreadResponse,
   RunAutomationNowResponse,
@@ -635,6 +637,9 @@ export type DesktopApi = {
   archiveThread?: (
     request: ArchiveThreadRequest
   ) => Promise<ArchiveThreadResponse>;
+  resolveMissingCodexThreads?: (
+    request: ResolveMissingCodexThreadsRequest
+  ) => Promise<ResolveMissingCodexThreadsResponse>;
   restoreThread?: (
     request: RestoreThreadRequest
   ) => Promise<RestoreThreadResponse>;

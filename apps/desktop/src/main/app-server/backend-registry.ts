@@ -175,6 +175,8 @@ import {
   projectNavigationLaunchpadProviderSettings,
   type RestoreWorktreeRequest,
   type RestoreWorktreeResponse,
+  type ResolveMissingCodexThreadsRequest,
+  type ResolveMissingCodexThreadsResponse,
   type RestoreThreadRequest,
   type RestoreThreadResponse,
   type RestoreThreadWorktreeResult,
@@ -4892,6 +4894,38 @@ function shouldEnrichThreadDirectories(
   }
 }
 
+/**
+ * Missing threads above this share of the visible Codex thread list stop being
+ * a stale-row cleanup and start looking like a misconfiguration — most likely
+ * this PwrAgent profile pointing at the wrong Codex authentication profile.
+ * PwrAgent asks instead of archiving when the share is above the threshold.
+ */
+const CODEX_MISSING_THREAD_CONFIRMATION_RATIO = 0.2;
+
+/**
+ * Missing-thread failures arrive one per thread as each pending workspace
+ * synchronization rejects. Coalesce a startup burst into one decision so the
+ * ratio is computed against every thread Codex lost, not the first one.
+ */
+const CODEX_MISSING_THREAD_EVALUATION_DELAY_MS = 2_000;
+
+/**
+ * Codex answers any thread-scoped request for a thread it can no longer
+ * resolve with `thread not found: <id>`. `thread/list` keeps returning the
+ * row — the list is served from Codex's session index, not from the rollout —
+ * so PwrAgent sees a thread that exists for browsing and does not exist for
+ * every operation that has to open it.
+ */
+function isCodexMissingThreadError(error: unknown, threadId: string): boolean {
+  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  const normalizedThreadId = threadId.trim().toLowerCase();
+  if (!normalizedThreadId || !message.includes(normalizedThreadId)) {
+    return false;
+  }
+
+  return message.includes("thread not found:");
+}
+
 function isCodexMissingRolloutArchiveError(
   error: unknown,
   threadId: string,
@@ -4905,6 +4939,10 @@ function isCodexMissingRolloutArchiveError(
   return (
     message.includes("no rollout found for thread id")
     || message.includes("failed to locate rollout for thread")
+    // `thread not found` reaches the same dead end as a missing rollout:
+    // Codex cannot archive what it cannot open, so the archive falls through
+    // to the local tombstone that already hides stale `thread/list` rows.
+    || message.includes("thread not found:")
   );
 }
 
@@ -6877,6 +6915,25 @@ export class DesktopBackendRegistry {
   private codexInvalidIdRecoveryDrain?: Promise<void>;
   private codexInvalidIdRecoveryBarrier?: Promise<void>;
   private resolveCodexInvalidIdRecoveryBarrier?: () => void;
+  /**
+   * Threads Codex answered `thread not found` for during this session. An id
+   * stays here once it lands, whatever the audit decides, so a later
+   * `thread/list` cannot reschedule the retries this set exists to suppress.
+   * Only a successful thread-scoped write clears one.
+   */
+  private readonly missingCodexThreadIds = new Set<string>();
+  /** The subset still awaiting an archive-or-keep outcome. */
+  private readonly unresolvedMissingCodexThreadIds = new Set<string>();
+  private missingCodexThreadEvaluationTimer?: ReturnType<typeof setTimeout>;
+  private missingCodexThreadEvaluation?: Promise<void>;
+  private missingCodexThreadPromptOpen = false;
+  /**
+   * Visible (non-tombstoned, non-archived) Codex thread count from the most
+   * recent full `thread/list`. It is the denominator for the missing-thread
+   * ratio, so it is only recorded from the full-list path — never from the
+   * single-thread repair path, whose "list" is one thread.
+   */
+  private codexVisibleThreadCount = 0;
   private readonly activeCodexTurnModes = new Map<string, ThreadExecutionMode>();
   private readonly activeCodexReviewTurnKeys = new Set<string>();
   private readonly activeCodexReviewInterruptTurnIds = new Map<string, string>();
@@ -18405,6 +18462,11 @@ export class DesktopBackendRegistry {
     if (this.taskMonitorWatchdogTimer) {
       clearInterval(this.taskMonitorWatchdogTimer);
     }
+    if (this.missingCodexThreadEvaluationTimer) {
+      clearTimeout(this.missingCodexThreadEvaluationTimer);
+      this.missingCodexThreadEvaluationTimer = undefined;
+    }
+    await this.missingCodexThreadEvaluation;
     // Live usage and command output may each have one bounded window sitting
     // in memory. `closed` prevents either drain from re-arming its timer; the
     // serialized flush chains ensure no write survives close().
@@ -20245,6 +20307,16 @@ export class DesktopBackendRegistry {
     const visibleThreads = threadsWithPending.filter(
       (thread) => overlaysByThreadId[thread.id]?.archiveTombstonedAt === undefined,
     );
+    // A search-filtered or page-limited list is a subset, not the profile, so
+    // it must not become the missing-thread denominator.
+    if (
+      !params.archived
+      && !params.filter
+      && params.limit === undefined
+      && params.maxPages === undefined
+    ) {
+      this.recordCodexVisibleThreadCount(visibleThreads.length);
+    }
     this.schedulePendingCodexWorkspaceCwdSyncs({
       overlaysByThreadId,
       threads: visibleThreads,
@@ -24371,6 +24443,12 @@ export class DesktopBackendRegistry {
     threads: AppServerThreadSummary[];
   }): void {
     for (const thread of params.threads) {
+      // Codex already told us it cannot open this thread. Retrying the
+      // workspace write on every `thread/list` produced one warning per list
+      // per thread forever; the missing-thread audit owns the outcome now.
+      if (this.isCodexThreadKnownMissing(thread.id)) {
+        continue;
+      }
       const handoffDirectory = params.overlaysByThreadId[
         thread.id
       ]?.extraLinkedDirectories.find(isHandoffDirectory);
@@ -24415,9 +24493,16 @@ export class DesktopBackendRegistry {
       cwd: params.cwd,
     })
       .then(() => {
+        // A thread Codex can write to is a thread Codex still has. Clear any
+        // earlier verdict so a reconnected profile recovers on its own.
+        this.clearMissingCodexThread(params.threadId);
         this.invalidateThreadListCache("codex");
       })
       .catch((error) => {
+        if (isCodexMissingThreadError(error, params.threadId)) {
+          this.recordMissingCodexThread(params.threadId);
+          return;
+        }
         backendRegistryLog.warn(
           "pending Codex workspace CWD synchronization failed; will retry",
           {
@@ -24437,6 +24522,209 @@ export class DesktopBackendRegistry {
       cwd: params.cwd,
       promise,
     });
+  }
+
+  private isCodexThreadKnownMissing(threadId: string): boolean {
+    return this.missingCodexThreadIds.has(threadId);
+  }
+
+  private clearMissingCodexThread(threadId: string): void {
+    this.missingCodexThreadIds.delete(threadId);
+    this.unresolvedMissingCodexThreadIds.delete(threadId);
+  }
+
+  /**
+   * Records the visible Codex thread count as the denominator for the
+   * missing-thread ratio. Only the full `thread/list` path may call this.
+   */
+  private recordCodexVisibleThreadCount(count: number): void {
+    this.codexVisibleThreadCount = count;
+  }
+
+  private recordMissingCodexThread(threadId: string): void {
+    // Only a thread that is newly missing needs a decision. Re-recording an
+    // already-decided thread would re-open a prompt the operator answered.
+    if (this.missingCodexThreadIds.has(threadId)) {
+      return;
+    }
+    this.missingCodexThreadIds.add(threadId);
+    this.unresolvedMissingCodexThreadIds.add(threadId);
+    backendRegistryLog.warn(
+      "Codex reports thread missing; suspending thread-scoped retries",
+      { threadId },
+    );
+    this.scheduleMissingCodexThreadAudit();
+  }
+
+  private scheduleMissingCodexThreadAudit(): void {
+    if (
+      this.closed
+      || this.missingCodexThreadEvaluationTimer
+      || this.missingCodexThreadEvaluation
+    ) {
+      return;
+    }
+    this.missingCodexThreadEvaluationTimer = setTimeout(() => {
+      this.missingCodexThreadEvaluationTimer = undefined;
+      this.missingCodexThreadEvaluation = this.auditMissingCodexThreads()
+        .catch((error) => {
+          backendRegistryLog.error("Codex missing-thread audit failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        })
+        .finally(() => {
+          this.missingCodexThreadEvaluation = undefined;
+        });
+    }, CODEX_MISSING_THREAD_EVALUATION_DELAY_MS);
+    this.missingCodexThreadEvaluationTimer.unref?.();
+  }
+
+  private async auditMissingCodexThreads(): Promise<void> {
+    if (this.closed || this.missingCodexThreadPromptOpen) {
+      return;
+    }
+    const threadIds = [...this.unresolvedMissingCodexThreadIds];
+    if (threadIds.length === 0) {
+      return;
+    }
+
+    // An unrecorded count means no full list has landed yet. Falling back to
+    // the missing count itself yields a ratio of 1, so an unknown denominator
+    // asks the operator rather than archiving on a guess.
+    const totalCount = Math.max(this.codexVisibleThreadCount, threadIds.length);
+    const ratio = threadIds.length / totalCount;
+    if (ratio > CODEX_MISSING_THREAD_CONFIRMATION_RATIO) {
+      this.missingCodexThreadPromptOpen = true;
+      backendRegistryLog.warn(
+        "Codex missing-thread share exceeds the automatic archive threshold",
+        {
+          missingCount: threadIds.length,
+          totalCount,
+          threadIds,
+        },
+      );
+      await this.emitCodexMissingThreadsUpdate({
+        missingCount: threadIds.length,
+        profileName: this.resolveMissingCodexThreadProfileName(),
+        status: "confirmationRequired",
+        threadIds,
+        totalCount,
+      });
+      return;
+    }
+
+    const result = await this.archiveMissingCodexThreads(threadIds);
+    await this.emitCodexMissingThreadsUpdate({
+      archivedCount: result.archived.length,
+      failedCount: result.failed.length,
+      missingCount: threadIds.length,
+      profileName: this.resolveMissingCodexThreadProfileName(),
+      status: "archived",
+      threadIds,
+      totalCount,
+    });
+  }
+
+  private async archiveMissingCodexThreads(threadIds: string[]): Promise<{
+    archived: string[];
+    failed: string[];
+  }> {
+    const archived: string[] = [];
+    const failed: string[] = [];
+    for (const threadId of threadIds) {
+      this.unresolvedMissingCodexThreadIds.delete(threadId);
+      try {
+        // `archiveThread` recognizes `thread not found` as an already-missing
+        // thread, so this performs the local tombstone plus the worktree,
+        // messaging, and child cleanup instead of failing on Codex's rejection.
+        await this.archiveThread({ backend: "codex", threadId });
+        archived.push(threadId);
+      } catch (error) {
+        failed.push(threadId);
+        backendRegistryLog.warn("archiving a missing Codex thread failed", {
+          error: error instanceof Error ? error.message : String(error),
+          threadId,
+        });
+      }
+    }
+    if (archived.length > 0) {
+      this.invalidateThreadListCache("codex");
+    }
+    if (archived.length > 0 || failed.length > 0) {
+      backendRegistryLog.warn("archived Codex threads reported missing", {
+        archivedCount: archived.length,
+        failedCount: failed.length,
+      });
+    }
+    return { archived, failed };
+  }
+
+  /**
+   * Applies the operator's answer to a missing-thread confirmation prompt.
+   * `keep` leaves the threads in place and suppresses both the prompt and the
+   * thread-scoped retries for the rest of this session; a reconnected Codex
+   * profile clears the suppression on the first successful thread-scoped
+   * write, and a restart re-asks if the threads are still missing.
+   */
+  async resolveMissingCodexThreads(
+    request: ResolveMissingCodexThreadsRequest,
+  ): Promise<ResolveMissingCodexThreadsResponse> {
+    // Every subscribed window renders the same prompt, so the answer can
+    // arrive more than once. Claiming the ids here makes the second answer a
+    // no-op instead of a second pass of worktree and messaging cleanup.
+    const threadIds = request.threadIds.filter(
+      (threadId) =>
+        threadId.trim()
+        && this.unresolvedMissingCodexThreadIds.delete(threadId),
+    );
+    this.missingCodexThreadPromptOpen = false;
+    if (request.action === "keep") {
+      // The ids stay in `missingCodexThreadIds`, which is what keeps the
+      // thread visible, its retries suspended, and this prompt closed.
+      backendRegistryLog.warn("keeping Codex threads reported missing", {
+        threadCount: threadIds.length,
+      });
+      return { action: "keep", archivedThreadIds: [], failedThreadIds: [] };
+    }
+
+    const result = await this.archiveMissingCodexThreads(threadIds);
+    return {
+      action: "archive",
+      archivedThreadIds: result.archived,
+      failedThreadIds: result.failed,
+    };
+  }
+
+  private resolveMissingCodexThreadProfileName(): string {
+    try {
+      return resolveActiveProfileName();
+    } catch {
+      // The prompt names the profile only to help the operator recognize a
+      // Codex profile mismatch. It stays useful without the name.
+      return "default";
+    }
+  }
+
+  private async emitCodexMissingThreadsUpdate(
+    params: Extract<
+      AppServerNotification,
+      { method: "codex/missingThreads/updated" }
+    >["params"],
+  ): Promise<void> {
+    try {
+      await this.emit({
+        backend: "codex",
+        notification: {
+          method: "codex/missingThreads/updated",
+          params,
+        },
+      });
+    } catch (error) {
+      backendRegistryLog.warn("Codex missing-thread notification failed", {
+        error: error instanceof Error ? error.message : String(error),
+        status: params.status,
+      });
+    }
   }
 
   private scheduleThreadTitleGeneration(params: {
