@@ -51,7 +51,6 @@ function countStarMapWindows(
     .filter((win) => win.url().includes("#star-map")).length;
 }
 
-
 /**
  * Resize the map's BrowserWindow and wait for the renderer to lay out at
  * the new width. Playwright's `setViewportSize` is unsupported on an
@@ -75,48 +74,93 @@ async function resizeStarMapWindow(
 }
 
 /**
+ * The band's three slots, in the order the grid lays them out. Named
+ * rather than derived from the DOM so an accidentally-dropped slot fails
+ * as a missing box below instead of silently narrowing the check.
+ */
+const TOP_BAND_SLOTS = [
+  ".star-map__chrome",
+  ".star-map__filters",
+  ".star-map__actions",
+] as const;
+
+/**
  * The top band's slots must not overlap at any window width, and nothing
  * may sit on top of a filter chip.
  *
  * The rect check is the structural one: `.star-map__chrome` and
  * `.star-map__filters` used to be independently positioned islands, so
  * the chrome (the higher z-index) painted over the leading chip and ate
- * its clicks. The hit test is the behavioural one, and it is wider — it
- * catches ANY element covering a chip, not just the chrome, which is the
- * shape axe reported as `target-size` ("partially obscured, smallest
- * space is 79.5px by 12px"). Both are cheaper than waiting for the a11y
- * gate to notice, and they say what actually broke.
+ * its clicks. It runs over every PAIR of occupied slots rather than that
+ * one pair, because the point of the band is that controls get added to
+ * it — a check that only knows about the two slots occupied today stops
+ * gating the moment somebody uses the third.
+ *
+ * The hit test is the behavioural one, and it is wider — it catches ANY
+ * element covering a chip, not just a sibling slot, which is the shape
+ * axe reported as `target-size` ("partially obscured, smallest space is
+ * 79.5px by 12px"). It is scoped to the chips INSIDE the filter strip:
+ * the same chip primitive is shared with Find, View, and anything the
+ * actions slot grows, and those are not what this measures.
+ *
+ * Both are cheaper than waiting for the a11y gate to notice, and they say
+ * what actually broke.
  */
 async function expectTopBandLaidOut(mapWindow: Page, at: string): Promise<void> {
-  const chrome = await mapWindow.locator(".star-map__chrome").boundingBox();
-  const filters = await mapWindow.locator(".star-map__filters").boundingBox();
-  if (!chrome || !filters) {
-    throw new Error(`Expected both top-band slots to be laid out ${at}`);
+  const boxes = await Promise.all(
+    TOP_BAND_SLOTS.map(async (selector) => ({
+      // An unoccupied slot renders no element at all; `count()` keeps that
+      // apart from a slot that is present but failed to lay out, which is
+      // a real failure and must not be skipped.
+      box: (await mapWindow.locator(selector).count())
+        ? await mapWindow.locator(selector).boundingBox()
+        : undefined,
+      selector,
+    })),
+  );
+  const present = boxes.filter((slot) => slot.box !== undefined);
+  if (present.length < 2) {
+    throw new Error(
+      `Expected at least two top-band slots to be laid out ${at};`
+        + ` got ${JSON.stringify(boxes)}`,
+    );
   }
 
-  const overlaps =
-    chrome.x < filters.x + filters.width
-    && filters.x < chrome.x + chrome.width
-    && chrome.y < filters.y + filters.height
-    && filters.y < chrome.y + chrome.height;
-  expect(
-    overlaps,
-    `top band slots overlap ${at}: chrome ${JSON.stringify(chrome)},`
-      + ` filters ${JSON.stringify(filters)}`,
-  ).toBe(false);
+  for (let i = 0; i < present.length; i += 1) {
+    for (let j = i + 1; j < present.length; j += 1) {
+      const a = present[i]!;
+      const b = present[j]!;
+      const boxA = a.box!;
+      const boxB = b.box!;
+      const overlaps =
+        boxA.x < boxB.x + boxB.width
+        && boxB.x < boxA.x + boxA.width
+        && boxA.y < boxB.y + boxB.height
+        && boxB.y < boxA.y + boxA.height;
+      expect(
+        overlaps,
+        `top band slots overlap ${at}: ${a.selector} ${JSON.stringify(boxA)},`
+          + ` ${b.selector} ${JSON.stringify(boxB)}`,
+      ).toBe(false);
+    }
+  }
 
   const covered = await mapWindow.evaluate(() =>
-    [...document.querySelectorAll(".star-map__filter-chip")]
-      .filter((chip) => !chip.closest(".star-map__chrome"))
+    [...document.querySelectorAll(".star-map__filters .star-map__filter-chip")]
       .map((chip) => {
         const box = chip.getBoundingClientRect();
         const top = document.elementFromPoint(
           box.x + box.width / 2,
           box.y + box.height / 2,
         );
-        return top?.closest(".star-map__filters")
-          ? undefined
-          : `${chip.textContent} covered by ${top?.className ?? "nothing"}`;
+        if (top?.closest(".star-map__filters")) return undefined;
+        // `className` is an SVGAnimatedString on SVG elements, and the map
+        // paints several full-bleed SVG layers — describe the element in a
+        // way that survives whichever kind covered the chip.
+        const culprit = top
+          ? `${top.tagName.toLowerCase()}${top.getAttribute("class") ? `.${top.getAttribute("class")}` : ""}`
+          : "nothing";
+        return `${chip.textContent} covered by ${culprit}`;
       })
       .filter((entry): entry is string => entry !== undefined),
   );
