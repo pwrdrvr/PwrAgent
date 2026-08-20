@@ -64,7 +64,6 @@ import {
   addFilterMatchCounts,
   countFilterMatches,
   cycleFilterState,
-  filterState,
   readStoredFilterSelection,
   selectFilteredThreads,
   STAR_MAP_FILTERS,
@@ -123,6 +122,12 @@ import {
 } from "./star-map-flight";
 import { useStarMapFlight } from "./useStarMapFlight";
 import { StarMapViewOptions } from "./StarMapViewOptions";
+import { StarMapFilterChip } from "./StarMapFilterChip";
+import { StarMapFilterMenu } from "./StarMapFilterMenu";
+import {
+  resolveFilterFit,
+  type StarMapFilterFit,
+} from "./star-map-filter-fit";
 import { StarMapKeyHint } from "./StarMapKeyHint";
 import { useStarMapCameraKeys } from "./useStarMapCameraKeys";
 import { StarMapInstanceCard } from "./StarMapInstanceCard";
@@ -1296,6 +1301,102 @@ export function StarMapScreen(props: StarMapScreenProps) {
     }
     return counts;
   }, [filterSelection, props.localThreads, props.sessionKeys, remote]);
+
+  // Which chips the band has room for. The chips carry live counts, so
+  // the width they need is a property of the data rather than of the
+  // window — see `resolveFilterFit` for the two constants that were wrong
+  // before this measured. `full` until measured: the strip is what the
+  // band is for.
+  const bandRef = useRef<HTMLDivElement>(null);
+  const filterStripRef = useRef<HTMLDivElement>(null);
+  const [filterFit, setFilterFit] = useState<StarMapFilterFit>("full");
+
+  // A zero chip can only filter the map down to nothing, so it is the
+  // cheapest thing to lose — unless the operator is actually filtering on
+  // it, in which case dropping it would strand a filter they cannot see
+  // to undo.
+  const droppableFilters = useMemo(() => {
+    const droppable = new Set<number>();
+    STAR_MAP_FILTERS.forEach((definition, index) => {
+      if (
+        filterCounts[definition.key] === 0
+        && filterSelection[definition.key] === undefined
+      ) {
+        droppable.add(index);
+      }
+    });
+    return droppable;
+  }, [filterCounts, filterSelection]);
+
+  useLayoutEffect(() => {
+    const band = bandRef.current;
+    const strip = filterStripRef.current;
+    if (!band || !strip) return;
+
+    const measure = () => {
+      // Everything in the band that is not the strip, plus the gaps: what
+      // is left is what the strip may occupy. Read from the live boxes
+      // rather than from the tokens, so a platform's stoplight
+      // reservation or a longer wordmark is accounted for by being there.
+      const bandStyle = getComputedStyle(band);
+      const bandGap = parseFloat(bandStyle.columnGap) || 0;
+      let taken = parseFloat(bandStyle.paddingLeft) + parseFloat(bandStyle.paddingRight);
+      let siblings = 0;
+      for (const child of band.children) {
+        if (child === strip.parentElement || child === strip) continue;
+        taken += child.getBoundingClientRect().width;
+        siblings += 1;
+      }
+      // One gap per sibling, plus the one between the strip and them.
+      taken += bandGap * siblings;
+
+      const stripStyle = getComputedStyle(strip);
+      const stripGap = parseFloat(stripStyle.columnGap) || 0;
+      const chips: number[] = [];
+      // Everything in the row that is not a chip - the "Clear" button -
+      // costs its width plus its gap, and unlike a chip it never leaves
+      // when the row is reduced. Left out, the row measures 56px narrower
+      // than it is and the clip below silently slices the last chip.
+      let reserved = 0;
+      for (const child of strip.children) {
+        const width = child.getBoundingClientRect().width;
+        if (child.classList.contains("star-map__filter-chip")) chips.push(width);
+        else reserved += width + stripGap;
+      }
+      setFilterFit(
+        resolveFilterFit({
+          available: band.getBoundingClientRect().width - taken,
+          chipWidths: chips,
+          droppable: droppableFilters,
+          gap: stripGap,
+          reserved,
+        }),
+      );
+    };
+
+    measure();
+    // Same shape as the card observer above: jsdom has none, and the
+    // initial measure still runs there.
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    // The band's width comes from the window, so watching it alone only
+    // catches resizes. What the strip NEEDS can change without the window
+    // moving at all: `--font-sans` leads with a web font, so the first
+    // layout measures fallback metrics and every box changes when the real
+    // face arrives, and macOS fullscreen drops the chrome's 80px stoplight
+    // reservation in place. Watching the two boxes whose content decides
+    // the fit catches both. No feedback loop: a fit change moves the
+    // strip's own width, but the measurement reads the chips' natural
+    // widths and the band's, neither of which the fit alters, so the
+    // second pass resolves the same state and React bails on the set.
+    observer.observe(band);
+    observer.observe(strip);
+    const chrome = band.firstElementChild;
+    if (chrome && chrome !== strip.parentElement) observer.observe(chrome);
+    return () => observer.disconnect();
+    // Counts and selection change chip widths and what may be dropped, so
+    // both have to re-measure.
+  }, [droppableFilters, filterCounts, hasFilterSelection]);
 
   const lanes = useMemo(() => {
     const result = new Map<
@@ -3823,41 +3924,89 @@ export function StarMapScreen(props: StarMapScreenProps) {
           </button>
         </p>
       ) : null}
-      <div className="star-map__chrome">
-        {/* Same wordmark primitive as the sidebar/Settings nav so the brand
-            reads identically across every window (theme-contract test). */}
-        <p className="sidebar__brand">
-          Pwr<span className="sidebar__brand-accent">Agent</span>
-        </p>
-        {/* ⌘K is the map's only way to reach a card it is not drawing, and
-            a keyboard-only door on a surface driven by the pointer is a
-            door nobody finds. The chord rides the label so learning it
-            costs one glance. */}
-        <button
-          type="button"
-          className="star-map__filter-chip star-map__find"
-          aria-label="Find a thread on the map"
-          onClick={() => setJumpOpen(true)}
-        >
-          <SearchIcon size={13} />
-          <span>Find</span>
-          <span className="star-map__find-chord" aria-hidden="true">
-            {formatPrimaryAccel("K")}
-          </span>
-        </button>
-        <StarMapViewOptions
-          preferences={preferences}
-          onChange={(next) => {
-            // A lens change re-places every card, and one lens (projects)
-            // paints no selected state at all. Carrying a selection across
-            // that boundary leaves the operator holding cards they can no
-            // longer point at — which the kebab would then act on.
-            if (next.layout !== preferences.layout) setSelection(new Set());
-            setPreferences(next);
-            writeStoredPreferences(next);
-          }}
-          onResetView={resetView}
-        />
+      {/* The map's whole top band: chrome on the left, filter chips in the
+          middle, and a right-hand slot for map actions. One grid row, so
+          the three cannot reach each other - they used to be separately
+          positioned islands and the chrome painted over the first filter
+          chip. See `.star-map__top-band` for the drag model that lets a
+          full-width band sit inside the window's only drag handle. */}
+      <div className="star-map__top-band" ref={bandRef}>
+        <div className="star-map__chrome">
+          {/* Same wordmark primitive as the sidebar/Settings nav so the brand
+              reads identically across every window (theme-contract test). */}
+          <p className="sidebar__brand">
+            Pwr<span className="sidebar__brand-accent">Agent</span>
+          </p>
+          {/* ⌘K is the map's only way to reach a card it is not drawing, and
+              a keyboard-only door on a surface driven by the pointer is a
+              door nobody finds. The chord rides the label so learning it
+              costs one glance. */}
+          <button
+            type="button"
+            className="star-map__filter-chip star-map__find"
+            aria-label="Find a thread on the map"
+            onClick={() => setJumpOpen(true)}
+          >
+            <SearchIcon size={13} />
+            <span>Find</span>
+            <span className="star-map__find-chord" aria-hidden="true">
+              {formatPrimaryAccel("K")}
+            </span>
+          </button>
+          <StarMapViewOptions
+            preferences={preferences}
+            onChange={(next) => {
+              // A lens change re-places every card, and one lens (projects)
+              // paints no selected state at all. Carrying a selection across
+              // that boundary leaves the operator holding cards they can no
+              // longer point at — which the kebab would then act on.
+              if (next.layout !== preferences.layout) setSelection(new Set());
+              setPreferences(next);
+              writeStoredPreferences(next);
+            }}
+            onResetView={resetView}
+          />
+        </div>
+        {/* Two renderings of one control set, sitting where the operator
+            already is — beside Find and View, not floating in the middle
+            of the window. Both stay mounted at every width: the strip's
+            chips are what the fit is measured from, so the one that is
+            not showing has to keep its natural width or the measurement
+            loses the input that would bring it back. */}
+        <div className={`star-map__filters is-${filterFit}`}>
+          <div
+            className="star-map__filter-strip"
+            role="group"
+            aria-label="Thread filters"
+            ref={filterStripRef}
+          >
+            {STAR_MAP_FILTERS.map((definition, index) => (
+              <StarMapFilterChip
+                key={definition.key}
+                definition={definition}
+                selection={filterSelection}
+                count={filterCounts[definition.key]}
+                dropped={filterFit === "reduced" && droppableFilters.has(index)}
+                onCycle={() => cycleFilter(definition.key)}
+              />
+            ))}
+            {hasFilterSelection ? (
+              <button
+                type="button"
+                className="star-map__filter-clear"
+                onClick={clearFilters}
+              >
+                Clear
+              </button>
+            ) : null}
+          </div>
+          <StarMapFilterMenu
+            selection={filterSelection}
+            counts={filterCounts}
+            onCycle={cycleFilter}
+            onClear={clearFilters}
+          />
+        </div>
       </div>
       {/* Two different settings can empty the map, and a blank star field
           looks identical either way. Name whichever one is responsible —
@@ -3922,54 +4071,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
           </button>
         </div>
       ) : null}
-      <div className="star-map__filters" role="group" aria-label="Thread filters">
-        {STAR_MAP_FILTERS.map((definition) => {
-          const state = filterState(filterSelection, definition.key);
-          const next =
-            state === "neutral"
-              ? "show only these"
-              : state === "include"
-                ? "hide these instead"
-                : "stop filtering on this";
-          return (
-            <button
-              key={definition.key}
-              type="button"
-              className={`star-map__filter-chip star-map__filter-chip--${state}`}
-              // Tri-state, so `aria-pressed` cannot describe it: exclude is
-              // neither pressed nor unpressed. The label carries the state
-              // and what the next click does.
-              aria-label={`${definition.label}: ${
-                state === "neutral"
-                  ? "not filtered"
-                  : state === "include"
-                    ? "showing only these"
-                    : "hidden"
-              } — click to ${next}`}
-              onClick={() => cycleFilter(definition.key)}
-            >
-              {state === "exclude" ? (
-                <span className="star-map__filter-mark" aria-hidden="true">
-                  −
-                </span>
-              ) : null}
-              <span>{definition.label}</span>
-              <span className="star-map__filter-count">
-                {filterCounts[definition.key]}
-              </span>
-            </button>
-          );
-        })}
-        {hasFilterSelection ? (
-          <button
-            type="button"
-            className="star-map__filter-clear"
-            onClick={clearFilters}
-          >
-            Clear
-          </button>
-        ) : null}
-      </div>
     </div>
   );
 }
