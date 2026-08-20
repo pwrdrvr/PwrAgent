@@ -147,6 +147,16 @@ async function expectTopBandLaidOut(mapWindow: Page, at: string): Promise<void> 
 
   const covered = await mapWindow.evaluate(() =>
     [...document.querySelectorAll(".star-map__filters .star-map__filter-chip")]
+      // The slot holds both renderings of the filters and CSS displays one,
+      // so the other measures 0x0 — and a zero rect centres on (0,0), where
+      // `elementFromPoint` truthfully reports the drag strip. Testing the
+      // rendered one at each width is the point; testing the hidden one is
+      // how this check reported the band as broken at 1280px when it was
+      // not.
+      .filter((chip) => {
+        const box = chip.getBoundingClientRect();
+        return box.width > 0 && box.height > 0;
+      })
       .map((chip) => {
         const box = chip.getBoundingClientRect();
         const top = document.elementFromPoint(
