@@ -53,6 +53,28 @@ function threads(count: number): NavigationThreadSummary[] {
   return Array.from({ length: count }, (_, index) => thread(`t${index}`));
 }
 
+/** A thread in a directory of its own, so it clouds separately. */
+function threadIn(id: string, project: string): NavigationThreadSummary {
+  return {
+    ...thread(id),
+    id,
+    linkedDirectories: [
+      {
+        id: `${project}-dir`,
+        label: project,
+        path: `/repos/${project}`,
+        kind: "local",
+      },
+    ],
+  } as unknown as NavigationThreadSummary;
+}
+
+function threadsIn(project: string, count: number): NavigationThreadSummary[] {
+  return Array.from({ length: count }, (unused, index) =>
+    threadIn(`${project}-${index}`, project),
+  );
+}
+
 function seedLayout(layout: "lanes" | "orbit" | "projects") {
   window.localStorage.setItem(
     "pwragent.starMap.viewPreferences",
@@ -92,6 +114,47 @@ function parseTransform(raw: string): { x: number; y: number; scale: number } {
 
 function readTransform(): { x: number; y: number; scale: number } {
   return parseTransform(canvas().style.transform);
+}
+
+/**
+ * Where a cloud's label sits in viewport pixels: its own canvas position,
+ * through the canvas transform. Composed from the two independent things
+ * that place it, so a layout that moves the bodies and a view that moves
+ * the canvas both show up here — which is the whole question when the
+ * complaint is "the map jumped".
+ */
+function screenPositionOf(project: string): { x: number; y: number } {
+  const label = screen.getByRole("button", {
+    name: new RegExp(`Select the ${project} cards`),
+  });
+  const cloud = label.closest(".star-map__cloud") as HTMLElement | null;
+  if (!cloud) throw new Error(`no cloud around the ${project} label`);
+  return onScreen(cloud, label);
+}
+
+/** Where a project body sits in viewport pixels, in the projects lens. */
+function projectScreenPosition(project: string): { x: number; y: number } {
+  const body = screen
+    .getByText(project)
+    .closest(".star-map__project-cloud") as HTMLElement | null;
+  if (!body) throw new Error(`no project cloud around ${project}`);
+  return onScreen(body);
+}
+
+function onScreen(...placed: HTMLElement[]): { x: number; y: number } {
+  const view = readTransform();
+  const canvasX = placed.reduce(
+    (total, element) => total + Number.parseFloat(element.style.left),
+    0,
+  );
+  const canvasY = placed.reduce(
+    (total, element) => total + Number.parseFloat(element.style.top),
+    0,
+  );
+  return {
+    x: view.x + canvasX * view.scale,
+    y: view.y + canvasY * view.scale,
+  };
 }
 
 /** The canvas's untransformed size, as the screen sized the element. */
@@ -247,7 +310,7 @@ describe("star map view stability", () => {
     });
 
     pan(-300, -200);
-    const panned = canvas().style.transform;
+    const before = projectScreenPosition("PwrSnap");
 
     rerender(
       <StarMapScreen
@@ -265,7 +328,88 @@ describe("star map view stability", () => {
         screen.queryByRole("button", { name: /Open thread: Thread t8/ }),
       ).toBeNull();
     });
-    expect(canvas().style.transform).toBe(panned);
+    // Against the body rather than the raw transform: this lens re-seats
+    // its projects from scratch and normalises the canvas around them, so
+    // the transform has to change by exactly that shift for the map to
+    // hold still. What the operator is owed is the pixels, not the number.
+    const after = projectScreenPosition("PwrSnap");
+    expect(after.x).toBeCloseTo(before.x, 6);
+    expect(after.y).toBeCloseTo(before.y, 6);
+  });
+
+  /**
+   * Unfolding a cloud it has the room for must move nothing at all. The
+   * fold state used to drop the cloud's remembered centre and seats, which
+   * made it an arrival again — re-seated from the base radius outward
+   * along its own bearing, which is rarely where it was. The operator
+   * asked for one more card and the cloud they were reading vanished.
+   */
+  it("unfolds a cloud that has the room without moving anything", async () => {
+    seedLayout("orbit");
+    renderMap({
+      threads: [...threadsIn("PwrSnap", 9), ...threadsIn("PwrAgent", 3)],
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Show 1 more PwrSnap threads/ }),
+      ).toBeTruthy();
+    });
+
+    pan(-320, -180);
+    const unfolded = screenPositionOf("PwrSnap");
+    const untouched = screenPositionOf("PwrAgent");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Show 1 more PwrSnap threads/ }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getAllByRole("button", { name: /^Open thread:/ }),
+      ).toHaveLength(12);
+    });
+
+    expect(screenPositionOf("PwrSnap").x).toBeCloseTo(unfolded.x, 6);
+    expect(screenPositionOf("PwrSnap").y).toBeCloseTo(unfolded.y, 6);
+    expect(screenPositionOf("PwrAgent").x).toBeCloseTo(untouched.x, 6);
+    expect(screenPositionOf("PwrAgent").y).toBeCloseTo(untouched.y, 6);
+  });
+
+  /**
+   * Unfolding a cloud used to move the whole map out from under the
+   * operator, twice over: the cloud itself was re-seated from scratch and
+   * reappeared somewhere else, and the canvas — which is normalised so the
+   * outermost cloud clears the padding — re-based its origin under a view
+   * that had not moved, sliding every other body several hundred pixels
+   * sideways. Clicking "+N more" is a request for two more cards, not for
+   * a new map.
+   */
+  it("keeps the map still when the operator unfolds a cloud", async () => {
+    seedLayout("orbit");
+    renderMap({
+      threads: [...threadsIn("PwrSnap", 14), ...threadsIn("PwrAgent", 3)],
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Show \d+ more PwrSnap threads/ }),
+      ).toBeTruthy();
+    });
+
+    pan(-320, -180);
+    const before = screenPositionOf("PwrAgent");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: /Show \d+ more PwrSnap threads/ }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Show fewer PwrSnap threads/ }),
+      ).toBeTruthy();
+    });
+
+    // The cloud the operator did not touch is still under the same pixels.
+    const after = screenPositionOf("PwrAgent");
+    expect(after.x).toBeCloseTo(before.x, 6);
+    expect(after.y).toBeCloseTo(before.y, 6);
   });
 });
 
@@ -464,13 +608,18 @@ describe("star map view bounds", () => {
     });
   });
 
-  it("lets a shrinking canvas strand the view, recovered by Reset", async () => {
-    // Pins the known gap rather than implying there isn't one. The bounds
-    // are a function of canvas size, and the clamp deliberately does not
-    // re-run on a content change — so a canvas that shrinks out from under
-    // a legally-parked view can leave nothing on screen. Recovery is
-    // manual. If a future change closes this properly, this test should
-    // fail and be rewritten, not deleted.
+  it("keeps a strip on screen when a folding cloud shrinks the canvas", async () => {
+    // This used to strand the view outright, and said so. The bounds are a
+    // function of canvas size and the clamp does not re-run on a content
+    // change, so a canvas that shrank out from under a legally-parked view
+    // left nothing on screen and only Reset brought it back.
+    //
+    // Holding the view against the map closed the common case: a shrink at
+    // the left or top edge moves the canvas origin, the view follows it,
+    // and that move goes through the clamp. What is left of the gap is a
+    // shrink that leaves the origin exactly where it was — the canvas
+    // losing width off its right edge alone — which still does not
+    // re-clamp. Reset still recovers, and is asserted below.
     //
     // The shrink is driven by folding an expanded cloud back up. Archiving
     // no longer shrinks anything: cloud seats, extents and centres are
@@ -509,8 +658,10 @@ describe("star map view bounds", () => {
     expect(narrow.width).toBeLessThan(
       wide.width - VIEWPORT.width * MIN_VISIBLE_FRACTION,
     );
-    const stranded = readTransform();
-    expect(visible(stranded.x, narrow.width, VIEWPORT.width)).toBe(0);
+    const folded = readTransform();
+    expect(
+      visible(folded.x, narrow.width, VIEWPORT.width),
+    ).toBeGreaterThanOrEqual(VIEWPORT.width * MIN_VISIBLE_FRACTION);
 
     fireEvent.click(screen.getByRole("button", { name: "View" }));
     fireEvent.click(screen.getByRole("button", { name: "Reset view" }));

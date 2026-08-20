@@ -55,7 +55,7 @@ import {
   buildInstanceClusters,
   computeClusterCloud,
   emptyCloudMemory,
-  forgetCluster,
+  refitCluster,
   resolveCloudDrop,
   type StarMapClusterPlacement,
   type StarMapCloudMemory,
@@ -1208,11 +1208,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   const toggleClusterExpanded = useCallback(
     (instanceId: string, clusterKey: string) => {
-      // Unfolding or folding a cloud is a request to re-fit THAT cloud, so
-      // it forgets its seats and centre. Everything else keeps its layout.
+      // Unfolding or folding a cloud is a request to re-fit THAT cloud's
+      // rings, so it can grow outward and shrink back. Its centre and its
+      // seats stay: the cards already on screen are not what changed.
       cloudMemory.current.set(
         instanceId,
-        forgetCluster(
+        refitCluster(
           cloudMemory.current.get(instanceId) ?? emptyCloudMemory(),
           clusterKey,
         ),
@@ -1780,6 +1781,77 @@ export function StarMapScreen(props: StarMapScreenProps) {
     viewAnchor,
     viewportSize.width,
     viewportSize.height,
+  ]);
+
+  /**
+   * Where the map's origin sits on the canvas right now, per lens. Lanes
+   * grows down and to the right from a fixed corner, so it has none.
+   */
+  const canvasOrigin = orbitMode
+    ? orbit.origin
+    : projectsMode
+      ? projectLayout.core
+      : undefined;
+
+  /**
+   * Hold the operator's view against the map rather than against the
+   * canvas.
+   *
+   * Orbit and projects normalise their canvas so the leftmost, topmost
+   * thing drawn clears the padding. That makes the origin — and every body
+   * measured from it — move whenever a cloud's extent changes on those
+   * edges, while the view transform stays exactly where it was. Expanding
+   * a cloud with its "+N more" chip slid the whole map several hundred
+   * pixels sideways, and collapsing it slid the map back: the operator
+   * asked one cloud for more cards and the map jumped out from under them.
+   *
+   * So when the origin moves, the view moves with it by the same amount in
+   * viewport pixels, and the world point under any given pixel is the one
+   * that was there before. Only while the view is the operator's: before
+   * that the centring effect above owns it and places it against the new
+   * canvas itself. Layout effect, so the compensation lands in the same
+   * paint as the layout that needed it.
+   */
+  const canvasOriginRef = useRef<
+    { layout: string; x: number; y: number } | undefined
+  >(
+    canvasOrigin
+      ? { layout: preferences.layout, ...canvasOrigin }
+      : undefined,
+  );
+  useLayoutEffect(() => {
+    const previous = canvasOriginRef.current;
+    canvasOriginRef.current = canvasOrigin
+      ? { layout: preferences.layout, ...canvasOrigin }
+      : undefined;
+    if (!canvasOrigin || !previous) return;
+    // A lens switch is a different map on a different canvas, not this
+    // one moving; the ownership reset and the centring effect place it.
+    if (previous.layout !== preferences.layout) return;
+    if (!operatorMovedViewRef.current) return;
+    const dx = canvasOrigin.x - previous.x;
+    const dy = canvasOrigin.y - previous.y;
+    if (dx === 0 && dy === 0) return;
+    const current = viewRef.current;
+    commitView(
+      clampStarMapView({
+        view: {
+          ...current,
+          x: current.x - dx * current.scale,
+          y: current.y - dy * current.scale,
+        },
+        canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+        viewport: { width: viewportSize.width, height: viewportSize.height },
+      }),
+    );
+  }, [
+    canvasOrigin,
+    commitView,
+    panZoomCanvas.height,
+    panZoomCanvas.width,
+    preferences.layout,
+    viewportSize.height,
+    viewportSize.width,
   ]);
 
   /**
@@ -3069,11 +3141,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
       );
       arrangement.setCardPosition(params.instanceId, threadKey, null);
       // The target cloud is about to gain or lose a card, so it re-fits
-      // rather than trying to seat the newcomer in a shape built without
-      // it. Every other cloud keeps its layout.
+      // its rings around the newcomer rather than wearing the radius the
+      // old membership needed. Every other cloud keeps its layout.
       cloudMemory.current.set(
         params.instanceId,
-        forgetCluster(
+        refitCluster(
           cloudMemory.current.get(params.instanceId) ?? emptyCloudMemory(),
           drop.clusterKey,
         ),

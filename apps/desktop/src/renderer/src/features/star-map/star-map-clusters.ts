@@ -75,6 +75,8 @@ const SEAT_RADIUS_STEP = 26;
 const SEAT_MAX_PROBES = 240;
 /** Clouds are wide and short-ish, so seating stretches horizontally. */
 const SEAT_ASPECT_X = 1.3;
+/** Directions tried around a cloud that is re-fitting into a new size. */
+const REFIT_BEARINGS = 16;
 
 export type StarMapClusterSpec = {
   /** Stable identity: project key, or `${projectKey}::pc:${parentKey}`. */
@@ -326,8 +328,10 @@ export function buildInstanceClusters(params: {
  * So seats are remembered per thread, ring allocation only grows, and a
  * cloud keeps the centre it was given. A new thread takes the lowest free
  * seat; a new cloud is seated around what is already placed. Nothing that
- * was already on screen moves unless the operator asks for it (expand or
- * collapse drops that cloud's memory, and the map re-fits it).
+ * was already on screen moves unless the operator asks for it — and even
+ * then only what they asked for: expand and collapse drop that cloud's
+ * ring allocation alone (see `refitCluster`), so it grows and shrinks
+ * around the centre and the seats it already has.
  */
 export type StarMapCloudMemory = {
   /** Cloud centre per cluster key, body-relative. */
@@ -342,18 +346,35 @@ export function emptyCloudMemory(): StarMapCloudMemory {
   return { centers: new Map(), seats: new Map(), rings: new Map() };
 }
 
-/** Forget one cloud, so the next layout re-fits it from scratch. */
-export function forgetCluster(
+/**
+ * Let one cloud re-fit its rings, in place.
+ *
+ * Only the ring allocation goes. Rings are grow-only (see
+ * `computeClusterCloud`), so without this a cloud the operator collapses
+ * would keep the radius its expanded cards needed — a ring of empty space
+ * where the cards used to be.
+ *
+ * The centre and the seats stay, on purpose. Dropping them made the cloud
+ * an arrival again, and an arrival is seated from the base radius outward
+ * along its own bearing — so expanding a cloud teleported it across the
+ * map, and collapsing it teleported it somewhere else again, while the
+ * cards that were still on screen shuffled into different seats. Keeping
+ * both means an expand grows the cloud outward around the centre it
+ * already has, a collapse pulls it back in, and every card that stays
+ * visible stays exactly where the operator last saw it. If the grown
+ * cloud lands on a neighbour, `computeClusterCloud` re-seats it then —
+ * the cloud that changed is still the one that moves.
+ */
+export function refitCluster(
   memory: StarMapCloudMemory,
   clusterKey: string,
 ): StarMapCloudMemory {
-  const centers = new Map(memory.centers);
-  const seats = new Map(memory.seats);
+  if (!memory.rings.has(clusterKey)) return memory;
   const rings = new Map(memory.rings);
-  centers.delete(clusterKey);
-  seats.delete(clusterKey);
   rings.delete(clusterKey);
-  return { centers, seats, rings };
+  // Centres and seats carry through by reference: a layout reads its
+  // memory and returns fresh maps, it never writes back into this one.
+  return { centers: memory.centers, seats: memory.seats, rings };
 }
 
 /**
@@ -548,6 +569,57 @@ function seatCluster(params: {
   return center;
 }
 
+/**
+ * Re-seat a cloud that has outgrown the spot it is in, as near to that
+ * spot as it can be put.
+ *
+ * A cloud the operator has been looking at is not a cloud to re-seat like
+ * an arrival: seating one from the base radius outward along its key's
+ * bearing sent an expanded cloud a screen and a half away, which is how
+ * "+2 more" came to mean "and now find your threads again". Nor is walking
+ * outward along that bearing enough on its own — the bearing is often
+ * blocked by the very neighbour the growth ran into, and the cloud sails
+ * past it just as far.
+ *
+ * So the search is around where the cloud already is: rings of increasing
+ * radius, each swept from the outward bearing inwards to either side, and
+ * the first clear spot wins. Sweeping outward-first keeps the natural
+ * answer — a cloud grows away from the body — while allowing the sideways
+ * step that a blocked bearing needs. The distance it moves is then bounded
+ * by the room it actually needed, not by the map.
+ */
+function reseatCluster(params: {
+  key: string;
+  from: { x: number; y: number };
+  extent: { rx: number; ry: number };
+  placed: readonly Box[];
+}): { x: number; y: number } {
+  if (isClear(boxFor(params.from, params.extent), params.placed)) {
+    return params.from;
+  }
+  const outward = Math.atan2(params.from.y, params.from.x / SEAT_ASPECT_X);
+  for (let step = 1; step <= SEAT_MAX_PROBES; step += 1) {
+    const radius = step * SEAT_RADIUS_STEP;
+    for (let bearing = 0; bearing < REFIT_BEARINGS; bearing += 1) {
+      // 0, +1, -1, +2, -2 … around the outward direction.
+      const turn = Math.ceil(bearing / 2) * (bearing % 2 === 0 ? -1 : 1);
+      const angle = outward + (turn * 2 * Math.PI) / REFIT_BEARINGS;
+      const center = {
+        x: params.from.x + Math.cos(angle) * radius * SEAT_ASPECT_X,
+        y: params.from.y + Math.sin(angle) * radius,
+      };
+      if (isClear(boxFor(center, params.extent), params.placed)) return center;
+    }
+  }
+  // Nowhere within reach of where it stands: fall back to the arrival
+  // walk, which is guaranteed to leave the instance's chrome behind.
+  return seatCluster({
+    extent: params.extent,
+    key: params.key,
+    placed: params.placed,
+  });
+}
+
 /** Extent an instance claims when its clouds are empty — its own body. */
 const EMPTY_CLOUD_EXTENT = 70;
 
@@ -588,7 +660,7 @@ export function computeClusterCloud(params: {
       highestSeat < 0 ? 0 : seatAddress(highestSeat, params.cardWidth).ring;
     // Grow-only: an outermost card leaving must not pull the cloud in and
     // shove its neighbours around. Collapsing the cloud is the operator's
-    // call and drops this memory (see `forgetCluster`).
+    // call and drops this one entry (see `refitCluster`).
     const rings = Math.max(needed, previous.rings.get(spec.key) ?? 0);
     nextRings.set(spec.key, rings);
     return {
@@ -633,6 +705,9 @@ export function computeClusterCloud(params: {
   const lonely =
     sized.length === 1 && previous.centers.size === 0 ? sized[0] : undefined;
   for (const cluster of [...reseat, ...arrivals]) {
+    // A cloud that was already somewhere is re-fitted near where it
+    // stands; a new one is seated on its own bearing.
+    const held = previous.centers.get(cluster.spec.key);
     const center =
       cluster === lonely
         ? {
@@ -644,11 +719,18 @@ export function computeClusterCloud(params: {
               + CLOUD_LABEL_ROOM
               + cluster.extent.ry,
           }
-        : seatCluster({
-            extent: cluster.extent,
-            key: cluster.spec.key,
-            placed,
-          });
+        : held
+          ? reseatCluster({
+              extent: cluster.extent,
+              from: held,
+              key: cluster.spec.key,
+              placed,
+            })
+          : seatCluster({
+              extent: cluster.extent,
+              key: cluster.spec.key,
+              placed,
+            });
     nextCenters.set(cluster.spec.key, center);
     placed.push(boxFor(center, cluster.extent));
   }

@@ -139,6 +139,61 @@ describe("computeOrbitPlacement", () => {
     }
   });
 
+  /**
+   * The screen holds the operator's view against this point, so it has to
+   * be the truth about where the map's origin ended up. The canvas is
+   * normalised around whatever is drawn, so a cloud growing on the left or
+   * top edge slides every body — a translation the view has to undo, and
+   * cannot undo without being told about it.
+   */
+  it("reports where the origin landed on the canvas", () => {
+    const counts = new Map([
+      ["pwr_local", 6],
+      ["pwr_a", 3],
+      ["pwr_b", 0],
+      ["pwr_c", 8],
+    ]);
+    // pwr_c is the widest child and stays that way below, so nothing here
+    // re-spaces the ring: the only thing that changes is where the drawn
+    // content starts, which is exactly the case the view compensates for.
+    const extents = new Map([
+      ["pwr_local", { rx: 400, ry: 300 }],
+      ["pwr_a", { rx: 200, ry: 180 }],
+      ["pwr_b", { rx: 200, ry: 180 }],
+      ["pwr_c", { rx: 500, ry: 420 }],
+    ]);
+    const placement = computeOrbitPlacement({
+      nodes,
+      cardCounts: counts,
+      cardWidth: 220,
+      extents,
+    });
+    // The hub is the origin, so its canvas position is the origin's.
+    const hub = placement.instances.find((instance) => instance.isHub)!;
+    expect(placement.origin).toEqual({ x: hub.x, y: hub.y });
+
+    const grown = computeOrbitPlacement({
+      nodes,
+      cardCounts: counts,
+      cardWidth: 220,
+      extents: new Map(extents).set("pwr_a", { rx: 420, ry: 380 }),
+    });
+    expect(grown.origin).not.toEqual(placement.origin);
+    // Every body moved by exactly the origin's shift, which is what makes
+    // compensating for it at the view enough to hold the map still.
+    const shift = {
+      x: grown.origin.x - placement.origin.x,
+      y: grown.origin.y - placement.origin.y,
+    };
+    for (const instance of placement.instances) {
+      const moved = grown.instances.find(
+        (candidate) => candidate.instanceId === instance.instanceId,
+      )!;
+      expect(moved.x - instance.x).toBeCloseTo(shift.x, 9);
+      expect(moved.y - instance.y).toBeCloseTo(shift.y, 9);
+    }
+  });
+
   it("spaces bodies so neighbouring card rings cannot touch", () => {
     const counts = new Map([
       ["pwr_local", 6],
