@@ -1931,7 +1931,25 @@ function DesktopAppShell(props: {
     ? undefined
     : {
         onOpen: () => {
-          void desktopApi?.openStarMapWindow?.();
+          // Both ends of this call are assumptions, not guarantees:
+          // `useDesktopApi` resolves the preload bridge by polling, so the
+          // control is mounted and clickable for however long that takes,
+          // and the channel is an `ipcRenderer.invoke` that can reject.
+          // The optional chaining stays — a half-built bridge must not
+          // throw out of a click handler — but a click that goes nowhere
+          // has to say so. Swallowing it cost a Star Map E2E failure six
+          // seconds of silence and a bare "window did not open", with
+          // nothing in the trace to say which end had dropped it.
+          if (!desktopApi?.openStarMapWindow) {
+            console.error(
+              "Open Star Map ignored: the desktop bridge is not ready.",
+              { bridgePresent: Boolean(desktopApi) },
+            );
+            return;
+          }
+          void desktopApi.openStarMapWindow().catch((error) => {
+            console.error("Opening the Star Map window failed.", error);
+          });
         },
       };
   useEffect(() => {

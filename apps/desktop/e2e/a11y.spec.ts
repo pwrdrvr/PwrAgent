@@ -33,6 +33,7 @@ import type { DesktopAppearanceTheme } from "@pwragent/shared";
 import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
+import { openStarMapWindow } from "./fixtures/star-map-window";
 import {
   buildAuditSubAgents,
   seedThreadSubAgents,
@@ -69,31 +70,6 @@ async function launchAuditApp(options?: {
   });
   await app.window.emulateMedia({ reducedMotion: "reduce" });
   return app;
-}
-
-/**
- * Poll `electronApp.windows()` for the dedicated Star Map window. The
- * BrowserWindow is created with `show: false`, so Playwright's `window`
- * event fires before the URL has loaded; polling sidesteps the race
- * (same pattern as `appearance-broadcast.spec.ts`).
- */
-async function waitForStarMapWindow(
-  app: Awaited<ReturnType<typeof launchElectronApp>>,
-): Promise<Page> {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    for (const candidate of app.electronApp.windows()) {
-      if (candidate.url().includes("#star-map")) {
-        return candidate;
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  throw new Error(
-    `Star Map window did not open; current windows: ${app.electronApp
-      .windows()
-      .map((win) => win.url())
-      .join(", ")}`,
-  );
 }
 
 // The smoke thread never reaches the Star Map: `deriveInboxState` keeps a
@@ -538,8 +514,7 @@ for (const theme of AUDIT_THEMES) {
         await expect(attentionThread).toBeVisible();
         // The map lives in its own OS window; the header control spawns
         // it and every map assertion below runs against that window.
-        await app.window.getByRole("button", { name: "Open Star Map" }).click();
-        const mapWindow = await waitForStarMapWindow(app);
+        const mapWindow = await openStarMapWindow(app);
         // The audit harness emulates reduced motion per Page, and the map
         // window is a different Page than the one `launchAuditApp`
         // configured — without this the card rise animation leaves text
