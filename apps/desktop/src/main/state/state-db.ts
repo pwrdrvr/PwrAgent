@@ -18,6 +18,25 @@ export const CURRENT_STATE_DB_USER_VERSION = 52;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
+/** `PRAGMA auto_vacuum` result codes, which SQLite reports as bare integers. */
+export const SQLITE_AUTO_VACUUM_NONE = 0;
+export const SQLITE_AUTO_VACUUM_INCREMENTAL = 2;
+
+/**
+ * Outcome of `StateDb.ensureIncrementalAutoVacuum`, reported rather than
+ * logged so `state-db.ts` stays free of an Electron logger import — every
+ * unit test in the suite opens one of these against a temp file.
+ */
+export type AutoVacuumConversion =
+  | { status: "already-incremental" }
+  | {
+      bytesAfter: number;
+      bytesBefore: number;
+      elapsedMs: number;
+      status: "converted";
+    }
+  | { error: Error; status: "failed" };
+
 const SCHEMA_V1 = `
 CREATE TABLE meta (
   key   TEXT PRIMARY KEY,
@@ -1109,6 +1128,19 @@ export class StateDb {
     const nativeBinding = getNativeBinding();
     const db = new Database(dbPath, nativeBinding ? { nativeBinding } : {});
 
+    // FIRST, ahead of every other pragma. SQLite honours `auto_vacuum` only
+    // while the file still has no database header; once one exists the
+    // assignment is silently ignored and the mode can be changed only by a
+    // full VACUUM. `journal_mode = WAL` writes that header, so setting WAL
+    // first — as this did until the fix — left every database PwrAgent has
+    // ever created at NONE. That in turn made the `incremental_vacuum` at the
+    // end of `cleanupExpired` a no-op, so pages freed by the retention sweeps
+    // were never returned to the filesystem and `state.db` only ever grew.
+    //
+    // Unconditional on purpose: on a fresh file it takes, and on an existing
+    // file it is exactly the silent no-op described above. Databases created
+    // before the fix are converted by `ensureIncrementalAutoVacuum`.
+    db.pragma("auto_vacuum = INCREMENTAL");
     db.pragma("journal_mode = WAL");
     db.pragma("synchronous = NORMAL");
     db.pragma(`wal_autocheckpoint = ${STATE_DB_WAL_AUTOCHECKPOINT_PAGES}`);
@@ -1118,11 +1150,6 @@ export class StateDb {
 
     const userVersion = db.pragma("user_version", { simple: true }) as number;
     const freshDatabase = userVersion === 0;
-    if (freshDatabase) {
-      // Has to precede the first write and cannot be set from inside a
-      // transaction, so it stays outside the wrapper below.
-      db.pragma("auto_vacuum = INCREMENTAL");
-    }
 
     // Migrations are wrapped in transactions so a partial failure
     // (mid-DDL crash, transient disk error) rolls back cleanly and the
@@ -1556,10 +1583,70 @@ export class StateDb {
     this.db.close();
   }
 
-  startGc(intervalMs = 60 * 60 * 1000): void {
+  /**
+   * Brings a database created before the `auto_vacuum` ordering fix up to
+   * INCREMENTAL, which is the only thing that makes the `incremental_vacuum`
+   * at the end of `cleanupExpired` reclaim anything.
+   *
+   * Converting an existing database requires a full VACUUM — SQLite offers no
+   * cheaper path once a header exists — so this rewrites the file once, ever.
+   *
+   * **Deliberately NOT a `user_version` migration**, for the reason recorded
+   * on `collapseComposerDraftJournalPrefixChains`: reserving a schema number
+   * for a change that alters no schema makes it unbackportable, because a
+   * release branch that took the number would collide with whatever main
+   * assigns next. It needs no marker of its own either — a converted database
+   * reports `PRAGMA auto_vacuum` as INCREMENTAL, so the guard below IS the
+   * marker, and the pass is self-healing if a database ever reverts.
+   *
+   * Failure is returned, not thrown. VACUUM wants an exclusive lock, and
+   * profiles are deliberately shared between instances over WAL, so a second
+   * window running at the same moment can lose the race and get SQLITE_BUSY
+   * after `busy_timeout`. A full disk fails the same way. Neither is worth
+   * refusing to start over: the database is untouched, still readable, and
+   * the next launch retries.
+   */
+  ensureIncrementalAutoVacuum(): AutoVacuumConversion {
+    const pageSize = this.db.pragma("page_size", { simple: true }) as number;
+    const sizeBytes = () =>
+      (this.db.pragma("page_count", { simple: true }) as number) * pageSize;
+
+    if (
+      (this.db.pragma("auto_vacuum", { simple: true }) as number)
+      === SQLITE_AUTO_VACUUM_INCREMENTAL
+    ) {
+      return { status: "already-incremental" };
+    }
+
+    const bytesBefore = sizeBytes();
+    const startedAt = Date.now();
+    try {
+      this.db.pragma("auto_vacuum = INCREMENTAL");
+      // Takes effect only through the rewrite; the assignment above is the
+      // silent no-op that `open` documents.
+      this.db.exec("VACUUM");
+    } catch (error) {
+      return {
+        error: error instanceof Error ? error : new Error(String(error)),
+        status: "failed",
+      };
+    }
+    return {
+      bytesAfter: sizeBytes(),
+      bytesBefore,
+      elapsedMs: Date.now() - startedAt,
+      status: "converted",
+    };
+  }
+
+  startGc(intervalMs = 60 * 60 * 1000): AutoVacuumConversion {
     this.cleanupExpired();
+    // After the first sweep, so the one-time rewrite also drops the pages that
+    // sweep just freed rather than carrying them into the new file.
+    const autoVacuum = this.ensureIncrementalAutoVacuum();
     this.gcTimer = setInterval(() => this.cleanupExpired(), intervalMs);
     if (this.gcTimer.unref) this.gcTimer.unref();
+    return autoVacuum;
   }
 
   stopGc(): void {

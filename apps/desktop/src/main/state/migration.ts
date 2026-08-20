@@ -127,10 +127,14 @@ export function migrateIfNeeded(options?: {
 
   const tmpDb = new Database(tmpDbPath, nativeBinding ? { nativeBinding } : {});
   try {
-    tmpDb.pragma("journal_mode = WAL");
-    tmpDb.pragma("synchronous = NORMAL");
-    tmpDb.pragma("auto_vacuum = INCREMENTAL");
-
+    // `tmpDb` deliberately sets no pragmas. It exists only to hold the temp
+    // path open across the rename dance below; `StateDb.open` is what
+    // configures the file, and it has to be the connection that writes the
+    // database header — `auto_vacuum` is honoured only before a header
+    // exists, so a pragma issued on this connection would be redundant and
+    // would also be the thing that stopped `StateDb.open`'s own `auto_vacuum`
+    // from taking. A bare `new Database` writes nothing (the file is still 0
+    // bytes at this point), which is what keeps that ordering intact.
     const stateDb = StateDb.open(tmpDbPath, { profileName });
 
     const counts: Record<string, number> = {};
