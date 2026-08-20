@@ -543,6 +543,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * nothing that merely changes the map's contents may move it.
    */
   const operatorMovedViewRef = useRef(false);
+  /**
+   * The view an in-flight canvas pan is measuring its pointer travel from,
+   * or undefined when no drag is running. Anything that moves the view
+   * under the drag has to move this with it (see `canvasOriginRef`).
+   */
+  const panBaseRef = useRef<StarMapView | undefined>(undefined);
 
   /**
    * Move the view without telling React. For gesture frames: writes the
@@ -794,15 +800,33 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // scale from state; the drag has always worked this way.
     // Read from the live ref, not React state: a keyboard flight may have
     // moved the view since the last commit.
-    const base = viewRef.current;
-    /** Latest raw pointer position, unclamped. Both writers clamp it. */
-    let pointerX = base.x;
-    let pointerY = base.y;
+    //
+    // Held in a ref rather than this closure, and applied to the pointer's
+    // travel rather than baked into an absolute position, because the base
+    // can move under a drag: a relayout that shifts the canvas origin steps
+    // the view to hold the map still (see `canvasOriginRef`), and a base
+    // captured by value would recompute over the top of that on the next
+    // frame and put the jump back.
+    panBaseRef.current = { ...viewRef.current };
+    /** Pointer travel since the press. Applied to the live base. */
+    let travelX = 0;
+    let travelY = 0;
     let frame = 0;
     const bounds = { canvas: panZoomCanvas, viewport: viewportSize };
+    /** Where the drag wants the view, unclamped. Both writers clamp it. */
+    const dragged = (): StarMapView => {
+      const base = panBaseRef.current ?? viewRef.current;
+      return { scale: base.scale, x: base.x + travelX, y: base.y + travelY };
+    };
     const move = (pointerEvent: globalThis.PointerEvent) => {
-      pointerX = base.x + pointerEvent.clientX - startX;
-      pointerY = base.y + pointerEvent.clientY - startY;
+      travelX = pointerEvent.clientX - startX;
+      travelY = pointerEvent.clientY - startY;
+      // Ownership from the first travel, not from the release: a cloud can
+      // arrive while the drag is still running, and until the view is the
+      // operator's the auto-centre answers that by re-placing the view they
+      // are in the middle of setting. `stop` sets it too, for the flick
+      // that commits before any frame has run.
+      operatorMovedViewRef.current = true;
       if (!frame) {
         frame = requestAnimationFrame(() => {
           frame = 0;
@@ -810,12 +834,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           // transform straight onto the canvas, so an unclamped live path
           // would let the map leave the window and then jump back on
           // pointerup when the clamped state landed.
-          paintView(
-            clampStarMapView({
-              view: { x: pointerX, y: pointerY, scale: base.scale },
-              ...bounds,
-            }),
-          );
+          paintView(clampStarMapView({ view: dragged(), ...bounds }));
         });
       }
     };
@@ -835,9 +854,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // has to be in bounds on its own account — and a flick released
       // before any frame ran still commits where the pointer actually
       // ended up.
+      const landed = dragged();
+      panBaseRef.current = undefined;
       commitView(
         clampStarMapView({
-          view: { ...viewRef.current, x: pointerX, y: pointerY },
+          // Scale from the live view, not the base: a pinch mid-drag is
+          // the one part of the gesture the base does not own.
+          view: { ...viewRef.current, x: landed.x, y: landed.y },
           ...bounds,
         }),
       );
@@ -1814,11 +1837,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
    */
   const canvasOriginRef = useRef<
     { layout: string; x: number; y: number } | undefined
-  >(
-    canvasOrigin
-      ? { layout: preferences.layout, ...canvasOrigin }
-      : undefined,
-  );
+  >(undefined);
   useLayoutEffect(() => {
     const previous = canvasOriginRef.current;
     canvasOriginRef.current = canvasOrigin
@@ -1833,13 +1852,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
     const dy = canvasOrigin.y - previous.y;
     if (dx === 0 && dy === 0) return;
     const current = viewRef.current;
+    const step = { x: dx * current.scale, y: dy * current.scale };
+    // A drag in flight measures its travel from a base of its own, and
+    // repaints from it on the very next frame. Step that base too, or the
+    // frame would compute over the top of this and put the jump back.
+    const panBase = panBaseRef.current;
+    if (panBase) {
+      panBaseRef.current = {
+        ...panBase,
+        x: panBase.x - step.x,
+        y: panBase.y - step.y,
+      };
+    }
     commitView(
       clampStarMapView({
-        view: {
-          ...current,
-          x: current.x - dx * current.scale,
-          y: current.y - dy * current.scale,
-        },
+        view: { ...current, x: current.x - step.x, y: current.y - step.y },
         canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
         viewport: { width: viewportSize.width, height: viewportSize.height },
       }),

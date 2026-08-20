@@ -57,7 +57,6 @@ function threads(count: number): NavigationThreadSummary[] {
 function threadIn(id: string, project: string): NavigationThreadSummary {
   return {
     ...thread(id),
-    id,
     linkedDirectories: [
       {
         id: `${project}-dir`,
@@ -155,6 +154,15 @@ function onScreen(...placed: HTMLElement[]): { x: number; y: number } {
     x: view.x + canvasX * view.scale,
     y: view.y + canvasY * view.scale,
   };
+}
+
+/** Let a gesture's animation frame run so it writes the live transform. */
+async function flushFrame() {
+  await act(async () => {
+    await new Promise((resolve) => {
+      requestAnimationFrame(() => resolve(undefined));
+    });
+  });
 }
 
 /** The canvas's untransformed size, as the screen sized the element. */
@@ -411,6 +419,61 @@ describe("star map view stability", () => {
     expect(after.x).toBeCloseTo(before.x, 6);
     expect(after.y).toBeCloseTo(before.y, 6);
   });
+
+  /**
+   * A relayout does not wait for the operator to let go of the map. The
+   * drag measures its pointer travel from a base of its own and repaints
+   * from it on the next frame, so holding the view still has to step that
+   * base too — a base captured by value simply painted the jump back.
+   */
+  it("keeps the map still when a cloud arrives mid-drag", async () => {
+    seedLayout("orbit");
+    const held = [...threadsIn("PwrSnap", 6), ...threadsIn("PwrAgent", 3)];
+    const { rerender } = renderMap({ threads: held });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Select the PwrAgent cards/ }),
+      ).toBeTruthy();
+    });
+
+    const viewport = document.querySelector(".star-map__viewport")!;
+    fireEvent.pointerDown(viewport, { button: 0, clientX: 500, clientY: 400 });
+    fireEvent.pointerMove(window, { clientX: 400, clientY: 300 });
+    await flushFrame();
+    const before = screenPositionOf("PwrAgent");
+
+    // A thread lands in a repo the map has never seen: a new cloud is
+    // seated, the instance's extent grows and the canvas origin moves.
+    rerender(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={[...held, ...threadsIn("PwrDrvr", 4)]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Select the PwrDrvr cards/ }),
+      ).toBeTruthy();
+    });
+
+    // Same pointer position, so anything that moved was the map, not the
+    // drag. The frame after the relayout is the one that used to undo the
+    // compensation.
+    fireEvent.pointerMove(window, { clientX: 400, clientY: 300 });
+    await flushFrame();
+    const during = screenPositionOf("PwrAgent");
+    expect(during.x).toBeCloseTo(before.x, 6);
+    expect(during.y).toBeCloseTo(before.y, 6);
+
+    fireEvent.pointerUp(window, { clientX: 400, clientY: 300 });
+    const landed = screenPositionOf("PwrAgent");
+    expect(landed.x).toBeCloseTo(before.x, 6);
+    expect(landed.y).toBeCloseTo(before.y, 6);
+  });
 });
 
 /**
@@ -438,15 +501,6 @@ describe("star map view bounds", () => {
       ).toBeTruthy();
     });
     return rendered;
-  }
-
-  /** Let the pan's animation frame run so it writes the live transform. */
-  async function flushFrame() {
-    await act(async () => {
-      await new Promise((resolve) => {
-        requestAnimationFrame(() => resolve(undefined));
-      });
-    });
   }
 
   it("keeps a strip of canvas on screen when dragged off the top-left", async () => {
