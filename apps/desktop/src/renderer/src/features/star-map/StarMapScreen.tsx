@@ -64,7 +64,6 @@ import {
   addFilterMatchCounts,
   countFilterMatches,
   cycleFilterState,
-  filterState,
   readStoredFilterSelection,
   selectFilteredThreads,
   STAR_MAP_FILTERS,
@@ -123,6 +122,8 @@ import {
 } from "./star-map-flight";
 import { useStarMapFlight } from "./useStarMapFlight";
 import { StarMapViewOptions } from "./StarMapViewOptions";
+import { StarMapFilterChip } from "./StarMapFilterChip";
+import { StarMapFilterMenu } from "./StarMapFilterMenu";
 import { StarMapKeyHint } from "./StarMapKeyHint";
 import { useStarMapCameraKeys } from "./useStarMapCameraKeys";
 import { StarMapInstanceCard } from "./StarMapInstanceCard";
@@ -3866,53 +3867,41 @@ export function StarMapScreen(props: StarMapScreenProps) {
             onResetView={resetView}
           />
         </div>
-        <div className="star-map__filters" role="group" aria-label="Thread filters">
-          {STAR_MAP_FILTERS.map((definition) => {
-            const state = filterState(filterSelection, definition.key);
-            const next =
-              state === "neutral"
-                ? "show only these"
-                : state === "include"
-                  ? "hide these instead"
-                  : "stop filtering on this";
-            return (
-              <button
+        {/* Two renderings of one control set. The strip is the real one;
+            the menu is what the band shows when the window is too narrow
+            to hold it. CSS picks, so neither has to measure anything —
+            see the `@media` beside `.star-map__filters`. */}
+        <div className="star-map__filters">
+          <div
+            className="star-map__filter-strip"
+            role="group"
+            aria-label="Thread filters"
+          >
+            {STAR_MAP_FILTERS.map((definition) => (
+              <StarMapFilterChip
                 key={definition.key}
+                definition={definition}
+                selection={filterSelection}
+                count={filterCounts[definition.key]}
+                onCycle={() => cycleFilter(definition.key)}
+              />
+            ))}
+            {hasFilterSelection ? (
+              <button
                 type="button"
-                className={`star-map__filter-chip star-map__filter-chip--${state}`}
-                // Tri-state, so `aria-pressed` cannot describe it: exclude is
-                // neither pressed nor unpressed. The label carries the state
-                // and what the next click does.
-                aria-label={`${definition.label}: ${
-                  state === "neutral"
-                    ? "not filtered"
-                    : state === "include"
-                      ? "showing only these"
-                      : "hidden"
-                } — click to ${next}`}
-                onClick={() => cycleFilter(definition.key)}
+                className="star-map__filter-clear"
+                onClick={clearFilters}
               >
-                {state === "exclude" ? (
-                  <span className="star-map__filter-mark" aria-hidden="true">
-                    −
-                  </span>
-                ) : null}
-                <span>{definition.label}</span>
-                <span className="star-map__filter-count">
-                  {filterCounts[definition.key]}
-                </span>
+                Clear
               </button>
-            );
-          })}
-          {hasFilterSelection ? (
-            <button
-              type="button"
-              className="star-map__filter-clear"
-              onClick={clearFilters}
-            >
-              Clear
-            </button>
-          ) : null}
+            ) : null}
+          </div>
+          <StarMapFilterMenu
+            selection={filterSelection}
+            counts={filterCounts}
+            onCycle={cycleFilter}
+            onClear={clearFilters}
+          />
         </div>
       </div>
       {/* Two different settings can empty the map, and a blank star field

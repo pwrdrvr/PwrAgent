@@ -1024,10 +1024,35 @@ describe("Tangerine Terminal theme contract", () => {
     expect(extractRuleBody(css, ".star-map__actions")).toContain(
       "justify-self: end;",
     );
-    // Wrapping is what lets the middle track shrink — its min-content
-    // becomes one chip rather than the whole strip — so a narrow window
-    // stacks the chips instead of pushing them under the chrome.
-    expect(filtersRule).toContain("flex-wrap: wrap;");
+  });
+
+  it("collapses the Star Map's filter strip instead of wrapping it", () => {
+    // The first version of this band let the strip wrap when it ran out
+    // of room. With the two-digit counts a real fleet produces the strip
+    // is 668px wide, so that happened at 1000px — well inside the map
+    // window's range — and the second row sat over the star field and
+    // doubled the height of the band to show information already on it.
+    // Below the breakpoint the strip is swapped for one "Filters" chip
+    // carrying the same controls in a popover, so the band stays a single
+    // row all the way down to the 800px minimum window width.
+    expect(css).toMatch(
+      /@media \(max-width: 1120px\) \{\s*\.star-map__filter-strip \{\s*display: none;[\s\S]*?\.star-map__filter-menu \{\s*display: block;/,
+    );
+    // Both renderings exist at every width and CSS picks between them, so
+    // the default state has to be the other way round: strip shown, menu
+    // hidden. Without this the menu would paint beside the strip above
+    // the breakpoint.
+    expect(extractRuleBody(css, ".star-map__filter-menu")).toContain(
+      "display: none;",
+    );
+    const stripRule = extractRuleBody(css, ".star-map__filter-strip");
+    expect(stripRule).toContain("display: flex;");
+    // Wrapping stays as the last resort under the breakpoint, not the
+    // narrow-window strategy: if a label or count ever outgrows what 1120px
+    // assumes, a second row is ugly, but overflowing the grid track puts
+    // chips back underneath the chrome — the bug the band exists to
+    // prevent. Do not swap this for `nowrap`.
+    expect(stripRule).toContain("flex-wrap: wrap;");
   });
 
   it("right-aligns the keyboard shortcut hint chip on context menu items", () => {

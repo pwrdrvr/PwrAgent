@@ -1600,6 +1600,59 @@ describe("StarMapScreen", () => {
     expect(status.textContent).toMatch(/No threads match these filters/);
   });
 
+  // The narrow-window rendering of the same filters. CSS decides which of
+  // the two is displayed (`@media` beside `.star-map__filters`); jsdom
+  // loads no stylesheet, so both are in the tree here and the menu can be
+  // driven directly. What matters is that it drives the SAME state as the
+  // strip — a popover that filtered a different map would be worse than
+  // no popover at all.
+  it("filters from the collapsed menu the same way the strip does", async () => {
+    render(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={[unreadThread("t11")]}
+        sessionKeys={{}}
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    // Closed, the trigger is the only thing that says the map is filtered,
+    // so its name carries the count rather than only its badge.
+    const trigger = screen.getByRole("button", { name: "Thread filters" });
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+    fireEvent.click(trigger);
+
+    const panel = screen.getByRole("dialog", { name: "Thread filters" });
+    // Exclude the only reason this card is on the map, through the popover.
+    const unread = () =>
+      within(panel).getByRole("button", { name: /^Unread:/ });
+    fireEvent.click(unread());
+    fireEvent.click(unread());
+
+    expect(
+      screen.queryByRole("button", { name: /Open thread: Thread t11/ }),
+    ).toBeNull();
+    const status = await screen.findByRole("status");
+    expect(status.textContent).toMatch(/No threads match these filters/);
+    // The strip is the same control set, not a parallel one: it has to
+    // show the state the popover just set.
+    const strip = screen.getByRole("group", { name: "Thread filters" });
+    expect(
+      within(strip).getByRole("button", { name: /^Unread: hidden/ }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Thread filters: 1 active" }),
+    ).toBeTruthy();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Clear" }));
+    expect(
+      screen.getByRole("button", { name: /Open thread: Thread t11/ }),
+    ).toBeTruthy();
+    // Clearing closes the door behind it — there is nothing left to set.
+    expect(screen.queryByRole("dialog", { name: "Thread filters" })).toBeNull();
+  });
+
   it("offers a way back from any selection", async () => {
     render(
       <StarMapScreen

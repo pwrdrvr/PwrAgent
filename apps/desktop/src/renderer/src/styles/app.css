@@ -12686,19 +12686,87 @@ textarea,
   cursor: pointer;
 }
 
-/* Middle slot. `justify-self: center` keeps the box hugging its chips
+/* Middle slot. `justify-self: center` keeps the box hugging its content
    instead of stretching across the track: the band's no-drag rect would
    otherwise cover the whole middle column and take that much sky away
-   from window dragging. Wrapping is what lets the middle track shrink -
-   its min-content becomes one chip rather than the whole strip - so a
-   narrow window stacks the chips into a second row instead of pushing
-   them under the chrome or off the right edge. */
+   from window dragging.
+
+   It holds two renderings of the same seven filters, and CSS picks which
+   one the band shows. Measured max-content of the strip plus the chrome
+   plus the band's padding and gaps: 994px with one-digit counts, 1020px
+   with the two-digit counts a real fleet produces, 1084px with three.
+   Under that the strip has to give, and the first version of this band
+   let it wrap - which put a second row of chips over the star field and
+   doubled the height of the band to show information that was already
+   there. Below the breakpoint the strip is swapped for one "Filters"
+   chip carrying the same controls in a popover, so the band stays one
+   row at every width down to the 800px minimum.
+
+   The breakpoint is 1120px rather than the measured 1084: the "Clear"
+   button appears in the strip once anything is filtered, and it is worth
+   about another 55px. Re-measure before moving it - the numbers above
+   came from the real chip metrics, not an estimate. */
 .star-map__filters {
   display: flex;
   justify-self: center;
+  align-items: center;
+}
+
+/* Wrapping stays as the last resort rather than `nowrap`. If a label or a
+   count ever outgrows what the breakpoint above assumes, a second row is
+   ugly; overflowing the grid track puts chips back underneath the chrome,
+   which is the bug this band exists to make impossible. */
+.star-map__filter-strip {
+  display: flex;
   flex-wrap: wrap;
   justify-content: center;
   gap: 6px;
+}
+
+/* Anchor for the collapsed popover, same shape as `.star-map__view-options`
+   across the band. Display is owned by the breakpoint below. */
+.star-map__filter-menu {
+  display: none;
+  position: relative;
+}
+
+@media (max-width: 1120px) {
+  .star-map__filter-strip {
+    display: none;
+  }
+
+  .star-map__filter-menu {
+    display: block;
+  }
+}
+
+/* Same panel as the View popover it sits beside - same surface, border,
+   radius and shadow - but centred under its own chip rather than left
+   aligned, because this one opens from the middle of the band. The chips
+   inside are the strip's chips, stacked and stretched: one family, one
+   set of states, just a different direction. */
+.star-map__filter-panel {
+  display: flex;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  flex-direction: column;
+  gap: 4px;
+  width: 208px;
+  padding: 10px;
+  transform: translateX(-50%);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+/* Stacked chips are full width, so the count goes to the far edge and
+   makes a column. Only the count - `space-between` would also push the
+   exclude mark off the label it negates, and "− ... Open PR" reads as two
+   separate things rather than one struck-through chip. */
+.star-map__filter-panel .star-map__filter-count {
+  margin-left: auto;
 }
 
 .star-map__filter-chip {

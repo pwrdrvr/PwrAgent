@@ -165,6 +165,31 @@ async function expectTopBandLaidOut(mapWindow: Page, at: string): Promise<void> 
       .filter((entry): entry is string => entry !== undefined),
   );
   expect(covered, `filter chips obscured ${at}`).toEqual([]);
+
+  // One row, at every width. The first version of this band let the chip
+  // strip wrap instead of collapsing, which put a second row of chips over
+  // the star field and doubled the band's height — the rect and hit-test
+  // checks above both stayed green through it, because wrapped chips
+  // overlap nothing. Measure the band against its tallest slot: equal
+  // means the slots sit side by side, taller means something wrapped.
+  const rowHeight = await mapWindow.evaluate(() => {
+    const band = document.querySelector(".star-map__top-band");
+    if (!band) return undefined;
+    const slots = [...band.children].map((slot) => slot.getBoundingClientRect().height);
+    const style = getComputedStyle(band);
+    const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom);
+    return {
+      band: Math.round(band.getBoundingClientRect().height - padding),
+      tallestSlot: Math.round(Math.max(...slots)),
+    };
+  });
+  expect(
+    rowHeight,
+    `top band is taller than one row ${at}: ${JSON.stringify(rowHeight)}`,
+  ).toEqual({
+    band: rowHeight?.tallestSlot,
+    tallestSlot: rowHeight?.tallestSlot,
+  });
 }
 
 test("opens a thread from the star map window in the main window", async () => {
@@ -274,6 +299,19 @@ test("keeps the star map's top band from overlapping itself", async () => {
     // that would have failed first.
     await resizeStarMapWindow(app, mapWindow, { width: 800, height: 720 });
     await expectTopBandLaidOut(mapWindow, "at the minimum window width");
+    // And the strip does not merely fit here — it is gone, replaced by the
+    // one chip that carries the same filters in a popover. Asserting the
+    // swap rather than only the geometry is what keeps a future change
+    // from "fixing" a narrow window by shrinking the chips instead.
+    await expect(
+      starMap.getByRole("group", { name: "Thread filters" }),
+    ).toBeHidden();
+    const filterMenu = starMap.getByRole("button", { name: /^Thread filters/ });
+    await expect(filterMenu).toBeVisible();
+    await filterMenu.click();
+    await expect(
+      mapWindow.getByRole("dialog", { name: "Thread filters" }),
+    ).toBeVisible();
   } finally {
     await app.close();
   }
