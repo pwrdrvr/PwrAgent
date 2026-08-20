@@ -1588,6 +1588,59 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const canvasBoundsRef = useRef(panZoomCanvas);
   canvasBoundsRef.current = panZoomCanvas;
 
+  /**
+   * The body the map opens on, in canvas units: this machine's own
+   * cluster, or the galaxy core in the lens that has no instances.
+   *
+   * Opening on a body rather than on the middle of the canvas is what
+   * makes a load sit still. Every lens sizes its canvas to the bounding
+   * box of what it laid out, so the middle of that box moves whenever the
+   * box does — a peer's first snapshot landing, a card measuring taller
+   * than its estimate, a cloud gaining a ring. The map used to re-centre
+   * on each of those, which is why opening it looked like it was flying
+   * itself somewhere: it was, several times, before the fleet had
+   * finished arriving. The home cluster's canvas position moves by the
+   * same amount as the box, so placing the view on it cancels out and the
+   * canvas grows around a map that has not moved.
+   */
+  const anchorBody = useMemo(() => {
+    if (projectsMode) {
+      // Projects pool threads across the fleet, so there is no local body
+      // to hold; the arms converge on the core and seat outward from it.
+      return projectLayout.projects.length > 0 ? projectLayout.core : undefined;
+    }
+    return (
+      bodies.find((body) => body.instanceId === localInstanceId)
+      ?? bodies.find((body) => body.isHub)
+      ?? bodies[0]
+    );
+  }, [
+    bodies,
+    localInstanceId,
+    projectLayout.core,
+    projectLayout.projects.length,
+    projectsMode,
+  ]);
+  /**
+   * The same point, rebuilt only when it actually moves.
+   *
+   * `anchorBody` comes off a layout that is recomputed for every streamed
+   * update, so its identity churns even when the body has not moved a
+   * pixel. Hoisting the two coordinates out and memoising on those is the
+   * same rule `panZoomCanvas` follows two lines up, and for the same
+   * reason: an effect keyed on the identity would re-place — and so
+   * re-render the whole map — on every delta.
+   */
+  const anchorX = anchorBody?.x;
+  const anchorY = anchorBody?.y;
+  const viewAnchor = useMemo(
+    () =>
+      anchorX === undefined || anchorY === undefined
+        ? undefined
+        : { x: anchorX, y: anchorY },
+    [anchorX, anchorY],
+  );
+
   // Trackpad: two-finger drag pans, pinch (ctrl+wheel) zooms about the
   // pointer. Registered natively because the listener must not be passive.
   // Sits below panZoomCanvas because the clamp needs the canvas size.
@@ -1657,14 +1710,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
     viewportSize.height,
   ]);
 
-  // A lens switch is a different map, so the view starts centred again.
-  useEffect(() => {
+  // A lens switch is a different map, so the view starts placed again.
+  // A layout effect, and declared above the placement below, because that
+  // is now one too: a passive release would land after the placement had
+  // already read the flag and bailed, leaving the new lens holding the old
+  // lens's pan.
+  useLayoutEffect(() => {
     operatorMovedViewRef.current = false;
   }, [preferences.layout]);
 
   /**
-   * Centre the canvas so the operator does not open onto empty space —
-   * but only while the view is still ours to place.
+   * Hold the map on its home cluster so the operator does not open onto
+   * empty space — but only while the view is still ours to place.
    *
    * The canvas size is an input here, and it changes whenever a cloud's
    * card count changes: archiving a card can drop a ring and resize the
@@ -1672,21 +1729,55 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * thread in one corner of the map threw away the operator's pan and
    * zoom and snapped them back to centre — the map moving under the
    * person using it.
+   *
+   * Ownership answers that for a map the operator has already moved, and
+   * answers nothing for the first seconds of one they have not: a load is
+   * a run of canvas resizes with the view still ours, so this effect
+   * re-ran on each of them and the map visibly toured itself. Anchoring
+   * is the other half — see `viewAnchor`. This still re-runs on every
+   * resize, and that is the point: each run re-places the same body under
+   * the same pixel, so the recompute is what keeps the map still rather
+   * than what moves it.
+   *
+   * A layout effect, not a passive one: the anchor's new canvas position
+   * is in the DOM as soon as React commits it, so a placement that waited
+   * for paint would show one frame of the body in its new place under the
+   * old transform — the content jumping, then the view catching up, once
+   * per snapshot. Re-placing before paint makes the two writes land in the
+   * same frame, which is what "the canvas grew, the map did not move"
+   * actually looks like.
    */
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (operatorMovedViewRef.current) return;
-    commitView(
-      placeStarMapView({
-        canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
-        viewport: { width: viewportSize.width, height: viewportSize.height },
-        topAnchored: topAnchoredView,
-      }),
-    );
+    const placed = placeStarMapView({
+      anchor: viewAnchor,
+      canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+      viewport: { width: viewportSize.width, height: viewportSize.height },
+      topAnchored: topAnchoredView,
+    });
+    // Most resizes during a load do not move the anchor: a cloud growing
+    // downward changes the canvas height without changing the bounding
+    // box's top-left, so the placement lands exactly where the view
+    // already is. Committing it anyway would hand React a new object and
+    // re-render every card on the map — synchronously, ahead of paint,
+    // once per card measurement. Nothing is skipped by leaving early: the
+    // live ref and the DOM only ever disagree during a gesture, and a
+    // gesture owns the view, which the line above already returned on.
+    const current = viewRef.current;
+    if (
+      placed.x === current.x
+      && placed.y === current.y
+      && placed.scale === current.scale
+    ) {
+      return;
+    }
+    commitView(placed);
   }, [
     commitView,
     topAnchoredView,
     panZoomCanvas.width,
     panZoomCanvas.height,
+    viewAnchor,
     viewportSize.width,
     viewportSize.height,
   ]);
@@ -1713,6 +1804,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // React's last-rendered transform still matched, would not even repaint.
     commitView(
       placeStarMapView({
+        anchor: viewAnchor,
         canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
         viewport: { width: viewportSize.width, height: viewportSize.height },
         topAnchored: topAnchoredView,
@@ -1724,6 +1816,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     topAnchoredView,
     panZoomCanvas.width,
     panZoomCanvas.height,
+    viewAnchor,
     viewportSize.width,
     viewportSize.height,
   ]);
