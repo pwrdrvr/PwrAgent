@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { IntegratedTerminal } from "../IntegratedTerminal";
@@ -333,4 +333,92 @@ describe("IntegratedTerminal", () => {
       });
     });
   });
+
+  it("draws its own close and resize chrome when it is standalone", async () => {
+    render(
+      <IntegratedTerminal
+        desktopApi={terminalApiStub()}
+        threadKey="codex:thread-a"
+        cwd="/repo/a"
+        height={260}
+        onHeightChange={() => undefined}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />,
+    );
+
+    await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+
+    expect(screen.getByLabelText("Close terminal")).toBeInTheDocument();
+    expect(screen.getByLabelText("Resize terminal")).toBeInTheDocument();
+  });
+
+  // A hosting card supplies a title bar with its own close button and its
+  // own resize grip. Drawing the pane's too put a second close 3px under
+  // the card's and a panel-colored dead band under the bar.
+  it("draws no close, handle, or remote chip when a card hosts it", async () => {
+    render(
+      <IntegratedTerminal
+        chrome="hosted"
+        desktopApi={terminalApiStub()}
+        threadKey="codex:thread-a"
+        cwd="/repo/a"
+        height={260}
+        remote={{
+          target: { instanceId: "peer-1", scope: "remote" },
+          instanceId: "peer-1",
+          instanceLabel: "Peer One",
+        }}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />,
+    );
+
+    await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+
+    expect(screen.queryByLabelText("Close terminal")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Resize terminal")).not.toBeInTheDocument();
+    expect(screen.queryByText("Peer One")).not.toBeInTheDocument();
+  });
+  // The hosting card owns the resize affordance, so a height change must not
+  // pull focus off the card's grip and into the shell.
+  it("keeps focus off the shell when a hosted card resizes it", async () => {
+    const api = terminalApiStub();
+    const view = (height: number) => (
+      <IntegratedTerminal
+        chrome="hosted"
+        desktopApi={api}
+        threadKey="codex:thread-a"
+        cwd="/repo/a"
+        height={height}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />
+    );
+    const { rerender } = render(view(260));
+
+    await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+    const terminal = xtermState.instances[0]!;
+    terminal.focus.mockClear();
+
+    rerender(view(300));
+
+    expect(terminal.focus).not.toHaveBeenCalled();
+  });
 });
+
+function terminalApiStub(): DesktopApi {
+  return {
+    createIntegratedTerminal: vi.fn(async () => ({
+      sessionId: "session-1",
+      threadKey: "codex:thread-a",
+      cwd: "/repo/a",
+      shell: "/bin/zsh",
+    })),
+    writeIntegratedTerminal: vi.fn(async () => undefined),
+    resizeIntegratedTerminal: vi.fn(async () => undefined),
+    onIntegratedTerminalOutput: vi.fn(() => () => undefined),
+    onIntegratedTerminalExit: vi.fn(() => () => undefined),
+    onIntegratedTerminalError: vi.fn(() => () => undefined),
+  } as unknown as DesktopApi;
+}
