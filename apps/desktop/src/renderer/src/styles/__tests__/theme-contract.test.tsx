@@ -976,6 +976,23 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /\.star-map__top-band > \*,\s*\.star-map__top-band > \* \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/,
     );
+    // …except the wordmark, which is brand, not a control: pressing it must
+    // drag the window like the main window's masthead brand, never start a
+    // text selection. Ties the band rule on specificity, so it only wins
+    // while it stays after it in source order.
+    const brandOverride = css.match(
+      /\.star-map__chrome \.sidebar__brand,\s*\.star-map__chrome \.sidebar__brand \*\s*\{[^}]*\}/,
+    );
+    expect(brandOverride?.[0]).toContain("-webkit-app-region: drag;");
+    expect(brandOverride?.[0]).toContain("pointer-events: none;");
+    expect(css.indexOf(brandOverride?.[0] ?? "")).toBeGreaterThan(
+      css.indexOf(".star-map__top-band > *"),
+    );
+    // The dedicated window locks chrome text selection at the root the way
+    // `.app-shell` does — dragging across the wordmark or a chip label must
+    // not paint a selection. Copyable content opts back in per component.
+    const mapWindowRule = extractRuleBody(css, ".star-map-window");
+    expect(mapWindowRule).toContain("user-select: none;");
     // The card-level dialogs are body-portaled and full-window, so their
     // scrim overlaps the strip's rect and would otherwise turn a
     // dismiss-click near the top into a window drag. Both are named here:

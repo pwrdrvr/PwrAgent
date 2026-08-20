@@ -10897,6 +10897,12 @@ textarea,
   height: 100vh;
   min-width: 0;
   min-height: 0;
+  /* Same chrome-wide selection lockout as `.app-shell`: labels, chips, and
+     the wordmark are interface, not copy. Content that should be copyable
+     (transcript text in chat cards) opts back in with its own
+     `user-select: text`, exactly as it does in the main window. */
+  -webkit-user-select: none;
+  user-select: none;
   background:
     radial-gradient(
       120% 85% at 50% -10%,
@@ -12524,6 +12530,19 @@ textarea,
 .star-map__top-band > * * {
   -webkit-app-region: no-drag;
   pointer-events: auto;
+}
+
+/* The wordmark is the one band resident that is NOT a control, so it takes
+   neither of the band's opt-ins back. It reads as title bar: pressing it
+   drags the window, exactly like `.sidebar__masthead`'s brand on the main
+   window (whose masthead marks every descendant `drag`). Same specificity
+   as the band rule above — source order decides, so keep this after it.
+   The `*` leg covers the accent span for the pointer opt-out; its
+   app-region half is moot on an inline box, which Chromium ignores. */
+.star-map__chrome .sidebar__brand,
+.star-map__chrome .sidebar__brand * {
+  -webkit-app-region: drag;
+  pointer-events: none;
 }
 
 /* Left slot: wordmark, the ⌘K Find chip, and the "View" popover (card
