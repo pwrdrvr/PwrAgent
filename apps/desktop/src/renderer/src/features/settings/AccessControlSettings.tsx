@@ -352,14 +352,25 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
         ? current
         : { w: cb.width, h: cb.height },
     );
+    // One rect per element, not per edge: a role's box is otherwise re-read
+    // once for every permission it grants, and this runs on every resize
+    // notification.
+    const rects = new Map<HTMLElement, DOMRect>();
+    const rectOf = (el: HTMLElement): DOMRect => {
+      const cached = rects.get(el);
+      if (cached) return cached;
+      const measured = el.getBoundingClientRect();
+      rects.set(el, measured);
+      return measured;
+    };
     const right = (el: HTMLElement | null) => {
       if (!el) return null;
-      const r = el.getBoundingClientRect();
+      const r = rectOf(el);
       return { x: r.right - cb.left, y: r.top + r.height / 2 - cb.top };
     };
     const left = (el: HTMLElement | null) => {
       if (!el) return null;
-      const r = el.getBoundingClientRect();
+      const r = rectOf(el);
       return { x: r.left - cb.left, y: r.top + r.height / 2 - cb.top };
     };
     const path = (a: { x: number; y: number } | null, b: { x: number; y: number } | null) => {
@@ -687,6 +698,7 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
               {subjects.map((known) => {
                 const key = subjectKey(known.subject);
                 const attached = rolesForSubjectKey(key);
+                const sub = `${platformLabel(known.subject.platform)} · ${subjectSub(known.subject)}`;
                 return (
                   <div
                     key={key}
@@ -704,11 +716,8 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
                         {subjectLabel(known.subject, known.displayName)}
                         {known.bucket ? <span className="rbac-node__badge is-danger">bucket</span> : null}
                       </div>
-                      <div
-                        className="rbac-node__sub"
-                        title={`${platformLabel(known.subject.platform)} · ${subjectSub(known.subject)}`}
-                      >
-                        {platformLabel(known.subject.platform)} · {subjectSub(known.subject)}
+                      <div className="rbac-node__sub" title={sub}>
+                        {sub}
                       </div>
                       <div className="rbac-node__roles">
                         {roles.map((role) => {
@@ -771,7 +780,7 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
                     {role.danger ? <Alert /> : <Lock />}
                   </span>
                   <div className="rbac-node__main">
-                    <div className="rbac-node__name" title={role.name}>{role.name}</div>
+                    <div className="rbac-node__name">{role.name}</div>
                     <div
                       className="rbac-node__sub"
                       style={{ fontFamily: "var(--font-sans)" }}
@@ -831,7 +840,7 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
                       {perm.danger === "high" ? <Alert /> : perm.danger === "med" ? <Eye /> : <Check />}
                     </span>
                     <div className="rbac-node__main">
-                      <div className="rbac-node__name" title={perm.label}>{perm.label}</div>
+                      <div className="rbac-node__name">{perm.label}</div>
                       <div
                         className="rbac-node__sub"
                         style={{ fontFamily: "var(--font-sans)" }}
