@@ -12984,6 +12984,84 @@ textarea,
   pointer-events: none;
 }
 
+/* Mention autocomplete (`$` skills, `@` directories, `#` threads and PRs).
+
+   Anchored to the field and opening upward, the same shape as the kebab's
+   menu two rules down — a floating card has nothing below the composer to
+   open into. It renders inside the card rather than through a body portal
+   so it stays under `.star-map-chat-card`, which is the ancestor every
+   star-map gesture guard tests for; a portalled list would take arrow keys
+   and wheel events straight to the camera.
+
+   `.star-map-chat-card` clips its children, so the list is capped short
+   enough to open over the transcript rather than out of the card. The
+   highlight is the shared popover language (`--accent-soft` tint, no
+   selection border), just at the card's smaller type scale. */
+.compact-composer__mention-list {
+  display: flex;
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 3;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 168px;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+.compact-composer__mention-option {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 5px 7px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.compact-composer__mention-option:hover,
+.compact-composer__mention-option.is-active {
+  background: var(--accent-soft);
+  color: var(--accent-bright);
+}
+
+.compact-composer__mention-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* One line, clipped: a thread title or a skill description is free text
+   and an unbounded row would be the only row the operator can see. */
+.compact-composer__mention-meta {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.compact-composer__mention-meta:empty {
+  display: none;
+}
+
 .compact-composer__controls {
   display: flex;
   flex: 0 0 auto;

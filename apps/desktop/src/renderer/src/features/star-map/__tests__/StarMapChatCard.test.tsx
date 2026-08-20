@@ -1,8 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapChatCard } from "../StarMapChatCard";
+import { resetComposerMentionSourcesCache } from "../../composer/useComposerMentionSources";
+import { isStarMapTypingTarget } from "../star-map-keyboard";
+import { shouldPanOnWheel, shouldStartCanvasPan } from "../star-map-orbit";
 import {
   DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
   DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT,
@@ -511,10 +514,16 @@ describe("StarMapChatCard steering a live turn", () => {
   it("drops the landing notice once that turn is over", async () => {
     // The notice describes a turn. Left alone it would sit on an idle card
     // for hours still claiming something is in flight.
-    let emit: ((event: unknown) => void) | undefined;
+    // The card has more than one agent-event subscriber (the thread
+    // session and the lazy skill list), so the fake has to fan out rather
+    // than remember the last listener to register.
+    const listeners: Array<(event: unknown) => void> = [];
+    const emit = (event: unknown): void => {
+      for (const listener of listeners) listener(event);
+    };
     const desktopApi = busyApi({
       onAgentEvent: vi.fn((listener: (event: unknown) => void) => {
-        emit = listener;
+        listeners.push(listener);
         return () => undefined;
       }),
     } as unknown as Partial<DesktopApi>);
@@ -526,7 +535,7 @@ describe("StarMapChatCard steering a live turn", () => {
     ).toBeTruthy();
 
     act(() => {
-      emit?.({
+      emit({
         backend: "codex",
         notification: {
           method: "turn/completed",
@@ -552,5 +561,121 @@ describe("StarMapChatCard steering a live turn", () => {
     await waitFor(() => {
       expect(steer.disabled).toBe(true);
     });
+  });
+});
+
+describe("StarMapChatCard mentions", () => {
+  beforeEach(() => {
+    // The directory/thread population is cached across cards on purpose;
+    // that cache must not leak between specs.
+    resetComposerMentionSourcesCache();
+  });
+
+  const SNAPSHOT = {
+    directories: [
+      {
+        key: "d-app",
+        kind: "repo",
+        label: "app",
+        latestUpdatedAt: 2,
+        path: "/Users/dev/app",
+      },
+    ],
+    threads: [
+      localThread(),
+      localThread({ id: "t-other", title: "Rewrite the parser" }),
+    ],
+  };
+
+  function mentionApi(overrides: Partial<DesktopApi> = {}): DesktopApi {
+    return buildApi({
+      getNavigationSnapshot: vi.fn(async () => SNAPSHOT),
+      listSkills: vi.fn(async () => ({
+        backend: "codex",
+        fetchedAt: 1,
+        data: [
+          {
+            cwd: "/Users/dev/app",
+            skills: [{ name: "deploy", path: "/skills/deploy.md" }],
+          },
+        ],
+      })),
+      ...overrides,
+    } as unknown as Partial<DesktopApi>);
+  }
+
+  function composer() {
+    return screen.getByRole("textbox", { name: "Message Local work" });
+  }
+
+  it("loads skills only once the operator types $", async () => {
+    // A card the operator only reads must not pay for a skill list.
+    const desktopApi = mentionApi();
+    renderCard({ desktopApi, thread: localThread() });
+    await screen.findByRole("button", { name: "Send" });
+    expect(desktopApi.listSkills).not.toHaveBeenCalled();
+
+    fireEvent.change(composer(), { target: { value: "run $dep" } });
+    await waitFor(() => {
+      expect(desktopApi.listSkills).toHaveBeenCalled();
+    });
+    expect(
+      (await screen.findByRole("option")).textContent,
+    ).toContain("$deploy");
+  });
+
+  it("offers tracked directories on @ and links them as markdown", async () => {
+    const desktopApi = mentionApi();
+    renderCard({ desktopApi, thread: localThread() });
+    await screen.findByRole("button", { name: "Send" });
+    expect(desktopApi.getNavigationSnapshot).not.toHaveBeenCalled();
+
+    fireEvent.change(composer(), { target: { value: "check @ap" } });
+    const option = await screen.findByRole("option");
+    expect(option.textContent).toContain("app");
+
+    fireEvent.click(option);
+    fireEvent.keyDown(composer(), { key: "Enter" });
+    await waitFor(() => {
+      expect(desktopApi.startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: [
+            { type: "text", text: "check [@app](/Users/dev/app)" },
+          ],
+        }),
+      );
+    });
+  });
+
+  it("never offers the thread the card is already on", async () => {
+    // On a bare `#` the current thread would otherwise take the first row,
+    // and referencing it tells the agent nothing it does not have.
+    const desktopApi = mentionApi();
+    renderCard({ desktopApi, thread: localThread() });
+    await screen.findByRole("button", { name: "Send" });
+
+    fireEvent.change(composer(), { target: { value: "see #" } });
+    const options = await screen.findAllByRole("option");
+    const labels = options.map((option) => option.textContent ?? "");
+    expect(labels.some((label) => label.includes("Rewrite the parser"))).toBe(
+      true,
+    );
+    expect(labels.some((label) => label.includes("Local work"))).toBe(false);
+  });
+
+  it("keeps an open picker inside the card's gesture guards", async () => {
+    // The popover renders in the card rather than through a body portal
+    // precisely so these three selectors still cover it. A portalled list
+    // would send arrow keys and wheel events straight to the camera.
+    const desktopApi = mentionApi();
+    renderCard({ desktopApi, thread: localThread() });
+    await screen.findByRole("button", { name: "Send" });
+
+    fireEvent.change(composer(), { target: { value: "check @ap" } });
+    const option = await screen.findByRole("option");
+    expect(option.closest(".star-map-chat-card")).not.toBeNull();
+    expect(isStarMapTypingTarget(option)).toBe(true);
+    expect(shouldPanOnWheel(option)).toBe(false);
+    expect(shouldStartCanvasPan(option)).toBe(false);
   });
 });

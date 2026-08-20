@@ -1,5 +1,9 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import type {
+  NavigationDirectorySummary,
+  NavigationThreadSummary,
+} from "@pwragent/shared";
 import { CompactComposer } from "../CompactComposer";
 
 function renderComposer(overrides: Partial<Parameters<typeof CompactComposer>[0]> = {}) {
@@ -198,6 +202,246 @@ describe("CompactComposer markdown", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     await waitFor(() => {
       expect(onSend).toHaveBeenCalledWith("```sh\npnpm lint\n```");
+    });
+  });
+
+  describe("mentions", () => {
+    const SKILLS = [
+      { name: "deploy", path: "/skills/deploy.md", shortDescription: "Ship it" },
+      { name: "debug", path: "/skills/debug.md" },
+    ];
+    function thread(
+      overrides: Partial<NavigationThreadSummary>,
+    ): NavigationThreadSummary {
+      return {
+        titleSource: "generated",
+        source: "codex",
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+        updatedAt: 1,
+        ...overrides,
+      } as NavigationThreadSummary;
+    }
+
+    function openPicker(value: string) {
+      const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+      fireEvent.change(input, { target: { value } });
+      return input;
+    }
+
+    it("leaves every trigger literal when no sources are supplied", () => {
+      // The default has to stay exactly what it was before mentions
+      // existed: `CompactComposer` is shared, and a host that knows
+      // nothing about `mentionSources` must not start opening pickers.
+      const { onSend } = renderComposer();
+      const input = openPicker("ask $deploy about @app and #42");
+      expect(screen.queryByRole("listbox")).toBeNull();
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledWith("ask $deploy about @app and #42");
+    });
+
+    it("opens the skill picker on $ and serializes the chip as markdown", () => {
+      const { container, onSend } = renderComposer({
+        mentionSources: { skills: SKILLS },
+      });
+      const input = openPicker("run $dep");
+      const options = screen.getAllByRole("option");
+      expect(options.map((option) => option.textContent)).toEqual([
+        "$deployShip it",
+      ]);
+
+      fireEvent.click(options[0]!);
+      // The chip is zero-width in the plain draft, so the rendered mention
+      // node is the only evidence it landed as a chip and not as text.
+      expect(
+        container.querySelector(".composer-tiptap-input__mention")?.textContent,
+      ).toBe("$deploy");
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledWith("run [$deploy](/skills/deploy.md)");
+    });
+
+    it("opens the directory picker on @ and serializes a tilde link", () => {
+      const { onSend } = renderComposer({
+        mentionSources: {
+          directories: [
+            {
+              key: "d-app",
+              kind: "directory",
+              label: "app",
+              path: "/dev/app",
+            } as NavigationDirectorySummary,
+          ],
+        },
+      });
+      const input = openPicker("look in @ap");
+      fireEvent.click(screen.getByRole("option"));
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledWith("look in [@app](/dev/app)");
+    });
+
+    it("offers threads on # and serializes the thread url", () => {
+      const { onSend } = renderComposer({
+        mentionSources: {
+          threads: [thread({ id: "t-42", title: "Ship the release" })],
+        },
+      });
+      const input = openPicker("see #Ship");
+      fireEvent.click(screen.getByRole("option"));
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledWith(
+        "see [Ship the release](pwragent://thread/t-42?backend=codex)",
+      );
+    });
+
+    it("offers a pull request on a numeric # and keeps its url", () => {
+      const { onSend } = renderComposer({
+        mentionSources: {
+          threads: [
+            thread({
+              id: "t-42",
+              title: "Ship the release",
+              prs: [
+                {
+                  provider: "github.com",
+                  state: "passing",
+                  number: 118,
+                  org: "pwrdrvr",
+                  repo: "PwrAgnt",
+                  title: "Fix the thing",
+                  url: "https://github.com/pwrdrvr/PwrAgnt/pull/118",
+                },
+              ],
+            }),
+          ],
+        },
+      });
+      const input = openPicker("about #118");
+      const pullRequest = screen
+        .getAllByRole("option")
+        .find((option) => option.textContent?.startsWith("#118"));
+      fireEvent.click(pullRequest!);
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledWith(
+        "about [#118](https://github.com/pwrdrvr/PwrAgnt/pull/118)",
+      );
+    });
+
+    it("keeps a trigger with no matches as literal text", () => {
+      const { onSend } = renderComposer({
+        mentionSources: { skills: SKILLS },
+      });
+      const input = openPicker("run $nothinghere");
+      expect(screen.queryByRole("listbox")).toBeNull();
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledWith("run $nothinghere");
+    });
+
+    it("gives arrows and Enter to the picker before the send path", () => {
+      const { onSend } = renderComposer({
+        mentionSources: { skills: SKILLS },
+      });
+      const input = openPicker("run $de");
+      expect(screen.getAllByRole("option")).toHaveLength(2);
+
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "Enter" });
+      // Enter committed the second row instead of sending the draft.
+      expect(onSend).not.toHaveBeenCalled();
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledWith("run [$debug](/skills/debug.md)");
+    });
+
+    it("hands Enter back to the send path once Escape closes the picker", () => {
+      const { onSend } = renderComposer({
+        mentionSources: { skills: SKILLS },
+      });
+      const input = openPicker("run $dep");
+      fireEvent.keyDown(input, { key: "Escape" });
+      expect(screen.queryByRole("listbox")).toBeNull();
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledWith("run $dep");
+    });
+
+    it("points the editor at the open listbox and its active row", () => {
+      renderComposer({ mentionSources: { skills: SKILLS } });
+      const input = openPicker("run $de");
+      const listbox = screen.getByRole("listbox");
+      expect(input.getAttribute("aria-controls")).toBe(listbox.id);
+      expect(input.getAttribute("aria-activedescendant")).toBe(
+        screen.getAllByRole("option")[0]!.id,
+      );
+    });
+
+    it("asks the host to load a population when a trigger opens", () => {
+      // Lazy on purpose: a card the operator only reads must not pay for a
+      // skill list or a navigation snapshot it never shows.
+      const ensureSkillsLoaded = vi.fn();
+      const ensureNavigationLoaded = vi.fn();
+      renderComposer({
+        mentionSources: { ensureNavigationLoaded, ensureSkillsLoaded },
+      });
+      expect(ensureSkillsLoaded).not.toHaveBeenCalled();
+      expect(ensureNavigationLoaded).not.toHaveBeenCalled();
+
+      openPicker("run $de");
+      expect(ensureSkillsLoaded).toHaveBeenCalled();
+      expect(ensureNavigationLoaded).not.toHaveBeenCalled();
+
+      openPicker("look in @ap");
+      expect(ensureNavigationLoaded).toHaveBeenCalled();
+    });
+
+    it("keeps two chips at their own offsets in one draft", async () => {
+      // Where the index math breaks if it breaks: a chip is zero-width in
+      // the plain draft, so the second insert has to shift nothing and the
+      // serializer has to splice both back at the right offsets.
+      const { onSend } = renderComposer({
+        mentionSources: {
+          directories: [
+            {
+              key: "d-app",
+              kind: "directory",
+              label: "app",
+              path: "/dev/app",
+            } as NavigationDirectorySummary,
+          ],
+          skills: SKILLS,
+        },
+      });
+      const input = openPicker("run $dep");
+      fireEvent.click(screen.getByRole("option"));
+
+      // Paste, not `change`: the test-only value setter replaces the whole
+      // document and would drop the chip already in it.
+      pasteMarkdown(input, "over @ap");
+      fireEvent.click(await screen.findByRole("option"));
+
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onSend).toHaveBeenCalledWith(
+        "run [$deploy](/skills/deploy.md) over [@app](/dev/app)",
+      );
+    });
+
+    it("puts a bounced send back with its chips intact", async () => {
+      const onSend = vi.fn(async () => false);
+      const { container } = render(
+        <CompactComposer
+          mentionSources={{ skills: SKILLS }}
+          onSend={onSend}
+          threadTitle="Thread t1"
+        />,
+      );
+      const input = openPicker("run $dep");
+      fireEvent.click(screen.getByRole("option"));
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => {
+        expect(
+          container.querySelector(".composer-tiptap-input__mention")?.textContent,
+        ).toBe("$deploy");
+      });
     });
   });
 });

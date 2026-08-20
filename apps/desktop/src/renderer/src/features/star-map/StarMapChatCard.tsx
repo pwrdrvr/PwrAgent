@@ -18,6 +18,8 @@ import {
   CompactComposer,
   type CompactComposerAction,
 } from "../composer/CompactComposer";
+import { useComposerMentionSources } from "../composer/useComposerMentionSources";
+import type { ComposerMentionSources } from "../composer/useComposerMentions";
 import { TranscriptList } from "../thread-detail/TranscriptList";
 import { useTranscriptWindow } from "../thread-detail/useTranscriptWindow";
 import { collectEditedFileGroups } from "../thread-detail/edited-file-groups";
@@ -25,6 +27,7 @@ import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "../../lib/thread-hist
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { useThreadSessionState } from "../../lib/useThreadSessionState";
+import { useThreadSkills } from "../../lib/useThreadSkills";
 import {
   clearStarMapCardContext,
   publishStarMapCardContext,
@@ -165,6 +168,47 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     });
   }, [cardKey, contextDemand, editedFileGroups, pricing, session.activeTurnId]);
   useEffect(() => () => clearStarMapCardContext(cardKey), [cardKey]);
+
+  /**
+   * What the card can honestly offer the composer's mention pickers.
+   *
+   * Skills are thread-scoped — they come from this thread's linked
+   * directories — so they use the same per-thread hook the full thread view
+   * does, lazily: nothing is fetched until the operator types `$`.
+   * Directories and threads are one local snapshot shared by every open
+   * card. Both loads are triggered by the popover opening, so a card the
+   * operator only reads costs neither.
+   *
+   * `#` also reaches peers, through the same federated search the sidebar's
+   * jump uses. That matters more here than anywhere: a card on a star map
+   * is usually open *because* of another instance.
+   */
+  const threadSkills = useThreadSkills({ desktopApi, thread });
+  const navigationSources = useComposerMentionSources({ desktopApi });
+  const ensureSkillsLoaded = threadSkills.ensureLoaded;
+  const mentionSources = useMemo<ComposerMentionSources>(
+    () => ({
+      currentThreadKey: buildThreadIdentityKey(thread.source, thread.id),
+      directories: navigationSources.directories,
+      ensureNavigationLoaded: navigationSources.ensureLoaded,
+      ensureSkillsLoaded: () => {
+        void ensureSkillsLoaded();
+      },
+      searchRemoteThreads: desktopApi?.jumpSearchRemoteThreads,
+      skills: threadSkills.skills,
+      threads: navigationSources.threads,
+    }),
+    [
+      desktopApi,
+      ensureSkillsLoaded,
+      navigationSources.directories,
+      navigationSources.ensureLoaded,
+      navigationSources.threads,
+      threadSkills.skills,
+      thread.id,
+      thread.source,
+    ],
+  );
 
   const beginDrag = useCallback(
     (event: ReactPointerEvent, kind: DragState["kind"]) => {
@@ -564,6 +608,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         busy={session.threadBusy}
         canSteer={canSteer}
         executionMode={thread.executionMode}
+        mentionSources={mentionSources}
         model={thread.model}
         onInterrupt={() => void interrupt()}
         onSend={send}
