@@ -35,29 +35,70 @@ const CANVAS_PADDING = 160;
 const ARM_COUNT = 3;
 /** Tightness of the spiral: bigger unwinds faster. */
 const ARM_PITCH = 0.42;
-/** Where the heaviest project sits, measured from the core. */
-const CORE_RADIUS = 260;
 /**
- * How far past the core the lightest project is thrown.
- *
- * Mass sets a target radius on this span; collisions only ever push a
- * project further out from there. Ordering alone was not enough — it made
- * the 4th-heaviest project land as far out as the 12th whenever the arms
- * fell that way, which is a queue, not gravity.
+ * Radius the arm bearings are measured from. Purely the spiral's own
+ * reference length — it does NOT reserve an empty hole of this size at
+ * the core, which is what the constant it replaced used to do.
  */
-const RIM_SPREAD = 900;
-/** How far outward to probe when a candidate seat collides. */
-const RADIUS_STEP = 36;
+const ARM_REFERENCE_RADIUS = 260;
+
+/**
+ * Share of the disc that unequal elliptical clouds actually fill once
+ * they are seated on arms, measured over a few hundred synthetic fleets.
+ *
+ * This turns "how much cloud is already placed" into "how far out the
+ * next one has to start looking", which is the whole point: the radius a
+ * project gets is now a consequence of the space its neighbours occupy,
+ * not a number assigned to it up front. Too high and every project starts
+ * its search inside its neighbours and probes outward one step at a time;
+ * too low and the galaxy re-acquires the empty middle this replaced.
+ */
+const PACKING_EFFICIENCY = 0.55;
+
+/** How far outward to probe when every bearing at a radius collides. */
+const RADIUS_STEP = 20;
+/**
+ * Bearings tried at each radius, alternating either side of the arm.
+ *
+ * A single bearing per radius makes a small project queue behind whatever
+ * is on its arm, however much room there is on the next one along — the
+ * single largest source of empty canvas in the old layout. Fanning out
+ * lets a light cloud tuck into a gap between two heavy ones instead of
+ * being pushed to the rim, and the first bearing tried is still the arm's
+ * own, so the galaxy keeps its shape.
+ */
+const BEARING_PROBES = 7;
 const MAX_PROBES = 400;
 
 /** Angle of a point on arm `index` at radius `r`. */
 function armAngle(index: number, radius: number): number {
   return (
     (index * 2 * Math.PI) / ARM_COUNT
-    + Math.log(Math.max(radius, 1) / CORE_RADIUS) / ARM_PITCH
+    + Math.log(Math.max(radius, 1) / ARM_REFERENCE_RADIUS) / ARM_PITCH
   );
 }
 
+/**
+ * Bearing offset for probe `index`: 0, then alternating either side of
+ * the arm in equal steps, out to half the angular pitch between arms.
+ */
+function bearingOffset(index: number): number {
+  if (index <= 0) return 0;
+  const side = index % 2 === 1 ? 1 : -1;
+  const step = Math.ceil(index / 2);
+  return (side * step * (2 * Math.PI)) / (ARM_COUNT * BEARING_PROBES);
+}
+
+/**
+ * Rectangular separation, deliberately.
+ *
+ * `cardRingExtent` reports the half-extents of the box that CONTAINS every
+ * card in the cloud, so two non-overlapping boxes provably cannot have two
+ * overlapping cards. Testing the clouds as ellipses instead packs a few
+ * percent tighter and lets real cards from different projects overlap by
+ * up to ~60px, because the Minkowski sum of two ellipses of different
+ * aspect is not the ellipse of their summed radii.
+ */
 function overlaps(
   a: { x: number; y: number; rx: number; ry: number },
   b: { x: number; y: number; rx: number; ry: number },
@@ -71,15 +112,39 @@ function overlaps(
 /**
  * Seat projects along the arms, busiest nearest the core.
  *
- * Each project walks outward along its arm until it clears everything
- * already placed, so a dense project pushes its neighbours further out
- * rather than overlapping them. Placement is deterministic: same input,
- * same galaxy, so the map does not reshuffle between renders.
+ * Each project starts its search at the radius the already-seated clouds
+ * force it to — the radius of a disc big enough to hold them — and then
+ * probes bearings, and only then steps outward. Distance is therefore a
+ * consequence of how much cloud is in the way, which is what "as far apart
+ * as they need to be" means.
+ *
+ * The layout this replaced mapped mass onto an ABSOLUTE radius across a
+ * fixed 900px span, so a project's distance from the core was decided
+ * before anything was placed: on a real nine-project fleet, five of the
+ * nine seated without a single collision probe — nothing had crowded them,
+ * they were simply thrown that far. It read worst on small fleets, where
+ * three one-thread projects have almost no spread in mass and every one of
+ * them but the heaviest landed at the rim, 1160px out, around an empty
+ * middle.
+ *
+ * Placement is deterministic: same input, same galaxy, so the map does not
+ * reshuffle between renders.
  */
 export function computeProjectLayout(params: {
   cardWidth: number;
-  /** Visible card count per project key, in the order to place them. */
-  projects: readonly { key: string; cardCount: number; mass?: number }[];
+  projects: readonly {
+    key: string;
+    /** Visible card count, for the ring-shaped fallback extent. */
+    cardCount: number;
+    /**
+     * Half-extent of what this project actually draws. Supplied by the
+     * caller from its seated clouds — the same arrangement
+     * `computeOrbitPlacement` uses — so project spacing tracks the real
+     * drawing rather than a ring formula that the clouds no longer follow.
+     */
+    extent?: { rx: number; ry: number };
+    mass?: number;
+  }[];
 }): ProjectLayout {
   if (params.projects.length === 0) {
     return {
@@ -91,60 +156,65 @@ export function computeProjectLayout(params: {
     };
   }
 
-  // Mass sets where a project WANTS to sit. Normalised against the
-  // heaviest so the galaxy looks the same whether the fleet has three
-  // threads or three hundred.
-  const masses = params.projects.map(
-    (project) => project.mass ?? project.cardCount,
+  // Seat order IS radial order now, so the ordering is enforced here
+  // rather than trusted from the caller: with mass no longer naming a
+  // radius, a caller that passed its projects in some other order would
+  // silently seat a dormant one-thread project at the galactic core.
+  const ordered = [...params.projects].sort(
+    (left, right) =>
+      (right.mass ?? right.cardCount) - (left.mass ?? left.cardCount)
+      || left.key.localeCompare(right.key),
   );
-  const heaviest = Math.max(...masses, 1);
-  const lightest = Math.min(...masses, heaviest);
-  const span = heaviest - lightest;
-  /**
-   * With no spread in mass there is nothing to rank, so everything is
-   * equally heavy and belongs at the core — the common shape for a small
-   * or new fleet, where every project has one thread of similar age.
-   * Deriving `pull` from a zero span instead gave every project the
-   * *lightest* treatment and flung the whole galaxy to the rim around an
-   * empty centre.
-   */
-  const ranked = span > 1e-6;
 
   const seated: (ProjectPlacement & { radius: number })[] = [];
-  params.projects.forEach((project, index) => {
-    const extent = cardRingExtent(project.cardCount, params.cardWidth);
+  /** Cloud area already claimed, each cloud's share of the gap included. */
+  let claimed = 0;
+  ordered.forEach((project, index) => {
+    const extent =
+      project.extent ?? cardRingExtent(project.cardCount, params.cardWidth);
     const arm = index % ARM_COUNT;
-    const pull = ranked ? (masses[index] - lightest) / span : 1;
-    // Square-root so the middle of the pack spreads out rather than
-    // bunching against the rim; heavy projects still dominate the core.
-    let radius = CORE_RADIUS + RIM_SPREAD * Math.sqrt(1 - pull);
+    let radius = Math.sqrt(claimed / (Math.PI * PACKING_EFFICIENCY));
+    let placed = false;
 
-    for (let probe = 0; probe < MAX_PROBES; probe += 1) {
+    for (let probe = 0; probe < MAX_PROBES && !placed; probe += 1) {
+      for (let bearing = 0; bearing < BEARING_PROBES; bearing += 1) {
+        // Below the reference radius the spiral winds arbitrarily fast, so
+        // bearings are read from a floor rather than from the true radius.
+        const angle =
+          armAngle(arm, Math.max(radius, ARM_REFERENCE_RADIUS / 4))
+          + bearingOffset(bearing);
+        const candidate = {
+          key: project.key,
+          rx: extent.rx,
+          ry: extent.ry,
+          x: Math.cos(angle) * radius,
+          y: Math.sin(angle) * radius,
+        };
+        if (!seated.some((other) => overlaps(candidate, other))) {
+          seated.push({ ...candidate, radius });
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) radius += RADIUS_STEP;
+    }
+    if (!placed) {
+      // Exhausted the probe budget: seat it at the outermost radius tried
+      // rather than dropping the project off the map entirely.
       const angle = armAngle(arm, radius);
-      const candidate = {
+      seated.push({
         key: project.key,
+        radius,
         rx: extent.rx,
         ry: extent.ry,
         x: Math.cos(angle) * radius,
         y: Math.sin(angle) * radius,
-      };
-      if (!seated.some((other) => overlaps(candidate, other))) {
-        seated.push({ ...candidate, radius });
-        return;
-      }
-      radius += RADIUS_STEP;
+      });
     }
-    // Exhausted the probe budget: seat it at the outermost radius tried
-    // rather than dropping the project off the map entirely.
-    const angle = armAngle(arm, radius);
-    seated.push({
-      key: project.key,
-      radius,
-      rx: extent.rx,
-      ry: extent.ry,
-      x: Math.cos(angle) * radius,
-      y: Math.sin(angle) * radius,
-    });
+    claimed +=
+      Math.PI
+      * (extent.rx + PROJECT_GAP / 2)
+      * (extent.ry + PROJECT_GAP / 2);
   });
 
   let minX = Infinity;
@@ -161,7 +231,7 @@ export function computeProjectLayout(params: {
   const offsetY = CANVAS_PADDING - minY;
   const outermost = seated.reduce(
     (furthest, project) => Math.max(furthest, project.radius),
-    CORE_RADIUS,
+    ARM_REFERENCE_RADIUS,
   );
 
   return {
@@ -189,11 +259,12 @@ function buildArms(params: {
   outermost: number;
 }): string[] {
   const arms: string[] = [];
+  const start = ARM_REFERENCE_RADIUS * 0.35;
   const end = params.outermost * 1.18;
   for (let index = 0; index < ARM_COUNT; index += 1) {
     const points: string[] = [];
     for (let step = 0; step <= 48; step += 1) {
-      const radius = CORE_RADIUS * 0.35 + (end - CORE_RADIUS * 0.35) * (step / 48);
+      const radius = start + (end - start) * (step / 48);
       const angle = armAngle(index, radius);
       const x = Math.cos(angle) * radius + params.offsetX;
       const y = Math.sin(angle) * radius + params.offsetY;

@@ -11737,6 +11737,21 @@ textarea,
   font-size: 12px;
 }
 
+/* A parent/child cloud is named after a THREAD; a project cloud is named
+   after a project. They looked identical, so a map with four thread
+   groups around an instance read as four extra projects. The mark and the
+   quieter name are the only difference — the chrome stays one family. */
+.star-map__cluster-label--parent {
+  font-style: italic;
+}
+
+.star-map__cluster-kind {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-style: normal;
+  line-height: 1;
+}
+
 .star-map__cluster-name {
   overflow: hidden;
   text-overflow: ellipsis;
