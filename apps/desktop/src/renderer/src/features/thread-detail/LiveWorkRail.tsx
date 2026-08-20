@@ -14,6 +14,7 @@ import {
   type EditedFileGroupView,
 } from "./EditedFileGroupList";
 import {
+  editedFileKey,
   summarizeEditedFileGroups,
   type EditedFileGroup,
 } from "./edited-file-groups";
@@ -176,7 +177,7 @@ function ChangedFilesSection(props: {
       <ul className="live-work-rail__file-list live-work-rail__file-list--static">
         {props.entry.details.map((detail) => (
           <li
-            key={detail.id}
+            key={editedFileKey(detail)}
             className="live-work-rail__file-row live-work-rail__file-row--static"
           >
             <span className="live-work-rail__file-path" title={detail.path}>

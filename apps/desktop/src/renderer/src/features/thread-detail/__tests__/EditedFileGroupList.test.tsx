@@ -36,6 +36,61 @@ function groups(count: number): EditedFileGroup[] {
   return Array.from({ length: count }, (_, index) => group(count - index));
 }
 
+/**
+ * A live cumulative turn diff, the way `turn/diff/updated` builds one: detail
+ * ids are positional over the diff's path-ordered sections
+ * (`live-diff-<turn>-<n>`), so editing a file that sorts earlier renumbers
+ * every row behind it.
+ */
+function liveDiffGroup(paths: string[]): EditedFileGroup {
+  return {
+    key: "turn-live",
+    turn: { id: "turn-live" },
+    details: [...paths].sort().map((path, index) => ({
+      id: `live-diff-turn-live-${index + 1}`,
+      kind: "write" as const,
+      label: `Update ${path}`,
+      path,
+      fileDiff: {
+        kind: "update" as const,
+        diff: `diff for ${path}`,
+        additions: 1,
+        removals: 0,
+      },
+    })),
+    summary: `Edited ${paths.length} files`,
+    additions: paths.length,
+    removals: 0,
+    live: true,
+  };
+}
+
+describe("EditedFileGroupList live-diff row stability", () => {
+  it("keeps a file's row mounted when a new file renumbers the diff", () => {
+    const { rerender } = render(
+      <EditedFileGroupList groups={[liveDiffGroup(["src/z.ts"])]} />,
+    );
+
+    const before = screen.getByText("Update src/z.ts");
+    // The operator opened this file's diff; a re-mount would collapse it and
+    // flash the row away mid-turn.
+    const toggle = before.closest("button");
+    fireEvent.click(toggle as HTMLElement);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+
+    // The agent now edits a file that sorts first, so src/z.ts moves from
+    // `live-diff-turn-live-1` to `live-diff-turn-live-2`.
+    rerender(
+      <EditedFileGroupList groups={[liveDiffGroup(["src/a.ts", "src/z.ts"])]} />,
+    );
+
+    expect(screen.getByText("Update src/a.ts")).toBeInTheDocument();
+    const after = screen.getByText("Update src/z.ts");
+    expect(after).toBe(before);
+    expect(after.closest("button")).toHaveAttribute("aria-expanded", "true");
+  });
+});
+
 describe("EditedFileGroupList Show more / Show less", () => {
   it("shows the first 3 turn-groups and collapses the rest behind a toggle", () => {
     render(<EditedFileGroupList groups={groups(5)} />);

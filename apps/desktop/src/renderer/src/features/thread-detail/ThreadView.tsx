@@ -82,7 +82,10 @@ import {
   type ContextTabId,
   type EditedFilesDock,
 } from "./context-panels/context-tab";
-import { collectEditedFileGroups } from "./edited-file-groups";
+import {
+  createEditedFileGroupsCollector,
+  type EditedFileGroupsCollector,
+} from "./edited-file-groups";
 import { useEditCommitStates } from "./useEditCommitStates";
 import type { HistoryNavControls } from "../chrome/HistoryNavButtons";
 import type { MastheadActionsProps } from "../chrome/MastheadActions";
@@ -2363,13 +2366,21 @@ export function ThreadView(props: ThreadViewProps) {
       )
     : -1;
 
+  // One collector per mounted view: `props.transcriptEntries` gets a fresh
+  // array identity on every streamed delta, so the derivation folds each entry
+  // once instead of re-walking the transcript per delta.
+  const editedFileGroupsCollectorRef = useRef<EditedFileGroupsCollector>(
+    undefined,
+  );
+  editedFileGroupsCollectorRef.current ??= createEditedFileGroupsCollector();
+  const editedFileGroupsCollector = editedFileGroupsCollectorRef.current;
   // Accumulated edited files: persisted replay entries + deferred live
   // entries grouped per turn, cleared past a committed turn once the
   // next turn starts. Rehydrates on thread load because the replay
   // already carries per-file diffs and command exit codes.
   const editedFileGroups = useMemo(
     () =>
-      collectEditedFileGroups({
+      editedFileGroupsCollector.collect({
         entries: props.transcriptEntries,
         activeTurnId: props.activeTurnId,
         forkCreatedAt: selectedThread?.forkSourceThreadId
@@ -2378,6 +2389,7 @@ export function ThreadView(props: ThreadViewProps) {
         livePendingEntry: pendingRailActivityEntry,
       }),
     [
+      editedFileGroupsCollector,
       props.transcriptEntries,
       props.activeTurnId,
       selectedThread?.createdAt,
