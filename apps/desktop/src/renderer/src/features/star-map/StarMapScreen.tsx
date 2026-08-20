@@ -61,7 +61,9 @@ import {
   type StarMapCloudMemory,
 } from "./star-map-clusters";
 import {
+  addAttentionCounts,
   addFilterMatchCounts,
+  countAttentionSignals,
   countFilterMatches,
   cycleFilterState,
   readStoredFilterSelection,
@@ -1112,6 +1114,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
           selectFilteredThreads({
             threads,
             selection: filterSelection,
+            // Peers get the session keys too. Withholding them dropped
+            // half of `isThreadActive` for every remote thread — a peer's
+            // turn could only register through `threadStatus`, so the
+            // renderer-observed thinking state counted for local work and
+            // silently not for anyone else's.
+            sessionKeys: props.sessionKeys,
             summonedKeys,
           }),
         ),
@@ -1474,7 +1482,45 @@ export function StarMapScreen(props: StarMapScreenProps) {
     for (const threads of remote.threadsByInstance.values()) {
       counts = addFilterMatchCounts(
         counts,
-        countFilterMatches({ selection: filterSelection, threads }),
+        // See `attentionByInstance`: the counts have to ask the same
+        // question the filter does, or a chip reports a number the map
+        // then declines to draw.
+        countFilterMatches({
+          selection: filterSelection,
+          sessionKeys: props.sessionKeys,
+          threads,
+        }),
+      );
+    }
+    return counts;
+  }, [filterSelection, props.localThreads, props.sessionKeys, remote]);
+
+  /**
+   * The Attention chip's two indicators.
+   *
+   * Counted alongside `filterCounts` rather than derived from it: that
+   * map holds one number per chip, and this chip draws two — plus the
+   * local/remote split inside the first, which no single-key tally can
+   * carry.
+   */
+  const attentionCounts = useMemo(() => {
+    let counts = countAttentionSignals({
+      selection: filterSelection,
+      sessionKeys: props.sessionKeys,
+      threads: props.localThreads.filter(
+        (thread) =>
+          !thread.federation
+          || !isRemoteFederationTarget(thread.federation.ref.target),
+      ),
+    });
+    for (const threads of remote.threadsByInstance.values()) {
+      counts = addAttentionCounts(
+        counts,
+        countAttentionSignals({
+          selection: filterSelection,
+          sessionKeys: props.sessionKeys,
+          threads,
+        }),
       );
     }
     return counts;
@@ -4525,6 +4571,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 definition={definition}
                 selection={filterSelection}
                 count={filterCounts[definition.key]}
+                attention={
+                  definition.key === "attention" ? attentionCounts : undefined
+                }
+                showRemoteTurns={peers.length > 0}
                 dropped={filterFit === "reduced" && droppableFilters.has(index)}
                 onCycle={() => cycleFilter(definition.key)}
               />
@@ -4542,6 +4592,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
           <StarMapFilterMenu
             selection={filterSelection}
             counts={filterCounts}
+            attention={attentionCounts}
+            showRemoteTurns={peers.length > 0}
             onCycle={cycleFilter}
             onClear={clearFilters}
           />

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { StarMapFilterChip } from "./StarMapFilterChip";
 import {
   STAR_MAP_FILTERS,
+  type StarMapAttentionCounts,
   type StarMapFilterKey,
   type StarMapFilterSelection,
 } from "./star-map-filters";
@@ -24,6 +25,9 @@ import {
 export function StarMapFilterMenu(props: {
   selection: StarMapFilterSelection;
   counts: Record<StarMapFilterKey, number>;
+  /** The Attention chip's two indicators; see `StarMapFilterChip`. */
+  attention: StarMapAttentionCounts;
+  showRemoteTurns: boolean;
   onCycle: (key: StarMapFilterKey) => void;
   onClear: () => void;
 }) {
@@ -86,6 +90,10 @@ export function StarMapFilterMenu(props: {
               definition={definition}
               selection={props.selection}
               count={props.counts[definition.key]}
+              attention={
+                definition.key === "attention" ? props.attention : undefined
+              }
+              showRemoteTurns={props.showRemoteTurns}
               onCycle={() => props.onCycle(definition.key)}
             />
           ))}

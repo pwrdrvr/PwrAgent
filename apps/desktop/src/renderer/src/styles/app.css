@@ -12818,7 +12818,76 @@ textarea,
    makes a column. Only the count - `space-between` would also push the
    exclude mark off the label it negates, and "− ... Open PR" reads as two
    separate things rather than one struck-through chip. */
-.star-map__filter-panel .star-map__filter-count {
+.star-map__filter-panel /* The Attention chip's readouts.
+   Token references copied from `.lens-switch__signal` and its modifiers, not
+   chosen to look similar: the map and the sidebar are reporting the SAME
+   three numbers, and an operator glancing between them must not have to
+   work out whether two different oranges mean two different things. If the
+   tab's tokens change, change these with them. */
+.star-map__filter-signals {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+}
+
+.star-map__filter-signal {
+  display: inline-flex;
+  /* Never the thing that gives: a half-eaten count reads as a different
+     number, so the indicator shrinks before the digits do. */
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.star-map__filter-signal--active {
+  color: var(--accent-bright);
+}
+
+/* Turns on another instance. Neutral rather than accent, and that is the
+   whole point: the accent means "this holds the app open", and a peer's turn
+   does not. Still a live sweeping scanner — the work IS running, just not
+   on this machine. */
+.star-map__filter-signal--remote-active {
+  color: var(--text-muted);
+}
+
+.star-map__filter-signal--remote-active .thinking-scanner {
+  --thinking-scanner-tint: var(--text-muted);
+  --thinking-scanner-tint-bright: var(--text-secondary);
+  --thinking-scanner-track: var(--bg-panel-hover);
+}
+
+.star-map__filter-signal--review {
+  color: var(--text-secondary);
+}
+
+.star-map__filter-signal--review .thread-row__status-cookie {
+  width: 8px;
+  height: 8px;
+}
+
+/* Zero is still shown — an idle chip has to read as "nothing running,
+   nothing unread", which a vanishing count cannot do. It just stops
+   claiming the accent. */
+.star-map__filter-signal[data-zero="true"] {
+  color: var(--text-muted);
+}
+
+/* The cookie paints itself from accent tokens rather than `currentColor`,
+   so greying the text is not enough. */
+.star-map__filter-signal[data-zero="true"] .thread-row__status-cookie {
+  border-color: var(--border-subtle);
+  background: var(--text-muted);
+  box-shadow: none;
+}
+
+.star-map__filter-count {
   margin-left: auto;
 }
 

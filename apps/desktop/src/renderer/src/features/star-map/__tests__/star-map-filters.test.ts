@@ -79,7 +79,7 @@ describe("selectFilteredThreads", () => {
   it("isolates on a single include, keeping pins alongside", () => {
     // A pin outranks the attention chips: the sidebar's Pins section and the
     // map are meant to agree about what the operator curated.
-    expect(ids({ unread: "include" })).toEqual([
+    expect(ids({ attention: "include" })).toEqual([
       "pinned",
       "unread",
       "unread-agent",
@@ -87,7 +87,7 @@ describe("selectFilteredThreads", () => {
   });
 
   it("unions includes WITHIN a facet", () => {
-    expect(ids({ unread: "include", pr: "include" })).toEqual([
+    expect(ids({ attention: "include", pr: "include" })).toEqual([
       "pinned",
       "pr",
       "unread",
@@ -98,7 +98,7 @@ describe("selectFilteredThreads", () => {
   it("intersects includes ACROSS facets", () => {
     // "unread AND agent-driven" — not "unread or agent-driven", which is
     // what a flat union would give and is never what the operator means.
-    expect(ids({ unread: "include", agent: "include" })).toEqual([
+    expect(ids({ attention: "include", agent: "include" })).toEqual([
       "pinned",
       "unread-agent",
     ]);
@@ -114,14 +114,14 @@ describe("selectFilteredThreads", () => {
   });
 
   it("lets an exclude override an include in another facet", () => {
-    expect(ids({ unread: "include", agent: "exclude" })).toEqual([
+    expect(ids({ attention: "include", agent: "exclude" })).toEqual([
       "pinned",
       "unread",
     ]);
   });
 
   it("supports include and exclude in the same facet", () => {
-    expect(ids({ unread: "include", pr: "exclude" })).toEqual([
+    expect(ids({ attention: "include", pr: "exclude" })).toEqual([
       "pinned",
       "unread",
       "unread-agent",
@@ -142,7 +142,7 @@ describe("selectFilteredThreads", () => {
   it("lets an explicit pinned exclude hide a pin the chips would keep", () => {
     // The override has exactly one counterweight: asking to see everything
     // EXCEPT pins. Without it the chip would be a control that cannot act.
-    expect(ids({ unread: "include", pinned: "exclude" })).toEqual([
+    expect(ids({ attention: "include", pinned: "exclude" })).toEqual([
       "unread",
       "unread-agent",
     ]);
@@ -205,19 +205,19 @@ describe("threadPassesFilters", () => {
 describe("countFilterMatches", () => {
   it("counts what each chip is about", () => {
     const counts = countFilterMatches({ selection: {}, threads: all });
-    expect(counts.unread).toBe(2);
+    expect(counts.attention).toBe(2);
     expect(counts.pinned).toBe(1);
     expect(counts.agent).toBe(2);
     expect(counts.pr).toBe(1);
   });
 
   it("counts against the other facets' current selection", () => {
-    // With agents excluded, the unread chip speaks for one card, not two.
+    // With agents excluded, the attention chip speaks for one card, not two.
     const counts = countFilterMatches({
       selection: { agent: "exclude" },
       threads: all,
     });
-    expect(counts.unread).toBe(1);
+    expect(counts.attention).toBe(1);
   });
 
   it("does not let a chip's own state suppress its count", () => {
@@ -237,7 +237,7 @@ describe("selectFilteredThreads summons", () => {
     // camera is about to fly to its card, so the lens has to draw one.
     expect(
       selectFilteredThreads({
-        selection: { unread: "include" },
+        selection: { attention: "include" },
         threads: [unread, withPr],
         summonedKeys: new Set(["codex:pr"]),
       }).map((entry) => entry.id),

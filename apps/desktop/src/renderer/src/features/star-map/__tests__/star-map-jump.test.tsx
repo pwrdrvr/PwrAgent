@@ -231,7 +231,7 @@ describe("Star Map ⌘K", () => {
     // The chip itself is untouched: this is one card the operator asked for
     // by name, not a filter that quietly stopped applying.
     expect(
-      screen.getByRole("button", { name: /^Unread: showing only these/ }),
+      screen.getByRole("button", { name: /^Attention: showing only these/ }),
     ).not.toBeNull();
     expect(
       screen.queryByRole("button", { name: "Open thread: Windows job wrapper" }),
