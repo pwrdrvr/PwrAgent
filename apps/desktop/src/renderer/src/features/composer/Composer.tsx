@@ -47,7 +47,6 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
-  buildPullRequestStatusKey,
   buildThreadIdentityKey,
   buildThreadMarkdownLink,
   buildThreadUrl,
@@ -58,7 +57,6 @@ import {
   normalizeGitOriginUrl,
   parseThreadUrl,
   readCodexEnvironmentActionRuns,
-  threadHasExactPrNumberMatch,
 } from "@pwragent/shared";
 import {
   BranchIcon,
@@ -104,8 +102,8 @@ import {
 } from "../../lib/directory-references";
 import { expandTildePath } from "../../lib/tildify-path";
 import {
-  collapseHashReferenceWhitespace,
-  filterHashReferenceCandidates,
+  buildHashReferenceOptions,
+  describeHashReferenceThread,
   findHashReferenceTrigger,
   formatHashReferenceThreadLabel,
   formatHashReferenceThreadTooltip,
@@ -158,6 +156,19 @@ import {
   type ComposerInputHandle,
   type ComposerSkillToken,
 } from "./ComposerInputTypes";
+import {
+  adjustSkillTokenIndexesForTextChange,
+  createComposerDirectoryToken,
+  createComposerFileToken,
+  createComposerPullRequestToken,
+  createComposerSkillToken,
+  createComposerThreadToken,
+  filterSkillAutocompleteCandidates,
+  getComposerSkillTokensSignature,
+  resolveThreadSummaryReference,
+  serializeDraftWithSkillTokens,
+} from "./composer-mention-tokens";
+import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
 import { ProjectPicker } from "./ProjectPicker";
 import {
@@ -1401,167 +1412,6 @@ function reviewSubmissionKey(command: {
  * populations ($ skills, / commands, @ directories) keep the leading-run
  * highlight so the emphasis always sits on what was typed.
  */
-function HighlightedAutocompleteLabel(props: {
-  label: string;
-  matchAnywhere?: boolean;
-  query: string;
-}) {
-  const matchIndex = !props.query
-    ? -1
-    : props.matchAnywhere
-      ? props.label.toLowerCase().indexOf(props.query.toLowerCase())
-      : props.label.toLowerCase().startsWith(props.query.toLowerCase())
-        ? 0
-        : -1;
-  if (matchIndex < 0) {
-    return <span>{props.label}</span>;
-  }
-
-  return (
-    <span>
-      {props.label.slice(0, matchIndex)}
-      <span className="composer__autocomplete-match">
-        {props.label.slice(matchIndex, matchIndex + props.query.length)}
-      </span>
-      {props.label.slice(matchIndex + props.query.length)}
-    </span>
-  );
-}
-
-function describeHashReferenceThread(
-  thread: NavigationThreadSummary,
-  query: string,
-): string {
-  const parts: string[] = [];
-  const pullRequest = threadHasExactPrNumberMatch(thread, query)
-    ? (thread.prs ?? []).find(
-        (candidate) => candidate.number === Number(query.trim()),
-      )
-    : (thread.prs ?? [])[0];
-  if (pullRequest) {
-    parts.push(`#${pullRequest.number}`);
-  }
-  if (thread.gitBranch) {
-    parts.push(thread.gitBranch);
-  }
-  const directory = (thread.linkedDirectories ?? [])[0];
-  if (directory?.label) {
-    parts.push(directory.label);
-  }
-  if (parts.length > 0) {
-    return parts.join(" · ");
-  }
-  // The id is the last-resort disambiguator between same-named threads. A
-  // thread with no title is already showing that same id as its label, so
-  // repeating it here would just print the uuid twice.
-  return collapseHashReferenceWhitespace(thread.title) ? thread.id : "";
-}
-
-function createComposerSkillToken(
-  skill: AppServerSkillSummary,
-  index: number,
-): ComposerSkillToken {
-  return {
-    ...skill,
-    id: `${skill.path ?? skill.name}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
-    index,
-  };
-}
-
-function createComposerDirectoryToken(
-  directory: Pick<NavigationDirectorySummary, "label" | "path">,
-  index: number,
-): ComposerSkillToken {
-  return {
-    kind: "directory",
-    name: directory.label,
-    path: directory.path,
-    id: `${directory.path ?? directory.label}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
-    index,
-  };
-}
-
-// Exported for the `@`-popover / picker surfaces that mint file-reference
-// chips; the drop/paste tray uses the pill list instead of chips.
-export function createComposerFileToken(
-  file: { label: string; path: string },
-  index: number,
-): ComposerSkillToken {
-  return {
-    kind: "file",
-    name: file.label,
-    path: file.path,
-    id: `${file.path}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
-    index,
-  };
-}
-
-function createComposerThreadToken(
-  thread: ResolvedThreadLink,
-  index: number,
-): ComposerSkillToken {
-  const path = buildThreadUrl({
-    backend: thread.backend,
-    ...(thread.instanceId ? { instanceId: thread.instanceId } : {}),
-    threadId: thread.threadId,
-  });
-  return {
-    kind: "thread",
-    // Every thread chip is minted here — picker, pasted url, and the draft
-    // rehydrate that rebuilds tokens from the live thread summary rather
-    // than from the saved link text. Formatting at the choke point is what
-    // makes the clamp survive a restore, and it makes the round trip
-    // converge: `format` of an already-formatted title is itself.
-    name: formatHashReferenceThreadLabel({
-      id: thread.threadId,
-      title: thread.title,
-    }),
-    path,
-    id: `${path}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
-    index,
-  };
-}
-
-function createComposerPullRequestToken(
-  pullRequest: PrSummary,
-  index: number,
-): ComposerSkillToken {
-  return {
-    kind: "pull-request",
-    name: `#${pullRequest.number}`,
-    path: pullRequest.url,
-    description: pullRequest.title,
-    shortDescription: `${pullRequest.org}/${pullRequest.repo}`,
-    id: `${pullRequest.url}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
-    index,
-    // Every PR chip in the composer is minted here — picker, pasted URL, and
-    // draft rehydration — so this is the one place the chip's status can be
-    // read off the summary. A summary that carries no status at all resolves
-    // to the same "unknown" gray the chip renders without it, so a PR nothing
-    // has observed is not dressed up as a state we know.
-    prChipModifiers: prChipModifierClasses(
-      resolvePrChipPresentation(pullRequest),
-    ),
-  };
-}
-
-function resolveThreadSummaryReference(
-  thread: NavigationThreadSummary,
-): ResolvedThreadLink {
-  const federationTarget = thread.federation?.ref.target;
-  return {
-    backend: thread.source,
-    ...(federationTarget && isRemoteFederationTarget(federationTarget)
-      ? { instanceId: federationTarget.instanceId }
-      : {}),
-    threadId: thread.id,
-    title: thread.title,
-    titleSource: thread.titleSource,
-    gitBranch: thread.gitBranch,
-    linkedDirectories: thread.linkedDirectories,
-  };
-}
-
 /**
  * Append path-only file references to outgoing text as one
  * `[@label](~/path)` line per file, separated from the typed draft by a
@@ -1721,71 +1571,6 @@ function mergeDerivedLocalFileInputs(
   return merged;
 }
 
-function getComposerSkillTokensSignature(skillTokens: ComposerSkillToken[]): string {
-  return JSON.stringify(
-    skillTokens.map((token) => ({
-      id: token.id,
-      index: token.index,
-      kind: token.kind,
-      name: token.name,
-      path: token.path,
-    })),
-  );
-}
-
-function clampSkillTokenIndex(index: number, draft: string): number {
-  return Math.max(0, Math.min(index, draft.length));
-}
-
-function serializeDraftWithSkillTokens(
-  draft: string,
-  skillTokens: ComposerSkillToken[],
-): string {
-  if (skillTokens.length === 0) {
-    return draft;
-  }
-
-  const sortedTokens = [...skillTokens].sort((left, right) => {
-    if (left.index !== right.index) {
-      return left.index - right.index;
-    }
-    return left.id.localeCompare(right.id);
-  });
-
-  let output = "";
-  let cursor = 0;
-  for (const token of sortedTokens) {
-    const index = clampSkillTokenIndex(token.index, draft);
-    output += draft.slice(cursor, index);
-    // Directory- and file-reference chips serialize to `[@label](~/path)`
-    // markdown — the parens bound the path so adjacent text can't glue
-    // onto it, the transcript renders it back as a chip, and
-    // hydrateComposerDraft rebuilds the token from a prompt-only restore.
-    // Skills keep their `[$name](path)` markdown.
-    if (token.kind === "directory" || token.kind === "file") {
-      output += buildDirectoryReferenceMarkdown({
-        label: token.name,
-        path: token.path ?? "",
-      });
-    } else if (token.kind === "thread") {
-      const ref = parseThreadUrl(token.path ?? "");
-      output += ref
-        ? buildThreadMarkdownLink({ ...ref, title: token.name })
-        : token.path ?? token.name;
-    } else if (token.kind === "pull-request") {
-      output += token.path
-        ? `[${token.name}](${token.path})`
-        : token.name;
-    } else {
-      output += buildSkillMentionMarkdown(token);
-    }
-    cursor = index;
-  }
-
-  output += draft.slice(cursor);
-  return output;
-}
-
 function hydrateComposerDraft(
   canonicalDraft: string,
   skills: AppServerSkillSummary[],
@@ -1874,92 +1659,6 @@ function hydrateComposerDraft(
   hydrateSkillAndDirectoryParts(canonicalDraft.slice(cursor));
 
   return { draft, skillTokens };
-}
-
-function adjustSkillTokenIndexesForTextChange(params: {
-  currentDraft: string;
-  nextDraft: string;
-  skillTokens: ComposerSkillToken[];
-}): ComposerSkillToken[] {
-  const { currentDraft, nextDraft, skillTokens } = params;
-  if (currentDraft === nextDraft || skillTokens.length === 0) {
-    return skillTokens;
-  }
-
-  let prefixLength = 0;
-  while (
-    prefixLength < currentDraft.length &&
-    prefixLength < nextDraft.length &&
-    currentDraft[prefixLength] === nextDraft[prefixLength]
-  ) {
-    prefixLength += 1;
-  }
-
-  let suffixLength = 0;
-  while (
-    suffixLength < currentDraft.length - prefixLength &&
-    suffixLength < nextDraft.length - prefixLength &&
-    currentDraft[currentDraft.length - 1 - suffixLength] ===
-      nextDraft[nextDraft.length - 1 - suffixLength]
-  ) {
-    suffixLength += 1;
-  }
-
-  const currentChangedEnd = currentDraft.length - suffixLength;
-  const nextChangedEnd = nextDraft.length - suffixLength;
-  const delta = nextChangedEnd - currentChangedEnd;
-
-  return skillTokens.map((token) => {
-    if (token.index <= prefixLength) {
-      return token;
-    }
-
-    if (token.index >= currentChangedEnd) {
-      return {
-        ...token,
-        index: clampSkillTokenIndex(token.index + delta, nextDraft),
-      };
-    }
-
-    return {
-      ...token,
-      index: clampSkillTokenIndex(prefixLength, nextDraft),
-    };
-  });
-}
-
-function rankSkillAutocompleteMatch(
-  skill: AppServerSkillSummary,
-  normalizedQuery: string,
-): number | undefined {
-  if (!normalizedQuery) {
-    return 0;
-  }
-
-  const name = skill.name.toLowerCase();
-  const shortDescription = skill.shortDescription?.toLowerCase() ?? "";
-  const description = skill.description?.toLowerCase() ?? "";
-
-  if (name === normalizedQuery) {
-    return 0;
-  }
-  if (name.startsWith(`${normalizedQuery}:`)) {
-    return 1;
-  }
-  if (name.startsWith(normalizedQuery)) {
-    return 2;
-  }
-  if (name.includes(normalizedQuery)) {
-    return 3;
-  }
-  if (shortDescription.includes(normalizedQuery)) {
-    return 4;
-  }
-  if (description.includes(normalizedQuery)) {
-    return 5;
-  }
-
-  return undefined;
 }
 
 function ComposerThreadOptionsMenu(props: {
@@ -4565,26 +4264,7 @@ export function Composer(props: ComposerProps) {
       return [];
     }
 
-    const normalizedQuery = trigger.query.trim().toLowerCase();
-    return props.skills
-      .map((skill, index) => ({
-        index,
-        score: skill.path
-          ? rankSkillAutocompleteMatch(skill, normalizedQuery)
-          : undefined,
-        skill,
-      }))
-      .filter(
-        (match): match is { index: number; score: number; skill: AppServerSkillSummary } =>
-          match.score !== undefined
-      )
-      .sort((left, right) => {
-        if (left.score !== right.score) {
-          return left.score - right.score;
-        }
-        return left.index - right.index;
-      })
-      .map((match) => match.skill);
+    return filterSkillAutocompleteCandidates(props.skills, trigger.query);
   }, [props.skills, trigger]);
   const slashCommandSuggestions = useMemo(() => {
     const commands =
@@ -4632,65 +4312,14 @@ export function Composer(props: ComposerProps) {
     if (!hashReferenceTrigger) {
       return [];
     }
-    // Referencing the thread you are writing in tells the agent nothing it
-    // does not already have, and on a bare `#` the current thread is the
-    // most recently updated one — so it would otherwise take the first row.
-    const currentThreadKey = props.thread
-      ? buildThreadIdentityKey(props.thread.source, props.thread.id)
-      : undefined;
-    const isCurrentThread = (thread: NavigationThreadSummary): boolean =>
-      currentThreadKey !== undefined
-      && buildThreadIdentityKey(thread.source, thread.id) === currentThreadKey;
-    const localCandidates = filterHashReferenceCandidates(
-      (props.threads ?? []).filter((thread) => !isCurrentThread(thread)),
-      hashReferenceTrigger.query,
-    );
-    const localThreadKeys = new Set(
-      (props.threads ?? []).map((thread) =>
-        buildThreadIdentityKey(thread.source, thread.id),
-      ),
-    );
-    const remoteCandidates = filterHashReferenceCandidates(
-      federatedHashSearchResults.filter(
-        (thread) =>
-          thread.federation?.ref.target.scope === "remote"
-          && !isCurrentThread(thread)
-          && !localThreadKeys.has(
-            buildThreadIdentityKey(thread.source, thread.id),
-          ),
-      ),
-      hashReferenceTrigger.query,
-    );
-    const localPullRequestKeys = new Set(
-      localCandidates.pullRequests.map(buildPullRequestStatusKey),
-    );
-    return [
-      ...localCandidates.threads.map((thread) => ({
-        kind: "thread" as const,
-        remote: false,
-        thread,
-      })),
-      ...localCandidates.pullRequests.map((pullRequest) => ({
-        kind: "pull-request" as const,
-        pullRequest,
-        remote: false,
-      })),
-      ...remoteCandidates.threads.map((thread) => ({
-        kind: "thread" as const,
-        remote: true,
-        thread,
-      })),
-      ...remoteCandidates.pullRequests
-        .filter(
-          (pullRequest) =>
-            !localPullRequestKeys.has(buildPullRequestStatusKey(pullRequest)),
-        )
-        .map((pullRequest) => ({
-          kind: "pull-request" as const,
-          pullRequest,
-          remote: true,
-        })),
-    ];
+    return buildHashReferenceOptions({
+      currentThreadKey: props.thread
+        ? buildThreadIdentityKey(props.thread.source, props.thread.id)
+        : undefined,
+      localThreads: props.threads ?? [],
+      query: hashReferenceTrigger.query,
+      remoteThreads: federatedHashSearchResults,
+    });
   }, [
     federatedHashSearchResults,
     hashReferenceTrigger,

@@ -1,5 +1,6 @@
 import {
   buildPullRequestStatusKey,
+  buildThreadIdentityKey,
   threadHasExactPrNumberMatch,
   threadMatchesQuery,
   type NavigationThreadSummary,
@@ -218,6 +219,131 @@ export function filterHashReferenceCandidates(
       })
       .slice(0, PULL_REQUEST_CANDIDATE_LIMIT),
   };
+}
+
+/**
+ * The secondary line under a `#` thread row: the details that tell two
+ * similarly-titled threads apart — a PR number (the one the query matched,
+ * when it matched one), the branch, the first linked directory.
+ */
+export function describeHashReferenceThread(
+  thread: NavigationThreadSummary,
+  query: string,
+): string {
+  const parts: string[] = [];
+  const pullRequest = threadHasExactPrNumberMatch(thread, query)
+    ? (thread.prs ?? []).find(
+        (candidate) => candidate.number === Number(query.trim()),
+      )
+    : (thread.prs ?? [])[0];
+  if (pullRequest) {
+    parts.push(`#${pullRequest.number}`);
+  }
+  if (thread.gitBranch) {
+    parts.push(thread.gitBranch);
+  }
+  const directory = (thread.linkedDirectories ?? [])[0];
+  if (directory?.label) {
+    parts.push(directory.label);
+  }
+  if (parts.length > 0) {
+    return parts.join(" · ");
+  }
+  // The id is the last-resort disambiguator between same-named threads. A
+  // thread with no title is already showing that same id as its label, so
+  // repeating it here would just print the uuid twice.
+  return collapseHashReferenceWhitespace(thread.title) ? thread.id : "";
+}
+
+/**
+ * One row in the `#` popover: a thread or a pull request, and whether it
+ * came from a peer rather than this instance's own navigation snapshot.
+ */
+export type HashReferenceOption =
+  | {
+      kind: "thread";
+      remote: boolean;
+      thread: NavigationThreadSummary;
+    }
+  | {
+      kind: "pull-request";
+      pullRequest: PrSummary;
+      remote: boolean;
+    };
+
+/**
+ * Assemble the `#` popover's rows from the local thread population and
+ * whatever a federated search turned up, local rows first.
+ *
+ * Shared by every composer surface so the two never disagree about what a
+ * `#` offers. Three things are filtered out, in this order:
+ *   - the thread being written in — referencing it tells the agent nothing
+ *     it does not already have, and on a bare `#` it is the most recently
+ *     updated thread, so it would otherwise take the first row;
+ *   - remote threads the local snapshot already carries, which would
+ *     otherwise appear twice once a peer answers;
+ *   - remote pull requests already offered by a local thread.
+ */
+export function buildHashReferenceOptions(params: {
+  currentThreadKey?: string;
+  localThreads: readonly NavigationThreadSummary[];
+  query: string;
+  remoteThreads?: readonly NavigationThreadSummary[];
+}): HashReferenceOption[] {
+  const { currentThreadKey, localThreads, query } = params;
+  const isCurrentThread = (thread: NavigationThreadSummary): boolean =>
+    currentThreadKey !== undefined
+    && buildThreadIdentityKey(thread.source, thread.id) === currentThreadKey;
+  const localCandidates = filterHashReferenceCandidates(
+    localThreads.filter((thread) => !isCurrentThread(thread)),
+    query,
+  );
+  const localThreadKeys = new Set(
+    localThreads.map((thread) =>
+      buildThreadIdentityKey(thread.source, thread.id),
+    ),
+  );
+  const remoteCandidates = filterHashReferenceCandidates(
+    (params.remoteThreads ?? []).filter(
+      (thread) =>
+        thread.federation?.ref.target.scope === "remote"
+        && !isCurrentThread(thread)
+        && !localThreadKeys.has(
+          buildThreadIdentityKey(thread.source, thread.id),
+        ),
+    ),
+    query,
+  );
+  const localPullRequestKeys = new Set(
+    localCandidates.pullRequests.map(buildPullRequestStatusKey),
+  );
+  return [
+    ...localCandidates.threads.map((thread) => ({
+      kind: "thread" as const,
+      remote: false,
+      thread,
+    })),
+    ...localCandidates.pullRequests.map((pullRequest) => ({
+      kind: "pull-request" as const,
+      pullRequest,
+      remote: false,
+    })),
+    ...remoteCandidates.threads.map((thread) => ({
+      kind: "thread" as const,
+      remote: true,
+      thread,
+    })),
+    ...remoteCandidates.pullRequests
+      .filter(
+        (pullRequest) =>
+          !localPullRequestKeys.has(buildPullRequestStatusKey(pullRequest)),
+      )
+      .map((pullRequest) => ({
+        kind: "pull-request" as const,
+        pullRequest,
+        remote: true,
+      })),
+  ];
 }
 
 function threadTitleMatchRank(title: string, query: string): number {
