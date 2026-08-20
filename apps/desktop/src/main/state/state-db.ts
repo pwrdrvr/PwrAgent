@@ -1607,10 +1607,6 @@ export class StateDb {
    * the next launch retries.
    */
   ensureIncrementalAutoVacuum(): AutoVacuumConversion {
-    const pageSize = this.db.pragma("page_size", { simple: true }) as number;
-    const sizeBytes = () =>
-      (this.db.pragma("page_count", { simple: true }) as number) * pageSize;
-
     if (
       (this.db.pragma("auto_vacuum", { simple: true }) as number)
       === SQLITE_AUTO_VACUUM_INCREMENTAL
@@ -1618,8 +1614,14 @@ export class StateDb {
       return { status: "already-incremental" };
     }
 
+    const pageSize = this.db.pragma("page_size", { simple: true }) as number;
+    const sizeBytes = () =>
+      (this.db.pragma("page_count", { simple: true }) as number) * pageSize;
     const bytesBefore = sizeBytes();
-    const startedAt = Date.now();
+    // Monotonic: a full VACUUM can run for most of a second, which is long
+    // enough for an NTP step or a resume-from-sleep correction to land inside
+    // it and make a wall-clock delta negative.
+    const startedAt = performance.now();
     try {
       this.db.pragma("auto_vacuum = INCREMENTAL");
       // Takes effect only through the rewrite; the assignment above is the
@@ -1634,12 +1636,16 @@ export class StateDb {
     return {
       bytesAfter: sizeBytes(),
       bytesBefore,
-      elapsedMs: Date.now() - startedAt,
+      elapsedMs: performance.now() - startedAt,
       status: "converted",
     };
   }
 
   startGc(intervalMs = 60 * 60 * 1000): AutoVacuumConversion {
+    // A second `startGc` without a `stopGc` would otherwise orphan the first
+    // interval: the handle is overwritten, so `stopGc` can no longer reach it
+    // and it keeps sweeping — against a closed database, once `close` runs.
+    this.stopGc();
     this.cleanupExpired();
     // After the first sweep, so the one-time rewrite also drops the pages that
     // sweep just freed rather than carrying them into the new file.

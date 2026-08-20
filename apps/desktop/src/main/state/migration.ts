@@ -125,17 +125,21 @@ export function migrateIfNeeded(options?: {
 
   if (fs.existsSync(tmpDbPath)) fs.unlinkSync(tmpDbPath);
 
-  const tmpDb = new Database(tmpDbPath, nativeBinding ? { nativeBinding } : {});
+  // Declared out here so the catch below can close it. Windows will not
+  // unlink or rename a file that still has an open handle, so a migration
+  // step that throws would otherwise mask its own error with an EBUSY from
+  // the cleanup and strand the temp database for the next launch to trip on.
+  let stateDb: StateDb | null = null;
   try {
-    // `tmpDb` deliberately sets no pragmas. It exists only to hold the temp
-    // path open across the rename dance below; `StateDb.open` is what
-    // configures the file, and it has to be the connection that writes the
-    // database header — `auto_vacuum` is honoured only before a header
-    // exists, so a pragma issued on this connection would be redundant and
-    // would also be the thing that stopped `StateDb.open`'s own `auto_vacuum`
-    // from taking. A bare `new Database` writes nothing (the file is still 0
-    // bytes at this point), which is what keeps that ordering intact.
-    const stateDb = StateDb.open(tmpDbPath, { profileName });
+    // `StateDb.open` must be the FIRST connection to touch this path, and the
+    // one that writes the database header. SQLite honours `auto_vacuum` only
+    // while no header exists, so a connection opened here that set any header
+    // pragma — `journal_mode = WAL` in particular — would leave every migrated
+    // profile stuck at `auto_vacuum=NONE`, where the hourly
+    // `incremental_vacuum` reclaims nothing. A holder connection used to sit
+    // here doing exactly that; it turned out to serve no other purpose, since
+    // it had to be closed before the rename below anyway.
+    stateDb = StateDb.open(tmpDbPath, { profileName });
 
     const counts: Record<string, number> = {};
     const timestamp = new Date().toISOString();
@@ -190,7 +194,7 @@ export function migrateIfNeeded(options?: {
 
     stateDb.close();
   } catch (error) {
-    tmpDb.close();
+    stateDb?.close();
     if (fs.existsSync(tmpDbPath)) fs.unlinkSync(tmpDbPath);
     const walPath = `${tmpDbPath}-wal`;
     const shmPath = `${tmpDbPath}-shm`;
@@ -199,7 +203,6 @@ export function migrateIfNeeded(options?: {
     throw error;
   }
 
-  tmpDb.close();
   cleanupSidecars(tmpDbPath);
   fs.renameSync(tmpDbPath, dbPath);
 

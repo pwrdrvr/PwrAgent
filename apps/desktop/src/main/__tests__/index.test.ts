@@ -794,6 +794,9 @@ describe("bootstrapApp", () => {
     });
     writeDockProfileSnapshotMock.mockReset();
     initializeAppStateMock.mockReset();
+    // `bootstrapApp` reads `.autoVacuum` off this to log the one-time
+    // `auto_vacuum` conversion, so the mock has to return the real shape.
+    initializeAppStateMock.mockReturnValue({ autoVacuum: null });
     startProfileFocusRequestWatcherMock.mockClear();
     startupProfilerInstance.start.mockReset();
     startupProfilerInstance.attachWindow.mockReset();

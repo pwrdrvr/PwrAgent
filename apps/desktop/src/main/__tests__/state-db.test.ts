@@ -770,6 +770,40 @@ describe("StateDb", () => {
     });
   });
 
+  it("does not orphan a GC interval when startGc is called twice", () => {
+    // Without the `stopGc` at the top of `startGc`, the second call
+    // overwrites `gcTimer` and the first interval becomes unreachable —
+    // `stopGc` can no longer clear it, so it keeps sweeping a database that
+    // `close` has already shut, throwing from a timer with nothing to catch it.
+    const timers: Array<ReturnType<typeof setInterval>> = [];
+    const realSetInterval = globalThis.setInterval;
+    const realClearInterval = globalThis.clearInterval;
+    const cleared = new Set<ReturnType<typeof setInterval>>();
+
+    globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
+      const timer = realSetInterval(...args);
+      timers.push(timer);
+      return timer;
+    }) as typeof setInterval;
+    globalThis.clearInterval = ((timer: ReturnType<typeof setInterval>) => {
+      cleared.add(timer);
+      return realClearInterval(timer);
+    }) as typeof clearInterval;
+
+    try {
+      stateDb.startGc();
+      stateDb.startGc();
+      stateDb.stopGc();
+    } finally {
+      globalThis.setInterval = realSetInterval;
+      globalThis.clearInterval = realClearInterval;
+      for (const timer of timers) realClearInterval(timer);
+    }
+
+    expect(timers).toHaveLength(2);
+    expect(timers.filter((timer) => cleared.has(timer))).toHaveLength(2);
+  });
+
   it("keeps AUTOINCREMENT limited to existing bounded UI history tables", () => {
     const rows = stateDb.raw
       .prepare(
