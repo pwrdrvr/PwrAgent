@@ -151,6 +151,29 @@ function homeBodyScreenPosition(): { x: number; y: number } {
   };
 }
 
+/**
+ * Where a project's cloud lands in the window, in viewport pixels.
+ *
+ * Composed the same way `homeBodyScreenPosition` is, and for the same
+ * reason: the projects lens normalises its canvas around whatever it has
+ * seated, so a project's own canvas position moves on every snapshot and
+ * neither half of the composition means anything on its own.
+ */
+function projectCloudScreenPosition(label: string): { x: number; y: number } {
+  const canvas = document.querySelector(".star-map__canvas") as HTMLElement;
+  if (!canvas) throw new Error("canvas not found");
+  const view = parseTransform(canvas.style.transform);
+  const name = [...document.querySelectorAll(".star-map-project__name")].find(
+    (node) => node.textContent === label,
+  );
+  const cloud = name?.closest(".star-map__project-cloud") as HTMLElement | null;
+  if (!cloud) throw new Error(`project not on the map: ${label}`);
+  return {
+    x: view.x + Number.parseFloat(cloud.style.left) * view.scale,
+    y: view.y + Number.parseFloat(cloud.style.top) * view.scale,
+  };
+}
+
 /** Let pending snapshots, measurements and placements settle. */
 async function settle() {
   await act(async () => {
@@ -189,6 +212,27 @@ async function openMap(fleet: LoadingFleet) {
     expect(
       screen.getAllByRole("button", { name: /Open this instance/ }).length,
     ).toBeGreaterThan(0);
+  });
+  await settle();
+  return rendered;
+}
+
+/**
+ * Open straight into the projects lens.
+ *
+ * Unlike the instance lenses, this one draws nothing at all until some
+ * thread has a project to pool into, so it opens with this machine's own
+ * threads already in hand rather than with an empty feed.
+ */
+async function openProjectsMap(
+  fleet: LoadingFleet,
+  localThreads: NavigationThreadSummary[],
+) {
+  const rendered = render(
+    renderMap({ desktopApi: fleet.desktopApi, localThreads }),
+  );
+  await waitFor(() => {
+    expect(document.querySelector(".star-map__project-cloud")).toBeTruthy();
   });
   await settle();
   return rendered;
@@ -252,6 +296,54 @@ describe("star map load drift", () => {
     await settle();
 
     expect(homeBodyScreenPosition()).toEqual(opened);
+  });
+
+  it("opens on the heaviest project", async () => {
+    seedLayout("projects");
+    const fleet = buildLoadingFleet(fleetThreads());
+    // This machine's own project is the biggest one on the map until a
+    // peer's snapshot says otherwise.
+    await openProjectsMap(fleet, threads(14, "PwrSnap", "l"));
+    await fleet.announce("pwr_a");
+
+    // Not merely on the middle of the canvas, which is the bounding box of
+    // whatever has been laid out so far and moves as the fleet arrives.
+    expect(projectCloudScreenPosition("PwrSnap")).toEqual({
+      x: VIEWPORT.width / 2,
+      y: VIEWPORT.height / 2,
+    });
+  });
+
+  it("holds the anchored project still while the fleet loads (projects)", async () => {
+    seedLayout("projects");
+    const fleet = buildLoadingFleet(fleetThreads());
+    await openProjectsMap(fleet, threads(14, "PwrSnap", "l"));
+    const opened = projectCloudScreenPosition("PwrSnap");
+
+    // Each peer pools its threads into a project of its own, and every
+    // project already seated is re-seated around the new mass spread — a
+    // canvas resize on each snapshot, from a different bounding box.
+    for (const peerId of ["pwr_a", "pwr_b"]) {
+      await fleet.announce(peerId);
+      expect(projectCloudScreenPosition("PwrSnap")).toEqual(opened);
+    }
+  });
+
+  it("hands the first seat to a heavier project without moving the map", async () => {
+    seedLayout("projects");
+    const fleet = buildLoadingFleet(fleetThreads());
+    await openProjectsMap(fleet, threads(14, "PwrSnap", "l"));
+    const seat = projectCloudScreenPosition("PwrSnap");
+
+    // Gamma is bigger than this machine's own project, so it takes the
+    // first seat the moment its snapshot lands. The map still holds: the
+    // seat is the core itself, so the new occupant lands exactly where the
+    // old one sat. This is why the anchor re-reads the seat rather than
+    // latching onto the project that opened on it — a latch would ride
+    // PwrSnap outward and drag the whole map after it.
+    await fleet.announce("pwr_c");
+
+    expect(projectCloudScreenPosition("Gamma")).toEqual(seat);
   });
 
   it("holds the home cluster still while the fleet loads (lanes)", async () => {

@@ -1768,7 +1768,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   /**
    * The body the map opens on, in canvas units: this machine's own
-   * cluster, or the galaxy core in the lens that has no instances.
+   * cluster, or the heaviest project in the lens that has no instances.
    *
    * Opening on a body rather than on the middle of the canvas is what
    * makes a load sit still. Every lens sizes its canvas to the bounding
@@ -1784,21 +1784,28 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const anchorBody = useMemo(() => {
     if (projectsMode) {
       // Projects pool threads across the fleet, so there is no local body
-      // to hold; the arms converge on the core and seat outward from it.
-      return projectLayout.projects.length > 0 ? projectLayout.core : undefined;
+      // to hold; the first seat — the heaviest project — is the body this
+      // lens is about. `computeProjectLayout` sorts by mass itself and
+      // seats that project at radius zero, so the anchor names the body
+      // rather than the point, and holds if the packing ever stops
+      // putting a body on the core.
+      //
+      // Deliberately the CURRENT first seat rather than one latched for
+      // the life of the lens. The seat does not move — it is the core —
+      // so a project overtaking another during a load swaps who sits
+      // there without moving where "there" is, and the anchor holds. A
+      // latch would instead ride one project's own rank, and a project
+      // that loses the top seat is pushed outward past everything
+      // heavier: the anchor would drag the whole map after it, which is
+      // the drift this anchor exists to prevent.
+      return projectLayout.projects[0];
     }
     return (
       bodies.find((body) => body.instanceId === localInstanceId)
       ?? bodies.find((body) => body.isHub)
       ?? bodies[0]
     );
-  }, [
-    bodies,
-    localInstanceId,
-    projectLayout.core,
-    projectLayout.projects.length,
-    projectsMode,
-  ]);
+  }, [bodies, localInstanceId, projectLayout.projects, projectsMode]);
   /**
    * The same point, rebuilt only when it actually moves.
    *
