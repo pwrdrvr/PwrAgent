@@ -555,6 +555,16 @@ describe("shouldPanOnWheel", () => {
     expect(shouldPanOnWheel(chat.querySelector("p"))).toBe(false);
   });
 
+  it("leaves the wheel to a focused transcript", () => {
+    const sky = element('<div class="star-map__sky" />');
+    const chat = element(
+      '<section class="star-map-chat-card">'
+      + '<div class="star-map-chat-card__transcript"><button>copy</button></div>'
+      + "</section>",
+    );
+    expect(shouldPanOnWheel(sky, chat.querySelector("button"))).toBe(false);
+  });
+
   it("pans for a non-element target", () => {
     expect(shouldPanOnWheel(null)).toBe(true);
   });
