@@ -232,7 +232,18 @@ async function runAxe(
     const summary = results.violations
       .map((violation) => {
         const nodes = violation.nodes
-          .map((node) => `    - ${node.target.join(" ")}`)
+          .map((node) => {
+            // The selector alone says WHICH element, never WHY — and for
+            // rules like target-size the why (too small, versus too close to
+            // which neighbour) is the whole diagnosis. Without it a CI
+            // failure costs a lab round trip to reproduce.
+            const why = (node.failureSummary ?? "")
+              .split("\n")
+              .map((line) => line.trim())
+              .filter(Boolean)
+              .join(" ");
+            return `    - ${node.target.join(" ")}${why ? `\n        ${why}` : ""}`;
+          })
           .join("\n");
         return `  ${violation.id} (${violation.impact ?? "n/a"}): ${violation.help}\n${nodes}\n    ${violation.helpUrl}`;
       })
