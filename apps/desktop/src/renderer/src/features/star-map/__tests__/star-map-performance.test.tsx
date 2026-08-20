@@ -87,6 +87,37 @@ describe("star map idle performance", () => {
     expect(movingRule).toContain("will-change: transform;");
   });
 
+  it("brings a cloud in as scattered groups, not one flat switch-on", async () => {
+    // The pure dealing is pinned in star-map-logic.test; this is the wiring
+    // — that the delays reach the shells at all, and that a real cloud
+    // produces more than one beat. A regression here looks like every card
+    // sharing a delay, which is the "they all appear at once" complaint.
+    const threads = Array.from({ length: 24 }, (_, index) =>
+      thread(`t${index}`),
+    );
+    const { container } = render(screen(threads));
+    const shells = await waitFor(() => {
+      const nodes = [
+        ...container.querySelectorAll<HTMLElement>(".star-map-card-shell"),
+      ].filter((shell) => shell.dataset.threadKey);
+      if (nodes.length === 0) throw new Error("no cards");
+      return nodes;
+    });
+    const delays = shells.map((shell) => shell.style.animationDelay);
+    expect(new Set(delays).size).toBeGreaterThan(1);
+    // And the beats must not climb with the card order: a delay that rises
+    // monotonically is a wipe with a direction, which is the "they all
+    // appear in the same order" complaint this answers.
+    // An unset delay is the empty string, and parseFloat("") is NaN —
+    // which makes every comparison false and would pass this test for the
+    // wrong reason. The first card's missing style means zero.
+    const ms = delays.map((delay) => Number.parseFloat(delay) || 0);
+    const monotonic = ms.every(
+      (delay, index) => index === 0 || delay >= ms[index - 1],
+    );
+    expect(monotonic).toBe(false);
+  });
+
   it("updates card layout from ResizeObserver without reading offsetHeight", async () => {
     // The expected card position is a lanes-geometry number; the default
     // lens is orbit now, so pin the layout the assertion assumes.

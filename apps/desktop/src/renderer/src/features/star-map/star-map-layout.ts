@@ -179,35 +179,79 @@ export function computeCardSlots(
  *
  * `star-map-rise` carries `backwards`, so a card holds `opacity: 0`
  * through its delay: the stagger is not decoration layered over visible
- * cards, it is how long each card stays blank. A flat `index * step` is
+ * cards, it is how long each card stays blank. A per-card delay is
  * therefore only safe while the card count is bounded, and in the orbit
  * lens it is not - clusters cap at ORBIT_MAX_CARDS_PER_GROUP but their
- * COUNT does not, so a cloud of forty small projects staggered at 45ms
- * left its last card invisible for over seven seconds and read as data
- * still arriving.
+ * COUNT does not.
  */
 export const STAR_MAP_RISE_TOTAL_MS = 500;
 /** Duration of `star-map-rise`; pinned to app.css by star-map-logic.test. */
-export const STAR_MAP_RISE_DURATION_MS = 380;
-/** Per-card step, used whole while the cloud can afford it. */
-export const STAR_MAP_RISE_STEP_MS = 45;
+export const STAR_MAP_RISE_DURATION_MS = 200;
+/**
+ * Gap between one entrance group and the next. The point of the entrance
+ * is that the cloud arrives as a few scattered pops rather than as one
+ * flat switch-on, and a step much under this reads as the switch again.
+ */
+export const STAR_MAP_RISE_GROUP_STEP_MS = 100;
+/**
+ * How many groups the budget affords. Derived rather than chosen, so the
+ * total cannot drift when the duration or the step is retuned.
+ */
+export const STAR_MAP_RISE_MAX_GROUPS =
+  Math.floor(
+    (STAR_MAP_RISE_TOTAL_MS - STAR_MAP_RISE_DURATION_MS)
+      / STAR_MAP_RISE_GROUP_STEP_MS,
+  ) + 1;
 
 /**
- * Entrance delay for one card of a `count`-card cloud.
- *
- * A cloud small enough to fit inside the budget keeps the full step, so
- * the constellation settle is unchanged where it was never the problem.
- * A larger one compresses the step instead of dropping the stagger, which
- * keeps the sweep direction legible while landing every card on budget.
+ * Deterministic scramble. Not `Math.random`: the delay is read during
+ * render, so a card that re-renders mid-entrance would otherwise jump to
+ * a different group, and a test could not name an expected order.
  */
-export function cardRiseDelayMs(params: {
-  index: number;
-  count: number;
-}): number {
-  const spread = STAR_MAP_RISE_TOTAL_MS - STAR_MAP_RISE_DURATION_MS;
-  const gaps = Math.max(1, params.count - 1);
-  const step = Math.min(STAR_MAP_RISE_STEP_MS, spread / gaps);
-  return Math.round(params.index * step);
+function mixIndex(value: number): number {
+  let hash = Math.imul(value ^ 0x9e3779b9, 0x85ebca6b);
+  hash ^= hash >>> 13;
+  hash = Math.imul(hash, 0xc2b2ae35);
+  return (hash ^ (hash >>> 16)) >>> 0;
+}
+
+/**
+ * Entrance delay per card, indexed alongside `onScreen`.
+ *
+ * Two rules, both about what the operator can actually see:
+ *
+ * Cards outside the window get no delay at all. Animating them spends
+ * budget on nothing - the operator will pan to them long after the
+ * entrance is over - and it is what made an in-view group depend on how
+ * many cards happened to be off to the side.
+ *
+ * In-view cards are scattered across a few groups instead of stepped one
+ * by one. A per-card step ordered by index is a sweep along the flat card
+ * order, and since clusters are seated contiguously that order is roughly
+ * spatial: it reads as a single wipe with an obvious direction. Scrambling
+ * first and then dealing round-robin keeps the groups within one card of
+ * each other in size while scattering each one across the whole cloud, so
+ * the map fills in as a handful of pops in different places.
+ */
+export function cardRiseDelays(onScreen: readonly boolean[]): number[] {
+  const delays = new Array<number>(onScreen.length).fill(0);
+  const inView: number[] = [];
+  for (let index = 0; index < onScreen.length; index += 1) {
+    if (onScreen[index]) inView.push(index);
+  }
+  // Fewer cards than groups: each one gets its own beat, which is the
+  // settle a small cloud always had.
+  const groups = Math.max(
+    1,
+    Math.min(STAR_MAP_RISE_MAX_GROUPS, inView.length),
+  );
+  // Sorted by the scramble, not shuffled in place: `Array.prototype.sort`
+  // is the only ordering primitive here that is stable across engines.
+  inView.sort((left, right) => mixIndex(left) - mixIndex(right));
+  for (let rank = 0; rank < inView.length; rank += 1) {
+    delays[inView[rank]] = (rank % groups) * STAR_MAP_RISE_GROUP_STEP_MS;
+  }
+  return delays;
 }
 
 /**

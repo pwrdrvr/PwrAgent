@@ -33,7 +33,7 @@ import {
   type StarMapSessionKeys,
 } from "./attention";
 import {
-  cardRiseDelayMs,
+  cardRiseDelays,
   cloudDetentRadius,
   computeCardSlots,
   computeStarMapLayout,
@@ -111,6 +111,7 @@ import {
 import {
   clampStarMapView,
   isOverviewZoom,
+  isPointInView,
   MAX_ZOOM,
   MIN_ZOOM,
   overviewChromeScale,
@@ -2938,6 +2939,62 @@ export function StarMapScreen(props: StarMapScreenProps) {
       loadSlot ? [...position.slots, loadSlot] : position.slots,
     );
     const overflow = threads.length - visible.length;
+    // Placement is resolved before the JSX rather than inside it because
+    // the entrance has to know which cards the window actually contains,
+    // and that question needs the very anchor each card renders at.
+    const drawn = overview && position.clusters ? [] : visible;
+    const placements = drawn.map((thread, index) => {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const storedOffset = arrangement.offsetFor(
+        position.instanceId,
+        threadKey,
+      );
+      const cardCluster =
+        position.clusterIndexByCard !== undefined
+          ? position.clusters?.[position.clusterIndexByCard[index]]
+          : undefined;
+      // A placed card anchors to its cloud's centre instead of its
+      // scatter slot: cloudmates arriving or archiving away reflow the
+      // scatter, and an offset over a moving slot made every arranged
+      // card jump. See `clusterAnchorFor`.
+      const anchored = cardCluster !== undefined && storedOffset !== undefined;
+      return {
+        thread,
+        threadKey,
+        storedOffset,
+        anchored,
+        cardCluster,
+        // The scatter slot, kept alongside the anchor: a first drop has to
+        // re-express its result from the cloud centre, and by then the
+        // anchor is that centre.
+        slot: slots[index],
+        anchorSlot: anchored
+          ? { dx: cardCluster.center.x, dy: cardCluster.center.y }
+          : slots[index],
+      };
+    });
+    // Reads committed view state, not the live ref a pan writes: a card
+    // mounting mid-gesture can be grouped against a view one frame stale,
+    // and the worst that costs is one card in the wrong beat of a 500ms
+    // entrance. Reading the ref would make render impure for no gain.
+    const riseDelays = cardRiseDelays(
+      placements.map((placement) =>
+        isPointInView({
+          point: {
+            x:
+              position.x
+              + placement.anchorSlot.dx
+              + (placement.storedOffset?.dx ?? 0),
+            y:
+              position.y
+              + placement.anchorSlot.dy
+              + (placement.storedOffset?.dy ?? 0),
+          },
+          view,
+          viewport: viewportSize,
+        }),
+      ),
+    );
     return (
       <div
         key={`cloud:${position.instanceId}`}
@@ -3049,26 +3106,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
             onDismiss={() => toggleLoadCard(position.instanceId)}
           />
         ) : null}
-        {(overview && position.clusters ? [] : visible).map((thread, index) => {
-          const slot = slots[index];
-          const threadKey = buildThreadIdentityKey(thread.source, thread.id);
-          const storedOffset = arrangement.offsetFor(
-            position.instanceId,
+        {placements.map((placement, index) => {
+          const {
+            anchored,
+            anchorSlot,
+            cardCluster,
+            slot,
+            storedOffset,
+            thread,
             threadKey,
-          );
-          const cardCluster =
-            position.clusterIndexByCard !== undefined
-              ? position.clusters?.[position.clusterIndexByCard[index]]
-              : undefined;
-          // A placed card anchors to its cloud's centre instead of its
-          // scatter slot: cloudmates arriving or archiving away reflow the
-          // scatter, and an offset over a moving slot made every arranged
-          // card jump. See `clusterAnchorFor`.
-          const anchored =
-            cardCluster !== undefined && storedOffset !== undefined;
-          const anchorSlot = anchored
-            ? { dx: cardCluster.center.x, dy: cardCluster.center.y }
-            : slot;
+          } = placement;
           return (
             <StarMapThreadCard
               key={threadKey}
@@ -3079,9 +3126,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   : undefined
               }
               hasUnsentDraft={props.draftThreadKeys?.[threadKey] === true}
-              // Budgeted, not per-card: `star-map-rise` blanks a card
-              // through its delay, and an orbit cloud has no card cap.
-              riseDelayMs={cardRiseDelayMs({ index, count: visible.length })}
+              // Scattered beats over the cards in view, not a sweep over
+              // every card that exists. See `cardRiseDelays`.
+              riseDelayMs={riseDelays[index]}
               entering={enteringThreadKeys.has(threadKey)}
               located={locatedThreadKey === threadKey}
               instanceIcon={celestialIcons.iconFor(

@@ -11778,7 +11778,11 @@ textarea,
    than a button nested in a button. */
 .star-map-card-shell {
   position: absolute;
-  animation: star-map-rise 380ms ease-out backwards;
+  /* Shorter than it looks like it wants to be, on purpose: the entrance
+     budget is delay + duration, and the delay channel is what carries the
+     scattered group cadence (see cardRiseDelays). A longer fade here buys
+     a smoother single card by spending the groups. */
+  animation: star-map-rise 200ms ease-out backwards;
 }
 
 .star-map-card {
