@@ -3700,6 +3700,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                         height:
                           card.terminalHeight ?? STAR_MAP_TERMINAL_CARD_HEIGHT,
                       })}
+                      scale={view.scale}
                       zIndex={cardZ}
                       onClose={() => chatCards.toggleTerminal(card.key)}
                       onHeightChange={(height) =>

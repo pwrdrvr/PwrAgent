@@ -26,7 +26,16 @@ type IntegratedTerminalProps = {
   remote?: IntegratedTerminalPaneRemote;
   height: number;
   visible?: boolean;
-  onHeightChange: (height: number) => void;
+  /**
+   * Who owns this pane's window chrome. "standalone" (the thread view) means
+   * the pane draws its own close button, resize handle, and remote chip.
+   * "hosted" means a surrounding card already has a title bar and a resize
+   * grip, so the pane draws none of them and is nothing but terminal: a
+   * second close button 3px under the card's, and a panel-colored resize
+   * strip under the card's bar, read as damage rather than as chrome.
+   */
+  chrome?: "standalone" | "hosted";
+  onHeightChange?: (height: number) => void;
   onClose: () => void;
   onExit: () => void;
 };
@@ -38,10 +47,12 @@ export function IntegratedTerminal({
   remote,
   height,
   visible = true,
+  chrome = "standalone",
   onHeightChange,
   onClose,
   onExit,
 }: IntegratedTerminalProps) {
+  const hosted = chrome === "hosted";
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const sessionIdRef = useRef<string | undefined>(undefined);
@@ -232,7 +243,7 @@ export function IntegratedTerminal({
   }, [height, visible]);
 
   const resizeBy = (delta: number) => {
-    onHeightChange(clampTerminalHeight(height + delta));
+    onHeightChange?.(clampTerminalHeight(height + delta));
   };
 
   const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -244,7 +255,7 @@ export function IntegratedTerminal({
 
     const handlePointerMove = (moveEvent: PointerEvent) => {
       const delta = startY - moveEvent.clientY;
-      onHeightChange(clampTerminalHeight(startHeight + delta));
+      onHeightChange?.(clampTerminalHeight(startHeight + delta));
     };
     const stopResize = () => {
       window.removeEventListener("pointermove", handlePointerMove);
@@ -297,7 +308,11 @@ export function IntegratedTerminal({
 
   return (
     <section
-      className="integrated-terminal"
+      className={
+        hosted
+          ? "integrated-terminal integrated-terminal--hosted"
+          : "integrated-terminal"
+      }
       aria-label="Integrated terminal"
       hidden={!visible}
       style={
@@ -306,19 +321,21 @@ export function IntegratedTerminal({
         } as CSSProperties
       }
     >
-      <div
-        aria-label="Resize terminal"
-        aria-orientation="horizontal"
-        aria-valuenow={clampTerminalHeight(height)}
-        aria-valuemin={TERMINAL_MIN_HEIGHT}
-        aria-valuemax={TERMINAL_MAX_HEIGHT}
-        className="integrated-terminal__resize-handle"
-        role="separator"
-        tabIndex={0}
-        onKeyDown={handleResizeKeyDown}
-        onPointerDown={startResize}
-      />
-      {remote ? (
+      {hosted ? null : (
+        <div
+          aria-label="Resize terminal"
+          aria-orientation="horizontal"
+          aria-valuenow={clampTerminalHeight(height)}
+          aria-valuemin={TERMINAL_MIN_HEIGHT}
+          aria-valuemax={TERMINAL_MAX_HEIGHT}
+          className="integrated-terminal__resize-handle"
+          role="separator"
+          tabIndex={0}
+          onKeyDown={handleResizeKeyDown}
+          onPointerDown={startResize}
+        />
+      )}
+      {remote && !hosted ? (
         <span className="integrated-terminal__remote">
           <InstanceChip
             icon={remote.celestialIcon}
@@ -327,18 +344,20 @@ export function IntegratedTerminal({
           />
         </span>
       ) : null}
-      <button
-        type="button"
-        className="integrated-terminal__close"
-        aria-label="Close terminal"
-        title="Close terminal"
-        onClick={onClose}
-        onPointerDown={(event) => {
-          event.stopPropagation();
-        }}
-      >
-        ×
-      </button>
+      {hosted ? null : (
+        <button
+          type="button"
+          className="integrated-terminal__close"
+          aria-label="Close terminal"
+          title="Close terminal"
+          onClick={onClose}
+          onPointerDown={(event) => {
+            event.stopPropagation();
+          }}
+        >
+          ×
+        </button>
+      )}
       <span className="integrated-terminal__status" role="status">
         {status}
       </span>

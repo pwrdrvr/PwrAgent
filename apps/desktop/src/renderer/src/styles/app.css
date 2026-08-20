@@ -22340,6 +22340,24 @@ a.transcript-message__messaging-origin:focus-visible {
   display: none;
 }
 
+/* Hosted in a card that already owns the chrome (the star map's terminal
+   satellite). The pane draws no close button, no handle, and no margins:
+   it is the terminal and nothing else, sized by the card. The 12px column
+   margins are what kept the black off the card's border — the breathing
+   room they gave moves inside the black as body padding, so the surface
+   runs to the border and the card's radius clips it. */
+.integrated-terminal--hosted {
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  margin: 0;
+}
+
+.integrated-terminal--hosted .integrated-terminal__body {
+  padding: 8px 10px;
+}
+
 .integrated-terminal__resize-handle {
   flex: 0 0 10px;
   min-height: 10px;
@@ -29218,6 +29236,50 @@ a.transcript-message__messaging-origin:focus-visible {
   position: relative;
   flex: 1;
   min-height: 0;
+}
+
+/* Same measurements the pane gave its floating chip, now in the bar. */
+.star-map-terminal-card .star-map-satellite-card__bar .chip--instance {
+  height: 20px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
+/* The terminal fills its card, so the body is the column it stretches in. */
+.star-map-terminal-card .star-map-satellite-card__body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Bottom-edge resize rail. The pane's own handle lived under the title bar
+   and grew the card downward when dragged upward; this card is pinned under
+   its host, so the edge that moves is the one the operator grabs. */
+.star-map-terminal-card__grip {
+  display: flex;
+  height: 10px;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  border-top: 1px solid var(--border-subtle);
+  cursor: ns-resize;
+}
+
+.star-map-terminal-card__grip::after {
+  width: 34px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--border-strong);
+  content: "";
+  transition: background-color 80ms ease;
+}
+
+.star-map-terminal-card__grip:hover::after {
+  background: var(--text-muted);
+}
+
+.star-map-terminal-card__grip:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
 }
 
 /* The rail's own max-width keeps a 32px peek margin in the thread view.
