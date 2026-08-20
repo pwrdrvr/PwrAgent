@@ -516,6 +516,32 @@ function assertRequiredGrokBundle() {
   console.log(`  verified bundled Grok runtime: ${bundledExecutable}`);
 }
 
+// Windows PowerShell 5.1 inherits this process's PSModulePath, and the hosted
+// runner's value is PowerShell 7-oriented. Autoloading Windows PowerShell's own
+// Microsoft.PowerShell.Security then fails ("the module could not be loaded"),
+// which left `Get-AuthenticodeSignature` undefined and the release reporting an
+// empty signature status. Prefer pwsh, and pin Windows PowerShell to its own
+// module locations when it is the only shell available.
+const WINDOWS_SIGNATURE_PRELUDE = [
+  "$ErrorActionPreference = 'Stop'",
+  "if ($PSVersionTable.PSEdition -ne 'Core') { $env:PSModulePath = \"$PSHOME\\Modules;$env:ProgramFiles\\WindowsPowerShell\\Modules\" }",
+  "Import-Module Microsoft.PowerShell.Security",
+];
+
+function windowsPowerShellCommand() {
+  for (const candidate of ["pwsh.exe", "powershell.exe"]) {
+    const probe = spawnSync(
+      candidate,
+      ["-NoProfile", "-NonInteractive", "-Command", "exit 0"],
+      { stdio: "ignore" },
+    );
+    if (!probe.error && probe.status === 0) {
+      return candidate;
+    }
+  }
+  return "powershell.exe";
+}
+
 function verifyPackagedGrok(resourcesDirectory) {
   const executable = process.platform === "win32" ? "grok.exe" : "grok";
   const bundledExecutable = join(
@@ -552,12 +578,17 @@ function verifyPackagedGrok(resourcesDirectory) {
     runChecked("codesign", codesignArgs);
   } else if (process.platform === "win32" && requireSigning) {
     runChecked(
-      "powershell.exe",
+      windowsPowerShellCommand(),
       [
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        "$signature = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_EXECUTABLE; if ($signature.Status -ne 'Valid') { throw \"Bundled Grok Authenticode signature is $($signature.Status): $($signature.StatusMessage)\" }; if ($signature.SignerCertificate.Subject -notmatch '(^|,\\s*)CN=PwrDrvr LLC(,|$)') { throw \"Bundled Grok signer is not PwrDrvr LLC: $($signature.SignerCertificate.Subject)\" }",
+        [
+          ...WINDOWS_SIGNATURE_PRELUDE,
+          "$signature = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_EXECUTABLE",
+          "if ($signature.Status -ne 'Valid') { throw \"Bundled Grok Authenticode signature is $($signature.Status): $($signature.StatusMessage)\" }",
+          "if ($signature.SignerCertificate.Subject -notmatch '(^|,\\s*)CN=PwrDrvr LLC(,|$)') { throw \"Bundled Grok signer is not PwrDrvr LLC: $($signature.SignerCertificate.Subject)\" }",
+        ].join("; "),
       ],
       { env: { PWRAGENT_VERIFY_EXECUTABLE: bundledExecutable } },
     );

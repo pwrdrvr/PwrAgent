@@ -646,6 +646,17 @@ async function validateExtractedBundle(
   return command;
 }
 
+// Windows PowerShell 5.1 inherits the parent process's PSModulePath. When that
+// value is PowerShell 7-oriented, autoloading Windows PowerShell's own
+// Microsoft.PowerShell.Security fails ("the module could not be loaded") and
+// Get-AuthenticodeSignature never runs. Pin the Windows PowerShell module
+// locations and import the module explicitly so a failure names its own cause.
+export const WINDOWS_SIGNATURE_PRELUDE = [
+  "$ErrorActionPreference = 'Stop'",
+  "if ($PSVersionTable.PSEdition -ne 'Core') { $env:PSModulePath = \"$PSHOME\\Modules;$env:ProgramFiles\\WindowsPowerShell\\Modules\" }",
+  "Import-Module Microsoft.PowerShell.Security",
+];
+
 async function verifyMatchingPlatformSignature(
   command: string,
   applicationCommand: string,
@@ -689,6 +700,7 @@ async function verifyMatchingPlatformSignature(
       "-NonInteractive",
       "-Command",
       [
+        ...WINDOWS_SIGNATURE_PRELUDE,
         "$application = Get-AuthenticodeSignature -LiteralPath $args[0]",
         "$runtime = Get-AuthenticodeSignature -LiteralPath $args[1]",
         "if ($application.Status -ne 'Valid' -or $runtime.Status -ne 'Valid') { exit 1 }",
