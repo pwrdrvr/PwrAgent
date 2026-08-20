@@ -580,36 +580,71 @@ describe("star map card menu acts on the selection", () => {
 });
 
 /**
- * The projects lens paints no selected state on its cards, and its cards
- * are not where the lane geometry says they are. A selection there is one
- * the operator can neither see nor point at — which is exactly what a
- * destructive menu action must not be about.
+ * Selection in the projects lens.
+ *
+ * This block used to assert the opposite — that a sweep here selected
+ * nothing. That guard came in with the change that pointed the card menu
+ * at the selection, and its reason was that the lens "paints no selected
+ * state on its cards, and its cards are not where the lane geometry says
+ * they are": a selection the operator could neither see nor point at, with
+ * a destructive menu action aimed at it.
+ *
+ * Both halves of that were descriptions of the implementation rather than
+ * requirements, and both are now false. The lens paints selected state,
+ * and the sweep reads the lens's own card geometry (`projectCardRects`)
+ * instead of the instance-only map that was empty here. What the guard was
+ * protecting — an invisible selection — cannot arise, so the lens gets the
+ * multi-select the one lens that pools work across every machine wants.
+ *
+ * Group DRAG is still absent, and stays absent: a project is not an
+ * instance, so there is no arrangement row to persist an offset to.
  */
-describe("star map selection stops at the projects lens", () => {
+describe("star map selection in the projects lens", () => {
   afterEach(() => {
     window.localStorage.removeItem("pwragent.starMap.viewPreferences");
     window.localStorage.removeItem("pwragent.starMap.filterSelection");
   });
 
-  it("selects nothing when a sweep runs under the projects lens", async () => {
+  it("sweeps the lens's own card geometry", async () => {
     window.localStorage.setItem(
       "pwragent.starMap.viewPreferences",
       JSON.stringify({ layout: "projects" }),
     );
     const desktopApi = buildMutatingDesktopApi();
     renderMap(4, { desktopApi });
-    // The cards are on screen, so the sweep has something to miss.
     await waitFor(() => expect(shells()).toHaveLength(4));
 
     await sweepEverything();
-    await act(async () => {
-      await Promise.resolve();
+
+    await waitFor(() => {
+      expect(screen.getByText("4 cards selected")).toBeTruthy();
+    });
+    // Painted, not just counted — the half the old guard was right to
+    // insist on.
+    expect(selectedShells()).toHaveLength(4);
+    // And the kebab is about the whole selection, which is only safe
+    // because the operator can see what it is about.
+    openCardMenu("t0");
+    expect(
+      screen.getByRole("menuitem", { name: "Archive 4 threads" }),
+    ).toBeTruthy();
+  });
+
+  it("offers no drag in its selection hint", async () => {
+    window.localStorage.setItem(
+      "pwragent.starMap.viewPreferences",
+      JSON.stringify({ layout: "projects" }),
+    );
+    renderMap(4);
+    await waitFor(() => expect(shells()).toHaveLength(4));
+    await sweepEverything();
+    await waitFor(() => {
+      expect(screen.getByText("4 cards selected")).toBeTruthy();
     });
 
-    expect(screen.queryByText(/cards? selected/)).toBeNull();
-    // And the kebab is about the card it hangs off, singular.
-    openCardMenu("t0");
-    expect(screen.getByRole("menuitem", { name: "Archive thread" })).toBeTruthy();
+    // Cards here carry no `drag`, so the bar must not name one.
+    const hint = document.querySelector(".star-map__selection-hint");
+    expect(hint?.textContent).toBe("⇧-click to amend");
   });
 
   it("drops a selection swept before the durable instance id arrived", async () => {

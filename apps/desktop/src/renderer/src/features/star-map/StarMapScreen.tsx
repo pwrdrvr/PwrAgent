@@ -2735,10 +2735,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * `cardRects`.
    *
    * Kept separate rather than folded into that map because `cardRects` is
-   * the drag/snap/marquee geometry, and cards in this lens deliberately do
-   * not move (a project is not an instance, so there is no arrangement row
-   * to persist an offset to). This is read for one thing only: knowing
-   * where a card the operator asked for is, so the camera can go there.
+   * the drag/snap geometry, and cards in this lens deliberately do not
+   * move (a project is not an instance, so there is no arrangement row to
+   * persist an offset to).
+   *
+   * Read for the two things that are about where a card IS rather than
+   * where it may be dragged to: flying the camera to a card the operator
+   * asked for, and sweeping a marquee over it. Both reach it through
+   * `flightRects`.
    */
   const projectCardRects = useMemo(() => {
     const rects = new Map<string, SnapRect>();
@@ -2998,7 +3002,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
         );
         setSelection((current) => {
           const hits = mode === "add" ? new Set(current) : new Set<string>();
-          for (const [key, cardRect] of cardRects) {
+          // The lens's own geometry, not `cardRects`: that map is built
+          // from instance bodies and is empty in Projects, so a sweep
+          // there hit nothing and — in `replace` mode — wiped whatever
+          // the cloud pills had selected. Outside Projects `flightRects`
+          // IS `cardRects`, so nothing else moves.
+          for (const [key, cardRect] of flightRects) {
             if (rectIntersects(cardRect, box)) hits.add(key);
           }
           return hits;
@@ -3010,7 +3019,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       window.addEventListener("pointercancel", stop);
       return true;
     },
-    [cardRects, view.scale],
+    [flightRects, view.scale],
   );
 
   /**
@@ -4484,10 +4493,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
           <StarMapViewOptions
             preferences={preferences}
             onChange={(next) => {
-              // A lens change re-places every card, and one lens (projects)
-              // paints no selected state at all. Carrying a selection across
-              // that boundary leaves the operator holding cards they can no
-              // longer point at — which the kebab would then act on.
+              // A lens change re-places every card. Every lens paints
+              // selected state now, so a selection WOULD carry over intact
+              // — and that is the problem: the cards are somewhere else
+              // entirely, and the operator is left holding a selection
+              // they did not sweep on the map now in front of them, which
+              // the kebab would then act on.
               if (next.layout !== preferences.layout) setSelection(new Set());
               setPreferences(next);
               writeStoredPreferences(next);
@@ -4587,8 +4598,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
           <span>
             {selection.size === 1 ? "1 card selected" : `${selection.size} cards selected`}
           </span>
+          {/* Projects cards carry no `drag` — a project is not an
+              instance, so there is no arrangement row to persist an offset
+              to — and offering a gesture that only pans the canvas is
+              worse than offering none. */}
           <span className="star-map__selection-hint" aria-hidden="true">
-            drag to move · ⇧-click to amend
+            {projectsMode
+              ? "⇧-click to amend"
+              : "drag to move · ⇧-click to amend"}
           </span>
           <button
             type="button"

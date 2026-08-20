@@ -169,6 +169,47 @@ describe("star map projects lens clouds", () => {
     });
   });
 
+  /**
+   * The sweep reads this lens's own card geometry. It used to read
+   * `cardRects`, which is empty by construction here, so a marquee
+   * selected nothing and — in `replace` mode — wiped whatever the cloud
+   * pills had selected. Invisible while the lens painted no selected state
+   * at all; a broken affordance the moment it did.
+   */
+  it("sweeps a marquee over project cards", async () => {
+    const { container } = renderProjects([
+      thread({ id: "a1", path: "/repo/alpha", label: "AlphaDir" }),
+      thread({ id: "a2", path: "/repo/alpha", label: "AlphaDir" }),
+      thread({ id: "b1", path: "/repo/beta", label: "BetaDir" }),
+    ]);
+    // Card keys name their owning instance; a sweep against the
+    // placeholder id is dropped the moment the durable one lands.
+    await waitFor(() => {
+      const keys = [
+        ...container.querySelectorAll(".star-map-card-shell[data-thread-key]"),
+      ].map((shell) => (shell as HTMLElement).dataset.cardKey ?? "");
+      expect(keys.length).toBe(3);
+      expect(keys.every((key) => key.startsWith("pwr_local::"))).toBe(true);
+    });
+
+    const viewport = container.querySelector(".star-map__viewport");
+    if (!(viewport instanceof HTMLElement)) throw new Error("no viewport");
+    fireEvent.pointerDown(viewport, {
+      button: 0,
+      shiftKey: true,
+      clientX: -4000,
+      clientY: -4000,
+    });
+    fireEvent.pointerMove(window, { clientX: 4000, clientY: 4000 });
+    fireEvent.pointerUp(window, { clientX: 4000, clientY: 4000 });
+
+    await waitFor(() => {
+      expect(
+        container.querySelectorAll(".star-map-card-shell--selected"),
+      ).toHaveLength(3);
+    });
+  });
+
   it("selects a parent cloud's cards from its pill", async () => {
     const { container } = renderProjects([
       thread({ id: "p1", path: "/repo/alpha", label: "AlphaDir", title: "Root work" }),
