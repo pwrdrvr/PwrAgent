@@ -89,10 +89,16 @@ export function StarMapViewOptions(props: {
                   props.onChange({ ...props.preferences, layout: mode })
                 }
               >
+                {/* "Instances", not "Orbit": every lens here is orbital,
+                    so the old name described the drawing rather than what
+                    the lens is FOR, and it did not pair with "Projects" —
+                    the choice is which thing a body stands for. The stored
+                    id stays `orbit` so an operator's saved layout survives
+                    the rename. */}
                 {mode === "lanes"
                   ? "Lanes"
                   : mode === "orbit"
-                    ? "Orbit"
+                    ? "Instances"
                     : "Projects"}
               </button>
             ))}

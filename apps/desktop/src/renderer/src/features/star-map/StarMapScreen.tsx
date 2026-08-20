@@ -7,6 +7,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type MutableRefObject,
   type PointerEvent as ReactPointerEvent,
   type RefObject,
 } from "react";
@@ -45,8 +46,6 @@ import {
   type StarMapCardSlot,
 } from "./star-map-layout";
 import {
-  cardRingExtent,
-  cardRingSlots,
   computeOrbitPlacement,
   galaxyArmPath,
   shouldPanOnWheel,
@@ -84,7 +83,10 @@ import {
   groupThreadsByProject,
   instanceIdByThreadKey,
 } from "./star-map-projects";
-import { computeProjectLayout } from "./star-map-project-layout";
+import {
+  computeProjectLayout,
+  EMPTY_PROJECT_LAYOUT,
+} from "./star-map-project-layout";
 import { StarMapProjectBody } from "./StarMapProjectBody";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { StarMapChatCard } from "./StarMapChatCard";
@@ -153,12 +155,36 @@ const STAR_COUNT = 130;
 /** Orbit clouds use a fixed card width; lanes narrow theirs to fit. */
 const ORBIT_CARD_WIDTH = 200;
 /**
- * Projects-lens ring cap: a ring crowds geometrically, so a project body
- * stays shallower than a column. The orbit lens no longer rings — its caps
- * live in star-map-clusters (per-group plus a cloud backstop), each cloud
- * carrying its own "+N more" chip instead of truncating silently.
+ * Scope prefix for a project's cloud state.
+ *
+ * Cloud memory and the expanded set are keyed by the body a cloud hangs
+ * off. A project's catch-all cloud is keyed by the project itself, so
+ * without a prefix the two lenses would share entries for it.
  */
-const PROJECT_MAX_CARDS_PER_BODY = 16;
+const PROJECT_CLUSTER_SCOPE = "project:";
+
+function projectClusterScope(projectKey: string): string {
+  return `${PROJECT_CLUSTER_SCOPE}${projectKey}`;
+}
+
+/**
+ * Accessible name for a parent/child cloud's pill.
+ *
+ * Shared by both lenses so the two cannot drift, and counting rather than
+ * interpolating a fixed plural: a parent with exactly one child is the
+ * commonest shape there is, and "its 1 replies" is what a screen reader
+ * would have said.
+ */
+function parentClusterSelectLabel(params: {
+  label: string;
+  threadCount: number;
+}): string {
+  const replies = Math.max(0, params.threadCount - 1);
+  return `Select the ${params.label} thread and its ${replies} ${
+    replies === 1 ? "reply" : "replies"
+  }`;
+}
+
 /** Breathing room past the longest column / widest lane when panning. */
 const LANE_CANVAS_PADDING = 120;
 /**
@@ -519,6 +545,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * must not itself schedule a render. See `StarMapCloudMemory`.
    */
   const cloudMemory = useRef(new Map<string, StarMapCloudMemory>());
+  /**
+   * The same, per project key, for the Projects lens. Kept in its own map
+   * rather than sharing one keyed space: a project pools threads from every
+   * instance, so its clouds are a different set of clouds even when a
+   * project key and an instance id could not collide.
+   */
+  const projectCloudMemory = useRef(new Map<string, StarMapCloudMemory>());
   // Orbit places bodies on a canvas larger than the window, so the surface
   // pans and zooms rather than compressing the map to fit.
   const [view, setView] = useState({ x: 0, y: 0, scale: 1 });
@@ -1249,26 +1282,55 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [clusterClouds],
   );
 
-  const toggleClusterExpanded = useCallback(
-    (instanceId: string, clusterKey: string) => {
+  /**
+   * Expand or collapse one cloud, in whichever lens owns it.
+   *
+   * `scopeId` names the body the cloud hangs off — an instance id in the
+   * Instances lens, a `project:`-prefixed key in Projects — and keys both
+   * the cloud memory and the expanded set, so the two lenses cannot read
+   * each other's state for a cloud key they happen to share (they always
+   * do: a project's catch-all cloud is keyed by the project itself).
+   */
+  const toggleClusterExpandedIn = useCallback(
+    (
+      memory: MutableRefObject<Map<string, StarMapCloudMemory>>,
+      scopeId: string,
+      clusterKey: string,
+    ) => {
       // Unfolding or folding a cloud is a request to re-fit THAT cloud's
       // rings, so it can grow outward and shrink back. Its centre and its
       // seats stay: the cards already on screen are not what changed.
-      cloudMemory.current.set(
-        instanceId,
+      memory.current.set(
+        scopeId,
         refitCluster(
-          cloudMemory.current.get(instanceId) ?? emptyCloudMemory(),
+          memory.current.get(scopeId) ?? emptyCloudMemory(),
           clusterKey,
         ),
       );
       setExpandedClusters((current) => {
         const next = new Set(current);
-        const key = `${instanceId}::${clusterKey}`;
+        const key = `${scopeId}::${clusterKey}`;
         if (!next.delete(key)) next.add(key);
         return next;
       });
     },
     [],
+  );
+
+  const toggleClusterExpanded = useCallback(
+    (instanceId: string, clusterKey: string) =>
+      toggleClusterExpandedIn(cloudMemory, instanceId, clusterKey),
+    [toggleClusterExpandedIn],
+  );
+
+  const toggleProjectClusterExpanded = useCallback(
+    (projectKey: string, clusterKey: string) =>
+      toggleClusterExpandedIn(
+        projectCloudMemory,
+        projectClusterScope(projectKey),
+        clusterKey,
+      ),
+    [toggleClusterExpandedIn],
   );
 
   const projects = useMemo(
@@ -1281,21 +1343,93 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [attentionByInstance],
   );
 
-  const projectLayout = useMemo(
-    () =>
-      computeProjectLayout({
-        cardWidth: ORBIT_CARD_WIDTH,
-        projects: projects.map((project) => ({
-          key: project.key,
-          cardCount: Math.min(
-            project.threads.length,
-            PROJECT_MAX_CARDS_PER_BODY,
-          ),
-          mass: project.mass,
-        })),
-      }),
-    [projects],
+  /**
+   * Card key for a thread in the Projects lens.
+   *
+   * Cards there are scoped by their OWNING instance, not by the project, so
+   * anything addressing them by key — selection, the camera — has to agree
+   * with the card's own `cardKey` exactly. Kept in one place because they
+   * disagreeing is silent: the selection would simply never highlight.
+   */
+  const projectCardKey = useCallback(
+    (thread: NavigationThreadSummary) => {
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const owner = projectThreadOwners.get(threadKey) ?? localInstanceId;
+      return `${owner ?? "project"}::${threadKey}`;
+    },
+    [localInstanceId, projectThreadOwners],
   );
+
+  /**
+   * Projects-lens clouds: a project's pooled threads grouped the same way
+   * an instance's are, so a parent thread and its children read as one
+   * body of work inside the project's solar system instead of scattering
+   * around a flat ring.
+   *
+   * `buildInstanceClusters` buckets by project key, so handing it a single
+   * project's threads yields exactly that project's parent/child clouds
+   * plus one catch-all — the same grouping, the same per-cloud caps, and
+   * the same working "+N more" chip the Instances lens already has. The
+   * flat ring this replaces capped the whole body at sixteen cards and
+   * said nothing about the seventeenth.
+   *
+   * Undefined outside the lens so the others pay nothing for it.
+   */
+  const projectClouds = useMemo(() => {
+    if (!projectsMode) return undefined;
+    const clouds = new Map<string, ReturnType<typeof computeClusterCloud>>();
+    for (const project of projects) {
+      const scopeId = projectClusterScope(project.key);
+      const prefix = `${scopeId}::`;
+      const expandedKeys = new Set<string>();
+      for (const entry of expandedClusters) {
+        if (entry.startsWith(prefix)) {
+          expandedKeys.add(entry.slice(prefix.length));
+        }
+      }
+      const cloud = computeClusterCloud({
+        clusters: buildInstanceClusters({
+          threads: project.threads,
+          expandedKeys,
+        }),
+        cardWidth: ORBIT_CARD_WIDTH,
+        heightForThread: (threadKey) =>
+          cardHeights.get(threadKey) ?? STAR_MAP_ESTIMATED_CARD_HEIGHT,
+        memory: projectCloudMemory.current.get(scopeId),
+      });
+      // See `clusterClouds`: carrying the layout forward is what keeps an
+      // archived thread from moving everything else.
+      projectCloudMemory.current.set(scopeId, cloud.memory);
+      clouds.set(project.key, cloud);
+    }
+    return clouds;
+  }, [cardHeights, expandedClusters, projects, projectsMode]);
+
+  /**
+   * Gated on the lens like `projectClouds`, and for a sharper reason than
+   * saving work: without the clouds the card count falls back to a
+   * project's FULL thread list, so the other lenses would pack the whole
+   * galaxy over every thread in the fleet on every streamed delta and
+   * throw the result away — every reader below is behind `projectsMode`.
+   */
+  const projectLayout = useMemo(() => {
+    if (!projectClouds) return EMPTY_PROJECT_LAYOUT;
+    return computeProjectLayout({
+      cardWidth: ORBIT_CARD_WIDTH,
+      projects: projects.map((project) => {
+        const cloud = projectClouds.get(project.key);
+        return {
+          key: project.key,
+          cardCount: cloud?.threads.length ?? 0,
+          // Spacing tracks the seated clouds, exactly as instance
+          // spacing does — see the `extents` argument to
+          // `computeOrbitPlacement`.
+          extent: cloud?.extent,
+          mass: project.mass,
+        };
+      }),
+    });
+  }, [projectClouds, projects]);
 
   /**
    * A filtered-to-nothing map is otherwise indistinguishable from a
@@ -2601,10 +2735,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * `cardRects`.
    *
    * Kept separate rather than folded into that map because `cardRects` is
-   * the drag/snap/marquee geometry, and cards in this lens deliberately do
-   * not move (a project is not an instance, so there is no arrangement row
-   * to persist an offset to). This is read for one thing only: knowing
-   * where a card the operator asked for is, so the camera can go there.
+   * the drag/snap geometry, and cards in this lens deliberately do not
+   * move (a project is not an instance, so there is no arrangement row to
+   * persist an offset to).
+   *
+   * Read for the two things that are about where a card IS rather than
+   * where it may be dragged to: flying the camera to a card the operator
+   * asked for, and sweeping a marquee over it. Both reach it through
+   * `flightRects`.
    */
   const projectCardRects = useMemo(() => {
     const rects = new Map<string, SnapRect>();
@@ -2614,11 +2752,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
     );
     for (const project of projects) {
       const placement = placementByKey.get(project.key);
-      if (!placement) continue;
-      const visible = project.threads.slice(0, PROJECT_MAX_CARDS_PER_BODY);
-      const slots = cardRingSlots(visible.length, ORBIT_CARD_WIDTH);
-      visible.forEach((thread, index) => {
-        const slot = slots[index];
+      const cloud = projectClouds?.get(project.key);
+      if (!placement || !cloud) continue;
+      cloud.threads.forEach((thread, index) => {
+        const slot = cloud.slots[index];
         if (!slot) return;
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);
         const owner = projectThreadOwners.get(threadKey) ?? localInstanceId;
@@ -2627,10 +2764,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
         const height =
           cardHeights.get(threadKey) || STAR_MAP_ESTIMATED_CARD_HEIGHT;
         rects.set(`${owner}::${threadKey}`, {
-          // Ring cards are centred on their slot both ways (`centered`),
-          // unlike the lane and cloud slots that hang from the top.
+          // Cloud slots hang from the card's TOP edge, and the cards are
+          // drawn from the same slots, so the rect follows suit — the
+          // ring-centred form this replaced described a different card.
           x: placement.x + slot.dx - ORBIT_CARD_WIDTH / 2,
-          y: placement.y + slot.dy - height / 2,
+          y: placement.y + slot.dy,
           width: ORBIT_CARD_WIDTH,
           height,
         });
@@ -2640,6 +2778,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, [
     cardHeights,
     localInstanceId,
+    projectClouds,
     projectLayout,
     projects,
     projectThreadOwners,
@@ -2863,7 +3002,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
         );
         setSelection((current) => {
           const hits = mode === "add" ? new Set(current) : new Set<string>();
-          for (const [key, cardRect] of cardRects) {
+          // The lens's own geometry, not `cardRects`: that map is built
+          // from instance bodies and is empty in Projects, so a sweep
+          // there hit nothing and — in `replace` mode — wiped whatever
+          // the cloud pills had selected. Outside Projects `flightRects`
+          // IS `cardRects`, so nothing else moves.
+          for (const [key, cardRect] of flightRects) {
             if (rectIntersects(cardRect, box)) hits.add(key);
           }
           return hits;
@@ -2875,7 +3019,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       window.addEventListener("pointercancel", stop);
       return true;
     },
-    [cardRects, view.scale],
+    [flightRects, view.scale],
   );
 
   /**
@@ -2935,6 +3079,29 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, []);
 
   /**
+   * Select every card in the list, or clear them if they are all already
+   * selected. Takes keys rather than a cloud because the two lenses scope
+   * cards differently: an instance's cloud is all one instance's cards,
+   * while a project pools cards from every machine in the federation.
+   *
+   * Which keys a caller passes is the caller's business — both pills
+   * below pass their cloud's VISIBLE cards, for the reason on
+   * `toggleClusterSelection`.
+   */
+  const toggleCardKeySelection = useCallback((keys: readonly string[]) => {
+    if (keys.length === 0) return;
+    setSelection((current) => {
+      const allSelected = keys.every((key) => current.has(key));
+      const next = new Set(current);
+      for (const key of keys) {
+        if (allSelected) next.delete(key);
+        else next.add(key);
+      }
+      return next;
+    });
+  }, []);
+
+  /**
    * A cloud's label pill selects its visible cards as one group, so the
    * existing group drag moves the whole cloud. Only visible cards join —
    * a hidden card has no shell to move, and a selection entry that cannot
@@ -2942,24 +3109,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
    */
   const toggleClusterSelection = useCallback(
     (instanceId: string, cluster: StarMapClusterPlacement) => {
-      const keys = cluster.threads
-        .slice(0, cluster.visibleCount)
-        .map(
-          (thread) =>
-            `${instanceId}::${buildThreadIdentityKey(thread.source, thread.id)}`,
-        );
-      if (keys.length === 0) return;
-      setSelection((current) => {
-        const allSelected = keys.every((key) => current.has(key));
-        const next = new Set(current);
-        for (const key of keys) {
-          if (allSelected) next.delete(key);
-          else next.add(key);
-        }
-        return next;
-      });
+      toggleCardKeySelection(
+        cluster.threads
+          .slice(0, cluster.visibleCount)
+          .map(
+            (thread) =>
+              `${instanceId}::${buildThreadIdentityKey(thread.source, thread.id)}`,
+          ),
+      );
     },
-    [],
+    [toggleCardKeySelection],
   );
 
   const commitSelectionMove = useCallback(
@@ -3595,8 +3754,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
               key={`cluster-label:${cluster.key}`}
               type="button"
               className={`star-map__cluster-label${
-                overview ? " star-map__cluster-label--overview" : ""
-              }`}
+                cluster.isParentGroup
+                  ? " star-map__cluster-label--parent"
+                  : ""
+              }${overview ? " star-map__cluster-label--overview" : ""}`}
               style={{
                 left: cluster.labelSlot.dx,
                 // In overview the label IS the cloud, so it sits on the
@@ -3610,11 +3771,29 @@ export function StarMapScreen(props: StarMapScreenProps) {
                   : {}),
               }}
               aria-pressed={allSelected}
-              aria-label={`Select the ${cluster.label} cards (${cluster.threads.length} threads)`}
+              aria-label={
+                cluster.isParentGroup
+                  ? parentClusterSelectLabel({
+                      label: cluster.label,
+                      threadCount: cluster.threads.length,
+                    })
+                  : `Select the ${cluster.label} cards (${cluster.threads.length} threads)`
+              }
               onClick={() =>
                 toggleClusterSelection(position.instanceId, cluster)
               }
             >
+              {/* A parent/child cloud is named after its parent THREAD,
+                  not after a project, and wearing identical chrome it was
+                  indistinguishable from one — an operator counting clouds
+                  around an instance counted four thread groups as four
+                  extra projects. The mark says which kind of thing the
+                  name is. */}
+              {cluster.isParentGroup ? (
+                <span className="star-map__cluster-kind" aria-hidden="true">
+                  ↳
+                </span>
+              ) : null}
               <span className="star-map__cluster-name">{cluster.label}</span>
               <span className="star-map__cluster-count">
                 {cluster.threads.length}
@@ -3915,13 +4094,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
               const project = projects.find(
                 (entry) => entry.key === placement.key,
               );
-              if (!project) return null;
-              const visible = project.threads.slice(
-                0,
-                PROJECT_MAX_CARDS_PER_BODY,
-              );
-              const slots = cardRingSlots(visible.length, ORBIT_CARD_WIDTH);
-              const ringOverflow = project.threads.length - visible.length;
+              const cloud = projectClouds?.get(placement.key);
+              if (!project || !cloud) return null;
               return (
                 <div
                   key={`project:${placement.key}`}
@@ -3932,8 +4106,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     label={project.label}
                     projectKey={project.key}
                     threadCount={project.threads.length}
+                    // In overview the body is the only thing naming the
+                    // project, so it counter-scales to stay readable —
+                    // the same treatment instance bodies get.
+                    scale={overview ? chromeScale : 1}
                   />
-                  {visible.map((thread, index) => {
+                  {(overview ? [] : cloud.threads).map((thread, index) => {
                     const threadKey = buildThreadIdentityKey(
                       thread.source,
                       thread.id,
@@ -3960,11 +4138,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
                         instanceIcon={celestialIcons.iconFor(
                           owner === localInstanceId ? undefined : owner,
                         )}
-                        cardKey={`${owner ?? "project"}::${buildThreadIdentityKey(
-                          thread.source,
-                          thread.id,
-                        )}`}
-                        baseSlot={slots[index]}
+                        cardKey={projectCardKey(thread)}
+                        // Selection was never wired here: the lens had no
+                        // cloud pill to sweep a group with, so a selected
+                        // card had no way to become one. The parent/child
+                        // pills give it one, and a pill that reports
+                        // `aria-pressed` while nothing highlights is worse
+                        // than no pill.
+                        selected={selection.has(projectCardKey(thread))}
+                        onToggleSelect={() =>
+                          toggleSelected(projectCardKey(thread))
+                        }
+                        baseSlot={cloud.slots[index]}
                         // No drag here on purpose: arrangements are keyed
                         // and synced per federation instance, and a project
                         // is not an instance. Giving projects their own
@@ -3972,8 +4157,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
                         // this lens simply do not move rather than moving
                         // and failing to persist.
                         width={ORBIT_CARD_WIDTH}
-                        centered
-                        stackIndex={index}
+                        // Cloud slots hang from the card's top edge, unlike
+                        // the ring slots this lens used to seat from.
+                        // Clamped like the orbit lens: a project draws more
+                        // cards than the old sixteen-card ring did, and a
+                        // card that climbs past the cap paints over the
+                        // cloud chrome above it (star-map-z-layers).
+                        stackIndex={Math.min(index, STAR_MAP_CARD_MAX_Z)}
                         // The project IS the sun here, so the project chip
                         // is redundant; the machine is what you cannot
                         // otherwise tell, so the instance chip earns its
@@ -3989,21 +4179,94 @@ export function StarMapScreen(props: StarMapScreenProps) {
                       />
                     );
                   })}
-                  {/* The ring truncates silently otherwise — the same lie
-                      the orbit lens used to tell. */}
-                  {ringOverflow > 0 ? (
-                    <span
-                      className="star-map__cloud-overflow"
-                      style={{
-                        transform: `translate(-50%, ${
-                          cardRingExtent(visible.length, ORBIT_CARD_WIDTH).ry
-                          + 24
-                        }px)`,
-                      }}
-                    >
-                      +{ringOverflow} more
-                    </span>
-                  ) : null}
+                  {cloud.clusters.map((cluster) => {
+                    // The project body already names the catch-all cloud
+                    // and counts it. Labelling it again puts the project's
+                    // own name on the map twice, a step from the confusion
+                    // this lens exists to avoid — so only the parent/child
+                    // clouds, which the body cannot name, get a caption.
+                    if (cluster.chromeless || !cluster.isParentGroup) {
+                      return null;
+                    }
+                    const clusterCardKeys = cluster.threads
+                      .slice(0, cluster.visibleCount)
+                      .map((member) => projectCardKey(member));
+                    const allSelected =
+                      clusterCardKeys.length > 0
+                      && clusterCardKeys.every((key) => selection.has(key));
+                    return (
+                      <button
+                        key={`project-cluster-label:${cluster.key}`}
+                        type="button"
+                        className={`star-map__cluster-label star-map__cluster-label--parent${
+                          overview ? " star-map__cluster-label--overview" : ""
+                        }`}
+                        style={{
+                          left: cluster.labelSlot.dx,
+                          top: overview
+                            ? cluster.center.y
+                            : cluster.labelSlot.dy,
+                          ...(overview
+                            ? {
+                                transform: `translate(-50%, -50%) scale(${chromeScale})`,
+                              }
+                            : {}),
+                        }}
+                        aria-pressed={allSelected}
+                        aria-label={parentClusterSelectLabel({
+                          label: cluster.label,
+                          threadCount: cluster.threads.length,
+                        })}
+                        onClick={() => toggleCardKeySelection(clusterCardKeys)}
+                      >
+                        <span
+                          className="star-map__cluster-kind"
+                          aria-hidden="true"
+                        >
+                          ↳
+                        </span>
+                        <span className="star-map__cluster-name">
+                          {cluster.label}
+                        </span>
+                        <span className="star-map__cluster-count">
+                          {cluster.threads.length}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {/* Per-cloud overflow, and it works: the flat ring this
+                      replaced printed one "+N more" for the whole body and
+                      gave the operator no way to see those threads. */}
+                  {overview
+                    ? null
+                    : cloud.clusters.map((cluster) =>
+                        cluster.overflowSlot ? (
+                          <button
+                            key={`project-cluster-overflow:${cluster.key}`}
+                            type="button"
+                            className="star-map__cluster-overflow"
+                            style={{
+                              left: cluster.overflowSlot.dx,
+                              top: cluster.overflowSlot.dy,
+                            }}
+                            aria-label={
+                              cluster.overflow > 0
+                                ? `Show ${cluster.overflow} more ${cluster.label} threads`
+                                : `Show fewer ${cluster.label} threads`
+                            }
+                            onClick={() =>
+                              toggleProjectClusterExpanded(
+                                project.key,
+                                cluster.key,
+                              )
+                            }
+                          >
+                            {cluster.overflow > 0
+                              ? `+${cluster.overflow} more`
+                              : "Show fewer"}
+                          </button>
+                        ) : null,
+                      )}
                 </div>
               );
             })
@@ -4230,10 +4493,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
           <StarMapViewOptions
             preferences={preferences}
             onChange={(next) => {
-              // A lens change re-places every card, and one lens (projects)
-              // paints no selected state at all. Carrying a selection across
-              // that boundary leaves the operator holding cards they can no
-              // longer point at — which the kebab would then act on.
+              // A lens change re-places every card. Every lens paints
+              // selected state now, so a selection WOULD carry over intact
+              // — and that is the problem: the cards are somewhere else
+              // entirely, and the operator is left holding a selection
+              // they did not sweep on the map now in front of them, which
+              // the kebab would then act on.
               if (next.layout !== preferences.layout) setSelection(new Set());
               setPreferences(next);
               writeStoredPreferences(next);
@@ -4333,8 +4598,14 @@ export function StarMapScreen(props: StarMapScreenProps) {
           <span>
             {selection.size === 1 ? "1 card selected" : `${selection.size} cards selected`}
           </span>
+          {/* Projects cards carry no `drag` — a project is not an
+              instance, so there is no arrangement row to persist an offset
+              to — and offering a gesture that only pans the canvas is
+              worse than offering none. */}
           <span className="star-map__selection-hint" aria-hidden="true">
-            drag to move · ⇧-click to amend
+            {projectsMode
+              ? "⇧-click to amend"
+              : "drag to move · ⇧-click to amend"}
           </span>
           <button
             type="button"
