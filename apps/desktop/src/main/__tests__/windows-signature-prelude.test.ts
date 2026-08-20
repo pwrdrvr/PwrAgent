@@ -4,7 +4,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { WINDOWS_SIGNATURE_PRELUDE } from "../acp/grok-managed-runtime";
+import {
+  WINDOWS_SIGNATURE_PRELUDE,
+  windowsSignatureVerification,
+} from "../acp/grok-managed-runtime";
 
 const releaseScriptPath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -25,6 +28,27 @@ describe("Windows Authenticode verification prelude", () => {
     for (const statement of WINDOWS_SIGNATURE_PRELUDE) {
       expect(releaseScript).toContain(JSON.stringify(statement).slice(1, -1));
     }
+  });
+
+  // `-Command <string>` must be the last argument: PowerShell appends anything
+  // after it to the command text rather than binding it to $args, so a path
+  // passed as a trailing argument turns the script into a parse error and the
+  // check fails on every packaged Windows build.
+  it("passes the verified paths through the environment, not argv", () => {
+    const { args, env } = windowsSignatureVerification(
+      "C:\\Program Files\\PwrAgent\\PwrAgent.exe",
+      "C:\\Users\\me\\.pwragent\\agents\\grok\\grok.exe",
+    );
+    expect(args[args.length - 2]).toBe("-Command");
+    expect(args).toHaveLength(5);
+    expect(args.join(" ")).not.toContain("$args[");
+    expect(args[4]).toContain("$env:PWRAGENT_VERIFY_APPLICATION");
+    expect(args[4]).toContain("$env:PWRAGENT_VERIFY_RUNTIME");
+    expect(env).toEqual({
+      PWRAGENT_VERIFY_APPLICATION: "C:\\Program Files\\PwrAgent\\PwrAgent.exe",
+      PWRAGENT_VERIFY_RUNTIME:
+        "C:\\Users\\me\\.pwragent\\agents\\grok\\grok.exe",
+    });
   });
 
   it.runIf(process.platform === "win32")(
