@@ -960,18 +960,21 @@ describe("Tangerine Terminal theme contract", () => {
     expect(stripRule).toContain("-webkit-app-region: drag;");
     expect(stripRule).toContain("position: absolute;");
     expect(stripRule).toContain("backdrop-filter:");
-    // Below the filters (3) and chrome (4) it hosts, above the canvas.
-    expect(readZIndex(stripRule)).toBeLessThan(
-      readZIndex(extractRuleBody(css, ".star-map__filters")),
-    );
-    expect(readZIndex(stripRule)).toBeLessThan(
-      readZIndex(extractRuleBody(css, ".star-map__chrome")),
-    );
+    // Below the top band it hosts, above the canvas.
+    const bandRule = extractRuleBody(css, ".star-map__top-band");
+    expect(readZIndex(stripRule)).toBeLessThan(readZIndex(bandRule));
+    // The band is full width, so it is the one element in the strip that
+    // must NOT opt out: a no-drag rect across the whole band would leave
+    // macOS with no handle on this window at all. It passes its pointer
+    // events through for the same reason - the gaps between its slots are
+    // drag strip, not chrome.
+    expect(bandRule).not.toContain("-webkit-app-region");
+    expect(bandRule).toContain("pointer-events: none;");
+    // Its slots take both back. Declared on the band's descendants rather
+    // than per slot, so a control added to any slot is clickable without
+    // anyone remembering this rule exists.
     expect(css).toMatch(
-      /\.star-map__chrome,\s*\.star-map__chrome \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
-    );
-    expect(css).toMatch(
-      /\.star-map__filters,\s*\.star-map__filters \*,[\s\S]*?\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
+      /\.star-map__top-band > \*,\s*\.star-map__top-band > \* \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/,
     );
     // The card-level dialogs are body-portaled and full-window, so their
     // scrim overlaps the strip's rect and would otherwise turn a
@@ -990,6 +993,87 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /:root\[data-fullscreen="true"\] \.star-map-window__titlebar\s*\{[\s\S]*?display:\s*none;[\s\S]*?\}/,
     );
+  });
+
+  it("lays the Star Map's top band out as one row its controls cannot escape", () => {
+    // The band's clusters used to position themselves independently —
+    // chrome pinned to the left edge, chips translated to the window's
+    // centre — with nothing reserving space between them, so the chrome
+    // painted over the first filter chip and swallowed its clicks. Flex
+    // items cannot overlap; this is the assertion that the row stays a
+    // row rather than reverting to islands.
+    const bandRule = extractRuleBody(css, ".star-map__top-band");
+    expect(bandRule).toContain("display: flex;");
+    // Left-aligned, not centred. The filters are the same kind of control
+    // as Find and View and belong beside them; a centred strip drifts with
+    // the window while the chrome does not, which is what put the two on a
+    // collision course. A `grid-template-columns` here means someone has
+    // gone back to spacer tracks.
+    expect(bandRule).not.toContain("grid-template-columns");
+    expect(bandRule).not.toContain("justify-content: center;");
+    // The one slot that is not in reading order: actions stay pinned right
+    // whatever the left group does.
+    expect(extractRuleBody(css, ".star-map__actions")).toContain(
+      "margin-left: auto;",
+    );
+
+    const chromeRule = extractRuleBody(css, ".star-map__chrome");
+    const filtersRule = extractRuleBody(css, ".star-map__filters");
+    // Neither slot positions itself any more; the band decides where they
+    // sit. A `position: absolute` creeping back into either one is the
+    // regression, not a style preference.
+    expect(chromeRule).not.toContain("position: absolute;");
+    expect(filtersRule).not.toContain("position: absolute;");
+  });
+
+  it("degrades the Star Map's filter strip by measurement, not by breakpoint", () => {
+    // Two earlier answers to a strip that does not fit were both wrong.
+    // Wrapping put a second row of chips over the star field and doubled
+    // the band's height; a fixed 1120px breakpoint threw the whole strip
+    // away well before it had to, because the chips carry live counts and
+    // the width they need is a property of the DATA (642px at one digit,
+    // 668px at two, 732px at three), not of the window.
+    expect(css).not.toMatch(/@media[^{]*\{\s*\.star-map__filter-strip/);
+    const stripRule = extractRuleBody(css, ".star-map__filter-strip");
+    expect(stripRule).toContain("flex-wrap: nowrap;");
+
+    // The hidden rendering is taken out of FLOW, never out of layout.
+    // `display: none` would zero the widths `resolveFilterFit` measures,
+    // the strip would look like it fits, and the band would flip between
+    // states every frame. This pair of selectors is load bearing for that
+    // — and `width: max-content` is what keeps the measurement honest once
+    // a chip is out of its flex row.
+    const hiddenRule = extractRuleBody(
+      css,
+      ".star-map__filters.is-reduced .star-map__filter-chip.is-dropped,\n"
+        + ".star-map__filters.is-collapsed .star-map__filter-strip",
+    );
+    expect(hiddenRule).toContain("visibility: hidden;");
+    expect(hiddenRule).toContain("position: absolute;");
+    expect(hiddenRule).toContain("width: max-content;");
+    expect(hiddenRule).not.toContain("display: none;");
+
+    // The strip clips a row that has outgrown it, but the clip edge falls
+    // exactly on the first and last chip's box and the focus ring is drawn
+    // OUTSIDE that box (2px at `outline-offset: 1px`). With plain
+    // `overflow: hidden` the ring on the edge chips lost its outer 3px —
+    // measured as three fully blank pixel columns where the accent should
+    // be — and no axe rule covers it.
+    expect(stripRule).toContain("overflow: clip;");
+    expect(stripRule).toContain("overflow-clip-margin: 4px;");
+    expect(stripRule).not.toContain("overflow: hidden;");
+
+    // The collapsed menu is the only thing that appears rather than
+    // disappears, so it is hidden by default and shown by the state class.
+    expect(extractRuleBody(css, ".star-map__filter-menu")).toContain(
+      "display: none;",
+    );
+    expect(
+      extractRuleBody(
+        css,
+        ".star-map__filters.is-collapsed .star-map__filter-menu",
+      ),
+    ).toContain("display: block;");
   });
 
   it("right-aligns the keyboard shortcut hint chip on context menu items", () => {

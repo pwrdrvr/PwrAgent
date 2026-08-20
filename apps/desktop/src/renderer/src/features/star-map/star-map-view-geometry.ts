@@ -235,8 +235,8 @@ export function isPointInView(params: {
 
 /**
  * The view that puts the middle of the canvas in the middle of the window
- * at 1:1. Used to place the map on open, on a lens switch, and by "Reset
- * view".
+ * at 1:1. The fallback for `placeStarMapView` when the lens has no body to
+ * open on, and the shape "Reset view" restores through it.
  *
  * This is also the manual half of the content-shrink gap described on
  * clampStarMapView. A rescue that re-placed the view automatically would
@@ -260,27 +260,55 @@ export function centerStarMapView(params: {
 /**
  * Where a lens opens.
  *
- * Radial lenses centre their canvas: content radiates from the middle, so
- * the middle is the interesting part. A column lens anchors to the top
- * instead — its bodies sit on a fixed row and their columns grow downward,
- * so centring a tall canvas would open the map already scrolled past the
- * bodies with nothing but card tails on screen.
+ * `anchor` is a point in canvas units that the map opens on — the home
+ * cluster, not the middle of the canvas. The distinction matters because
+ * the canvas is sized to its content and every lens builds it by taking
+ * the bounding box of what it laid out and shifting it into positive
+ * space. A peer snapshot landing, or a card measuring taller than the
+ * estimate, moves that bounding box, and the middle of the canvas moves
+ * with it — so a view placed on the middle chases the content around for
+ * the whole of a load while nothing the operator cares about holds still.
+ * An anchor is a real body, and it moves with the content it names, so
+ * holding it fixed is what lets the canvas grow around a still map.
  *
- * Clamped, so a top anchor on a canvas that is shorter than the window
- * still lands somewhere legal rather than at a negative offset.
+ * With no anchor — an empty map, before a body exists — the canvas centre
+ * is the only point there is, so that is what it falls back to.
+ *
+ * A column lens anchors to the top on the y axis instead: its bodies sit
+ * on a fixed row and their columns grow downward, so centring their y
+ * would open the map already scrolled past the bodies with nothing but
+ * card tails on screen.
+ *
+ * Always clamped, so an anchor near an edge — or a top anchor on a canvas
+ * that is shorter than the window — still lands somewhere legal. The clamp
+ * is a no-op on a centred view at every canvas size, so the unanchored
+ * result is unchanged by passing through it.
  */
 export function placeStarMapView(params: {
   canvas: StarMapViewBox;
   viewport: StarMapViewBox;
   topAnchored?: boolean;
+  /** Canvas-space point to open on; the canvas centre when absent. */
+  anchor?: { x: number; y: number };
 }): StarMapView {
-  const centered = centerStarMapView({
-    canvas: params.canvas,
-    viewport: params.viewport,
-  });
-  if (!params.topAnchored) return centered;
+  const anchor =
+    params.anchor
+    && Number.isFinite(params.anchor.x)
+    && Number.isFinite(params.anchor.y)
+      ? params.anchor
+      : undefined;
+  const placed = anchor
+    ? {
+        scale: 1,
+        x: params.viewport.width / 2 - anchor.x,
+        y: params.viewport.height / 2 - anchor.y,
+      }
+    : centerStarMapView({
+        canvas: params.canvas,
+        viewport: params.viewport,
+      });
   return clampStarMapView({
-    view: { ...centered, y: 0 },
+    view: params.topAnchored ? { ...placed, y: 0 } : placed,
     canvas: params.canvas,
     viewport: params.viewport,
   });

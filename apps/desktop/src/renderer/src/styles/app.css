@@ -10917,10 +10917,13 @@ textarea,
    the strip is legible exactly when the operator is most likely to reach
    for the wrong handle. z-index 2 sits above the transformed canvas (its
    own stacking context, so card z-indexes cannot climb out) and below the
-   `.star-map__filters` (3) and `.star-map__chrome` (4) that live inside it;
-   both of those carve `no-drag` holes so they stay clickable (the card
-   no-drag list further down does the same for anything panned up under
-   the glass, so it goes inert rather than turning into a window drag).
+   `.star-map__top-band` (4) that lives inside it. The band itself stays
+   draggable and passes its pointer events through - it is full width, so
+   opting the whole thing out would leave this window with no handle at
+   all - and each of its slots carves its own `no-drag` hole so the
+   controls stay clickable (the card no-drag list further down does the
+   same for anything panned up under the glass, so it goes inert rather
+   than turning into a window drag).
    The strip owns pointer events in its band: wheel there is lost to the
    map, deliberately, so a press can never start both a window drag and a
    canvas pan. Not rendered on Windows (painted `.activity-titlebar` above
@@ -12446,16 +12449,86 @@ textarea,
   }
 }
 
-/* "View" popover: card density + instance visibility, parked opposite the
-   attention filters. */
-.star-map__chrome {
+/* The map's top band.
+
+   Every control that sits over the top of the sky lives in this one row:
+   the chrome (wordmark, Find, View) on the left, the filter chips in the
+   middle, and a slot on the right for map actions. These used to be
+   independently positioned islands - chrome pinned to the left edge, chips
+   translated to the window's centre - with nothing reserving space between
+   them. Measured on a 1280px window with the three controls it ships
+   with, the chrome ran to x=330 and the strip started at x=320: they
+   already overlapped by 10px, just not by enough of a chip for axe's
+   `target-size` rule to call it obscured. A fourth control was what
+   pushed it over (79.5px by 12px left uncovered), and below roughly
+   1100px they overlapped outright, because the centred strip walks left
+   as the window narrows and the chrome does not.
+   Grid tracks cannot overlap, so that collision is now structurally
+   impossible instead of a thing every new control has to re-check.
+
+   One left-aligned row, not a centred strip between two spacer tracks.
+   The filters belong beside Find and View: they are the same kind of
+   control, the operator's attention is already on that corner, and a
+   centred strip drifts with the window while the chrome does not — which
+   is what put the two on a collision course to begin with. It also means
+   the degraded states read correctly: a single "Filters" chip lands next
+   to View instead of floating alone in the middle of the sky.
+
+   The actions slot keeps its `margin-left: auto`, so it stays pinned to
+   the right whatever the left group does.
+
+   The band spans the full width, which makes its drag model load bearing:
+   it must NOT carve a no-drag hole of its own, or it would take the whole
+   `.star-map-window__titlebar` strip away from window dragging - on macOS
+   that strip is the only handle this window has (see the note there). So
+   the band declares no `-webkit-app-region` at all and passes its pointer
+   events through; each slot punches its own hole and takes its pointer
+   events back. The gaps between the slots stay draggable sky. */
+.star-map__top-band {
   display: flex;
   position: absolute;
-  top: 14px;
-  left: 16px;
+  top: 0;
+  right: 0;
+  left: 0;
   z-index: 4;
+  align-items: start;
+  gap: 12px;
+  padding: 14px 16px 0;
+  pointer-events: none;
+}
+
+/* Everything inside the band is a control, and every control in the band
+   is in the macOS drag strip's rect. Chromium ignores `-webkit-app-region`
+   on inline-level boxes, so the opt-out is declared on the descendants
+   too - a bare <button> in here otherwise has its clicks taken by the OS
+   (the same trap documented on `.messaging-status-bar` and on the card
+   list below). Declared once for the band so a control added to any slot
+   is clickable the day it is written, rather than the day someone
+   notices it is not. */
+.star-map__top-band > *,
+.star-map__top-band > * * {
+  -webkit-app-region: no-drag;
+  pointer-events: auto;
+}
+
+/* Left slot: wordmark, the ⌘K Find chip, and the "View" popover (card
+   density + instance visibility). */
+.star-map__chrome {
+  display: flex;
+  flex-shrink: 0;
   align-items: center;
   gap: 12px;
+}
+
+/* Right slot, reserved. Nothing occupies it today; it exists so that the
+   next map-level action has somewhere to go that is not the chrome. A
+   third child of the band lands here on its own - this rule only decides
+   that it hugs the right edge rather than the centre track. */
+.star-map__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
 }
 
 /* The map covers the whole window, so its top-left chrome has to clear the
@@ -12620,19 +12693,118 @@ textarea,
   cursor: pointer;
 }
 
-.star-map__chrome,
-.star-map__chrome * {
-  -webkit-app-region: no-drag;
-}
+/* The filter slot, beside the chrome rather than centred on the window.
+   It holds two renderings of the same seven filters and shows whichever
+   one fits; `resolveFilterFit` decides, from measurements, and puts the
+   answer on this element as `is-full` / `is-reduced` / `is-collapsed`.
 
+   Why measured and not a breakpoint: the chips carry live counts, so the
+   width the strip needs is a property of the data. The same seven chips
+   are 642px wide with one-digit counts, 668px with two and 732px with
+   three. A constant safe for the widest case throws the strip away in
+   the common one, which is exactly what a 1120px breakpoint did here. */
 .star-map__filters {
   display: flex;
-  position: absolute;
-  top: 14px;
-  left: 50%;
+  min-width: 0;
+  align-items: center;
+}
+
+/* `nowrap`: wrapping was the first answer to a strip that did not fit,
+   and it put a second row of chips over the star field and doubled the
+   height of the band to show information already on it. The band is one
+   row; when the row runs out, chips leave it rather than stacking.
+
+   The clip is on the STRIP and not on the slot around it: the collapsed
+   popover is a descendant of the slot, and clipping there would cut the
+   panel off at the band. It only ever matters until the first measurement
+   lands anyway - it keeps an unmeasured row from widening the band and
+   shoving the actions slot off the window.
+
+   `clip` with a margin rather than `hidden`, because the clip edge falls
+   exactly on the first and last chip's box and the focus ring is drawn
+   OUTSIDE that box (2px at `outline-offset: 1px`). Under `hidden` the ring
+   on the edge chips lost its outer 3px - three blank pixel columns where
+   the accent should be - and no axe rule covers that. 4px clears the ring
+   and still clips a runaway row. */
+.star-map__filter-strip {
+  display: flex;
+  flex-wrap: nowrap;
   gap: 6px;
-  transform: translateX(-50%);
-  z-index: 3;
+  overflow: clip;
+  overflow-clip-margin: 4px;
+}
+
+/* Chips hold their size. Flex shrinking is the other way a row that does
+   not fit can fail: instead of a chip leaving, every chip narrows, the
+   labels wrap inside them ("Needs / input"), and the band grows a second
+   line anyway - the exact outcome the strip stopped wrapping to avoid.
+   Degradation here is a chip leaving the row, never the row squeezing. */
+.star-map__filter-strip > * {
+  flex-shrink: 0;
+}
+
+/* Anchor for the collapsed popover, same shape as `.star-map__view-options`
+   two controls to its left. */
+.star-map__filter-menu {
+  display: none;
+  position: relative;
+}
+
+/* The three states.
+
+   Both renderings stay mounted at every width, and the one that is not
+   showing is taken out of FLOW rather than out of layout — `position:
+   absolute` plus `visibility: hidden`, never `display: none`. The fit is
+   decided by measuring these chips: `display: none` would zero the widths
+   the decision reads, the strip would look like it fits, and the band
+   would flip between states every frame. `visibility: hidden` also takes
+   them out of the accessibility tree, and the chip itself carries
+   `tabIndex={-1}` and `aria-hidden`, so nothing hidden here is reachable.
+
+   `left: 0; top: 0` parks the hidden copy over the slot's own corner; it
+   paints nothing, and `width: max-content` is what keeps its measurement
+   honest once it is out of a flex row. */
+.star-map__filters.is-reduced .star-map__filter-chip.is-dropped,
+.star-map__filters.is-collapsed .star-map__filter-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: max-content;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.star-map__filters.is-collapsed .star-map__filter-menu {
+  display: block;
+}
+
+/* Same panel as the View popover across the band - same surface, border,
+   radius and shadow. It opens from the left edge of its own chip for the
+   same reason that one does: the band is a left-aligned row, and a panel
+   that fans out from the middle of a left-aligned control reads as
+   belonging to neither side. The chips inside are the strip's chips,
+   stacked and stretched: one family, one set of states. */
+.star-map__filter-panel {
+  display: flex;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  flex-direction: column;
+  gap: 4px;
+  width: 208px;
+  padding: 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  box-shadow: var(--shadow-popover);
+}
+
+/* Stacked chips are full width, so the count goes to the far edge and
+   makes a column. Only the count - `space-between` would also push the
+   exclude mark off the label it negates, and "− ... Open PR" reads as two
+   separate things rather than one struck-through chip. */
+.star-map__filter-panel .star-map__filter-count {
+  margin-left: auto;
 }
 
 .star-map__filter-chip {
@@ -12766,16 +12938,14 @@ textarea,
   color: var(--text-primary);
 }
 
-/* The map's top chrome sits inside the macOS glass drag strip
-   (`.star-map-window__titlebar`; `.star-map__chrome` opts out beside its
-   own rule), and Chromium ignores `-webkit-app-region` on inline-level
-   boxes - a plain <button> there has its clicks swallowed by the OS (the
-   same trap documented on .messaging-status-bar). Draggable regions are
-   rect unions independent of z-order, so every interactive element gets an
-   explicit no-drag on a non-inline box: anything panned up under the strip
-   goes inert behind the glass rather than turning into a window drag. */
-.star-map__filters,
-.star-map__filters *,
+/* Cards can be panned up UNDER the macOS glass drag strip
+   (`.star-map-window__titlebar`), and draggable regions are rect unions
+   independent of z-order, so a card that reaches the strip's band would
+   otherwise turn into a window drag. Every interactive element gets an
+   explicit no-drag on a non-inline box - Chromium ignores
+   `-webkit-app-region` on inline-level boxes, the same trap documented on
+   .messaging-status-bar - so the card goes inert behind the glass
+   instead. The strip's own residents opt out with the top band above. */
 .star-map-instance,
 .star-map-instance *,
 .star-map-card,

@@ -247,6 +247,16 @@ describe("shouldStartCanvasPan", () => {
       '<div class="star-map__filters"><span>Unread</span></div>',
     );
     expect(shouldStartCanvasPan(filters.firstElementChild)).toBe(false);
+
+    // The band covers the whole top row, so a control added to any of its
+    // slots is safe without being named here. This one carries no slot
+    // class at all — it stands in for the next thing somebody drops in.
+    const band = element(
+      '<div class="star-map__top-band"><div><span>Manager</span></div></div>',
+    );
+    expect(
+      shouldStartCanvasPan(band.querySelector("span")),
+    ).toBe(false);
   });
 
   it("ignores a non-element target", () => {

@@ -65,7 +65,6 @@ import {
   addFilterMatchCounts,
   countFilterMatches,
   cycleFilterState,
-  filterState,
   readStoredFilterSelection,
   selectFilteredThreads,
   STAR_MAP_FILTERS,
@@ -125,6 +124,12 @@ import {
 } from "./star-map-flight";
 import { useStarMapFlight } from "./useStarMapFlight";
 import { StarMapViewOptions } from "./StarMapViewOptions";
+import { StarMapFilterChip } from "./StarMapFilterChip";
+import { StarMapFilterMenu } from "./StarMapFilterMenu";
+import {
+  resolveFilterFit,
+  type StarMapFilterFit,
+} from "./star-map-filter-fit";
 import { StarMapKeyHint } from "./StarMapKeyHint";
 import { useStarMapCameraKeys } from "./useStarMapCameraKeys";
 import { StarMapInstanceCard } from "./StarMapInstanceCard";
@@ -1299,6 +1304,102 @@ export function StarMapScreen(props: StarMapScreenProps) {
     return counts;
   }, [filterSelection, props.localThreads, props.sessionKeys, remote]);
 
+  // Which chips the band has room for. The chips carry live counts, so
+  // the width they need is a property of the data rather than of the
+  // window — see `resolveFilterFit` for the two constants that were wrong
+  // before this measured. `full` until measured: the strip is what the
+  // band is for.
+  const bandRef = useRef<HTMLDivElement>(null);
+  const filterStripRef = useRef<HTMLDivElement>(null);
+  const [filterFit, setFilterFit] = useState<StarMapFilterFit>("full");
+
+  // A zero chip can only filter the map down to nothing, so it is the
+  // cheapest thing to lose — unless the operator is actually filtering on
+  // it, in which case dropping it would strand a filter they cannot see
+  // to undo.
+  const droppableFilters = useMemo(() => {
+    const droppable = new Set<number>();
+    STAR_MAP_FILTERS.forEach((definition, index) => {
+      if (
+        filterCounts[definition.key] === 0
+        && filterSelection[definition.key] === undefined
+      ) {
+        droppable.add(index);
+      }
+    });
+    return droppable;
+  }, [filterCounts, filterSelection]);
+
+  useLayoutEffect(() => {
+    const band = bandRef.current;
+    const strip = filterStripRef.current;
+    if (!band || !strip) return;
+
+    const measure = () => {
+      // Everything in the band that is not the strip, plus the gaps: what
+      // is left is what the strip may occupy. Read from the live boxes
+      // rather than from the tokens, so a platform's stoplight
+      // reservation or a longer wordmark is accounted for by being there.
+      const bandStyle = getComputedStyle(band);
+      const bandGap = parseFloat(bandStyle.columnGap) || 0;
+      let taken = parseFloat(bandStyle.paddingLeft) + parseFloat(bandStyle.paddingRight);
+      let siblings = 0;
+      for (const child of band.children) {
+        if (child === strip.parentElement || child === strip) continue;
+        taken += child.getBoundingClientRect().width;
+        siblings += 1;
+      }
+      // One gap per sibling, plus the one between the strip and them.
+      taken += bandGap * siblings;
+
+      const stripStyle = getComputedStyle(strip);
+      const stripGap = parseFloat(stripStyle.columnGap) || 0;
+      const chips: number[] = [];
+      // Everything in the row that is not a chip - the "Clear" button -
+      // costs its width plus its gap, and unlike a chip it never leaves
+      // when the row is reduced. Left out, the row measures 56px narrower
+      // than it is and the clip below silently slices the last chip.
+      let reserved = 0;
+      for (const child of strip.children) {
+        const width = child.getBoundingClientRect().width;
+        if (child.classList.contains("star-map__filter-chip")) chips.push(width);
+        else reserved += width + stripGap;
+      }
+      setFilterFit(
+        resolveFilterFit({
+          available: band.getBoundingClientRect().width - taken,
+          chipWidths: chips,
+          droppable: droppableFilters,
+          gap: stripGap,
+          reserved,
+        }),
+      );
+    };
+
+    measure();
+    // Same shape as the card observer above: jsdom has none, and the
+    // initial measure still runs there.
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    // The band's width comes from the window, so watching it alone only
+    // catches resizes. What the strip NEEDS can change without the window
+    // moving at all: `--font-sans` leads with a web font, so the first
+    // layout measures fallback metrics and every box changes when the real
+    // face arrives, and macOS fullscreen drops the chrome's 80px stoplight
+    // reservation in place. Watching the two boxes whose content decides
+    // the fit catches both. No feedback loop: a fit change moves the
+    // strip's own width, but the measurement reads the chips' natural
+    // widths and the band's, neither of which the fit alters, so the
+    // second pass resolves the same state and React bails on the set.
+    observer.observe(band);
+    observer.observe(strip);
+    const chrome = band.firstElementChild;
+    if (chrome && chrome !== strip.parentElement) observer.observe(chrome);
+    return () => observer.disconnect();
+    // Counts and selection change chip widths and what may be dropped, so
+    // both have to re-measure.
+  }, [droppableFilters, filterCounts, hasFilterSelection]);
+
   const lanes = useMemo(() => {
     const result = new Map<
       string,
@@ -1489,6 +1590,59 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const canvasBoundsRef = useRef(panZoomCanvas);
   canvasBoundsRef.current = panZoomCanvas;
 
+  /**
+   * The body the map opens on, in canvas units: this machine's own
+   * cluster, or the galaxy core in the lens that has no instances.
+   *
+   * Opening on a body rather than on the middle of the canvas is what
+   * makes a load sit still. Every lens sizes its canvas to the bounding
+   * box of what it laid out, so the middle of that box moves whenever the
+   * box does — a peer's first snapshot landing, a card measuring taller
+   * than its estimate, a cloud gaining a ring. The map used to re-centre
+   * on each of those, which is why opening it looked like it was flying
+   * itself somewhere: it was, several times, before the fleet had
+   * finished arriving. The home cluster's canvas position moves by the
+   * same amount as the box, so placing the view on it cancels out and the
+   * canvas grows around a map that has not moved.
+   */
+  const anchorBody = useMemo(() => {
+    if (projectsMode) {
+      // Projects pool threads across the fleet, so there is no local body
+      // to hold; the arms converge on the core and seat outward from it.
+      return projectLayout.projects.length > 0 ? projectLayout.core : undefined;
+    }
+    return (
+      bodies.find((body) => body.instanceId === localInstanceId)
+      ?? bodies.find((body) => body.isHub)
+      ?? bodies[0]
+    );
+  }, [
+    bodies,
+    localInstanceId,
+    projectLayout.core,
+    projectLayout.projects.length,
+    projectsMode,
+  ]);
+  /**
+   * The same point, rebuilt only when it actually moves.
+   *
+   * `anchorBody` comes off a layout that is recomputed for every streamed
+   * update, so its identity churns even when the body has not moved a
+   * pixel. Hoisting the two coordinates out and memoising on those is the
+   * same rule `panZoomCanvas` follows two lines up, and for the same
+   * reason: an effect keyed on the identity would re-place — and so
+   * re-render the whole map — on every delta.
+   */
+  const anchorX = anchorBody?.x;
+  const anchorY = anchorBody?.y;
+  const viewAnchor = useMemo(
+    () =>
+      anchorX === undefined || anchorY === undefined
+        ? undefined
+        : { x: anchorX, y: anchorY },
+    [anchorX, anchorY],
+  );
+
   // Trackpad: two-finger drag pans, pinch (ctrl+wheel) zooms about the
   // pointer. Registered natively because the listener must not be passive.
   // Sits below panZoomCanvas because the clamp needs the canvas size.
@@ -1558,14 +1712,18 @@ export function StarMapScreen(props: StarMapScreenProps) {
     viewportSize.height,
   ]);
 
-  // A lens switch is a different map, so the view starts centred again.
-  useEffect(() => {
+  // A lens switch is a different map, so the view starts placed again.
+  // A layout effect, and declared above the placement below, because that
+  // is now one too: a passive release would land after the placement had
+  // already read the flag and bailed, leaving the new lens holding the old
+  // lens's pan.
+  useLayoutEffect(() => {
     operatorMovedViewRef.current = false;
   }, [preferences.layout]);
 
   /**
-   * Centre the canvas so the operator does not open onto empty space —
-   * but only while the view is still ours to place.
+   * Hold the map on its home cluster so the operator does not open onto
+   * empty space — but only while the view is still ours to place.
    *
    * The canvas size is an input here, and it changes whenever a cloud's
    * card count changes: archiving a card can drop a ring and resize the
@@ -1573,21 +1731,55 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * thread in one corner of the map threw away the operator's pan and
    * zoom and snapped them back to centre — the map moving under the
    * person using it.
+   *
+   * Ownership answers that for a map the operator has already moved, and
+   * answers nothing for the first seconds of one they have not: a load is
+   * a run of canvas resizes with the view still ours, so this effect
+   * re-ran on each of them and the map visibly toured itself. Anchoring
+   * is the other half — see `viewAnchor`. This still re-runs on every
+   * resize, and that is the point: each run re-places the same body under
+   * the same pixel, so the recompute is what keeps the map still rather
+   * than what moves it.
+   *
+   * A layout effect, not a passive one: the anchor's new canvas position
+   * is in the DOM as soon as React commits it, so a placement that waited
+   * for paint would show one frame of the body in its new place under the
+   * old transform — the content jumping, then the view catching up, once
+   * per snapshot. Re-placing before paint makes the two writes land in the
+   * same frame, which is what "the canvas grew, the map did not move"
+   * actually looks like.
    */
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (operatorMovedViewRef.current) return;
-    commitView(
-      placeStarMapView({
-        canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
-        viewport: { width: viewportSize.width, height: viewportSize.height },
-        topAnchored: topAnchoredView,
-      }),
-    );
+    const placed = placeStarMapView({
+      anchor: viewAnchor,
+      canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+      viewport: { width: viewportSize.width, height: viewportSize.height },
+      topAnchored: topAnchoredView,
+    });
+    // Most resizes during a load do not move the anchor: a cloud growing
+    // downward changes the canvas height without changing the bounding
+    // box's top-left, so the placement lands exactly where the view
+    // already is. Committing it anyway would hand React a new object and
+    // re-render every card on the map — synchronously, ahead of paint,
+    // once per card measurement. Nothing is skipped by leaving early: the
+    // live ref and the DOM only ever disagree during a gesture, and a
+    // gesture owns the view, which the line above already returned on.
+    const current = viewRef.current;
+    if (
+      placed.x === current.x
+      && placed.y === current.y
+      && placed.scale === current.scale
+    ) {
+      return;
+    }
+    commitView(placed);
   }, [
     commitView,
     topAnchoredView,
     panZoomCanvas.width,
     panZoomCanvas.height,
+    viewAnchor,
     viewportSize.width,
     viewportSize.height,
   ]);
@@ -1614,6 +1806,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // React's last-rendered transform still matched, would not even repaint.
     commitView(
       placeStarMapView({
+        anchor: viewAnchor,
         canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
         viewport: { width: viewportSize.width, height: viewportSize.height },
         topAnchored: topAnchoredView,
@@ -1625,6 +1818,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     topAnchoredView,
     panZoomCanvas.width,
     panZoomCanvas.height,
+    viewAnchor,
     viewportSize.width,
     viewportSize.height,
   ]);
@@ -3873,41 +4067,89 @@ export function StarMapScreen(props: StarMapScreenProps) {
           </button>
         </p>
       ) : null}
-      <div className="star-map__chrome">
-        {/* Same wordmark primitive as the sidebar/Settings nav so the brand
-            reads identically across every window (theme-contract test). */}
-        <p className="sidebar__brand">
-          Pwr<span className="sidebar__brand-accent">Agent</span>
-        </p>
-        {/* ⌘K is the map's only way to reach a card it is not drawing, and
-            a keyboard-only door on a surface driven by the pointer is a
-            door nobody finds. The chord rides the label so learning it
-            costs one glance. */}
-        <button
-          type="button"
-          className="star-map__filter-chip star-map__find"
-          aria-label="Find a thread on the map"
-          onClick={() => setJumpOpen(true)}
-        >
-          <SearchIcon size={13} />
-          <span>Find</span>
-          <span className="star-map__find-chord" aria-hidden="true">
-            {formatPrimaryAccel("K")}
-          </span>
-        </button>
-        <StarMapViewOptions
-          preferences={preferences}
-          onChange={(next) => {
-            // A lens change re-places every card, and one lens (projects)
-            // paints no selected state at all. Carrying a selection across
-            // that boundary leaves the operator holding cards they can no
-            // longer point at — which the kebab would then act on.
-            if (next.layout !== preferences.layout) setSelection(new Set());
-            setPreferences(next);
-            writeStoredPreferences(next);
-          }}
-          onResetView={resetView}
-        />
+      {/* The map's whole top band: chrome on the left, filter chips in the
+          middle, and a right-hand slot for map actions. One grid row, so
+          the three cannot reach each other - they used to be separately
+          positioned islands and the chrome painted over the first filter
+          chip. See `.star-map__top-band` for the drag model that lets a
+          full-width band sit inside the window's only drag handle. */}
+      <div className="star-map__top-band" ref={bandRef}>
+        <div className="star-map__chrome">
+          {/* Same wordmark primitive as the sidebar/Settings nav so the brand
+              reads identically across every window (theme-contract test). */}
+          <p className="sidebar__brand">
+            Pwr<span className="sidebar__brand-accent">Agent</span>
+          </p>
+          {/* ⌘K is the map's only way to reach a card it is not drawing, and
+              a keyboard-only door on a surface driven by the pointer is a
+              door nobody finds. The chord rides the label so learning it
+              costs one glance. */}
+          <button
+            type="button"
+            className="star-map__filter-chip star-map__find"
+            aria-label="Find a thread on the map"
+            onClick={() => setJumpOpen(true)}
+          >
+            <SearchIcon size={13} />
+            <span>Find</span>
+            <span className="star-map__find-chord" aria-hidden="true">
+              {formatPrimaryAccel("K")}
+            </span>
+          </button>
+          <StarMapViewOptions
+            preferences={preferences}
+            onChange={(next) => {
+              // A lens change re-places every card, and one lens (projects)
+              // paints no selected state at all. Carrying a selection across
+              // that boundary leaves the operator holding cards they can no
+              // longer point at — which the kebab would then act on.
+              if (next.layout !== preferences.layout) setSelection(new Set());
+              setPreferences(next);
+              writeStoredPreferences(next);
+            }}
+            onResetView={resetView}
+          />
+        </div>
+        {/* Two renderings of one control set, sitting where the operator
+            already is — beside Find and View, not floating in the middle
+            of the window. Both stay mounted at every width: the strip's
+            chips are what the fit is measured from, so the one that is
+            not showing has to keep its natural width or the measurement
+            loses the input that would bring it back. */}
+        <div className={`star-map__filters is-${filterFit}`}>
+          <div
+            className="star-map__filter-strip"
+            role="group"
+            aria-label="Thread filters"
+            ref={filterStripRef}
+          >
+            {STAR_MAP_FILTERS.map((definition, index) => (
+              <StarMapFilterChip
+                key={definition.key}
+                definition={definition}
+                selection={filterSelection}
+                count={filterCounts[definition.key]}
+                dropped={filterFit === "reduced" && droppableFilters.has(index)}
+                onCycle={() => cycleFilter(definition.key)}
+              />
+            ))}
+            {hasFilterSelection ? (
+              <button
+                type="button"
+                className="star-map__filter-clear"
+                onClick={clearFilters}
+              >
+                Clear
+              </button>
+            ) : null}
+          </div>
+          <StarMapFilterMenu
+            selection={filterSelection}
+            counts={filterCounts}
+            onCycle={cycleFilter}
+            onClear={clearFilters}
+          />
+        </div>
       </div>
       {/* Two different settings can empty the map, and a blank star field
           looks identical either way. Name whichever one is responsible —
@@ -3972,54 +4214,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
           </button>
         </div>
       ) : null}
-      <div className="star-map__filters" role="group" aria-label="Thread filters">
-        {STAR_MAP_FILTERS.map((definition) => {
-          const state = filterState(filterSelection, definition.key);
-          const next =
-            state === "neutral"
-              ? "show only these"
-              : state === "include"
-                ? "hide these instead"
-                : "stop filtering on this";
-          return (
-            <button
-              key={definition.key}
-              type="button"
-              className={`star-map__filter-chip star-map__filter-chip--${state}`}
-              // Tri-state, so `aria-pressed` cannot describe it: exclude is
-              // neither pressed nor unpressed. The label carries the state
-              // and what the next click does.
-              aria-label={`${definition.label}: ${
-                state === "neutral"
-                  ? "not filtered"
-                  : state === "include"
-                    ? "showing only these"
-                    : "hidden"
-              } — click to ${next}`}
-              onClick={() => cycleFilter(definition.key)}
-            >
-              {state === "exclude" ? (
-                <span className="star-map__filter-mark" aria-hidden="true">
-                  −
-                </span>
-              ) : null}
-              <span>{definition.label}</span>
-              <span className="star-map__filter-count">
-                {filterCounts[definition.key]}
-              </span>
-            </button>
-          );
-        })}
-        {hasFilterSelection ? (
-          <button
-            type="button"
-            className="star-map__filter-clear"
-            onClick={clearFilters}
-          >
-            Clear
-          </button>
-        ) : null}
-      </div>
     </div>
   );
 }
