@@ -30,6 +30,25 @@ function thread(): NavigationThreadSummary {
   } as unknown as NavigationThreadSummary;
 }
 
+/**
+ * The same thread as a peer's. A remote target is what the provider read is
+ * actually keyed by, and it is the only case where the target is an object
+ * rather than `undefined` — so it is the only case that can churn.
+ */
+function remoteThread(): NavigationThreadSummary {
+  return {
+    ...thread(),
+    federation: {
+      instanceLabel: "Studio Mac",
+      ref: {
+        backend: "codex",
+        threadId: "t-local",
+        target: { scope: "remote", instanceId: "pwr_peer" },
+      },
+    },
+  } as unknown as NavigationThreadSummary;
+}
+
 /** One turn that wrote a file, the way the Edits tab reads a transcript. */
 function editEntries(): AppServerThreadEntry[] {
   return [
@@ -94,6 +113,15 @@ function buildApi(entries: AppServerThreadEntry[] = []): DesktopApi {
         ],
       },
     })),
+    listBackends: vi.fn(async () => ({
+      backends: [
+        {
+          kind: "codex",
+          label: "OpenAI",
+          available: true,
+        },
+      ],
+    })),
     startTurn: vi.fn(async () => ({
       backend: "codex",
       threadId: "t-local",
@@ -114,11 +142,14 @@ function satellite() {
   );
 }
 
-function renderCardWithContextSatellite(
+/** The screen's arrangement, as an element. Every call builds fresh thread
+    summaries the way a navigation poll does, which is what makes a re-render
+    with it a real test of identity churn. */
+function cardWithContextSatellite(
   desktopApi: DesktopApi,
-  options?: { threadPricingSummaryEnabled?: boolean },
+  options?: { threadPricingSummaryEnabled?: boolean; remote?: boolean },
 ) {
-  return render(
+  return (
     <>
       <StarMapChatCard
         cardKey={CARD_KEY}
@@ -130,7 +161,7 @@ function renderCardWithContextSatellite(
         rect={CHAT_RECT}
         scale={1}
         bounds={{ width: 4000, height: 3000 }}
-        thread={thread()}
+        thread={options?.remote ? remoteThread() : thread()}
         contextOpen
         onToggleContext={() => undefined}
         onToggleTerminal={() => undefined}
@@ -139,14 +170,21 @@ function renderCardWithContextSatellite(
       <StarMapContextCard
         cardKey={CARD_KEY}
         desktopApi={desktopApi}
-        thread={thread()}
+        thread={options?.remote ? remoteThread() : thread()}
         rect={CONTEXT_RECT}
         zIndex={40}
         onClose={() => undefined}
         threadPricingSummaryEnabled={options?.threadPricingSummaryEnabled}
       />
-    </>,
+    </>
   );
+}
+
+function renderCardWithContextSatellite(
+  desktopApi: DesktopApi,
+  options?: { threadPricingSummaryEnabled?: boolean; remote?: boolean },
+) {
+  return render(cardWithContextSatellite(desktopApi, options));
 }
 
 describe("star map context satellite data", () => {
@@ -184,6 +222,45 @@ describe("star map context satellite data", () => {
     });
 
     expect(satellite().queryByRole("tab", { name: "Pricing" })).toBeNull();
+  });
+
+  it("shows the host instance's AI providers, not an unavailable rail", async () => {
+    // The satellite was handed `backends={[]}`, so the providers tab read
+    // "Status unavailable" on a machine whose providers were fine.
+    const desktopApi = buildApi();
+    renderCardWithContextSatellite(desktopApi);
+
+    fireEvent.click(satellite().getByRole("tab", { name: "AI provider info" }));
+
+    expect(await satellite().findByText("OpenAI")).toBeTruthy();
+    expect(satellite().queryByText("Status unavailable")).toBeNull();
+  });
+
+  it("reads the provider list once per thread, not once per render", async () => {
+    // The hook refetches whenever its federation target changes identity,
+    // and both target sources build a fresh object per call. Handed over
+    // inline that is a fetch on every render, forever.
+    const desktopApi = buildApi();
+    const { rerender } = renderCardWithContextSatellite(desktopApi, {
+      remote: true,
+    });
+
+    await waitFor(() => {
+      expect(desktopApi.listBackends).toHaveBeenCalled();
+    });
+    const callsAfterMount = vi.mocked(desktopApi.listBackends!).mock.calls
+      .length;
+
+    for (let index = 0; index < 3; index += 1) {
+      rerender(cardWithContextSatellite(desktopApi, { remote: true }));
+    }
+    await waitFor(() => {
+      expect(desktopApi.readThread).toHaveBeenCalled();
+    });
+
+    expect(vi.mocked(desktopApi.listBackends!).mock.calls.length).toBe(
+      callsAfterMount,
+    );
   });
 
   it("keeps the map's edits in the rail: no above-composer dock offered", async () => {

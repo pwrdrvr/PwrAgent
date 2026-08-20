@@ -1,10 +1,11 @@
-import { lazy, Suspense, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useMemo, useState, type CSSProperties } from "react";
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
 } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { useBackendSummaries } from "../../lib/useBackendSummaries";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { isRemoteFederationTarget } from "@pwragent/shared";
@@ -56,6 +57,33 @@ export function StarMapContextCard(props: {
   // usage at all and Edits claimed it had touched no files, while the full
   // window showed both for the same thread.
   const cardContext = useStarMapCardContext(props.cardKey);
+  // Provider status belongs to the instance the THREAD lives on, not to
+  // this window: a map holds cards over several peers at once, so each
+  // satellite reads the backends of its own host's instance.
+  //
+  // Memoized by instance id rather than passed straight through. The hook
+  // rebuilds `refresh` whenever the target's identity changes and refetches
+  // on it, while `thread.federation.ref.target` is replaced on every
+  // navigation poll and `readRendererFederationTarget()` builds a fresh
+  // object per call — either one, handed over inline, refetches on every
+  // render forever.
+  const remoteInstanceId = useMemo(() => {
+    const target =
+      props.thread.federation?.ref.target ?? readRendererFederationTarget();
+    return target && isRemoteFederationTarget(target)
+      ? target.instanceId
+      : undefined;
+  }, [props.thread.federation?.ref.target]);
+  const federationTarget = useMemo(
+    () =>
+      remoteInstanceId
+        ? ({ scope: "remote", instanceId: remoteInstanceId } as const)
+        : undefined,
+    [remoteInstanceId],
+  );
+  const backendSummaries = useBackendSummaries(props.desktopApi, {
+    federationTarget,
+  });
   const style: CSSProperties = {
     left: `${props.rect.left}px`,
     top: `${props.rect.top}px`,
@@ -100,7 +128,8 @@ export function StarMapContextCard(props: {
         <ThreadContextPanel
           activeTab={tab}
           activeTurnId={cardContext.activeTurnId}
-          backends={[]}
+          backendError={backendSummaries.error}
+          backends={backendSummaries.backends}
           desktopApi={props.desktopApi}
           editedFileGroups={cardContext.editedFileGroups}
           // The rail is the only edits surface a chat card has: the card
