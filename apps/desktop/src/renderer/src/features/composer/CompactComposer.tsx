@@ -8,7 +8,10 @@ import {
 } from "react";
 import type { ThreadExecutionMode } from "@pwragent/shared";
 import { ComposerTiptapInput } from "./ComposerTiptapInput";
-import type { ComposerSkillToken } from "./ComposerInputTypes";
+import {
+  useComposerMentions,
+  type ComposerMentionSources,
+} from "./useComposerMentions";
 
 export type CompactComposerAction = {
   disabled?: boolean;
@@ -27,6 +30,12 @@ export type CompactComposerProps = {
   canSteer?: boolean;
   disabled?: boolean;
   executionMode?: ThreadExecutionMode;
+  /**
+   * Populations the `$` / `@` / `#` popovers pick from. Optional on
+   * purpose: a host that supplies nothing keeps the trigger characters as
+   * literal prose, so adopting this component never requires them.
+   */
+  mentionSources?: ComposerMentionSources;
   /** Thread's current model, shown as ambient state rather than a control. */
   model?: string;
   onInterrupt?: () => void;
@@ -48,13 +57,6 @@ const EXECUTION_MODE_LABELS: Record<ThreadExecutionMode, string> = {
 };
 
 /**
- * Module-level so the identity is stable: the Tiptap input re-syncs its
- * document whenever this prop changes identity, and a fresh `[]` on every
- * render would make that run on every keystroke.
- */
-const NO_SKILL_TOKENS: ComposerSkillToken[] = [];
-
-/**
  * Composer for surfaces with no vertical budget — currently the star map's
  * floating chat cards.
  *
@@ -73,9 +75,10 @@ const NO_SKILL_TOKENS: ComposerSkillToken[] = [];
  * rather than hydrating it on focus, which would cost a click and a caret
  * every time the operator moved between cards.
  *
- * Mentions are the one thing left out: `$skill`, `@file`, and `#thread`
- * need the backend list and directory index the card does not have, so no
- * skill tokens are ever supplied and the trigger characters stay literal.
+ * Mentions come from `useComposerMentions`, driven by whatever populations
+ * the host can honestly supply through `mentionSources`. Nothing about the
+ * pickers is re-implemented here: the triggers, ranking, token minting and
+ * markdown serialization are the same modules the full composer calls.
  *
  * Two moves buy back the height: secondary actions consolidate under a
  * single kebab, and model / reasoning effort render as right-aligned
@@ -83,7 +86,10 @@ const NO_SKILL_TOKENS: ComposerSkillToken[] = [];
  * state to be aware of, not controls to reach for.
  */
 export function CompactComposer(props: CompactComposerProps) {
-  const [draft, setDraft] = useState("");
+  const mentions = useComposerMentions({
+    disabled: props.disabled,
+    sources: props.mentionSources,
+  });
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const { onSend } = props;
@@ -100,21 +106,28 @@ export function CompactComposer(props: CompactComposerProps) {
     .join(" · ");
 
   const send = useCallback(async () => {
-    const text = draft.trim();
+    // The serialized text, not the plain draft: a mention chip is
+    // zero-width until this splices its markdown back in.
+    const text = mentions.text.trim();
     if (!text) return;
     // Clear optimistically so the input frees up immediately, then put the
-    // text back if the send turned out to fail.
-    setDraft("");
+    // draft back — chips and all — if the send turned out to fail.
+    const previous = mentions.snapshot;
+    mentions.clear();
     const delivered = await onSend(text);
     if (delivered === false) {
-      setDraft((current) => (current.length > 0 ? current : text));
+      mentions.restore(previous);
     }
-  }, [draft, onSend]);
+  }, [mentions, onSend]);
 
-  // The editor forwards only the keys it does not claim itself: Enter
-  // without Shift or Alt (both of which insert a newline), and the arrows.
+  // The editor forwards the keys it does not claim itself: Enter without
+  // Shift or Alt (both of which insert a newline), the arrows, and anything
+  // it has no binding for — Escape and Tab among them.
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      // An open mention popover claims the arrows, Enter, Tab, and Escape
+      // before the send path sees them.
+      if (mentions.handleKeyDown(event)) return;
       if (event.key !== "Enter" || event.metaKey || event.ctrlKey) return;
       // The button checks this too. A disabled `<textarea>` used to swallow
       // the keydown for us; the editor only stops taking new text, and still
@@ -123,7 +136,7 @@ export function CompactComposer(props: CompactComposerProps) {
       event.preventDefault();
       void send();
     },
-    [props.disabled, send],
+    [mentions, props.disabled, send],
   );
 
   // Click-away and Escape close the kebab. Without this the menu survives
@@ -150,16 +163,24 @@ export function CompactComposer(props: CompactComposerProps) {
     <div className="compact-composer">
       <div className="compact-composer__field">
         <ComposerTiptapInput
+          ref={mentions.inputRef}
+          ariaActiveDescendant={mentions.activeOptionId}
+          ariaControls={mentions.listboxId}
+          ariaExpanded={mentions.open}
           disabled={props.disabled}
           id={inputId}
           label={`Message ${props.threadTitle}`}
           markdownConversion
-          onChange={(value) => setDraft(value)}
+          onChange={mentions.handleChange}
           onKeyDown={onKeyDown}
           placeholder={props.placeholder ?? "Reply…"}
-          skillTokens={NO_SKILL_TOKENS}
-          value={draft}
+          skillTokens={mentions.skillTokens}
+          value={mentions.draft}
         />
+        {/* Inside the field, not portalled to the body: on the star map
+            that is what keeps the list within `.star-map-chat-card`, the
+            selector every camera-gesture guard tests against. */}
+        {mentions.popover}
         {ambient ? (
           // Ambient, not interactive: the label belongs to the input, so
           // screen readers reach it through the field rather than as a
@@ -222,7 +243,7 @@ export function CompactComposer(props: CompactComposerProps) {
           className="compact-composer__send"
           disabled={
             props.disabled
-            || draft.trim().length === 0
+            || mentions.text.trim().length === 0
             || (props.busy && props.canSteer === false)
           }
           onClick={() => void send()}

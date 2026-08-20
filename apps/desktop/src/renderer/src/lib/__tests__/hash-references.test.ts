@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
 import {
+  buildHashReferenceOptions,
   collapseHashReferenceWhitespace,
   filterHashReferenceCandidates,
   findHashReferenceTrigger,
@@ -196,5 +197,77 @@ describe("filterHashReferenceCandidates", () => {
       "https://github.com/pwrdrvr/PwrAgent/pull/123",
       "https://github.com/pwrdrvr/PwrSnap/pull/123",
     ]);
+  });
+});
+
+describe("buildHashReferenceOptions", () => {
+  function remote(
+    id: string,
+    title: string,
+    instanceId = "pwr_peer",
+  ): NavigationThreadSummary {
+    return thread(id, title, {
+      federation: {
+        instanceLabel: "Studio Mac",
+        ref: {
+          backend: "codex",
+          threadId: id,
+          target: { scope: "remote", instanceId },
+        },
+      },
+    } as Partial<NavigationThreadSummary>);
+  }
+
+  it("lists local rows before peer rows", () => {
+    const options = buildHashReferenceOptions({
+      localThreads: [thread("t-1", "Parser rewrite")],
+      query: "parser",
+      remoteThreads: [remote("t-2", "Parser cleanup")],
+    });
+    expect(
+      options.map((option) =>
+        option.kind === "thread"
+          ? [option.thread.id, option.remote]
+          : [option.pullRequest.url, option.remote],
+      ),
+    ).toEqual([
+      ["t-1", false],
+      ["t-2", true],
+    ]);
+  });
+
+  it("drops the thread being written in", () => {
+    const options = buildHashReferenceOptions({
+      currentThreadKey: "codex:t-1",
+      localThreads: [thread("t-1", "Parser rewrite"), thread("t-2", "Parser fix")],
+      query: "parser",
+    });
+    expect(options.map((option) => option.kind === "thread" && option.thread.id))
+      .toEqual(["t-2"]);
+  });
+
+  it("drops a peer row the local snapshot already carries", () => {
+    // A pinned peer thread appears in both populations; offering it twice
+    // is the kind of duplicate an operator reads as two different threads.
+    const options = buildHashReferenceOptions({
+      localThreads: [remote("t-2", "Parser cleanup")],
+      query: "parser",
+      remoteThreads: [remote("t-2", "Parser cleanup")],
+    });
+    expect(options).toHaveLength(1);
+    expect(options[0]!.remote).toBe(false);
+  });
+
+  it("drops a peer pull request a local thread already offers", () => {
+    const shared = pullRequest(123);
+    const options = buildHashReferenceOptions({
+      localThreads: [thread("t-1", "Local", { prs: [shared] })],
+      query: "123",
+      remoteThreads: [remote("t-2", "Remote")],
+    });
+    const pullRequests = options.filter(
+      (option) => option.kind === "pull-request",
+    );
+    expect(pullRequests).toHaveLength(1);
   });
 });
