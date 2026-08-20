@@ -646,6 +646,50 @@ async function validateExtractedBundle(
   return command;
 }
 
+// Windows PowerShell 5.1 inherits the parent process's PSModulePath. When that
+// value is PowerShell 7-oriented, autoloading Windows PowerShell's own
+// Microsoft.PowerShell.Security fails ("the module could not be loaded") and
+// Get-AuthenticodeSignature never runs. Pin the Windows PowerShell module
+// locations and import the module explicitly so a failure names its own cause.
+export const WINDOWS_SIGNATURE_PRELUDE = [
+  "$ErrorActionPreference = 'Stop'",
+  "if ($PSVersionTable.PSEdition -ne 'Core') { $env:PSModulePath = \"$PSHOME\\Modules;$env:ProgramFiles\\WindowsPowerShell\\Modules\" }",
+  "Import-Module Microsoft.PowerShell.Security",
+];
+
+// `powershell.exe -Command <string>` does NOT bind trailing arguments to
+// $args — the docs are explicit that a string command must come last because
+// everything after it is appended to the command text. ($args binding needs
+// -File, or -CommandWithArgs, which Windows PowerShell 5.1 does not have.) So
+// the two paths travel in the child environment instead, the way
+// scripts/release.mjs already passes PWRAGENT_VERIFY_EXECUTABLE.
+export function windowsSignatureVerification(
+  applicationCommand: string,
+  runtimeCommand: string,
+): { args: string[]; env: Record<string, string> } {
+  return {
+    args: [
+      "-NoLogo",
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      [
+        ...WINDOWS_SIGNATURE_PRELUDE,
+        "$application = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_APPLICATION",
+        "$runtime = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_RUNTIME",
+        "if ($application.Status -ne 'Valid' -or $runtime.Status -ne 'Valid') { exit 1 }",
+        "if ($null -eq $application.SignerCertificate -or $null -eq $runtime.SignerCertificate) { exit 1 }",
+        "if ($runtime.SignerCertificate.Subject -cne $application.SignerCertificate.Subject) { exit 1 }",
+        "if ($runtime.SignerCertificate.Issuer -cne $application.SignerCertificate.Issuer) { exit 1 }",
+      ].join("; "),
+    ],
+    env: {
+      PWRAGENT_VERIFY_APPLICATION: applicationCommand,
+      PWRAGENT_VERIFY_RUNTIME: runtimeCommand,
+    },
+  };
+}
+
 async function verifyMatchingPlatformSignature(
   command: string,
   applicationCommand: string,
@@ -683,22 +727,10 @@ async function verifyMatchingPlatformSignature(
   }
 
   if (platform === "win32") {
-    await execFile("powershell.exe", [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      [
-        "$application = Get-AuthenticodeSignature -LiteralPath $args[0]",
-        "$runtime = Get-AuthenticodeSignature -LiteralPath $args[1]",
-        "if ($application.Status -ne 'Valid' -or $runtime.Status -ne 'Valid') { exit 1 }",
-        "if ($null -eq $application.SignerCertificate -or $null -eq $runtime.SignerCertificate) { exit 1 }",
-        "if ($runtime.SignerCertificate.Subject -cne $application.SignerCertificate.Subject) { exit 1 }",
-        "if ($runtime.SignerCertificate.Issuer -cne $application.SignerCertificate.Issuer) { exit 1 }",
-      ].join("; "),
-      applicationCommand,
-      command,
-    ]);
+    const verification = windowsSignatureVerification(applicationCommand, command);
+    await execFile("powershell.exe", verification.args, {
+      env: { ...process.env, ...verification.env },
+    });
   }
 }
 
