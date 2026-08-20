@@ -123,11 +123,16 @@ export type StarMapAttentionCounts = {
   unread: number;
 };
 
-export const EMPTY_ATTENTION_COUNTS: StarMapAttentionCounts = {
+/**
+ * Frozen and module-private: its only job is to seed a fresh tally, and a
+ * shared mutable "empty" is one careless caller away from every later
+ * reader starting from a non-zero.
+ */
+const EMPTY_ATTENTION_COUNTS: StarMapAttentionCounts = Object.freeze({
   activeLocal: 0,
   activeRemote: 0,
   unread: 0,
-};
+});
 
 export function countAttentionSignals(params: {
   selection: StarMapFilterSelection;

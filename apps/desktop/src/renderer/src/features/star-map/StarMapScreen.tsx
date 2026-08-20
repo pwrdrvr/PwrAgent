@@ -1526,6 +1526,22 @@ export function StarMapScreen(props: StarMapScreenProps) {
     return counts;
   }, [filterSelection, props.localThreads, props.sessionKeys, remote]);
 
+  /**
+   * Whether the Attention chip draws its remote-turn readout.
+   *
+   * Fronting a peer is the reason to draw it — a permanent 0 on a
+   * single-machine setup is noise. The count is ORed in so the readout
+   * can never hide a non-zero: `peers` is the capability and
+   * `activeRemote` is the fact, and they part company for a frame when a
+   * peer leaves the directory, since the retention pass that drops its
+   * threads is an effect and runs after the render that shrank `peers`.
+   * The cards are on their way out in that frame too, so this is belt
+   * and braces rather than a bug being fixed — but it is free, and it
+   * makes "the drawn numbers account for every card the filter matched"
+   * true in every frame instead of almost every frame.
+   */
+  const showRemoteTurns = peers.length > 0 || attentionCounts.activeRemote > 0;
+
   // Which chips the band has room for. The chips carry live counts, so
   // the width they need is a property of the data rather than of the
   // window — see `resolveFilterFit` for the two constants that were wrong
@@ -4574,7 +4590,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 attention={
                   definition.key === "attention" ? attentionCounts : undefined
                 }
-                showRemoteTurns={peers.length > 0}
+                showRemoteTurns={showRemoteTurns}
                 dropped={filterFit === "reduced" && droppableFilters.has(index)}
                 onCycle={() => cycleFilter(definition.key)}
               />
@@ -4593,7 +4609,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             selection={filterSelection}
             counts={filterCounts}
             attention={attentionCounts}
-            showRemoteTurns={peers.length > 0}
+            showRemoteTurns={showRemoteTurns}
             onCycle={cycleFilter}
             onClear={clearFilters}
           />

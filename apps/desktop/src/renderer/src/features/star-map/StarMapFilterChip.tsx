@@ -172,7 +172,7 @@ function AttentionTurnScanner(props: { count: number }) {
  * when a peer actually has work — "0 on other instances" on every
  * single-machine setup is noise.
  */
-export function describeAttentionCounts(
+function describeAttentionCounts(
   counts: StarMapAttentionCounts,
   showRemoteTurns = false,
 ): string {
