@@ -5,7 +5,7 @@ usage() {
   cat <<'USAGE'
 Usage:
   restart-pwragent-dev.zsh schedule [--root PATH] [--delay SECONDS] [--log PATH] [--dry-run]
-  restart-pwragent-dev.zsh restart-now [--root PATH] [--log PATH] [--dry-run] [--detach-start]
+  restart-pwragent-dev.zsh restart-now [--root PATH] [--log PATH] [--dry-run] [--detach-start] [--protect-pids "PID ..."]
 
 Schedules or performs a local PwrAgent dev-profile restart. The restart stops
 processes that match the target checkout path plus the bounded parent
@@ -43,11 +43,14 @@ if [[ -z "$mode" || "$mode" == "--help" || "$mode" == "-h" ]]; then
 fi
 shift
 
-root="/Users/huntharo/github/PwrAgnt"
+# The script lives at <root>/.agents/skills/pwragent-dev-restart/scripts/,
+# so the checkout root is five directory levels above it.
+root="${0:A:h:h:h:h:h}"
 delay="30"
 log_path=""
 dry_run="false"
 detach_start="false"
+inherited_protected_pids=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -74,6 +77,11 @@ while [[ $# -gt 0 ]]; do
       detach_start="true"
       shift
       ;;
+    --protect-pids)
+      [[ $# -ge 2 ]] || die "--protect-pids requires a pid list"
+      inherited_protected_pids="${2//[^0-9 ]/}"
+      shift 2
+      ;;
     *)
       die "unknown argument: $1"
       ;;
@@ -86,6 +94,12 @@ done
 root="${root:A}"
 [[ -d "$root" ]] || die "root does not exist: $root"
 
+# `matching_pids` uses the root path as a `pgrep -f` pattern, so a broad root
+# such as `/` or `$HOME` would match and kill unrelated processes. Require the
+# root to look like the pnpm workspace this script is meant to restart.
+[[ -f "$root/package.json" && -f "$root/pnpm-workspace.yaml" ]] \
+  || die "root is not a PwrAgent checkout: $root"
+
 if [[ -z "$log_path" ]]; then
   log_path="$root/.local/pwragent-dev-restart.log"
 fi
@@ -93,12 +107,35 @@ mkdir -p "${log_path:h}" || die "failed to create log directory: ${log_path:h}"
 
 script_path="${0:A}"
 
+# Never signal this script's own ancestors. One of them is the shell or agent
+# session that started the restart, and its command line can contain the
+# checkout path, which makes it match the `pgrep -f "$root"` pattern. Skipping
+# only $$ and $PPID is not enough: the session is usually a grandparent or
+# higher, behind an intermediate shell whose command line does not match.
+#
+# `schedule` passes this set down to the detached `restart-now` child through
+# --protect-pids. That child is reparented after nohup, so it cannot discover
+# the scheduling session on its own.
+protected_pids=""
+collect_protected_pids() {
+  local pid="$$"
+  while [[ -n "$pid" && "$pid" != "0" && "$pid" != "1" ]]; do
+    protected_pids="$protected_pids $pid"
+    pid="$(ps -p "$pid" -o ppid= 2>/dev/null | tr -d ' ')"
+  done
+  protected_pids="$protected_pids $inherited_protected_pids"
+}
+collect_protected_pids
+
+is_protected_pid() {
+  [[ " $protected_pids " == *" $1 "* ]]
+}
+
 matching_pids() {
   local command pattern="$1"
   pgrep -f "$pattern" 2>/dev/null | while read -r pid; do
     [[ -z "$pid" ]] && continue
-    [[ "$pid" == "$$" ]] && continue
-    [[ "$pid" == "$PPID" ]] && continue
+    is_protected_pid "$pid" && continue
     command="$(process_command "$pid")"
     [[ "$command" == *"restart-pwragent-dev.zsh"* ]] && continue
     is_restart_excluded_process "$command" && continue
@@ -130,17 +167,21 @@ is_restart_excluded_process() {
   [[ "$command" == *"/.codex/computer-use/"* ]] && return 0
   [[ "$command" == *"SkyComputerUseClient"* ]] && return 0
   [[ "$command" == *"turn-ended"* ]] && return 0
+  # Coding-agent CLI sessions carry the checkout path in their arguments for the
+  # same reason. They are not part of the PwrAgent dev process tree.
+  [[ "$command" == *"/Application Support/Claude/claude-code/"* ]] && return 0
+  [[ "$command" == *"/Claude.app/Contents/Helpers/disclaimer"* ]] && return 0
   return 1
 }
 
 candidate_pids() {
   local command parent pid
   for pid in $(matching_pids "$root"); do
-    [[ "$pid" != "$$" && "$pid" != "$PPID" ]] && print -r -- "$pid"
+    is_protected_pid "$pid" || print -r -- "$pid"
 
     parent="$(parent_pid "$pid")"
     while [[ -n "$parent" && "$parent" != "0" && "$parent" != "1" ]]; do
-      [[ "$parent" == "$$" || "$parent" == "$PPID" ]] && break
+      is_protected_pid "$parent" && break
       command="$(process_command "$parent")"
       is_restart_excluded_process "$command" && break
       if [[ "$command" == *"$root"* ]] || is_dev_chain_parent "$command"; then
@@ -178,7 +219,7 @@ stop_matches() {
 
 schedule_restart() {
   local command restart_command
-  restart_command="$(shell_quote "$script_path") restart-now --root $(shell_quote "$root") --log $(shell_quote "$log_path") --detach-start"
+  restart_command="$(shell_quote "$script_path") restart-now --root $(shell_quote "$root") --log $(shell_quote "$log_path") --detach-start --protect-pids $(shell_quote "$protected_pids")"
   [[ "$dry_run" == "true" ]] && restart_command="$restart_command --dry-run"
   command="sleep $(shell_quote "$delay"); nohup /bin/zsh -lc $(shell_quote "$restart_command") >> $(shell_quote "$log_path") 2>&1 &"
 
