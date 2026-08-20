@@ -13,35 +13,11 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { openStarMapWindow } from "./fixtures/star-map-window";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
 const THREAD_TITLE = "Star map attention thread";
-
-/**
- * Poll `electronApp.windows()` for a window whose URL carries the map
- * hash. The BrowserWindow is created with `show: false`, so Playwright's
- * `window` event fires before the URL has loaded; polling sidesteps the
- * race (same pattern as `appearance-broadcast.spec.ts`).
- */
-async function waitForStarMapWindow(
-  app: Awaited<ReturnType<typeof launchElectronApp>>,
-): Promise<Page> {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    for (const candidate of app.electronApp.windows()) {
-      if (candidate.url().includes("#star-map")) {
-        return candidate;
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  throw new Error(
-    `Star Map window did not open; current windows: ${app.electronApp
-      .windows()
-      .map((win) => win.url())
-      .join(", ")}`,
-  );
-}
 
 function countStarMapWindows(
   app: Awaited<ReturnType<typeof launchElectronApp>>,
@@ -262,8 +238,7 @@ test("opens a thread from the star map window in the main window", async () => {
       app.window.getByRole("button", { name: new RegExp(THREAD_TITLE, "i") }).first(),
     ).toBeVisible();
 
-    await app.window.getByRole("button", { name: "Open Star Map" }).click();
-    const mapWindow = await waitForStarMapWindow(app);
+    const mapWindow = await openStarMapWindow(app);
 
     // `exact` matters here: role-name matching is substring by default,
     // and once a chat card opens its "Chat: Star map attention thread"
@@ -341,8 +316,7 @@ test("keeps the star map's top band from overlapping itself", async () => {
   });
 
   try {
-    await app.window.getByRole("button", { name: "Open Star Map" }).click();
-    const mapWindow = await waitForStarMapWindow(app);
+    const mapWindow = await openStarMapWindow(app);
     const starMap = mapWindow.getByRole("region", {
       name: "Star Map",
       exact: true,

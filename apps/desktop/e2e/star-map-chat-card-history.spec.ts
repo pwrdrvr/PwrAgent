@@ -1,12 +1,13 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import {
   startInProcessFederationGateway,
   type InProcessFederationGateway,
 } from "./fixtures/federation-gateway";
+import { openStarMapWindow } from "./fixtures/star-map-window";
 
 /**
  * A Star Map chat card must not read or mount a whole large thread.
@@ -43,31 +44,6 @@ const TOTAL_TRANSCRIPT_BYTES = ENTRY_COUNT * BYTES_PER_ENTRY;
 const MAX_TRANSCRIPT_NODES = 4_000;
 /** Likewise: a bounded open is well under a megabyte. */
 const MAX_OPEN_BYTES = 4_000_000;
-
-/**
- * Poll `electronApp.windows()` for the dedicated Star Map window. The
- * BrowserWindow is created with `show: false`, so Playwright's `window`
- * event fires before the URL has loaded; polling sidesteps the race
- * (same pattern as `appearance-broadcast.spec.ts`).
- */
-async function waitForStarMapWindow(
-  app: Awaited<ReturnType<typeof launchElectronApp>>,
-): Promise<Page> {
-  for (let attempt = 0; attempt < 30; attempt += 1) {
-    for (const candidate of app.electronApp.windows()) {
-      if (candidate.url().includes("#star-map")) {
-        return candidate;
-      }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-  }
-  throw new Error(
-    `Star Map window did not open; current windows: ${app.electronApp
-      .windows()
-      .map((win) => win.url())
-      .join(", ")}`,
-  );
-}
 
 async function createLocalControlFixture(): Promise<{
   cleanup: () => Promise<void>;
@@ -165,8 +141,7 @@ test.describe("star map chat card history", () => {
 
     // Open the map — a dedicated OS window — and the peer's thread as a
     // floating chat card inside it.
-    await window.getByRole("button", { name: "Open Star Map" }).click();
-    const mapWindow = await waitForStarMapWindow(app);
+    const mapWindow = await openStarMapWindow(app);
     const starMap = mapWindow.getByRole("region", {
       name: "Star Map",
       exact: true,

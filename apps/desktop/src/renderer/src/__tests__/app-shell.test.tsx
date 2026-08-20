@@ -321,6 +321,61 @@ describe("App", () => {
     ).toBeInTheDocument();
   });
 
+  // `useDesktopApi` resolves the preload bridge by polling, so the header's
+  // Star Map control mounts and is clickable whether or not the bridge has
+  // landed — and `desktopApi?.openStarMapWindow?.()` used to drop that click
+  // without a sound. A Linux E2E lane failed twice on exactly that shape
+  // (click, then six seconds of nothing, then "Star Map window did not
+  // open"), so the no-op has to be audible from the renderer console.
+  it("reports a Star Map click that the desktop bridge cannot serve", async () => {
+    const consoleError = vi
+      .spyOn(console, "error")
+      .mockImplementation(() => undefined);
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        platform: "darwin",
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        getNavigationSnapshot: async () => ({
+          backend: "all" as const,
+          fetchedAt: Date.now(),
+          unchanged: false,
+          inboxThreadKeys: [],
+          threads: [],
+          directories: [],
+          launchpadDefaults: {
+            backend: "codex" as const,
+            executionMode: "default" as const,
+          },
+        }),
+        readSettings: async () =>
+          await new Promise<never>(() => {
+            // Keep the shell mounted without needing a full settings fixture.
+          }),
+        // Deliberately absent: `openStarMapWindow`.
+      },
+    });
+
+    try {
+      render(<App />);
+
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Open Star Map" }),
+      );
+
+      expect(consoleError).toHaveBeenCalledWith(
+        "Open Star Map ignored: the desktop bridge is not ready.",
+        { bridgePresent: true },
+      );
+    } finally {
+      // Restore even when the assertion throws: `console.error` is how React
+      // reports act() and render warnings, so leaving it stubbed would mute
+      // every remaining test in this file and turn one failure into a
+      // misleading cascade.
+      consoleError.mockRestore();
+    }
+  });
+
   it("starts a new thread on a selected federation machine and profile", async () => {
     const federationListeners = new Set<(event: AgentEvent) => void>();
     const remoteTarget = { scope: "remote" as const, instanceId: "studio-work" };
