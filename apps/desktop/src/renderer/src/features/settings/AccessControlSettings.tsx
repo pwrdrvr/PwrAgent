@@ -36,6 +36,28 @@ type HoverTarget =
   | { kind: "perm"; id: MessagingPermissionId }
   | null;
 
+type Wires = {
+  actorRole: Array<{ id: string; d: string; key: string; roleId: string; danger: boolean }>;
+  rolePerm: Array<{ id: string; d: string; roleId: string; permId: string; danger: boolean }>;
+  reject: Array<{ id: string; d: string; key: string }>;
+};
+
+const EMPTY_WIRES: Wires = { actorRole: [], rolePerm: [], reject: [] };
+
+// Measurement runs on every layout change, so bail out of the state update
+// whenever the geometry is unchanged; otherwise the observer loops.
+function sameWires(a: Wires, b: Wires): boolean {
+  const sameList = (
+    x: ReadonlyArray<{ id: string; d: string }>,
+    y: ReadonlyArray<{ id: string; d: string }>,
+  ) => x.length === y.length && x.every((it, i) => it.id === y[i].id && it.d === y[i].d);
+  return (
+    sameList(a.actorRole, b.actorRole)
+    && sameList(a.rolePerm, b.rolePerm)
+    && sameList(a.reject, b.reject)
+  );
+}
+
 function subjectKey(subject: RbacSubject): string {
   if (subject.kind === "actor") {
     return `${subject.platform}:actor:${subject.actorId}`;
@@ -310,43 +332,44 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
 
   // ---- SVG connector wires ----
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const colsRef = useRef<HTMLDivElement | null>(null);
   const actorRefs = useRef<Record<string, HTMLElement | null>>({});
   const roleRefs = useRef<Record<string, HTMLElement | null>>({});
   const permRefs = useRef<Record<string, HTMLElement | null>>({});
   const rejectRef = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
+  const [wires, setWires] = useState<Wires>(EMPTY_WIRES);
 
-  useLayoutEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const update = () => {
-      const r = el.getBoundingClientRect();
-      setSize({ w: r.width, h: r.height });
-    };
-    update();
-    // ResizeObserver is absent under jsdom; the initial measure is enough there.
-    if (typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver(update);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [subjects.length, policy?.roles.length]);
-
-  const wires = useMemo(() => {
+  // Measure after the DOM is committed, never during render: the card
+  // positions the wires attach to are only correct once the browser has laid
+  // out the commit that produced them.
+  const measure = useCallback(() => {
     const container = containerRef.current;
-    if (!container) return { actorRole: [], rolePerm: [], reject: [] as Array<{ id: string; d: string; key: string }> };
+    if (!container) return;
     const cb = container.getBoundingClientRect();
-    const right = (el: HTMLElement | null) =>
-      el ? { x: el.getBoundingClientRect().right - cb.left, y: el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2 - cb.top } : null;
-    const left = (el: HTMLElement | null) =>
-      el ? { x: el.getBoundingClientRect().left - cb.left, y: el.getBoundingClientRect().top + el.getBoundingClientRect().height / 2 - cb.top } : null;
+    setSize((current) =>
+      current.w === cb.width && current.h === cb.height
+        ? current
+        : { w: cb.width, h: cb.height },
+    );
+    const right = (el: HTMLElement | null) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.right - cb.left, y: r.top + r.height / 2 - cb.top };
+    };
+    const left = (el: HTMLElement | null) => {
+      if (!el) return null;
+      const r = el.getBoundingClientRect();
+      return { x: r.left - cb.left, y: r.top + r.height / 2 - cb.top };
+    };
     const path = (a: { x: number; y: number } | null, b: { x: number; y: number } | null) => {
       if (!a || !b) return "";
       const dx = Math.max(40, (b.x - a.x) * 0.5);
       return `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`;
     };
-    const actorRole: Array<{ id: string; d: string; key: string; roleId: string; danger: boolean }> = [];
-    const rolePerm: Array<{ id: string; d: string; roleId: string; permId: string; danger: boolean }> = [];
-    const reject: Array<{ id: string; d: string; key: string }> = [];
+    const actorRole: Wires["actorRole"] = [];
+    const rolePerm: Wires["rolePerm"] = [];
+    const reject: Wires["reject"] = [];
     for (const known of subjects) {
       const key = subjectKey(known.subject);
       const aEl = actorRefs.current[key];
@@ -385,8 +408,39 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
         }
       }
     }
-    return { actorRole, rolePerm, reject };
-  }, [size.w, size.h, subjects, policy, rolesForSubjectKey]);
+    const next: Wires = { actorRole, rolePerm, reject };
+    setWires((current) => (sameWires(current, next) ? current : next));
+  }, [subjects, policy, rolesForSubjectKey]);
+
+  useLayoutEffect(() => {
+    measure();
+    // ResizeObserver is absent under jsdom; the initial measure is enough there.
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => measure());
+    if (containerRef.current) ro.observe(containerRef.current);
+    const cols = colsRef.current;
+    if (cols) {
+      ro.observe(cols);
+      // The columns share the row's width, so a redistribution between them
+      // moves the cards without changing the graph box. Watch each column.
+      for (const col of Array.from(cols.children)) ro.observe(col);
+    }
+    return () => ro.disconnect();
+  }, [measure]);
+
+  useEffect(() => {
+    // Web fonts land after the last commit and change text metrics, which
+    // reflows the columns with no resize of anything we observe above.
+    const fonts = (document as Document & { fonts?: { ready: Promise<unknown> } }).fonts;
+    if (!fonts?.ready) return;
+    let cancelled = false;
+    void fonts.ready.then(() => {
+      if (!cancelled) measure();
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [measure]);
 
   const wireActive = (which: "ar" | "rp" | "rj", info: { key?: string; roleId?: string; permId?: string }): boolean => {
     if (!trace) return false;
@@ -622,9 +676,9 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
           ))}
         </svg>
 
-        <div className="rbac-graph__cols">
+        <div className="rbac-graph__cols" ref={colsRef}>
           {/* ACTORS */}
-          <div>
+          <div className="rbac-col">
             <div className="rbac-col__head">
               <span className="rbac-col__eyebrow">Actors</span>
               <span className="rbac-col__count">{subjects.length}</span>
@@ -650,7 +704,10 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
                         {subjectLabel(known.subject, known.displayName)}
                         {known.bucket ? <span className="rbac-node__badge is-danger">bucket</span> : null}
                       </div>
-                      <div className="rbac-node__sub">
+                      <div
+                        className="rbac-node__sub"
+                        title={`${platformLabel(known.subject.platform)} · ${subjectSub(known.subject)}`}
+                      >
                         {platformLabel(known.subject.platform)} · {subjectSub(known.subject)}
                       </div>
                       <div className="rbac-node__roles">
@@ -690,7 +747,7 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
           </div>
 
           {/* ROLES */}
-          <div>
+          <div className="rbac-col">
             <div className="rbac-col__head">
               <span className="rbac-col__eyebrow">PwrAgent · Roles (additive)</span>
               <span className="rbac-col__count">{roles.length}</span>
@@ -714,8 +771,12 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
                     {role.danger ? <Alert /> : <Lock />}
                   </span>
                   <div className="rbac-node__main">
-                    <div className="rbac-node__name">{role.name}</div>
-                    <div className="rbac-node__sub" style={{ fontFamily: "var(--font-sans)" }}>
+                    <div className="rbac-node__name" title={role.name}>{role.name}</div>
+                    <div
+                      className="rbac-node__sub"
+                      style={{ fontFamily: "var(--font-sans)" }}
+                      title={role.description ?? `${role.permissions.length} permissions`}
+                    >
                       {role.description ?? `${role.permissions.length} permissions`}
                     </div>
                   </div>
@@ -743,7 +804,7 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
           </div>
 
           {/* PERMISSIONS */}
-          <div>
+          <div className="rbac-col">
             <div className="rbac-col__head">
               <span className="rbac-col__eyebrow">Permissions</span>
               <span className="rbac-col__count">{catalog.length}</span>
@@ -770,8 +831,12 @@ export function AccessControlSettings(props: { desktopApi: DesktopApi }) {
                       {perm.danger === "high" ? <Alert /> : perm.danger === "med" ? <Eye /> : <Check />}
                     </span>
                     <div className="rbac-node__main">
-                      <div className="rbac-node__name">{perm.label}</div>
-                      <div className="rbac-node__sub" style={{ fontFamily: "var(--font-sans)" }}>
+                      <div className="rbac-node__name" title={perm.label}>{perm.label}</div>
+                      <div
+                        className="rbac-node__sub"
+                        style={{ fontFamily: "var(--font-sans)" }}
+                        title={perm.description}
+                      >
                         {perm.description}
                       </div>
                     </div>
