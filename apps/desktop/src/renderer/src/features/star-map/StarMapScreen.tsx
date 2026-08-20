@@ -4452,6 +4452,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
               }
               onClose={chatCards.close}
               onOpenFull={openThreadFully}
+              onRefreshNavigation={async () => {
+                refreshOwner(cardInstanceId ?? localInstanceId);
+              }}
               onRaise={chatCards.raise}
               onRectChange={chatCards.setRect}
               rect={card.rect}
