@@ -56,7 +56,7 @@ import {
   buildInstanceClusters,
   computeClusterCloud,
   emptyCloudMemory,
-  forgetCluster,
+  refitCluster,
   resolveCloudDrop,
   type StarMapClusterPlacement,
   type StarMapCloudMemory,
@@ -545,6 +545,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * nothing that merely changes the map's contents may move it.
    */
   const operatorMovedViewRef = useRef(false);
+  /**
+   * The view the most recent in-flight canvas pan is measuring its pointer
+   * travel from, or undefined when no drag is running. Anything that moves
+   * the view under the drag has to move this with it (see `viewAnchorRef`)
+   * — in place, since the drag itself holds the same object.
+   */
+  const panBaseRef = useRef<StarMapView | undefined>(undefined);
 
   /**
    * Move the view without telling React. For gesture frames: writes the
@@ -796,15 +803,48 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // scale from state; the drag has always worked this way.
     // Read from the live ref, not React state: a keyboard flight may have
     // moved the view since the last commit.
-    const base = viewRef.current;
-    /** Latest raw pointer position, unclamped. Both writers clamp it. */
-    let pointerX = base.x;
-    let pointerY = base.y;
+    //
+    // The base is applied to the pointer's travel rather than baked into
+    // an absolute position, and the ref points at it, because the base can
+    // move under a drag: a relayout that shifts the map's anchor steps the
+    // view to hold the map still (see `viewAnchorRef`) and steps this with
+    // it, where a base captured by value would recompute over the top of
+    // that on the next frame and put the jump back.
+    //
+    // This drag reads its own object rather than the ref, so a second
+    // pointer starting its own pan — two fingers on a touchscreen — leaves
+    // this one measuring from where IT was pressed instead of inheriting
+    // the newer drag's base and re-adding its own travel to it.
+    const base = { ...viewRef.current };
+    panBaseRef.current = base;
+    /** Pointer travel since the press. Applied to the live base. */
+    let travelX = 0;
+    let travelY = 0;
     let frame = 0;
-    const bounds = { canvas: panZoomCanvas, viewport: viewportSize };
+    /**
+     * Read at use, not captured: a cloud arriving mid-drag resizes the
+     * canvas, and clamping against the size the map had at pointerdown
+     * would pull the view in against bounds that no longer exist.
+     */
+    const bounds = () => ({
+      canvas: canvasBoundsRef.current,
+      viewport: viewportSizeRef.current,
+    });
+    /** Where the drag wants the view, unclamped. Both writers clamp it. */
+    const dragged = (): StarMapView => ({
+      scale: base.scale,
+      x: base.x + travelX,
+      y: base.y + travelY,
+    });
     const move = (pointerEvent: globalThis.PointerEvent) => {
-      pointerX = base.x + pointerEvent.clientX - startX;
-      pointerY = base.y + pointerEvent.clientY - startY;
+      travelX = pointerEvent.clientX - startX;
+      travelY = pointerEvent.clientY - startY;
+      // Ownership from the first travel, not from the release: a cloud can
+      // arrive while the drag is still running, and until the view is the
+      // operator's the auto-centre answers that by re-placing the view they
+      // are in the middle of setting. `stop` sets it too, for the flick
+      // that commits before any frame has run.
+      operatorMovedViewRef.current = true;
       if (!frame) {
         frame = requestAnimationFrame(() => {
           frame = 0;
@@ -812,12 +852,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           // transform straight onto the canvas, so an unclamped live path
           // would let the map leave the window and then jump back on
           // pointerup when the clamped state landed.
-          paintView(
-            clampStarMapView({
-              view: { x: pointerX, y: pointerY, scale: base.scale },
-              ...bounds,
-            }),
-          );
+          paintView(clampStarMapView({ view: dragged(), ...bounds() }));
         });
       }
     };
@@ -837,10 +872,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // has to be in bounds on its own account — and a flick released
       // before any frame ran still commits where the pointer actually
       // ended up.
+      const landed = dragged();
+      // Only if this drag is still the current one: a second pointer may
+      // have taken the ref, and its pan is not this one's to end.
+      if (panBaseRef.current === base) panBaseRef.current = undefined;
       commitView(
         clampStarMapView({
-          view: { ...viewRef.current, x: pointerX, y: pointerY },
-          ...bounds,
+          // Scale from the live view, not the base: a pinch mid-drag is
+          // the one part of the gesture the base does not own.
+          view: { ...viewRef.current, x: landed.x, y: landed.y },
+          ...bounds(),
         }),
       );
     };
@@ -1210,11 +1251,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   const toggleClusterExpanded = useCallback(
     (instanceId: string, clusterKey: string) => {
-      // Unfolding or folding a cloud is a request to re-fit THAT cloud, so
-      // it forgets its seats and centre. Everything else keeps its layout.
+      // Unfolding or folding a cloud is a request to re-fit THAT cloud's
+      // rings, so it can grow outward and shrink back. Its centre and its
+      // seats stay: the cards already on screen are not what changed.
       cloudMemory.current.set(
         instanceId,
-        forgetCluster(
+        refitCluster(
           cloudMemory.current.get(instanceId) ?? emptyCloudMemory(),
           clusterKey,
         ),
@@ -1782,6 +1824,76 @@ export function StarMapScreen(props: StarMapScreenProps) {
     viewAnchor,
     viewportSize.width,
     viewportSize.height,
+  ]);
+
+  /**
+   * Hold the operator's view against the map rather than against the
+   * canvas.
+   *
+   * Orbit and projects normalise their canvas so the leftmost, topmost
+   * thing drawn clears the padding. That makes the anchor — and every body
+   * measured alongside it — move whenever a cloud's extent changes on
+   * those edges, while the view transform stays exactly where it was.
+   * Expanding a cloud with its "+N more" chip slid the whole map several
+   * hundred pixels sideways, and collapsing it slid the map back: the
+   * operator asked one cloud for more cards and the map jumped out from
+   * under them.
+   *
+   * So when the anchor moves, the view moves with it by the same amount in
+   * viewport pixels, and the world point under any given pixel is the one
+   * that was there before. The same `viewAnchor` the placement above holds
+   * an unplaced map on, deliberately: the two paths differ in who owns the
+   * view, not in which body the map is held by. Only while the view is the
+   * operator's — before that the placement owns it. Layout effect, like
+   * that placement, so the step lands in the same paint as the layout that
+   * needed it.
+   *
+   * Lanes is exempt: its canvas grows down and to the right from a fixed
+   * corner, so nothing it lays out moves what is already drawn.
+   */
+  const heldAnchor = orbitMode || projectsMode ? viewAnchor : undefined;
+  const viewAnchorRef = useRef<
+    { layout: string; x: number; y: number } | undefined
+  >(undefined);
+  useLayoutEffect(() => {
+    const previous = viewAnchorRef.current;
+    viewAnchorRef.current = heldAnchor
+      ? { layout: preferences.layout, ...heldAnchor }
+      : undefined;
+    if (!heldAnchor || !previous) return;
+    // A lens switch is a different map on a different canvas, not this
+    // one moving; the ownership reset and the placement above place it.
+    if (previous.layout !== preferences.layout) return;
+    if (!operatorMovedViewRef.current) return;
+    const dx = heldAnchor.x - previous.x;
+    const dy = heldAnchor.y - previous.y;
+    if (dx === 0 && dy === 0) return;
+    const current = viewRef.current;
+    const step = { x: dx * current.scale, y: dy * current.scale };
+    // A drag in flight measures its travel from a base of its own, and
+    // repaints from it on the very next frame. Step that base too — in
+    // place, because the drag holds this object — or the frame would
+    // compute over the top of this and put the jump back.
+    const panBase = panBaseRef.current;
+    if (panBase) {
+      panBase.x -= step.x;
+      panBase.y -= step.y;
+    }
+    commitView(
+      clampStarMapView({
+        view: { ...current, x: current.x - step.x, y: current.y - step.y },
+        canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+        viewport: { width: viewportSize.width, height: viewportSize.height },
+      }),
+    );
+  }, [
+    commitView,
+    heldAnchor,
+    panZoomCanvas.height,
+    panZoomCanvas.width,
+    preferences.layout,
+    viewportSize.height,
+    viewportSize.width,
   ]);
 
   /**
@@ -3071,11 +3183,11 @@ export function StarMapScreen(props: StarMapScreenProps) {
       );
       arrangement.setCardPosition(params.instanceId, threadKey, null);
       // The target cloud is about to gain or lose a card, so it re-fits
-      // rather than trying to seat the newcomer in a shape built without
-      // it. Every other cloud keeps its layout.
+      // its rings around the newcomer rather than wearing the radius the
+      // old membership needed. Every other cloud keeps its layout.
       cloudMemory.current.set(
         params.instanceId,
-        forgetCluster(
+        refitCluster(
           cloudMemory.current.get(params.instanceId) ?? emptyCloudMemory(),
           drop.clusterKey,
         ),

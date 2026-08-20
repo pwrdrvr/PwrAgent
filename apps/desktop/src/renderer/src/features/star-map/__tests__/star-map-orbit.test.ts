@@ -139,6 +139,55 @@ describe("computeOrbitPlacement", () => {
     }
   });
 
+  /**
+   * Why holding the view on a single body is enough to hold the whole map
+   * still: the canvas is normalised around whatever is drawn, so a cloud
+   * growing on the left or top edge slides every body by the same amount.
+   * The screen anchors the view to one of them (`viewAnchor`) and gets the
+   * rest for free.
+   */
+  it("slides every body together when a cloud grows on an edge", () => {
+    const counts = new Map([
+      ["pwr_local", 6],
+      ["pwr_a", 3],
+      ["pwr_b", 0],
+      ["pwr_c", 8],
+    ]);
+    // pwr_c is the widest child and stays that way below, so nothing here
+    // re-spaces the ring: the only thing that changes is where the drawn
+    // content starts, which is exactly the case the view compensates for.
+    const extents = new Map([
+      ["pwr_local", { rx: 400, ry: 300 }],
+      ["pwr_a", { rx: 200, ry: 180 }],
+      ["pwr_b", { rx: 200, ry: 180 }],
+      ["pwr_c", { rx: 500, ry: 420 }],
+    ]);
+    const placement = computeOrbitPlacement({
+      nodes,
+      cardCounts: counts,
+      cardWidth: 220,
+      extents,
+    });
+    const grown = computeOrbitPlacement({
+      nodes,
+      cardCounts: counts,
+      cardWidth: 220,
+      extents: new Map(extents).set("pwr_a", { rx: 420, ry: 380 }),
+    });
+
+    const hub = placement.instances.find((instance) => instance.isHub)!;
+    const movedHub = grown.instances.find((instance) => instance.isHub)!;
+    const shift = { x: movedHub.x - hub.x, y: movedHub.y - hub.y };
+    expect(Math.hypot(shift.x, shift.y)).toBeGreaterThan(0);
+    for (const instance of placement.instances) {
+      const moved = grown.instances.find(
+        (candidate) => candidate.instanceId === instance.instanceId,
+      )!;
+      expect(moved.x - instance.x).toBeCloseTo(shift.x, 9);
+      expect(moved.y - instance.y).toBeCloseTo(shift.y, 9);
+    }
+  });
+
   it("spaces bodies so neighbouring card rings cannot touch", () => {
     const counts = new Map([
       ["pwr_local", 6],

@@ -3,7 +3,7 @@ import type { NavigationThreadSummary } from "@pwragent/shared";
 import {
   buildInstanceClusters,
   computeClusterCloud,
-  forgetCluster,
+  refitCluster,
   orderParentAdjacent,
   resolveCloudDrop,
   ORBIT_MAX_CARDS_PER_GROUP,
@@ -588,7 +588,7 @@ describe("layout stability", () => {
     const alphaKey = "directory:/repo/alpha";
     const after = layout(
       threads,
-      forgetCluster(before.memory, alphaKey),
+      refitCluster(before.memory, alphaKey),
       [alphaKey],
     );
     const beta = after.clusters.find((cluster) => cluster.key !== alphaKey)!;
@@ -598,6 +598,162 @@ describe("layout stability", () => {
     expect(beta.center).toEqual(previousBeta.center);
     const alpha = after.clusters.find((cluster) => cluster.key === alphaKey)!;
     expect(alpha.slots).toHaveLength(14);
+  });
+
+  /**
+   * Expanding a cloud used to drop its centre and its seats, which made it
+   * an arrival again — seated from the base radius outward along its own
+   * bearing, which is rarely where it was. The operator asked for two more
+   * cards and the cloud they were reading vanished across the map.
+   */
+  it("expands a cloud where it stands when it has the room", () => {
+    // One past the cap: the extra card takes a free seat in the rings the
+    // cloud already has, so there is nothing to re-fit.
+    const threads = [
+      ...project("alpha", ORBIT_MAX_CARDS_PER_GROUP + 1),
+      ...project("beta", 4),
+    ];
+    const alphaKey = "directory:/repo/alpha";
+    const before = layout(threads);
+    const after = layout(threads, refitCluster(before.memory, alphaKey), [
+      alphaKey,
+    ]);
+
+    const previousAlpha = before.clusters.find(
+      (cluster) => cluster.key === alphaKey,
+    )!;
+    const alpha = after.clusters.find((cluster) => cluster.key === alphaKey)!;
+    expect(alpha.center).toEqual(previousAlpha.center);
+    // Every card that was on screen is exactly where it was; the one the
+    // operator asked for is the only new geometry.
+    const was = slotByThread(before);
+    const now = slotByThread(after);
+    for (const [id, slot] of was) {
+      expect(now.get(id)).toEqual(slot);
+    }
+    expect(now.size).toBe(was.size + 1);
+  });
+
+  it("moves a cloud that outgrows its spot no further than it has to", () => {
+    const threads = [...project("alpha", 14), ...project("beta", 4)];
+    const alphaKey = "directory:/repo/alpha";
+    const before = layout(threads);
+    const after = layout(threads, refitCluster(before.memory, alphaKey), [
+      alphaKey,
+    ]);
+    const previousAlpha = before.clusters.find(
+      (cluster) => cluster.key === alphaKey,
+    )!;
+    const alpha = after.clusters.find((cluster) => cluster.key === alphaKey)!;
+
+    // Fourteen cards need a ring the eight did not, and that ring would
+    // swallow the instance's own chrome, so this cloud does have to move.
+    expect(alpha.extent.rx).toBeGreaterThan(previousAlpha.extent.rx);
+    // It moves no further than it grew, so the old and new footprints
+    // overlap — the difference between "made room" and "teleported".
+    const moved = Math.hypot(
+      alpha.center.x - previousAlpha.center.x,
+      alpha.center.y - previousAlpha.center.y,
+    );
+    expect(moved).toBeGreaterThan(0);
+    expect(moved).toBeLessThanOrEqual(
+      Math.hypot(
+        alpha.extent.rx - previousAlpha.extent.rx,
+        alpha.extent.ry - previousAlpha.extent.ry,
+      ),
+    );
+    // Away from the body, not through it.
+    expect(Math.hypot(alpha.center.x, alpha.center.y)).toBeGreaterThan(
+      Math.hypot(previousAlpha.center.x, previousAlpha.center.y),
+    );
+    // The cards it already had keep their places within the cloud.
+    const was = slotByThread(before);
+    const now = slotByThread(after);
+    for (const thread of project("alpha", ORBIT_MAX_CARDS_PER_GROUP)) {
+      const slot = was.get(thread.id)!;
+      const taken = now.get(thread.id)!;
+      expect(taken.dx - alpha.center.x).toBeCloseTo(
+        slot.dx - previousAlpha.center.x,
+        9,
+      );
+      expect(taken.dy - alpha.center.y).toBeCloseTo(
+        slot.dy - previousAlpha.center.y,
+        9,
+      );
+    }
+  });
+
+  /**
+   * The map the operator actually has: several clouds around one body,
+   * with the one they unfold hemmed in by a neighbour. It cannot grow
+   * where it stands — something has to give — and what gives is this
+   * cloud's position and nothing else. Its cloudmates hold, and it carries
+   * its own cards with it rather than reshuffling them, so what the
+   * operator follows is one cloud moving, not a new map.
+   */
+  it("moves only the unfolded cloud on a crowded map", () => {
+    const threads = [
+      ...project("alpha", 10),
+      ...project("beta", 4),
+      ...project("gamma", 5),
+      ...project("delta", 3),
+    ];
+    const alphaKey = "directory:/repo/alpha";
+    const before = layout(threads);
+    const after = layout(threads, refitCluster(before.memory, alphaKey), [
+      alphaKey,
+    ]);
+
+    const at = (cloud: ReturnType<typeof computeClusterCloud>) =>
+      cloud.clusters.find((cluster) => cluster.key === alphaKey)!.center;
+    const from = at(before);
+    const moved = at(after);
+
+    for (const cluster of before.clusters) {
+      if (cluster.key === alphaKey) continue;
+      expect(
+        after.clusters.find((entry) => entry.key === cluster.key)!.center,
+      ).toEqual(cluster.center);
+    }
+    const was = slotByThread(before);
+    const now = slotByThread(after);
+    for (const thread of project("alpha", ORBIT_MAX_CARDS_PER_GROUP)) {
+      const slot = was.get(thread.id)!;
+      const taken = now.get(thread.id)!;
+      expect(taken.dx - moved.x).toBeCloseTo(slot.dx - from.x, 9);
+      expect(taken.dy - moved.y).toBeCloseTo(slot.dy - from.y, 9);
+    }
+  });
+
+  it("collapses a cloud back to the size it started at, in place", () => {
+    const threads = [...project("alpha", 14), ...project("beta", 4)];
+    const alphaKey = "directory:/repo/alpha";
+    const before = layout(threads);
+    const expanded = layout(threads, refitCluster(before.memory, alphaKey), [
+      alphaKey,
+    ]);
+    const collapsed = layout(threads, refitCluster(expanded.memory, alphaKey));
+
+    const previousAlpha = before.clusters.find(
+      (cluster) => cluster.key === alphaKey,
+    )!;
+    const expandedAlpha = expanded.clusters.find(
+      (cluster) => cluster.key === alphaKey,
+    )!;
+    const alpha = collapsed.clusters.find(
+      (cluster) => cluster.key === alphaKey,
+    )!;
+
+    // Rings are grow-only, so without dropping that one entry the cloud
+    // would keep the radius the expanded cards needed.
+    expect(alpha.extent).toEqual(previousAlpha.extent);
+    // Folding is not a reason to move: the cloud stays where the operator
+    // last saw it, holding the cards that stay visible.
+    expect(alpha.center).toEqual(expandedAlpha.center);
+    const was = slotByThread(expanded);
+    for (const [id, slot] of slotByThread(collapsed)) {
+      expect(was.get(id)).toEqual(slot);
+    }
   });
 
   it("lays out the same way twice from a cold start", () => {
