@@ -9,36 +9,81 @@ let tempDir: string;
 
 /**
  * Counts top-level sqlite commits the way the production write-accounting in
- * `sqlite-write-metrics.ts` does — a `db.transaction()` call that is already
- * inside a transaction runs as a savepoint and commits nothing of its own.
+ * `sqlite-write-metrics.ts` does — a `db.transaction()` call already inside a
+ * transaction runs as a savepoint and commits nothing of its own, while any
+ * statement issued outside one commits implicitly.
  *
  * That accounting cannot be reused directly here: `StateDb.open` attaches it
  * *after* schema setup, so it can never see the writes that build a database.
  * Patching the prototype is the only seam that observes an open from outside.
+ *
+ * `exec` is counted as well as `transaction`, so a write moved out of the
+ * creation wrapper is caught rather than going uncounted — that regression is
+ * the whole reason this helper exists. Schema setup issues no bare
+ * `prepare(...).run()` outside a transaction, so `prepare` is left alone.
  */
 function countCommitsDuring(run: () => void): number {
   const originalTransaction = Database.prototype.transaction;
+  const originalExec = Database.prototype.exec;
   let commits = 0;
+
   Database.prototype.transaction = function patched(
     this: Database.Database,
     fn: (...args: unknown[]) => unknown,
   ) {
-    const inner = originalTransaction.call(this, fn);
-    const counted = (...args: unknown[]): unknown => {
-      const nested = this.inTransaction;
-      const result = (inner as (...a: unknown[]) => unknown)(...args);
-      if (!nested) {
-        commits += 1;
+    const inner = originalTransaction.call(this, fn) as unknown as Record<
+      string,
+      unknown
+    >;
+    const count = <T extends (...args: unknown[]) => unknown>(
+      transactionFn: T,
+    ): T =>
+      ((...args: unknown[]) => {
+        const nested = this.inTransaction;
+        const result = transactionFn(...args);
+        if (!nested) {
+          commits += 1;
+        }
+        return result;
+      }) as T;
+
+    const counted = count(
+      inner as unknown as (...args: unknown[]) => unknown,
+    ) as unknown as Record<string, unknown>;
+    // `.default` / `.deferred` / `.immediate` / `.exclusive` hang off the
+    // returned callable and are NOT enumerable, so they have to be rewrapped
+    // one at a time. `sqlite-write-metrics.ts` lost them once and every
+    // `tx.immediate(...)` caller died with "is not a function".
+    for (const variant of ["default", "deferred", "immediate", "exclusive"]) {
+      const original = inner[variant];
+      if (typeof original === "function") {
+        Object.defineProperty(counted, variant, {
+          configurable: true,
+          value: count(original as (...args: unknown[]) => unknown),
+          writable: true,
+        });
       }
-      return result;
-    };
-    return counted as ReturnType<typeof originalTransaction>;
+    }
+    return counted as unknown as ReturnType<typeof originalTransaction>;
   } as typeof Database.prototype.transaction;
+
+  Database.prototype.exec = function patchedExec(
+    this: Database.Database,
+    source: string,
+  ) {
+    const nested = this.inTransaction;
+    const result = originalExec.call(this, source);
+    if (!nested) {
+      commits += 1;
+    }
+    return result;
+  } as typeof Database.prototype.exec;
 
   try {
     run();
   } finally {
     Database.prototype.transaction = originalTransaction;
+    Database.prototype.exec = originalExec;
   }
   return commits;
 }
