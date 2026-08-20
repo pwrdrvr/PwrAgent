@@ -274,6 +274,11 @@ import {
   type FederationClientWebSocketClient,
   type FederationGatewayConnection,
 } from "./federation-transport";
+import {
+  buildFederationAdvertisedEndpoints,
+  collectFederationInterfaceAddresses,
+  type FederationTailscaleAdvertisement,
+} from "./federation-advertised-endpoints";
 import { orderFederationEndpointAttempts } from "./federation-endpoints";
 import {
   dialFederationSshEndpoint,
@@ -1450,6 +1455,16 @@ export class DesktopFederationRuntime {
   async generateInvite(request: {
     label?: string;
     ttlMs?: number;
+    /**
+     * Reads the tailnet identity to advertise. Injected by the caller because
+     * the Tailscale service reaches back into this runtime to verify the
+     * listener, so reading it from here would close a dependency cycle. It
+     * stays a thunk so an operator who pinned an explicit advertised list
+     * never pays for a Tailscale CLI spawn whose result is discarded.
+     */
+    readTailscaleAdvertisement?: () => Promise<
+      FederationTailscaleAdvertisement | undefined
+    >;
   }): Promise<{ invite: string; expiresAt: number }> {
     const settings = await getDesktopSettingsService().readSettings();
     const mode = settings.federation.mode.value;
@@ -1461,14 +1476,13 @@ export class DesktopFederationRuntime {
     const advertisedEndpoints = settings.federation.advertisedEndpoints.value
       .map((endpoint) => endpoint.trim())
       .filter((endpoint) => endpoint.length > 0);
-    const fallbackUrl =
-      settings.federation.publicUrl.value.trim() || this.listenUrl;
     const gatewayEndpoints =
       advertisedEndpoints.length > 0
         ? advertisedEndpoints
-        : fallbackUrl
-          ? [fallbackUrl]
-          : [];
+        : await this.defaultAdvertisedEndpoints(
+            settings,
+            request.readTailscaleAdvertisement,
+          );
     const gatewayUrl = gatewayEndpoints[0];
     if (!gatewayUrl) {
       throw new Error("Federation gateway URL is not configured.");
@@ -1502,6 +1516,51 @@ export class DesktopFederationRuntime {
       }),
       expiresAt,
     };
+  }
+
+  /**
+   * Endpoints for an invite when the operator has pinned no advertised list.
+   *
+   * Synthesized from names that follow the machine rather than from whatever
+   * address it happens to hold today — an invite outlives a DHCP lease, and a
+   * literal that has since moved leaves every enrolled client dialing a
+   * stranger. See federation-advertised-endpoints.ts for the ordering rules.
+   */
+  private async defaultAdvertisedEndpoints(
+    settings: DesktopSettingsSnapshot,
+    readTailscaleAdvertisement?: () => Promise<
+      FederationTailscaleAdvertisement | undefined
+    >,
+  ): Promise<string[]> {
+    const publicUrl = settings.federation.publicUrl.value.trim();
+    if (!publicUrl && !this.listenUrl) {
+      // Nothing designated a URL and no listener is up to name. Minting an
+      // invite here would hand a peer endpoints that cannot answer until the
+      // bind is repaired — most often another instance already holds the port,
+      // since every profile defaults to the same one. Say that instead.
+      throw new Error(
+        this.gatewayListenerError
+          ? `Federation gateway is not listening: ${this.gatewayListenerError}`
+          : "Federation gateway is not listening yet. Wait for it to start, or set a Public URL.",
+      );
+    }
+    const tailscale = await readTailscaleAdvertisement?.();
+    const endpoints = buildFederationAdvertisedEndpoints({
+      listenHost: settings.federation.listenHost.value,
+      listenPort: settings.federation.listenPort.value,
+      hostname: hostname(),
+      platform: process.platform,
+      interfaceAddresses: collectFederationInterfaceAddresses(),
+      ...(publicUrl ? { publicUrl } : {}),
+      ...(tailscale ? { tailscale } : {}),
+    });
+    if (endpoints.length > 0) return endpoints;
+    // Nothing on this machine produced a usable candidate (an unusable
+    // hostname on a listener bound to a wildcard with no external address).
+    // The listener URL is wrong for a remote peer, but a caller that can see
+    // it can still repair it by hand, which beats an invite with no endpoint.
+    const fallbackUrl = publicUrl || this.listenUrl;
+    return fallbackUrl ? [fallbackUrl] : [];
   }
 
   async importInvite(invite: string): Promise<{
