@@ -1,4 +1,5 @@
 import { execFile as execFileCallback } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import {
   copyFile,
   mkdir,
@@ -14,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
@@ -270,9 +271,74 @@ function createDeferred<T>(): {
   return { promise, reject, resolve };
 }
 
+// Every `git` below runs against this environment instead of whatever the
+// machine happens to be configured with. Three separate reasons:
+//
+// 1. Identity. Supplying it as GIT_AUTHOR_*/GIT_COMMITTER_* removes the two
+//    `git config` spawns each repo used to pay for, and the `-c user.name=`
+//    argument pairs every `commit` used to carry. A commit is authored the
+//    same way whether the test set identity up or not, so no repo here can
+//    fail on "please tell me who you are" for having forgotten the setup.
+// 2. Ambient configuration. Global config is redirected to an empty file and
+//    system config is switched off, so a runner's gitconfig cannot reach
+//    these repos: no credential helper, no `init.defaultBranch`, no
+//    `commit.gpgsign` waiting on a passphrase. What the assertions see is
+//    what this file set. Repo-location variables are unset for the same
+//    reason — see the entries below.
+// 3. Prompting. A git that blocks on a terminal prompt does not fail, it
+//    hangs, and a hang is charged to the whole test timeout rather than to
+//    the command that caused it.
+//
+// PwrGit's e2e sandbox (`apps/desktop/e2e/fixtures/git-sandbox.ts` there)
+// neutralizes config by pointing these at `/dev/null`. That path does not
+// exist on Windows, so this uses a real empty file, which reads as "no
+// configuration" on every platform. The non-interactive pair matches
+// `NON_INTERACTIVE_GIT_ENV` in PwrGit's `main/git/dugite.ts`; the dugite
+// binary it guards there is a production concern and is deliberately not
+// adopted here, since these spawns are test setup against PATH git.
+const gitConfigDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-git-config-"));
+const emptyGitConfigPath = path.join(gitConfigDir, "empty.gitconfig");
+writeFileSync(emptyGitConfigPath, "");
+
+const gitTestEnv: NodeJS.ProcessEnv = {
+  ...process.env,
+  // A repo-location variable inherited from the outside would redirect every
+  // command below at whatever repo the suite was launched from — `git rebase
+  // -x`, a pre-push hook, and any npm lifecycle script running inside a git
+  // operation all export these. `git -C <fixture>` does not override them, so
+  // an inherited GIT_DIR would point `add` and `commit` at the outer repo's
+  // index while the fixture path only chose the cwd. Node drops env keys whose
+  // value is undefined, so this unsets them for the child.
+  GIT_DIR: undefined,
+  GIT_WORK_TREE: undefined,
+  GIT_INDEX_FILE: undefined,
+  GIT_OBJECT_DIRECTORY: undefined,
+  GIT_COMMON_DIR: undefined,
+  GIT_CONFIG_GLOBAL: emptyGitConfigPath,
+  GIT_CONFIG_SYSTEM: emptyGitConfigPath,
+  // GIT_CONFIG_SYSTEM replaces `$(prefix)/etc/gitconfig`, but Git for Windows
+  // reads a second system-level file at `%PROGRAMDATA%\Git\config` that the
+  // installer writes to — including, in a default install, a credential
+  // helper. That one is gated on GIT_CONFIG_NOSYSTEM rather than on the path
+  // override, so the path override alone would leave the exact setting this
+  // env exists to keep out, on the exact platform it matters for.
+  GIT_CONFIG_NOSYSTEM: "1",
+  GIT_AUTHOR_NAME: "PwrAgent Tests",
+  GIT_AUTHOR_EMAIL: "tests@pwragent.local",
+  GIT_COMMITTER_NAME: "PwrAgent Tests",
+  GIT_COMMITTER_EMAIL: "tests@pwragent.local",
+  GIT_TERMINAL_PROMPT: "0",
+  GCM_INTERACTIVE: "Never",
+};
+
+afterAll(() => {
+  rmSync(gitConfigDir, { force: true, recursive: true });
+});
+
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
     encoding: "utf8",
+    env: gitTestEnv,
     maxBuffer: 1024 * 1024 * 10,
   });
   return stdout.trim();
@@ -14489,16 +14555,7 @@ script = "printf setup-output"
     const repo = path.join(root, "app");
     await mkdir(repo, { recursive: true });
     await git(repo, ["init", "-b", "feature/metadata"]);
-    await git(repo, [
-      "-c",
-      "user.email=test@example.com",
-      "-c",
-      "user.name=Test User",
-      "commit",
-      "--allow-empty",
-      "-m",
-      "init",
-    ]);
+    await git(repo, ["commit", "--allow-empty", "-m", "init"]);
 
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "thread/metadata/update"] },
@@ -15415,8 +15472,6 @@ command = "pnpm dev"
     const worktreePath = path.join(root, "worktree");
     await mkdir(repoPath, { recursive: true });
     await git(repoPath, ["init", "-b", "main"]);
-    await git(repoPath, ["config", "user.email", "test@example.com"]);
-    await git(repoPath, ["config", "user.name", "Test User"]);
     await writeFile(path.join(repoPath, "README.md"), "hello\n", "utf8");
     await git(repoPath, ["add", "README.md"]);
     await git(repoPath, ["commit", "-m", "initial"]);
@@ -24631,15 +24686,7 @@ command = "pnpm dev"
     }
     await writeFile(path.join(root, "README.md"), "handoff\n", "utf8");
     await git(root, ["add", "README.md"]);
-    await git(root, [
-      "-c",
-      "user.name=PwrAgent Tests",
-      "-c",
-      "user.email=tests@pwragent.local",
-      "commit",
-      "-m",
-      "initial",
-    ]);
+    await git(root, ["commit", "-m", "initial"]);
 
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
@@ -25522,15 +25569,7 @@ command = "pnpm dev"
         }
         await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
         await git(repoPath, ["add", "README.md"]);
-        await git(repoPath, [
-          "-c",
-          "user.name=PwrAgent Tests",
-          "-c",
-          "user.email=tests@pwragent.local",
-          "commit",
-          "-m",
-          "initial",
-        ]);
+        await git(repoPath, ["commit", "-m", "initial"]);
       }
 
       const parentDirectory = {
@@ -25676,15 +25715,7 @@ command = "pnpm dev"
         }
         await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
         await git(repoPath, ["add", "README.md"]);
-        await git(repoPath, [
-          "-c",
-          "user.name=PwrAgent Tests",
-          "-c",
-          "user.email=tests@pwragent.local",
-          "commit",
-          "-m",
-          "initial",
-        ]);
+        await git(repoPath, ["commit", "-m", "initial"]);
       }
 
       const parentDirectory = {
@@ -25806,15 +25837,7 @@ command = "pnpm dev"
     }
     await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
     await git(repoPath, ["add", "README.md"]);
-    await git(repoPath, [
-      "-c",
-      "user.name=PwrAgent Tests",
-      "-c",
-      "user.email=tests@pwragent.local",
-      "commit",
-      "-m",
-      "initial",
-    ]);
+    await git(repoPath, ["commit", "-m", "initial"]);
     await mkdir(callerWorktreePath, { recursive: true });
     await mkdir(path.join(worktreePath, ".codex", "environments"), { recursive: true });
     await writeFile(
@@ -26028,15 +26051,7 @@ command = "pnpm dev"
     }
     await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
     await git(repoPath, ["add", "README.md"]);
-    await git(repoPath, [
-      "-c",
-      "user.name=PwrAgent Tests",
-      "-c",
-      "user.email=tests@pwragent.local",
-      "commit",
-      "-m",
-      "initial",
-    ]);
+    await git(repoPath, ["commit", "-m", "initial"]);
     await mkdir(path.join(worktreePath, ".codex", "environments"), { recursive: true });
     await writeFile(
       path.join(worktreePath, ".codex", "environments", "environment.toml"),
@@ -27664,15 +27679,7 @@ script = "printf setup"
     }
     await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
     await git(repoPath, ["add", "README.md"]);
-    await git(repoPath, [
-      "-c",
-      "user.name=PwrAgent Tests",
-      "-c",
-      "user.email=tests@pwragent.local",
-      "commit",
-      "-m",
-      "initial",
-    ]);
+    await git(repoPath, ["commit", "-m", "initial"]);
     await mkdir(worktreePath, { recursive: true });
     const sourceRuntime: CodexThreadEnvironmentRuntime = {
       environmentId: "environment",
@@ -28047,15 +28054,7 @@ script = "printf setup"
       await git(seedPath, ["init", "-b", "main"]);
       await writeFile(path.join(seedPath, "README.md"), "seed\n", "utf8");
       await git(seedPath, ["add", "README.md"]);
-      await git(seedPath, [
-        "-c",
-        "user.name=PwrAgent Tests",
-        "-c",
-        "user.email=tests@pwragent.local",
-        "commit",
-        "-m",
-        "initial",
-      ]);
+      await git(seedPath, ["commit", "-m", "initial"]);
       await git(seedPath, ["remote", "add", "origin", remotePath]);
       await git(seedPath, ["push", "origin", "main"]);
       await git(repoPath, [
@@ -28145,15 +28144,7 @@ script = "printf setup"
     }
     await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
     await git(repoPath, ["add", "README.md"]);
-    await git(repoPath, [
-      "-c",
-      "user.name=PwrAgent Tests",
-      "-c",
-      "user.email=tests@pwragent.local",
-      "commit",
-      "-m",
-      "initial",
-    ]);
+    await git(repoPath, ["commit", "-m", "initial"]);
     await git(repoPath, ["worktree", "add", "--detach", worktreePath, "main"]);
 
     const linkedDirectory = {
@@ -28259,15 +28250,7 @@ script = "printf setup"
         }
         await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
         await git(repoPath, ["add", "README.md"]);
-        await git(repoPath, [
-          "-c",
-          "user.name=PwrAgent Tests",
-          "-c",
-          "user.email=tests@pwragent.local",
-          "commit",
-          "-m",
-          "initial",
-        ]);
+        await git(repoPath, ["commit", "-m", "initial"]);
       }
 
       const parentDirectory = {
@@ -28394,15 +28377,7 @@ script = "printf setup"
       }
       await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
       await git(repoPath, ["add", "README.md"]);
-      await git(repoPath, [
-        "-c",
-        "user.name=PwrAgent Tests",
-        "-c",
-        "user.email=tests@pwragent.local",
-        "commit",
-        "-m",
-        "initial",
-      ]);
+      await git(repoPath, ["commit", "-m", "initial"]);
       await git(repoPath, ["branch", "develop"]);
 
       const scratchDirectory = {
@@ -28672,15 +28647,7 @@ script = "printf setup"
       }
       await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
       await git(repoPath, ["add", "README.md"]);
-      await git(repoPath, [
-        "-c",
-        "user.name=PwrAgent Tests",
-        "-c",
-        "user.email=tests@pwragent.local",
-        "commit",
-        "-m",
-        "initial",
-      ]);
+      await git(repoPath, ["commit", "-m", "initial"]);
 
       const scratchDirectory = {
         id: expectedDir(scratchPath),
@@ -28970,15 +28937,7 @@ script = "printf setup"
       }
       await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
       await git(repoPath, ["add", "README.md"]);
-      await git(repoPath, [
-        "-c",
-        "user.name=PwrAgent Tests",
-        "-c",
-        "user.email=tests@pwragent.local",
-        "commit",
-        "-m",
-        "initial",
-      ]);
+      await git(repoPath, ["commit", "-m", "initial"]);
       await git(repoPath, ["worktree", "add", "--detach", worktreePath, "main"]);
 
       const linkedDirectory = {
@@ -29135,15 +29094,7 @@ script = "printf setup"
         }
         await writeFile(path.join(repo, "README.md"), "handoff\n", "utf8");
         await git(repo, ["add", "README.md"]);
-        await git(repo, [
-          "-c",
-          "user.name=PwrAgent Tests",
-          "-c",
-          "user.email=tests@pwragent.local",
-          "commit",
-          "-m",
-          "initial",
-        ]);
+        await git(repo, ["commit", "-m", "initial"]);
       }
 
       const parentDirectory = {
@@ -29284,15 +29235,7 @@ script = "printf setup"
       }
       await writeFile(path.join(repoPath, "README.md"), "handoff\n", "utf8");
       await git(repoPath, ["add", "README.md"]);
-      await git(repoPath, [
-        "-c",
-        "user.name=PwrAgent Tests",
-        "-c",
-        "user.email=tests@pwragent.local",
-        "commit",
-        "-m",
-        "initial",
-      ]);
+      await git(repoPath, ["commit", "-m", "initial"]);
 
       const sourceRuntime: CodexThreadEnvironmentRuntime = {
         environmentId: "environment",
@@ -29417,15 +29360,7 @@ script = "printf setup"
     }
     await writeFile(path.join(root, "README.md"), "handoff\n", "utf8");
     await git(root, ["add", "README.md"]);
-    await git(root, [
-      "-c",
-      "user.name=PwrAgent Tests",
-      "-c",
-      "user.email=tests@pwragent.local",
-      "commit",
-      "-m",
-      "initial",
-    ]);
+    await git(root, ["commit", "-m", "initial"]);
 
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "thread/list", "turn/start"] },
@@ -33000,15 +32935,7 @@ script = "printf setup"
     }
     await writeFile(path.join(repoPath, "README.md"), "kube manifests\n", "utf8");
     await git(repoPath, ["add", "README.md"]);
-    await git(repoPath, [
-      "-c",
-      "user.name=PwrAgent Tests",
-      "-c",
-      "user.email=tests@pwragent.local",
-      "commit",
-      "-m",
-      "initial",
-    ]);
+    await git(repoPath, ["commit", "-m", "initial"]);
     await mkdir(path.dirname(worktreePath), { recursive: true });
     await git(repoPath, [
       "worktree",
@@ -40007,8 +39934,6 @@ script = "printf setup"
     try {
       await mkdir(repoPath, { recursive: true });
       await git(repoPath, ["init", "-b", "main"]);
-      await git(repoPath, ["config", "user.email", "test@example.com"]);
-      await git(repoPath, ["config", "user.name", "Test User"]);
       await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
       await git(repoPath, ["add", "README.md"]);
       await git(repoPath, ["commit", "-m", "initial"]);
@@ -41050,8 +40975,6 @@ script = "printf setup"
     try {
       await mkdir(repoPath, { recursive: true });
       await git(repoPath, ["init", "-b", "main"]);
-      await git(repoPath, ["config", "user.email", "test@example.com"]);
-      await git(repoPath, ["config", "user.name", "Test User"]);
       await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
       await git(repoPath, ["add", "README.md"]);
       await git(repoPath, ["commit", "-m", "initial"]);
@@ -41143,8 +41066,6 @@ script = "printf setup"
     try {
       await mkdir(repoPath, { recursive: true });
       await git(repoPath, ["init", "-b", "main"]);
-      await git(repoPath, ["config", "user.email", "test@example.com"]);
-      await git(repoPath, ["config", "user.name", "Test User"]);
       await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
       await git(repoPath, ["add", "README.md"]);
       await git(repoPath, ["commit", "-m", "initial"]);
@@ -41226,8 +41147,6 @@ script = "printf setup"
     try {
       await mkdir(repoPath, { recursive: true });
       await git(repoPath, ["init", "-b", "main"]);
-      await git(repoPath, ["config", "user.email", "test@example.com"]);
-      await git(repoPath, ["config", "user.name", "Test User"]);
       await writeFile(path.join(repoPath, "README.md"), "base\n", "utf8");
       await git(repoPath, ["add", "README.md"]);
       await git(repoPath, ["commit", "-m", "initial"]);
@@ -41537,16 +41456,7 @@ script = "printf setup"
     const repo = path.join(root, "app");
     await mkdir(repo, { recursive: true });
     await git(repo, ["init", "-b", "feature/old"]);
-    await git(repo, [
-      "-c",
-      "user.email=test@example.com",
-      "-c",
-      "user.name=Test User",
-      "commit",
-      "--allow-empty",
-      "-m",
-      "init",
-    ]);
+    await git(repo, ["commit", "--allow-empty", "-m", "init"]);
 
     const thread: AppServerThreadSummary = {
       id: "thread-branch",
@@ -41656,16 +41566,7 @@ script = "printf setup"
       const repo = path.join(root, "app");
       await mkdir(repo, { recursive: true });
       await git(repo, ["init", "-b", "feature/old"]);
-      await git(repo, [
-        "-c",
-        "user.email=test@example.com",
-        "-c",
-        "user.name=Test User",
-        "commit",
-        "--allow-empty",
-        "-m",
-        "init",
-      ]);
+      await git(repo, ["commit", "--allow-empty", "-m", "init"]);
 
       const acpBackendId = "acp:kimi" as AcpBackendId;
       const overlayStore = createOverlayStoreMock({
@@ -41778,16 +41679,7 @@ script = "printf setup"
     const repo = path.join(root, "app");
     await mkdir(repo, { recursive: true });
     await git(repo, ["init", "-b", "main"]);
-    await git(repo, [
-      "-c",
-      "user.email=test@example.com",
-      "-c",
-      "user.name=Test User",
-      "commit",
-      "--allow-empty",
-      "-m",
-      "init",
-    ]);
+    await git(repo, ["commit", "--allow-empty", "-m", "init"]);
     await git(repo, ["switch", "--detach", "HEAD"]);
 
     const acpBackendId = "acp:grok" as AcpBackendId;
@@ -45176,5 +45068,43 @@ describe("DesktopBackendRegistry — ACP worktree directory grouping", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("real-repo git test environment", () => {
+  // Without this guard the hardening above is invisible: the suite would keep
+  // passing on a machine whose global gitconfig happens to supply an identity,
+  // and would only break on a runner that does not. Both halves are asserted
+  // from a repo built exactly the way every other real-repo test builds one.
+  it("authors commits from the environment and reads no ambient config", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-git-env-guard-"));
+    try {
+      await git(root, ["init", "-b", "main"]);
+    } catch {
+      await git(root, ["init"]);
+      await git(root, ["checkout", "-b", "main"]);
+    }
+    await writeFile(path.join(root, "README.md"), "guard\n", "utf8");
+    await git(root, ["add", "README.md"]);
+    await git(root, ["commit", "-m", "initial"]);
+
+    // No `git config user.*` ran for this repo, so the commit is proof that
+    // GIT_AUTHOR_*/GIT_COMMITTER_* carried the identity on their own.
+    expect(
+      await git(root, ["log", "-1", "--format=%an|%ae|%cn|%ce"]),
+    ).toBe(
+      "PwrAgent Tests|tests@pwragent.local|PwrAgent Tests|tests@pwragent.local",
+    );
+
+    // `--list` folds system + global + local together, so an empty result for
+    // these prefixes means the runner's gitconfig never reached the repo. A
+    // leaked `credential.*` is the one that matters most: it is what turns a
+    // git spawn into a process waiting on a prompt nobody can answer.
+    const effectiveConfig = await git(root, ["config", "--list"]);
+    expect(
+      effectiveConfig
+        .split(/\r?\n/)
+        .filter((entry) => /^(user\.|credential\.|commit\.gpgsign=)/.test(entry)),
+    ).toEqual([]);
   });
 });
