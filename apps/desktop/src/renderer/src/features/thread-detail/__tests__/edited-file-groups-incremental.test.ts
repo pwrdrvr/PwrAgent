@@ -283,6 +283,46 @@ describe("createEditedFileGroupsCollector", () => {
     );
   });
 
+  it("recomputes when a refresh replaces the middle of the transcript", () => {
+    // `reconcileRetainedTranscriptTail` splices retained entries (identity
+    // preserved) ahead of freshly read ones, so a refresh can leave the first
+    // and last folded entries pointing at the same objects while replacing
+    // everything between them — including with different content.
+    const transcript = Array.from({ length: 100 }, (_, index) =>
+      activityEntry({
+        id: `entry-${index}`,
+        createdAt: 1_000 + index,
+        turnId: `turn-${Math.floor(index / 4)}`,
+        details: [
+          fileDiffDetail({ path: `/repo/src/file-${index}.ts`, additions: 1 }),
+        ],
+      }),
+    );
+    const collector = createEditedFileGroupsCollector();
+    collector.collect({ entries: transcript });
+
+    // Rewrite the band that actually matters: entries old enough to be
+    // committed (the re-folded tail is the last 32, so the fold committed
+    // through index 67) but still inside one of the rendered turn groups.
+    // Entry 0 and entry 67 keep their identity, so head/tail anchors alone
+    // would report the fold as still valid and serve the pre-refresh counts.
+    const refreshed = transcript.slice(0);
+    for (let index = 60; index < 67; index += 1) {
+      refreshed[index] = activityEntry({
+        id: `entry-${index}`,
+        createdAt: 1_000 + index,
+        turnId: `turn-${Math.floor(index / 4)}`,
+        details: [
+          fileDiffDetail({ path: `/repo/src/file-${index}.ts`, additions: 9 }),
+        ],
+      });
+    }
+
+    expect(collector.collect({ entries: refreshed })).toEqual(
+      collectEditedFileGroups({ entries: refreshed }),
+    );
+  });
+
   it("keeps unchanged groups referentially stable across deltas", () => {
     const transcript = Array.from({ length: 12 }, (_, index) =>
       activityEntry({

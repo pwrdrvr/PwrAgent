@@ -96,6 +96,16 @@ const LIVE_CUMULATIVE_DIFF_ID_PREFIX = "live-diff-";
 const REFOLDED_TAIL_ENTRIES = 32;
 
 /**
+ * Positions sampled across the committed prefix to detect that the array was
+ * rebuilt underneath the fold. Head and tail alone are not enough:
+ * `reconcileRetainedTranscriptTail` splices retained entries (identity
+ * preserved) ahead of freshly read ones, so a refresh can leave both ends
+ * pointing at the same objects while replacing the middle. Sampling is
+ * bounded, so validation stays O(1) per delta.
+ */
+const PREFIX_ANCHOR_SAMPLES = 16;
+
+/**
  * Turn buckets kept in the fold, beyond which a turn's accumulated details are
  * released. Only `MAX_RETAINED_TURN_GROUPS` ever render, and turn order only
  * grows, so a bucket past this margin can never return to the rail — the
@@ -105,7 +115,6 @@ const RETAINED_TURN_BUCKETS = MAX_RETAINED_TURN_GROUPS + 2;
 
 type FoldedBucket = {
   key: string;
-  orderIndex: number;
   turn?: AppServerThreadTurnMetadata;
   detailsByKey: Map<string, AppServerThreadActivityDetail>;
   cumulative?: AppServerThreadActivityEntry;
@@ -133,8 +142,6 @@ type PendingBucket = {
   details: AppServerThreadActivityDetail[];
   cumulative?: AppServerThreadActivityEntry;
   live: boolean;
-  /** Set when this bucket exists only in the tail / overlay. */
-  orderIndex?: number;
 };
 
 /**
@@ -321,8 +328,8 @@ export function createEditedFileGroupsCollector(): EditedFileGroupsCollector {
   let buckets = new Map<string, FoldedBucket>();
   /** Entries committed to the fold — the length of the validated prefix. */
   let foldedCount = 0;
-  let headEntry: AppServerThreadEntry | undefined;
-  let anchorEntry: AppServerThreadEntry | undefined;
+  /** Sampled {index, entry} pairs proving the committed prefix is unchanged. */
+  let prefixAnchors: Array<{ index: number; entry: AppServerThreadEntry }> = [];
   let foldedForkCreatedAt: number | undefined;
   let pastForkBoundary = true;
   /** Highest order index released from the fold; older buckets never render. */
@@ -334,8 +341,7 @@ export function createEditedFileGroupsCollector(): EditedFileGroupsCollector {
     turnOrder = [];
     buckets = new Map();
     foldedCount = 0;
-    headEntry = undefined;
-    anchorEntry = undefined;
+    prefixAnchors = [];
     foldedForkCreatedAt = forkCreatedAt;
     pastForkBoundary = typeof forkCreatedAt !== "number";
     droppedThrough = -1;
@@ -350,7 +356,6 @@ export function createEditedFileGroupsCollector(): EditedFileGroupsCollector {
     if (!bucket) {
       bucket = {
         key,
-        orderIndex: turnOrder.length,
         turn,
         detailsByKey: new Map(),
         cumulative: undefined,
@@ -380,6 +385,25 @@ export function createEditedFileGroupsCollector(): EditedFileGroupsCollector {
       }
     }
   };
+
+  /** Re-sample the anchors after the committed prefix grows. */
+  const captureAnchors = (entries: readonly AppServerThreadEntry[]): void => {
+    prefixAnchors = [];
+    if (foldedCount === 0) {
+      return;
+    }
+    const step = Math.max(1, Math.floor(foldedCount / PREFIX_ANCHOR_SAMPLES));
+    for (let index = 0; index < foldedCount; index += step) {
+      prefixAnchors.push({ index, entry: entries[index] });
+    }
+    const last = foldedCount - 1;
+    if (prefixAnchors[prefixAnchors.length - 1]?.index !== last) {
+      prefixAnchors.push({ index: last, entry: entries[last] });
+    }
+  };
+
+  const anchorsHold = (entries: readonly AppServerThreadEntry[]): boolean =>
+    prefixAnchors.every((anchor) => entries[anchor.index] === anchor.entry);
 
   const foldEntry = (entry: AppServerThreadEntry): void => {
     if (typeof foldedForkCreatedAt === "number" && !pastForkBoundary) {
@@ -545,21 +569,17 @@ export function createEditedFileGroupsCollector(): EditedFileGroupsCollector {
       const entries = input.entries;
 
       // The fold is only reusable while the array it was built from still
-      // starts and ends (at the committed boundary) with the same entries.
-      // Both anchors are needed: the tail anchor alone would survive a fresh
-      // read of a different thread that happens to be shorter, and the head
-      // alone would survive a truncation. What the anchors cannot see is an
-      // entry rewritten in the middle of the committed prefix while both ends
-      // hold — but a rewrite reaches the renderer through a fresh read, which
-      // replaces every entry object including the head, and anything within
-      // `REFOLDED_TAIL_ENTRIES` of the end is re-folded regardless. A producer
-      // that splices an older entry in place while preserving the first and
-      // last folded ones would need to invalidate this fold explicitly.
+      // carries the same entry objects at every sampled position, so any
+      // rebuild of the transcript — a fresh read, a page refresh, a different
+      // thread — recomputes instead of serving a stale bucket. Sampling covers
+      // bulk replacement, which is the shape every producer here actually
+      // produces; a surgical rewrite of a single unsampled entry older than
+      // `REFOLDED_TAIL_ENTRIES` would still be missed, and needs an explicit
+      // invalidation rather than a wider sample.
       const reusable =
         foldedForkCreatedAt === input.forkCreatedAt
         && entries.length >= foldedCount
-        && (foldedCount === 0
-          || (entries[0] === headEntry && entries[foldedCount - 1] === anchorEntry));
+        && anchorsHold(entries);
       if (!reusable) {
         reset(input.forkCreatedAt);
       }
@@ -573,8 +593,7 @@ export function createEditedFileGroupsCollector(): EditedFileGroupsCollector {
       }
       if (commitThrough > foldedCount) {
         foldedCount = commitThrough;
-        headEntry = entries[0];
-        anchorEntry = entries[foldedCount - 1];
+        captureAnchors(entries);
         dropStaleBuckets();
       }
 
@@ -590,8 +609,9 @@ export function createEditedFileGroupsCollector(): EditedFileGroupsCollector {
         let pending = pendingByKey.get(key);
         if (!pending) {
           pending = { key, turn, details: [], live: false };
-          if (!buckets.has(key)) {
-            pending.orderIndex = turnOrder.length + pendingOrder.length;
+          // A dropped bucket counts as absent: its folded position `break`s the
+          // render walk, so a pending contribution parked there would vanish.
+          if (!buckets.has(key) || buckets.get(key)?.dropped) {
             pendingOrder.push(key);
           }
           pendingByKey.set(key, pending);
