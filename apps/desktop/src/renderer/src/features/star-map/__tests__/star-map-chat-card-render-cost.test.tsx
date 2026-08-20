@@ -234,8 +234,8 @@ describe("StarMapChatCard streaming render cost", () => {
     });
   });
 
-  it("closes the kebab's compaction door once the stream makes it busy", async () => {
-    // The kebab is where a frozen composer does real damage. Compaction
+  it("closes the menu's compaction door once the stream makes it busy", async () => {
+    // The settings menu is where a frozen composer does real damage. Compaction
     // rewrites history, so `secondaryActions` gates it on `threadBusy`; a
     // card still rendering the pre-turn array would leave that door open
     // mid-turn. Asserting on an action whose props never change — "Open in
@@ -260,7 +260,9 @@ describe("StarMapChatCard streaming render cost", () => {
     await screen.findByRole("textbox", { name: "Message Local work" });
     await settleInitialRead(desktopApi);
 
-    fireEvent.click(await screen.findByRole("button", { name: "More actions" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Thread settings" }),
+    );
     const compact = (await screen.findByRole("menuitem", {
       name: "Compact thread",
     })) as HTMLButtonElement;

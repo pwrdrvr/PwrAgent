@@ -68,22 +68,38 @@ describe("CompactComposer", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("shows model, effort, and access mode as one ambient string", () => {
+  it("shows model, effort, and access mode as the status chip", () => {
     renderComposer({
       executionMode: "full-access",
       model: "gpt-5-codex",
       reasoningEffort: "high",
     });
-    expect(screen.getByText("gpt-5-codex · high · Full access")).toBeTruthy();
+    // Segments, not one joined string: the access segment carries its own
+    // warning treatment.
+    expect(screen.getByText("gpt-5-codex")).toBeTruthy();
+    expect(screen.getByText("high")).toBeTruthy();
+    expect(screen.getByText("Full access")).toBeTruthy();
   });
 
-  it("omits optional ambient and action chrome when unconfigured", () => {
+  it("omits optional chip and menu chrome when unconfigured", () => {
     renderComposer();
     expect(
       screen.getByRole("textbox", { name: "Message Thread t1" }),
     ).toBeTruthy();
     expect(screen.queryByText(/·/)).toBeNull();
-    expect(screen.queryByRole("button", { name: "More actions" })).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Thread settings" }),
+    ).toBeNull();
+  });
+
+  it("keeps the chip informational when there is nothing to open", () => {
+    // Model info with no settings callbacks and no actions: readout only,
+    // no menu trigger.
+    renderComposer({ model: "gpt-5-codex" });
+    expect(screen.getByText("gpt-5-codex")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Thread settings" }),
+    ).toBeNull();
   });
 
   it("offers Steer alongside Stop while a turn is running", () => {
@@ -128,7 +144,7 @@ describe("CompactComposer", () => {
     renderComposer({
       secondaryActions: [{ key: "a", label: "Compact thread", onSelect }],
     });
-    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(screen.getByRole("button", { name: "Thread settings" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Compact thread" }));
     expect(onSelect).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("menu")).toBeNull();
@@ -139,7 +155,7 @@ describe("CompactComposer", () => {
     renderComposer({
       secondaryActions: [{ key: "a", label: "Compact thread", onSelect }],
     });
-    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(screen.getByRole("button", { name: "Thread settings" }));
     fireEvent.keyDown(document, { key: "Escape" });
     expect(screen.queryByRole("menu")).toBeNull();
     expect(onSelect).not.toHaveBeenCalled();
@@ -152,9 +168,155 @@ describe("CompactComposer", () => {
         { disabled: true, key: "a", label: "Compact thread", onSelect },
       ],
     });
-    fireEvent.click(screen.getByRole("button", { name: "More actions" }));
+    fireEvent.click(screen.getByRole("button", { name: "Thread settings" }));
     fireEvent.click(screen.getByRole("menuitem", { name: "Compact thread" }));
     expect(onSelect).not.toHaveBeenCalled();
+  });
+});
+
+describe("CompactComposer settings menu", () => {
+  const settingsMenu = (
+    overrides: Partial<
+      NonNullable<Parameters<typeof CompactComposer>[0]["settingsMenu"]>
+    > = {},
+  ) => ({
+    executionModes: [
+      { label: "Default access", mode: "default" as const },
+      { label: "Full access", mode: "full-access" as const },
+    ],
+    models: [
+      { id: "gpt-5-codex", label: "gpt-5-codex" },
+      { id: "gpt-5-spark" },
+    ],
+    reasoningEfforts: ["low", "medium", "high"],
+    supportsFastMode: true,
+    onSelectExecutionMode: vi.fn(),
+    onSelectModel: vi.fn(),
+    onSelectReasoningEffort: vi.fn(),
+    onToggleFastMode: vi.fn(),
+    ...overrides,
+  });
+
+  function openMenu() {
+    fireEvent.click(screen.getByRole("button", { name: "Thread settings" }));
+  }
+
+  it("asks the host to load options when the menu opens", () => {
+    // Lazy on purpose: a card the operator only reads must not pay for a
+    // backend describe it never shows.
+    const onOpen = vi.fn();
+    renderComposer({ settingsMenu: settingsMenu({ onOpen }) });
+    expect(onOpen).not.toHaveBeenCalled();
+    openMenu();
+    expect(onOpen).toHaveBeenCalledTimes(1);
+  });
+
+  it("selects a model from the submenu and closes", () => {
+    const menu = settingsMenu();
+    renderComposer({ model: "gpt-5-codex", settingsMenu: menu });
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Model/ }));
+    const current = screen.getByRole("menuitemradio", { name: "gpt-5-codex" });
+    expect(current.getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "gpt-5-spark" }));
+    expect(menu.onSelectModel).toHaveBeenCalledWith("gpt-5-spark");
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("selects a reasoning effort from the submenu", () => {
+    const menu = settingsMenu();
+    renderComposer({ reasoningEffort: "high", settingsMenu: menu });
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Reasoning/ }));
+    fireEvent.click(screen.getByRole("menuitemradio", { name: "medium" }));
+    expect(menu.onSelectReasoningEffort).toHaveBeenCalledWith("medium");
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("toggles fast mode in place without closing the menu", () => {
+    const menu = settingsMenu();
+    renderComposer({ fastMode: false, settingsMenu: menu });
+    openMenu();
+    const toggle = screen.getByRole("menuitemcheckbox", { name: "Fast mode" });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    fireEvent.click(toggle);
+    expect(menu.onToggleFastMode).toHaveBeenCalledWith(true);
+    // Still open: a toggle is not a leaf selection.
+    expect(screen.getByRole("menu")).toBeTruthy();
+  });
+
+  it("switches access mode from the submenu", () => {
+    const menu = settingsMenu();
+    renderComposer({ executionMode: "default", settingsMenu: menu });
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Access/ }));
+    fireEvent.click(
+      screen.getByRole("menuitemradio", { name: "Full access" }),
+    );
+    expect(menu.onSelectExecutionMode).toHaveBeenCalledWith("full-access");
+    expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  it("returns to the root view through Back", () => {
+    renderComposer({ settingsMenu: settingsMenu() });
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Model/ }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "Back" }));
+    expect(screen.getByRole("menuitem", { name: /Reasoning/ })).toBeTruthy();
+  });
+
+  it("reopens on the root view after browsing a submenu", () => {
+    renderComposer({ settingsMenu: settingsMenu() });
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Model/ }));
+    fireEvent.keyDown(document, { key: "Escape" });
+    openMenu();
+    expect(screen.getByRole("menuitem", { name: /Model/ })).toBeTruthy();
+  });
+
+  it("reports a still-loading submenu instead of an empty list", () => {
+    renderComposer({
+      settingsMenu: settingsMenu({ loading: true, models: undefined }),
+    });
+    openMenu();
+    fireEvent.click(screen.getByRole("menuitem", { name: /Model/ }));
+    expect(screen.getByText("Loading options…")).toBeTruthy();
+  });
+
+  it("hides setting sections whose options cannot load", () => {
+    // No models, no efforts, nothing loading: only Access has anything to
+    // offer, so Model and Reasoning rows do not render at all.
+    renderComposer({
+      settingsMenu: settingsMenu({
+        loading: false,
+        models: [],
+        reasoningEfforts: [],
+        supportsFastMode: false,
+      }),
+    });
+    openMenu();
+    expect(screen.queryByRole("menuitem", { name: /Model/ })).toBeNull();
+    expect(screen.queryByRole("menuitem", { name: /Reasoning/ })).toBeNull();
+    expect(
+      screen.queryByRole("menuitemcheckbox", { name: "Fast mode" }),
+    ).toBeNull();
+    expect(screen.getByRole("menuitem", { name: /Access/ })).toBeTruthy();
+  });
+
+  it("separates settings from host actions in one menu", () => {
+    const onSelect = vi.fn();
+    renderComposer({
+      secondaryActions: [
+        { key: "open-full", label: "Open in full view", onSelect },
+      ],
+      settingsMenu: settingsMenu(),
+    });
+    openMenu();
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Open in full view" }),
+    );
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("menu")).toBeNull();
   });
 });
 

@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
+  type BackendLaunchpadOptions,
   type CelestialIconId,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
@@ -18,6 +19,7 @@ import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   CompactComposer,
   type CompactComposerAction,
+  type CompactComposerSettingsMenu,
 } from "../composer/CompactComposer";
 import { useComposerMentionSources } from "../composer/useComposerMentionSources";
 import type { ComposerMentionSources } from "../composer/useComposerMentions";
@@ -458,39 +460,181 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   }, [interrupt]);
 
   /**
-   * Everything the card can do with only a thread summary and the desktop
-   * bridge. Anything needing the backend list, skills, or launchpad state
-   * lives behind the header's Open button in the full thread view.
+   * Launchpad options for the settings chip's menu, described once per card
+   * and only when the menu first opens — a card the operator only reads
+   * never pays for the backend describe. `listBackends` takes the card's
+   * federation target, so a card over a peer's thread lists the peer's
+   * models.
+   */
+  const [backendOptions, setBackendOptions] = useState<
+    BackendLaunchpadOptions | undefined
+  >();
+  const [backendOptionsState, setBackendOptionsState] = useState<
+    "error" | "idle" | "loaded" | "loading"
+  >("idle");
+  const loadBackendOptions = useCallback(() => {
+    if (backendOptionsState === "loading" || backendOptionsState === "loaded") {
+      return;
+    }
+    if (!desktopApi?.listBackends) return;
+    setBackendOptionsState("loading");
+    desktopApi
+      .listBackends({ federationTarget })
+      .then((response) => {
+        const backend = response.backends.find(
+          (entry) => entry.kind === thread.source,
+        );
+        setBackendOptions(backend?.launchpadOptions);
+        setBackendOptionsState("loaded");
+      })
+      .catch(() => {
+        // Retried on the next open; the submenus report the empty state.
+        setBackendOptionsState("error");
+      });
+  }, [backendOptionsState, desktopApi, federationTarget, thread.source]);
+
+  /**
+   * The settings chip's menu: the same mutations the full composer's chip
+   * row drives, minus what a floating card cannot honestly host (workspace
+   * handoff and environments need the handoff dialog and launchpad state —
+   * those stay behind Open in full view).
+   *
+   * Deliberately delta-stable: nothing here reads the streaming session, so
+   * the memo boundary on the composer holds through a running turn.
+   */
+  const settingsMenu = useMemo<CompactComposerSettingsMenu | undefined>(() => {
+    if (!desktopApi) return undefined;
+    const patchModelSettings = (
+      patch: Partial<
+        Pick<NavigationThreadSummary, "model" | "reasoningEffort" | "fastMode">
+      >,
+    ) => {
+      // Same request construction as useThreadNavigation's
+      // setThreadModelSettings: carry the current model when the patch does
+      // not name one, and only send fastMode for Codex threads.
+      void desktopApi
+        .setThreadModelSettings?.({
+          backend: thread.source,
+          federationTarget,
+          threadId: thread.id,
+          ...("model" in patch
+            ? { model: patch.model }
+            : thread.model
+              ? { model: thread.model }
+              : {}),
+          ...("reasoningEffort" in patch
+            ? { reasoningEffort: patch.reasoningEffort }
+            : {}),
+          ...(thread.source === "codex" && "fastMode" in patch
+            ? { fastMode: patch.fastMode }
+            : {}),
+        })
+        .catch((error: unknown) => {
+          setSendError(
+            error instanceof Error
+              ? error.message
+              : "Could not change model settings.",
+          );
+        });
+    };
+    const models = backendOptions?.models;
+    const currentModelOption = models?.find(
+      (option) => option.id === thread.model,
+    );
+    const reasoningEfforts =
+      currentModelOption?.reasoningEfforts
+      ?? backendOptions?.reasoningEfforts
+      ?? [];
+    const supportsReasoning =
+      currentModelOption?.supportsReasoning
+      ?? Boolean(backendOptions?.reasoningEfforts?.length);
+    const supportsFast =
+      thread.source === "codex"
+        ? currentModelOption?.supportsFast
+          ?? backendOptions?.supportsFastMode
+          ?? false
+        : false;
+    const canPatchModelSettings = Boolean(desktopApi.setThreadModelSettings);
+    return {
+      loading:
+        Boolean(desktopApi.listBackends)
+        && (backendOptionsState === "idle" || backendOptionsState === "loading"),
+      onOpen: loadBackendOptions,
+      executionModes: desktopApi.setThreadExecutionMode
+        ? [
+            { label: "Default access", mode: "default" as const },
+            { label: "Full access", mode: "full-access" as const },
+          ]
+        : undefined,
+      models: models?.map((option) => ({
+        id: option.id,
+        label: option.label,
+      })),
+      reasoningEfforts: supportsReasoning ? reasoningEfforts : [],
+      supportsFastMode: supportsFast,
+      onSelectExecutionMode: desktopApi.setThreadExecutionMode
+        ? (mode) => {
+            void desktopApi
+              .setThreadExecutionMode?.({
+                backend: thread.source,
+                executionMode: mode,
+                federationTarget,
+                threadId: thread.id,
+              })
+              .catch((error: unknown) => {
+                setSendError(
+                  error instanceof Error
+                    ? error.message
+                    : "Could not change access mode.",
+                );
+              });
+          }
+        : undefined,
+      onSelectModel: canPatchModelSettings
+        ? (model) => {
+            // Mirror the full composer's model change: a model that cannot
+            // reason clears the effort, one that cannot go fast clears fast.
+            const nextOption = models?.find((option) => option.id === model);
+            const nextSupportsReasoning =
+              nextOption?.supportsReasoning
+              ?? Boolean(backendOptions?.reasoningEfforts?.length);
+            const nextSupportsFast =
+              thread.source === "codex"
+                ? nextOption?.supportsFast
+                  ?? backendOptions?.supportsFastMode
+                  ?? false
+                : false;
+            patchModelSettings({
+              model,
+              ...(nextSupportsReasoning ? {} : { reasoningEffort: undefined }),
+              ...(nextSupportsFast ? {} : { fastMode: undefined }),
+            });
+          }
+        : undefined,
+      onSelectReasoningEffort: canPatchModelSettings
+        ? (reasoningEffort) => patchModelSettings({ reasoningEffort })
+        : undefined,
+      onToggleFastMode:
+        canPatchModelSettings && thread.source === "codex"
+          ? (enabled) => patchModelSettings({ fastMode: enabled })
+          : undefined,
+    };
+  }, [
+    backendOptions,
+    backendOptionsState,
+    desktopApi,
+    federationTarget,
+    loadBackendOptions,
+    thread,
+  ]);
+
+  /**
+   * Plain actions at the bottom of the settings chip's menu. Anything
+   * needing skills or launchpad state lives behind the header's Open button
+   * in the full thread view.
    */
   const secondaryActions = useMemo<CompactComposerAction[]>(() => {
     const entries: CompactComposerAction[] = [];
-    const nextMode =
-      thread.executionMode === "full-access" ? "default" : "full-access";
-    if (desktopApi?.setThreadExecutionMode) {
-      entries.push({
-        key: "execution-mode",
-        label:
-          nextMode === "full-access"
-            ? "Switch to full access"
-            : "Switch to default access",
-        onSelect: () => {
-          void desktopApi
-            .setThreadExecutionMode?.({
-              backend: thread.source,
-              executionMode: nextMode,
-              federationTarget,
-              threadId: thread.id,
-            })
-            .catch((error: unknown) => {
-              setSendError(
-                error instanceof Error
-                  ? error.message
-                  : "Could not change access mode.",
-              );
-            });
-        },
-      });
-    }
     if (desktopApi?.compactThread) {
       entries.push({
         key: "compact",
@@ -653,12 +797,14 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         busy={session.threadBusy}
         canSteer={canSteer}
         executionMode={thread.executionMode}
+        fastMode={thread.fastMode}
         mentionSources={mentionSources}
         model={thread.model}
         onInterrupt={onInterrupt}
         onSend={send}
         reasoningEffort={thread.reasoningEffort}
         secondaryActions={secondaryActions}
+        settingsMenu={settingsMenu}
         threadTitle={thread.title}
       />
 

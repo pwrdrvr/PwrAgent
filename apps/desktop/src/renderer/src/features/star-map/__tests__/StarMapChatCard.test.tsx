@@ -695,3 +695,130 @@ describe("StarMapChatCard mentions", () => {
     expect(shouldStartCanvasPan(option)).toBe(false);
   });
 });
+
+describe("StarMapChatCard settings menu", () => {
+  beforeEach(() => {
+    resetComposerMentionSourcesCache();
+  });
+
+  function settingsApi(overrides: Partial<DesktopApi> = {}): DesktopApi {
+    return buildApi({
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1,
+        backends: [
+          {
+            kind: "codex",
+            label: "Codex",
+            available: true,
+            methods: [],
+            capabilities: {},
+            executionModes: [],
+            launchpadOptions: {
+              models: [
+                { id: "gpt-5-codex", supportsFast: true },
+                { id: "gpt-5-spark", supportsFast: false },
+              ],
+              reasoningEfforts: ["low", "medium", "high"],
+              supportsFastMode: true,
+            },
+          },
+        ],
+      })),
+      setThreadExecutionMode: vi.fn(async () => ({})),
+      setThreadModelSettings: vi.fn(async () => ({})),
+      ...overrides,
+    } as unknown as Partial<DesktopApi>);
+  }
+
+  async function openSettingsMenu() {
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Thread settings" }),
+    );
+  }
+
+  it("describes the backend once, on first open, with the card's target", async () => {
+    const desktopApi = settingsApi();
+    renderCard({ desktopApi, thread: remoteThread({ model: "gpt-5-codex" }) });
+    await screen.findByRole("button", { name: "Send" });
+    expect(desktopApi.listBackends).not.toHaveBeenCalled();
+
+    await openSettingsMenu();
+    await waitFor(() => {
+      expect(desktopApi.listBackends).toHaveBeenCalledTimes(1);
+    });
+    expect(desktopApi.listBackends).toHaveBeenCalledWith({
+      federationTarget: { scope: "remote", instanceId: "pwr_peer" },
+    });
+
+    // Reopening reuses the loaded options rather than describing again.
+    fireEvent.keyDown(document, { key: "Escape" });
+    await openSettingsMenu();
+    expect(desktopApi.listBackends).toHaveBeenCalledTimes(1);
+  });
+
+  it("changes the model through the submenu, on the thread's own target", async () => {
+    const desktopApi = settingsApi();
+    renderCard({ desktopApi, thread: remoteThread({ model: "gpt-5-codex" }) });
+    await openSettingsMenu();
+
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Model/ }));
+    fireEvent.click(
+      await screen.findByRole("menuitemradio", { name: "gpt-5-spark" }),
+    );
+    await waitFor(() => {
+      expect(desktopApi.setThreadModelSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          federationTarget: { scope: "remote", instanceId: "pwr_peer" },
+          model: "gpt-5-spark",
+          threadId: "t-remote",
+        }),
+      );
+    });
+  });
+
+  it("switches access mode through the Access submenu", async () => {
+    const desktopApi = settingsApi();
+    renderCard({
+      desktopApi,
+      thread: localThread({ executionMode: "default", model: "gpt-5-codex" }),
+    });
+    await openSettingsMenu();
+
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Access/ }));
+    fireEvent.click(
+      await screen.findByRole("menuitemradio", { name: "Full access" }),
+    );
+    await waitFor(() => {
+      expect(desktopApi.setThreadExecutionMode).toHaveBeenCalledWith({
+        backend: "codex",
+        executionMode: "full-access",
+        federationTarget: undefined,
+        threadId: "t-local",
+      });
+    });
+  });
+
+  it("toggles fast mode for a model that supports it", async () => {
+    const desktopApi = settingsApi();
+    renderCard({
+      desktopApi,
+      thread: localThread({ fastMode: false, model: "gpt-5-codex" }),
+    });
+    await openSettingsMenu();
+
+    fireEvent.click(
+      await screen.findByRole("menuitemcheckbox", { name: "Fast mode" }),
+    );
+    await waitFor(() => {
+      expect(desktopApi.setThreadModelSettings).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "codex",
+          fastMode: true,
+          model: "gpt-5-codex",
+          threadId: "t-local",
+        }),
+      );
+    });
+  });
+});
