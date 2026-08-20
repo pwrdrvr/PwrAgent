@@ -36,6 +36,13 @@ export type ComposerDraftSkillToken = {
    * the full provider URL.
    */
   kind?: "directory" | "file" | "pull-request" | "thread";
+  /**
+   * Pull-request chips only: the `pr-chip--*` modifiers that give the chip its
+   * status color, resolved when the chip was minted. Persisted with the draft
+   * so a recovered chip comes back the color it had rather than a gray
+   * "status unknown" dot. Absent on drafts written before chips carried it.
+   */
+  prChipModifiers?: string[];
 };
 
 export type ComposerDraftSnapshotRecord = {

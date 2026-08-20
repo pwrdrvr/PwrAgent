@@ -3123,6 +3123,9 @@ describe("Composer", () => {
     expect(chip).toHaveClass("pr-chip--failing");
     expect(chip).toHaveClass("pr-chip--draft");
     expect(chip).not.toHaveClass("pr-chip--unknown");
+    // The draft modifier only lifts the label; the bar is the affordance the
+    // sidebar chip renders, so the composer chip has to draw it too.
+    expect(chip?.querySelector(".pr-chip__draft-bar")).not.toBeNull();
   });
 
   it("rebuilds a GitLab merge request chip from a prompt-only launchpad restore", async () => {
