@@ -1,15 +1,17 @@
-import { lazy, Suspense, useState, type CSSProperties } from "react";
+import { lazy, Suspense, useMemo, useState, type CSSProperties } from "react";
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
 } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { useBackendSummaries } from "../../lib/useBackendSummaries";
 import { InstanceChip } from "../federation/InstanceGlyph";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { isRemoteFederationTarget } from "@pwragent/shared";
 import { ThreadContextPanel } from "../thread-detail/ThreadContextPanel";
 import type { ContextTabId } from "../thread-detail/context-panels/context-tab";
+import { useStarMapCardContext } from "./star-map-card-context-store";
 import {
   CHAT_CARD_CONTEXT_SPINE_WIDTH,
   CHAT_CARD_TERMINAL_HEIGHT,
@@ -34,13 +36,54 @@ const LazyIntegratedTerminal = lazy(async () => {
  * the host drags — there is no second position to keep in sync.
  */
 export function StarMapContextCard(props: {
+  /** Host chat card's key: the session data the panels need is published
+      under it by the card that owns the thread session. */
+  cardKey: string;
   desktopApi?: DesktopApi;
   thread: NavigationThreadSummary;
   rect: ChatCardRect;
   zIndex: number;
   onClose: () => void;
+  /** The operator's Settings -> Pricing choices. Without them the rail
+      falls back to its own defaults, which shows a thread's spend on a
+      surface the operator switched off and prices it in the wrong
+      currency for a Codex-credits account. */
+  pricingDisplayOptions?: { codexCredits: boolean; usd: boolean };
+  threadPricingSummaryEnabled?: boolean;
 }) {
   const [tab, setTab] = useState<ContextTabId>("info");
+  // Pricing rows and edited-file groups come out of the host's thread
+  // session. Read from a summary alone, Pricing claimed the thread had no
+  // usage at all and Edits claimed it had touched no files, while the full
+  // window showed both for the same thread.
+  const cardContext = useStarMapCardContext(props.cardKey);
+  // Provider status belongs to the instance the THREAD lives on, not to
+  // this window: a map holds cards over several peers at once, so each
+  // satellite reads the backends of its own host's instance.
+  //
+  // Memoized by instance id rather than passed straight through. The hook
+  // rebuilds `refresh` whenever the target's identity changes and refetches
+  // on it, while `thread.federation.ref.target` is replaced on every
+  // navigation poll and `readRendererFederationTarget()` builds a fresh
+  // object per call — either one, handed over inline, refetches on every
+  // render forever.
+  const remoteInstanceId = useMemo(() => {
+    const target =
+      props.thread.federation?.ref.target ?? readRendererFederationTarget();
+    return target && isRemoteFederationTarget(target)
+      ? target.instanceId
+      : undefined;
+  }, [props.thread.federation?.ref.target]);
+  const federationTarget = useMemo(
+    () =>
+      remoteInstanceId
+        ? ({ scope: "remote", instanceId: remoteInstanceId } as const)
+        : undefined,
+    [remoteInstanceId],
+  );
+  const backendSummaries = useBackendSummaries(props.desktopApi, {
+    federationTarget,
+  });
   const style: CSSProperties = {
     left: `${props.rect.left}px`,
     top: `${props.rect.top}px`,
@@ -84,11 +127,26 @@ export function StarMapContextCard(props: {
       >
         <ThreadContextPanel
           activeTab={tab}
-          backends={[]}
+          activeTurnId={cardContext.activeTurnId}
+          backendError={backendSummaries.error}
+          backends={backendSummaries.backends}
           desktopApi={props.desktopApi}
+          editedFileGroups={cardContext.editedFileGroups}
+          // The rail is the only edits surface a chat card has: the card
+          // composes through CompactComposer and renders no above-composer
+          // work rail. Left at the panel's "above" default, the dock toggle
+          // came up accent-filled and aria-pressed, claiming a second copy
+          // that does not exist on this surface.
+          editedFilesDock="sidebar"
           onActiveTabChange={setTab}
           pinned
+          // The Info tab prints this verbatim as its "Desktop" row, and
+          // falls back to "Unknown" when it is absent.
+          platform={props.desktopApi?.platform}
+          pricing={cardContext.pricing}
+          pricingDisplayOptions={props.pricingDisplayOptions}
           thread={props.thread}
+          threadPricingSummaryEnabled={props.threadPricingSummaryEnabled}
           width={props.rect.width - CHAT_CARD_CONTEXT_SPINE_WIDTH}
         />
       </div>
