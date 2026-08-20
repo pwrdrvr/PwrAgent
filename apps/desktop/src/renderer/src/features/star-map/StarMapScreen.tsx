@@ -2029,18 +2029,27 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // frame, so it is already composing with whatever landed since the
     // last one.
     //
+    // Each is handed the CANVAS delta and converts it at the scale IT
+    // paints with, which is not always the live view's. `dx * scale` is
+    // only the right number of pixels for a writer painting at that
+    // scale, and both of these can be painting at another one.
+    //
     // The drag's base is stepped in place, because the drag holds this
-    // object.
+    // object — at `panBase.scale`, the scale it captured at pointerdown
+    // and keeps painting with, rather than a scale a pinch has since
+    // committed underneath it.
     const panBase = panBaseRef.current;
     if (panBase) {
-      panBase.x -= step.x;
-      panBase.y -= step.y;
+      panBase.x -= dx * panBase.scale;
+      panBase.y -= dy * panBase.scale;
     }
     // A ⌘K flight carries both ends of its leg, and its destination is a
-    // card that moved with everything else. Stepped by the whole `step`
-    // even when the clamp below rescues the view by less: the card moved
-    // that far, so that is where the flight has to land.
-    flight.stepBy(step);
+    // card that moved with everything else. It converts per end, because a
+    // flight that starts zoomed out lands at 1:1 and the two ends owe
+    // different pixel counts for the same shift. Corrected by the whole
+    // delta even when the clamp below rescues the view by less: the card
+    // moved that far, so that is where the flight has to land.
+    flight.stepByCanvasDelta({ x: dx, y: dy });
     commitView(
       clampStarMapView({
         view: { ...current, x: current.x - step.x, y: current.y - step.y },

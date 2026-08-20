@@ -741,6 +741,72 @@ describe("star map view stability", () => {
     expect(arrived.x).toBeCloseTo(VIEWPORT.width / 2, 6);
     expect(arrived.y).toBeCloseTo(VIEWPORT.height / 2, 6);
   });
+
+  /**
+   * The same re-base, on a flight that is also ZOOMING.
+   *
+   * A leg is two views, and they need not share a scale: a pick made from
+   * further out lands at 1:1 whatever the operator was on, so the same
+   * canvas shift is worth a different number of viewport pixels at the
+   * destination than at the launch. Correcting both ends with one
+   * pre-multiplied pixel step — the live view's, which mid-flight is
+   * neither end's — under-corrects the landing by the ratio between them,
+   * and the flight arrives beside the card again with every 1:1 test still
+   * green, because at 1:1 the two scales are the same number.
+   */
+  it("lands on the card when the re-base arrives mid-zoom", async () => {
+    seedLayout("orbit");
+    const held = [...threadsIn("PwrSnap", 6), ...threadsIn("PwrAgent", 3)];
+    const { rerender } = renderMap({ threads: held });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Select the PwrAgent cards/ }),
+      ).toBeTruthy();
+    });
+
+    // Out to 0.5, so the flight has to climb back to 1:1 as it travels.
+    // Still above STAR_MAP_OVERVIEW_ZOOM, so the cards are drawn and the
+    // pick has a rect to fly to.
+    fireEvent.wheel(document.querySelector(".star-map__viewport")!, {
+      deltaY: 120,
+      ctrlKey: true,
+      clientX: 400,
+      clientY: 300,
+    });
+    expect(readTransform().scale).toBe(0.5);
+
+    await flyToThread("PwrAgent-2");
+    await flushFrame();
+    await flushFrame();
+    // Precondition: the leg really does span two scales, which is the
+    // whole subject here.
+    expect(readTransform().scale).toBeLessThan(1);
+    const laidOut = canvasPositionOf("PwrAgent");
+
+    rerender(
+      <StarMapScreen
+        desktopApi={buildDesktopApi()}
+        localThreads={[...held, ...threadsIn("PwrDrvr", 4)]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Select the PwrDrvr cards/ }),
+      ).toBeTruthy();
+    });
+    expect(canvasPositionOf("PwrAgent").x).not.toBeCloseTo(laidOut.x, 3);
+
+    await settleFlight();
+
+    expect(readTransform().scale).toBe(1);
+    const arrived = cardCenterOnScreen("codex:PwrAgent-2");
+    expect(arrived.x).toBeCloseTo(VIEWPORT.width / 2, 6);
+    expect(arrived.y).toBeCloseTo(VIEWPORT.height / 2, 6);
+  });
 });
 
 /**
