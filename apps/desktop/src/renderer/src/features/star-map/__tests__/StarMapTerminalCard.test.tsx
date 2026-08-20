@@ -6,8 +6,10 @@ import {
   clampTerminalCardHeight,
   StarMapTerminalCard,
   STAR_MAP_SATELLITE_BAR_HEIGHT,
+  STAR_MAP_TERMINAL_CARD_HEIGHT,
   STAR_MAP_TERMINAL_CARD_MIN_HEIGHT,
   STAR_MAP_TERMINAL_GRIP_HEIGHT,
+  terminalCardMaxHeight,
 } from "../StarMapSatelliteCards";
 
 // The card lazy-loads the real pane to keep xterm out of the map's bundle;
@@ -132,8 +134,36 @@ describe("StarMapTerminalCard", () => {
 
   it("never shrinks the card below its chrome plus a usable terminal", () => {
     expect(clampTerminalCardHeight(0)).toBe(STAR_MAP_TERMINAL_CARD_MIN_HEIGHT);
-    expect(clampTerminalCardHeight(Number.NaN)).toBeGreaterThan(
-      STAR_MAP_TERMINAL_CARD_MIN_HEIGHT,
-    );
+  });
+
+  // A clamp that can hand back an out-of-range number is worse than useless
+  // to its next caller, so the non-finite fallback takes the bounds too.
+  //
+  // The window has to be SHORT for this to bite: at jsdom's default 768 the
+  // ceiling is 522 and the unclamped fallback of 300 sits under it, so the
+  // assertion would agree with the bug. At 400 the ceiling is 272.
+  it("keeps even its fallback inside the bounds it enforces", () => {
+    const realHeight = window.innerHeight;
+    Object.defineProperty(window, "innerHeight", {
+      configurable: true,
+      value: 400,
+    });
+    try {
+      expect(terminalCardMaxHeight()).toBeLessThan(
+        STAR_MAP_TERMINAL_CARD_HEIGHT,
+      );
+      for (const value of [Number.NaN, Number.POSITIVE_INFINITY]) {
+        const clamped = clampTerminalCardHeight(value);
+        expect(clamped).toBeGreaterThanOrEqual(
+          STAR_MAP_TERMINAL_CARD_MIN_HEIGHT,
+        );
+        expect(clamped).toBeLessThanOrEqual(terminalCardMaxHeight());
+      }
+    } finally {
+      Object.defineProperty(window, "innerHeight", {
+        configurable: true,
+        value: realHeight,
+      });
+    }
   });
 });

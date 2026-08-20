@@ -380,6 +380,31 @@ describe("IntegratedTerminal", () => {
     expect(screen.queryByLabelText("Resize terminal")).not.toBeInTheDocument();
     expect(screen.queryByText("Peer One")).not.toBeInTheDocument();
   });
+  // The hosting card owns the resize affordance, so a height change must not
+  // pull focus off the card's grip and into the shell.
+  it("keeps focus off the shell when a hosted card resizes it", async () => {
+    const api = terminalApiStub();
+    const view = (height: number) => (
+      <IntegratedTerminal
+        chrome="hosted"
+        desktopApi={api}
+        threadKey="codex:thread-a"
+        cwd="/repo/a"
+        height={height}
+        onClose={() => undefined}
+        onExit={() => undefined}
+      />
+    );
+    const { rerender } = render(view(260));
+
+    await waitFor(() => expect(xtermState.instances).toHaveLength(1));
+    const terminal = xtermState.instances[0]!;
+    terminal.focus.mockClear();
+
+    rerender(view(300));
+
+    expect(terminal.focus).not.toHaveBeenCalled();
+  });
 });
 
 function terminalApiStub(): DesktopApi {

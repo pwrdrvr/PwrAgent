@@ -271,11 +271,14 @@ export function terminalCardMaxHeight(): number {
 }
 
 export function clampTerminalCardHeight(value: number): number {
-  if (!Number.isFinite(value)) {
-    return STAR_MAP_TERMINAL_CARD_HEIGHT;
-  }
+  // The fallback goes through the same bounds as everything else: a short
+  // window can put the default above the maximum, and a clamp that can
+  // return out of range is worse than useless to its next caller.
+  const requested = Number.isFinite(value)
+    ? Math.round(value)
+    : STAR_MAP_TERMINAL_CARD_HEIGHT;
   return Math.min(
     terminalCardMaxHeight(),
-    Math.max(STAR_MAP_TERMINAL_CARD_MIN_HEIGHT, Math.round(value)),
+    Math.max(STAR_MAP_TERMINAL_CARD_MIN_HEIGHT, requested),
   );
 }

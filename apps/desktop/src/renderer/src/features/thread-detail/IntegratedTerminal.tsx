@@ -239,8 +239,15 @@ export function IntegratedTerminal({
       return;
     }
     fitAndResizeRef.current();
-    terminalRef.current?.focus();
-  }, [height, visible]);
+    // Standalone, the only thing that changes this height is the pane's own
+    // handle, and taking focus back afterwards is the point. Hosted, the
+    // height changes because the CARD's grip moved — pulling focus here put
+    // it in the shell after one keypress, so the operator's next arrow key
+    // went to the PTY instead of resizing.
+    if (!hosted) {
+      terminalRef.current?.focus();
+    }
+  }, [height, hosted, visible]);
 
   const resizeBy = (delta: number) => {
     onHeightChange?.(clampTerminalHeight(height + delta));
