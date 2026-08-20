@@ -3823,41 +3823,97 @@ export function StarMapScreen(props: StarMapScreenProps) {
           </button>
         </p>
       ) : null}
-      <div className="star-map__chrome">
-        {/* Same wordmark primitive as the sidebar/Settings nav so the brand
-            reads identically across every window (theme-contract test). */}
-        <p className="sidebar__brand">
-          Pwr<span className="sidebar__brand-accent">Agent</span>
-        </p>
-        {/* ⌘K is the map's only way to reach a card it is not drawing, and
-            a keyboard-only door on a surface driven by the pointer is a
-            door nobody finds. The chord rides the label so learning it
-            costs one glance. */}
-        <button
-          type="button"
-          className="star-map__filter-chip star-map__find"
-          aria-label="Find a thread on the map"
-          onClick={() => setJumpOpen(true)}
-        >
-          <SearchIcon size={13} />
-          <span>Find</span>
-          <span className="star-map__find-chord" aria-hidden="true">
-            {formatPrimaryAccel("K")}
-          </span>
-        </button>
-        <StarMapViewOptions
-          preferences={preferences}
-          onChange={(next) => {
-            // A lens change re-places every card, and one lens (projects)
-            // paints no selected state at all. Carrying a selection across
-            // that boundary leaves the operator holding cards they can no
-            // longer point at — which the kebab would then act on.
-            if (next.layout !== preferences.layout) setSelection(new Set());
-            setPreferences(next);
-            writeStoredPreferences(next);
-          }}
-          onResetView={resetView}
-        />
+      {/* The map's whole top band: chrome on the left, filter chips in the
+          middle, and a right-hand slot for map actions. One grid row, so
+          the three cannot reach each other - they used to be separately
+          positioned islands and the chrome painted over the first filter
+          chip. See `.star-map__top-band` for the drag model that lets a
+          full-width band sit inside the window's only drag handle. */}
+      <div className="star-map__top-band">
+        <div className="star-map__chrome">
+          {/* Same wordmark primitive as the sidebar/Settings nav so the brand
+              reads identically across every window (theme-contract test). */}
+          <p className="sidebar__brand">
+            Pwr<span className="sidebar__brand-accent">Agent</span>
+          </p>
+          {/* ⌘K is the map's only way to reach a card it is not drawing, and
+              a keyboard-only door on a surface driven by the pointer is a
+              door nobody finds. The chord rides the label so learning it
+              costs one glance. */}
+          <button
+            type="button"
+            className="star-map__filter-chip star-map__find"
+            aria-label="Find a thread on the map"
+            onClick={() => setJumpOpen(true)}
+          >
+            <SearchIcon size={13} />
+            <span>Find</span>
+            <span className="star-map__find-chord" aria-hidden="true">
+              {formatPrimaryAccel("K")}
+            </span>
+          </button>
+          <StarMapViewOptions
+            preferences={preferences}
+            onChange={(next) => {
+              // A lens change re-places every card, and one lens (projects)
+              // paints no selected state at all. Carrying a selection across
+              // that boundary leaves the operator holding cards they can no
+              // longer point at — which the kebab would then act on.
+              if (next.layout !== preferences.layout) setSelection(new Set());
+              setPreferences(next);
+              writeStoredPreferences(next);
+            }}
+            onResetView={resetView}
+          />
+        </div>
+        <div className="star-map__filters" role="group" aria-label="Thread filters">
+          {STAR_MAP_FILTERS.map((definition) => {
+            const state = filterState(filterSelection, definition.key);
+            const next =
+              state === "neutral"
+                ? "show only these"
+                : state === "include"
+                  ? "hide these instead"
+                  : "stop filtering on this";
+            return (
+              <button
+                key={definition.key}
+                type="button"
+                className={`star-map__filter-chip star-map__filter-chip--${state}`}
+                // Tri-state, so `aria-pressed` cannot describe it: exclude is
+                // neither pressed nor unpressed. The label carries the state
+                // and what the next click does.
+                aria-label={`${definition.label}: ${
+                  state === "neutral"
+                    ? "not filtered"
+                    : state === "include"
+                      ? "showing only these"
+                      : "hidden"
+                } — click to ${next}`}
+                onClick={() => cycleFilter(definition.key)}
+              >
+                {state === "exclude" ? (
+                  <span className="star-map__filter-mark" aria-hidden="true">
+                    −
+                  </span>
+                ) : null}
+                <span>{definition.label}</span>
+                <span className="star-map__filter-count">
+                  {filterCounts[definition.key]}
+                </span>
+              </button>
+            );
+          })}
+          {hasFilterSelection ? (
+            <button
+              type="button"
+              className="star-map__filter-clear"
+              onClick={clearFilters}
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
       </div>
       {/* Two different settings can empty the map, and a blank star field
           looks identical either way. Name whichever one is responsible —
@@ -3922,54 +3978,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
           </button>
         </div>
       ) : null}
-      <div className="star-map__filters" role="group" aria-label="Thread filters">
-        {STAR_MAP_FILTERS.map((definition) => {
-          const state = filterState(filterSelection, definition.key);
-          const next =
-            state === "neutral"
-              ? "show only these"
-              : state === "include"
-                ? "hide these instead"
-                : "stop filtering on this";
-          return (
-            <button
-              key={definition.key}
-              type="button"
-              className={`star-map__filter-chip star-map__filter-chip--${state}`}
-              // Tri-state, so `aria-pressed` cannot describe it: exclude is
-              // neither pressed nor unpressed. The label carries the state
-              // and what the next click does.
-              aria-label={`${definition.label}: ${
-                state === "neutral"
-                  ? "not filtered"
-                  : state === "include"
-                    ? "showing only these"
-                    : "hidden"
-              } — click to ${next}`}
-              onClick={() => cycleFilter(definition.key)}
-            >
-              {state === "exclude" ? (
-                <span className="star-map__filter-mark" aria-hidden="true">
-                  −
-                </span>
-              ) : null}
-              <span>{definition.label}</span>
-              <span className="star-map__filter-count">
-                {filterCounts[definition.key]}
-              </span>
-            </button>
-          );
-        })}
-        {hasFilterSelection ? (
-          <button
-            type="button"
-            className="star-map__filter-clear"
-            onClick={clearFilters}
-          >
-            Clear
-          </button>
-        ) : null}
-      </div>
     </div>
   );
 }

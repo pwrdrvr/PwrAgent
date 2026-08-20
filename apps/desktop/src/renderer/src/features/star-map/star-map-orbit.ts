@@ -413,6 +413,11 @@ export function computeOrbitPlacement(params: {
  * and overhangs the card's top-right corner, so dragging the card from it
  * is the right behaviour — but it is a change, not just a port.
  *
+ * `.star-map__top-band` covers the whole top row - chrome, filter chips,
+ * and whatever lands in the actions slot - so a control added to the band
+ * never has to be added here too. The two older entries stay because they
+ * are named directly by tests and read as the specific things they are.
+ *
  * `.star-map-chat-card` is listed for the same reason, and it became load
  * bearing the moment chat cards moved INSIDE the canvas: a press on a
  * chat card bubbles to the viewport, so without it the card dragged and
@@ -441,6 +446,7 @@ export function shouldStartCanvasPan(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   return !target.closest(
     "button, a, input, label, .star-map-card-shell, .star-map-chat-card,"
-      + " .star-map-satellite-card, .star-map__chrome, .star-map__filters",
+      + " .star-map-satellite-card, .star-map__top-band, .star-map__chrome,"
+      + " .star-map__filters",
   );
 }

@@ -51,6 +51,78 @@ function countStarMapWindows(
     .filter((win) => win.url().includes("#star-map")).length;
 }
 
+
+/**
+ * Resize the map's BrowserWindow and wait for the renderer to lay out at
+ * the new width. Playwright's `setViewportSize` is unsupported on an
+ * Electron page, so the OS window is the only handle.
+ */
+async function resizeStarMapWindow(
+  app: Awaited<ReturnType<typeof launchElectronApp>>,
+  mapWindow: Page,
+  size: { width: number; height: number },
+): Promise<void> {
+  await app.electronApp.evaluate(({ BrowserWindow }, bounds) => {
+    const target = BrowserWindow.getAllWindows().find((win) =>
+      win.webContents.getURL().includes("#star-map"),
+    );
+    if (!target) throw new Error("Expected the Star Map BrowserWindow");
+    target.setSize(bounds.width, bounds.height);
+  }, size);
+  await expect
+    .poll(() => mapWindow.evaluate(() => window.innerWidth))
+    .toBeLessThanOrEqual(size.width);
+}
+
+/**
+ * The top band's slots must not overlap at any window width, and nothing
+ * may sit on top of a filter chip.
+ *
+ * The rect check is the structural one: `.star-map__chrome` and
+ * `.star-map__filters` used to be independently positioned islands, so
+ * the chrome (the higher z-index) painted over the leading chip and ate
+ * its clicks. The hit test is the behavioural one, and it is wider — it
+ * catches ANY element covering a chip, not just the chrome, which is the
+ * shape axe reported as `target-size` ("partially obscured, smallest
+ * space is 79.5px by 12px"). Both are cheaper than waiting for the a11y
+ * gate to notice, and they say what actually broke.
+ */
+async function expectTopBandLaidOut(mapWindow: Page, at: string): Promise<void> {
+  const chrome = await mapWindow.locator(".star-map__chrome").boundingBox();
+  const filters = await mapWindow.locator(".star-map__filters").boundingBox();
+  if (!chrome || !filters) {
+    throw new Error(`Expected both top-band slots to be laid out ${at}`);
+  }
+
+  const overlaps =
+    chrome.x < filters.x + filters.width
+    && filters.x < chrome.x + chrome.width
+    && chrome.y < filters.y + filters.height
+    && filters.y < chrome.y + chrome.height;
+  expect(
+    overlaps,
+    `top band slots overlap ${at}: chrome ${JSON.stringify(chrome)},`
+      + ` filters ${JSON.stringify(filters)}`,
+  ).toBe(false);
+
+  const covered = await mapWindow.evaluate(() =>
+    [...document.querySelectorAll(".star-map__filter-chip")]
+      .filter((chip) => !chip.closest(".star-map__chrome"))
+      .map((chip) => {
+        const box = chip.getBoundingClientRect();
+        const top = document.elementFromPoint(
+          box.x + box.width / 2,
+          box.y + box.height / 2,
+        );
+        return top?.closest(".star-map__filters")
+          ? undefined
+          : `${chip.textContent} covered by ${top?.className ?? "nothing"}`;
+      })
+      .filter((entry): entry is string => entry !== undefined),
+  );
+  expect(covered, `filter chips obscured ${at}`).toEqual([]);
+}
+
 test("opens a thread from the star map window in the main window", async () => {
   const app = await launchElectronApp({
     fixturePath: path.resolve(specDir, "fixtures/star-map/replay.fixture.json"),
@@ -121,6 +193,43 @@ test("opens a thread from the star map window in the main window", async () => {
     await expect(
       starMap.getByRole("button", { name: "Close Star Map" }),
     ).toHaveCount(0);
+  } finally {
+    await app.close();
+  }
+});
+
+// The map's controls all live over the top of the sky, in the same band,
+// and for a long time they were three separately positioned islands with
+// nothing reserving space between them. On a 1280px window the chrome
+// already reached the leading filter chip; a third chrome control covered
+// it, and narrow windows overlapped outright. `.star-map__top-band` makes
+// them one grid row so the collision cannot happen — this is the gate on
+// that, at the default width and at the window's 800px minimum, where the
+// old layout was already broken.
+test("keeps the star map's top band from overlapping itself", async () => {
+  const app = await launchElectronApp({
+    fixturePath: path.resolve(specDir, "fixtures/star-map/replay.fixture.json"),
+  });
+
+  try {
+    await app.window.getByRole("button", { name: "Open Star Map" }).click();
+    const mapWindow = await waitForStarMapWindow(app);
+    const starMap = mapWindow.getByRole("region", {
+      name: "Star Map",
+      exact: true,
+    });
+    await expect(starMap).toBeVisible();
+    await expect(
+      starMap.getByRole("group", { name: "Thread filters" }),
+    ).toBeVisible();
+
+    await expectTopBandLaidOut(mapWindow, "at the default window width");
+
+    // `minWidth` in star-map-window.ts. Below roughly 1100px the old
+    // centred strip walked left into the chrome, so this is the width
+    // that would have failed first.
+    await resizeStarMapWindow(app, mapWindow, { width: 800, height: 720 });
+    await expectTopBandLaidOut(mapWindow, "at the minimum window width");
   } finally {
     await app.close();
   }

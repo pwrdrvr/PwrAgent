@@ -65,9 +65,11 @@ export function StarMapWindow() {
       {isMac ? (
         // Purely a window-drag handle: `-webkit-app-region: drag` means
         // macOS takes the mouse-down before the DOM sees it, so nothing
-        // here can (or should) start a canvas pan. The map's own top
-        // chrome and filter chips carve `no-drag` holes so they stay
-        // clickable inside the strip. Decorative to assistive tech.
+        // here can (or should) start a canvas pan. The slots of the map's
+        // own top band carve `no-drag` holes so their controls stay
+        // clickable inside the strip; the band between them does not, or
+        // this window would have no drag handle left. Decorative to
+        // assistive tech.
         <div aria-hidden="true" className="star-map-window__titlebar" />
       ) : null}
       {isWindows ? (

@@ -960,18 +960,21 @@ describe("Tangerine Terminal theme contract", () => {
     expect(stripRule).toContain("-webkit-app-region: drag;");
     expect(stripRule).toContain("position: absolute;");
     expect(stripRule).toContain("backdrop-filter:");
-    // Below the filters (3) and chrome (4) it hosts, above the canvas.
-    expect(readZIndex(stripRule)).toBeLessThan(
-      readZIndex(extractRuleBody(css, ".star-map__filters")),
-    );
-    expect(readZIndex(stripRule)).toBeLessThan(
-      readZIndex(extractRuleBody(css, ".star-map__chrome")),
-    );
+    // Below the top band it hosts, above the canvas.
+    const bandRule = extractRuleBody(css, ".star-map__top-band");
+    expect(readZIndex(stripRule)).toBeLessThan(readZIndex(bandRule));
+    // The band is full width, so it is the one element in the strip that
+    // must NOT opt out: a no-drag rect across the whole band would leave
+    // macOS with no handle on this window at all. It passes its pointer
+    // events through for the same reason - the gaps between its slots are
+    // drag strip, not chrome.
+    expect(bandRule).not.toContain("-webkit-app-region");
+    expect(bandRule).toContain("pointer-events: none;");
+    // Its slots take both back. Declared on the band's descendants rather
+    // than per slot, so a control added to any slot is clickable without
+    // anyone remembering this rule exists.
     expect(css).toMatch(
-      /\.star-map__chrome,\s*\.star-map__chrome \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
-    );
-    expect(css).toMatch(
-      /\.star-map__filters,\s*\.star-map__filters \*,[\s\S]*?\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?\}/,
+      /\.star-map__top-band > \*,\s*\.star-map__top-band > \* \*\s*\{[\s\S]*?-webkit-app-region:\s*no-drag;[\s\S]*?pointer-events:\s*auto;[\s\S]*?\}/,
     );
     // The card-level dialogs are body-portaled and full-window, so their
     // scrim overlaps the strip's rect and would otherwise turn a
@@ -990,6 +993,41 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /:root\[data-fullscreen="true"\] \.star-map-window__titlebar\s*\{[\s\S]*?display:\s*none;[\s\S]*?\}/,
     );
+  });
+
+  it("lays the Star Map's top band out as one grid row its slots cannot escape", () => {
+    // The band's three clusters used to position themselves independently
+    // — chrome pinned to the left edge, chips translated to the window's
+    // centre — with nothing reserving space between them, so the chrome
+    // painted over the first filter chip and swallowed its clicks. Grid
+    // tracks cannot overlap; this is the assertion that the row stays a
+    // row rather than reverting to islands.
+    const bandRule = extractRuleBody(css, ".star-map__top-band");
+    expect(bandRule).toContain("display: grid;");
+    // Equal outer tracks, so the chip strip stays centred on the WINDOW
+    // while there is room for it. `auto 1fr auto` would centre it in
+    // whatever the chrome left over, which is a different position.
+    expect(bandRule).toContain("grid-template-columns: 1fr auto 1fr;");
+
+    const chromeRule = extractRuleBody(css, ".star-map__chrome");
+    const filtersRule = extractRuleBody(css, ".star-map__filters");
+    // Neither slot positions itself any more; the band decides where they
+    // sit. A `position: absolute` creeping back into either one is the
+    // regression, not a style preference.
+    expect(chromeRule).not.toContain("position: absolute;");
+    expect(filtersRule).not.toContain("position: absolute;");
+    // And neither may stretch across its track: a grid item defaults to
+    // `stretch`, the no-drag rect follows the box, and a stretched slot
+    // would take that whole column of sky away from window dragging.
+    expect(chromeRule).toContain("justify-self: start;");
+    expect(filtersRule).toContain("justify-self: center;");
+    expect(extractRuleBody(css, ".star-map__actions")).toContain(
+      "justify-self: end;",
+    );
+    // Wrapping is what lets the middle track shrink — its min-content
+    // becomes one chip rather than the whole strip — so a narrow window
+    // stacks the chips instead of pushing them under the chrome.
+    expect(filtersRule).toContain("flex-wrap: wrap;");
   });
 
   it("right-aligns the keyboard shortcut hint chip on context menu items", () => {
