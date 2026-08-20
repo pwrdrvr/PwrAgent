@@ -279,10 +279,12 @@ function createDeferred<T>(): {
 //    argument pairs every `commit` used to carry. A commit is authored the
 //    same way whether the test set identity up or not, so no repo here can
 //    fail on "please tell me who you are" for having forgotten the setup.
-// 2. Ambient configuration. GIT_CONFIG_GLOBAL/GIT_CONFIG_SYSTEM point at an
-//    empty file, so a CI runner's global gitconfig cannot reach these repos:
-//    no credential helper, no `init.defaultBranch`, no `commit.gpgsign`
-//    waiting on a passphrase. What the assertions see is what this file set.
+// 2. Ambient configuration. Global config is redirected to an empty file and
+//    system config is switched off, so a runner's gitconfig cannot reach
+//    these repos: no credential helper, no `init.defaultBranch`, no
+//    `commit.gpgsign` waiting on a passphrase. What the assertions see is
+//    what this file set. Repo-location variables are unset for the same
+//    reason — see the entries below.
 // 3. Prompting. A git that blocks on a terminal prompt does not fail, it
 //    hangs, and a hang is charged to the whole test timeout rather than to
 //    the command that caused it.
@@ -300,8 +302,27 @@ writeFileSync(emptyGitConfigPath, "");
 
 const gitTestEnv: NodeJS.ProcessEnv = {
   ...process.env,
+  // A repo-location variable inherited from the outside would redirect every
+  // command below at whatever repo the suite was launched from — `git rebase
+  // -x`, a pre-push hook, and any npm lifecycle script running inside a git
+  // operation all export these. `git -C <fixture>` does not override them, so
+  // an inherited GIT_DIR would point `add` and `commit` at the outer repo's
+  // index while the fixture path only chose the cwd. Node drops env keys whose
+  // value is undefined, so this unsets them for the child.
+  GIT_DIR: undefined,
+  GIT_WORK_TREE: undefined,
+  GIT_INDEX_FILE: undefined,
+  GIT_OBJECT_DIRECTORY: undefined,
+  GIT_COMMON_DIR: undefined,
   GIT_CONFIG_GLOBAL: emptyGitConfigPath,
   GIT_CONFIG_SYSTEM: emptyGitConfigPath,
+  // GIT_CONFIG_SYSTEM replaces `$(prefix)/etc/gitconfig`, but Git for Windows
+  // reads a second system-level file at `%PROGRAMDATA%\Git\config` that the
+  // installer writes to — including, in a default install, a credential
+  // helper. That one is gated on GIT_CONFIG_NOSYSTEM rather than on the path
+  // override, so the path override alone would leave the exact setting this
+  // env exists to keep out, on the exact platform it matters for.
+  GIT_CONFIG_NOSYSTEM: "1",
   GIT_AUTHOR_NAME: "PwrAgent Tests",
   GIT_AUTHOR_EMAIL: "tests@pwragent.local",
   GIT_COMMITTER_NAME: "PwrAgent Tests",
