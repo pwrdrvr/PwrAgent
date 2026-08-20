@@ -140,13 +140,13 @@ describe("computeOrbitPlacement", () => {
   });
 
   /**
-   * The screen holds the operator's view against this point, so it has to
-   * be the truth about where the map's origin ended up. The canvas is
-   * normalised around whatever is drawn, so a cloud growing on the left or
-   * top edge slides every body — a translation the view has to undo, and
-   * cannot undo without being told about it.
+   * Why holding the view on a single body is enough to hold the whole map
+   * still: the canvas is normalised around whatever is drawn, so a cloud
+   * growing on the left or top edge slides every body by the same amount.
+   * The screen anchors the view to one of them (`viewAnchor`) and gets the
+   * rest for free.
    */
-  it("reports where the origin landed on the canvas", () => {
+  it("slides every body together when a cloud grows on an edge", () => {
     const counts = new Map([
       ["pwr_local", 6],
       ["pwr_a", 3],
@@ -168,23 +168,17 @@ describe("computeOrbitPlacement", () => {
       cardWidth: 220,
       extents,
     });
-    // The hub is the origin, so its canvas position is the origin's.
-    const hub = placement.instances.find((instance) => instance.isHub)!;
-    expect(placement.origin).toEqual({ x: hub.x, y: hub.y });
-
     const grown = computeOrbitPlacement({
       nodes,
       cardCounts: counts,
       cardWidth: 220,
       extents: new Map(extents).set("pwr_a", { rx: 420, ry: 380 }),
     });
-    expect(grown.origin).not.toEqual(placement.origin);
-    // Every body moved by exactly the origin's shift, which is what makes
-    // compensating for it at the view enough to hold the map still.
-    const shift = {
-      x: grown.origin.x - placement.origin.x,
-      y: grown.origin.y - placement.origin.y,
-    };
+
+    const hub = placement.instances.find((instance) => instance.isHub)!;
+    const movedHub = grown.instances.find((instance) => instance.isHub)!;
+    const shift = { x: movedHub.x - hub.x, y: movedHub.y - hub.y };
+    expect(Math.hypot(shift.x, shift.y)).toBeGreaterThan(0);
     for (const instance of placement.instances) {
       const moved = grown.instances.find(
         (candidate) => candidate.instanceId === instance.instanceId,

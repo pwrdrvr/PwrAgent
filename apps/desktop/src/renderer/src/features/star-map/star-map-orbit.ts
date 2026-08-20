@@ -15,16 +15,6 @@ export type OrbitPlacement = {
   links: { fromInstanceId: string; toInstanceId: string }[];
   canvasWidth: number;
   canvasHeight: number;
-  /**
-   * Where the map's origin — the hub — sits on the canvas.
-   *
-   * The canvas is normalised so the leftmost, topmost thing drawn clears
-   * the padding, which means the origin moves whenever any cloud's extent
-   * changes on those edges. Every body moves with it, so a view stored in
-   * canvas pixels is looking somewhere else afterwards. Reported here so
-   * the screen can hold its view against the map instead.
-   */
-  origin: { x: number; y: number };
 };
 
 /* Cards are wide and short (~2:1), so their rings are ellipses rather than
@@ -294,13 +284,7 @@ export function computeOrbitPlacement(params: {
 }): OrbitPlacement {
   const root = params.nodes.find((node) => node.depth === 0);
   if (!root) {
-    return {
-      instances: [],
-      links: [],
-      canvasWidth: 0,
-      canvasHeight: 0,
-      origin: { x: 0, y: 0 },
-    };
+    return { instances: [], links: [], canvasWidth: 0, canvasHeight: 0 };
   }
   const extentFor = (instanceId: string) =>
     params.extents?.get(instanceId)
@@ -400,7 +384,6 @@ export function computeOrbitPlacement(params: {
 
   return {
     instances,
-    origin: { x: offsetX, y: offsetY },
     links: params.nodes
       .filter((node) => node.parentId)
       .map((node) => ({

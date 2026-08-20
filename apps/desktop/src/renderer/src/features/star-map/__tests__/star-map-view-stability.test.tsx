@@ -421,6 +421,48 @@ describe("star map view stability", () => {
   });
 
   /**
+   * Two pointers can be on the map at once — two fingers on a touchscreen
+   * — and each press starts its own pan. They already fight over the
+   * transform, which is old news; what they must not do is lose track of
+   * where they were pressed. A single shared base meant the first finger
+   * to lift took the other one's base with it, and the survivor started
+   * measuring its travel from a view that already contained that travel:
+   * the map bolted, faster every frame.
+   */
+  it("keeps a second pan measuring from its own press", async () => {
+    seedLayout("orbit");
+    renderMap({ threads: threads(9) });
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open this instance/ }),
+      ).toBeTruthy();
+    });
+
+    const viewport = document.querySelector(".star-map__viewport")!;
+    fireEvent.pointerDown(viewport, { button: 0, clientX: 500, clientY: 400 });
+    fireEvent.pointerMove(window, { clientX: 400, clientY: 300 });
+    await flushFrame();
+
+    // A second finger lands and drags while the first is still down.
+    fireEvent.pointerDown(viewport, { button: 0, clientX: 600, clientY: 500 });
+    fireEvent.pointerMove(window, { clientX: 560, clientY: 460 });
+    await flushFrame();
+    const held = readTransform();
+
+    // The first finger lifts. The second is still down and has not moved,
+    // so the frame it paints next has to land where it already was.
+    fireEvent.pointerUp(window, { clientX: 400, clientY: 300 });
+    fireEvent.pointerMove(window, { clientX: 560, clientY: 460 });
+    await flushFrame();
+
+    const after = readTransform();
+    expect(after.x).toBeCloseTo(held.x, 6);
+    expect(after.y).toBeCloseTo(held.y, 6);
+
+    fireEvent.pointerUp(window, { clientX: 560, clientY: 460 });
+  });
+
+  /**
    * A relayout does not wait for the operator to let go of the map. The
    * drag measures its pointer travel from a base of its own and repaints
    * from it on the next frame, so holding the view still has to step that
