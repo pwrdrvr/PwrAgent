@@ -18,6 +18,14 @@ export function StarMapFilterChip(props: {
   selection: StarMapFilterSelection;
   count: number;
   onCycle: () => void;
+  /**
+   * Dropped from the strip because the band ran out of room for it. The
+   * chip stays in the DOM and keeps its natural width: the fit is decided
+   * by measuring these chips, so removing them would remove the input
+   * that decides whether they come back, and the strip would oscillate.
+   * CSS takes it out of flow and out of the accessibility tree.
+   */
+  dropped?: boolean;
 }) {
   const state = filterState(props.selection, props.definition.key);
   const next =
@@ -30,7 +38,13 @@ export function StarMapFilterChip(props: {
   return (
     <button
       type="button"
-      className={`star-map__filter-chip star-map__filter-chip--${state}`}
+      className={`star-map__filter-chip star-map__filter-chip--${state}${
+        props.dropped ? " is-dropped" : ""
+      }`}
+      // Out of flow is not out of reach: without this a dropped chip is
+      // still in the tab order, focusable, and invisible.
+      tabIndex={props.dropped ? -1 : undefined}
+      aria-hidden={props.dropped ? true : undefined}
       // Tri-state, so `aria-pressed` cannot describe it: exclude is
       // neither pressed nor unpressed. The label carries the state
       // and what the next click does.

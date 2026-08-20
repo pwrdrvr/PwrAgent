@@ -147,15 +147,16 @@ async function expectTopBandLaidOut(mapWindow: Page, at: string): Promise<void> 
 
   const covered = await mapWindow.evaluate(() =>
     [...document.querySelectorAll(".star-map__filters .star-map__filter-chip")]
-      // The slot holds both renderings of the filters and CSS displays one,
-      // so the other measures 0x0 — and a zero rect centres on (0,0), where
-      // `elementFromPoint` truthfully reports the drag strip. Testing the
-      // rendered one at each width is the point; testing the hidden one is
-      // how this check reported the band as broken at 1280px when it was
-      // not.
+      // The slot keeps both renderings of the filters mounted, and the
+      // dropped chips keep their natural width so the fit stays
+      // measurable — so "not showing" here is `visibility: hidden` with a
+      // real box, or a zero box, depending on which. Neither is a chip
+      // the operator can click, and testing one anyway is how this check
+      // reported the band as broken at 1280px when it was not.
       .filter((chip) => {
         const box = chip.getBoundingClientRect();
-        return box.width > 0 && box.height > 0;
+        if (box.width === 0 || box.height === 0) return false;
+        return getComputedStyle(chip).visibility !== "hidden";
       })
       .map((chip) => {
         const box = chip.getBoundingClientRect();
@@ -200,6 +201,49 @@ async function expectTopBandLaidOut(mapWindow: Page, at: string): Promise<void> 
     band: rowHeight?.tallestSlot,
     tallestSlot: rowHeight?.tallestSlot,
   });
+
+  // Which of the two filter renderings shows is a property of the data —
+  // how many chips carry a count, how wide those counts are — so a spec
+  // cannot assert a state at a width without pinning the fixture's
+  // numbers. What it CAN assert is the invariant: exactly one of them is
+  // ever on screen, and whatever is on screen fits inside the window.
+  const slots = await mapWindow.evaluate(() => {
+    const showing = (selector: string) => {
+      const el = document.querySelector(selector);
+      if (!el) return false;
+      const box = el.getBoundingClientRect();
+      return (
+        box.width > 0
+        && box.height > 0
+        && getComputedStyle(el).visibility !== "hidden"
+      );
+    };
+    const band = document.querySelector(".star-map__top-band");
+    const right = band
+      ? Math.max(
+          ...[...band.querySelectorAll("button")]
+            .filter((el) => el.getBoundingClientRect().width > 0)
+            .map((el) => el.getBoundingClientRect().right),
+        )
+      : 0;
+    return {
+      menu: showing(".star-map__filter-menu"),
+      overflowsBy: Math.round(right - document.documentElement.clientWidth),
+      strip: showing(".star-map__filter-strip"),
+    };
+  });
+  expect(
+    slots.strip !== slots.menu,
+    `expected exactly one filter rendering ${at}: ${JSON.stringify(slots)}`,
+  ).toBe(true);
+  // The other way a row that does not fit fails: rather than a chip
+  // leaving, every chip narrows until the labels wrap, or the row runs
+  // straight off the right edge of the window. Both were real before the
+  // chips were pinned to their natural width.
+  expect(
+    slots.overflowsBy,
+    `top band runs past the window edge ${at}`,
+  ).toBeLessThanOrEqual(0);
 }
 
 test("opens a thread from the star map window in the main window", async () => {
@@ -309,19 +353,20 @@ test("keeps the star map's top band from overlapping itself", async () => {
     // that would have failed first.
     await resizeStarMapWindow(app, mapWindow, { width: 800, height: 720 });
     await expectTopBandLaidOut(mapWindow, "at the minimum window width");
-    // And the strip does not merely fit here — it is gone, replaced by the
-    // one chip that carries the same filters in a popover. Asserting the
-    // swap rather than only the geometry is what keeps a future change
-    // from "fixing" a narrow window by shrinking the chips instead.
-    await expect(
-      starMap.getByRole("group", { name: "Thread filters" }),
-    ).toBeHidden();
-    const filterMenu = starMap.getByRole("button", { name: /^Thread filters/ });
-    await expect(filterMenu).toBeVisible();
-    await filterMenu.click();
-    await expect(
-      mapWindow.getByRole("dialog", { name: "Thread filters" }),
-    ).toBeVisible();
+    // Whichever rendering the fixture's counts land on at this width, the
+    // filters have to still be reachable. A degradation that ends with no
+    // way to filter would satisfy every geometric check above.
+    const strip = starMap.getByRole("group", { name: "Thread filters" });
+    const menu = starMap.getByRole("button", { name: /^Thread filters/ });
+    if (await strip.isVisible()) {
+      await expect(strip.getByRole("button").first()).toBeVisible();
+    } else {
+      await expect(menu).toBeVisible();
+      await menu.click();
+      await expect(
+        mapWindow.getByRole("dialog", { name: "Thread filters" }),
+      ).toBeVisible();
+    }
   } finally {
     await app.close();
   }

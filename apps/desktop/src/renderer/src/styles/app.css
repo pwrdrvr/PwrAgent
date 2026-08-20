@@ -12462,12 +12462,16 @@ textarea,
    Grid tracks cannot overlap, so that collision is now structurally
    impossible instead of a thing every new control has to re-check.
 
-   `1fr auto 1fr` rather than `auto 1fr auto`: the outer tracks are equal,
-   so the chip strip stays centred on the WINDOW while there is room for
-   it, which is where it has always sat. When the chrome outgrows its
-   share its track widens and the strip slides over rather than being
-   covered. The chips wrap (see `.star-map__filters`) so the middle track
-   can always shrink to fit, down to the 800px minimum window width.
+   One left-aligned row, not a centred strip between two spacer tracks.
+   The filters belong beside Find and View: they are the same kind of
+   control, the operator's attention is already on that corner, and a
+   centred strip drifts with the window while the chrome does not — which
+   is what put the two on a collision course to begin with. It also means
+   the degraded states read correctly: a single "Filters" chip lands next
+   to View instead of floating alone in the middle of the sky.
+
+   The actions slot keeps its `margin-left: auto`, so it stays pinned to
+   the right whatever the left group does.
 
    The band spans the full width, which makes its drag model load bearing:
    it must NOT carve a no-drag hole of its own, or it would take the whole
@@ -12477,13 +12481,12 @@ textarea,
    events through; each slot punches its own hole and takes its pointer
    events back. The gaps between the slots stay draggable sky. */
 .star-map__top-band {
-  display: grid;
+  display: flex;
   position: absolute;
   top: 0;
   right: 0;
   left: 0;
   z-index: 4;
-  grid-template-columns: 1fr auto 1fr;
   align-items: start;
   gap: 12px;
   padding: 14px 16px 0;
@@ -12508,7 +12511,7 @@ textarea,
    density + instance visibility). */
 .star-map__chrome {
   display: flex;
-  justify-self: start;
+  flex-shrink: 0;
   align-items: center;
   gap: 12px;
 }
@@ -12519,9 +12522,9 @@ textarea,
    that it hugs the right edge rather than the centre track. */
 .star-map__actions {
   display: flex;
-  justify-self: end;
   align-items: center;
   gap: 12px;
+  margin-left: auto;
 }
 
 /* The map covers the whole window, so its top-left chrome has to clear the
@@ -12686,75 +12689,101 @@ textarea,
   cursor: pointer;
 }
 
-/* Middle slot. `justify-self: center` keeps the box hugging its content
-   instead of stretching across the track: the band's no-drag rect would
-   otherwise cover the whole middle column and take that much sky away
-   from window dragging.
+/* The filter slot, beside the chrome rather than centred on the window.
+   It holds two renderings of the same seven filters and shows whichever
+   one fits; `resolveFilterFit` decides, from measurements, and puts the
+   answer on this element as `is-full` / `is-reduced` / `is-collapsed`.
 
-   It holds two renderings of the same seven filters, and CSS picks which
-   one the band shows. Measured max-content of the strip plus the chrome
-   plus the band's padding and gaps: 994px with one-digit counts, 1020px
-   with the two-digit counts a real fleet produces, 1084px with three.
-   Under that the strip has to give, and the first version of this band
-   let it wrap - which put a second row of chips over the star field and
-   doubled the height of the band to show information that was already
-   there. Below the breakpoint the strip is swapped for one "Filters"
-   chip carrying the same controls in a popover, so the band stays one
-   row at every width down to the 800px minimum.
-
-   The breakpoint is 1120px rather than the measured 1084: the "Clear"
-   button appears in the strip once anything is filtered, and it is worth
-   about another 55px. Re-measure before moving it - the numbers above
-   came from the real chip metrics, not an estimate. */
+   Why measured and not a breakpoint: the chips carry live counts, so the
+   width the strip needs is a property of the data. The same seven chips
+   are 642px wide with one-digit counts, 668px with two and 732px with
+   three. A constant safe for the widest case throws the strip away in
+   the common one, which is exactly what a 1120px breakpoint did here. */
 .star-map__filters {
   display: flex;
-  justify-self: center;
+  min-width: 0;
   align-items: center;
 }
 
-/* Wrapping stays as the last resort rather than `nowrap`. If a label or a
-   count ever outgrows what the breakpoint above assumes, a second row is
-   ugly; overflowing the grid track puts chips back underneath the chrome,
-   which is the bug this band exists to make impossible. */
+/* `nowrap`: wrapping was the first answer to a strip that did not fit,
+   and it put a second row of chips over the star field and doubled the
+   height of the band to show information already on it. The band is one
+   row; when the row runs out, chips leave it rather than stacking. */
 .star-map__filter-strip {
   display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
+  flex-wrap: nowrap;
   gap: 6px;
 }
 
+/* Chips hold their size. Flex shrinking is the other way a row that does
+   not fit can fail: instead of a chip leaving, every chip narrows, the
+   labels wrap inside them ("Needs / input"), and the band grows a second
+   line anyway - the exact outcome the strip stopped wrapping to avoid.
+   Degradation here is a chip leaving the row, never the row squeezing.
+
+   The clip is on the STRIP and not on the slot around it: the collapsed
+   popover is a descendant of the slot, and clipping there would cut the
+   panel off at the band. It only ever matters for the frame before the
+   first measurement lands anyway - it keeps an unmeasured row from
+   widening the band and shoving the actions slot off the window. */
+.star-map__filter-strip > * {
+  flex-shrink: 0;
+}
+
+.star-map__filter-strip {
+  overflow: hidden;
+}
+
 /* Anchor for the collapsed popover, same shape as `.star-map__view-options`
-   across the band. Display is owned by the breakpoint below. */
+   two controls to its left. */
 .star-map__filter-menu {
   display: none;
   position: relative;
 }
 
-@media (max-width: 1120px) {
-  .star-map__filter-strip {
-    display: none;
-  }
+/* The three states.
 
-  .star-map__filter-menu {
-    display: block;
-  }
+   Both renderings stay mounted at every width, and the one that is not
+   showing is taken out of FLOW rather than out of layout — `position:
+   absolute` plus `visibility: hidden`, never `display: none`. The fit is
+   decided by measuring these chips: `display: none` would zero the widths
+   the decision reads, the strip would look like it fits, and the band
+   would flip between states every frame. `visibility: hidden` also takes
+   them out of the accessibility tree, and the chip itself carries
+   `tabIndex={-1}` and `aria-hidden`, so nothing hidden here is reachable.
+
+   `left: 0; top: 0` parks the hidden copy over the slot's own corner; it
+   paints nothing, and `width: max-content` is what keeps its measurement
+   honest once it is out of a flex row. */
+.star-map__filters.is-reduced .star-map__filter-chip.is-dropped,
+.star-map__filters.is-collapsed .star-map__filter-strip {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: max-content;
+  visibility: hidden;
+  pointer-events: none;
 }
 
-/* Same panel as the View popover it sits beside - same surface, border,
-   radius and shadow - but centred under its own chip rather than left
-   aligned, because this one opens from the middle of the band. The chips
-   inside are the strip's chips, stacked and stretched: one family, one
-   set of states, just a different direction. */
+.star-map__filters.is-collapsed .star-map__filter-menu {
+  display: block;
+}
+
+/* Same panel as the View popover across the band - same surface, border,
+   radius and shadow. It opens from the left edge of its own chip for the
+   same reason that one does: the band is a left-aligned row, and a panel
+   that fans out from the middle of a left-aligned control reads as
+   belonging to neither side. The chips inside are the strip's chips,
+   stacked and stretched: one family, one set of states. */
 .star-map__filter-panel {
   display: flex;
   position: absolute;
   top: calc(100% + 6px);
-  left: 50%;
+  left: 0;
   flex-direction: column;
   gap: 4px;
   width: 208px;
   padding: 10px;
-  transform: translateX(-50%);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-panel-elevated);
