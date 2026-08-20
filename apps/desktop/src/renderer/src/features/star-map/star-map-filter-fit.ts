@@ -2,8 +2,10 @@
  * How much of the filter strip the top band can show.
  *
  * The band is one row and the map window goes down to 800px, so at some
- * width the seven chips stop fitting beside the chrome. Two earlier
- * answers were both wrong in ways worth recording:
+ * width the chips stop fitting beside the chrome — six of them today, and
+ * the Attention chip is the widest, since it carries up to three readouts
+ * rather than one count. Two earlier answers were both wrong in ways
+ * worth recording:
  *
  * - Wrapping to a second row put chips over the star field and doubled
  *   the height of the band to show information already on it.

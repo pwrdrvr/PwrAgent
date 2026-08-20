@@ -3,6 +3,7 @@ import {
   comparePinnedThreads,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
+import { isThreadRemoteWork } from "../navigation/ThreadRowStatus";
 import {
   isAgentThread,
   threadAttentionCategories,
@@ -36,8 +37,13 @@ export type StarMapFilterState = "neutral" | "include" | "exclude";
 export type StarMapFilterFacet = "attention" | "pinned" | "agent";
 
 export type StarMapFilterKey =
-  | "unread"
-  | "active"
+  /**
+   * Unread OR a live turn — the two signals the sidebar's Attention tab
+   * carries as one tab with two indicators, and now the map's one chip
+   * with the same two. They were separate chips, which made "show me what
+   * wants me" two clicks and read as two unrelated questions.
+   */
+  | "attention"
   | "approval"
   | "pr"
   | "unpushed"
@@ -51,8 +57,7 @@ export type StarMapFilterDefinition = {
 };
 
 export const STAR_MAP_FILTERS: readonly StarMapFilterDefinition[] = [
-  { facet: "attention", key: "unread", label: "Unread" },
-  { facet: "attention", key: "active", label: "Working" },
+  { facet: "attention", key: "attention", label: "Attention" },
   { facet: "attention", key: "approval", label: "Needs input" },
   { facet: "attention", key: "pr", label: "Open PR" },
   { facet: "attention", key: "unpushed", label: "Unpushed" },
@@ -92,9 +97,80 @@ export function threadMatchesFilter(
 ): boolean {
   if (key === "agent") return isAgentThread(thread);
   if (key === "pinned") return isPinnedThread(thread);
-  return threadAttentionCategories(thread, sessionKeys).some(
-    (category) => category === key,
-  );
+  const categories = threadAttentionCategories(thread, sessionKeys);
+  if (key === "attention") {
+    return categories.some(
+      (category) => category === "unread" || category === "active",
+    );
+  }
+  return categories.some((category) => category === key);
+}
+
+/**
+ * The two numbers the Attention chip draws, and the split inside the
+ * first of them.
+ *
+ * Counted the way `countFilterMatches` counts: against the threads that
+ * already pass every OTHER facet, so the chip answers "how many is this
+ * about right now" rather than a global tally. Live turns split local from
+ * remote because the sidebar's Attention card does — quitting interrupts
+ * the first and leaves the second running, so they are not interchangeable
+ * even though both are "working".
+ */
+export type StarMapAttentionCounts = {
+  activeLocal: number;
+  activeRemote: number;
+  unread: number;
+};
+
+/**
+ * Frozen and module-private: its only job is to seed a fresh tally, and a
+ * shared mutable "empty" is one careless caller away from every later
+ * reader starting from a non-zero.
+ */
+const EMPTY_ATTENTION_COUNTS: StarMapAttentionCounts = Object.freeze({
+  activeLocal: 0,
+  activeRemote: 0,
+  unread: 0,
+});
+
+export function countAttentionSignals(params: {
+  selection: StarMapFilterSelection;
+  sessionKeys?: StarMapSessionKeys;
+  threads: readonly NavigationThreadSummary[];
+}): StarMapAttentionCounts {
+  const counts: StarMapAttentionCounts = { ...EMPTY_ATTENTION_COUNTS };
+  const otherFacets = FACETS.filter((facet) => facet !== "attention");
+  for (const thread of params.threads) {
+    if (thread.archivedAt !== undefined) continue;
+    const passesOthers = otherFacets.every((facet) =>
+      passesFacet({
+        facet,
+        selection: params.selection,
+        sessionKeys: params.sessionKeys,
+        thread,
+      }),
+    );
+    if (!passesOthers) continue;
+    const categories = threadAttentionCategories(thread, params.sessionKeys);
+    if (categories.includes("unread")) counts.unread += 1;
+    if (categories.includes("active")) {
+      if (isThreadRemoteWork(thread)) counts.activeRemote += 1;
+      else counts.activeLocal += 1;
+    }
+  }
+  return counts;
+}
+
+export function addAttentionCounts(
+  left: StarMapAttentionCounts,
+  right: StarMapAttentionCounts,
+): StarMapAttentionCounts {
+  return {
+    activeLocal: left.activeLocal + right.activeLocal,
+    activeRemote: left.activeRemote + right.activeRemote,
+    unread: left.unread + right.unread,
+  };
 }
 
 const FACETS: StarMapFilterFacet[] = ["attention", "pinned", "agent"];
@@ -314,6 +390,22 @@ function isFilterState(value: unknown): value is StarMapFilterState {
 }
 
 /**
+ * The state a pre-merge `unread` / `active` pair carries forward, or
+ * undefined when neither said anything.
+ */
+function mergeLegacyAttentionStates(
+  values: readonly unknown[],
+): StarMapFilterState | undefined {
+  let result: StarMapFilterState | undefined;
+  for (const value of values) {
+    if (!isFilterState(value) || value === "neutral") continue;
+    if (value === "include") return "include";
+    result = value;
+  }
+  return result;
+}
+
+/**
  * Read the stored selection, migrating the pre-facet shape.
  *
  * The old model stored the set of ENABLED attention categories and started
@@ -334,15 +426,39 @@ export function readStoredFilterSelection(): StarMapFilterSelection {
           selection[definition.key] = value;
         }
       }
+      // `unread` and `active` were two chips before they became one, and
+      // an operator who left either one on has a stored blob naming a key
+      // that no longer exists. Reading it forward matters more than it
+      // looks: dropping it silently would turn a narrowed map back into
+      // an unfiltered one at the next launch, with nothing on screen to
+      // say why. Include wins over exclude when the two disagree — the
+      // combined chip cannot express "unread but not working", and
+      // showing more than asked beats hiding what was asked for.
+      const merged = mergeLegacyAttentionStates([
+        parsed.unread,
+        parsed.active,
+      ]);
+      if (merged && selection.attention === undefined) {
+        selection.attention = merged;
+      }
       return selection;
     }
 
     const legacyRaw = window.localStorage.getItem(LEGACY_CATEGORY_KEY);
     if (legacyRaw) {
       const enabled = JSON.parse(legacyRaw) as unknown;
-      const attention = facetKeys("attention");
-      if (Array.isArray(enabled) && enabled.length < attention.length) {
-        for (const key of attention) {
+      // The pre-facet blob stored the OLD category names, two of which
+      // now share one chip, so it is read against those rather than
+      // against today's keys.
+      const legacyAttentionKeys = ["unread", "active", "approval", "pr", "unpushed"];
+      if (
+        Array.isArray(enabled)
+        && enabled.length < legacyAttentionKeys.length
+      ) {
+        if (enabled.includes("unread") || enabled.includes("active")) {
+          selection.attention = "include";
+        }
+        for (const key of ["approval", "pr", "unpushed"] as const) {
           if (enabled.includes(key)) selection[key] = "include";
         }
       }

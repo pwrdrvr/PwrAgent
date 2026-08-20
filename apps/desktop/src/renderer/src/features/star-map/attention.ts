@@ -1,5 +1,6 @@
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
+import { isThreadActive } from "../navigation/ThreadRowStatus";
 import { isOpenPullRequest } from "./star-map-preferences";
 
 export const STAR_MAP_ATTENTION_CATEGORIES = [
@@ -37,10 +38,11 @@ export function threadAttentionCategories(
   if (thread.inbox.inInbox && thread.inbox.reason === "updated-since-seen") {
     categories.push("unread");
   }
-  if (
-    thread.threadStatus === "active"
-    || sessionKeys?.thinkingThreadKeys?.[key] === true
-  ) {
+  // The sidebar's predicate, not a copy of it. `isThreadActive` carries a
+  // standing instruction to keep it shared "so their numbers match the
+  // animated thread-row marker exactly" — and the map had drifted into its
+  // own copy, which is the drift that instruction exists to prevent.
+  if (isThreadActive(thread, sessionKeys?.thinkingThreadKeys)) {
     categories.push("active");
   }
   if (

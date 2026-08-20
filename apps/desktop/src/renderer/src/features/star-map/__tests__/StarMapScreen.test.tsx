@@ -716,7 +716,7 @@ describe("StarMapScreen", () => {
     // Scope to the chip row: thread cards also expose an "Unread" status.
     const filterRow = screen.getByRole("group", { name: "Thread filters" });
     const unreadChip = within(filterRow).getByRole("button", {
-      name: /^Unread:/,
+      name: /^Attention:/,
     });
 
     // First click isolates rather than hides — the thread IS unread, so it
@@ -726,13 +726,13 @@ describe("StarMapScreen", () => {
 
     // Second click flips the same chip to exclude.
     fireEvent.click(
-      within(filterRow).getByRole("button", { name: /^Unread:/ }),
+      within(filterRow).getByRole("button", { name: /^Attention:/ }),
     );
     expect(card()).toBeNull();
 
     // Third click returns to neutral.
     fireEvent.click(
-      within(filterRow).getByRole("button", { name: /^Unread:/ }),
+      within(filterRow).getByRole("button", { name: /^Attention:/ }),
     );
     expect(card()).toBeTruthy();
   });
@@ -1587,7 +1587,7 @@ describe("StarMapScreen", () => {
     const filterRow = screen.getByRole("group", { name: "Thread filters" });
     // Exclude the only reason this card is on the map.
     const unread = () =>
-      within(filterRow).getByRole("button", { name: /^Unread:/ });
+      within(filterRow).getByRole("button", { name: /^Attention:/ });
     fireEvent.click(unread());
     fireEvent.click(unread());
 
@@ -1626,7 +1626,7 @@ describe("StarMapScreen", () => {
     const panel = screen.getByRole("dialog", { name: "Thread filters" });
     // Exclude the only reason this card is on the map, through the popover.
     const unread = () =>
-      within(panel).getByRole("button", { name: /^Unread:/ });
+      within(panel).getByRole("button", { name: /^Attention:/ });
     fireEvent.click(unread());
     fireEvent.click(unread());
 
@@ -1639,7 +1639,7 @@ describe("StarMapScreen", () => {
     // show the state the popover just set.
     const strip = screen.getByRole("group", { name: "Thread filters" });
     expect(
-      within(strip).getByRole("button", { name: /^Unread: hidden/ }),
+      within(strip).getByRole("button", { name: /^Attention: hidden/ }),
     ).toBeTruthy();
     expect(
       screen.getByRole("button", { name: "Thread filters: 1 active" }),
@@ -1671,7 +1671,7 @@ describe("StarMapScreen", () => {
     ).toBeNull();
 
     fireEvent.click(
-      within(filterRow).getByRole("button", { name: /^Unread:/ }),
+      within(filterRow).getByRole("button", { name: /^Attention:/ }),
     );
     fireEvent.click(within(filterRow).getByRole("button", { name: "Clear" }));
 
