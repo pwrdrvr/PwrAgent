@@ -29,6 +29,7 @@ import {
 import { useComposerMentionSources } from "../composer/useComposerMentionSources";
 import type { ComposerMentionSources } from "../composer/useComposerMentions";
 import { TranscriptList } from "../thread-detail/TranscriptList";
+import { ActiveSubAgentsStrip } from "../thread-detail/ActiveSubAgentsStrip";
 import { useTranscriptWindow } from "../thread-detail/useTranscriptWindow";
 import { collectEditedFileGroups } from "../thread-detail/edited-file-groups";
 import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "../../lib/thread-history-limits";
@@ -56,6 +57,8 @@ export type StarMapChatCardProps = {
   onClose: (cardKey: string) => void;
   /** Escape hatch into the full thread surface. */
   onOpenFull: (thread: NavigationThreadSummary) => void;
+  /** Refresh the owning navigation feed after a monitor is stopped. */
+  onRefreshNavigation?: () => Promise<void>;
   onRaise: (cardKey: string) => void;
   onRectChange: (cardKey: string, rect: ChatCardRect) => void;
   /** Satellite cards, docked to this card and owned by the controller. */
@@ -102,6 +105,7 @@ type DragState = {
  * `star-map-chat-card-render-cost.test.tsx` pins the result.
  */
 const MemoizedCompactComposer = memo(CompactComposer);
+const MemoizedActiveSubAgentsStrip = memo(ActiveSubAgentsStrip);
 
 /**
  * One chat card, anchored in the star map.
@@ -919,6 +923,12 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           {sendNotice}
         </p>
       ) : undefined}
+
+      <MemoizedActiveSubAgentsStrip
+        desktopApi={desktopApi}
+        onRefreshNavigation={props.onRefreshNavigation}
+        thread={thread}
+      />
 
       <MemoizedCompactComposer
         busy={session.threadBusy}

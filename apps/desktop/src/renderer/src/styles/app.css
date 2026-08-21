@@ -13223,6 +13223,18 @@ textarea,
   user-select: text;
 }
 
+/* The full thread view surfaces monitor jobs and native sub-agents in the
+   band above its composer. A floating chat is still an operating surface for
+   that same thread, so carry the shared strip into the equivalent position
+   instead of making the operator open the full window to discover live work.
+   The component returns null while empty, leaving no reserved gap. */
+.star-map-chat-card > .live-strip {
+  flex: 0 0 auto;
+  padding: 4px 0;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel-elevated);
+}
+
 /* Compact composer: for surfaces with no vertical budget. The field sits
    over a one-line status strip: the model/effort/access chip (which is
    also the settings-menu trigger) on the left, the Stop/Send pills on the

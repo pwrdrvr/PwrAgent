@@ -401,7 +401,7 @@ type StarMapScreenProps = {
   /** The local instance card's open action: focus the main window. */
   onFocusLocalInstance: () => void;
   /** Refresh the App's navigation snapshot (after intake creates locally). */
-  onRefreshLocalThreads?: () => void;
+  onRefreshLocalThreads?: () => Promise<void>;
   /** Settings -> Pricing, for the chat cards' context satellites. */
   pricingDisplayOptions?: { codexCredits: boolean; usd: boolean };
   pastedImageMaxPatches?: number;
@@ -2443,19 +2443,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
     setSelection((current) => (current.size > 0 ? new Set() : current));
   }, [localInstanceId]);
 
+  const onRefreshLocalThreads = props.onRefreshLocalThreads;
+  const refreshRemoteInstance = remote.refreshInstance;
   /**
    * Refresh whichever cloud owns a thread. Archive removes it from the
    * owning instance, so the map has to re-fetch rather than guess.
    */
   const refreshOwner = useCallback(
-    (instanceId: string) => {
+    async (instanceId: string): Promise<void> => {
       if (instanceId === localInstanceId) {
-        props.onRefreshLocalThreads?.();
+        await onRefreshLocalThreads?.();
       } else {
-        setRemoteRefreshNonce((nonce) => nonce + 1);
+        await refreshRemoteInstance(instanceId);
       }
     },
-    [localInstanceId, props],
+    [localInstanceId, onRefreshLocalThreads, refreshRemoteInstance],
   );
 
   /**
@@ -2584,7 +2586,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         for (const instanceId of new Set(
           targets.map((target) => target.instanceId),
         )) {
-          refreshOwner(instanceId);
+          void refreshOwner(instanceId);
         }
       });
     },
@@ -4453,6 +4455,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
               }
               onClose={chatCards.close}
               onOpenFull={openThreadFully}
+              onRefreshNavigation={() =>
+                refreshOwner(cardInstanceId ?? localInstanceId)
+              }
               onRaise={chatCards.raise}
               onRectChange={chatCards.setRect}
               pastedImageMaxPatches={props.pastedImageMaxPatches}
@@ -4545,7 +4550,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               ),
             );
             if (created.instanceId === localInstanceId) {
-              props.onRefreshLocalThreads?.();
+              void props.onRefreshLocalThreads?.();
             } else {
               setRemoteRefreshNonce((nonce) => nonce + 1);
             }

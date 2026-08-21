@@ -190,6 +190,76 @@ describe("StarMapChatCard transcript loading", () => {
   });
 });
 
+describe("StarMapChatCard sub-agents", () => {
+  it("surfaces a running monitor above the compact composer", () => {
+    const desktopApi = buildApi();
+    renderCard({
+      desktopApi,
+      thread: localThread({
+        subAgents: [
+          {
+            monitorId: "monitor-1",
+            task: "Watch the production rollout",
+            status: "running",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            backend: "codex",
+            monitorThreadId: "monitor-thread",
+            monitorTurnId: "monitor-turn",
+          },
+        ],
+      }),
+    });
+
+    const strip = screen.getByRole("region", { name: "Active sub-agents" });
+    expect(strip.textContent).toContain("Watch the production rollout");
+    expect(strip.compareDocumentPosition(screen.getByRole("textbox")))
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it("stops a remote monitor on its owning instance", async () => {
+    const stopSubAgent = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t-remote",
+      monitorId: "monitor-remote",
+      stoppedAt: Date.now(),
+    }));
+    const desktopApi = buildApi({ stopSubAgent });
+    renderCard({
+      desktopApi,
+      thread: remoteThread({
+        subAgents: [
+          {
+            monitorId: "monitor-remote",
+            task: "Watch the peer rollout",
+            status: "running",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            backend: "codex",
+            monitorThreadId: "monitor-thread",
+            monitorTurnId: "monitor-turn",
+          },
+        ],
+      }),
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Stop sub-agent: Watch the peer rollout",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(stopSubAgent).toHaveBeenCalledWith({
+        backend: "codex",
+        federationTarget: { scope: "remote", instanceId: "pwr_peer" },
+        threadId: "t-remote",
+        monitorId: "monitor-remote",
+      });
+    });
+  });
+});
+
 describe("StarMapChatCard federation routing", () => {
   it("hydrates a peer's thread against that peer", async () => {
     const desktopApi = buildApi();
