@@ -31,6 +31,9 @@ function ruleFor(selector: string): string {
  */
 describe("star map chat card transcript layout", () => {
   const rule = ruleFor(".star-map-chat-card__transcript");
+  const editorRule = ruleFor(
+    ".compact-composer .composer-tiptap-input__editor",
+  );
 
   it("is a flex column so the transcript's own scroller resolves", () => {
     expect(rule).toMatch(/display:\s*flex;/);
@@ -44,5 +47,10 @@ describe("star map chat card transcript layout", () => {
 
   it("does not take the overflow for itself", () => {
     expect(rule).not.toMatch(/overflow[^:]*:\s*[^;]*(auto|scroll)/);
+  });
+
+  it("does not inherit the canvas grab cursor", () => {
+    expect(rule).toMatch(/cursor:\s*default;/);
+    expect(editorRule).toMatch(/cursor:\s*text;/);
   });
 });

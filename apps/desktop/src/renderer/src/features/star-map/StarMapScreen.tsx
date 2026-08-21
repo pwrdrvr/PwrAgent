@@ -154,6 +154,8 @@ import { useStarMapThreads } from "./useStarMapThreads";
  */
 const LANE_MAX_CARDS_PER_INSTANCE = 40;
 const STAR_COUNT = 130;
+/** A new trackpad gesture begins after this much wheel-event silence. */
+const WHEEL_GESTURE_IDLE_MS = 120;
 /** Orbit clouds use a fixed card width; lanes narrow theirs to fit. */
 const ORBIT_CARD_WIDTH = 200;
 /**
@@ -1894,6 +1896,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
   useEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
+    let wheelOwner: "canvas" | "embedded" | undefined;
+    let wheelIdleTimer: number | undefined;
     const bounds = {
       canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
       viewport: { width: viewportSize.width, height: viewportSize.height },
@@ -1901,7 +1905,22 @@ export function StarMapScreen(props: StarMapScreenProps) {
     const onWheel = (event: WheelEvent) => {
       // Pinch (ctrl+wheel) is a map gesture wherever the pointer is; a
       // plain scroll over a chat card belongs to that card's transcript.
-      if (!event.ctrlKey && !shouldPanOnWheel(event.target)) return;
+      // Decide once per wheel sequence: the canvas moves underneath a
+      // stationary trackpad cursor, so event.target can become a transcript
+      // halfway through a pan. Reclassifying there used to stop the map dead.
+      if (event.ctrlKey) {
+        wheelOwner = "canvas";
+      } else if (!wheelOwner) {
+        wheelOwner = shouldPanOnWheel(event.target)
+          ? "canvas"
+          : "embedded";
+      }
+      if (wheelIdleTimer !== undefined) window.clearTimeout(wheelIdleTimer);
+      wheelIdleTimer = window.setTimeout(() => {
+        wheelOwner = undefined;
+        wheelIdleTimer = undefined;
+      }, WHEEL_GESTURE_IDLE_MS);
+      if (wheelOwner === "embedded") return;
       event.preventDefault();
       abortFlight();
       // Both branches read the LIVE view rather than a `setView` updater's
@@ -1946,7 +1965,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
       );
     };
     element.addEventListener("wheel", onWheel, { passive: false });
-    return () => element.removeEventListener("wheel", onWheel);
+    return () => {
+      element.removeEventListener("wheel", onWheel);
+      if (wheelIdleTimer !== undefined) window.clearTimeout(wheelIdleTimer);
+    };
   }, [
     abortFlight,
     commitView,

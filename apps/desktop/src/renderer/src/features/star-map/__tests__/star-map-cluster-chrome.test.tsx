@@ -694,15 +694,18 @@ describe("star map chat cards in map space", () => {
     });
 
     const canvas = container.querySelector(".star-map__canvas") as HTMLElement;
-    const chat = container.querySelector(".star-map-chat-card") as HTMLElement;
+    const transcript = container.querySelector(
+      ".star-map-chat-card__transcript",
+    ) as HTMLElement;
     const before = canvas.style.transform;
 
     // The card is inside the canvas, so its wheel events reach the
     // viewport's listener; the map must leave them alone.
-    fireEvent.wheel(chat, { deltaY: 240 });
+    fireEvent.wheel(transcript, { deltaY: 240 });
     expect(canvas.style.transform).toBe(before);
 
-    // Bare sky still pans, so the exception is scoped to the card.
+    // Once that trackpad gesture has ended, bare sky starts a canvas pan.
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
     fireEvent.wheel(
       container.querySelector(".star-map__viewport") as HTMLElement,
       { deltaY: 240 },
@@ -710,6 +713,66 @@ describe("star map chat cards in map space", () => {
     await waitFor(() => {
       expect(canvas.style.transform).not.toBe(before);
     });
+
+    // Focus is sticky after the pointer leaves a transcript, but a fresh
+    // wheel sequence over bare sky still belongs to the canvas.
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    transcript.tabIndex = 0;
+    transcript.focus();
+    const beforeFocusedSkyGesture = canvas.style.transform;
+    fireEvent.wheel(
+      container.querySelector(".star-map__viewport") as HTMLElement,
+      { deltaX: 120 },
+    );
+    await waitFor(() => {
+      expect(canvas.style.transform).not.toBe(beforeFocusedSkyGesture);
+    });
+  });
+
+  it("keeps an in-flight trackpad pan when a transcript moves under it", async () => {
+    const { container } = renderOrbit([
+      projectThread("a1", "/repo/alpha", "AlphaDir"),
+      projectThread("a2", "/repo/alpha", "AlphaDir"),
+    ]);
+    await screen.findByRole("button", { name: /Open thread: Thread a1/ });
+    fireEvent.click(
+      screen.getByRole("button", { name: /Open thread: Thread a1/ }),
+    );
+    await waitFor(() => {
+      expect(
+        container.querySelector(".star-map-chat-card__transcript"),
+      ).not.toBeNull();
+    });
+
+    const canvas = container.querySelector(".star-map__canvas") as HTMLElement;
+    const viewport = container.querySelector(
+      ".star-map__viewport",
+    ) as HTMLElement;
+    const transcript = container.querySelector(
+      ".star-map-chat-card__transcript",
+    ) as HTMLElement;
+
+    fireEvent.wheel(viewport, { deltaX: 120, deltaY: 40 });
+    await waitFor(() => {
+      expect(canvas.style.transform).not.toBe("");
+    });
+    const afterFirstEvent = canvas.style.transform;
+
+    // The cursor has not moved. The canvas did, placing the transcript under
+    // it before the trackpad's next event. Gesture ownership must stay with
+    // the canvas until this wheel sequence ends.
+    fireEvent.wheel(transcript, { deltaX: 120, deltaY: 40 });
+    await waitFor(() => {
+      expect(canvas.style.transform).not.toBe(afterFirstEvent);
+    });
+
+    // Ownership is symmetric: a new gesture that begins over a transcript
+    // remains a transcript scroll if later events target the sky.
+    await new Promise((resolve) => window.setTimeout(resolve, 150));
+    const beforeTranscriptGesture = canvas.style.transform;
+    fireEvent.wheel(transcript, { deltaY: 80 });
+    fireEvent.wheel(viewport, { deltaY: 80 });
+    expect(canvas.style.transform).toBe(beforeTranscriptGesture);
   });
 
   it("docks satellite cards to their chat card as one group", async () => {
