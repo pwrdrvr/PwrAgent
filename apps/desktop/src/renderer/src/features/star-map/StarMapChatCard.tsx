@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
@@ -41,8 +42,15 @@ import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "../../lib/thread-hist
 import type { DesktopApi } from "../../lib/desktop-api";
 import { parseReviewCommand } from "../../../../shared/review-command";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { agentEventMatchesThread } from "../../lib/federated-thread-events";
 import { useThreadSessionState } from "../../lib/useThreadSessionState";
 import { useThreadSkills } from "../../lib/useThreadSkills";
+import {
+  buildThreadComposerScopeKey,
+  createQueuedTurnId,
+  type ComposerDraftStore,
+  type ComposerQueuedTurnSnapshot,
+} from "../composer/useComposerDraftStore";
 import {
   clearStarMapCardContext,
   publishStarMapCardContext,
@@ -60,6 +68,7 @@ import {
 
 export type StarMapChatCardProps = {
   cardKey: string;
+  composerDraftStore?: ComposerDraftStore;
   desktopApi?: DesktopApi;
   /** Owning instance's celestial mark, watermarked behind the header. */
   instanceIcon?: CelestialIconId;
@@ -98,6 +107,17 @@ type DragState = {
   originY: number;
   startRect: ChatCardRect;
 };
+
+function queuedTurnPreview(queued: ComposerQueuedTurnSnapshot): string {
+  if (queued.text.trim()) {
+    return queued.text.trim();
+  }
+  const attachments = [
+    ...queued.imageAttachments.map((attachment) => attachment.name),
+    ...queued.fileAttachments.map((attachment) => attachment.label),
+  ].filter(Boolean);
+  return attachments.join(", ") || "Queued message";
+}
 
 /**
  * The composer, behind a memo boundary.
@@ -145,6 +165,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // from a queue by looking at the transcript, and the answer differs by
   // backend, so the card says which one happened.
   const [sendNotice, setSendNotice] = useState<string | undefined>(undefined);
+  const startRequestPendingRef = useRef(false);
   const onAttachmentError = useCallback((message?: string): void => {
     setAttachmentError(message);
     if (message) {
@@ -228,6 +249,60 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         : undefined,
     [remoteInstanceId],
   );
+  const composerScopeKey = buildThreadComposerScopeKey(thread.source, thread.id);
+  const subscribeQueuedTurns = useCallback(
+    (listener: () => void) =>
+      props.composerDraftStore?.subscribeQueuedTurns(listener)
+      ?? (() => undefined),
+    [props.composerDraftStore],
+  );
+  const getQueuedTurnVersion = useCallback(
+    () => props.composerDraftStore?.getQueuedTurnVersion() ?? 0,
+    [props.composerDraftStore],
+  );
+  useSyncExternalStore(
+    subscribeQueuedTurns,
+    getQueuedTurnVersion,
+  );
+  const queuedTurns =
+    props.composerDraftStore?.getQueuedTurns(composerScopeKey) ?? [];
+  useEffect(() => {
+    if (!desktopApi?.onAgentEvent || !props.composerDraftStore) {
+      return;
+    }
+    return desktopApi.onAgentEvent((event) => {
+      if (event.notification.method !== "thread/turnQueue/updated") {
+        return;
+      }
+      const notification = event.notification.params as {
+        queueEntryId?: unknown;
+        status?: unknown;
+        threadId?: unknown;
+      };
+      if (
+        typeof notification.threadId !== "string"
+        || typeof notification.queueEntryId !== "string"
+        || !agentEventMatchesThread(event, thread, notification.threadId)
+        || (
+          notification.status !== "started"
+          && notification.status !== "failed"
+          && notification.status !== "cancelled"
+          && notification.status !== "terminal"
+        )
+      ) {
+        return;
+      }
+      const current = props.composerDraftStore?.getQueuedTurns(
+        composerScopeKey,
+      ) ?? [];
+      const next = current.filter(
+        (queued) => queued.queueEntryId !== notification.queueEntryId,
+      );
+      if (next.length !== current.length) {
+        props.composerDraftStore?.setQueuedTurns(composerScopeKey, next);
+      }
+    });
+  }, [composerScopeKey, desktopApi, props.composerDraftStore, thread]);
   /* Every control in the bar is a glyph now, so every one of them needs
      the same hover affordance — a lone tooltip on ↗ reads as the other
      two being broken. The toggles say what the click will DO, which is
@@ -732,20 +807,76 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         }
       }
 
-      if (!desktopApi?.startTurn) return false;
+      if (!desktopApi?.startTurn || startRequestPendingRef.current) return false;
+      startRequestPendingRef.current = true;
+      const queueEntryId = createQueuedTurnId();
+      const queuedProjection: ComposerQueuedTurnSnapshot = {
+        id: queueEntryId,
+        backendQueuePending: true,
+        queueEntryId,
+        text: displayText,
+        imageAttachments,
+        fileAttachments,
+        input,
+      };
+      if (props.composerDraftStore) {
+        props.composerDraftStore.setQueuedTurns(composerScopeKey, [
+          ...props.composerDraftStore.getQueuedTurns(composerScopeKey),
+          queuedProjection,
+        ]);
+      }
       const optimisticId = sessionRef.current.addOptimisticUserMessage(
         displayText,
         imageParts,
       );
       try {
-        await desktopApi.startTurn({
+        const response = await desktopApi.startTurn({
           backend: thread.source,
           federationTarget,
           threadId: thread.id,
+          queueEntryId,
           input,
         });
+        if (props.composerDraftStore) {
+          const current = props.composerDraftStore.getQueuedTurns(
+            composerScopeKey,
+          );
+          if (response.queueStatus === "queued") {
+            const acknowledgedProjection = {
+              ...queuedProjection,
+              backendQueuePending: false,
+              queueEntryId: response.queueEntryId ?? response.turnId,
+              ...(typeof response.queueEntryCreatedAt === "number"
+                ? { queueEntryCreatedAt: response.queueEntryCreatedAt }
+                : {}),
+            };
+            props.composerDraftStore.setQueuedTurns(
+              composerScopeKey,
+              current.some((queued) => queued.id === queuedProjection.id)
+                ? current.map((queued) =>
+                    queued.id === queuedProjection.id
+                      ? acknowledgedProjection
+                      : queued,
+                  )
+                : [...current, acknowledgedProjection],
+            );
+          } else {
+            props.composerDraftStore.setQueuedTurns(
+              composerScopeKey,
+              current.filter((queued) => queued.id !== queuedProjection.id),
+            );
+          }
+        }
         return true;
       } catch (error) {
+        if (props.composerDraftStore) {
+          props.composerDraftStore.setQueuedTurns(
+            composerScopeKey,
+            props.composerDraftStore
+              .getQueuedTurns(composerScopeKey)
+              .filter((queued) => queued.id !== queuedProjection.id),
+          );
+        }
         sessionRef.current.removeOptimisticMessage(optimisticId);
         setSendError(
           error instanceof Error
@@ -753,17 +884,21 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             : "Could not send that message.",
         );
         return false;
+      } finally {
+        startRequestPendingRef.current = false;
       }
     },
     [
       activeTurnId,
       cardKey,
+      composerScopeKey,
       desktopApi,
       federationTarget,
       ensureNavigationLoaded,
       supportsReview,
       thread.id,
       thread.source,
+      props.composerDraftStore,
     ],
   );
 
@@ -1313,6 +1448,29 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           </p>
         ) : undefined}
 
+        {queuedTurns.map((queued, index) => (
+          <div
+            aria-label={
+              index === 0 ? "Queued message" : `Queued message ${index + 1}`
+            }
+            className="composer__queued"
+            key={queued.id}
+          >
+            <div className="composer__queued-copy">
+              <span className="composer__queued-label">
+                {queued.backendQueuePending
+                  ? "Sending…"
+                  : index === 0
+                    ? "Queued next"
+                    : `Queued #${index + 1}`}
+              </span>
+              <span className="composer__queued-text">
+                {queuedTurnPreview(queued)}
+              </span>
+            </div>
+          </div>
+        ))}
+
         <MemoizedCompactComposer
           busy={session.threadBusy}
           canAttachLocalFiles={
@@ -1320,6 +1478,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           }
           canSteer={canSteer}
           disabled={reviewSetupOpen || reviewSubmitting}
+          draftScopeKey={composerScopeKey}
+          draftStore={props.composerDraftStore}
           executionMode={threadExecutionMode}
           fastMode={threadFastMode}
           getPathForFile={desktopApi?.getPathForFile}

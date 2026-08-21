@@ -1,0 +1,118 @@
+{
+  "metadata": {
+    "backend": "codex",
+    "scenario": "star-map-composer-attachments",
+    "threadId": "thread-star-map-attachments"
+  },
+  "steps": [
+    {
+      "id": "initialize-1",
+      "kind": "response",
+      "method": "initialize",
+      "result": {
+        "serverInfo": {
+          "name": "Replay Codex",
+          "version": "1.0.0"
+        },
+        "methods": [
+          "thread/list",
+          "thread/read",
+          "skills/list",
+          "turn/start"
+        ]
+      }
+    },
+    {
+      "id": "thread-list-1",
+      "kind": "response",
+      "method": "thread/list",
+      "result": [
+        {
+          "id": "thread-star-map-attachments",
+          "title": "Star map attention thread",
+          "titleSource": "explicit",
+          "summary": "An idle thread with unpushed work for attachment sends.",
+          "source": "codex",
+          "executionMode": "default",
+          "threadStatus": "idle",
+          "gitBranch": "feature/star-map-audit",
+          "gitWorkingState": {
+            "dirtyFiles": 0,
+            "dirtyAdditions": 0,
+            "dirtyDeletions": 0,
+            "untrackedFiles": 0,
+            "unpushedCommits": 1
+          },
+          "linkedDirectories": [
+            {
+              "id": "star-map-worktree-dir",
+              "kind": "worktree",
+              "label": "PwrAgent",
+              "path": "/repo/PwrAgent",
+              "worktreePath": "/repo/PwrAgent/.worktrees/feature-star-map-audit"
+            }
+          ],
+          "inbox": {
+            "inInbox": true,
+            "reason": "new-thread"
+          },
+          "updatedAt": 1760000100000
+        }
+      ]
+    },
+    {
+      "id": "skills-list-1",
+      "kind": "response",
+      "method": "skills/list",
+      "result": []
+    },
+    {
+      "id": "thread-read-1",
+      "kind": "response",
+      "method": "thread/read",
+      "result": {
+        "entries": [
+          {
+            "type": "message",
+            "id": "message-1",
+            "role": "user",
+            "text": "Show me the star map."
+          },
+          {
+            "type": "message",
+            "id": "message-2",
+            "role": "assistant",
+            "text": "The star map is live."
+          }
+        ],
+        "messages": [
+          {
+            "id": "message-1",
+            "role": "user",
+            "text": "Show me the star map."
+          },
+          {
+            "id": "message-2",
+            "role": "assistant",
+            "text": "The star map is live."
+          }
+        ],
+        "lastUserMessage": "Show me the star map.",
+        "lastAssistantMessage": "The star map is live.",
+        "pagination": {
+          "supportsPagination": false,
+          "hasPreviousPage": false
+        }
+      }
+    },
+    {
+      "id": "turn-start-1",
+      "kind": "response",
+      "method": "turn/start",
+      "result": {
+        "threadId": "thread-star-map-attachments",
+        "turnId": "turn-star-map-attachment"
+      }
+    }
+  ]
+}

@@ -22,13 +22,26 @@ import type {
  * an older navigation snapshot from pruning a just-acknowledged submission.
  */
 export function useQueuedTurnProjection(params: {
-  composerDraftStore: ComposerDraftStore;
+  composerDraftStore?: ComposerDraftStore;
   snapshotFetchedAt?: number;
+  snapshotFetchedAtForThread?: (
+    thread: NavigationThreadSummary,
+  ) => number | undefined;
   threads: readonly NavigationThreadSummary[];
 }): void {
-  const { composerDraftStore, snapshotFetchedAt, threads } = params;
+  const {
+    composerDraftStore,
+    snapshotFetchedAt,
+    snapshotFetchedAtForThread,
+    threads,
+  } = params;
   useEffect(() => {
+    if (!composerDraftStore) {
+      return;
+    }
     for (const thread of threads) {
+      const threadSnapshotFetchedAt =
+        snapshotFetchedAtForThread?.(thread) ?? snapshotFetchedAt;
       const scopeKey = `thread:${thread.source}:${thread.id}`;
       const snapshotEntries = thread.queuedTurns ?? [];
       const snapshotIds = new Set(
@@ -50,10 +63,10 @@ export function useQueuedTurnProjection(params: {
           || entry.backendQueuePending
           || snapshotIds.has(entry.queueEntryId)
           || typeof entry.queueEntryCreatedAt !== "number"
-          || typeof snapshotFetchedAt !== "number"
+          || typeof threadSnapshotFetchedAt !== "number"
           // Millisecond equality is ambiguous: the snapshot may have read the
           // FIFO just before creation within the same clock tick.
-          || snapshotFetchedAt <= entry.queueEntryCreatedAt,
+          || threadSnapshotFetchedAt <= entry.queueEntryCreatedAt,
       );
       const additions: ComposerQueuedTurnSnapshot[] = snapshotEntries
         .filter((entry) => !knownIds.has(entry.queueEntryId))
@@ -73,5 +86,10 @@ export function useQueuedTurnProjection(params: {
         composerDraftStore.setQueuedTurns(scopeKey, [...kept, ...additions]);
       }
     }
-  }, [composerDraftStore, snapshotFetchedAt, threads]);
+  }, [
+    composerDraftStore,
+    snapshotFetchedAt,
+    snapshotFetchedAtForThread,
+    threads,
+  ]);
 }

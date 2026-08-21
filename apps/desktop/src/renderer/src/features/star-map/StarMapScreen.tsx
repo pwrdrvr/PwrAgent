@@ -22,6 +22,7 @@ import {
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
 import { SearchIcon } from "../../icons";
 import {
   formatPrimaryAccel,
@@ -29,6 +30,7 @@ import {
 } from "../../lib/keyboard-accel";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { useFederationHealth } from "../../lib/useFederationHealth";
+import { useQueuedTurnProjection } from "../../lib/useQueuedTurnProjection";
 import { SidebarSearchPopup } from "../navigation/SidebarSearchPopup";
 import {
   type StarMapSessionKeys,
@@ -384,9 +386,12 @@ type StarMapCardTargets = {
 const NO_CARD_TARGETS: readonly StarMapCardTarget[] = [];
 
 type StarMapScreenProps = {
+  composerDraftStore?: ComposerDraftStore;
   desktopApi?: DesktopApi;
   /** Local navigation snapshot threads (already live in the App shell). */
   localThreads: readonly NavigationThreadSummary[];
+  /** Local owner-clock time paired with `localThreads`. */
+  localNavigationSnapshotFetchedAt?: number;
   sessionKeys: StarMapSessionKeys;
   /**
    * Threads with unsent composer text in THIS window, keyed by
@@ -1007,6 +1012,30 @@ export function StarMapScreen(props: StarMapScreenProps) {
     peers,
     enabled: true,
     refreshNonce: remoteRefreshNonce,
+  });
+  const queueProjectionThreads = useMemo(
+    () => [
+      ...props.localThreads,
+      ...[...remote.threadsByInstance.values()].flat(),
+    ],
+    [props.localThreads, remote.threadsByInstance],
+  );
+  const queueSnapshotFetchedAtForThread = useCallback(
+    (thread: NavigationThreadSummary): number | undefined => {
+      const target = thread.federation?.ref.target;
+      return target && isRemoteFederationTarget(target)
+        ? remote.snapshotFetchedAtByInstance.get(target.instanceId)
+        : props.localNavigationSnapshotFetchedAt;
+    },
+    [
+      props.localNavigationSnapshotFetchedAt,
+      remote.snapshotFetchedAtByInstance,
+    ],
+  );
+  useQueuedTurnProjection({
+    composerDraftStore: props.composerDraftStore,
+    snapshotFetchedAtForThread: queueSnapshotFetchedAtForThread,
+    threads: queueProjectionThreads,
   });
   const arrangement = useStarMapArrangement({ desktopApi: props.desktopApi });
   // Load-card membership lives in the synced arrangement, so a card opened
@@ -4446,6 +4475,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             <StarMapChatCard
               key={card.key}
               cardKey={card.key}
+              composerDraftStore={props.composerDraftStore}
               desktopApi={props.desktopApi}
               instanceIcon={celestialIcons.iconFor(cardInstanceId)}
               instanceLabel={
