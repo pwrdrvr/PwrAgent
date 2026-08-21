@@ -59,8 +59,10 @@ export type StarMapChatCardsController = {
       bounds: { width: number; height: number };
       sourceRect: { x: number; y: number; width: number; height: number };
     },
+    options?: { persist?: boolean },
   ) => void;
-  raise: (cardKey: string) => void;
+  raise: (cardKey: string, persist?: boolean) => boolean;
+  remapOwner: (placeholderInstanceId: string, durableInstanceId: string) => void;
   /** Pointer-frame update. Deliberately memory-only. */
   setRect: (cardKey: string, rect: ChatCardRect) => void;
   /** Completed gesture: update relative geometry and persist once. */
@@ -145,6 +147,7 @@ export function useStarMapChatCards(params: {
   const [hydrated, setHydrated] = useState(false);
   const stateRef = useRef(state);
   const mutatedBeforeHydrationRef = useRef(false);
+  const revisionRef = useRef(0);
   const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const desktopApi = params.desktopApi;
 
@@ -155,7 +158,11 @@ export function useStarMapChatCards(params: {
       writeQueueRef.current = writeQueueRef.current
         .catch(() => undefined)
         .then(async () => {
-          await desktopApi.writeStarMapWorkspace?.({ workspace: snapshot });
+          const response = await desktopApi.writeStarMapWorkspace?.({
+            baseRevision: revisionRef.current,
+            workspace: snapshot,
+          });
+          if (response) revisionRef.current = response.workspace.revision;
         });
     },
     [desktopApi],
@@ -165,13 +172,8 @@ export function useStarMapChatCards(params: {
     (next: StarMapChatCardsState, persist: boolean) => {
       stateRef.current = next;
       setState(next);
-      if (persist) {
-        if (!hydrated) {
-          mutatedBeforeHydrationRef.current = true;
-        } else {
-          enqueueWrite(next);
-        }
-      }
+      if (!hydrated) mutatedBeforeHydrationRef.current = true;
+      if (persist && hydrated) enqueueWrite(next);
     },
     [enqueueWrite, hydrated],
   );
@@ -182,6 +184,7 @@ export function useStarMapChatCards(params: {
       ?.readStarMapWorkspace?.()
       .then((response) => {
         if (cancelled) return;
+        revisionRef.current = response.workspace.revision;
         const restored: StarMapChatCardsState = {
           cards: response.workspace.cards.map(entryFromSnapshot),
           views: response.workspace.views,
@@ -213,10 +216,10 @@ export function useStarMapChatCards(params: {
   }, [desktopApi, enqueueWrite]);
 
   const raise = useCallback(
-    (cardKey: string) => {
+    (cardKey: string, persist = true): boolean => {
       const current = stateRef.current;
       const index = current.cards.findIndex((card) => card.key === cardKey);
-      if (index === -1 || index === current.cards.length - 1) return;
+      if (index === -1 || index === current.cards.length - 1) return false;
       const card = current.cards[index];
       applyState(
         {
@@ -227,8 +230,46 @@ export function useStarMapChatCards(params: {
             card,
           ],
         },
-        true,
+        persist,
       );
+      return true;
+    },
+    [applyState],
+  );
+
+  const remapOwner = useCallback(
+    (placeholderInstanceId: string, durableInstanceId: string) => {
+      if (placeholderInstanceId === durableInstanceId) return;
+      const current = stateRef.current;
+      if (
+        !current.cards.some(
+          (card) => card.ownerInstanceId === placeholderInstanceId,
+        )
+      ) {
+        return;
+      }
+      const cards: StarMapChatCardEntry[] = [];
+      for (const card of current.cards) {
+        const remapped = card.ownerInstanceId === placeholderInstanceId
+          ? {
+              ...card,
+              key: starMapWorkspaceCardKey({
+                instanceId: durableInstanceId,
+                threadKey: card.threadKey,
+              }),
+              ownerInstanceId: durableInstanceId,
+              anchor:
+                card.anchor.kind !== "canvas"
+                && card.anchor.instanceId === placeholderInstanceId
+                  ? { ...card.anchor, instanceId: durableInstanceId }
+                  : card.anchor,
+            }
+          : card;
+        const duplicate = cards.findIndex((entry) => entry.key === remapped.key);
+        if (duplicate >= 0) cards.splice(duplicate, 1);
+        cards.push(remapped);
+      }
+      applyState({ ...current, cards }, true);
     },
     [applyState],
   );
@@ -242,7 +283,9 @@ export function useStarMapChatCards(params: {
         bounds: { width: number; height: number };
         sourceRect: { x: number; y: number; width: number; height: number };
       },
+      options?: { persist?: boolean },
     ) => {
+      const persist = options?.persist ?? true;
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       const key = starMapWorkspaceCardKey({
         instanceId: ownerInstanceId,
@@ -264,7 +307,7 @@ export function useStarMapChatCards(params: {
               },
             ],
           },
-          true,
+          persist,
         );
         return;
       }
@@ -302,7 +345,7 @@ export function useStarMapChatCards(params: {
             },
           ],
         },
-        true,
+        persist,
       );
     },
     [applyState],
@@ -479,6 +522,7 @@ export function useStarMapChatCards(params: {
       depthOf,
       open,
       raise,
+      remapOwner,
       resetView,
       resolveRestoredAnchors,
       setRect,
@@ -497,6 +541,7 @@ export function useStarMapChatCards(params: {
       hydrated,
       open,
       raise,
+      remapOwner,
       resetView,
       resolveRestoredAnchors,
       setRect,

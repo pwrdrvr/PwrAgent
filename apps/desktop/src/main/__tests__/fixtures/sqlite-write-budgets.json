@@ -127,7 +127,7 @@
   },
   "star-map-workspace-gesture": {
     "commits": 1,
-    "note": "one completed Star Map open/close/move/resize/toggle or camera gesture, persisted as one atomic workspace row",
+    "note": "one coalesced Star Map open/close/move/resize/toggle or camera gesture, feature-pinned to one API call and persisted as one atomic workspace row",
     "observedWalBytes": 8240,
     "rowsChanged": 1,
     "statements": 1

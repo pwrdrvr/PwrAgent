@@ -86,7 +86,7 @@ export type StarMapChatCardProps = {
   ) => void | Promise<void>;
   /** Refresh the owning navigation feed after a monitor is stopped. */
   onRefreshNavigation?: () => Promise<void>;
-  onRaise: (cardKey: string) => void;
+  onRaise: (cardKey: string, persist?: boolean) => boolean | void;
   onRectChange: (cardKey: string, rect: ChatCardRect) => void;
   onRectCommit?: (cardKey: string, rect: ChatCardRect) => void;
   resolveRect?: (
@@ -117,6 +117,7 @@ export type StarMapChatCardProps = {
 type DragState = {
   kind: "move" | "resize";
   moved: boolean;
+  raised: boolean;
   pointerId: number;
   originX: number;
   originY: number;
@@ -514,10 +515,11 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     (event: ReactPointerEvent, kind: DragState["kind"]) => {
       if (event.button !== 0) return;
       event.preventDefault();
-      onRaise(cardKey);
+      event.stopPropagation();
       dragRef.current = {
         kind,
         moved: false,
+        raised: onRaise(cardKey, false) === true,
         pointerId: event.pointerId,
         originX: event.clientX,
         originY: event.clientY,
@@ -571,7 +573,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       if (!drag || drag.pointerId !== event.pointerId) return;
       dragRef.current = undefined;
       onGuidesChange?.([]);
-      if (drag.moved) onRectCommit?.(cardKey, drag.lastRect);
+      if (drag.moved || drag.raised) {
+        onRectCommit?.(cardKey, drag.lastRect);
+      }
       event.currentTarget.releasePointerCapture?.(event.pointerId);
     },
     [cardKey, onGuidesChange, onRectCommit],

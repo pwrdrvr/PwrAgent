@@ -143,6 +143,7 @@ describe("useStarMapChatCards", () => {
 
     await waitFor(() => expect(writeStarMapWorkspace).toHaveBeenCalledTimes(1));
     expect(writeStarMapWorkspace).toHaveBeenCalledWith({
+      baseRevision: 4,
       workspace: expect.objectContaining({
         cards: [
           expect.objectContaining({
@@ -151,6 +152,131 @@ describe("useStarMapChatCards", () => {
         ],
       }),
     });
+  });
+
+  it("coalesces raising a non-top card and dragging it into one write", async () => {
+    const writeStarMapWorkspace = vi.fn(
+      async ({ baseRevision, workspace }: WriteStarMapWorkspaceRequest) => ({
+        workspace: {
+          ...workspace,
+          revision: baseRevision + 1,
+          updatedAt: 200,
+        },
+      }),
+    );
+    const desktopApi: DesktopApi = {
+      readStarMapWorkspace: vi.fn(async () => savedWorkspace()),
+      writeStarMapWorkspace,
+    };
+    const { result } = renderHook(() => useStarMapChatCards({ desktopApi }));
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    const secondThread = {
+      ...savedWorkspace().workspace.cards[0].thread,
+      id: "t-second",
+      title: "Second card",
+    };
+    act(() => {
+      result.current.open(
+        "pwr_remote",
+        secondThread,
+        undefined,
+        { persist: false },
+      );
+    });
+
+    const nextRect = { left: 760, top: 360, width: 460, height: 560 };
+    act(() => {
+      expect(
+        result.current.raise("pwr_remote::codex:t-remote", false),
+      ).toBe(true);
+      result.current.setRect("pwr_remote::codex:t-remote", nextRect);
+      result.current.commitRect("pwr_remote::codex:t-remote", nextRect);
+    });
+
+    await waitFor(() => expect(writeStarMapWorkspace).toHaveBeenCalledTimes(1));
+    expect(writeStarMapWorkspace).toHaveBeenCalledWith({
+      baseRevision: 4,
+      workspace: expect.objectContaining({
+        cards: expect.arrayContaining([
+          expect.objectContaining({
+            key: "pwr_remote::codex:t-remote",
+            geometry: expect.objectContaining({ fallbackRect: nextRect }),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it("keeps placeholder local cards memory-only until remapping the owner", async () => {
+    const writeStarMapWorkspace = vi.fn(
+      async ({ baseRevision, workspace }: WriteStarMapWorkspaceRequest) => ({
+        workspace: {
+          ...workspace,
+          revision: baseRevision + 1,
+          updatedAt: 200,
+        },
+      }),
+    );
+    const desktopApi: DesktopApi = {
+      readStarMapWorkspace: vi.fn(async () => savedWorkspace()),
+      writeStarMapWorkspace,
+    };
+    const { result } = renderHook(() => useStarMapChatCards({ desktopApi }));
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+    const localThread = {
+      ...savedWorkspace().workspace.cards[0].thread,
+      id: "t-local",
+      title: "Local before health",
+      federation: undefined,
+    };
+
+    act(() => {
+      result.current.open("local", localThread, undefined, { persist: false });
+    });
+    expect(writeStarMapWorkspace).not.toHaveBeenCalled();
+
+    act(() => result.current.remapOwner("local", "pwr_local"));
+
+    await waitFor(() => expect(writeStarMapWorkspace).toHaveBeenCalledTimes(1));
+    expect(result.current.cards.at(-1)).toMatchObject({
+      key: "pwr_local::codex:t-local",
+      ownerInstanceId: "pwr_local",
+    });
+    expect(writeStarMapWorkspace).toHaveBeenCalledWith({
+      baseRevision: 4,
+      workspace: expect.objectContaining({
+        cards: expect.arrayContaining([
+          expect.objectContaining({ key: "pwr_local::codex:t-local" }),
+        ]),
+      }),
+    });
+  });
+
+  it("advances the optimistic base revision after each queued write", async () => {
+    const writeStarMapWorkspace = vi.fn(
+      async ({ baseRevision, workspace }: WriteStarMapWorkspaceRequest) => ({
+        workspace: {
+          ...workspace,
+          revision: baseRevision + 1,
+          updatedAt: 200,
+        },
+      }),
+    );
+    const desktopApi: DesktopApi = {
+      readStarMapWorkspace: vi.fn(async () => savedWorkspace()),
+      writeStarMapWorkspace,
+    };
+    const { result } = renderHook(() => useStarMapChatCards({ desktopApi }));
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+
+    act(() => {
+      result.current.toggleContext("pwr_remote::codex:t-remote");
+      result.current.toggleTerminal("pwr_remote::codex:t-remote");
+    });
+
+    await waitFor(() => expect(writeStarMapWorkspace).toHaveBeenCalledTimes(2));
+    expect(writeStarMapWorkspace.mock.calls[0][0].baseRevision).toBe(4);
+    expect(writeStarMapWorkspace.mock.calls[1][0].baseRevision).toBe(5);
   });
 
   it("merges operator changes made while the saved workspace is loading", async () => {

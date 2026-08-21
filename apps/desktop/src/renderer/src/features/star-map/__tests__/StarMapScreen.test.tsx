@@ -812,9 +812,100 @@ describe("StarMapScreen", () => {
     ).toHaveLength(1);
   });
 
+  it("does not persist a local chat under the pre-health placeholder id", async () => {
+    type HealthResponse = Awaited<
+      ReturnType<NonNullable<DesktopApi["readFederationHealth"]>>
+    >;
+    let resolveHealth: (value: HealthResponse) => void = () => {};
+    const healthRead = new Promise<HealthResponse>((resolve) => {
+      resolveHealth = resolve;
+    });
+    const writeStarMapWorkspace = vi.fn(
+      async ({ baseRevision, workspace }) => ({
+        workspace: {
+          ...workspace,
+          revision: baseRevision + 1,
+          updatedAt: 200,
+        },
+      }),
+    );
+    const desktopApi: DesktopApi = {
+      readFederationHealth: vi.fn(() => healthRead),
+      readStarMapWorkspace: vi.fn(async () => ({
+        workspace: {
+          version: 1 as const,
+          cards: [],
+          views: {},
+          revision: 0,
+          updatedAt: 0,
+        },
+      })),
+      writeStarMapWorkspace,
+      onAgentEvent: vi.fn(() => () => undefined),
+    };
+    render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Open thread: Thread t1/ }),
+    );
+    await screen.findByRole("region", { name: "Chat: Thread t1" });
+    expect(writeStarMapWorkspace).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveHealth({
+        health: {
+          enabled: false,
+          role: "client",
+          status: "disabled",
+          instanceId: "pwr_local",
+          peers: [],
+        },
+      });
+    });
+
+    await waitFor(() => expect(writeStarMapWorkspace).toHaveBeenCalledTimes(1));
+    expect(writeStarMapWorkspace).toHaveBeenCalledWith({
+      baseRevision: 0,
+      workspace: expect.objectContaining({
+        cards: [
+          expect.objectContaining({
+            key: "pwr_local::codex:t1",
+            ownerInstanceId: "pwr_local",
+          }),
+        ],
+      }),
+    });
+  });
+
   it("restores an open disconnected chat with its context and terminal", async () => {
     const desktopApi: DesktopApi = {
       ...buildDesktopApi(),
+      readFederationHealth: vi.fn(async () => ({
+        health: {
+          enabled: true,
+          role: "gateway" as const,
+          status: "listening" as const,
+          instanceId: "pwr_local",
+          peers: [
+            {
+              id: "pwr_remote",
+              label: "Remote Mac",
+              role: "client" as const,
+              status: "disconnected" as const,
+              capabilities: [],
+            },
+          ],
+        },
+      })) as unknown as DesktopApi["readFederationHealth"],
       readStarMapWorkspace: vi.fn(async () => ({
         workspace: {
           version: 1 as const,
@@ -880,11 +971,11 @@ describe("StarMapScreen", () => {
       />,
     );
 
-    expect(
-      await screen.findByRole("region", {
-        name: "Chat: Disconnected workspace chat",
-      }),
-    ).toBeTruthy();
+    const chat = await screen.findByRole("region", {
+      name: "Chat: Disconnected workspace chat",
+    });
+    expect(chat.style.left).toBe("600px");
+    expect(chat.style.top).toBe("240px");
     expect(
       screen.getByRole("region", {
         name: "Thread context: Disconnected workspace chat",

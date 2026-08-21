@@ -244,6 +244,8 @@ export type ReadStarMapWorkspaceResponse = {
 };
 
 export type WriteStarMapWorkspaceRequest = {
+  /** Revision returned by the read or previous successful write. */
+  baseRevision: number;
   workspace: StarMapWorkspaceSnapshot;
 };
 

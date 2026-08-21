@@ -138,16 +138,19 @@ describe("sqlite write metrics", () => {
       views: { orbit: { x: -40, y: 60, scale: 0.8 } },
     };
 
-    // One completed gesture can replace many card fields, but it is one row
-    // and one transaction. Pointermove frames never call this path. At an
-    // intentionally heavy 1,000 completed actions/day, the observed ~8 KB
-    // WAL cost projects to about 8 MB/day; ordinary use is far below that.
+    // The renderer card test pins raise + drag to one commit callback, and the
+    // controller test "coalesces raising a non-top card and dragging it into
+    // one write" pins that callback to one API call. This measured region is
+    // the API call's database half: one row and one transaction, independent
+    // of pointermove count. At an intentionally heavy 1,000 completed
+    // actions/day, the observed ~8 KB WAL cost projects to about 8 MB/day;
+    // ordinary use is far below that.
     const { writes } = await measureSqliteWrites(async () => {
-      await store.writeStarMapWorkspace(workspace);
+      await store.writeStarMapWorkspace(workspace, 0);
     });
 
     expectSqliteWriteBudget({
-      note: "one completed Star Map open/close/move/resize/toggle or camera gesture, persisted as one atomic workspace row",
+      note: "one coalesced Star Map open/close/move/resize/toggle or camera gesture, feature-pinned to one API call and persisted as one atomic workspace row",
       scenario: "star-map-workspace-gesture",
       writes,
     });

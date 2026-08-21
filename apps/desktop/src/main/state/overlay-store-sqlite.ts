@@ -3418,6 +3418,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
   async writeStarMapWorkspace(
     snapshot: StarMapWorkspaceSnapshot,
+    baseRevision: number,
   ): Promise<StarMapWorkspaceState> {
     if (!isStarMapWorkspaceSnapshot(snapshot)) {
       throw new Error("Invalid Star Map workspace");
@@ -3428,7 +3429,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         `SELECT revision FROM star_map_workspace
          WHERE workspace_key = ?`,
       ).get(STAR_MAP_WORKSPACE_KEY) as { revision: number } | undefined;
-      const revision = (current?.revision ?? 0) + 1;
+      const currentRevision = current?.revision ?? 0;
+      if (currentRevision !== baseRevision) {
+        throw new Error(
+          `Star Map workspace revision conflict: expected ${baseRevision}, found ${currentRevision}`,
+        );
+      }
+      const revision = currentRevision + 1;
       this.stateDb.raw.prepare(
         `INSERT OR REPLACE INTO star_map_workspace(
            workspace_key,

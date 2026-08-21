@@ -970,6 +970,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, []);
 
   const localInstanceId = health?.instanceId ?? "local";
+  useEffect(() => {
+    if (!health?.instanceId || !chatCards.hydrated) return;
+    chatCards.remapOwner("local", health.instanceId);
+  }, [chatCards, health?.instanceId]);
   const peers = useMemo(() => {
     const visible = (health?.peers ?? []).filter(
       (peer) => peer.status !== "revoked",
@@ -2497,10 +2501,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // callback only ever runs after a render has computed it.
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
       const target = thread.federation?.ref.target;
-      const ownerInstanceId =
-        target && isRemoteFederationTarget(target)
-          ? target.instanceId
-          : localInstanceId;
+      const remoteOwner = target && isRemoteFederationTarget(target);
+      const ownerInstanceId = remoteOwner ? target.instanceId : localInstanceId;
       const sourceKey = starMapWorkspaceCardKey({
         instanceId: ownerInstanceId,
         threadKey,
@@ -2512,31 +2514,33 @@ export function StarMapScreen(props: StarMapScreenProps) {
           break;
         }
       }
+      const placement = anchor
+        ? {
+            anchor: {
+              anchor: {
+                kind: "thread" as const,
+                instanceId: ownerInstanceId,
+                threadKey,
+              },
+              point: { x: anchor.x, y: anchor.y },
+            },
+            sourceRect: {
+              height: anchor.height,
+              width: anchor.width,
+              x: anchor.x,
+              y: anchor.y,
+            },
+            bounds: canvasBoundsRef.current,
+          }
+        : undefined;
       chatCards.open(
         ownerInstanceId,
         thread,
-        anchor
-          ? {
-              anchor: {
-                anchor: {
-                  kind: "thread",
-                  instanceId: ownerInstanceId,
-                  threadKey,
-                },
-                point: { x: anchor.x, y: anchor.y },
-              },
-              sourceRect: {
-                height: anchor.height,
-                width: anchor.width,
-                x: anchor.x,
-                y: anchor.y,
-              },
-              bounds: canvasBoundsRef.current,
-            }
-          : undefined,
+        placement,
+        { persist: Boolean(remoteOwner || health?.instanceId) },
       );
     },
-    [chatCards, localInstanceId],
+    [chatCards, health?.instanceId, localInstanceId],
   );
 
   /**
@@ -3101,6 +3105,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           }),
         );
         if (rect) return { x: rect.x, y: rect.y };
+        return undefined;
       }
       const body = bodies.find(
         (candidate) => candidate.instanceId === anchor.instanceId,

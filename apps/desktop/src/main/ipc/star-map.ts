@@ -157,9 +157,16 @@ export function registerStarMapIpcHandlers(): void {
       if (!isStarMapWorkspaceSnapshot(request?.workspace)) {
         throw new Error("Invalid Star Map workspace");
       }
+      if (
+        typeof request.baseRevision !== "number"
+        || !Number.isSafeInteger(request.baseRevision)
+        || request.baseRevision < 0
+      ) {
+        throw new Error("Invalid Star Map workspace base revision");
+      }
       return {
         workspace: await getDesktopOverlayStore()
-          .writeStarMapWorkspace(request.workspace),
+          .writeStarMapWorkspace(request.workspace, request.baseRevision),
       };
     },
   );

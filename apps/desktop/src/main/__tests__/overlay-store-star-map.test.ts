@@ -157,7 +157,7 @@ describe("star map arrangement overlay", () => {
 
 describe("star map workspace overlay", () => {
   it("round-trips viewer-owned cards, satellites, geometry, and cameras", async () => {
-    const written = await store.writeStarMapWorkspace(workspace());
+    const written = await store.writeStarMapWorkspace(workspace(), 0);
 
     expect(written).toMatchObject({
       ...workspace(),
@@ -168,11 +168,11 @@ describe("star map workspace overlay", () => {
   });
 
   it("increments the revision while replacing the workspace atomically", async () => {
-    await store.writeStarMapWorkspace(workspace());
+    await store.writeStarMapWorkspace(workspace(), 0);
     const next = workspace();
     next.cards[0].terminalOpen = false;
 
-    const written = await store.writeStarMapWorkspace(next);
+    const written = await store.writeStarMapWorkspace(next, 1);
 
     expect(written.revision).toBe(2);
     expect((await store.readStarMapWorkspace()).cards[0].terminalOpen).toBe(
@@ -183,6 +183,25 @@ describe("star map workspace overlay", () => {
         "SELECT COUNT(*) AS count FROM star_map_workspace",
       ).get(),
     ).toEqual({ count: 1 });
+  });
+
+  it("rejects a stale full-snapshot write instead of losing newer state", async () => {
+    const otherInstanceStore = new SqliteOverlayStore(stateDb);
+    const first = workspace();
+    const second = workspace();
+    second.cards[0].terminalOpen = false;
+
+    await store.writeStarMapWorkspace(first, 0);
+
+    await expect(
+      otherInstanceStore.writeStarMapWorkspace(second, 0),
+    ).rejects.toThrow(
+      "Star Map workspace revision conflict: expected 0, found 1",
+    );
+    expect(await store.readStarMapWorkspace()).toMatchObject({
+      cards: first.cards,
+      revision: 1,
+    });
   });
 
   it("degrades a malformed payload to an empty workspace", async () => {
