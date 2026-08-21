@@ -319,6 +319,14 @@ export const SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL =
 export const SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL =
   "settings:resolve-messaging-contact";
 /**
+ * Builds the official Slack create-from-manifest URL and optionally
+ * opens it in the system browser. Request: `SlackCreateAppRequest`.
+ * Response: `SlackCreateAppResponse`. The renderer never opens the
+ * Slack login page itself.
+ */
+export const SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL =
+  "settings:open-slack-create-app";
+/**
  * Fired main → renderer whenever the messaging store has had bindings or
  * default Agent assignments created, changed, or revoked. The
  * payload is intentionally minimal — receivers should refetch the

@@ -32,6 +32,8 @@ import {
   slackApprovalSequence,
 } from "../../lib/slack-pairing-approval";
 import type { AppearanceController } from "../../lib/useAppearance";
+import { SlackConnectCard } from "../messaging/SlackConnectCard";
+import { SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE } from "../messaging/slack-connect-copy";
 import type { DesktopSettingsState } from "../settings/useDesktopSettings";
 import { SettingsSwitch } from "../settings/SettingsSwitch";
 import { filterBufferedSecrets } from "./filterBufferedSecrets";
@@ -2751,8 +2753,8 @@ const PROVIDER_ROWS: readonly ProviderRow[] = [
     name: "Slack",
     icon: <SlackIcon size={20} aria-hidden />,
     notes:
-      "Multi-step app config · OAuth scopes · Socket Mode vs Events API. Most fiddly.",
-    setupTime: "~30 min",
+      "Create from PwrAgent's Slack manifest · Install to Workspace · paste xoxb- and xapp-.",
+    setupTime: "~10 min",
     risk: "med",
     riskLabel: "Low–medium",
   },
@@ -4110,40 +4112,19 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
     id: "slack",
     intro: (
       <>
-        Slack app config → Install App → grab the Bot User OAuth Token. Pick
-        Socket Mode (easiest, requires App-Level Token) or Events API
-        (requires a public signing secret + callback URL).
+        Create a customer-owned Slack app from PwrAgent&rsquo;s official
+        manifest, install it to your workspace, then paste the bot token
+        (<code>xoxb-</code>) and app-level token (<code>xapp-</code>).
+        Socket Mode is the only inbound path.
       </>
     ),
     fields: [
-      {
-        kind: "segmented",
-        key: "inboundMode",
-        label: "Inbound mode",
-        sub: "Socket Mode is recommended — no public URL needed.",
-        options: [
-          { label: "Socket Mode", value: "socket" },
-          { label: "Events API", value: "events" },
-        ],
-      },
       { kind: "secret", name: "slackBotToken", label: "Bot token (xoxb-…)" },
       {
         kind: "secret",
         name: "slackAppToken",
         label: "App-level token (xapp-…)",
         sub: "Required for Socket Mode. Generate under Basic Information → App-Level Tokens.",
-      },
-      {
-        kind: "secret",
-        name: "slackSigningSecret",
-        label: "Signing secret",
-        sub: "Required for Events API. Found under Basic Information → App Credentials.",
-      },
-      {
-        kind: "text",
-        key: "workspaceUrl",
-        label: "Workspace URL",
-        placeholder: "https://your-team.slack.com",
       },
     ],
     pairingTitle: "Pair a Slack conversation",
@@ -4208,7 +4189,7 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
   },
 };
 
-function ProviderSetupStep(props: {
+export function ProviderSetupStep(props: {
   provider: OnboardingProvider;
   settings: DesktopSettingsState;
   desktopApi?: DesktopApi;
@@ -4240,6 +4221,20 @@ function ProviderSetupStep(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.provider]);
 
+  useEffect(() => {
+    if (props.provider !== "slack") return;
+    if (snapshot?.messaging.slack.inboundMode.value !== "events") return;
+    void props.settings.writeConfig({
+      messaging: { slack: { inboundMode: "socket" } },
+    });
+    // Coerce leftover Events API configs once when the Slack step opens.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.provider]);
+
+  const leftoverEventsInbound =
+    props.provider === "slack"
+    && snapshot?.messaging.slack.inboundMode.value === "events";
+
   return (
     <div className="onboarding-wizard__provider-setup">
       <header className="onboarding-wizard__head">
@@ -4256,6 +4251,17 @@ function ProviderSetupStep(props: {
         </h1>
         <p className="onboarding-wizard__sub">{config.intro}</p>
       </header>
+      {props.provider === "slack" ? (
+        <SlackConnectCard
+          desktopApi={props.desktopApi}
+          variant="onboarding"
+        />
+      ) : null}
+      {leftoverEventsInbound ? (
+        <p className="onboarding-wizard__notice" role="status">
+          {SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE}
+        </p>
+      ) : null}
       <div className="onboarding-wizard__provider-fields">
         {config.fields.map((field) => (
           <ProviderFieldRow
@@ -4272,6 +4278,45 @@ function ProviderSetupStep(props: {
           />
         ))}
       </div>
+      {props.provider === "slack" ? (
+        <details className="onboarding-wizard__advanced">
+          <summary>Advanced — existing tokens and optional fields</summary>
+          <div className="onboarding-wizard__provider-fields">
+            <ProviderFieldRow
+              field={{
+                kind: "secret",
+                name: "slackSigningSecret",
+                label: "Signing secret",
+                sub: "Optional. Used to sign in-app button callbacks. Not required for Socket Mode.",
+              }}
+              provider={props.provider}
+              snapshot={snapshot}
+              saving={props.settings.saving}
+              bufferedSecrets={props.bufferedSecrets}
+              onBufferSecret={props.onBufferSecret}
+              writeConfig={props.settings.writeConfig}
+              replaceSecret={props.settings.replaceSecret}
+              clearSecret={props.settings.clearSecret}
+            />
+            <ProviderFieldRow
+              field={{
+                kind: "text",
+                key: "workspaceUrl",
+                label: "Workspace URL",
+                placeholder: "https://your-team.slack.com",
+              }}
+              provider={props.provider}
+              snapshot={snapshot}
+              saving={props.settings.saving}
+              bufferedSecrets={props.bufferedSecrets}
+              onBufferSecret={props.onBufferSecret}
+              writeConfig={props.settings.writeConfig}
+              replaceSecret={props.settings.replaceSecret}
+              clearSecret={props.settings.clearSecret}
+            />
+          </div>
+        </details>
+      ) : null}
       <ProviderIdentityProbe
         provider={props.provider}
         snapshot={snapshot}
@@ -4368,6 +4413,7 @@ function ProviderIdentityProbe(props: {
   const configured = isPlatformPrimarySecretConfigured(props.provider, props.snapshot);
   const desktopApi = props.desktopApi;
   const probeKind: SettingsCredentialTestKind = props.provider;
+  const fetchedAt = props.snapshot?.fetchedAt;
 
   useEffect(() => {
     if (!configured || !desktopApi?.testSettingsCredentials) {
@@ -4399,7 +4445,7 @@ function ProviderIdentityProbe(props: {
     return () => {
       cancelled = true;
     };
-  }, [configured, desktopApi, probeKind]);
+  }, [configured, desktopApi, fetchedAt, probeKind]);
 
   if (!configured && !running && !result) return null;
 
@@ -4456,9 +4502,8 @@ function ProviderIdentityProbe(props: {
  *
  * (We don't try to gate on EVERY secret being present — that would
  * silently hide the probe for multi-field providers like Slack until
- * all 3 are entered. Better to attempt the probe once the primary
- * token is present; the probe surfaces its own "missing X" message
- * for the rest.)
+ * both tokens are entered. Slack waits for xoxb- + xapp- because the
+ * probe now reports bot identity and Socket Mode separately.)
  */
 function isPlatformPrimarySecretConfigured(
   provider: OnboardingProvider,
@@ -4473,7 +4518,8 @@ function isPlatformPrimarySecretConfigured(
     case "mattermost":
       return snapshot.messaging?.mattermost?.botToken?.configured === true;
     case "slack":
-      return snapshot.messaging?.slack?.botToken?.configured === true;
+      return snapshot.messaging?.slack?.botToken?.configured === true
+        && snapshot.messaging?.slack?.appToken?.configured === true;
     case "feishu":
       return snapshot.messaging?.feishu?.appSecret?.configured === true;
     case "line":

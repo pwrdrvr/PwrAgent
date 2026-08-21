@@ -174,8 +174,10 @@ export function buildSlackPatchDelta(
   if (snapshot.workspaceUrl.value !== candidate.workspaceUrl.value) {
     patch.workspaceUrl = candidate.workspaceUrl.value;
   }
-  if (snapshot.inboundMode.value !== candidate.inboundMode.value) {
-    patch.inboundMode = candidate.inboundMode.value;
+  const nextInboundMode =
+    candidate.inboundMode.value === "events" ? "socket" : candidate.inboundMode.value;
+  if (snapshot.inboundMode.value !== nextInboundMode) {
+    patch.inboundMode = nextInboundMode;
   }
   if (
     snapshot.teamAuthorizationMode.value

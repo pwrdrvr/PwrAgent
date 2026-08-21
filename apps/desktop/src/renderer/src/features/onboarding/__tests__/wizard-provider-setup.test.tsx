@@ -19,6 +19,7 @@ import type { DesktopSettingsState } from "../../settings/useDesktopSettings";
 import {
   BackendRequirementsStep,
   isBackendRequirementSatisfied,
+  ProviderSetupStep,
   SecretFieldRow,
   validateProfileNames,
 } from "../OnboardingWizard";
@@ -474,4 +475,148 @@ describe("SecretFieldRow live-write contract", () => {
     // the buffer (asserted above).
     await Promise.resolve();
     expect(clearSecret).not.toHaveBeenCalled();
-  });});
+  });
+});
+
+describe("Slack onboarding setup", () => {
+  function slackSettings(
+    inboundMode: "socket" | "events" = "socket",
+  ): DesktopSettingsState {
+    const unsetSecret = {
+      configured: false,
+      source: "unset" as const,
+      writable: true,
+    };
+    return {
+      snapshot: {
+        messaging: {
+          telegram: { botToken: unsetSecret },
+          discord: { botToken: unsetSecret },
+          mattermost: { botToken: unsetSecret, hmacSecret: unsetSecret },
+          slack: {
+            enabled: { value: true, source: "config" },
+            inboundMode: { value: inboundMode, source: "config" },
+            botToken: unsetSecret,
+            appToken: unsetSecret,
+            signingSecret: unsetSecret,
+          },
+          feishu: {
+            appId: unsetSecret,
+            appSecret: unsetSecret,
+            encryptKey: unsetSecret,
+            verificationToken: unsetSecret,
+          },
+          line: {
+            channelAccessToken: unsetSecret,
+            channelSecret: unsetSecret,
+          },
+        },
+      } as unknown as DesktopSettingsSnapshot,
+      refresh: vi.fn(async () => undefined),
+      writeConfig: vi.fn(async () => true),
+      replaceSecret: vi.fn(async () => true),
+      clearSecret: vi.fn(async () => true),
+      saving: false,
+    } as unknown as DesktopSettingsState;
+  }
+
+  it("offers Create Slack app and hides Events API", () => {
+    const openSlackCreateApp = vi.fn(async () => ({
+      url: "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
+      oversized: false,
+      manifestJson: "{}",
+      opened: true,
+    }));
+    render(
+      <ProviderSetupStep
+        provider="slack"
+        settings={slackSettings()}
+        desktopApi={{ openSlackCreateApp } as unknown as DesktopApi}
+        bufferedSecrets={{}}
+        onBufferSecret={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Create Slack app" })).toBeEnabled();
+    expect(screen.queryByRole("radio", { name: "Events API" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Events API \(requires/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/Socket Mode is the only inbound path/i)).toBeInTheDocument();
+  });
+
+  it("coerces leftover Events API configs and shows a notice", () => {
+    const settings = slackSettings("events");
+    render(
+      <ProviderSetupStep
+        provider="slack"
+        settings={settings}
+        bufferedSecrets={{}}
+        onBufferSecret={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("Events API is not implemented. PwrAgent will use Socket Mode."),
+    ).toBeInTheDocument();
+    expect(settings.writeConfig).toHaveBeenCalledWith({
+      messaging: { slack: { inboundMode: "socket" } },
+    });
+  });
+
+  it("re-runs Slack identity probe after a later secret replace", async () => {
+    const testSettingsCredentials = vi.fn(async () => ({
+      kind: "slack" as const,
+      status: "failed" as const,
+      testedAt: 1,
+      durationMs: 1,
+      errorMessage: "Socket Mode failed",
+    }));
+    const configuredSecret = {
+      configured: true,
+      source: "keychain" as const,
+      writable: true,
+    };
+    const settings = slackSettings();
+    const snapshot = {
+      ...settings.snapshot!,
+      fetchedAt: 11,
+      messaging: {
+        ...settings.snapshot!.messaging,
+        slack: {
+          ...settings.snapshot!.messaging.slack,
+          botToken: configuredSecret,
+          appToken: configuredSecret,
+        },
+      },
+    };
+    const { rerender } = render(
+      <ProviderSetupStep
+        provider="slack"
+        settings={{ ...settings, snapshot }}
+        desktopApi={{ testSettingsCredentials } as unknown as DesktopApi}
+        bufferedSecrets={{}}
+        onBufferSecret={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(testSettingsCredentials).toHaveBeenCalledTimes(1);
+    });
+
+    rerender(
+      <ProviderSetupStep
+        provider="slack"
+        settings={{
+          ...settings,
+          snapshot: { ...snapshot, fetchedAt: 12 },
+        }}
+        desktopApi={{ testSettingsCredentials } as unknown as DesktopApi}
+        bufferedSecrets={{}}
+        onBufferSecret={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(testSettingsCredentials).toHaveBeenCalledTimes(2);
+    });
+  });
+});

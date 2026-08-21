@@ -33,6 +33,12 @@ const providerMocks = vi.hoisted(() => ({
   resolveDiscordContact: vi.fn(),
   resolveMattermostContact: vi.fn(),
   resolveSlackContact: vi.fn(),
+  buildSlackCreateAppUrl: vi.fn(() => ({
+    url: "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
+    fullUrl: "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
+    oversized: false,
+    manifestJson: "{}",
+  })),
 }));
 const runtimeMock = vi.hoisted(() => ({
   applyConfig: vi.fn(async (_config: unknown, _options?: unknown) => undefined),
@@ -169,6 +175,7 @@ vi.mock("@pwragent/messaging-provider-mattermost", () => ({
 
 vi.mock("@pwragent/messaging-provider-slack", () => ({
   resolveContact: providerMocks.resolveSlackContact,
+  buildSlackCreateAppUrl: providerMocks.buildSlackCreateAppUrl,
 }));
 
 describe("settings ipc", () => {
@@ -191,6 +198,7 @@ describe("settings ipc", () => {
     providerMocks.resolveDiscordContact.mockReset();
     providerMocks.resolveMattermostContact.mockReset();
     providerMocks.resolveSlackContact.mockReset();
+    providerMocks.buildSlackCreateAppUrl.mockClear();
     messagingConfigMocks.loadDesktopMessagingConfigFromSettings.mockClear();
     leaseCoordinatorMock.applyLatestConfig.mockClear();
     leaseCoordinatorMock.snapshot.mockClear();
@@ -436,6 +444,7 @@ describe("settings ipc", () => {
       resolveMattermostBotTokenSync: vi.fn(),
       resolveMattermostServerUrlSync: vi.fn(),
       resolveSlackBotTokenSync: vi.fn(),
+      resolveSlackAppTokenSync: vi.fn(),
       resolveLineChannelAccessTokenSync: vi.fn(),
       resolveGrokApiKey: vi.fn(),
     } as unknown as DesktopSettingsService;
@@ -457,6 +466,34 @@ describe("settings ipc", () => {
       status: "unset",
     });
     expect(childProcessMocks.execFile).not.toHaveBeenCalled();
+
+    disposeSettingsIpcHandlers();
+  });
+
+  it("opens the official Slack create-from-manifest URL in the system browser", async () => {
+    const service = {
+      readSettings: vi.fn(),
+    } as unknown as DesktopSettingsService;
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
+      "../ipc/settings"
+    );
+    const { SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL } = await import("../../shared/ipc");
+
+    disposeSettingsIpcHandlers();
+    registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL)?.({}, { open: true }),
+    ).resolves.toMatchObject({
+      opened: true,
+      oversized: false,
+      url: "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
+      manifestJson: "{}",
+    });
+    expect(providerMocks.buildSlackCreateAppUrl).toHaveBeenCalledTimes(1);
+    expect(electronMocks.openExternal).toHaveBeenCalledExactlyOnceWith(
+      "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
+    );
 
     disposeSettingsIpcHandlers();
   });
