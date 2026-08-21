@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
   type FormEvent,
-  type KeyboardEvent,
 } from "react";
 import {
   buildReviewBranchOptions,
@@ -162,6 +161,7 @@ function buildReviewRequest(params: {
 }
 
 export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
+  const { busy, onCancel, onSubmit, submitting } = props;
   const workspaceOptions = useMemo(
     () => buildReviewWorkspaceOptions(props.thread),
     [props.thread],
@@ -185,11 +185,18 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
   const [commit, setCommit] = useState("");
   const [customInstructions, setCustomInstructions] = useState("");
   const targetRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const dialogRef = useRef<HTMLElement | null>(null);
   const branchListId = useId();
   const commitListId = useId();
 
   useEffect(() => {
-    targetRefs.current[0]?.focus();
+    // The compact editor also synchronizes editability when this mounts and
+    // can reclaim focus during that transaction. Focus one frame later, as
+    // the main review composer does, so keyboard commands land in the setup.
+    const frame = requestAnimationFrame(() => {
+      targetRefs.current[0]?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
   }, []);
 
   useEffect(() => {
@@ -198,38 +205,114 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
     }
   }, [branchEdited, branchOptions]);
 
-  const request = buildReviewRequest({
-    branch,
-    commit,
-    customInstructions,
-    target,
-    workspaceCwd,
-  });
+  const request = useMemo(
+    () => buildReviewRequest({
+      branch,
+      commit,
+      customInstructions,
+      target,
+      workspaceCwd,
+    }),
+    [branch, commit, customInstructions, target, workspaceCwd],
+  );
   const workspaceSelectionRequired = workspaceOptions.length > 1;
   const canSubmit = Boolean(
     request
     && (!workspaceSelectionRequired || workspaceCwd)
-    && !props.busy
-    && !props.submitting,
+    && !busy
+    && !submitting,
   );
 
   const submit = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault();
-    if (canSubmit && request) props.onSubmit(request);
+    if (canSubmit && request) onSubmit(request);
   };
 
-  const handleKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
-    if (event.key !== "Escape" || props.submitting) return;
-    event.preventDefault();
-    event.stopPropagation();
-    props.onCancel();
-  };
+  useEffect(() => {
+    const handleKeyDown = (event: globalThis.KeyboardEvent): void => {
+      const dialog = dialogRef.current;
+      const targetNode = event.target;
+      if (!dialog || !(targetNode instanceof Node)) return;
+      const ownerCard = dialog.closest(".star-map-chat-card");
+      if (!ownerCard?.contains(targetNode)) return;
+
+      if (event.key === "Escape" && !submitting) {
+        event.preventDefault();
+        event.stopPropagation();
+        onCancel();
+        return;
+      }
+      if (
+        event.key !== "Enter"
+        || event.shiftKey
+        || event.altKey
+        || event.metaKey
+        || event.ctrlKey
+      ) {
+        return;
+      }
+
+      const targetElement =
+        targetNode instanceof HTMLElement ? targetNode : undefined;
+      const insideDialog = dialog.contains(targetNode);
+      const insideDisabledComposer = Boolean(
+        targetElement?.closest(".compact-composer"),
+      );
+      if (!insideDialog && !insideDisabledComposer) return;
+      if (
+        targetElement?.closest("textarea, select")
+        || targetElement?.closest("[data-review-dismiss]")
+      ) {
+        return;
+      }
+
+      const requestedTarget = targetElement
+        ?.closest<HTMLElement>("[data-review-target]")
+        ?.dataset.reviewTarget as ReviewTargetChoice | undefined;
+      const nextRequest = requestedTarget
+        ? buildReviewRequest({
+            branch,
+            commit,
+            customInstructions,
+            target: requestedTarget,
+            workspaceCwd,
+          })
+        : request;
+      if (
+        !nextRequest
+        || (workspaceSelectionRequired && !workspaceCwd)
+        || busy
+        || submitting
+      ) {
+        return;
+      }
+      event.preventDefault();
+      event.stopPropagation();
+      onSubmit(nextRequest);
+    };
+
+    // Capture is intentional: the Star Map layer owns Escape at its root,
+    // while the disabled editor can retain focus underneath this sibling.
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
+  }, [
+    branch,
+    busy,
+    commit,
+    customInstructions,
+    onCancel,
+    onSubmit,
+    request,
+    submitting,
+    workspaceCwd,
+    workspaceSelectionRequired,
+  ]);
 
   return (
     <section
       aria-label={`Start review for ${props.thread.title}`}
       className="star-map-review-setup"
-      onKeyDown={handleKeyDown}
+      ref={dialogRef}
       role="dialog"
     >
       <header className="star-map-review-setup__header">
@@ -240,6 +323,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
         <button
           aria-label="Close review setup"
           className="star-map-review-setup__close"
+          data-review-dismiss
           disabled={props.submitting}
           onClick={props.onCancel}
           type="button"
@@ -279,6 +363,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
                 className={`composer__review-option${
                   target === option.target ? " is-active" : ""
                 }`}
+                data-review-target={option.target}
                 key={option.target}
                 onClick={() => setTarget(option.target)}
                 ref={(node) => {
@@ -363,6 +448,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
         <footer className="star-map-review-setup__actions">
           <button
             className="composer__secondary-action"
+            data-review-dismiss
             disabled={props.submitting}
             onClick={props.onCancel}
             type="button"

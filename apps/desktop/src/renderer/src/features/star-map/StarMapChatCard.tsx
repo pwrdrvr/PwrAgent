@@ -124,6 +124,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const [reviewSetupOpen, setReviewSetupOpen] = useState(false);
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewError, setReviewError] = useState<string | undefined>(undefined);
+  const [reviewComposerKey, setReviewComposerKey] = useState(0);
   // Where a mid-turn send actually landed. The operator cannot tell a steer
   // from a queue by looking at the transcript, and the answer differs by
   // backend, so the card says which one happened.
@@ -372,6 +373,11 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     if (reviewSubmitting) return;
     setReviewError(undefined);
     setReviewSetupOpen(false);
+    // The editability transaction can echo Tiptap's pre-disable document
+    // after the send path cleared it. Remounting only at this explicit review
+    // boundary gives Cancel/Escape the main composer's clean-slate contract
+    // without discarding ordinary card drafts on unrelated renders.
+    setReviewComposerKey((current) => current + 1);
   }, [reviewSubmitting]);
 
   const submitReviewSetup = useCallback(
@@ -386,6 +392,12 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       }
       setReviewError(undefined);
       setReviewSubmitting(true);
+      // Match the main review composer: accepting the configured request
+      // closes the setup immediately. review/start can spend noticeable time
+      // resolving its model, workspace, and managed-child path; keeping the
+      // form onscreen until that promise settles makes a real click look dead.
+      setReviewSetupOpen(false);
+      setReviewComposerKey((current) => current + 1);
       try {
         await desktopApi.startReview({
           backend: thread.source,
@@ -396,7 +408,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         });
         setReviewSetupOpen(false);
       } catch (error) {
-        setReviewError(
+        setSendError(
           error instanceof Error
             ? error.message
             : "Could not start that review.",
@@ -1002,9 +1014,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         <MemoizedCompactComposer
           busy={session.threadBusy}
           canSteer={canSteer}
-          disabled={reviewSetupOpen}
+          disabled={reviewSetupOpen || reviewSubmitting}
           executionMode={threadExecutionMode}
           fastMode={threadFastMode}
+          key={reviewComposerKey}
           mentionSources={mentionSources}
           model={threadModel}
           onInterrupt={onInterrupt}

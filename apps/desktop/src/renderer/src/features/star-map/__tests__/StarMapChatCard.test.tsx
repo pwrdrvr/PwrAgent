@@ -407,13 +407,139 @@ describe("StarMapChatCard slash commands", () => {
     const dialog = await screen.findByRole("dialog", {
       name: "Start review for Local work",
     });
+    // Tiptap can emit its pre-disable document once more while editability
+    // synchronizes. Cancel must still leave the same clean composer state as
+    // the main window, not resurrect the command and its autocomplete.
+    fireEvent.change(input, { target: { value: "/review" } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Start review for Local work" }),
+      ).toBeNull();
+    });
+    const restoredInput = screen.getByRole("textbox", {
+      name: "Message Local work",
+    }) as HTMLElement & { value: string };
+    expect(restoredInput.getAttribute("contenteditable")).toBe("true");
+    expect(restoredInput.value).toBe("");
+    expect(screen.queryByRole("listbox", { name: "Commands" })).toBeNull();
+    expect(desktopApi.startReview).not.toHaveBeenCalled();
+  });
+
+  it("cancels review setup on Escape even if the disabled editor kept focus", async () => {
+    const desktopApi = buildApi({ startReview: vi.fn() });
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    fireEvent.change(input, { target: { value: "/review" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByRole("dialog", { name: "Start review for Local work" });
+
+    fireEvent.keyDown(input, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Start review for Local work" }),
+      ).toBeNull();
+    });
+    const restoredInput = screen.getByRole("textbox", {
+      name: "Message Local work",
+    }) as HTMLElement & { value: string };
+    expect(restoredInput.value).toBe("");
+    expect(screen.queryByRole("listbox", { name: "Commands" })).toBeNull();
+    expect(desktopApi.startReview).not.toHaveBeenCalled();
+  });
+
+  it("starts the selected review on Enter even if the disabled editor kept focus", async () => {
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t-local",
+      reviewThreadId: "review-1",
+      turnId: "turn-review-1",
+    }));
+    const desktopApi = buildApi({ startReview });
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    fireEvent.change(input, { target: { value: "/review" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByRole("dialog", { name: "Start review for Local work" });
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "t-local",
+        target: { type: "baseBranch", branch: "main" },
+        delivery: "inline",
+      });
+    });
     expect(
       screen.queryByRole("dialog", { name: "Start review for Local work" }),
     ).toBeNull();
-    expect(input.getAttribute("contenteditable")).toBe("true");
-    expect(desktopApi.startReview).not.toHaveBeenCalled();
+  });
+
+  it("starts the focused review target on Enter", async () => {
+    const startReview = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t-local",
+      reviewThreadId: "review-1",
+      turnId: "turn-review-1",
+    }));
+    const desktopApi = buildApi({ startReview });
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    fireEvent.change(input, { target: { value: "/review" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const dialog = await screen.findByRole("dialog", {
+      name: "Start review for Local work",
+    });
+
+    fireEvent.keyDown(
+      within(dialog).getByRole("button", { name: /Current changes/ }),
+      { key: "Enter" },
+    );
+
+    await waitFor(() => {
+      expect(startReview).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "t-local",
+        target: { type: "uncommittedChanges" },
+        delivery: "inline",
+      });
+    });
+    expect(
+      screen.queryByRole("dialog", { name: "Start review for Local work" }),
+    ).toBeNull();
+  });
+
+  it("closes review setup as soon as Start review is accepted", async () => {
+    let resolveStart: (() => void) | undefined;
+    const startReview = vi.fn(
+      () => new Promise<never>((resolve) => {
+        resolveStart = () => resolve(undefined as never);
+      }),
+    );
+    const desktopApi = buildApi({ startReview });
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    fireEvent.change(input, { target: { value: "/review" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const dialog = await screen.findByRole("dialog", {
+      name: "Start review for Local work",
+    });
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: /Current changes/ }),
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Start review" }),
+    );
+
+    expect(startReview).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("dialog", { name: "Start review for Local work" }),
+    ).toBeNull();
+    resolveStart?.();
   });
 
   it("closes review setup without disabling the card's terminal control", async () => {
@@ -451,7 +577,11 @@ describe("StarMapChatCard slash commands", () => {
     expect(
       screen.queryByRole("dialog", { name: "Start review for Local work" }),
     ).toBeNull();
-    expect(input.getAttribute("contenteditable")).toBe("true");
+    expect(
+      screen
+        .getByRole("textbox", { name: "Message Local work" })
+        .getAttribute("contenteditable"),
+    ).toBe("true");
   });
 
   it.each([false, true])(
