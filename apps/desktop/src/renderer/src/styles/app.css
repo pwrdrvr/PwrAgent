@@ -13196,6 +13196,143 @@ textarea,
   cursor: default;
 }
 
+/* The body is a card-local stacking context. Review setup can cover the
+   transcript and composer without becoming a window-global modal, so another
+   chat card and the terminal satellite remain ordinary interactive siblings. */
+.star-map-chat-card__body {
+  display: flex;
+  position: relative;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.star-map-review-setup {
+  display: flex;
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+}
+
+.star-map-review-setup__header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.star-map-review-setup__eyebrow {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.star-map-review-setup__header h2 {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.star-map-review-setup__close {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.star-map-review-setup__close:hover:not(:disabled) {
+  border-color: var(--accent-border);
+  color: var(--text-primary);
+}
+
+.star-map-review-setup__close:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.star-map-review-setup__close:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.star-map-review-setup__form {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.star-map-review-setup__content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 10px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.star-map-review-setup .composer__review-options {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.star-map-review-setup .composer__review-option {
+  min-height: 54px;
+  padding: 7px 8px;
+}
+
+.star-map-review-setup .composer__review-option span,
+.star-map-review-setup .composer__review-input {
+  font-size: 12px;
+}
+
+.star-map-review-setup__message,
+.star-map-review-setup__error {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.star-map-review-setup__message {
+  color: var(--text-secondary);
+}
+
+.star-map-review-setup__error {
+  color: var(--danger-text);
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.star-map-review-setup__actions {
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+
 .star-map-chat-card__error {
   flex: 0 0 auto;
   margin: 0;

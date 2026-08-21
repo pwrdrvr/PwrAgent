@@ -50,6 +50,13 @@ import {
   resolveThreadSummaryReference,
   serializeDraftWithSkillTokens,
 } from "./composer-mention-tokens";
+import {
+  filterSlashCommandCandidates,
+  findSlashCommandTrigger,
+  normalizeSlashCommandName,
+  slashCommandMatchesText,
+  type ComposerSlashCommand,
+} from "./composer-slash-commands";
 import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
 
 /**
@@ -57,7 +64,8 @@ import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
  *
  * Every field is optional and an absent one simply retires its trigger
  * character back to prose — a host that supplies nothing gets exactly the
- * literal `$`/`@`/`#` behaviour the compact composer had before mentions
+ * literal `$`, `/`, `@`, and `#` behaviour the compact composer had before
+ * mentions
  * existed. That is deliberate: `CompactComposer` is shared, and a required
  * source would be a breaking change for the next surface that adopts it.
  *
@@ -67,6 +75,8 @@ import { HighlightedAutocompleteLabel } from "./HighlightedAutocompleteLabel";
  * for a list the operator may never ask for.
  */
 export type ComposerMentionSources = {
+  /** Slash commands offered by PwrAgent and the active provider. */
+  commands?: readonly ComposerSlashCommand[];
   /**
    * Identity key of the thread being written in. Never offered as a `#`
    * candidate — referencing the current thread tells the agent nothing it
@@ -77,7 +87,7 @@ export type ComposerMentionSources = {
   directories?: readonly NavigationDirectorySummary[];
   /** Called when `@` or `#` opens a popover. */
   ensureNavigationLoaded?: () => void;
-  /** Called when `$` opens a popover. */
+  /** Called when `$` or `/` opens a popover. */
   ensureSkillsLoaded?: () => void;
   /**
    * Peer thread search behind `#`. Omitted leaves `#` local-only; the
@@ -97,6 +107,8 @@ export type ComposerMentionDraft = {
 };
 
 export type ComposerMentions = {
+  /** Canonical text for the highlighted runnable slash command. */
+  activeCommandText?: string;
   /** `aria-activedescendant` for the editor while a popover is open. */
   activeOptionId?: string;
   clear: () => void;
@@ -122,14 +134,15 @@ export type ComposerMentions = {
   text: string;
 };
 
-type MentionKind = "directories" | "hash" | "skills";
+type MentionKind = "commands" | "directories" | "hash" | "skills";
 
+const NO_COMMANDS: readonly ComposerSlashCommand[] = [];
 const NO_DIRECTORIES: readonly NavigationDirectorySummary[] = [];
 const NO_SKILLS: readonly AppServerSkillSummary[] = [];
 const NO_THREADS: readonly NavigationThreadSummary[] = [];
 
 /**
- * Mention autocomplete for a compact composer.
+ * Mention and command autocomplete for a compact composer.
  *
  * The full composer's popovers are woven through a 12,000-line component
  * that also owns queued turns, review mode, attachments, and draft
@@ -199,6 +212,7 @@ export function useComposerMentions(params: {
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   const skills = sources?.skills ?? NO_SKILLS;
+  const commands = sources?.commands ?? NO_COMMANDS;
   const directories = sources?.directories ?? NO_DIRECTORIES;
   const threads = sources?.threads ?? NO_THREADS;
 
@@ -210,6 +224,7 @@ export function useComposerMentions(params: {
     draft.length,
   );
   const skillTrigger = findSkillTrigger(draft, selectionStart);
+  const slashTrigger = findSlashCommandTrigger(draft, selectionStart);
   const directoryTrigger = findDirectoryReferenceTrigger(draft, selectionStart);
   const rawHashTrigger = findHashReferenceTrigger(draft, selectionStart);
   const hashTrigger =
@@ -219,6 +234,7 @@ export function useComposerMentions(params: {
       : undefined;
 
   const skillQuery = skillTrigger?.query;
+  const slashQuery = slashTrigger?.query;
   const directoryQuery = directoryTrigger?.query;
   const hashQuery = hashTrigger?.query;
 
@@ -245,6 +261,13 @@ export function useComposerMentions(params: {
         : filterSkillAutocompleteCandidates(skills, skillQuery),
     [skillQuery, skills],
   );
+  const commandOptions = useMemo(
+    () =>
+      slashQuery === undefined
+        ? []
+        : filterSlashCommandCandidates(commands, slashQuery),
+    [commands, slashQuery],
+  );
   const directoryOptions = useMemo(
     () =>
       directoryQuery === undefined
@@ -270,6 +293,8 @@ export function useComposerMentions(params: {
   const kind: MentionKind | undefined =
     skillTrigger && skillOptions.length > 0
       ? "skills"
+      : slashTrigger && commandOptions.length > 0
+        ? "commands"
       : directoryTrigger && directoryOptions.length > 0
         ? "directories"
         : hashTrigger && hashOptions.length > 0
@@ -278,12 +303,16 @@ export function useComposerMentions(params: {
   const query =
     kind === "skills"
       ? (skillQuery ?? "")
+      : kind === "commands"
+        ? (slashQuery ?? "")
       : kind === "directories"
         ? (directoryQuery ?? "")
         : (hashQuery ?? "");
   const optionCount =
     kind === "skills"
       ? skillOptions.length
+      : kind === "commands"
+        ? commandOptions.length
       : kind === "directories"
         ? directoryOptions.length
         : kind === "hash"
@@ -292,6 +321,8 @@ export function useComposerMentions(params: {
   const activeTrigger =
     kind === "skills"
       ? skillTrigger
+      : kind === "commands"
+        ? slashTrigger
       : kind === "directories"
         ? directoryTrigger
         : kind === "hash"
@@ -314,7 +345,7 @@ export function useComposerMentions(params: {
     Boolean(kind) && !params.disabled && dismissKey !== dismissedKey;
   const activeOption = Math.min(activeIndex, Math.max(optionCount - 1, 0));
 
-  const skillsTriggered = Boolean(skillTrigger);
+  const skillsTriggered = Boolean(skillTrigger || slashTrigger);
   const navigationTriggered = Boolean(directoryTrigger || rawHashTrigger);
   const ensureSkillsLoaded = sources?.ensureSkillsLoaded;
   const ensureNavigationLoaded = sources?.ensureNavigationLoaded;
@@ -479,11 +510,53 @@ export function useComposerMentions(params: {
     });
   };
 
+  const insertCommand = (
+    trigger: { end: number; start: number },
+    command: ComposerSlashCommand,
+  ): void => {
+    const input = inputRef.current;
+    if (!input) return;
+
+    const caret = Math.min(input.selectionStart ?? draft.length, draft.length);
+    const selectionEnd = Math.min(input.selectionEnd ?? caret, draft.length);
+    const before = draft.slice(0, trigger.start);
+    const after = draft.slice(Math.max(trigger.end, selectionEnd));
+    const insertText = `/${normalizeSlashCommandName(command.name)}`;
+    const trailingSpace = /^\s/.test(after) ? "" : " ";
+    const nextDraft = `${before}${insertText}${trailingSpace}${after}`;
+    const nextSelection = before.length + insertText.length + trailingSpace.length;
+    const nextSkillTokens = adjustSkillTokenIndexesForTextChange({
+      currentDraft: draft,
+      nextDraft,
+      skillTokens,
+    });
+
+    pendingProgrammaticChangeRef.current = {
+      staleDraft: draft,
+      staleSkillTokensSignature: getComposerSkillTokensSignature(skillTokens),
+    };
+    flushSync(() => {
+      setContent({ draft: nextDraft, skillTokens: nextSkillTokens });
+      setActiveIndex(0);
+    });
+    requestAnimationFrame(() => {
+      inputRef.current?.focus();
+      inputRef.current?.setSelectionRange(nextSelection, nextSelection);
+    });
+  };
+
   const commit = (index: number): void => {
     if (kind === "skills" && skillTrigger) {
       const skill = skillOptions[index] ?? skillOptions[0];
       if (skill) {
         insertToken(skillTrigger, (at) => createComposerSkillToken(skill, at));
+      }
+      return;
+    }
+    if (kind === "commands" && slashTrigger) {
+      const command = commandOptions[index] ?? commandOptions[0];
+      if (command) {
+        insertCommand(slashTrigger, command);
       }
       return;
     }
@@ -536,6 +609,19 @@ export function useComposerMentions(params: {
       (event.key === "Enter" && !event.shiftKey && !event.altKey)
       || (event.key === "Tab" && !event.shiftKey)
     ) {
+      if (
+        event.key === "Enter"
+        && kind === "commands"
+        && slashTrigger
+        && commandOptions.some((command) =>
+          slashCommandMatchesText(command, `/${slashTrigger.query}`)
+        )
+      ) {
+        // An exact command is already runnable. Leave Enter to the composer
+        // send path; Tab and pointer selection still perform insertion so
+        // autocomplete remains useful while the operator is composing one.
+        return false;
+      }
       event.preventDefault();
       commit(activeOption);
       return true;
@@ -595,6 +681,25 @@ export function useComposerMentions(params: {
         { title: buildSkillTooltip(skill) || undefined },
       ),
     );
+  } else if (kind === "commands") {
+    label = "Commands";
+    options = commandOptions.map((command, index) => {
+      const name = normalizeSlashCommandName(command.name);
+      return renderOption(
+        index,
+        <>
+          <span className="compact-composer__mention-title">
+            <HighlightedAutocompleteLabel
+              label={`/${name}`}
+              query={query ? `/${query}` : "/"}
+            />
+          </span>
+          <span className="compact-composer__mention-meta">
+            {[command.sourceLabel, command.description].filter(Boolean).join(" · ")}
+          </span>
+        </>,
+      );
+    });
   } else if (kind === "directories") {
     label = "Directories";
     options = directoryOptions.map((directory, index) =>
@@ -679,8 +784,15 @@ export function useComposerMentions(params: {
       {options}
     </div>
   ) : null;
+  const activeCommand =
+    open && kind === "commands"
+      ? commandOptions[activeOption] ?? commandOptions[0]
+      : undefined;
 
   return {
+    activeCommandText: activeCommand
+      ? `/${normalizeSlashCommandName(activeCommand.name)}`
+      : undefined,
     activeOptionId: open ? optionId(activeOption) : undefined,
     clear: () => {
       pendingProgrammaticChangeRef.current = undefined;

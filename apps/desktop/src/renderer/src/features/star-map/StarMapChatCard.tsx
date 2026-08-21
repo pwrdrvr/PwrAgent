@@ -19,6 +19,7 @@ import {
 } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { formatBackendLabel } from "../../lib/backend-label";
 import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
 import { useBackendSummaries } from "../../lib/useBackendSummaries";
 import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
@@ -36,6 +37,7 @@ import { useTranscriptWindow } from "../thread-detail/useTranscriptWindow";
 import { collectEditedFileGroups } from "../thread-detail/edited-file-groups";
 import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "../../lib/thread-history-limits";
 import type { DesktopApi } from "../../lib/desktop-api";
+import { parseReviewCommand } from "../../../../shared/review-command";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { useThreadSessionState } from "../../lib/useThreadSessionState";
 import { useThreadSkills } from "../../lib/useThreadSkills";
@@ -49,6 +51,10 @@ import {
   resizeChatCardRect,
   type ChatCardRect,
 } from "./star-map-chat-card-geometry";
+import {
+  StarMapReviewSetup,
+  type StarMapReviewRequest,
+} from "./StarMapReviewSetup";
 
 export type StarMapChatCardProps = {
   cardKey: string;
@@ -126,6 +132,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const rectRef = useRef(rect);
   rectRef.current = rect;
   const [sendError, setSendError] = useState<string | undefined>(undefined);
+  const [reviewSetupOpen, setReviewSetupOpen] = useState(false);
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
+  const [reviewError, setReviewError] = useState<string | undefined>(undefined);
+  const [reviewComposerKey, setReviewComposerKey] = useState(0);
   // Where a mid-turn send actually landed. The operator cannot tell a steer
   // from a queue by looking at the transcript, and the answer differs by
   // backend, so the card says which one happened.
@@ -173,6 +183,30 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     () => threadFederationTarget ?? readRendererFederationTarget(),
     [threadFederationTarget],
   );
+  const isAcpThread = thread.source.startsWith("acp:");
+  const [settingsMenuOpened, setSettingsMenuOpened] = useState(false);
+  const backendSummaries = useBackendSummaries(desktopApi, {
+    // Codex review is native and needs no describe. ACP review is a
+    // PwrAgent-managed child, so its explicit capability is authoritative
+    // even before the settings menu has ever been opened.
+    enabled: settingsMenuOpened || isAcpThread,
+    federationTarget,
+  });
+  const backendSummariesRef = useRef(backendSummaries);
+  backendSummariesRef.current = backendSummaries;
+  const onSettingsMenuOpen = useCallback(() => {
+    setSettingsMenuOpened(true);
+    // A failed describe retries on the next open through the hook's
+    // exported refresh path (a plain re-list for remote targets).
+    if (backendSummariesRef.current.error) {
+      void backendSummariesRef.current.refreshAcpAgents();
+    }
+  }, []);
+  const backendSummary = backendSummaries.backends.find(
+    (entry) => entry.kind === thread.source,
+  );
+  const supportsReview =
+    !isAcpThread || backendSummary?.capabilities.startReview === true;
 
   // The context satellite is a sibling rendered by the screen, so the session
   // data its panels need has to be published rather than passed down.
@@ -231,11 +265,41 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const threadSkills = useThreadSkills({ desktopApi, thread });
   const navigationSources = useComposerMentionSources({ desktopApi });
   const ensureSkillsLoaded = threadSkills.ensureLoaded;
+  const ensureNavigationLoaded = navigationSources.ensureLoaded;
   const mentionSources = useMemo<ComposerMentionSources>(
     () => ({
+      commands: [
+        ...(supportsReview
+          ? [
+              {
+                name: "review",
+                description:
+                  "Review current staged, unstaged, and untracked changes",
+                requiresNoAttachments: true,
+                sourceLabel: "PwrAgent",
+              },
+            ]
+          : []),
+        ...threadSkills.providerCommands.map((command) => {
+          const commandBackend = command.backend ?? thread.source;
+          const commandName = command.name.startsWith("/")
+            ? command.name.slice(1)
+            : command.name;
+          return {
+            aliases: command.aliases,
+            description: command.description,
+            name: command.name,
+            // Codex compaction is a client action. ACP commands remain
+            // ordinary prompt content and may accompany attachments.
+            requiresNoAttachments:
+              commandBackend === "codex" && commandName === "compact",
+            sourceLabel: formatBackendLabel(commandBackend),
+          };
+        }),
+      ],
       currentThreadKey: buildThreadIdentityKey(thread.source, thread.id),
       directories: navigationSources.directories,
-      ensureNavigationLoaded: navigationSources.ensureLoaded,
+      ensureNavigationLoaded,
       ensureSkillsLoaded: () => {
         void ensureSkillsLoaded();
       },
@@ -247,8 +311,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       desktopApi,
       ensureSkillsLoaded,
       navigationSources.directories,
-      navigationSources.ensureLoaded,
+      ensureNavigationLoaded,
       navigationSources.threads,
+      supportsReview,
+      threadSkills.providerCommands,
       threadSkills.skills,
       thread.id,
       thread.source,
@@ -355,6 +421,61 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
    */
   const canSteer = Boolean(desktopApi?.steerTurn);
 
+  const closeReviewSetup = useCallback(() => {
+    if (reviewSubmitting) return;
+    setReviewError(undefined);
+    setReviewSetupOpen(false);
+    // The editability transaction can echo Tiptap's pre-disable document
+    // after the send path cleared it. Remounting only at this explicit review
+    // boundary gives Cancel/Escape the main composer's clean-slate contract
+    // without discarding ordinary card drafts on unrelated renders.
+    setReviewComposerKey((current) => current + 1);
+  }, [reviewSubmitting]);
+
+  const submitReviewSetup = useCallback(
+    async (request: StarMapReviewRequest): Promise<void> => {
+      if (!supportsReview) {
+        setReviewError("Selected backend does not support reviews.");
+        return;
+      }
+      if (sessionRef.current.threadBusy) {
+        setReviewError("Cannot start a review while a turn is in progress.");
+        return;
+      }
+      if (!desktopApi?.startReview) {
+        setReviewError("Review is not available for this thread.");
+        return;
+      }
+      setReviewError(undefined);
+      setReviewSubmitting(true);
+      // Match the main review composer: accepting the configured request
+      // closes the setup immediately. review/start can spend noticeable time
+      // resolving its model, workspace, and managed-child path; keeping the
+      // form onscreen until that promise settles makes a real click look dead.
+      setReviewSetupOpen(false);
+      setReviewComposerKey((current) => current + 1);
+      try {
+        await desktopApi.startReview({
+          backend: thread.source,
+          federationTarget,
+          threadId: thread.id,
+          ...request,
+          delivery: "inline",
+        });
+        setReviewSetupOpen(false);
+      } catch (error) {
+        setSendError(
+          error instanceof Error
+            ? error.message
+            : "Could not start that review.",
+        );
+      } finally {
+        setReviewSubmitting(false);
+      }
+    },
+    [desktopApi, federationTarget, supportsReview, thread.id, thread.source],
+  );
+
   /**
    * Returns whether the turn actually reached the backend. A peer can drop
    * mid-send, and when it does the operator must get their text back and
@@ -408,6 +529,78 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           type: "localFile" as const,
         })),
       ];
+
+      const reviewCommand = supportsReview ? parseReviewCommand(text) : undefined;
+      if (reviewCommand) {
+        if (imageAttachments.length > 0 || fileAttachments.length > 0) {
+          setSendError("/review does not accept attachments.");
+          return false;
+        }
+        if (sessionRef.current.threadBusy) {
+          setSendError("Cannot start a review while a turn is in progress.");
+          return false;
+        }
+        if (!desktopApi?.startReview) {
+          setSendError("Review is not available for this thread.");
+          return false;
+        }
+        if (text.trim().toLowerCase() === "/review") {
+          setReviewError(undefined);
+          setReviewSetupOpen(true);
+          ensureNavigationLoaded();
+          return true;
+        }
+        try {
+          await desktopApi.startReview({
+            backend: thread.source,
+            federationTarget,
+            threadId: thread.id,
+            target: reviewCommand.target,
+            delivery: "inline",
+          });
+          return true;
+        } catch (error) {
+          setSendError(
+            error instanceof Error
+              ? error.message
+              : "Could not start that review.",
+          );
+          return false;
+        }
+      }
+
+      if (
+        thread.source === "codex"
+        && text.trim().toLowerCase() === "/compact"
+      ) {
+        if (imageAttachments.length > 0 || fileAttachments.length > 0) {
+          setSendError("/compact does not accept attachments.");
+          return false;
+        }
+        if (sessionRef.current.threadBusy) {
+          setSendError("Cannot compact while a turn is in progress.");
+          return false;
+        }
+        if (!desktopApi?.compactThread) {
+          setSendError("Compaction is not available for this thread.");
+          return false;
+        }
+        try {
+          await desktopApi.compactThread({
+            backend: thread.source,
+            federationTarget,
+            threadId: thread.id,
+          });
+          return true;
+        } catch (error) {
+          setSendError(
+            error instanceof Error
+              ? error.message
+              : "Could not compact the thread.",
+          );
+          return false;
+        }
+      }
 
       if (sessionRef.current.threadBusy) {
         if (!desktopApi?.steerTurn) {
@@ -486,6 +679,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       cardKey,
       desktopApi,
       federationTarget,
+      ensureNavigationLoaded,
+      supportsReview,
       thread.id,
       thread.source,
     ],
@@ -527,25 +722,6 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // on its props staying stable across snapshot refreshes.
   const threadRef = useRef(thread);
   threadRef.current = thread;
-
-  const [settingsMenuOpened, setSettingsMenuOpened] = useState(false);
-  const backendSummaries = useBackendSummaries(desktopApi, {
-    enabled: settingsMenuOpened,
-    federationTarget,
-  });
-  const backendSummariesRef = useRef(backendSummaries);
-  backendSummariesRef.current = backendSummaries;
-  const onSettingsMenuOpen = useCallback(() => {
-    setSettingsMenuOpened(true);
-    // A failed describe retries on the next open through the hook's
-    // exported refresh path (a plain re-list for remote targets).
-    if (backendSummariesRef.current.error) {
-      void backendSummariesRef.current.refreshAcpAgents();
-    }
-  }, []);
-  const backendSummary = backendSummaries.backends.find(
-    (entry) => entry.kind === thread.source,
-  );
 
   /**
    * Optimistic view of the chip's settings between a menu selection and
@@ -918,67 +1094,82 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         </button>
       </header>
 
-      <div className="star-map-chat-card__transcript">
-        <TranscriptList
-          activeTurnId={session.activeTurnId}
-          activeTurnStartedAt={session.activeTurnStartedAt}
+      <div className="star-map-chat-card__body">
+        <div className="star-map-chat-card__transcript">
+          <TranscriptList
+            activeTurnId={session.activeTurnId}
+            activeTurnStartedAt={session.activeTurnStartedAt}
+            desktopApi={desktopApi}
+            entries={transcriptWindow.visibleEntries}
+            error={session.error}
+            loading={session.loading}
+            loadingMore={session.loadingMore}
+            onLoadOlder={transcriptWindow.loadOlder}
+            pagination={transcriptWindow.visiblePagination}
+            parentThreadId={thread.id}
+            pendingAssistantMessage={session.pendingAssistantMessage}
+            pendingMcpInteraction={session.pendingMcpInteraction}
+            pendingRequest={session.pendingRequest}
+            pendingStatusText={session.pendingStatusText}
+            pendingUserInput={session.pendingUserInput}
+            runningTurnUsageText={session.runningTurnUsageText}
+            threadId={thread.id}
+            transientMessages={session.transientMessages}
+          />
+        </div>
+
+        <MemoizedActiveSubAgentsStrip
           desktopApi={desktopApi}
-          entries={transcriptWindow.visibleEntries}
-          error={session.error}
-          loading={session.loading}
-          loadingMore={session.loadingMore}
-          onLoadOlder={transcriptWindow.loadOlder}
-          pagination={transcriptWindow.visiblePagination}
-          parentThreadId={thread.id}
-          pendingAssistantMessage={session.pendingAssistantMessage}
-          pendingMcpInteraction={session.pendingMcpInteraction}
-          pendingRequest={session.pendingRequest}
-          pendingStatusText={session.pendingStatusText}
-          pendingUserInput={session.pendingUserInput}
-          runningTurnUsageText={session.runningTurnUsageText}
-          threadId={thread.id}
-          transientMessages={session.transientMessages}
+          onRefreshNavigation={props.onRefreshNavigation}
+          thread={thread}
         />
+
+        {sendError ? (
+          <p className="star-map-chat-card__error" role="alert">
+            {sendError}
+          </p>
+        ) : sendNotice ? (
+          <p className="star-map-chat-card__notice" role="status">
+            {sendNotice}
+          </p>
+        ) : undefined}
+
+        <MemoizedCompactComposer
+          busy={session.threadBusy}
+          canAttachLocalFiles={
+            !federationTarget || !isRemoteFederationTarget(federationTarget)
+          }
+          canSteer={canSteer}
+          disabled={reviewSetupOpen || reviewSubmitting}
+          executionMode={threadExecutionMode}
+          fastMode={threadFastMode}
+          getPathForFile={desktopApi?.getPathForFile}
+          key={reviewComposerKey}
+          mentionSources={mentionSources}
+          model={threadModel}
+          normalizeImageForUpload={desktopApi?.normalizeImageForUpload}
+          onAttachmentError={setSendError}
+          onInterrupt={onInterrupt}
+          onSend={send}
+          pastedImageMaxPatches={props.pastedImageMaxPatches}
+          reasoningEffort={threadReasoningEffort}
+          secondaryActions={secondaryActions}
+          settingsMenu={settingsMenu}
+          threadTitle={thread.title}
+        />
+
+        {reviewSetupOpen ? (
+          <StarMapReviewSetup
+            busy={session.threadBusy}
+            directories={navigationSources.directories}
+            error={reviewError}
+            onCancel={closeReviewSetup}
+            onSubmit={submitReviewSetup}
+            submitting={reviewSubmitting}
+            thread={thread}
+          />
+        ) : null}
       </div>
-
-      {sendError ? (
-        <p className="star-map-chat-card__error" role="alert">
-          {sendError}
-        </p>
-      ) : sendNotice ? (
-        <p className="star-map-chat-card__notice" role="status">
-          {sendNotice}
-        </p>
-      ) : undefined}
-
-      <MemoizedActiveSubAgentsStrip
-        desktopApi={desktopApi}
-        onRefreshNavigation={props.onRefreshNavigation}
-        thread={thread}
-      />
-
-      <MemoizedCompactComposer
-        busy={session.threadBusy}
-        canAttachLocalFiles={
-          !federationTarget || !isRemoteFederationTarget(federationTarget)
-        }
-        canSteer={canSteer}
-        executionMode={threadExecutionMode}
-        fastMode={threadFastMode}
-        getPathForFile={desktopApi?.getPathForFile}
-        mentionSources={mentionSources}
-        model={threadModel}
-        normalizeImageForUpload={desktopApi?.normalizeImageForUpload}
-        onAttachmentError={setSendError}
-        onInterrupt={onInterrupt}
-        onSend={send}
-        pastedImageMaxPatches={props.pastedImageMaxPatches}
-        reasoningEffort={threadReasoningEffort}
-        secondaryActions={secondaryActions}
-        settingsMenu={settingsMenu}
-        threadTitle={thread.title}
-      />
-
       {titleTooltip.tooltipNode}
       {/* Portals to the body, so the card's clip and transform miss it. */}
       {fullAccessRiskDialog}

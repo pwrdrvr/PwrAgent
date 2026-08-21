@@ -1,6 +1,7 @@
 import {
   useCallback,
   useId,
+  useMemo,
   useState,
   type ClipboardEvent,
   type DragEvent,
@@ -94,7 +95,7 @@ export type CompactComposerProps = {
   /** Thread's current fast-mode state, shown on the chip menu's toggle. */
   fastMode?: boolean;
   /**
-   * Populations the `$` / `@` / `#` popovers pick from. Optional on
+   * Populations the `$` / `/` / `@` / `#` popovers pick from. Optional on
    * purpose: a host that supplies nothing keeps the trigger characters as
    * literal prose, so adopting this component never requires them.
    */
@@ -159,10 +160,11 @@ const MENU_VIEW_TITLES: Record<
  * rather than hydrating it on focus, which would cost a click and a caret
  * every time the operator moved between cards.
  *
- * Mentions come from `useComposerMentions`, driven by whatever populations
- * the host can honestly supply through `mentionSources`. Nothing about the
- * pickers is re-implemented here: the triggers, ranking, token minting and
- * markdown serialization are the same modules the full composer calls.
+ * Mentions and slash commands come from `useComposerMentions`, driven by
+ * whatever populations the host can honestly supply through `mentionSources`.
+ * Nothing about the pickers is re-implemented here: the triggers, ranking,
+ * token minting and markdown serialization are the same modules the full
+ * composer calls.
  *
  * Model / reasoning / access render as a chip on a status strip below the
  * field — a strip, not ambient text inside the field, because the field
@@ -172,10 +174,6 @@ const MENU_VIEW_TITLES: Record<
  * line: chip on the left, Stop / Send pills on the right.
  */
 export function CompactComposer(props: CompactComposerProps) {
-  const mentions = useComposerMentions({
-    disabled: props.disabled,
-    sources: props.mentionSources,
-  });
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<SettingsMenuView>("root");
   const [imageAttachments, setImageAttachments] = useState<
@@ -186,6 +184,27 @@ export function CompactComposer(props: CompactComposerProps) {
   >([]);
   const [normalizingImageBatches, setNormalizingImageBatches] = useState(0);
   const normalizingImages = normalizingImageBatches > 0;
+  const hasAttachments =
+    imageAttachments.length > 0 || fileAttachments.length > 0;
+  const mentionSources = useMemo<ComposerMentionSources | undefined>(() => {
+    const sources = props.mentionSources;
+    if (
+      !hasAttachments
+      || !sources?.commands?.some((command) => command.requiresNoAttachments)
+    ) {
+      return sources;
+    }
+    return {
+      ...sources,
+      commands: sources.commands.filter(
+        (command) => !command.requiresNoAttachments,
+      ),
+    };
+  }, [hasAttachments, props.mentionSources]);
+  const mentions = useComposerMentions({
+    disabled: props.disabled,
+    sources: mentionSources,
+  });
   // Click-away and Escape close the menu, same hook as the composer
   // dropdowns. Without it the menu survives a click on the transcript
   // behind it and covers the conversation.
@@ -227,10 +246,10 @@ export function CompactComposer(props: CompactComposerProps) {
     Boolean(segment),
   );
 
-  const send = useCallback(async () => {
+  const send = useCallback(async (commandText?: string) => {
     // The serialized text, not the plain draft: a mention chip is
     // zero-width until this splices its markdown back in.
-    const text = mentions.text.trim();
+    const text = (commandText ?? mentions.text).trim();
     if (
       (!text && imageAttachments.length === 0 && fileAttachments.length === 0)
       || normalizingImages
@@ -429,6 +448,21 @@ export function CompactComposer(props: CompactComposerProps) {
   // it has no binding for — Escape and Tab among them.
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (
+        event.key === "Enter"
+        && !event.shiftKey
+        && !event.altKey
+        && !event.metaKey
+        && !event.ctrlKey
+        && mentions.activeCommandText
+      ) {
+        // Enter runs the highlighted command in one step, matching the main
+        // composer. Tab and pointer selection still flow through the mention
+        // hook below and insert the command for further editing.
+        event.preventDefault();
+        void send(mentions.activeCommandText);
+        return;
+      }
       // An open mention popover claims the arrows, Enter, Tab, and Escape
       // before the send path sees them.
       if (mentions.handleKeyDown(event)) return;
