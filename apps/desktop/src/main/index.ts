@@ -151,6 +151,7 @@ import {
   isAppStateInitialized,
   recordBootDecision,
 } from "./state/app-state";
+import type { AutoVacuumConversion } from "./state/state-db";
 import { prewarmWindowsJobWrapper } from "./windows-job-wrapper";
 import { createMainWindow, syncHotCpuProfilersFromSettings } from "./window";
 import { subscribersForChannel } from "./window-channels";
@@ -1095,6 +1096,36 @@ function rejectDevOnlyEnvVarsInProduction(): void {
   }
 }
 
+/**
+ * Reports the one-time `auto_vacuum = INCREMENTAL` conversion `startGc` runs
+ * on profiles created before that pragma was ordered correctly.
+ *
+ * A failure here is not fatal and is deliberately not thrown — VACUUM wants an
+ * exclusive lock and profiles are shared between instances over WAL — but it
+ * does have to be visible: the profile stays at `auto_vacuum=NONE`, where the
+ * hourly `incremental_vacuum` reclaims nothing and every later launch retries
+ * a full rewrite. Silence is what let the original pragma bug survive.
+ */
+function reportAutoVacuumConversion(
+  conversion: AutoVacuumConversion | null,
+): void {
+  if (!conversion || conversion.status === "already-incremental") return;
+  if (conversion.status === "failed") {
+    mainLog.warn(
+      "state.db auto_vacuum conversion failed; retrying on next launch",
+      { error: conversion.error.message },
+    );
+    return;
+  }
+  const toMb = (bytes: number) => Math.round(bytes / (1024 * 1024));
+  mainLog.info("state.db converted to incremental auto_vacuum", {
+    elapsedMs: Math.round(conversion.elapsedMs),
+    freedMb: toMb(conversion.bytesBefore - conversion.bytesAfter),
+    fromMb: toMb(conversion.bytesBefore),
+    toMb: toMb(conversion.bytesAfter),
+  });
+}
+
 export function bootstrapApp(): void {
   setUpdateInstallPreparationHandler(prepareForUpdateInstallShutdown);
   rejectDevOnlyEnvVarsInProduction();
@@ -1173,7 +1204,7 @@ export function bootstrapApp(): void {
         bootMode,
       },
     });
-    initializeAppState(bootMode);
+    reportAutoVacuumConversion(initializeAppState(bootMode).autoVacuum);
     // Skip the focus-request watcher in bootstrap mode. The watcher
     // mkdirs `<root>/profiles/<active>/state/focus-requests/` to
     // catch "focus existing window" requests from sibling PwrAgent

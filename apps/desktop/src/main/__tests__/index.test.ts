@@ -794,6 +794,9 @@ describe("bootstrapApp", () => {
     });
     writeDockProfileSnapshotMock.mockReset();
     initializeAppStateMock.mockReset();
+    // `bootstrapApp` reads `.autoVacuum` off this to log the one-time
+    // `auto_vacuum` conversion, so the mock has to return the real shape.
+    initializeAppStateMock.mockReturnValue({ autoVacuum: null });
     startProfileFocusRequestWatcherMock.mockClear();
     startupProfilerInstance.start.mockReset();
     startupProfilerInstance.attachWindow.mockReset();
@@ -936,6 +939,68 @@ describe("bootstrapApp", () => {
       "/test/app/build/icon.png",
     );
     expect(dockSetIconMock).toHaveBeenCalledWith(nativeImageMock);
+  });
+
+  // The conversion reporting exists because a failed `auto_vacuum` rewrite
+  // was otherwise invisible — leaving the profile at NONE, reclaiming nothing
+  // on every hourly sweep, and re-running a full VACUUM on every launch. An
+  // untested reporter would be the same silence one layer up.
+  it("warns when the state.db auto_vacuum conversion fails", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    initializeAppStateMock.mockReturnValue({
+      autoVacuum: {
+        error: new Error("database is locked"),
+        status: "failed",
+      },
+    });
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(mainLogWarnMock).toHaveBeenCalledWith(
+      "state.db auto_vacuum conversion failed; retrying on next launch",
+      { error: "database is locked" },
+    );
+    // Not fatal: the window still opens.
+    expect(createMainWindowMock).toHaveBeenCalledOnce();
+  });
+
+  it("logs the reclaimed space when the conversion succeeds", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    initializeAppStateMock.mockReturnValue({
+      autoVacuum: {
+        bytesAfter: 67 * 1024 * 1024,
+        bytesBefore: 461 * 1024 * 1024,
+        elapsedMs: 301.4,
+        status: "converted",
+      },
+    });
+
+    await import("../index");
+    await flushMicrotasks();
+
+    expect(mainLogInfoMock).toHaveBeenCalledWith(
+      "state.db converted to incremental auto_vacuum",
+      { elapsedMs: 301, freedMb: 394, fromMb: 461, toMb: 67 },
+    );
+  });
+
+  it("says nothing when the database is already converted", async () => {
+    startupProfilerInstance.start.mockResolvedValue();
+    initializeAppStateMock.mockReturnValue({
+      autoVacuum: { status: "already-incremental" },
+    });
+
+    await import("../index");
+    await flushMicrotasks();
+
+    // The steady state for every launch after the first: no log line at all.
+    for (const call of mainLogInfoMock.mock.calls) {
+      expect(call[0]).not.toContain("auto_vacuum");
+    }
+    for (const call of mainLogWarnMock.mock.calls) {
+      expect(call[0]).not.toContain("auto_vacuum");
+    }
   });
 
   it("continues startup when the Dock profile snapshot cannot be refreshed", async () => {

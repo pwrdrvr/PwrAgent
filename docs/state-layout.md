@@ -82,6 +82,15 @@ The General > Pasted images setting is stored as
 
 Single database containing all persistent state. Opened with WAL mode, `synchronous=NORMAL`, `busy_timeout=5000ms`, `auto_vacuum=INCREMENTAL`.
 
+`auto_vacuum` is set before `journal_mode`, because SQLite honours it only
+while the file has no database header yet and `journal_mode = WAL` writes one.
+Databases created before that ordering was fixed sit at `auto_vacuum=NONE`,
+where the `incremental_vacuum` at the end of the hourly GC pass reclaims
+nothing and the file only grows. `StateDb.ensureIncrementalAutoVacuum` converts
+those on the first launch after upgrading — one full `VACUUM`, once per profile
+— and `PRAGMA auto_vacuum` reading `INCREMENTAL` is its own marker, so no
+schema version is reserved for it.
+
 ### Tables
 
 | Table | Contents |

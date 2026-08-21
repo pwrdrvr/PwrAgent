@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { getNativeBinding } from "../state/native-binding";
 import {
   CURRENT_STATE_DB_USER_VERSION,
+  SQLITE_AUTO_VACUUM_INCREMENTAL,
+  SQLITE_AUTO_VACUUM_NONE,
   STATE_DB_JOURNAL_SIZE_LIMIT_BYTES,
   STATE_DB_WAL_AUTOCHECKPOINT_PAGES,
   StateDb,
@@ -605,6 +607,226 @@ describe("StateDb", () => {
     expect(stateDb.raw.pragma("journal_size_limit", { simple: true })).toBe(
       STATE_DB_JOURNAL_SIZE_LIMIT_BYTES,
     );
+  });
+
+  // `auto_vacuum` is only honoured on a database with no header yet, and
+  // `journal_mode = WAL` writes that header. These read the pragma back
+  // instead of asserting the call was made, because the call WAS being made
+  // before the fix and SQLite ignored it in silence.
+  it("enables incremental auto-vacuum on a new database", () => {
+    expect(stateDb.raw.pragma("auto_vacuum", { simple: true })).toBe(
+      SQLITE_AUTO_VACUUM_INCREMENTAL,
+    );
+    // The pragma the ordering fight was with, still in force.
+    expect(stateDb.raw.pragma("journal_mode", { simple: true })).toBe("wal");
+  });
+
+  it("keeps incremental auto-vacuum across a close and reopen", () => {
+    const dbPath = path.join(tempDir, "reopened.db");
+    const first = StateDb.open(dbPath);
+    first.close();
+    const second = StateDb.open(dbPath);
+    try {
+      expect(second.raw.pragma("auto_vacuum", { simple: true })).toBe(
+        SQLITE_AUTO_VACUUM_INCREMENTAL,
+      );
+    } finally {
+      second.close();
+    }
+  });
+
+  it("returns freed pages to the filesystem on incremental_vacuum", () => {
+    const pageSize = stateDb.raw.pragma("page_size", {
+      simple: true,
+    }) as number;
+    const pageCount = () =>
+      stateDb.raw.pragma("page_count", { simple: true }) as number;
+
+    const insert = stateDb.raw.prepare(
+      "INSERT INTO meta(key, value) VALUES (?, ?)",
+    );
+    stateDb.raw.transaction(() => {
+      for (let index = 0; index < 4000; index += 1) {
+        insert.run(`bulk:${index}`, "x".repeat(400));
+      }
+    })();
+    const grown = pageCount();
+    stateDb.raw.prepare("DELETE FROM meta WHERE key LIKE 'bulk:%'").run();
+
+    expect(
+      stateDb.raw.pragma("freelist_count", { simple: true }),
+    ).toBeGreaterThan(0);
+    stateDb.raw.pragma("incremental_vacuum");
+
+    // The assertion the old code could never have passed: the file itself is
+    // smaller, not merely the freelist marked reusable.
+    expect(stateDb.raw.pragma("freelist_count", { simple: true })).toBe(0);
+    expect(pageCount() * pageSize).toBeLessThan(grown * pageSize);
+  });
+
+  describe("ensureIncrementalAutoVacuum", () => {
+    // A database created the way every pre-fix profile was: WAL first, so the
+    // `auto_vacuum` assignment lands on a file that already has a header.
+    const openLegacyDatabase = (dbPath: string) => {
+      const nativeBinding = getNativeBinding();
+      const legacy = new Database(
+        dbPath,
+        nativeBinding ? { nativeBinding } : {},
+      );
+      legacy.pragma("journal_mode = WAL");
+      legacy.pragma("auto_vacuum = INCREMENTAL");
+      legacy.exec("CREATE TABLE bulk(id INTEGER PRIMARY KEY, blob TEXT)");
+      const insert = legacy.prepare("INSERT INTO bulk(blob) VALUES (?)");
+      legacy.transaction(() => {
+        for (let index = 0; index < 20000; index += 1) {
+          insert.run("x".repeat(400));
+        }
+      })();
+      legacy.prepare("DELETE FROM bulk WHERE id % 10 != 0").run();
+      return legacy;
+    };
+
+    it("reproduces the pre-fix state it has to repair", () => {
+      const dbPath = path.join(tempDir, "legacy.db");
+      const legacy = openLegacyDatabase(dbPath);
+      try {
+        expect(legacy.pragma("auto_vacuum", { simple: true })).toBe(
+          SQLITE_AUTO_VACUUM_NONE,
+        );
+        const before = legacy.pragma("page_count", { simple: true }) as number;
+        legacy.pragma("incremental_vacuum");
+        // Free pages, and a vacuum that cannot touch them.
+        expect(
+          legacy.pragma("freelist_count", { simple: true }),
+        ).toBeGreaterThan(0);
+        expect(legacy.pragma("page_count", { simple: true })).toBe(before);
+      } finally {
+        legacy.close();
+      }
+    });
+
+    it("converts a pre-fix database and shrinks the file", () => {
+      const dbPath = path.join(tempDir, "convert.db");
+      openLegacyDatabase(dbPath).close();
+
+      const legacyDb = StateDb.open(dbPath);
+      try {
+        expect(legacyDb.raw.pragma("auto_vacuum", { simple: true })).toBe(
+          SQLITE_AUTO_VACUUM_NONE,
+        );
+
+        const conversion = legacyDb.ensureIncrementalAutoVacuum();
+        expect(conversion.status).toBe("converted");
+        if (conversion.status !== "converted") throw new Error("unreachable");
+        expect(conversion.bytesAfter).toBeLessThan(conversion.bytesBefore);
+
+        expect(legacyDb.raw.pragma("auto_vacuum", { simple: true })).toBe(
+          SQLITE_AUTO_VACUUM_INCREMENTAL,
+        );
+        // VACUUM rewrites the whole file; WAL has to survive that.
+        expect(legacyDb.raw.pragma("journal_mode", { simple: true })).toBe(
+          "wal",
+        );
+        expect(legacyDb.raw.pragma("integrity_check", { simple: true })).toBe(
+          "ok",
+        );
+      } finally {
+        legacyDb.close();
+      }
+
+      const reopened = StateDb.open(dbPath);
+      try {
+        expect(reopened.raw.pragma("auto_vacuum", { simple: true })).toBe(
+          SQLITE_AUTO_VACUUM_INCREMENTAL,
+        );
+      } finally {
+        reopened.close();
+      }
+    });
+
+    it("reports failure when the rewrite leaves the mode unchanged", () => {
+      const dbPath = path.join(tempDir, "stubborn.db");
+      openLegacyDatabase(dbPath).close();
+
+      const legacyDb = StateDb.open(dbPath);
+      // Stand in for any VACUUM that returns cleanly without converting: the
+      // method must not call that a success, or it would report a conversion
+      // and then repeat the full rewrite on every launch forever.
+      const realExec = legacyDb.raw.exec.bind(legacyDb.raw);
+      legacyDb.raw.exec = ((sql: string) =>
+        sql.trim().toUpperCase() === "VACUUM"
+          ? legacyDb.raw
+          : realExec(sql)) as typeof legacyDb.raw.exec;
+
+      try {
+        const conversion = legacyDb.ensureIncrementalAutoVacuum();
+        expect(conversion.status).toBe("failed");
+        if (conversion.status !== "failed") throw new Error("unreachable");
+        expect(conversion.error.message).toContain("still not INCREMENTAL");
+      } finally {
+        legacyDb.raw.exec = realExec;
+        legacyDb.close();
+      }
+    });
+
+    it("is a no-op on an already-converted database", () => {
+      // The guard that keeps this a once-per-profile cost rather than a
+      // full rewrite on every launch.
+      expect(stateDb.ensureIncrementalAutoVacuum()).toEqual({
+        status: "already-incremental",
+      });
+    });
+
+    it("runs from startGc", () => {
+      const dbPath = path.join(tempDir, "gc.db");
+      openLegacyDatabase(dbPath).close();
+
+      const legacyDb = StateDb.open(dbPath);
+      try {
+        expect(legacyDb.startGc().status).toBe("converted");
+        expect(legacyDb.raw.pragma("auto_vacuum", { simple: true })).toBe(
+          SQLITE_AUTO_VACUUM_INCREMENTAL,
+        );
+        // Second launch pays nothing.
+        expect(legacyDb.startGc().status).toBe("already-incremental");
+      } finally {
+        legacyDb.close();
+      }
+    });
+  });
+
+  it("does not orphan a GC interval when startGc is called twice", () => {
+    // Without the `stopGc` at the top of `startGc`, the second call
+    // overwrites `gcTimer` and the first interval becomes unreachable —
+    // `stopGc` can no longer clear it, so it keeps sweeping a database that
+    // `close` has already shut, throwing from a timer with nothing to catch it.
+    const timers: Array<ReturnType<typeof setInterval>> = [];
+    const realSetInterval = globalThis.setInterval;
+    const realClearInterval = globalThis.clearInterval;
+    const cleared = new Set<ReturnType<typeof setInterval>>();
+
+    globalThis.setInterval = ((...args: Parameters<typeof setInterval>) => {
+      const timer = realSetInterval(...args);
+      timers.push(timer);
+      return timer;
+    }) as typeof setInterval;
+    globalThis.clearInterval = ((timer: ReturnType<typeof setInterval>) => {
+      cleared.add(timer);
+      return realClearInterval(timer);
+    }) as typeof clearInterval;
+
+    try {
+      stateDb.startGc();
+      stateDb.startGc();
+      stateDb.stopGc();
+    } finally {
+      globalThis.setInterval = realSetInterval;
+      globalThis.clearInterval = realClearInterval;
+      for (const timer of timers) realClearInterval(timer);
+    }
+
+    expect(timers).toHaveLength(2);
+    expect(timers.filter((timer) => cleared.has(timer))).toHaveLength(2);
   });
 
   it("keeps AUTOINCREMENT limited to existing bounded UI history tables", () => {

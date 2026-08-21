@@ -15,7 +15,7 @@ import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-threa
 import { migrateIfNeeded } from "./migration.js";
 import { SqliteMessagingStore } from "./messaging-store-sqlite.js";
 import { SqliteOverlayStore } from "./overlay-store-sqlite.js";
-import { StateDb } from "./state-db.js";
+import { type AutoVacuumConversion, StateDb } from "./state-db.js";
 
 let stateDb: StateDb | null = null;
 let messagingStore: SqliteMessagingStore | null = null;
@@ -25,6 +25,13 @@ let profileRuntimeHeartbeat: ProfileRuntimeHeartbeat | null = null;
 let automationStore: AutomationStore | null = null;
 let scheduledThreadActionStore: ScheduledThreadActionStore | null = null;
 let activeMode: AppStateMode | null = null;
+// Result of the one-time `auto_vacuum` conversion `startGc` performs, kept
+// so the early-return path reports the same value the first init did. It is
+// logged by the caller rather than here: a failed conversion leaves the
+// profile at `auto_vacuum=NONE`, where the hourly `incremental_vacuum`
+// reclaims nothing and every later launch retries a full VACUUM, and that
+// has to be visible somewhere.
+let autoVacuumConversion: AutoVacuumConversion | null = null;
 // The boot decision is set once at startup and stays put for the
 // process lifetime. Stored here (vs. recomputed lazily) because the
 // wizard's entry-mode signal in the renderer needs to know what the
@@ -62,6 +69,7 @@ export function getBootDecision(): ProfileBootDecision | null {
 export function initializeAppState(
   mode: AppStateMode = "active-profile",
 ): {
+  autoVacuum: AutoVacuumConversion | null;
   stateDb: StateDb;
   messagingStore: SqliteMessagingStore;
   overlayStore: SqliteOverlayStore;
@@ -81,6 +89,7 @@ export function initializeAppState(
       );
     }
     return {
+      autoVacuum: autoVacuumConversion,
       stateDb,
       messagingStore: messagingStore!,
       overlayStore: overlayStore!,
@@ -99,7 +108,7 @@ export function initializeAppState(
     // the operator's chosen profile gets initialized on graduation.
     const dbPath = resolveBootstrapProfilePath("state/state.db");
     stateDb = StateDb.open(dbPath, { profileName: "__bootstrap__" });
-    stateDb.startGc();
+    autoVacuumConversion = stateDb.startGc();
     // Intentionally no profile heartbeat / last_used. The bootstrap
     // profile is transient and must not appear in any user-facing
     // profile listing.
@@ -109,7 +118,7 @@ export function initializeAppState(
 
     const dbPath = resolveActiveProfilePath("state/state.db");
     stateDb = StateDb.open(dbPath, { profileName });
-    stateDb.startGc();
+    autoVacuumConversion = stateDb.startGc();
 
     updateLastUsed(profileName);
     const processIdentity = getProcessRuntimeIdentity();
@@ -127,6 +136,7 @@ export function initializeAppState(
   activeMode = mode;
 
   return {
+    autoVacuum: autoVacuumConversion,
     stateDb,
     messagingStore: messagingStore!,
     overlayStore: overlayStore!,
@@ -192,6 +202,7 @@ export function disposeAppState(): void {
     scheduledThreadActionStore = null;
   }
   activeMode = null;
+  autoVacuumConversion = null;
 }
 
 export function resetAppStateForTests(): void {
@@ -207,5 +218,6 @@ export function resetAppStateForTests(): void {
   runtimeInstanceStore = null;
   automationStore = null;
   activeMode = null;
+  autoVacuumConversion = null;
   currentBootDecision = null;
 }
