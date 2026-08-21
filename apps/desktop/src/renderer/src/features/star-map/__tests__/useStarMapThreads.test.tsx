@@ -1,7 +1,8 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type {
   FederationPeerSummary,
+  NavigationSnapshot,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -115,5 +116,55 @@ describe("useStarMapThreads", () => {
       expect(result.current.unreachableInstanceIds.has("pwr_a")).toBe(true);
     });
     expect(result.current.threadsByInstance.get("pwr_a")).toHaveLength(1);
+  });
+
+  it("resolves a manual refresh only after the peer snapshot is applied", async () => {
+    let resolveRefresh: ((snapshot: NavigationSnapshot) => void) | undefined;
+    const pendingRefresh = new Promise<NavigationSnapshot>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const getNavigationSnapshot = vi
+      .fn<NonNullable<DesktopApi["getNavigationSnapshot"]>>()
+      .mockResolvedValueOnce({
+        threads: [
+          { id: "thread-before" } as unknown as NavigationThreadSummary,
+        ],
+      } as NavigationSnapshot)
+      .mockImplementationOnce(async () => await pendingRefresh);
+    const desktopApi = { getNavigationSnapshot } as DesktopApi;
+    const { result } = renderHook(() =>
+      useStarMapThreads({
+        desktopApi,
+        peers: [peer("pwr_a", "connected")],
+        enabled: true,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(
+        result.current.threadsByInstance.get("pwr_a")?.[0]?.id,
+      ).toBe("thread-before");
+    });
+
+    let settled = false;
+    const refresh = result.current.refreshInstance("pwr_a").then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    await act(async () => {
+      resolveRefresh?.({
+        threads: [
+          { id: "thread-after" } as unknown as NavigationThreadSummary,
+        ],
+      } as NavigationSnapshot);
+      await refresh;
+    });
+
+    expect(settled).toBe(true);
+    expect(result.current.threadsByInstance.get("pwr_a")?.[0]?.id).toBe(
+      "thread-after",
+    );
   });
 });

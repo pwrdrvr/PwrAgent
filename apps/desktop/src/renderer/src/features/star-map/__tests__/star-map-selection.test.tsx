@@ -62,7 +62,7 @@ function renderMap(
   count: number,
   overrides?: {
     desktopApi?: DesktopApi;
-    onRefreshLocalThreads?: () => void;
+    onRefreshLocalThreads?: () => Promise<void>;
   },
 ) {
   const desktopApi = overrides?.desktopApi ?? buildDesktopApi();
@@ -489,7 +489,7 @@ describe("star map card menu acts on the selection", () => {
         return { backend: "codex" as const, threadId: request.threadId };
       }),
     } as unknown as Partial<DesktopApi>);
-    const onRefreshLocalThreads = vi.fn();
+    const onRefreshLocalThreads = vi.fn(async () => undefined);
     renderMap(3, { desktopApi, onRefreshLocalThreads });
     await ready();
     await sweepEverything();
@@ -522,7 +522,7 @@ describe("star map card menu acts on the selection", () => {
 
   it("refreshes an owning cloud once, not once per archived card", async () => {
     const desktopApi = buildMutatingDesktopApi();
-    const onRefreshLocalThreads = vi.fn();
+    const onRefreshLocalThreads = vi.fn(async () => undefined);
     renderMap(4, { desktopApi, onRefreshLocalThreads });
     await ready();
     await sweepEverything();

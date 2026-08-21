@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   FederationPeerSummary,
   NavigationThreadSummary,
@@ -18,7 +18,14 @@ export type StarMapRemoteThreads = {
    * instead of vanishing.
    */
   staleInstanceIds: Set<string>;
+  /** Refresh one owning peer and resolve only after its snapshot is applied. */
+  refreshInstance: (instanceId: string) => Promise<void>;
 };
+
+type StarMapRemoteThreadState = Omit<
+  StarMapRemoteThreads,
+  "refreshInstance"
+>;
 
 /**
  * Remote attention-thread feed for the Star Map: one navigation snapshot
@@ -39,7 +46,7 @@ export function useStarMapThreads(params: {
   refreshNonce?: number;
 }): StarMapRemoteThreads {
   const desktopApi = params.desktopApi;
-  const [state, setState] = useState<StarMapRemoteThreads>({
+  const [state, setState] = useState<StarMapRemoteThreadState>({
     threadsByInstance: new Map(),
     unreachableInstanceIds: new Set(),
     staleInstanceIds: new Set(),
@@ -62,6 +69,62 @@ export function useStarMapThreads(params: {
     .sort()
     .join("\n");
   const generationRef = useRef(0);
+
+  const refreshInstanceForGeneration = useCallback(
+    async (instanceId: string, generation: number): Promise<void> => {
+      if (!desktopApi?.getNavigationSnapshot) return;
+      try {
+        const snapshot = await desktopApi.getNavigationSnapshot({
+          federationTarget: { scope: "remote", instanceId },
+        });
+        if (generationRef.current !== generation) return;
+        setState((current) => {
+          const threadsByInstance = new Map(current.threadsByInstance);
+          threadsByInstance.set(instanceId, snapshot.threads);
+          const unreachableInstanceIds = new Set(
+            current.unreachableInstanceIds,
+          );
+          unreachableInstanceIds.delete(instanceId);
+          const staleInstanceIds = new Set(current.staleInstanceIds);
+          staleInstanceIds.delete(instanceId);
+          return {
+            threadsByInstance,
+            unreachableInstanceIds,
+            staleInstanceIds,
+          };
+        });
+      } catch (error) {
+        if (generationRef.current === generation) {
+          setState((current) => {
+            const unreachableInstanceIds = new Set(
+              current.unreachableInstanceIds,
+            );
+            unreachableInstanceIds.add(instanceId);
+            // A failed refresh keeps whatever cards we already had; the
+            // instance card carries the unreachable marker instead.
+            const staleInstanceIds = new Set(current.staleInstanceIds);
+            if (current.threadsByInstance.has(instanceId)) {
+              staleInstanceIds.add(instanceId);
+            }
+            return {
+              ...current,
+              unreachableInstanceIds,
+              staleInstanceIds,
+            };
+          });
+        }
+        throw error;
+      }
+    },
+    [desktopApi],
+  );
+
+  const refreshInstance = useCallback(
+    async (instanceId: string): Promise<void> => {
+      await refreshInstanceForGeneration(instanceId, generationRef.current);
+    },
+    [refreshInstanceForGeneration],
+  );
 
   // Retention pass: drop only peers that left the directory, and mark
   // everything we hold but cannot currently reach as stale.
@@ -111,48 +174,9 @@ export function useStarMapThreads(params: {
 
     const fetchAll = () => {
       for (const instanceId of instanceIds) {
-        void desktopApi
-          .getNavigationSnapshot?.({
-            federationTarget: { scope: "remote", instanceId },
-          })
-          .then((snapshot) => {
-            if (generationRef.current !== generation) return;
-            setState((current) => {
-              const threadsByInstance = new Map(current.threadsByInstance);
-              threadsByInstance.set(instanceId, snapshot.threads);
-              const unreachableInstanceIds = new Set(
-                current.unreachableInstanceIds,
-              );
-              unreachableInstanceIds.delete(instanceId);
-              const staleInstanceIds = new Set(current.staleInstanceIds);
-              staleInstanceIds.delete(instanceId);
-              return {
-                threadsByInstance,
-                unreachableInstanceIds,
-                staleInstanceIds,
-              };
-            });
-          })
-          .catch(() => {
-            if (generationRef.current !== generation) return;
-            setState((current) => {
-              const unreachableInstanceIds = new Set(
-                current.unreachableInstanceIds,
-              );
-              unreachableInstanceIds.add(instanceId);
-              // A failed refresh keeps whatever cards we already had; the
-              // instance card carries the unreachable marker instead.
-              const staleInstanceIds = new Set(current.staleInstanceIds);
-              if (current.threadsByInstance.has(instanceId)) {
-                staleInstanceIds.add(instanceId);
-              }
-              return {
-                ...current,
-                unreachableInstanceIds,
-                staleInstanceIds,
-              };
-            });
-          });
+        void refreshInstanceForGeneration(instanceId, generation).catch(
+          () => undefined,
+        );
       }
     };
 
@@ -162,7 +186,13 @@ export function useStarMapThreads(params: {
       generationRef.current += 1;
       clearInterval(timer);
     };
-  }, [desktopApi, connectedIds, params.enabled, params.refreshNonce]);
+  }, [
+    connectedIds,
+    desktopApi?.getNavigationSnapshot,
+    params.enabled,
+    params.refreshNonce,
+    refreshInstanceForGeneration,
+  ]);
 
-  return state;
+  return { ...state, refreshInstance };
 }

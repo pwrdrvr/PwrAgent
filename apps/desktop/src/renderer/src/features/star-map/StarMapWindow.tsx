@@ -117,9 +117,7 @@ export function StarMapWindow() {
         onFocusLocalInstance={() => {
           void desktopApi?.focusMainWindowFromStarMap?.();
         }}
-        onRefreshLocalThreads={() => {
-          void navigation.refresh?.();
-        }}
+        onRefreshLocalThreads={navigation.refresh}
       />
     </div>
   );
