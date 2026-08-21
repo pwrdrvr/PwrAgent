@@ -1633,6 +1633,24 @@ export class StateDb {
         status: "failed",
       };
     }
+
+    // Read the mode back rather than trusting that a VACUUM which did not
+    // throw did the job. Reporting an unverified success is what this whole
+    // change exists to undo: without this check, a rewrite that somehow left
+    // the mode at NONE would be logged as a conversion and then repeated in
+    // full on every launch, forever, each one looking like it worked.
+    if (
+      (this.db.pragma("auto_vacuum", { simple: true }) as number)
+      !== SQLITE_AUTO_VACUUM_INCREMENTAL
+    ) {
+      return {
+        error: new Error(
+          "VACUUM completed but auto_vacuum is still not INCREMENTAL",
+        ),
+        status: "failed",
+      };
+    }
+
     return {
       bytesAfter: sizeBytes(),
       bytesBefore,

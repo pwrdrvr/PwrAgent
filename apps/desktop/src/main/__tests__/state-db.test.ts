@@ -744,6 +744,31 @@ describe("StateDb", () => {
       }
     });
 
+    it("reports failure when the rewrite leaves the mode unchanged", () => {
+      const dbPath = path.join(tempDir, "stubborn.db");
+      openLegacyDatabase(dbPath).close();
+
+      const legacyDb = StateDb.open(dbPath);
+      // Stand in for any VACUUM that returns cleanly without converting: the
+      // method must not call that a success, or it would report a conversion
+      // and then repeat the full rewrite on every launch forever.
+      const realExec = legacyDb.raw.exec.bind(legacyDb.raw);
+      legacyDb.raw.exec = ((sql: string) =>
+        sql.trim().toUpperCase() === "VACUUM"
+          ? legacyDb.raw
+          : realExec(sql)) as typeof legacyDb.raw.exec;
+
+      try {
+        const conversion = legacyDb.ensureIncrementalAutoVacuum();
+        expect(conversion.status).toBe("failed");
+        if (conversion.status !== "failed") throw new Error("unreachable");
+        expect(conversion.error.message).toContain("still not INCREMENTAL");
+      } finally {
+        legacyDb.raw.exec = realExec;
+        legacyDb.close();
+      }
+    });
+
     it("is a no-op on an already-converted database", () => {
       // The guard that keeps this a once-per-profile cost rather than a
       // full rewrite on every launch.

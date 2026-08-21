@@ -202,6 +202,7 @@ export function disposeAppState(): void {
     scheduledThreadActionStore = null;
   }
   activeMode = null;
+  autoVacuumConversion = null;
 }
 
 export function resetAppStateForTests(): void {
@@ -217,5 +218,6 @@ export function resetAppStateForTests(): void {
   runtimeInstanceStore = null;
   automationStore = null;
   activeMode = null;
+  autoVacuumConversion = null;
   currentBootDecision = null;
 }
