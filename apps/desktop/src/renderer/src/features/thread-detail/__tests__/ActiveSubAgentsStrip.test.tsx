@@ -579,6 +579,22 @@ describe("ActiveSubAgentsStrip", () => {
       expect(screen.queryByRole("button", { name: /^Stop sub-agent:/ })).toBeNull();
     });
 
+    it("offers Stop while a monitor reports pending external work", () => {
+      render(
+        <ActiveSubAgentsStrip
+          desktopApi={{ stopSubAgent: vi.fn() } as unknown as DesktopApi}
+          thread={buildThread([
+            buildSubAgent({ monitorId: "a", status: "pending" }),
+          ])}
+        />,
+      );
+      expect(
+        screen.getByRole("button", {
+          name: "Stop sub-agent: Watch the deployment",
+        }),
+      ).toBeInTheDocument();
+    });
+
     it("recovers the button after a failed stop instead of leaving it stuck", async () => {
       const stopSubAgent = vi.fn().mockRejectedValue(new Error("nope"));
       render(

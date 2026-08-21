@@ -204,7 +204,9 @@ export function ActiveSubAgentsStrip(props: {
             const blockedRow = isBlockedSubAgent(subAgent);
             const stopping = stoppingIds.has(subAgent.monitorId);
             const canStop =
-              (subAgent.status === "running" || blockedRow)
+              (subAgent.status === "pending"
+                || subAgent.status === "running"
+                || blockedRow)
               && Boolean(subAgent.monitorThreadId)
               && Boolean(subAgent.monitorTurnId)
               && Boolean(props.desktopApi?.stopSubAgent);

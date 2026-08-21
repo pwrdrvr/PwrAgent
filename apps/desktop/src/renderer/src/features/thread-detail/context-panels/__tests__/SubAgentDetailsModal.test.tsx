@@ -167,4 +167,33 @@ describe("SubAgentDetailsModal", () => {
       title: "Epicurus",
     });
   });
+
+  it("opens a running non-Codex monitor transcript", () => {
+    const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true as const }));
+    (window as Window & { pwragent?: unknown }).pwragent = {
+      openSubAgentTranscriptWindow,
+    };
+    render(
+      <SubAgentDetailsModal
+        defaultBackend="acp:claude"
+        parentThreadId="parent-thread"
+        subAgent={{
+          ...subAgent,
+          backend: "acp:claude",
+          monitorId: "monitor-job-1",
+          monitorThreadId: "claude-monitor-thread",
+          monitorTurnId: undefined,
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Open transcript" }));
+
+    expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
+      backend: "acp:claude",
+      threadId: "claude-monitor-thread",
+      title: LONG_TASK,
+    });
+  });
 });

@@ -22,7 +22,7 @@ import {
 } from "./subagent-format";
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { RailStatusChip } from "./RailStatusChip";
-import { isCodexNativeSubAgent, subAgentOriginLabel } from "./subagent-kind";
+import { subAgentOriginLabel } from "./subagent-kind";
 
 type SubAgentDetailsModalProps = {
   defaultBackend: AppServerBackendKind;
@@ -126,7 +126,6 @@ export function SubAgentDetailsModal(props: SubAgentDetailsModalProps) {
   const running = !isTerminalSubAgent(subAgent);
   const now = useNowWhileActive(running);
   const transcriptThreadId =
-    isCodexNativeSubAgent(subAgent) &&
     subAgent.monitorThreadId &&
     subAgent.monitorThreadId !== props.parentThreadId
       ? subAgent.monitorThreadId

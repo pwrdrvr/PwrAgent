@@ -136,7 +136,9 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                 : undefined;
             const stopping = stoppingIds.has(subAgent.monitorId);
             const canStop =
-              (subAgent.status === "running" || subAgent.status === "blocked")
+              (subAgent.status === "pending"
+                || subAgent.status === "running"
+                || subAgent.status === "blocked")
               && Boolean(subAgent.monitorThreadId)
               && Boolean(subAgent.monitorTurnId)
               && Boolean(props.desktopApi?.stopSubAgent);

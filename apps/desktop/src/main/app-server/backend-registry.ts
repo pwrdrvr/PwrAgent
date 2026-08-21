@@ -14651,7 +14651,11 @@ export class DesktopBackendRegistry {
     if (!subAgent) {
       throw new Error("Sub-agent was not found on this thread.");
     }
-    if (subAgent.status !== "running" && subAgent.status !== "blocked") {
+    if (
+      subAgent.status !== "pending"
+      && subAgent.status !== "running"
+      && subAgent.status !== "blocked"
+    ) {
       throw new Error("Sub-agent is no longer running.");
     }
     const taskMonitor = this.taskMonitorDelegations.get(params.monitorId);

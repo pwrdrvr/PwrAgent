@@ -36825,7 +36825,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("stops blocked active task monitors without starting recovery", async () => {
+  it("stops pending active task monitors without starting recovery", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "turn/interrupt"] },
       models: TEST_TASK_MONITOR_MODELS,
@@ -36880,8 +36880,8 @@ script = "printf setup"
         tool: "inject_progress",
         arguments: {
           monitorId,
-          status: "blocked",
-          message: "Waiting for an external dependency.",
+          status: "pending",
+          message: "Waiting for external work.",
         },
       },
     } as AppServerPendingRequestNotification);
@@ -36889,7 +36889,7 @@ script = "printf setup"
       backend: "codex",
       threadId: "thread-1",
     })).resolves.toMatchObject({
-      subAgents: [expect.objectContaining({ status: "blocked" })],
+      subAgents: [expect.objectContaining({ status: "pending" })],
     });
     const monitorRecord = (registry as unknown as {
       taskMonitorDelegations: Map<string, { finalizationStarted?: boolean }>;
