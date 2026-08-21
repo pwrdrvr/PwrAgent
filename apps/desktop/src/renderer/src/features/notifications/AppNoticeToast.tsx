@@ -171,7 +171,7 @@ export function AppNoticeToast(props: {
           <CloseIcon size={14} aria-hidden="true" />
         </button>
       </div>
-      {customActions.length > 0 ? (
+      {customActions.length > 0 && !props.navigation ? (
         <div className="app-notice-toast__custom-actions">
           {customActions.map((action) => (
             <button
@@ -193,6 +193,20 @@ export function AppNoticeToast(props: {
           <span className="app-notice-toast__position">
             {props.navigation.current} of {props.navigation.total}
           </span>
+          {customActions.length > 0 ? (
+            <div className="app-notice-toast__custom-actions">
+              {customActions.map((action) => (
+                <button
+                  key={action.label}
+                  className={`button button--${action.tone ?? "secondary"}`}
+                  type="button"
+                  onClick={action.onClick}
+                >
+                  {action.label}
+                </button>
+              ))}
+            </div>
+          ) : null}
           <button
             className="app-notice-toast__icon-button"
             type="button"

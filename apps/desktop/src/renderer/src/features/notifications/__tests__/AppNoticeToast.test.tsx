@@ -269,6 +269,39 @@ describe("AppNoticeToast", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps operator actions in the existing durable-navigation row", () => {
+    const onExamine = vi.fn();
+    const { container } = render(
+      <AppNoticeToast
+        navigation={{ current: 1, total: 1 }}
+        notice={{
+          ...notice,
+          actions: [{
+            label: "Examine 20 cases",
+            onClick: onExamine,
+            tone: "primary",
+          }],
+          autoDismiss: false,
+        }}
+        onDismiss={vi.fn()}
+      />,
+    );
+
+    const navigation = screen.getByRole("navigation", {
+      name: "Durable notices",
+    });
+    const actionGroup = navigation.querySelector<HTMLElement>(
+      ".app-notice-toast__custom-actions",
+    );
+    expect(actionGroup).toBeInTheDocument();
+    expect(container.querySelector(
+      ".app-notice-toast > .app-notice-toast__custom-actions",
+    )).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Examine 20 cases" }));
+    expect(onExamine).toHaveBeenCalledTimes(1);
+  });
+
   it("uses a notice-specific durable dismissal when supplied", () => {
     const durableDismiss = vi.fn();
     const stackDismiss = vi.fn();

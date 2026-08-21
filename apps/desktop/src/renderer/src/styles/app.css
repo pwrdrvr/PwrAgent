@@ -7138,8 +7138,13 @@ textarea,
   align-self: start;
 }
 
-.app-notice-toast__custom-actions {
+.app-notice-toast > .app-notice-toast__custom-actions {
   grid-column: 1 / -1;
+  justify-content: flex-end;
+}
+
+.app-notice-toast__navigation .app-notice-toast__custom-actions {
+  min-width: 0;
   justify-content: flex-end;
 }
 
