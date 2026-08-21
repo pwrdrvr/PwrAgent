@@ -10276,6 +10276,45 @@ script = "echo setup"
     await registry.close();
   });
 
+  it("keeps the startup prewarm bounded to summary-only active pages", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-1",
+          title: "Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await registry.listThreads({
+      callerReason: "startup-prewarm",
+      limit: 50,
+      maxPages: 1,
+      skipArchivedMetadataRefresh: true,
+    });
+
+    expect(codexClient.lastListThreadsParams).toMatchObject({
+      enrichDirectories: false,
+      limit: 50,
+      maxPages: 1,
+      skipArchivedMetadataRefresh: true,
+    });
+    expect(codexClient.lastListNativeSubAgentThreadsParams).toEqual({
+      limit: 50,
+      maxPages: 1,
+    });
+    expect(codexClient.readThreadCalls).toEqual([]);
+
+    await registry.close();
+  });
+
   it("deduplicates identical linked directories in thread summaries", async () => {
     const repoPath = "/Users/fixture-user/projects/PwrAgent";
     const firstWorktreePath = "/Users/fixture-user/.codex/worktrees/wt1/PwrAgent";

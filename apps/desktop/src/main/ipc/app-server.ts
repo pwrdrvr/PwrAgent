@@ -2126,6 +2126,7 @@ class DesktopAppServerService {
     const refreshMode = request.refreshMode ?? "full";
     const activeRecentRefresh = refreshMode === "active-recent";
     const cacheKey = buildThreadSnapshotCacheKey(backend, request.filter);
+    const cachedFullThreads = this.lastFullNavigationThreadsByKey.get(cacheKey);
     const fetchedThreads = await getDesktopBackendRegistry().listThreads({
       backend: backend === "all" ? undefined : backend,
       callerReason: activeRecentRefresh
@@ -2139,10 +2140,13 @@ class DesktopAppServerService {
     });
     const threads = activeRecentRefresh
       ? mergeRecentThreadsIntoCachedSnapshot(
-          this.lastFullNavigationThreadsByKey.get(cacheKey),
+          cachedFullThreads,
           fetchedThreads,
         )
       : fetchedThreads;
+    const partialSnapshot =
+      activeRecentRefresh
+      && (!cachedFullThreads || cachedFullThreads.length === 0);
     if (!activeRecentRefresh) {
       this.lastFullNavigationThreadsByKey.set(cacheKey, threads);
     }
@@ -2157,6 +2161,7 @@ class DesktopAppServerService {
       automationsByThreadKey,
       fetchedAt: Date.now(),
       messagingBindingsByThreadKey,
+      ...(partialSnapshot ? { partial: true } : {}),
       queuedExecutionModesByThreadKey,
       queuedTurnsByThreadKey,
       threads,

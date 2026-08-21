@@ -694,13 +694,20 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
      * sees queued messages, mirroring queuedExecutionModesByThreadKey.
      */
     queuedTurnsByThreadKey?: Record<string, ThreadQueuedTurnSummary[]>;
+    /**
+     * A bounded provider page that is useful for early rendering but does not
+     * represent the complete backend. Partial snapshots must not replace the
+     * durable completeness baseline or initialize per-thread seen metadata.
+     */
+    partial?: boolean;
     threads: AppServerThreadSummary[];
     workspaceRoots?: string[];
   }): Promise<NavigationSnapshot> {
     const backendState = this.getBackend(params.backend);
     const firstSnapshot = !backendState?.lastSnapshotHash;
+    const persistReconciliation = params.partial !== true;
 
-    if (firstSnapshot) {
+    if (persistReconciliation && firstSnapshot) {
       for (const thread of params.threads) {
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);
         const current = this.getThread(threadKey);
@@ -754,7 +761,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       }
     }
 
-    for (const thread of params.threads) {
+    for (const thread of persistReconciliation ? params.threads : []) {
       if (!isAcpBackendId(thread.source) || !thread.executionMode) {
         continue;
       }
@@ -779,7 +786,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // Agent names originate from the thread title when a thread is promoted
     // or created as an Agent. Keep that invariant across older builds that
     // renamed only the provider thread and left the overlay name stale.
-    for (const thread of params.threads) {
+    for (const thread of persistReconciliation ? params.threads : []) {
       const threadTitle = thread.title.trim();
       if (!threadTitle) {
         continue;
@@ -869,14 +876,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       launchpadDefaults: snapshot.launchpadDefaults,
       threads: snapshot.threads,
     });
-    const unchanged = backendState?.lastSnapshotHash === nextHash;
+    const unchanged =
+      persistReconciliation
+      && backendState?.lastSnapshotHash === nextHash;
 
-    this.putBackend(params.backend, {
-      knownThreadKeys: params.threads.map((thread) =>
-        buildThreadIdentityKey(thread.source, thread.id),
-      ),
-      lastSnapshotHash: nextHash,
-    });
+    if (persistReconciliation) {
+      this.putBackend(params.backend, {
+        knownThreadKeys: params.threads.map((thread) =>
+          buildThreadIdentityKey(thread.source, thread.id),
+        ),
+        lastSnapshotHash: nextHash,
+      });
+    }
 
     return { ...snapshot, unchanged };
   }

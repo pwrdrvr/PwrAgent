@@ -3278,6 +3278,11 @@ describe("app server ipc", () => {
       maxPages: 1,
       skipArchivedMetadataRefresh: true,
     });
+    expect(reconcileNavigationSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        partial: true,
+      }),
+    );
     expect(rememberCompleteNavigationSnapshot).not.toHaveBeenCalled();
   });
 
@@ -3333,6 +3338,9 @@ describe("app server ipc", () => {
           expect.objectContaining({ id: "thread-stale" }),
         ],
       }),
+    );
+    expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ partial: true }),
     );
   });
 
