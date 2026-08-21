@@ -404,7 +404,9 @@ type StarMapScreenProps = {
   /** Open a local thread in the main window's full thread view. */
   onOpenLocalThread: (thread: NavigationThreadSummary) => void;
   /** Clear unread state after a chat card's reply reaches its backend. */
-  onUserRepliedToThread?: (thread: NavigationThreadSummary) => void;
+  onUserRepliedToThread?: (
+    thread: NavigationThreadSummary,
+  ) => void | Promise<void>;
   /** The local instance card's open action: focus the main window. */
   onFocusLocalInstance: () => void;
   /** Refresh the App's navigation snapshot (after intake creates locally). */
@@ -1039,6 +1041,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
     snapshotFetchedAtForThread: queueSnapshotFetchedAtForThread,
     threads: queueProjectionThreads,
   });
+  const refreshRemoteInstance = remote.refreshInstance;
+  const onUserRepliedToThread = props.onUserRepliedToThread;
+  const reportUserRepliedToThread = useCallback(
+    async (thread: NavigationThreadSummary): Promise<void> => {
+      await onUserRepliedToThread?.(thread);
+      const target = thread.federation?.ref.target;
+      if (target && isRemoteFederationTarget(target)) {
+        // `markThreadsSeen` optimistically patches the local navigation
+        // snapshot, but peer cards render from `useStarMapThreads`. Refresh
+        // that owning feed only after its seen watermark reaches the peer.
+        await refreshRemoteInstance(target.instanceId);
+      }
+    },
+    [onUserRepliedToThread, refreshRemoteInstance],
+  );
   const arrangement = useStarMapArrangement({ desktopApi: props.desktopApi });
   // Load-card membership lives in the synced arrangement, so a card opened
   // on one machine is on the map from every machine in the fleet.
@@ -2475,7 +2492,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, [localInstanceId]);
 
   const onRefreshLocalThreads = props.onRefreshLocalThreads;
-  const refreshRemoteInstance = remote.refreshInstance;
   /**
    * Refresh whichever cloud owns a thread. Archive removes it from the
    * owning instance, so the map has to re-fetch rather than guess.
@@ -4487,7 +4503,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               }
               onClose={chatCards.close}
               onOpenFull={openThreadFully}
-              onUserRepliedToThread={props.onUserRepliedToThread}
+              onUserRepliedToThread={reportUserRepliedToThread}
               onRefreshNavigation={() =>
                 refreshOwner(cardInstanceId ?? localInstanceId)
               }

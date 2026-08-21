@@ -173,7 +173,9 @@ type CardParams = {
   desktopApi: DesktopApi;
   instanceIcon?: string;
   instanceLabel?: string;
-  onUserRepliedToThread?: (thread: NavigationThreadSummary) => void;
+  onUserRepliedToThread?: (
+    thread: NavigationThreadSummary,
+  ) => void | Promise<void>;
   pastedImageMaxPatches?: number;
   thread: NavigationThreadSummary;
 };

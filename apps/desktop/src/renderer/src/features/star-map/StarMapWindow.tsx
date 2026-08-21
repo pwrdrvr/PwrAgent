@@ -44,9 +44,8 @@ export function StarMapWindow() {
   });
   const markThreadsSeen = navigation.markThreadsSeen;
   const reportUserRepliedToThread = useCallback(
-    (thread: NavigationThreadSummary) => {
-      void markThreadsSeen([thread]);
-    },
+    (thread: NavigationThreadSummary): Promise<void> =>
+      markThreadsSeen([thread]),
     [markThreadsSeen],
   );
 

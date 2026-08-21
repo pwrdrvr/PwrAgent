@@ -80,7 +80,9 @@ export type StarMapChatCardProps = {
    * Report an ordinary reply only after start/steer has been accepted.
    * Attention keeps unread state until this signal arrives.
    */
-  onUserRepliedToThread?: (thread: NavigationThreadSummary) => void;
+  onUserRepliedToThread?: (
+    thread: NavigationThreadSummary,
+  ) => void | Promise<void>;
   /** Refresh the owning navigation feed after a monitor is stopped. */
   onRefreshNavigation?: () => Promise<void>;
   onRaise: (cardKey: string) => void;
@@ -230,6 +232,11 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // — so it reads through here and depends on scalars instead.
   const sessionRef = useRef(session);
   sessionRef.current = session;
+  // For callbacks and effects that need the latest summary without taking
+  // the whole object as a dependency — the composer's memo boundary rests
+  // on its props staying stable across snapshot refreshes.
+  const threadRef = useRef(thread);
+  threadRef.current = thread;
 
   // Cap what actually mounts. Same window the full thread view uses, so a
   // card over a long thread holds tens of entries rather than thousands.
@@ -646,6 +653,26 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     [desktopApi, federationTarget, supportsReview, thread.id, thread.source],
   );
 
+  const reportAcceptedReply = useCallback(() => {
+    try {
+      void Promise.resolve(
+        onUserRepliedToThread?.(threadRef.current),
+      ).catch((error) => {
+        console.warn(
+          "Could not clear unread state after the accepted Star Map reply.",
+          error,
+        );
+      });
+    } catch (error) {
+      // Seen-state bookkeeping is downstream of backend acceptance. A
+      // bookkeeping failure must not roll back the accepted user message.
+      console.warn(
+        "Could not clear unread state after the accepted Star Map reply.",
+        error,
+      );
+    }
+  }, [onUserRepliedToThread]);
+
   /**
    * Returns whether the turn actually reached the backend. A peer can drop
    * mid-send, and when it does the operator must get their text back and
@@ -805,7 +832,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             requestId: `star-map-chat-card:${cardKey}:${activeTurnId}:${Date.now()}`,
             threadId: thread.id,
           });
-          onUserRepliedToThread?.(threadRef.current);
+          reportAcceptedReply();
           setSendNotice(
             response.disposition === "queued"
               ? "Queued for the next turn."
@@ -883,7 +910,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             );
           }
         }
-        onUserRepliedToThread?.(threadRef.current);
+        reportAcceptedReply();
         return true;
       } catch (error) {
         if (props.composerDraftStore) {
@@ -912,7 +939,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       desktopApi,
       ensureNavigationLoaded,
       federationTarget,
-      onUserRepliedToThread,
+      reportAcceptedReply,
       supportsReview,
       thread.id,
       thread.source,
@@ -951,12 +978,6 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
    * never pays for the describe. The hook takes the card's federation
    * target, so a card over a peer's thread lists the peer's models.
    */
-  // For callbacks and effects that need the latest summary without taking
-  // the whole object as a dependency — the composer's memo boundary rests
-  // on its props staying stable across snapshot refreshes.
-  const threadRef = useRef(thread);
-  threadRef.current = thread;
-
   /**
    * Optimistic view of the chip's settings between a menu selection and
    * the thread-state bus round-trip. Mirrors the optimistic snapshot patch
