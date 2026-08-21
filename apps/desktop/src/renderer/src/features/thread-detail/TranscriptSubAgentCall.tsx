@@ -26,8 +26,6 @@ export function TranscriptSubAgentCall(props: TranscriptSubAgentCallProps) {
     return null;
   }
 
-  const canOpenTranscript =
-    call.origin === "codex-native" && call.backend === "codex";
   const origin = call.origin === "codex-native"
     ? "Codex native agent"
     : "PwrAgent sub-agent";
@@ -66,7 +64,7 @@ export function TranscriptSubAgentCall(props: TranscriptSubAgentCallProps) {
                 ) : null}
               </div>
               {agent.message ? <p className="transcript-subagent__message">{agent.message}</p> : null}
-              {canOpenTranscript && openSubAgentTranscriptWindow ? (
+              {openSubAgentTranscriptWindow ? (
                 <button
                   className="button button--ghost transcript-subagent__action"
                   type="button"

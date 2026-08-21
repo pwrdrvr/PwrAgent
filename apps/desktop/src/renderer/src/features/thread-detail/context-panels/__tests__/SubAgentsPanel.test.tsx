@@ -72,6 +72,28 @@ describe("SubAgentsPanel", () => {
     expect(onRefreshNavigation).toHaveBeenCalledTimes(1);
   });
 
+  it("offers Stop while a monitor reports pending external work", () => {
+    const activeSubAgent = thread.subAgents?.[0];
+    expect(activeSubAgent).toBeDefined();
+
+    render(
+      <SubAgentsPanel
+        desktopApi={{ stopSubAgent: vi.fn() } as unknown as DesktopApi}
+        thread={{
+          ...thread,
+          subAgents: [
+            {
+              ...activeSubAgent!,
+              status: "pending",
+            },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+  });
+
   it("keeps the control available and reports an interruption failure", async () => {
     const stopSubAgent = vi.fn(async () => {
       throw new Error("Sub-agent is no longer running.");

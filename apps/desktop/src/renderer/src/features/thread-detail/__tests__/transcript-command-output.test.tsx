@@ -122,7 +122,7 @@ describe("TranscriptCommandOutput", () => {
     });
   });
 
-  it("does not offer a transcript for a PwrAgent-managed sub-agent", () => {
+  it("opens a transcript for a PwrAgent-managed sub-agent", () => {
     const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
     (window as Window & { pwragent?: unknown }).pwragent = {
       openSubAgentTranscriptWindow,
@@ -153,9 +153,13 @@ describe("TranscriptCommandOutput", () => {
       />,
     );
 
-    expect(
-      screen.queryByRole("button", { name: "Open transcript" }),
-    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open transcript" }));
+
+    expect(openSubAgentTranscriptWindow).toHaveBeenCalledWith({
+      backend: "acp:gemini",
+      threadId: "monitor-thread-1",
+      title: "Build monitor",
+    });
   });
 
   it("renders structured ACP tool invocations without pretending they are shell commands", () => {

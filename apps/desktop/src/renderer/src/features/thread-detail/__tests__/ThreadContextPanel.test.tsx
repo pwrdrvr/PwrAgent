@@ -538,7 +538,7 @@ describe("ThreadContextPanel", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("does not offer a transcript for a detached review child", () => {
+  it("offers a transcript for a detached review child", () => {
     const openSubAgentTranscriptWindow = vi.fn(async () => ({ opened: true }));
     (window as Window & { pwragent?: unknown }).pwragent = {
       openSubAgentTranscriptWindow,
@@ -565,10 +565,10 @@ describe("ThreadContextPanel", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Details" }));
     expect(
-      within(screen.getByRole("dialog")).queryByRole("button", {
+      within(screen.getByRole("dialog")).getByRole("button", {
         name: "Open transcript",
       }),
-    ).not.toBeInTheDocument();
+    ).toBeInTheDocument();
   });
 
   it("labels Codex native sub-agent usage separately from monitor usage", () => {
