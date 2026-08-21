@@ -24,11 +24,6 @@ export function buildToolAccountingNotice(params: {
         onClick: params.onExamine,
         tone: "primary" as const,
       },
-      {
-        label: "Dismiss",
-        onClick: params.onDismiss,
-        tone: "secondary" as const,
-      },
       /* Muting is offered only below critical. Silencing "output is getting
          large" is a reasonable call; silencing "output hit the cap and was
          truncated" is not something to offer in one click. */
@@ -47,6 +42,7 @@ export function buildToolAccountingNotice(params: {
       showCost: params.showCost,
       summary,
     }),
+    onDismiss: params.onDismiss,
     threadLink: params.threadLink,
     title: critical
       ? "Tool output hit the cap"

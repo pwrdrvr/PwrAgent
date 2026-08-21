@@ -60,6 +60,12 @@ export function PricingSettings(props: {
     DEFAULT_THREAD_PRICING_DISPLAY_CODEX_CREDITS;
   const toolOutputAlerts = props.snapshot.general.toolOutputAlerts;
   const spendAlerts = props.snapshot.general.spendAlerts;
+  const alertsEnabled =
+    spendAlerts.activeTurnSpendEnabled.value
+    || spendAlerts.threadSpendEnabled.value
+    || toolOutputAlerts.outputCapHitsEnabled.value
+    || toolOutputAlerts.repeatedLargeOutputsEnabled.value
+    || toolOutputAlerts.repeatedQueuedChecksEnabled.value;
   const displayControlsDisabled = props.saving || !threadPricingSummary.value;
   const repeatedLargeOutputDescription =
     `Alert after ${toolOutputAlerts.repeatedLargeOutputMinimumCalls.value.toLocaleString()} tool calls in one turn each produce at least ${toolOutputAlerts.repeatedLargeOutputMinimumPercent.value.toLocaleString()}% of the model-visible output cap.`;
@@ -146,7 +152,8 @@ export function PricingSettings(props: {
         eyebrow="Usage"
         title="Alerts"
         description="Choose which costly or lossy tool-use patterns should interrupt you."
-        chip={sourceBadge(toolOutputAlerts.repeatedLargeOutputsEnabled)}
+        chip={alertsEnabled ? "On" : "Off"}
+        chipKind={alertsEnabled ? "ok" : "default"}
       >
         <div className="settings-fields">
           <SettingsField

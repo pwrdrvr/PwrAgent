@@ -172,6 +172,8 @@ import type {
   SetThreadReactionResponse,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
+  AcknowledgeThreadSpendAlertRequest,
+  AcknowledgeThreadSpendAlertResponse,
   SetThreadParentRequest,
   SetThreadParentResponse,
   SetThreadPinRequest,
@@ -932,6 +934,9 @@ export type DesktopApi = {
   setThreadToolIncidentNotice?: (
     request: SetThreadToolIncidentNoticeRequest,
   ) => Promise<SetThreadToolIncidentNoticeResponse>;
+  acknowledgeThreadSpendAlert?: (
+    request: AcknowledgeThreadSpendAlertRequest,
+  ) => Promise<AcknowledgeThreadSpendAlertResponse>;
   setThreadPin?: (
     request: SetThreadPinRequest
   ) => Promise<SetThreadPinResponse>;

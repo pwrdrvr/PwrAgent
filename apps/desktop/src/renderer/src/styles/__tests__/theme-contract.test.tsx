@@ -488,7 +488,7 @@ describe("Tangerine Terminal theme contract", () => {
   it("keeps custom toast actions from collapsing the message column", () => {
     const customActionsRule = extractRuleBody(
       css,
-      '.app-notice-toast__actions[data-custom-actions="true"]',
+      ".app-notice-toast__custom-actions",
     );
 
     expect(customActionsRule).toContain("grid-column: 1 / -1;");

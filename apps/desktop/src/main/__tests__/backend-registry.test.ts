@@ -60,6 +60,7 @@ import type {
   ThreadOverlayState,
   ThreadToolAccounting,
   ThreadToolInvocationAlert,
+  ThreadSpendAlert,
   ThreadUsageLineRecord,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
@@ -459,6 +460,53 @@ function createOverlayStoreMock(params?: {
       backend: ThreadOverlayState["backend"];
       threadId: string;
     }) => overlays.get(`${backend}:${threadId}`),
+    setThreadSpendAlertPending: async ({
+      alert,
+      backend,
+      threadId,
+    }: {
+      alert: ThreadSpendAlert;
+      backend: ThreadOverlayState["backend"];
+      threadId: string;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      if (
+        current.threadSpendAlertedAt !== undefined
+        || current.threadSpendAlertPending !== undefined
+      ) return current;
+      const next = {
+        ...current,
+        threadSpendAlertPending: alert,
+      };
+      overlays.set(key, next);
+      return next;
+    },
+    acknowledgeThreadSpendAlert: async ({
+      alertId,
+      backend,
+      threadId,
+    }: {
+      alertId: string;
+      backend: ThreadOverlayState["backend"];
+      threadId: string;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key);
+      if (current?.threadSpendAlertPending?.alertId !== alertId) return false;
+      const next: ThreadOverlayState = {
+        ...current,
+        threadSpendAlertedAt: Date.now(),
+      };
+      delete next.threadSpendAlertPending;
+      overlays.set(key, next);
+      return true;
+    },
     getThreadOverlayStates: async ({
       backend,
       threadIds,
@@ -19838,7 +19886,7 @@ command = "pnpm dev"
     });
   });
 
-  it("emits configured spend alerts once per threshold", async () => {
+  it("replays total spend until renderer acknowledgement, then suppresses it", async () => {
     const activeLine: ThreadUsageLineRecord = {
       backend: "codex",
       cachedInputCostMicros: 0,
@@ -19883,12 +19931,13 @@ command = "pnpm dev"
         usageLineCount: 1,
       }],
     };
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadPricing: vi.fn(async () => pricing),
+    };
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
-      overlayStore: {
-        ...createOverlayStoreMock(),
-        readThreadPricing: vi.fn(async () => pricing),
-      } as never,
+      overlayStore: overlayStore as never,
       resolveSpendAlertPolicy: () => ({
         activeTurnSpendEnabled: true,
         activeTurnSpendThresholdUsd: 5,
@@ -19928,11 +19977,95 @@ command = "pnpm dev"
         { kind: "thread-spend", spendMicros: 30_000_000 },
       ],
     });
-    expect(pricingEvents[1]?.notification.params).not.toHaveProperty(
+    expect(pricingEvents[1]?.notification.params).toMatchObject({
+      triggeredSpendAlerts: [
+        { kind: "thread-spend", spendMicros: 30_000_000 },
+      ],
+    });
+    const pendingAlert = (pricingEvents[1]?.notification.params as {
+      triggeredSpendAlerts?: ThreadSpendAlert[];
+    }).triggeredSpendAlerts?.[0];
+    expect(pendingAlert?.kind).toBe("thread-spend");
+    await registry.close();
+
+    const restartedRegistry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: overlayStore as never,
+      resolveSpendAlertPolicy: () => ({
+        activeTurnSpendEnabled: true,
+        activeTurnSpendThresholdUsd: 5,
+        threadSpendEnabled: true,
+        threadSpendThresholdUsd: 25,
+      }),
+    });
+    const restartedEvents: AgentEvent[] = [];
+    restartedRegistry.onEvent((event) => {
+      restartedEvents.push(event);
+    });
+    const emitRestartedPricing = (restartedRegistry as unknown as {
+      emitThreadPricingUpdated(params: {
+        backend: AppServerBackendKind;
+        threadId: string;
+      }): Promise<void>;
+    }).emitThreadPricingUpdated.bind(restartedRegistry);
+    await emitRestartedPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(restartedEvents[0]?.notification.params).toMatchObject({
+      triggeredSpendAlerts: [
+        { kind: "thread-spend", spendMicros: 30_000_000 },
+      ],
+    });
+
+    await (overlayStore as typeof overlayStore & {
+      acknowledgeThreadSpendAlert(params: {
+        alertId: string;
+        backend: AppServerBackendKind;
+        threadId: string;
+      }): Promise<boolean>;
+    }).acknowledgeThreadSpendAlert({
+      alertId: pendingAlert?.alertId ?? "missing",
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    await emitRestartedPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const acknowledgedPricingEvent = restartedEvents[1];
+    expect(acknowledgedPricingEvent?.notification.params).not.toHaveProperty(
       "triggeredSpendAlerts",
     );
+    await restartedRegistry.close();
 
-    await registry.close();
+    const acknowledgedRegistry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: overlayStore as never,
+      resolveSpendAlertPolicy: () => ({
+        activeTurnSpendEnabled: true,
+        activeTurnSpendThresholdUsd: 5,
+        threadSpendEnabled: true,
+        threadSpendThresholdUsd: 25,
+      }),
+    });
+    const acknowledgedEvents: AgentEvent[] = [];
+    acknowledgedRegistry.onEvent((event) => {
+      acknowledgedEvents.push(event);
+    });
+    await (acknowledgedRegistry as unknown as {
+      emitThreadPricingUpdated(params: {
+        backend: AppServerBackendKind;
+        threadId: string;
+      }): Promise<void>;
+    }).emitThreadPricingUpdated({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(acknowledgedEvents[0]?.notification.params).not.toHaveProperty(
+      "triggeredSpendAlerts",
+    );
+    await acknowledgedRegistry.close();
   });
 
   it("preserves every active turn while coalescing pricing updates", async () => {

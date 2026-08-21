@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { buildPrAutoDispatchBudgetNotice } from "../pr-auto-dispatch-budget-notice";
 
 describe("buildPrAutoDispatchBudgetNotice", () => {
-  it("creates a persistent acknowledgement notice with the two safety actions", () => {
+  it("uses the standard dismissal for the safe leave-disabled outcome", () => {
     const onLeaveDisabled = vi.fn();
     const onResume = vi.fn();
     const notice = buildPrAutoDispatchBudgetNotice({
@@ -23,13 +23,10 @@ describe("buildPrAutoDispatchBudgetNotice", () => {
       title: "Auto-fix PR paused",
       tone: "warning",
     });
-    expect(notice?.actions?.map((action) => action.label)).toEqual([
-      "Leave disabled",
-      "Resume",
-    ]);
+    expect(notice?.actions?.map((action) => action.label)).toEqual(["Resume"]);
 
+    notice?.onDismiss?.();
     notice?.actions?.[0]?.onClick();
-    notice?.actions?.[1]?.onClick();
     expect(onLeaveDisabled).toHaveBeenCalledTimes(1);
     expect(onResume).toHaveBeenCalledTimes(1);
   });

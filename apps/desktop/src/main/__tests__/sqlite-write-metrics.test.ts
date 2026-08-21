@@ -33,6 +33,14 @@ let stateDb: StateDb;
 let store: SqliteOverlayStore;
 let tempDir: string;
 
+const ALERTING_TOOL_OUTPUT_POLICY = {
+  outputCapHitsEnabled: true,
+  repeatedLargeOutputsEnabled: true,
+  repeatedLargeOutputMinimumCalls: 5,
+  repeatedLargeOutputMinimumPercent: 50,
+  repeatedQueuedChecksEnabled: true,
+};
+
 beforeEach(() => {
   process.env[SQLITE_WRITE_METRICS_ENV] = "1";
   tempDir = mkdtempSync(path.join(os.tmpdir(), "pwragent-write-metrics-"));
@@ -202,6 +210,7 @@ describe("sqlite write metrics", () => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
+      resolveToolOutputAlertPolicy: () => ALERTING_TOOL_OUTPUT_POLICY,
     });
     const emit = (registry as unknown as {
       emit(event: AgentEvent): Promise<void>;
@@ -256,6 +265,7 @@ describe("sqlite write metrics", () => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
+      resolveToolOutputAlertPolicy: () => ALERTING_TOOL_OUTPUT_POLICY,
     });
     const emit = (registry as unknown as {
       emit(event: AgentEvent): Promise<void>;
@@ -482,6 +492,7 @@ describe("sqlite write metrics", () => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
+      resolveToolOutputAlertPolicy: () => ALERTING_TOOL_OUTPUT_POLICY,
     });
     const emit = (registry as unknown as {
       emit(event: AgentEvent): Promise<void>;
@@ -530,6 +541,7 @@ describe("sqlite write metrics", () => {
     const registry = new DesktopBackendRegistry({
       codexClient: createStubBackendClient(),
       overlayStore: store as never,
+      resolveToolOutputAlertPolicy: () => ALERTING_TOOL_OUTPUT_POLICY,
     });
     const emit = (registry as unknown as {
       emit(event: AgentEvent): Promise<void>;
@@ -803,6 +815,58 @@ describe("sqlite write metrics", () => {
       note:
         "one thread load lazily reprices 25 usage rows in ten-row progress batches; a second load is read-only",
       scenario: "thread-pricing-lazy-repair",
+      writes,
+    });
+  });
+
+  it("persists total-spend pending and acknowledgement without repeat writes", async () => {
+    const alert = {
+      alertId: "spend-alert:thread:codex:thread-spend-alert",
+      createdAt: 1_800_000_000_000,
+      currency: "USD" as const,
+      kind: "thread-spend" as const,
+      spendMicros: 30_000_000,
+      threadId: "thread-spend-alert",
+      thresholdMicros: 25_000_000,
+    };
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.setThreadSpendAlertPending({
+        alert,
+        backend: "codex",
+        threadId: "thread-spend-alert",
+      });
+      await store.setThreadSpendAlertPending({
+        alert,
+        backend: "codex",
+        threadId: "thread-spend-alert",
+      });
+      await store.acknowledgeThreadSpendAlert({
+        acknowledgedAt: 1_800_000_000_001,
+        alertId: alert.alertId,
+        backend: "codex",
+        threadId: "thread-spend-alert",
+      });
+      await store.acknowledgeThreadSpendAlert({
+        acknowledgedAt: 1_800_000_000_002,
+        alertId: alert.alertId,
+        backend: "codex",
+        threadId: "thread-spend-alert",
+      });
+    });
+
+    expect(
+      (await store.getThreadOverlayState({
+        backend: "codex",
+        threadId: "thread-spend-alert",
+      }))?.threadSpendAlertedAt,
+    ).toBe(1_800_000_000_001);
+    expectSqliteWriteBudget({
+      // Pending delivery and its acknowledgement each commit once. At about
+      // 16 KB of WAL per commit, 100 newly expensive threads per day project
+      // to roughly 3.2 MB/day, with no repeat writes.
+      note:
+        "one pending total-spend alert and one renderer acknowledgement; repeated updates and acknowledgements are read-only",
+      scenario: "thread-spend-alert-boundary",
       writes,
     });
   });

@@ -20,6 +20,7 @@ export function detectUsageSpendAlerts(params: {
     summaries: readonly ThreadPricingSummary[];
   };
   threadId: string;
+  threadSpendAlerted?: boolean;
   triggeredAlertIds: ReadonlySet<string>;
   now?: number;
 }): ThreadSpendAlert[] {
@@ -78,7 +79,6 @@ export function detectUsageSpendAlerts(params: {
       "thread",
       params.backend,
       params.threadId,
-      thresholdMicros,
     ].join(":");
     const spendMicros = params.pricing.summaries.reduce(
       (total, summary) =>
@@ -89,6 +89,7 @@ export function detectUsageSpendAlerts(params: {
     );
     if (
       spendMicros >= thresholdMicros
+      && !params.threadSpendAlerted
       && !params.triggeredAlertIds.has(alertId)
     ) {
       alerts.push({

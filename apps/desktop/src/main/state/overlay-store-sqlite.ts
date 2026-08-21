@@ -31,6 +31,7 @@ import type {
   ThreadToolInvocationSummary,
   ThreadPermissionTransition,
   ThreadPricingSummary,
+  ThreadSpendAlert,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
   ThreadPullRequestWatchSummary,
@@ -2378,6 +2379,57 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     if (!nextNotice) delete nextState.toolIncidentNotice;
     this.putThread(threadKey, nextState);
     return nextState;
+  }
+
+  /** Retains the threshold-crossing payload until a renderer receives it. */
+  async setThreadSpendAlertPending(params: {
+    alert: ThreadSpendAlert;
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    if (
+      current.threadSpendAlertedAt !== undefined
+      || current.threadSpendAlertPending !== undefined
+    ) {
+      return current;
+    }
+    const nextState: ThreadOverlayState = {
+      ...current,
+      threadSpendAlertPending: params.alert,
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  /** Consumes only the pending alert the renderer confirms it received. */
+  async acknowledgeThreadSpendAlert(params: {
+    acknowledgedAt?: number;
+    alertId: string;
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<boolean> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey);
+    if (
+      !current
+      || current.threadSpendAlertPending?.alertId !== params.alertId
+    ) {
+      return false;
+    }
+    const nextState: ThreadOverlayState = {
+      ...current,
+      threadSpendAlertedAt: params.acknowledgedAt ?? Date.now(),
+    };
+    delete nextState.threadSpendAlertPending;
+    this.putThread(threadKey, nextState);
+    return true;
   }
 
   async setThreadArchiveTombstone(params: {

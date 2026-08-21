@@ -736,7 +736,7 @@ describe("DesktopSettingsService", () => {
     });
   });
 
-  it("defaults tool-output alert triggers on and persists independent opt-outs", async () => {
+  it("defaults tool-output alert triggers off and persists independent opt-ins", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     const service = new DesktopSettingsService({
@@ -746,17 +746,17 @@ describe("DesktopSettingsService", () => {
     });
 
     expect((await service.readSettings()).general.toolOutputAlerts).toEqual({
-      outputCapHitsEnabled: { value: true, source: "default" },
-      repeatedLargeOutputsEnabled: { value: true, source: "default" },
+      outputCapHitsEnabled: { value: false, source: "default" },
+      repeatedLargeOutputsEnabled: { value: false, source: "default" },
       repeatedLargeOutputMinimumCalls: { value: 5, source: "default" },
       repeatedLargeOutputMinimumPercent: { value: 50, source: "default" },
-      repeatedQueuedChecksEnabled: { value: true, source: "default" },
+      repeatedQueuedChecksEnabled: { value: false, source: "default" },
     });
 
     await service.writeConfigPatch({
       general: {
         toolOutputAlerts: {
-          repeatedLargeOutputsEnabled: false,
+          repeatedLargeOutputsEnabled: true,
           repeatedLargeOutputMinimumCalls: 7,
           repeatedLargeOutputMinimumPercent: 65,
         },
@@ -764,7 +764,7 @@ describe("DesktopSettingsService", () => {
     });
 
     expect(fs.readFileSync(configPath, "utf8")).toContain(
-      "repeated_large_outputs_enabled = false",
+      "repeated_large_outputs_enabled = true",
     );
     expect(fs.readFileSync(configPath, "utf8")).toContain(
       "repeated_large_output_minimum_calls = 7",
@@ -773,11 +773,11 @@ describe("DesktopSettingsService", () => {
       "repeated_large_output_minimum_percent = 65",
     );
     expect(service.resolveToolOutputAlertPolicy()).toEqual({
-      outputCapHitsEnabled: true,
-      repeatedLargeOutputsEnabled: false,
+      outputCapHitsEnabled: false,
+      repeatedLargeOutputsEnabled: true,
       repeatedLargeOutputMinimumCalls: 7,
       repeatedLargeOutputMinimumPercent: 65,
-      repeatedQueuedChecksEnabled: true,
+      repeatedQueuedChecksEnabled: false,
     });
   });
 
@@ -791,7 +791,7 @@ describe("DesktopSettingsService", () => {
     });
 
     expect((await service.readSettings()).general.spendAlerts).toEqual({
-      activeTurnSpendEnabled: { value: true, source: "default" },
+      activeTurnSpendEnabled: { value: false, source: "default" },
       activeTurnSpendThresholdUsd: { value: 5, source: "default" },
       threadSpendEnabled: { value: true, source: "default" },
       threadSpendThresholdUsd: { value: 25, source: "default" },

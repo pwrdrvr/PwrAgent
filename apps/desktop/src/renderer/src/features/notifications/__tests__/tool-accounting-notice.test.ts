@@ -192,8 +192,9 @@ describe("resolveToolIncidentVisibility", () => {
 
 describe("buildToolAccountingNotice", () => {
   it("carries one notice id per thread, not per turn", () => {
+    const onDismiss = vi.fn();
     const notice = buildToolAccountingNotice({
-      onDismiss: vi.fn(),
+      onDismiss,
       onExamine: vi.fn(),
       showCost: false,
       summary: summaryFor(),
@@ -201,6 +202,11 @@ describe("buildToolAccountingNotice", () => {
 
     expect(notice.id).toBe("tool-accounting:codex:thread-1");
     expect(notice.message).toContain("3 tool calls flagged across 2 turns");
+    expect(notice.actions?.map((action) => action.label)).not.toContain(
+      "Dismiss",
+    );
+    notice.onDismiss?.();
+    expect(onDismiss).toHaveBeenCalledOnce();
   });
 
   it("offers a mute for a warning but not for a cap hit", () => {

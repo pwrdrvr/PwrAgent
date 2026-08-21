@@ -170,17 +170,16 @@ export const MIN_REPEATED_LARGE_OUTPUT_PERCENT = 1;
 export const MAX_REPEATED_LARGE_OUTPUT_PERCENT = 100;
 
 /**
- * Tool-output alerts stay on by default, but the large-output warning is
- * deliberately a repeated-pattern signal rather than a one-call tripwire.
- * Operators can independently select the qualifying output size and how many
- * calls in one turn must reach it before the warning interrupts them.
+ * Tool-output accounting remains available in thread diagnostics without
+ * interrupting every operator by default. Operators who want live warnings
+ * can opt into each trigger independently.
  */
 export const DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT: DesktopToolOutputAlertPolicy = {
-  outputCapHitsEnabled: true,
-  repeatedLargeOutputsEnabled: true,
+  outputCapHitsEnabled: false,
+  repeatedLargeOutputsEnabled: false,
   repeatedLargeOutputMinimumCalls: TOOL_OUTPUT_WARNING_INVOCATIONS,
   repeatedLargeOutputMinimumPercent: TOOL_OUTPUT_WARNING_PERCENT,
-  repeatedQueuedChecksEnabled: true,
+  repeatedQueuedChecksEnabled: false,
 };
 
 export type DesktopSpendAlertPolicy = {
@@ -194,7 +193,7 @@ export const MIN_SPEND_ALERT_THRESHOLD_USD = 0.01;
 export const MAX_SPEND_ALERT_THRESHOLD_USD = 10_000;
 
 export const DESKTOP_SPEND_ALERT_POLICY_DEFAULT: DesktopSpendAlertPolicy = {
-  activeTurnSpendEnabled: true,
+  activeTurnSpendEnabled: false,
   activeTurnSpendThresholdUsd: 5,
   threadSpendEnabled: true,
   threadSpendThresholdUsd: 25,

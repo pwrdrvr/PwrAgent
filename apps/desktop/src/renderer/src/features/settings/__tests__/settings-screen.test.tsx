@@ -130,14 +130,14 @@ function createSnapshot(
         source: "default",
       },
       toolOutputAlerts: {
-        outputCapHitsEnabled: { value: true, source: "default" },
-        repeatedLargeOutputsEnabled: { value: true, source: "default" },
+        outputCapHitsEnabled: { value: true, source: "config" },
+        repeatedLargeOutputsEnabled: { value: true, source: "config" },
         repeatedLargeOutputMinimumCalls: { value: 5, source: "default" },
         repeatedLargeOutputMinimumPercent: { value: 50, source: "default" },
-        repeatedQueuedChecksEnabled: { value: true, source: "default" },
+        repeatedQueuedChecksEnabled: { value: true, source: "config" },
       },
       spendAlerts: {
-        activeTurnSpendEnabled: { value: true, source: "default" },
+        activeTurnSpendEnabled: { value: true, source: "config" },
         activeTurnSpendThresholdUsd: { value: 5, source: "default" },
         threadSpendEnabled: { value: true, source: "default" },
         threadSpendThresholdUsd: { value: 25, source: "default" },

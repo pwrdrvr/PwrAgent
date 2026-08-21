@@ -18,7 +18,6 @@ describe("buildGithubPrAuthenticationNotice", () => {
     });
     expect(notice.message).toMatch(/GitHub CLI/);
     expect(notice.actions?.map((action) => action.label)).toEqual([
-      "Dismiss",
       "Open Git settings",
     ]);
   });
