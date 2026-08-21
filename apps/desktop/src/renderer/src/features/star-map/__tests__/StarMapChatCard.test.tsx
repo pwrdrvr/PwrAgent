@@ -1,10 +1,18 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { StarMapChatCard } from "../StarMapChatCard";
 import { resetComposerMentionSourcesCache } from "../../composer/useComposerMentionSources";
+import { resetFullAccessRiskWarningCache } from "../../../lib/useExecutionModeSelection";
 import { isStarMapTypingTarget } from "../star-map-keyboard";
 import { shouldPanOnWheel, shouldStartCanvasPan } from "../star-map-orbit";
 import {
@@ -984,6 +992,9 @@ describe("StarMapChatCard mentions", () => {
 describe("StarMapChatCard settings menu", () => {
   beforeEach(() => {
     resetComposerMentionSourcesCache();
+    // The dismissed-forever preference is cached window-wide so N cards
+    // share one settings read; that cache outlives a render tree.
+    resetFullAccessRiskWarningCache();
   });
 
   function settingsApi(overrides: Partial<DesktopApi> = {}): DesktopApi {
@@ -1066,22 +1077,228 @@ describe("StarMapChatCard settings menu", () => {
     });
   });
 
-  it("switches access mode through the Access submenu", async () => {
+  /**
+   * The Full Access confirmation is the shared renderer gate, not the
+   * composer's own state: this chip escalated a thread in one un-gated
+   * click for as long as the dialog lived inside `Composer`.
+   */
+  async function chooseAccessMode(label: string): Promise<void> {
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Access/ }));
+    fireEvent.click(await screen.findByRole("menuitemradio", { name: label }));
+  }
+
+  /** Settings reads resolve a tick after mount; the gate reads false until then. */
+  async function settleDismissedRead(desktopApi: DesktopApi): Promise<void> {
+    await waitFor(() => {
+      expect(desktopApi.readSettings).toHaveBeenCalled();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+  }
+
+  function settingsSnapshotApi(
+    fullAccessRiskWarningDismissed: boolean,
+    overrides: Partial<DesktopApi> = {},
+  ): DesktopApi {
+    return settingsApi({
+      readSettings: vi.fn(async () => ({
+        snapshot: {
+          experimental: {
+            fullAccessRiskWarningDismissed: {
+              value: fullAccessRiskWarningDismissed,
+            },
+          },
+        },
+      })),
+      ...overrides,
+    } as unknown as Partial<DesktopApi>);
+  }
+
+  it("confirms the first escalation to Full Access before applying it", async () => {
     const desktopApi = settingsApi();
     renderCard({
       desktopApi,
       thread: localThread({ executionMode: "default", model: "gpt-5-codex" }),
     });
     await openSettingsMenu();
+    await chooseAccessMode("Full Access");
 
-    fireEvent.click(await screen.findByRole("menuitem", { name: /Access/ }));
+    const dialog = await screen.findByRole("dialog", {
+      name: "Enable Full Access?",
+    });
+    expect(dialog.textContent).toContain("network access");
+    expect(dialog.textContent).toContain("supply chain attack");
+    expect(desktopApi.setThreadExecutionMode).not.toHaveBeenCalled();
+
     fireEvent.click(
-      await screen.findByRole("menuitemradio", { name: "Full Access" }),
+      within(dialog).getByRole("button", {
+        name: "I Understand and Accept the Risks",
+      }),
     );
     await waitFor(() => {
       expect(desktopApi.setThreadExecutionMode).toHaveBeenCalledWith({
         backend: "codex",
         executionMode: "full-access",
+        federationTarget: undefined,
+        threadId: "t-local",
+      });
+    });
+  });
+
+  it("keeps the warning's input off the map behind it", async () => {
+    // The dialog portals out of the card's DOM but not out of its React
+    // tree, and in the Star Map window its ancestors are the map's own
+    // `onPointerDown` (canvas pan, marquee, click-to-drop-selection) and
+    // `onKeyDown` (Escape unwinds the selection). The dialog sits outside
+    // every `.star-map-*` container `shouldStartCanvasPan` tests for, so
+    // without containment a drag on the scrim pans the map underneath it.
+    const onPointerDown = vi.fn();
+    const onKeyDown = vi.fn();
+    const desktopApi = settingsApi();
+    render(
+      <div onKeyDown={onKeyDown} onPointerDown={onPointerDown}>
+        {card({
+          desktopApi,
+          thread: localThread({
+            executionMode: "default",
+            model: "gpt-5-codex",
+          }),
+        })}
+      </div>,
+    );
+    await openSettingsMenu();
+    await chooseAccessMode("Full Access");
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Enable Full Access?",
+    });
+    const scrim = dialog.closest(".full-access-warning-modal");
+    expect(scrim).not.toBeNull();
+    onPointerDown.mockClear();
+    onKeyDown.mockClear();
+
+    fireEvent.pointerDown(scrim as Element, { button: 0 });
+    fireEvent.keyDown(scrim as Element, { key: "Escape" });
+
+    expect(onPointerDown).not.toHaveBeenCalled();
+    expect(onKeyDown).not.toHaveBeenCalled();
+  });
+
+  it("leaves the thread on Default Access when the warning is cancelled", async () => {
+    const desktopApi = settingsApi();
+    renderCard({
+      desktopApi,
+      thread: localThread({ executionMode: "default", model: "gpt-5-codex" }),
+    });
+    await openSettingsMenu();
+    await chooseAccessMode("Full Access");
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Enable Full Access?",
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole("dialog", { name: "Enable Full Access?" }),
+      ).toBeNull();
+    });
+    expect(desktopApi.setThreadExecutionMode).not.toHaveBeenCalled();
+    // The chip carries the mode in its accessible name, so this is the
+    // operator's own view of the thread still being on Default Access —
+    // the optimistic patch must not have run either.
+    const chip = await screen.findByRole("button", {
+      name: /^Thread settings/,
+    });
+    expect(chip.getAttribute("aria-label")).toContain("Default Access");
+  });
+
+  it("skips the warning once the operator dismissed it on this desktop", async () => {
+    const desktopApi = settingsSnapshotApi(true);
+    renderCard({
+      desktopApi,
+      thread: localThread({ executionMode: "default", model: "gpt-5-codex" }),
+    });
+    await settleDismissedRead(desktopApi);
+    await openSettingsMenu();
+    await chooseAccessMode("Full Access");
+
+    expect(
+      screen.queryByRole("dialog", { name: "Enable Full Access?" }),
+    ).toBeNull();
+    await waitFor(() => {
+      expect(desktopApi.setThreadExecutionMode).toHaveBeenCalledWith({
+        backend: "codex",
+        executionMode: "full-access",
+        federationTarget: undefined,
+        threadId: "t-local",
+      });
+    });
+  });
+
+  it("persists the dismissal this window from the card's own dialog", async () => {
+    // No `App` above this window to own the preference, so the gate reads
+    // and writes the setting itself.
+    const writeSettingsConfig = vi.fn(async () => ({
+      snapshot: {
+        experimental: { fullAccessRiskWarningDismissed: { value: true } },
+      },
+    }));
+    const desktopApi = settingsSnapshotApi(false, {
+      writeSettingsConfig,
+    } as unknown as Partial<DesktopApi>);
+    renderCard({
+      desktopApi,
+      thread: localThread({ executionMode: "default", model: "gpt-5-codex" }),
+    });
+    await settleDismissedRead(desktopApi);
+    await openSettingsMenu();
+    await chooseAccessMode("Full Access");
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Enable Full Access?",
+    });
+    fireEvent.click(
+      within(dialog).getByLabelText("Do not warn me again on this desktop."),
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", {
+        name: "I Understand and Accept the Risks",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(writeSettingsConfig).toHaveBeenCalledWith({
+        patch: { experimental: { fullAccessRiskWarningDismissed: true } },
+      });
+      expect(desktopApi.setThreadExecutionMode).toHaveBeenCalledWith(
+        expect.objectContaining({ executionMode: "full-access" }),
+      );
+    });
+  });
+
+  it("drops back to Default Access without a confirmation", async () => {
+    // The gate is an escalation gate; de-escalating is never risky and
+    // must stay one click.
+    const desktopApi = settingsApi();
+    renderCard({
+      desktopApi,
+      thread: localThread({
+        executionMode: "full-access",
+        model: "gpt-5-codex",
+      }),
+    });
+    await openSettingsMenu();
+    await chooseAccessMode("Default Access");
+
+    expect(
+      screen.queryByRole("dialog", { name: "Enable Full Access?" }),
+    ).toBeNull();
+    await waitFor(() => {
+      expect(desktopApi.setThreadExecutionMode).toHaveBeenCalledWith({
+        backend: "codex",
+        executionMode: "default",
         federationTarget: undefined,
         threadId: "t-local",
       });

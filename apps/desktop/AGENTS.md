@@ -92,6 +92,26 @@ summary.
 - Interactive Star Map children must guard canvas pan, wheel, and keyboard
   handlers before shipping.
 
+### Full Access Escalation
+
+- Every renderer surface that can raise a thread's execution mode routes the
+  selection through `useExecutionModeSelection`
+  ([lib/useExecutionModeSelection.tsx](src/renderer/src/lib/useExecutionModeSelection.tsx)),
+  never through `desktopApi.setThreadExecutionMode` directly. The gate owns the
+  "Enable Full Access?" confirmation and the dismissed-forever preference; a
+  surface that calls the API itself is a one-click, un-gated escalation, which
+  is what the Star Map chat card's settings chip was while the dialog lived
+  inside `Composer`.
+- A surface with a live settings snapshot (the main window's `App`) passes
+  `dismissed` / `onDismiss`; anything else lets the gate read and write the
+  preference itself.
+- Messaging surfaces deliberately do NOT share this gate. An escalation
+  requested over Telegram or Discord is made by a remote actor, so
+  `MessagingController.ensureFullAccessEscalationAllowed` gates it on the
+  `thread.execution.full_access` permission, the operator's `warningPolicy`,
+  and a per-contact dismissal. The desktop-local preference is the operator's
+  own acknowledgement and must never dismiss a contact's warning.
+
 ## Codex Data Boundary
 
 Desktop code must not inspect Codex-owned storage directly. Do not open, parse,
