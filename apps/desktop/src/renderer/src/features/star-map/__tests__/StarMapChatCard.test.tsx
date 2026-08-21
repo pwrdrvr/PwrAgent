@@ -149,6 +149,8 @@ function reviewCapableApi(
 
 type CardParams = {
   desktopApi: DesktopApi;
+  instanceIcon?: string;
+  instanceLabel?: string;
   pastedImageMaxPatches?: number;
   thread: NavigationThreadSummary;
 };
@@ -158,6 +160,8 @@ function card(params: CardParams) {
     <StarMapChatCard
       cardKey="card-1"
       desktopApi={params.desktopApi}
+      instanceIcon={params.instanceIcon as never}
+      instanceLabel={params.instanceLabel}
       onClose={() => undefined}
       onOpenFull={() => undefined}
       onRaise={() => undefined}
@@ -2271,5 +2275,76 @@ describe("StarMapChatCard settings menu", () => {
         }),
       );
     });
+  });
+});
+
+describe("StarMapChatCard title bar", () => {
+  it("carries the instance as its celestial mark, not as bar text", () => {
+    // The bar has one scarce resource: horizontal room the thread title
+    // needs. A full hostname plus directory ("Harold-MBP-M2-Max / work")
+    // spent more of it than the title did, so the machine reads as the
+    // same mark the map already gives it and the name moves to the
+    // accessible name and the hover tooltip. Assert BOTH halves: the
+    // name must be gone from the bar's text, and still reachable by
+    // name — dropping it entirely would trade a cramped title for an
+    // unidentifiable card.
+    renderCard({
+      desktopApi: buildApi(),
+      instanceIcon: "moon",
+      instanceLabel: "Studio Mac",
+      thread: remoteThread(),
+    });
+
+    const banner = screen.getByRole("banner", { hidden: true });
+    expect(banner.textContent).not.toContain("Studio Mac");
+    expect(
+      screen.getByRole("img", { name: "Instance: Studio Mac" }),
+    ).toBeTruthy();
+  });
+
+  it("keeps the name visible when no celestial mark can render", () => {
+    // Two ways to have a label and no usable icon: the assignment
+    // snapshot has not landed yet (undefined), or a peer on a newer
+    // build named an id this build does not know — the celestial
+    // contract makes that "unassigned" and CelestialIcon renders null
+    // for it. Either way the slot must fall back to the name rather
+    // than going blank.
+    for (const instanceIcon of [undefined, "quasar"]) {
+      const view = renderCard({
+        desktopApi: buildApi(),
+        instanceIcon,
+        instanceLabel: "Studio Mac",
+        thread: remoteThread(),
+      });
+
+      const banner = screen.getByRole("banner", { hidden: true });
+      expect(banner.textContent).toContain("Studio Mac");
+      view.unmount();
+    }
+  });
+
+  it("gathers the card's controls into one group, close kept apart", () => {
+    // Three lone glyphs drifting across the bar read as unrelated; the
+    // group is what makes them one row of controls. Close stays outside
+    // it — a destructive control should not sit flush against the ones
+    // the hand reaches for repeatedly.
+    renderCard({
+      desktopApi: buildApi(),
+      instanceIcon: "moon",
+      instanceLabel: "Studio Mac",
+      thread: remoteThread(),
+    });
+
+    const actions = document.querySelector(".star-map-chat-card__actions");
+    expect(actions).toBeTruthy();
+    const grouped = [...(actions?.querySelectorAll("button") ?? [])].map(
+      (button) => button.getAttribute("aria-label"),
+    );
+    expect(grouped).toEqual([
+      "Show thread context for Remote work",
+      "Open terminal for Remote work",
+      "Open Remote work in the full thread view",
+    ]);
+    expect(actions?.querySelector(".star-map-chat-card__close")).toBeNull();
   });
 });

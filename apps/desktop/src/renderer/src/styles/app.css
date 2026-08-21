@@ -13230,8 +13230,40 @@ textarea,
 .star-map-chat-card__instance {
   z-index: 1;
   flex: 0 0 auto;
+  /* Cap the text fallback. A hostname plus directory can run past the
+     title itself, and the fallback only appears while the instance has
+     no icon assigned — it must never win the bar back. */
+  max-width: 140px;
+  overflow: hidden;
   color: var(--text-muted);
   font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The icon form: the same celestial mark the map gives this instance,
+   at bar scale. `--text-muted` keeps it a quiet identity stamp rather
+   than a third control competing with the two live toggles beside it. */
+.star-map-chat-card__instance--icon {
+  display: inline-flex;
+  align-items: center;
+  max-width: none;
+  color: var(--text-muted);
+}
+
+/* The card's controls, gathered. 8px is the bar's own rhythm and reads
+   as three unrelated glyphs; 2px makes them one group with the title's
+   gap on one side and the close button's on the other. */
+.star-map-chat-card__actions {
+  z-index: 1;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  /* Plus the bar's own 8px: the instance mark is identity, not a control,
+     and at the bar's flat rhythm it read as a fourth button in the row.
+     The wider gutter puts the boundary where the meaning changes. */
+  margin-left: 6px;
 }
 
 .star-map-chat-card__expand,
@@ -13245,6 +13277,16 @@ textarea,
   color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
+}
+
+/* Sized and coloured with the rail toggles it now sits beside, so the
+   group reads as one row of controls instead of a word wearing a
+   button. Same radius as those toggles, not the close button's. */
+.star-map-chat-card__expand {
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
 }
 
 .star-map-chat-card__close {
