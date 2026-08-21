@@ -227,9 +227,9 @@ const STAR_MAP_LOAD_CARD_Z = 7000;
  */
 const STAR_MAP_CHAT_CARD_BASE_Z = 40;
 /**
- * The dot where a chat tether surfaces from under its thread card. Also
- * sets how far the exit point is pushed clear of the card (plus the 1px
- * border) so the dot is never half-hidden under it.
+ * The dot at each end of a chat tether, where the line clears its card.
+ * Also sets how far the exit point is pushed out (plus the 1px border) so
+ * a dot is never half-hidden under the card it belongs to.
  */
 const TETHER_ANCHOR_RADIUS = 3;
 /**
@@ -3446,9 +3446,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
    *
    * The arc runs to the thread card's centre but is painted UNDER the
    * clouds (`.star-map__tethers` z-index), so the stretch across the card
-   * — and across any other card or menu in its way — is hidden; the dot
-   * marks where it surfaces from under its own card, so the pairing reads
-   * edge-to-edge. See `tetherExitPoint`.
+   * — and across any other card or menu in its way — is hidden. A dot at
+   * each end marks where the line clears its own card, so the pairing
+   * reads edge-to-edge rather than centre-to-centre. See
+   * `tetherExitPoint`.
    */
   const chatTethers = useMemo(() => {
     if (chatCards.cards.length === 0 || projectsMode) return [];
@@ -3475,7 +3476,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
         x: midX + (target.y - from.y) * lift,
         y: midY - (target.x - from.x) * lift,
       };
-      const anchor = tetherExitPoint({
+      const margin = TETHER_ANCHOR_RADIUS + 1;
+      const threadAnchor = tetherExitPoint({
         from,
         control,
         to: target,
@@ -3485,7 +3487,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
           width: source.width,
           height: source.height,
         },
-        margin: TETHER_ANCHOR_RADIUS + 1,
+        margin,
+      });
+      // The same walk from the other end. A quadratic reversed is the
+      // same curve with the same control point, so swapping the
+      // endpoints traces this arc backwards from the chat card and finds
+      // where it clears ITS border — no second algorithm, and the two
+      // dots sit the same distance clear of their own card.
+      const chatAnchor = tetherExitPoint({
+        from: target,
+        control,
+        to: from,
+        rect: card.rect,
+        margin,
       });
       return [
         {
@@ -3494,7 +3508,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
             `M ${from.x.toFixed(2)} ${from.y.toFixed(2)}`
             + ` Q ${control.x.toFixed(2)} ${control.y.toFixed(2)}`
             + ` ${target.x.toFixed(2)} ${target.y.toFixed(2)}`,
-          anchor,
+          anchors: [chatAnchor, threadAnchor].filter(
+            (point): point is { x: number; y: number } => point !== undefined,
+          ),
         },
       ];
     });
@@ -3511,14 +3527,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
         {chatTethers.map((tether) => (
           <g key={tether.key}>
             <path className="star-map__tether" d={tether.path} />
-            {tether.anchor ? (
+            {tether.anchors.map((point, index) => (
               <circle
+                key={index}
                 className="star-map__tether-anchor"
-                cx={tether.anchor.x.toFixed(2)}
-                cy={tether.anchor.y.toFixed(2)}
+                cx={point.x.toFixed(2)}
+                cy={point.y.toFixed(2)}
                 r={TETHER_ANCHOR_RADIUS}
               />
-            ) : null}
+            ))}
           </g>
         ))}
       </svg>
