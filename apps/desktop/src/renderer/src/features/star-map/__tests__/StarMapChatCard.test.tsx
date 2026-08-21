@@ -9,6 +9,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { normalizeImageFile } from "../../../lib/image-normalization";
 import { StarMapChatCard } from "../StarMapChatCard";
 import { resetComposerMentionSourcesCache } from "../../composer/useComposerMentionSources";
 import { isStarMapTypingTarget } from "../star-map-keyboard";
@@ -17,6 +18,24 @@ import {
   DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
   DEFAULT_RENDERED_TRANSCRIPT_ENTRY_LIMIT,
 } from "../../../lib/thread-history-limits";
+
+vi.mock("../../../lib/image-normalization", () => ({
+  normalizeImageFile: vi.fn(async (file: File) => ({
+    conversionPath: "renderer" as const,
+    dataUrl: "data:image/png;base64,c3Rhci1tYXA=",
+    height: 24,
+    mimeType: "image/png" as const,
+    original: {
+      height: 24,
+      mimeType: file.type,
+      name: file.name,
+      size: file.size,
+      width: 32,
+    },
+    size: file.size,
+    width: 32,
+  })),
+}));
 
 const RECT = { left: 40, top: 40, width: 420, height: 520 };
 
@@ -82,6 +101,7 @@ function buildApi(overrides: Partial<DesktopApi> = {}): DesktopApi {
 
 type CardParams = {
   desktopApi: DesktopApi;
+  pastedImageMaxPatches?: number;
   thread: NavigationThreadSummary;
 };
 
@@ -94,6 +114,7 @@ function card(params: CardParams) {
       onOpenFull={() => undefined}
       onRaise={() => undefined}
       onRectChange={() => undefined}
+      pastedImageMaxPatches={params.pastedImageMaxPatches}
       rect={RECT}
       thread={params.thread}
       scale={1}
@@ -176,6 +197,76 @@ describe("StarMapChatCard transcript loading", () => {
   });
 });
 
+describe("StarMapChatCard sub-agents", () => {
+  it("surfaces a running monitor above the compact composer", () => {
+    const desktopApi = buildApi();
+    renderCard({
+      desktopApi,
+      thread: localThread({
+        subAgents: [
+          {
+            monitorId: "monitor-1",
+            task: "Watch the production rollout",
+            status: "running",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            backend: "codex",
+            monitorThreadId: "monitor-thread",
+            monitorTurnId: "monitor-turn",
+          },
+        ],
+      }),
+    });
+
+    const strip = screen.getByRole("region", { name: "Active sub-agents" });
+    expect(strip.textContent).toContain("Watch the production rollout");
+    expect(strip.compareDocumentPosition(screen.getByRole("textbox")))
+      .toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
+
+  it("stops a remote monitor on its owning instance", async () => {
+    const stopSubAgent = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t-remote",
+      monitorId: "monitor-remote",
+      stoppedAt: Date.now(),
+    }));
+    const desktopApi = buildApi({ stopSubAgent });
+    renderCard({
+      desktopApi,
+      thread: remoteThread({
+        subAgents: [
+          {
+            monitorId: "monitor-remote",
+            task: "Watch the peer rollout",
+            status: "running",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            backend: "codex",
+            monitorThreadId: "monitor-thread",
+            monitorTurnId: "monitor-turn",
+          },
+        ],
+      }),
+    });
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Stop sub-agent: Watch the peer rollout",
+      }),
+    );
+
+    await waitFor(() => {
+      expect(stopSubAgent).toHaveBeenCalledWith({
+        backend: "codex",
+        federationTarget: { scope: "remote", instanceId: "pwr_peer" },
+        threadId: "t-remote",
+        monitorId: "monitor-remote",
+      });
+    });
+  });
+});
+
 describe("StarMapChatCard federation routing", () => {
   it("hydrates a peer's thread against that peer", async () => {
     const desktopApi = buildApi();
@@ -224,6 +315,200 @@ describe("StarMapChatCard federation routing", () => {
     expect(request.threadId).toBe("t-local");
     // No per-thread ref, so nothing overrides the renderer's own target.
     expect(request.federationTarget).toBeUndefined();
+  });
+
+  it("pastes a PNG into the outgoing turn", async () => {
+    const desktopApi = buildApi();
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const image = new File(["star-map"], "star-map.png", {
+      type: "image/png",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [image],
+        getData: () => "",
+        items: [
+          {
+            getAsFile: () => image,
+            kind: "file",
+            type: "image/png",
+          },
+        ],
+        types: ["Files"],
+      },
+    });
+    await screen.findByRole("img", { name: "star-map.png" });
+    fireEvent.change(input, { target: { value: "What is wrong here?" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(desktopApi.startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: [
+            { type: "text", text: "What is wrong here?" },
+            {
+              type: "image",
+              name: "star-map.png",
+              url: "data:image/png;base64,c3Rhci1tYXA=",
+            },
+          ],
+        }),
+      );
+    });
+  });
+
+  it("uses the configured image patch budget when normalizing", async () => {
+    vi.mocked(normalizeImageFile).mockClear();
+    const desktopApi = buildApi();
+    renderCard({
+      desktopApi,
+      pastedImageMaxPatches: 321,
+      thread: localThread(),
+    });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const image = new File(["star-map"], "star-map.png", {
+      type: "image/png",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [image],
+        getData: () => "",
+        items: [
+          {
+            getAsFile: () => image,
+            kind: "file",
+            type: "image/png",
+          },
+        ],
+        types: ["Files"],
+      },
+    });
+
+    await screen.findByRole("img", { name: "star-map.png" });
+    expect(normalizeImageFile).toHaveBeenCalledWith(
+      image,
+      expect.objectContaining({ maxPatchCount: 321 }),
+    );
+  });
+
+  it("preserves an animated GIF instead of normalizing it", async () => {
+    const desktopApi = buildApi();
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const image = new File(["GIF89a"], "animated.gif", {
+      type: "image/gif",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [image],
+        getData: () => "",
+        items: [
+          {
+            getAsFile: () => image,
+            kind: "file",
+            type: "image/gif",
+          },
+        ],
+        types: ["Files"],
+      },
+    });
+    await screen.findByRole("img", { name: "animated.gif" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(desktopApi.startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: [
+            {
+              type: "image",
+              name: "animated.gif",
+              url: "data:image/gif;base64,R0lGODlh",
+            },
+          ],
+        }),
+      );
+    });
+  });
+
+  it("sends a pasted PDF through the existing local-file turn path", async () => {
+    const desktopApi = buildApi({
+      getPathForFile: vi.fn(() => "/tmp/brief.pdf"),
+    });
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const pdf = new File(["%PDF-1.7"], "brief.pdf", {
+      type: "application/pdf",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [pdf],
+        getData: () => "",
+        items: [
+          {
+            getAsFile: () => pdf,
+            kind: "file",
+            type: "application/pdf",
+          },
+        ],
+        types: ["Files"],
+      },
+    });
+    expect(await screen.findByText("brief.pdf")).toBeTruthy();
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(desktopApi.startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: [
+            {
+              type: "text",
+              text: "[@brief.pdf](/tmp/brief.pdf)",
+            },
+            {
+              name: "brief.pdf",
+              path: "/tmp/brief.pdf",
+              type: "localFile",
+            },
+          ],
+        }),
+      );
+    });
+  });
+
+  it("does not attach a local PDF to a remote thread", async () => {
+    const getPathForFile = vi.fn(() => "/tmp/brief.pdf");
+    const desktopApi = buildApi({ getPathForFile });
+    renderCard({ desktopApi, thread: remoteThread() });
+    const input = screen.getByRole("textbox", { name: "Message Remote work" });
+    const pdf = new File(["%PDF-1.7"], "brief.pdf", {
+      type: "application/pdf",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [pdf],
+        getData: () => "",
+        items: [
+          {
+            getAsFile: () => pdf,
+            kind: "file",
+            type: "application/pdf",
+          },
+        ],
+        types: ["Files"],
+      },
+    });
+
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /another instance/,
+    );
+    expect(getPathForFile).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Attached files")).toBeNull();
   });
 });
 

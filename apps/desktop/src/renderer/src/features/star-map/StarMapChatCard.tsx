@@ -10,12 +10,16 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
+  isRemoteFederationTarget,
   type CelestialIconId,
+  type NavigationLaunchpadFileAttachment,
+  type NavigationLaunchpadImageAttachment,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { formatBackendLabel } from "../../lib/backend-label";
+import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
 import { useBackendSummaries } from "../../lib/useBackendSummaries";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
@@ -26,6 +30,7 @@ import {
 import { useComposerMentionSources } from "../composer/useComposerMentionSources";
 import type { ComposerMentionSources } from "../composer/useComposerMentions";
 import { TranscriptList } from "../thread-detail/TranscriptList";
+import { ActiveSubAgentsStrip } from "../thread-detail/ActiveSubAgentsStrip";
 import { useTranscriptWindow } from "../thread-detail/useTranscriptWindow";
 import { collectEditedFileGroups } from "../thread-detail/edited-file-groups";
 import { DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT } from "../../lib/thread-history-limits";
@@ -58,6 +63,8 @@ export type StarMapChatCardProps = {
   onClose: (cardKey: string) => void;
   /** Escape hatch into the full thread surface. */
   onOpenFull: (thread: NavigationThreadSummary) => void;
+  /** Refresh the owning navigation feed after a monitor is stopped. */
+  onRefreshNavigation?: () => Promise<void>;
   onRaise: (cardKey: string) => void;
   onRectChange: (cardKey: string, rect: ChatCardRect) => void;
   /** Satellite cards, docked to this card and owned by the controller. */
@@ -77,6 +84,7 @@ export type StarMapChatCardProps = {
   thread: NavigationThreadSummary;
   /** Stack position; the host owns the order, we only read our depth. */
   zIndex: number;
+  pastedImageMaxPatches?: number;
 };
 
 type DragState = {
@@ -103,6 +111,7 @@ type DragState = {
  * `star-map-chat-card-render-cost.test.tsx` pins the result.
  */
 const MemoizedCompactComposer = memo(CompactComposer);
+const MemoizedActiveSubAgentsStrip = memo(ActiveSubAgentsStrip);
 
 /**
  * One chat card, anchored in the star map.
@@ -433,9 +442,46 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
    * allow.
    */
   const send = useCallback(
-    async (text: string): Promise<boolean> => {
+    async (
+      text: string,
+      imageAttachments: NavigationLaunchpadImageAttachment[] = [],
+      fileAttachments: NavigationLaunchpadFileAttachment[] = [],
+    ): Promise<boolean> => {
       setSendError(undefined);
       setSendNotice(undefined);
+      const fileReferences = fileAttachments
+        .map((attachment) =>
+          buildDirectoryReferenceMarkdown({
+            label: attachment.label,
+            path: attachment.path,
+          }),
+        )
+        .join("\n");
+      const displayText = fileReferences
+        ? text
+          ? `${text}\n\n${fileReferences}`
+          : fileReferences
+        : text;
+      const imageParts = imageAttachments.map((attachment, index) => ({
+        alt: attachment.name || `Pasted image ${index + 1}`,
+        type: "image" as const,
+        url: attachment.url,
+      }));
+      const input = [
+        ...(displayText
+          ? [{ type: "text" as const, text: displayText }]
+          : []),
+        ...imageAttachments.map((attachment) => ({
+          name: attachment.name,
+          type: "image" as const,
+          url: attachment.url,
+        })),
+        ...fileAttachments.map((attachment) => ({
+          name: attachment.label,
+          path: attachment.path,
+          type: "localFile" as const,
+        })),
+      ];
 
       const reviewCommand = parseReviewCommand(text);
       if (reviewCommand) {
@@ -515,13 +561,16 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           );
           return false;
         }
-        const optimisticId = sessionRef.current.addOptimisticUserMessage(text);
+        const optimisticId = sessionRef.current.addOptimisticUserMessage(
+          displayText,
+          imageParts,
+        );
         try {
           const response = await desktopApi.steerTurn({
             backend: thread.source,
             expectedTurnId: activeTurnId,
             federationTarget,
-            input: [{ type: "text", text }],
+            input,
             // Main dedupes retries by request id, so it has to be fresh per
             // attempt or a corrected resend would return the first result.
             requestId: `star-map-chat-card:${cardKey}:${activeTurnId}:${Date.now()}`,
@@ -545,13 +594,16 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       }
 
       if (!desktopApi?.startTurn) return false;
-      const optimisticId = sessionRef.current.addOptimisticUserMessage(text);
+      const optimisticId = sessionRef.current.addOptimisticUserMessage(
+        displayText,
+        imageParts,
+      );
       try {
         await desktopApi.startTurn({
           backend: thread.source,
           federationTarget,
           threadId: thread.id,
-          input: [{ type: "text", text }],
+          input,
         });
         return true;
       } catch (error) {
@@ -1001,6 +1053,12 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           />
         </div>
 
+        <MemoizedActiveSubAgentsStrip
+          desktopApi={desktopApi}
+          onRefreshNavigation={props.onRefreshNavigation}
+          thread={thread}
+        />
+
         {sendError ? (
           <p className="star-map-chat-card__error" role="alert">
             {sendError}
@@ -1013,15 +1071,22 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
 
         <MemoizedCompactComposer
           busy={session.threadBusy}
+          canAttachLocalFiles={
+            !federationTarget || !isRemoteFederationTarget(federationTarget)
+          }
           canSteer={canSteer}
           disabled={reviewSetupOpen || reviewSubmitting}
           executionMode={threadExecutionMode}
           fastMode={threadFastMode}
+          getPathForFile={desktopApi?.getPathForFile}
           key={reviewComposerKey}
           mentionSources={mentionSources}
           model={threadModel}
+          normalizeImageForUpload={desktopApi?.normalizeImageForUpload}
+          onAttachmentError={setSendError}
           onInterrupt={onInterrupt}
           onSend={send}
+          pastedImageMaxPatches={props.pastedImageMaxPatches}
           reasoningEffort={threadReasoningEffort}
           secondaryActions={secondaryActions}
           settingsMenu={settingsMenu}
@@ -1040,7 +1105,6 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           />
         ) : null}
       </div>
-
       {titleTooltip.tooltipNode}
       <span
         aria-hidden="true"

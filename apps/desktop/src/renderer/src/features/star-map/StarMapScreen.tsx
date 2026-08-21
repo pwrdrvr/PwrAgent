@@ -154,6 +154,8 @@ import { useStarMapThreads } from "./useStarMapThreads";
  */
 const LANE_MAX_CARDS_PER_INSTANCE = 40;
 const STAR_COUNT = 130;
+/** A new trackpad gesture begins after this much wheel-event silence. */
+const WHEEL_GESTURE_IDLE_MS = 120;
 /** Orbit clouds use a fixed card width; lanes narrow theirs to fit. */
 const ORBIT_CARD_WIDTH = 200;
 /**
@@ -399,9 +401,10 @@ type StarMapScreenProps = {
   /** The local instance card's open action: focus the main window. */
   onFocusLocalInstance: () => void;
   /** Refresh the App's navigation snapshot (after intake creates locally). */
-  onRefreshLocalThreads?: () => void;
+  onRefreshLocalThreads?: () => Promise<void>;
   /** Settings -> Pricing, for the chat cards' context satellites. */
   pricingDisplayOptions?: { codexCredits: boolean; usd: boolean };
+  pastedImageMaxPatches?: number;
   threadPricingSummaryEnabled?: boolean;
 };
 
@@ -1894,6 +1897,8 @@ export function StarMapScreen(props: StarMapScreenProps) {
   useEffect(() => {
     const element = viewportRef.current;
     if (!element) return;
+    let wheelOwner: "canvas" | "embedded" | undefined;
+    let wheelIdleTimer: number | undefined;
     const bounds = {
       canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
       viewport: { width: viewportSize.width, height: viewportSize.height },
@@ -1901,7 +1906,22 @@ export function StarMapScreen(props: StarMapScreenProps) {
     const onWheel = (event: WheelEvent) => {
       // Pinch (ctrl+wheel) is a map gesture wherever the pointer is; a
       // plain scroll over a chat card belongs to that card's transcript.
-      if (!event.ctrlKey && !shouldPanOnWheel(event.target)) return;
+      // Decide once per wheel sequence: the canvas moves underneath a
+      // stationary trackpad cursor, so event.target can become a transcript
+      // halfway through a pan. Reclassifying there used to stop the map dead.
+      if (event.ctrlKey) {
+        wheelOwner = "canvas";
+      } else if (!wheelOwner) {
+        wheelOwner = shouldPanOnWheel(event.target)
+          ? "canvas"
+          : "embedded";
+      }
+      if (wheelIdleTimer !== undefined) window.clearTimeout(wheelIdleTimer);
+      wheelIdleTimer = window.setTimeout(() => {
+        wheelOwner = undefined;
+        wheelIdleTimer = undefined;
+      }, WHEEL_GESTURE_IDLE_MS);
+      if (wheelOwner === "embedded") return;
       event.preventDefault();
       abortFlight();
       // Both branches read the LIVE view rather than a `setView` updater's
@@ -1946,7 +1966,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
       );
     };
     element.addEventListener("wheel", onWheel, { passive: false });
-    return () => element.removeEventListener("wheel", onWheel);
+    return () => {
+      element.removeEventListener("wheel", onWheel);
+      if (wheelIdleTimer !== undefined) window.clearTimeout(wheelIdleTimer);
+    };
   }, [
     abortFlight,
     commitView,
@@ -2420,19 +2443,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
     setSelection((current) => (current.size > 0 ? new Set() : current));
   }, [localInstanceId]);
 
+  const onRefreshLocalThreads = props.onRefreshLocalThreads;
+  const refreshRemoteInstance = remote.refreshInstance;
   /**
    * Refresh whichever cloud owns a thread. Archive removes it from the
    * owning instance, so the map has to re-fetch rather than guess.
    */
   const refreshOwner = useCallback(
-    (instanceId: string) => {
+    async (instanceId: string): Promise<void> => {
       if (instanceId === localInstanceId) {
-        props.onRefreshLocalThreads?.();
+        await onRefreshLocalThreads?.();
       } else {
-        setRemoteRefreshNonce((nonce) => nonce + 1);
+        await refreshRemoteInstance(instanceId);
       }
     },
-    [localInstanceId, props],
+    [localInstanceId, onRefreshLocalThreads, refreshRemoteInstance],
   );
 
   /**
@@ -2561,7 +2586,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         for (const instanceId of new Set(
           targets.map((target) => target.instanceId),
         )) {
-          refreshOwner(instanceId);
+          void refreshOwner(instanceId);
         }
       });
     },
@@ -4430,8 +4455,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
               }
               onClose={chatCards.close}
               onOpenFull={openThreadFully}
+              onRefreshNavigation={() =>
+                refreshOwner(cardInstanceId ?? localInstanceId)
+              }
               onRaise={chatCards.raise}
               onRectChange={chatCards.setRect}
+              pastedImageMaxPatches={props.pastedImageMaxPatches}
               rect={card.rect}
               thread={liveThread}
               scale={view.scale}
@@ -4521,7 +4550,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               ),
             );
             if (created.instanceId === localInstanceId) {
-              props.onRefreshLocalThreads?.();
+              void props.onRefreshLocalThreads?.();
             } else {
               setRemoteRefreshNonce((nonce) => nonce + 1);
             }

@@ -1,4 +1,5 @@
 import {
+  act,
   fireEvent,
   render,
   screen,
@@ -668,6 +669,79 @@ describe("StarMapScreen", () => {
     ).toHaveLength(1);
   });
 
+  it("keeps a stopped monitor disabled until local navigation refreshes", async () => {
+    let resolveRefresh: (() => void) | undefined;
+    const refreshPending = new Promise<void>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    const onRefreshLocalThreads = vi.fn(() => refreshPending);
+    const stopSubAgent = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t1",
+      monitorId: "monitor-1",
+      stoppedAt: Date.now(),
+    }));
+    render(
+      <StarMapScreen
+        desktopApi={{
+          ...buildDesktopApi(),
+          stopSubAgent,
+        } as unknown as DesktopApi}
+        localThreads={[
+          {
+            ...unreadThread("t1"),
+            subAgents: [
+              {
+                monitorId: "monitor-1",
+                task: "Watch production",
+                status: "running",
+                createdAt: Date.now(),
+                updatedAt: Date.now(),
+                backend: "codex",
+                monitorThreadId: "monitor-thread",
+                monitorTurnId: "monitor-turn",
+              },
+            ],
+          },
+        ]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+        onRefreshLocalThreads={onRefreshLocalThreads}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        screen.getByRole("button", { name: /Open thread: Thread t1/ }),
+      ).toBeTruthy();
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open thread: Thread t1" }),
+    );
+    const stop = await screen.findByRole("button", {
+      name: "Stop sub-agent: Watch production",
+    });
+    fireEvent.click(stop);
+
+    await waitFor(() => {
+      expect(onRefreshLocalThreads).toHaveBeenCalledTimes(1);
+    });
+    expect(stop.textContent).toBe("Stopping…");
+    expect((stop as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(stop);
+    expect(stopSubAgent).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      resolveRefresh?.();
+      await refreshPending;
+    });
+    await waitFor(() => {
+      expect((stop as HTMLButtonElement).disabled).toBe(false);
+    });
+  });
+
   it("closes a chat card from its close button", async () => {
     render(
       <StarMapScreen
@@ -1060,7 +1134,7 @@ describe("StarMapScreen", () => {
       backend: "codex" as const,
       threadId: "t1",
     }));
-    const onRefreshLocalThreads = vi.fn();
+    const onRefreshLocalThreads = vi.fn(async () => undefined);
     render(
       <StarMapScreen
         desktopApi={{ ...buildDesktopApi(), archiveThread } as unknown as DesktopApi}
@@ -1157,7 +1231,7 @@ describe("StarMapScreen", () => {
       threadId: "t1",
       renamedAt: 1,
     }));
-    const onRefreshLocalThreads = vi.fn();
+    const onRefreshLocalThreads = vi.fn(async () => undefined);
     render(
       <StarMapScreen
         desktopApi={{ ...buildDesktopApi(), renameThread } as unknown as DesktopApi}
