@@ -7,7 +7,10 @@ import {
   within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NavigationThreadSummary } from "@pwragent/shared";
+import type {
+  BackendCapabilities,
+  NavigationThreadSummary,
+} from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { StarMapChatCard } from "../StarMapChatCard";
@@ -97,6 +100,50 @@ function buildApi(overrides: Partial<DesktopApi> = {}): DesktopApi {
     onAgentEvent: vi.fn(() => () => undefined),
     ...overrides,
   } as unknown as DesktopApi;
+}
+
+function reviewCapabilities(startReview: boolean): BackendCapabilities {
+  return {
+    approvalRequests: true,
+    createThread: true,
+    interruptTurn: true,
+    listThreads: true,
+    multiDirectoryThreads: true,
+    readThread: true,
+    renameThread: true,
+    resumeThread: true,
+    startReview,
+    startTurn: true,
+    steerTurn: false,
+    toolUse: true,
+    transcriptPagination: false,
+  };
+}
+
+function reviewCapableApi(
+  backend: "codex" | "acp:grok",
+  overrides: Partial<DesktopApi> = {},
+): DesktopApi {
+  return buildApi({
+    ...(backend.startsWith("acp:")
+      ? {
+          listBackends: vi.fn(async () => ({
+            fetchedAt: 1,
+            backends: [
+              {
+                available: true,
+                capabilities: reviewCapabilities(true),
+                executionModes: [],
+                kind: backend,
+                label: "Grok",
+                methods: [],
+              },
+            ],
+          })),
+        }
+      : {}),
+    ...overrides,
+  });
 }
 
 type CardParams = {
@@ -558,6 +605,93 @@ describe("StarMapChatCard slash commands", () => {
     ).toBeTruthy();
   });
 
+  it("does not offer or intercept review for an unsupported ACP backend", async () => {
+    const startReview = vi.fn();
+    const startTurn = vi.fn(async () => ({
+      backend: "acp:grok" as const,
+      threadId: "t-local",
+      turnId: "turn-acp-1",
+    }));
+    const desktopApi = buildApi({
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1,
+        backends: [
+          {
+            available: true,
+            capabilities: reviewCapabilities(false),
+            executionModes: [],
+            kind: "acp:grok" as const,
+            label: "Grok",
+            methods: [],
+          },
+        ],
+      })),
+      startReview,
+      startTurn,
+    });
+    renderCard({
+      desktopApi,
+      thread: localThread({ source: "acp:grok" }),
+    });
+    await waitFor(() => {
+      expect(desktopApi.listBackends).toHaveBeenCalled();
+    });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    fireEvent.change(input, { target: { value: "/" } });
+    expect(screen.queryByRole("option", { name: /\/review/i })).toBeNull();
+
+    fireEvent.change(input, { target: { value: "/review" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "acp:grok",
+          input: [{ type: "text", text: "/review" }],
+        }),
+      );
+    });
+    expect(startReview).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps an attached image when /review is rejected", async () => {
+    const startReview = vi.fn();
+    const desktopApi = buildApi({ startReview });
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const image = new File(["star-map"], "review.png", {
+      type: "image/png",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [image],
+        getData: () => "",
+        items: [
+          {
+            getAsFile: () => image,
+            kind: "file",
+            type: "image/png",
+          },
+        ],
+        types: ["Files"],
+      },
+    });
+    await screen.findByRole("img", { name: "review.png" });
+    fireEvent.change(input, { target: { value: "/" } });
+    expect(screen.queryByRole("option", { name: /\/review/i })).toBeNull();
+    fireEvent.change(input, { target: { value: "/review" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /\/review does not accept attachments/i,
+    );
+    expect(screen.getByRole("img", { name: "review.png" })).toBeTruthy();
+    expect(startReview).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it.each(["codex", "acp:grok"] as const)(
     "opens the review setup on the first Enter for %s",
     async (backend) => {
@@ -567,7 +701,7 @@ describe("StarMapChatCard slash commands", () => {
         reviewThreadId: "review-1",
         turnId: "turn-review-1",
       }));
-      const desktopApi = buildApi({ startReview });
+      const desktopApi = reviewCapableApi(backend, { startReview });
       renderCard({
         desktopApi,
         thread: localThread({ source: backend }),
@@ -575,6 +709,10 @@ describe("StarMapChatCard slash commands", () => {
       const input = screen.getByRole("textbox", {
         name: "Message Local work",
       });
+      if (backend.startsWith("acp:")) {
+        fireEvent.change(input, { target: { value: "/" } });
+        await screen.findByRole("option", { name: /\/review/i });
+      }
       fireEvent.change(input, { target: { value: "/review" } });
       fireEvent.keyDown(input, { key: "Enter" });
 
@@ -592,7 +730,9 @@ describe("StarMapChatCard slash commands", () => {
   it.each(["codex", "acp:grok"] as const)(
     "opens highlighted /review from a bare slash on the first Enter for %s",
     async (backend) => {
-      const desktopApi = buildApi({ startReview: vi.fn() });
+      const desktopApi = reviewCapableApi(backend, {
+        startReview: vi.fn(),
+      });
       renderCard({
         desktopApi,
         thread: localThread({ source: backend }),
@@ -602,7 +742,7 @@ describe("StarMapChatCard slash commands", () => {
       });
       fireEvent.change(input, { target: { value: "/" } });
       expect(
-        screen.getByRole("option", { name: /\/review/i }).getAttribute(
+        (await screen.findByRole("option", { name: /\/review/i })).getAttribute(
           "aria-selected",
         ),
       ).toBe("true");
@@ -628,7 +768,7 @@ describe("StarMapChatCard slash commands", () => {
         reviewThreadId: "review-1",
         turnId: "turn-review-1",
       }));
-      const desktopApi = buildApi({ startReview });
+      const desktopApi = reviewCapableApi(backend, { startReview });
       renderCard({
         desktopApi,
         thread: localThread({ source: backend }),
@@ -636,6 +776,10 @@ describe("StarMapChatCard slash commands", () => {
       const input = screen.getByRole("textbox", {
         name: "Message Local work",
       });
+      if (backend.startsWith("acp:")) {
+        fireEvent.change(input, { target: { value: "/" } });
+        await screen.findByRole("option", { name: /\/review/i });
+      }
       fireEvent.change(input, { target: { value: "/review" } });
       fireEvent.click(screen.getByRole("button", { name: "Send" }));
       const dialog = await screen.findByRole("dialog", {
@@ -951,6 +1095,137 @@ describe("StarMapChatCard slash commands", () => {
       expect(desktopApi.startTurn).not.toHaveBeenCalled();
     },
   );
+
+  it("keeps an attached file when /compact is rejected", async () => {
+    const compactThread = vi.fn();
+    const desktopApi = buildApi({
+      compactThread,
+      getPathForFile: vi.fn(() => "/tmp/brief.pdf"),
+      listSkills: vi.fn(async () => ({
+        backend: "codex" as const,
+        fetchedAt: 1,
+        data: [
+          {
+            commands: [
+              {
+                backend: "codex" as const,
+                description: "Compact the thread",
+                name: "compact",
+                scope: "session" as const,
+                source: "provider" as const,
+              },
+            ],
+            skills: [],
+          },
+        ],
+      })),
+    });
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const pdf = new File(["%PDF-1.7"], "brief.pdf", {
+      type: "application/pdf",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [pdf],
+        getData: () => "",
+        items: [
+          {
+            getAsFile: () => pdf,
+            kind: "file",
+            type: "application/pdf",
+          },
+        ],
+        types: ["Files"],
+      },
+    });
+    expect(await screen.findByText("brief.pdf")).toBeTruthy();
+    fireEvent.change(input, { target: { value: "/" } });
+    await waitFor(() => {
+      expect(desktopApi.listSkills).toHaveBeenCalled();
+    });
+    expect(screen.queryByRole("option", { name: /\/compact/i })).toBeNull();
+    fireEvent.change(input, { target: { value: "/compact" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /\/compact does not accept attachments/i,
+    );
+    expect(screen.getByText("brief.pdf")).toBeTruthy();
+    expect(compactThread).not.toHaveBeenCalled();
+  });
+
+  it("keeps ACP provider commands available with attachments", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "acp:grok" as const,
+      threadId: "t-local",
+      turnId: "turn-acp-1",
+    }));
+    const desktopApi = buildApi({
+      listSkills: vi.fn(async () => ({
+        backend: "acp:grok" as const,
+        fetchedAt: 1,
+        data: [
+          {
+            commands: [
+              {
+                backend: "acp:grok" as const,
+                description: "Show session details",
+                name: "session-info",
+                scope: "session" as const,
+                source: "provider" as const,
+              },
+            ],
+            skills: [],
+          },
+        ],
+      })),
+      startTurn,
+    });
+    renderCard({
+      desktopApi,
+      thread: localThread({ source: "acp:grok" }),
+    });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const image = new File(["star-map"], "context.png", {
+      type: "image/png",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [image],
+        getData: () => "",
+        items: [
+          {
+            getAsFile: () => image,
+            kind: "file",
+            type: "image/png",
+          },
+        ],
+        types: ["Files"],
+      },
+    });
+    await screen.findByRole("img", { name: "context.png" });
+    fireEvent.change(input, { target: { value: "/ses" } });
+    expect(
+      await screen.findByRole("option", { name: /\/session-info/i }),
+    ).toBeTruthy();
+    fireEvent.change(input, { target: { value: "/session-info" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backend: "acp:grok",
+          input: [
+            { type: "text", text: "/session-info" },
+            expect.objectContaining({ name: "context.png", type: "image" }),
+          ],
+        }),
+      );
+    });
+  });
 
   it("sends an ACP-native slash command to the ACP session", async () => {
     const startTurn = vi.fn(async () => ({

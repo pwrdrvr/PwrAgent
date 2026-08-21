@@ -181,6 +181,30 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     () => threadFederationTarget ?? readRendererFederationTarget(),
     [threadFederationTarget],
   );
+  const isAcpThread = thread.source.startsWith("acp:");
+  const [settingsMenuOpened, setSettingsMenuOpened] = useState(false);
+  const backendSummaries = useBackendSummaries(desktopApi, {
+    // Codex review is native and needs no describe. ACP review is a
+    // PwrAgent-managed child, so its explicit capability is authoritative
+    // even before the settings menu has ever been opened.
+    enabled: settingsMenuOpened || isAcpThread,
+    federationTarget,
+  });
+  const backendSummariesRef = useRef(backendSummaries);
+  backendSummariesRef.current = backendSummaries;
+  const onSettingsMenuOpen = useCallback(() => {
+    setSettingsMenuOpened(true);
+    // A failed describe retries on the next open through the hook's
+    // exported refresh path (a plain re-list for remote targets).
+    if (backendSummariesRef.current.error) {
+      void backendSummariesRef.current.refreshAcpAgents();
+    }
+  }, []);
+  const backendSummary = backendSummaries.backends.find(
+    (entry) => entry.kind === thread.source,
+  );
+  const supportsReview =
+    !isAcpThread || backendSummary?.capabilities.startReview === true;
 
   // The context satellite is a sibling rendered by the screen, so the session
   // data its panels need has to be published rather than passed down.
@@ -243,17 +267,33 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const mentionSources = useMemo<ComposerMentionSources>(
     () => ({
       commands: [
-        {
-          name: "review",
-          description: "Review current staged, unstaged, and untracked changes",
-          sourceLabel: "PwrAgent",
-        },
-        ...threadSkills.providerCommands.map((command) => ({
-          aliases: command.aliases,
-          description: command.description,
-          name: command.name,
-          sourceLabel: formatBackendLabel(command.backend ?? thread.source),
-        })),
+        ...(supportsReview
+          ? [
+              {
+                name: "review",
+                description:
+                  "Review current staged, unstaged, and untracked changes",
+                requiresNoAttachments: true,
+                sourceLabel: "PwrAgent",
+              },
+            ]
+          : []),
+        ...threadSkills.providerCommands.map((command) => {
+          const commandBackend = command.backend ?? thread.source;
+          const commandName = command.name.startsWith("/")
+            ? command.name.slice(1)
+            : command.name;
+          return {
+            aliases: command.aliases,
+            description: command.description,
+            name: command.name,
+            // Codex compaction is a client action. ACP commands remain
+            // ordinary prompt content and may accompany attachments.
+            requiresNoAttachments:
+              commandBackend === "codex" && commandName === "compact",
+            sourceLabel: formatBackendLabel(commandBackend),
+          };
+        }),
       ],
       currentThreadKey: buildThreadIdentityKey(thread.source, thread.id),
       directories: navigationSources.directories,
@@ -271,6 +311,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       navigationSources.directories,
       ensureNavigationLoaded,
       navigationSources.threads,
+      supportsReview,
       threadSkills.providerCommands,
       threadSkills.skills,
       thread.id,
@@ -391,6 +432,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
 
   const submitReviewSetup = useCallback(
     async (request: StarMapReviewRequest): Promise<void> => {
+      if (!supportsReview) {
+        setReviewError("Selected backend does not support reviews.");
+        return;
+      }
       if (sessionRef.current.threadBusy) {
         setReviewError("Cannot start a review while a turn is in progress.");
         return;
@@ -426,7 +471,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         setReviewSubmitting(false);
       }
     },
-    [desktopApi, federationTarget, thread.id, thread.source],
+    [desktopApi, federationTarget, supportsReview, thread.id, thread.source],
   );
 
   /**
@@ -483,8 +528,12 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         })),
       ];
 
-      const reviewCommand = parseReviewCommand(text);
+      const reviewCommand = supportsReview ? parseReviewCommand(text) : undefined;
       if (reviewCommand) {
+        if (imageAttachments.length > 0 || fileAttachments.length > 0) {
+          setSendError("/review does not accept attachments.");
+          return false;
+        }
         if (sessionRef.current.threadBusy) {
           setSendError("Cannot start a review while a turn is in progress.");
           return false;
@@ -518,7 +567,14 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         }
       }
 
-      if (text.trim().toLowerCase() === "/compact") {
+      if (
+        thread.source === "codex"
+        && text.trim().toLowerCase() === "/compact"
+      ) {
+        if (imageAttachments.length > 0 || fileAttachments.length > 0) {
+          setSendError("/compact does not accept attachments.");
+          return false;
+        }
         if (sessionRef.current.threadBusy) {
           setSendError("Cannot compact while a turn is in progress.");
           return false;
@@ -622,6 +678,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       desktopApi,
       federationTarget,
       ensureNavigationLoaded,
+      supportsReview,
       thread.id,
       thread.source,
     ],
@@ -663,25 +720,6 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // on its props staying stable across snapshot refreshes.
   const threadRef = useRef(thread);
   threadRef.current = thread;
-
-  const [settingsMenuOpened, setSettingsMenuOpened] = useState(false);
-  const backendSummaries = useBackendSummaries(desktopApi, {
-    enabled: settingsMenuOpened,
-    federationTarget,
-  });
-  const backendSummariesRef = useRef(backendSummaries);
-  backendSummariesRef.current = backendSummaries;
-  const onSettingsMenuOpen = useCallback(() => {
-    setSettingsMenuOpened(true);
-    // A failed describe retries on the next open through the hook's
-    // exported refresh path (a plain re-list for remote targets).
-    if (backendSummariesRef.current.error) {
-      void backendSummariesRef.current.refreshAcpAgents();
-    }
-  }, []);
-  const backendSummary = backendSummaries.backends.find(
-    (entry) => entry.kind === thread.source,
-  );
 
   /**
    * Optimistic view of the chip's settings between a menu selection and

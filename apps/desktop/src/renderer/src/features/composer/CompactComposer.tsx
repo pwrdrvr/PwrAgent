@@ -1,6 +1,7 @@
 import {
   useCallback,
   useId,
+  useMemo,
   useState,
   type ClipboardEvent,
   type DragEvent,
@@ -173,10 +174,6 @@ const MENU_VIEW_TITLES: Record<
  * line: chip on the left, Stop / Send pills on the right.
  */
 export function CompactComposer(props: CompactComposerProps) {
-  const mentions = useComposerMentions({
-    disabled: props.disabled,
-    sources: props.mentionSources,
-  });
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuView, setMenuView] = useState<SettingsMenuView>("root");
   const [imageAttachments, setImageAttachments] = useState<
@@ -187,6 +184,27 @@ export function CompactComposer(props: CompactComposerProps) {
   >([]);
   const [normalizingImageBatches, setNormalizingImageBatches] = useState(0);
   const normalizingImages = normalizingImageBatches > 0;
+  const hasAttachments =
+    imageAttachments.length > 0 || fileAttachments.length > 0;
+  const mentionSources = useMemo<ComposerMentionSources | undefined>(() => {
+    const sources = props.mentionSources;
+    if (
+      !hasAttachments
+      || !sources?.commands?.some((command) => command.requiresNoAttachments)
+    ) {
+      return sources;
+    }
+    return {
+      ...sources,
+      commands: sources.commands.filter(
+        (command) => !command.requiresNoAttachments,
+      ),
+    };
+  }, [hasAttachments, props.mentionSources]);
+  const mentions = useComposerMentions({
+    disabled: props.disabled,
+    sources: mentionSources,
+  });
   // Click-away and Escape close the menu, same hook as the composer
   // dropdowns. Without it the menu survives a click on the transcript
   // behind it and covers the conversation.

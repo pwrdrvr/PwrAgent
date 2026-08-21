@@ -2,6 +2,8 @@ export type ComposerSlashCommand = {
   aliases?: readonly string[];
   description?: string;
   name: string;
+  /** Hide this client action while the compact composer holds attachments. */
+  requiresNoAttachments?: boolean;
   sourceLabel: string;
 };
 
