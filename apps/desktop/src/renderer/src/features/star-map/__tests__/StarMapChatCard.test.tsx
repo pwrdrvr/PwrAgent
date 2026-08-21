@@ -861,6 +861,45 @@ describe("StarMapChatCard settings menu", () => {
     });
   });
 
+  it("keeps the warning's input off the map behind it", async () => {
+    // The dialog portals out of the card's DOM but not out of its React
+    // tree, and in the Star Map window its ancestors are the map's own
+    // `onPointerDown` (canvas pan, marquee, click-to-drop-selection) and
+    // `onKeyDown` (Escape unwinds the selection). The dialog sits outside
+    // every `.star-map-*` container `shouldStartCanvasPan` tests for, so
+    // without containment a drag on the scrim pans the map underneath it.
+    const onPointerDown = vi.fn();
+    const onKeyDown = vi.fn();
+    const desktopApi = settingsApi();
+    render(
+      <div onKeyDown={onKeyDown} onPointerDown={onPointerDown}>
+        {card({
+          desktopApi,
+          thread: localThread({
+            executionMode: "default",
+            model: "gpt-5-codex",
+          }),
+        })}
+      </div>,
+    );
+    await openSettingsMenu();
+    await chooseAccessMode("Full Access");
+
+    const dialog = await screen.findByRole("dialog", {
+      name: "Enable Full Access?",
+    });
+    const scrim = dialog.closest(".full-access-warning-modal");
+    expect(scrim).not.toBeNull();
+    onPointerDown.mockClear();
+    onKeyDown.mockClear();
+
+    fireEvent.pointerDown(scrim as Element, { button: 0 });
+    fireEvent.keyDown(scrim as Element, { key: "Escape" });
+
+    expect(onPointerDown).not.toHaveBeenCalled();
+    expect(onKeyDown).not.toHaveBeenCalled();
+  });
+
   it("leaves the thread on Default Access when the warning is cancelled", async () => {
     const desktopApi = settingsApi();
     renderCard({

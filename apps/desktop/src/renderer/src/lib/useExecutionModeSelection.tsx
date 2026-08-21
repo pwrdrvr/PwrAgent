@@ -215,7 +215,21 @@ export function useExecutionModeSelection(
 
   const fullAccessRiskDialog = dialogOpen
     ? createPortal(
-        <div className="full-access-warning-modal">
+        <div
+          className="full-access-warning-modal"
+          // A modal scrim must not leak input to what it covers. The
+          // portal escapes the host's DOM but NOT its React tree, and
+          // this gate now renders from inside the Star Map, whose
+          // ancestors handle both events: a press anywhere on the scrim
+          // or the dialog's prose passes `shouldStartCanvasPan` — the
+          // dialog is outside every `.star-map-*` container it tests for
+          // — so the map takes focus and pans under the dialog, and
+          // Escape reaches the map's own handler and drops the
+          // operator's card selection. The card's inner controls stop
+          // propagation the same way for the same reason.
+          onKeyDown={(event) => event.stopPropagation()}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
           <div
             aria-labelledby="full-access-warning-title"
             aria-modal="true"
