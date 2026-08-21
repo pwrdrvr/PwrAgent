@@ -403,6 +403,8 @@ type StarMapScreenProps = {
   localInstanceLabel?: string;
   /** Open a local thread in the main window's full thread view. */
   onOpenLocalThread: (thread: NavigationThreadSummary) => void;
+  /** Clear unread state after a chat card's reply reaches its backend. */
+  onUserRepliedToThread?: (thread: NavigationThreadSummary) => void;
   /** The local instance card's open action: focus the main window. */
   onFocusLocalInstance: () => void;
   /** Refresh the App's navigation snapshot (after intake creates locally). */
@@ -4485,6 +4487,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               }
               onClose={chatCards.close}
               onOpenFull={openThreadFully}
+              onUserRepliedToThread={props.onUserRepliedToThread}
               onRefreshNavigation={() =>
                 refreshOwner(cardInstanceId ?? localInstanceId)
               }

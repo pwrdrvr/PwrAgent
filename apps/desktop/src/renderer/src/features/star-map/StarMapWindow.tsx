@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useCallback, useEffect } from "react";
+import type { NavigationThreadSummary } from "@pwragent/shared";
 import { getDesktopApi, useDesktopApi } from "../../lib/desktop-api";
 import { useThreadNavigation } from "../../lib/useThreadNavigation";
 import { useThreadSessionState } from "../../lib/useThreadSessionState";
@@ -41,6 +42,13 @@ export function StarMapWindow() {
     composerDraftStore,
     threads: navigation.threads,
   });
+  const markThreadsSeen = navigation.markThreadsSeen;
+  const reportUserRepliedToThread = useCallback(
+    (thread: NavigationThreadSummary) => {
+      void markThreadsSeen([thread]);
+    },
+    [markThreadsSeen],
+  );
 
   // The renderer-side document title is what macOS shows in the Window
   // menu (the BrowserWindow's `title` option gets overridden by `<title>`
@@ -119,6 +127,7 @@ export function StarMapWindow() {
             threadId: thread.id,
           });
         }}
+        onUserRepliedToThread={reportUserRepliedToThread}
         onFocusLocalInstance={() => {
           void desktopApi?.focusMainWindowFromStarMap?.();
         }}

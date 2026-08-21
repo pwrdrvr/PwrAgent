@@ -76,6 +76,11 @@ export type StarMapChatCardProps = {
   onClose: (cardKey: string) => void;
   /** Escape hatch into the full thread surface. */
   onOpenFull: (thread: NavigationThreadSummary) => void;
+  /**
+   * Report an ordinary reply only after start/steer has been accepted.
+   * Attention keeps unread state until this signal arrives.
+   */
+  onUserRepliedToThread?: (thread: NavigationThreadSummary) => void;
   /** Refresh the owning navigation feed after a monitor is stopped. */
   onRefreshNavigation?: () => Promise<void>;
   onRaise: (cardKey: string) => void;
@@ -147,8 +152,18 @@ const MemoizedActiveSubAgentsStrip = memo(ActiveSubAgentsStrip);
  * handed, so a card over a peer's thread reads and writes on that peer.
  */
 export function StarMapChatCard(props: StarMapChatCardProps) {
-  const { bounds, cardKey, desktopApi, onOpenFull, onRaise, onRectChange, rect, scale, thread } =
-    props;
+  const {
+    bounds,
+    cardKey,
+    desktopApi,
+    onOpenFull,
+    onRaise,
+    onRectChange,
+    onUserRepliedToThread,
+    rect,
+    scale,
+    thread,
+  } = props;
   const dragRef = useRef<DragState | undefined>(undefined);
   // Read by callbacks that must not re-bind on every pointermove.
   const rectRef = useRef(rect);
@@ -790,6 +805,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             requestId: `star-map-chat-card:${cardKey}:${activeTurnId}:${Date.now()}`,
             threadId: thread.id,
           });
+          onUserRepliedToThread?.(threadRef.current);
           setSendNotice(
             response.disposition === "queued"
               ? "Queued for the next turn."
@@ -867,6 +883,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             );
           }
         }
+        onUserRepliedToThread?.(threadRef.current);
         return true;
       } catch (error) {
         if (props.composerDraftStore) {
@@ -893,8 +910,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       cardKey,
       composerScopeKey,
       desktopApi,
-      federationTarget,
       ensureNavigationLoaded,
+      federationTarget,
+      onUserRepliedToThread,
       supportsReview,
       thread.id,
       thread.source,
