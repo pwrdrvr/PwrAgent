@@ -24,6 +24,7 @@ function peer(
 function buildDesktopApi(): DesktopApi {
   return {
     getNavigationSnapshot: vi.fn(async (request) => ({
+      fetchedAt: 123,
       threads: [
         {
           id: `thread-${
@@ -83,6 +84,8 @@ describe("useStarMapThreads", () => {
       expect(result.current.threadsByInstance.has("pwr_b")).toBe(false);
     });
     expect(result.current.threadsByInstance.has("pwr_a")).toBe(true);
+    expect(result.current.snapshotFetchedAtByInstance.get("pwr_a")).toBe(123);
+    expect(result.current.snapshotFetchedAtByInstance.has("pwr_b")).toBe(false);
   });
 
   it("retains cards when a refresh fails and marks the instance unreachable", async () => {

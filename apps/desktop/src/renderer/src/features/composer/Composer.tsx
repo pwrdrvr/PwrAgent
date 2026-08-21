@@ -201,6 +201,7 @@ import { ActiveSubAgentsStrip } from "../thread-detail/ActiveSubAgentsStrip";
 import { ActiveAutomationRunsStrip } from "../automations/ActiveAutomationRunsStrip";
 import {
   buildThreadComposerScopeKey,
+  createQueuedTurnId,
   getNextReleasableQueuedTurn,
   hasComposerDraftContent,
   useComposerDraftStore,
@@ -622,13 +623,6 @@ type ScheduledSendMenuOption = {
   label: string;
   scheduledSendAt?: number;
 };
-
-let queuedTurnIdSequence = 0;
-
-function createQueuedTurnId(): string {
-  queuedTurnIdSequence += 1;
-  return `queued-turn-${Date.now().toString(36)}-${queuedTurnIdSequence.toString(36)}`;
-}
 
 const globalQueuedTurnReleaseScopeKeys = new Set<string>();
 

@@ -65,6 +65,18 @@ export type ComposerPendingSteerSnapshot = {
   fileAttachments: NavigationLaunchpadFileAttachment[];
 };
 
+let queuedTurnIdSequence = 0;
+
+/**
+ * Reserves one renderer-owned identity for a main-process FIFO submission.
+ * Every composer surface must mint through the same primitive so the pending
+ * projection it shows is the entry the backend later acknowledges.
+ */
+export function createQueuedTurnId(): string {
+  queuedTurnIdSequence += 1;
+  return `queued-turn-${Date.now().toString(36)}-${queuedTurnIdSequence.toString(36)}`;
+}
+
 /**
  * The one definition of a thread composer's draft scope key. Everything that
  * reads or writes the store — the composer, the queued-turn release loop, the

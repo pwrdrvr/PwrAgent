@@ -2,18 +2,24 @@ import {
   act,
   fireEvent,
   render,
+  renderHook,
   screen,
   waitFor,
   within,
 } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  AgentEvent,
   BackendCapabilities,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { StarMapChatCard } from "../StarMapChatCard";
+import {
+  useComposerDraftStore,
+  type ComposerDraftStore,
+} from "../../composer/useComposerDraftStore";
 import { resetComposerMentionSourcesCache } from "../../composer/useComposerMentionSources";
 import { resetFullAccessRiskWarningCache } from "../../../lib/useExecutionModeSelection";
 import { isStarMapTypingTarget } from "../star-map-keyboard";
@@ -42,6 +48,20 @@ vi.mock("../../../lib/image-normalization", () => ({
 }));
 
 const RECT = { left: 40, top: 40, width: 420, height: 520 };
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  reject: (reason: unknown) => void;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, reject, resolve };
+}
 
 /**
  * A thread owned by a peer. The federation ref is the whole point: the
@@ -148,6 +168,7 @@ function reviewCapableApi(
 }
 
 type CardParams = {
+  composerDraftStore?: ComposerDraftStore;
   desktopApi: DesktopApi;
   pastedImageMaxPatches?: number;
   thread: NavigationThreadSummary;
@@ -157,6 +178,7 @@ function card(params: CardParams) {
   return (
     <StarMapChatCard
       cardKey="card-1"
+      composerDraftStore={params.composerDraftStore}
       desktopApi={params.desktopApi}
       onClose={() => undefined}
       onOpenFull={() => undefined}
@@ -1255,7 +1277,197 @@ describe("StarMapChatCard slash commands", () => {
   });
 });
 
+describe("StarMapChatCard start-turn queue handling", () => {
+  it("retains the backend-acknowledged queue entry visibly", async () => {
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t-local",
+      turnId: "turn-queued",
+      queueStatus: "queued" as const,
+      queueEntryId: "queue-owner-1",
+      queueEntryCreatedAt: 123,
+    }));
+    const { result } = renderHook(() => useComposerDraftStore());
+    const desktopApi = buildApi({ startTurn });
+    renderCard({
+      composerDraftStore: result.current,
+      desktopApi,
+      thread: localThread(),
+    });
+
+    await typeAndSend("Local work", "wait your turn");
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Queued message").textContent).toBe(
+        "Queued nextwait your turn",
+      );
+    });
+    expect(startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        queueEntryId: expect.stringMatching(/^queued-turn-/),
+      }),
+    );
+    expect(
+      result.current.getQueuedTurns("thread:codex:t-local"),
+    ).toEqual([
+      expect.objectContaining({
+        backendQueuePending: false,
+        queueEntryId: "queue-owner-1",
+        queueEntryCreatedAt: 123,
+        text: "wait your turn",
+      }),
+    ]);
+  });
+
+  it("clears a remote queue entry only for its owning peer's lifecycle event", async () => {
+    const listeners: Array<(event: AgentEvent) => void> = [];
+    const onAgentEvent = vi.fn((listener: (event: AgentEvent) => void) => {
+      listeners.push(listener);
+      return () => undefined;
+    });
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "t-remote",
+      turnId: "turn-queued",
+      queueStatus: "queued" as const,
+      queueEntryId: "queue-owner-remote",
+      queueEntryCreatedAt: 123,
+    }));
+    const { result } = renderHook(() => useComposerDraftStore());
+    const desktopApi = buildApi({ onAgentEvent, startTurn });
+    renderCard({
+      composerDraftStore: result.current,
+      desktopApi,
+      thread: remoteThread(),
+    });
+    await typeAndSend("Remote work", "remote queue");
+    await screen.findByLabelText("Queued message");
+
+    act(() => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          federationTarget: { scope: "local" },
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: {
+              queueEntryId: "queue-owner-remote",
+              status: "started",
+              threadId: "t-remote",
+            },
+          },
+        } as AgentEvent);
+      }
+    });
+    expect(screen.getByLabelText("Queued message")).toBeTruthy();
+
+    act(() => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          federationTarget: { scope: "remote", instanceId: "pwr_peer" },
+          notification: {
+            method: "thread/turnQueue/updated",
+            params: {
+              queueEntryId: "queue-owner-remote",
+              status: "started",
+              threadId: "t-remote",
+            },
+          },
+        } as AgentEvent);
+      }
+    });
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Queued message")).toBeNull();
+    });
+  });
+});
+
 describe("StarMapChatCard send failures", () => {
+  it("keeps a new draft but does not start twice while admission is pending", async () => {
+    const admission = deferred<{
+      backend: "codex";
+      threadId: string;
+      turnId: string;
+    }>();
+    const startTurn = vi.fn(() => admission.promise);
+    const desktopApi = buildApi({ startTurn });
+    const { result } = renderHook(() => useComposerDraftStore());
+    renderCard({
+      composerDraftStore: result.current,
+      desktopApi,
+      thread: localThread(),
+    });
+    const input = screen.getByRole("textbox", {
+      name: "Message Local work",
+    }) as HTMLElement & { value: string };
+    fireEvent.change(input, { target: { value: "first message" } });
+    const sendButton = screen.getByRole("button", { name: "Send" });
+
+    // Two native activations can land before React has painted the busy
+    // state derived from the first optimistic message. Admission itself is
+    // the concurrency boundary, so the card must guard it synchronously.
+    act(() => {
+      sendButton.click();
+      sendButton.click();
+    });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByLabelText("Queued message").textContent).toBe(
+      "Sending…first message",
+    );
+    fireEvent.change(input, { target: { value: "new draft" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(startTurn).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(input.value).toBe("new draft");
+    });
+
+    act(() => {
+      admission.resolve({
+        backend: "codex",
+        threadId: "t-local",
+        turnId: "turn-1",
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByLabelText("Queued message")).toBeNull();
+    });
+    expect(input.value).toBe("new draft");
+  });
+
+  it("keeps newer edits visible and parks the failed submission for recovery", async () => {
+    const admission = deferred<{
+      backend: "codex";
+      threadId: string;
+      turnId: string;
+    }>();
+    const { result } = renderHook(() => useComposerDraftStore());
+    const composerDraftStore = result.current;
+    const desktopApi = buildApi({
+      startTurn: vi.fn(() => admission.promise),
+    });
+    renderCard({ composerDraftStore, desktopApi, thread: localThread() });
+    const input = await typeAndSend("Local work", "failed submission");
+
+    fireEvent.change(input, { target: { value: "newer edit" } });
+    admission.reject(new Error("admission failed"));
+
+    await waitFor(() => {
+      expect(input.value).toBe("newer edit");
+    });
+    expect(
+      composerDraftStore.popDraft("thread:codex:t-local"),
+    ).toEqual(expect.objectContaining({ draft: "failed submission" }));
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /admission failed/,
+    );
+    expect(screen.queryByLabelText("Queued message")).toBeNull();
+  });
+
   it("restores the draft and rolls back its optimistic message when the peer refuses", async () => {
     const desktopApi = buildApi({
       startTurn: vi.fn(async () => {

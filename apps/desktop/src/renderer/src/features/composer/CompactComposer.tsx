@@ -2,6 +2,7 @@ import {
   useCallback,
   useId,
   useMemo,
+  useRef,
   useState,
   type ClipboardEvent,
   type DragEvent,
@@ -40,6 +41,7 @@ import {
   useComposerMentions,
   type ComposerMentionSources,
 } from "./useComposerMentions";
+import type { ComposerDraftStore } from "./useComposerDraftStore";
 
 export type CompactComposerAction = {
   disabled?: boolean;
@@ -91,6 +93,9 @@ export type CompactComposerProps = {
   canSteer?: boolean;
   canAttachLocalFiles?: boolean;
   disabled?: boolean;
+  /** Shared draft store for a failed submission displaced by newer text. */
+  draftStore?: ComposerDraftStore;
+  draftScopeKey?: string;
   executionMode?: ThreadExecutionMode;
   /** Thread's current fast-mode state, shown on the chip menu's toggle. */
   fastMode?: boolean;
@@ -183,6 +188,8 @@ export function CompactComposer(props: CompactComposerProps) {
     NavigationLaunchpadFileAttachment[]
   >([]);
   const [normalizingImageBatches, setNormalizingImageBatches] = useState(0);
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
   const normalizingImages = normalizingImageBatches > 0;
   const hasAttachments =
     imageAttachments.length > 0 || fileAttachments.length > 0;
@@ -205,6 +212,12 @@ export function CompactComposer(props: CompactComposerProps) {
     disabled: props.disabled,
     sources: mentionSources,
   });
+  const latestMentionSnapshotRef = useRef(mentions.snapshot);
+  const latestImageAttachmentsRef = useRef(imageAttachments);
+  const latestFileAttachmentsRef = useRef(fileAttachments);
+  latestMentionSnapshotRef.current = mentions.snapshot;
+  latestImageAttachmentsRef.current = imageAttachments;
+  latestFileAttachmentsRef.current = fileAttachments;
   // Click-away and Escape close the menu, same hook as the composer
   // dropdowns. Without it the menu survives a click on the transcript
   // behind it and covers the conversation.
@@ -247,6 +260,7 @@ export function CompactComposer(props: CompactComposerProps) {
   );
 
   const send = useCallback(async (commandText?: string) => {
+    if (sendingRef.current || props.disabled) return;
     // The serialized text, not the plain draft: a mention chip is
     // zero-width until this splices its markdown back in.
     const text = (commandText ?? mentions.text).trim();
@@ -259,20 +273,62 @@ export function CompactComposer(props: CompactComposerProps) {
     const previous = mentions.snapshot;
     const previousImages = imageAttachments;
     const previousFiles = fileAttachments;
+    sendingRef.current = true;
+    setSending(true);
     mentions.clear();
     setImageAttachments([]);
     setFileAttachments([]);
-    const delivered = await (
-      previousImages.length > 0 || previousFiles.length > 0
-        ? onSend(text, previousImages, previousFiles)
-        : onSend(text)
-    );
-    if (delivered === false) {
-      mentions.restore(previous);
-      setImageAttachments(previousImages);
-      setFileAttachments(previousFiles);
+    latestMentionSnapshotRef.current = { draft: "", skillTokens: [] };
+    latestImageAttachmentsRef.current = [];
+    latestFileAttachmentsRef.current = [];
+    try {
+      const delivered = await (
+        previousImages.length > 0 || previousFiles.length > 0
+          ? onSend(text, previousImages, previousFiles)
+          : onSend(text)
+      );
+      if (delivered === false) {
+        const currentMentionSnapshot = latestMentionSnapshotRef.current;
+        const hasNewerDraft =
+          currentMentionSnapshot.draft.trim().length > 0
+          || currentMentionSnapshot.skillTokens.length > 0
+          || latestImageAttachmentsRef.current.length > 0
+          || latestFileAttachmentsRef.current.length > 0;
+        if (hasNewerDraft) {
+          if (props.draftStore && props.draftScopeKey) {
+            props.draftStore.pushDraft(
+              props.draftScopeKey,
+              {
+                draft: previous.draft,
+                imageAttachments: previousImages,
+                fileAttachments: previousFiles,
+                skillTokens: previous.skillTokens,
+              },
+            );
+          }
+        } else {
+          mentions.restore(previous);
+          setImageAttachments(previousImages);
+          setFileAttachments(previousFiles);
+          latestMentionSnapshotRef.current = previous;
+          latestImageAttachmentsRef.current = previousImages;
+          latestFileAttachmentsRef.current = previousFiles;
+        }
+      }
+    } finally {
+      sendingRef.current = false;
+      setSending(false);
     }
-  }, [fileAttachments, imageAttachments, mentions, normalizingImages, onSend]);
+  }, [
+    fileAttachments,
+    imageAttachments,
+    mentions,
+    normalizingImages,
+    onSend,
+    props.disabled,
+    props.draftScopeKey,
+    props.draftStore,
+  ]);
 
   const attachImages = useCallback(
     (pastedImages: ReturnType<typeof getImageFilesFromDataTransfer>) => {
@@ -470,6 +526,10 @@ export function CompactComposer(props: CompactComposerProps) {
       // The button checks this too. A disabled `<textarea>` used to swallow
       // the keydown for us; the editor only stops taking new text, and still
       // forwards Enter from a field that was focused before it was disabled.
+      if (sendingRef.current) {
+        event.preventDefault();
+        return;
+      }
       if (props.disabled) return;
       event.preventDefault();
       void send();
@@ -921,6 +981,7 @@ export function CompactComposer(props: CompactComposerProps) {
           className="compact-composer__send"
           disabled={
             props.disabled
+            || sending
             || normalizingImages
             || (
               mentions.text.trim().length === 0
@@ -932,7 +993,7 @@ export function CompactComposer(props: CompactComposerProps) {
           onClick={() => void send()}
           type="button"
         >
-          {props.busy ? "Steer" : "Send"}
+          {sending ? "Sending…" : props.busy ? "Steer" : "Send"}
         </button>
       </div>
     </div>

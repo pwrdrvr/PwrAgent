@@ -8,6 +8,8 @@ import type { DesktopApi } from "../../lib/desktop-api";
 const REMOTE_REFRESH_INTERVAL_MS = 60_000;
 
 export type StarMapRemoteThreads = {
+  /** Owner-clock fetch time for each retained navigation snapshot. */
+  snapshotFetchedAtByInstance: Map<string, number>;
   /** Per-instance thread lists, retained across peer reconnect churn. */
   threadsByInstance: Map<string, NavigationThreadSummary[]>;
   /** Instances whose last snapshot fetch failed (rendered as unreachable). */
@@ -47,6 +49,7 @@ export function useStarMapThreads(params: {
 }): StarMapRemoteThreads {
   const desktopApi = params.desktopApi;
   const [state, setState] = useState<StarMapRemoteThreadState>({
+    snapshotFetchedAtByInstance: new Map(),
     threadsByInstance: new Map(),
     unreachableInstanceIds: new Set(),
     staleInstanceIds: new Set(),
@@ -81,6 +84,12 @@ export function useStarMapThreads(params: {
         setState((current) => {
           const threadsByInstance = new Map(current.threadsByInstance);
           threadsByInstance.set(instanceId, snapshot.threads);
+          const snapshotFetchedAtByInstance = new Map(
+            current.snapshotFetchedAtByInstance,
+          );
+          if (typeof snapshot.fetchedAt === "number") {
+            snapshotFetchedAtByInstance.set(instanceId, snapshot.fetchedAt);
+          }
           const unreachableInstanceIds = new Set(
             current.unreachableInstanceIds,
           );
@@ -88,6 +97,7 @@ export function useStarMapThreads(params: {
           const staleInstanceIds = new Set(current.staleInstanceIds);
           staleInstanceIds.delete(instanceId);
           return {
+            snapshotFetchedAtByInstance,
             threadsByInstance,
             unreachableInstanceIds,
             staleInstanceIds,
@@ -139,6 +149,11 @@ export function useStarMapThreads(params: {
           known.has(instanceId),
         ),
       );
+      const nextSnapshotFetchedAt = new Map(
+        [...current.snapshotFetchedAtByInstance].filter(([instanceId]) =>
+          known.has(instanceId),
+        ),
+      );
       const nextUnreachable = new Set(
         [...current.unreachableInstanceIds].filter((instanceId) =>
           known.has(instanceId),
@@ -151,6 +166,8 @@ export function useStarMapThreads(params: {
       );
       const unchanged =
         nextThreads.size === current.threadsByInstance.size
+        && nextSnapshotFetchedAt.size
+          === current.snapshotFetchedAtByInstance.size
         && nextUnreachable.size === current.unreachableInstanceIds.size
         && nextStale.size === current.staleInstanceIds.size
         && [...nextStale].every((instanceId) =>
@@ -158,6 +175,7 @@ export function useStarMapThreads(params: {
         );
       if (unchanged) return current;
       return {
+        snapshotFetchedAtByInstance: nextSnapshotFetchedAt,
         threadsByInstance: nextThreads,
         unreachableInstanceIds: nextUnreachable,
         staleInstanceIds: nextStale,
