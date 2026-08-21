@@ -1,4 +1,4 @@
-import type { PrSummary } from "@pwragent/shared";
+import type { PrSummary, StarMapWorkspaceLayout } from "@pwragent/shared";
 
 /**
  * Per-operator view preferences for the Star Map. These are viewing
@@ -18,7 +18,7 @@ export type StarMapCardFields = {
   terminalPullRequests: boolean;
 };
 
-export type StarMapLayoutMode = "lanes" | "orbit" | "projects";
+export type StarMapLayoutMode = StarMapWorkspaceLayout;
 
 export type StarMapViewPreferences = {
   /**

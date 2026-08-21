@@ -16,10 +16,12 @@ import {
   formatFederationPeerDisplayLabel,
   formatFederationPeerDisplayLabelParts,
   isRemoteFederationTarget,
+  starMapWorkspaceCardKey,
   STAR_MAP_LOAD_CARD_KEY,
   STAR_MAP_LOAD_CARD_POSITION_KEY,
   type FederationPeerSummary,
   type NavigationThreadSummary,
+  type StarMapWorkspaceAnchor,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ComposerDraftStore } from "../composer/useComposerDraftStore";
@@ -78,6 +80,7 @@ import {
 import {
   marqueeRect,
   rectIntersects,
+  resolveResizeSnap,
   resolveSnap,
   type AlignmentGuide,
   type SnapRect,
@@ -100,10 +103,13 @@ import {
   STAR_MAP_TERMINAL_CARD_HEIGHT,
 } from "./StarMapSatelliteCards";
 import {
+  chatCardGroupRect,
   chatCardEdgeToward,
   dockContextRect,
   dockTerminalRect,
+  resizeChatCardRect,
   tetherExitPoint,
+  type ChatCardRect,
 } from "./star-map-chat-card-geometry";
 import type { StarMapCardMenuAction } from "./StarMapCardMenu";
 import { useStarMapChatCards } from "./useStarMapChatCards";
@@ -552,6 +558,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const [preferences, setPreferences] = useState<StarMapViewPreferences>(
     readStoredPreferences,
   );
+  const chatCards = useStarMapChatCards({ desktopApi: props.desktopApi });
   /**
    * Project clouds the operator expanded past the per-group cap, keyed
    * `instanceId::clusterKey`. View-local like the selection: how much of a
@@ -650,6 +657,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
     },
     [paintView],
   );
+  const commitViewAndPersist = useCallback(
+    (next: StarMapView) => {
+      commitView(next);
+      chatCards.commitView(preferences.layout, next);
+    },
+    [chatCards, commitView, preferences.layout],
+  );
   /**
    * ⌘K flies the camera; the operator's own hands outrank it.
    *
@@ -661,7 +675,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const flight = useStarMapFlight({
     liveViewRef: viewRef,
     onPaint: paintView,
-    onCommit: commitView,
+    onCommit: commitViewAndPersist,
   });
   /**
    * The thread a pick is travelling to, by identity key.
@@ -930,7 +944,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // Only if this drag is still the current one: a second pointer may
       // have taken the ref, and its pan is not this one's to end.
       if (panBaseRef.current === base) panBaseRef.current = undefined;
-      commitView(
+      commitViewAndPersist(
         clampStarMapView({
           // Scale from the live view, not the base: a pinch mid-drag is
           // the one part of the gesture the base does not own.
@@ -1876,13 +1890,28 @@ export function StarMapScreen(props: StarMapScreenProps) {
     return { width: right, height: bottom };
   }, [bodies, viewportSize.height, viewportSize.width]);
 
-  const panZoomCanvas = orbitMode
-    ? { width: orbit.canvasWidth, height: orbit.canvasHeight }
-    : projectsMode
-      ? { width: projectLayout.canvasWidth, height: projectLayout.canvasHeight }
-      : lanesCanvas;
+  const panZoomCanvas = useMemo(
+    () =>
+      orbitMode
+        ? { width: orbit.canvasWidth, height: orbit.canvasHeight }
+        : projectsMode
+          ? {
+              width: projectLayout.canvasWidth,
+              height: projectLayout.canvasHeight,
+            }
+          : lanesCanvas,
+    [
+      lanesCanvas,
+      orbit.canvasHeight,
+      orbit.canvasWidth,
+      orbitMode,
+      projectLayout.canvasHeight,
+      projectLayout.canvasWidth,
+      projectsMode,
+    ],
+  );
 
-  /** Canvas extent for callbacks defined above it (see `cardRectsRef`). */
+  /** Canvas extent for callbacks defined above it. */
   const canvasBoundsRef = useRef(panZoomCanvas);
   canvasBoundsRef.current = panZoomCanvas;
 
@@ -1973,8 +2002,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
       }
       if (wheelIdleTimer !== undefined) window.clearTimeout(wheelIdleTimer);
       wheelIdleTimer = window.setTimeout(() => {
+        const completedOwner = wheelOwner;
         wheelOwner = undefined;
         wheelIdleTimer = undefined;
+        if (completedOwner === "canvas" && operatorMovedViewRef.current) {
+          commitViewAndPersist(viewRef.current);
+        }
       }, WHEEL_GESTURE_IDLE_MS);
       if (wheelOwner === "embedded") return;
       event.preventDefault();
@@ -2028,6 +2061,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, [
     abortFlight,
     commitView,
+    commitViewAndPersist,
     topAnchoredView,
     panZoomCanvas.width,
     panZoomCanvas.height,
@@ -2043,6 +2077,33 @@ export function StarMapScreen(props: StarMapScreenProps) {
   useLayoutEffect(() => {
     operatorMovedViewRef.current = false;
   }, [preferences.layout]);
+
+  const restoredViewLayoutRef = useRef<
+    StarMapViewPreferences["layout"] | undefined
+  >(undefined);
+  useLayoutEffect(() => {
+    if (!chatCards.hydrated) return;
+    if (restoredViewLayoutRef.current === preferences.layout) return;
+    restoredViewLayoutRef.current = preferences.layout;
+    const saved = chatCards.viewFor(preferences.layout);
+    if (!saved) return;
+    operatorMovedViewRef.current = true;
+    commitView(
+      clampStarMapView({
+        view: saved,
+        canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+        viewport: { width: viewportSize.width, height: viewportSize.height },
+      }),
+    );
+  }, [
+    chatCards,
+    commitView,
+    panZoomCanvas.height,
+    panZoomCanvas.width,
+    preferences.layout,
+    viewportSize.height,
+    viewportSize.width,
+  ]);
 
   /**
    * Hold the map on its home cluster so the operator does not open onto
@@ -2235,17 +2296,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
     // keyboard camera's next frame reads the live ref. Committing to state
     // alone would be silently overwritten by that frame — and, because
     // React's last-rendered transform still matched, would not even repaint.
-    commitView(
-      placeStarMapView({
-        anchor: viewAnchor,
-        canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
-        viewport: { width: viewportSize.width, height: viewportSize.height },
-        topAnchored: topAnchoredView,
-      }),
-    );
+    const reset = placeStarMapView({
+      anchor: viewAnchor,
+      canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+      viewport: { width: viewportSize.width, height: viewportSize.height },
+      topAnchored: topAnchoredView,
+    });
+    commitView(reset);
+    chatCards.resetView(preferences.layout);
   }, [
     abortFlight,
+    chatCards,
     commitView,
+    preferences.layout,
     topAnchoredView,
     panZoomCanvas.width,
     panZoomCanvas.height,
@@ -2272,7 +2335,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     canvas: panZoomCanvas,
     viewport: viewportSize,
     onPaint: paintView,
-    onCommit: commitView,
+    onCommit: commitViewAndPersist,
     onMoveStart: claimView,
     onResetView: resetView,
   });
@@ -2372,7 +2435,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
     return labels;
   }, [displayLabelPartsById, peers]);
 
-  const chatCards = useStarMapChatCards();
   /** Threads with a chat card open, so their card can say so. */
   const chattingThreadKeys = useMemo(
     () => new Set(chatCards.cards.map((card) => card.key)),
@@ -2391,15 +2453,25 @@ export function StarMapScreen(props: StarMapScreenProps) {
     if (chatCards.cards.length === 0) return undefined;
     const byKey = new Map<string, NavigationThreadSummary>();
     for (const thread of props.localThreads) {
-      byKey.set(buildThreadIdentityKey(thread.source, thread.id), thread);
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      byKey.set(
+        starMapWorkspaceCardKey({ instanceId: localInstanceId, threadKey }),
+        thread,
+      );
     }
-    for (const threads of remote.threadsByInstance.values()) {
+    for (const [instanceId, threads] of remote.threadsByInstance) {
       for (const thread of threads) {
-        byKey.set(buildThreadIdentityKey(thread.source, thread.id), thread);
+        const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+        byKey.set(starMapWorkspaceCardKey({ instanceId, threadKey }), thread);
       }
     }
     return byKey;
-  }, [chatCards.cards.length, props.localThreads, remote.threadsByInstance]);
+  }, [
+    chatCards.cards.length,
+    localInstanceId,
+    props.localThreads,
+    remote.threadsByInstance,
+  ]);
   const { desktopApi, onFocusLocalInstance, onOpenLocalThread } = props;
   const openInstance = useCallback(
     (instanceId: string) => {
@@ -2424,24 +2496,36 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // is read through a ref because it is declared further down; the
       // callback only ever runs after a render has computed it.
       const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const target = thread.federation?.ref.target;
+      const ownerInstanceId =
+        target && isRemoteFederationTarget(target)
+          ? target.instanceId
+          : localInstanceId;
+      const sourceKey = starMapWorkspaceCardKey({
+        instanceId: ownerInstanceId,
+        threadKey,
+      });
       let anchor: SnapRect | undefined;
-      // `cardRects` is built from the lane/orbit bodies, which is NOT where
-      // the projects lens draws its cards — anchoring to it there would
-      // open the chat at a position unrelated to anything on screen. That
-      // lens falls back to the cascade until it publishes its own rects.
-      if (!projectsModeRef.current) {
-        for (const [key, rect] of cardRectsRef.current) {
-          if (key.endsWith(`::${threadKey}`)) {
-            anchor = rect;
-            break;
-          }
+      for (const [key, rect] of flightRectsRef.current) {
+        if (key === sourceKey) {
+          anchor = rect;
+          break;
         }
       }
       chatCards.open(
+        ownerInstanceId,
         thread,
         anchor
           ? {
               anchor: {
+                anchor: {
+                  kind: "thread",
+                  instanceId: ownerInstanceId,
+                  threadKey,
+                },
+                point: { x: anchor.x, y: anchor.y },
+              },
+              sourceRect: {
                 height: anchor.height,
                 width: anchor.width,
                 x: anchor.x,
@@ -2452,7 +2536,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
           : undefined,
       );
     },
-    [chatCards],
+    [chatCards, localInstanceId],
   );
 
   /**
@@ -2804,7 +2888,19 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     threadId: target.thread.id,
                   })
                   .then(() => {
-                    chatCards.close(threadKey);
+                    const federationTarget =
+                      target.thread.federation?.ref.target;
+                    const ownerInstanceId =
+                      federationTarget
+                      && isRemoteFederationTarget(federationTarget)
+                        ? federationTarget.instanceId
+                        : localInstanceId;
+                    chatCards.close(
+                      starMapWorkspaceCardKey({
+                        instanceId: ownerInstanceId,
+                        threadKey,
+                      }),
+                    );
                     // An archived card is gone for good, unlike one a
                     // filter or a flapping instance takes off the map, so
                     // the selection drops it rather than counting it
@@ -2840,6 +2936,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       chatCards,
       desktopApi,
       dropFromSelection,
+      localInstanceId,
       openThreadFully,
       runOnCardTargets,
     ],
@@ -2932,11 +3029,6 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * them (opening a chat card beside its thread). Refs rather than deps so
    * those callbacks stay stable across every snapshot.
    */
-  const cardRectsRef = useRef(cardRects);
-  cardRectsRef.current = cardRects;
-  const projectsModeRef = useRef(projectsMode);
-  projectsModeRef.current = projectsMode;
-
   /**
    * Card geometry for the projects lens, which seats its cards around
    * project bodies rather than instance bodies and so appears nowhere in
@@ -2995,6 +3087,33 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   /** Where every card the current lens draws sits, by card key. */
   const flightRects = projectsMode ? projectCardRects : cardRects;
+  const flightRectsRef = useRef(flightRects);
+  flightRectsRef.current = flightRects;
+
+  const resolveWorkspaceAnchor = useCallback(
+    (anchor: StarMapWorkspaceAnchor) => {
+      if (anchor.kind === "canvas") return { x: 0, y: 0 };
+      if (anchor.kind === "thread") {
+        const rect = flightRects.get(
+          starMapWorkspaceCardKey({
+            instanceId: anchor.instanceId,
+            threadKey: anchor.threadKey,
+          }),
+        );
+        if (rect) return { x: rect.x, y: rect.y };
+      }
+      const body = bodies.find(
+        (candidate) => candidate.instanceId === anchor.instanceId,
+      );
+      return body ? { x: body.x, y: body.y } : undefined;
+    },
+    [bodies, flightRects],
+  );
+
+  useLayoutEffect(() => {
+    if (!chatCards.hydrated) return;
+    chatCards.resolveRestoredAnchors(resolveWorkspaceAnchor);
+  }, [chatCards, resolveWorkspaceAnchor]);
 
   useEffect(() => {
     if (!pendingFlight) return;
@@ -3450,6 +3569,107 @@ export function StarMapScreen(props: StarMapScreenProps) {
     [bodies, cardRects, lanes, selection, view.scale],
   );
 
+  const resolveChatCardRect = useCallback(
+    (
+      cardKey: string,
+      next: ChatCardRect,
+      kind: "move" | "resize",
+    ): { rect: ChatCardRect; guides: AlignmentGuide[] } => {
+      const card = chatCards.cards.find((entry) => entry.key === cardKey);
+      if (!card) return { rect: next, guides: [] };
+      const movingGroup = chatCardGroupRect(next, {
+        contextOpen: card.contextOpen,
+        terminalOpen: card.terminalOpen,
+        terminalHeight: card.terminalHeight,
+      });
+      const moving: SnapRect = {
+        x: movingGroup.left,
+        y: movingGroup.top,
+        width: movingGroup.width,
+        height: movingGroup.height,
+      };
+      const others: SnapRect[] = [...flightRects.values()];
+      for (const other of chatCards.cards) {
+        if (other.key === cardKey) continue;
+        const group = chatCardGroupRect(other.rect, {
+          contextOpen: other.contextOpen,
+          terminalOpen: other.terminalOpen,
+          terminalHeight: other.terminalHeight,
+        });
+        others.push({
+          x: group.left,
+          y: group.top,
+          width: group.width,
+          height: group.height,
+        });
+      }
+      const threshold = SNAP_THRESHOLD_PX / (view.scale > 0 ? view.scale : 1);
+      if (kind === "resize") {
+        const snap = resolveResizeSnap({ moving, others, threshold });
+        return {
+          rect: resizeChatCardRect({
+            rect: next,
+            deltaX: snap.dw,
+            deltaY: snap.dh,
+            viewport: panZoomCanvas,
+          }),
+          guides: snap.guides,
+        };
+      }
+      const snap = resolveSnap({
+        defaultGap: STAR_MAP_CARD_GAP,
+        moving,
+        others,
+        threshold,
+      });
+      return {
+        rect: {
+          ...next,
+          left: next.left + snap.dx,
+          top: next.top + snap.dy,
+        },
+        guides: snap.guides,
+      };
+    },
+    [chatCards.cards, flightRects, panZoomCanvas, view.scale],
+  );
+
+  const commitChatCardRect = useCallback(
+    (cardKey: string, rect: ChatCardRect) => {
+      const card = chatCards.cards.find((entry) => entry.key === cardKey);
+      if (!card) return;
+      const source = flightRects.get(cardKey);
+      if (source) {
+        chatCards.commitRect(cardKey, rect, {
+          anchor: {
+            kind: "thread",
+            instanceId: card.ownerInstanceId,
+            threadKey: card.threadKey,
+          },
+          point: { x: source.x, y: source.y },
+        });
+        return;
+      }
+      const body = bodies.find(
+        (candidate) => candidate.instanceId === card.ownerInstanceId,
+      );
+      chatCards.commitRect(
+        cardKey,
+        rect,
+        body
+          ? {
+              anchor: {
+                kind: "instance",
+                instanceId: card.ownerInstanceId,
+              },
+              point: { x: body.x, y: body.y },
+            }
+          : undefined,
+      );
+    },
+    [bodies, chatCards, flightRects],
+  );
+
   /**
    * A line from each open chat card to the thread card it belongs to.
    *
@@ -3472,13 +3692,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const chatTethers = useMemo(() => {
     if (chatCards.cards.length === 0 || projectsMode) return [];
     return chatCards.cards.flatMap((card) => {
-      let source: SnapRect | undefined;
-      for (const [key, rect] of cardRects) {
-        if (key.endsWith(`::${card.key}`)) {
-          source = rect;
-          break;
-        }
-      }
+      const source = cardRects.get(card.key);
       if (!source) return [];
       const target = {
         x: source.x + source.width / 2,
@@ -3879,7 +4093,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
               stackIndex={Math.min(index, STAR_MAP_CARD_MAX_Z)}
               cardKey={`${position.instanceId}::${threadKey}`}
               selected={selection.has(`${position.instanceId}::${threadKey}`)}
-              chatting={chattingThreadKeys.has(threadKey)}
+              chatting={chattingThreadKeys.has(
+                starMapWorkspaceCardKey({
+                  instanceId: position.instanceId,
+                  threadKey,
+                }),
+              )}
               onToggleSelect={() =>
                 toggleSelected(`${position.instanceId}::${threadKey}`)
               }
@@ -4554,10 +4773,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
               onRefreshNavigation={() =>
                 refreshOwner(cardInstanceId ?? localInstanceId)
               }
+              onGuidesChange={setActiveGuides}
               onRaise={chatCards.raise}
+              onRectCommit={commitChatCardRect}
               onRectChange={chatCards.setRect}
               pastedImageMaxPatches={props.pastedImageMaxPatches}
               rect={card.rect}
+              resolveRect={(rect, kind) =>
+                resolveChatCardRect(card.key, rect, kind)
+              }
               thread={liveThread}
               scale={view.scale}
               bounds={panZoomCanvas}
@@ -4610,6 +4834,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
                       onClose={() => chatCards.toggleTerminal(card.key)}
                       onHeightChange={(height) =>
                         chatCards.setTerminalHeight(card.key, height)
+                      }
+                      onHeightCommit={(height) =>
+                        chatCards.commitTerminalHeight(card.key, height)
                       }
                     />
                   ) : null}

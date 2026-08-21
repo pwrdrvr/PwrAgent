@@ -1,175 +1,510 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   buildThreadIdentityKey,
+  snapshotStarMapWorkspaceThread,
+  starMapWorkspaceCardKey,
+  STAR_MAP_WORKSPACE_VERSION,
   type NavigationThreadSummary,
+  type StarMapWorkspaceAnchor,
+  type StarMapWorkspaceLayout,
+  type StarMapWorkspaceSnapshot,
+  type StarMapWorkspaceThreadSnapshot,
+  type StarMapWorkspaceView,
 } from "@pwragent/shared";
+import type { DesktopApi } from "../../lib/desktop-api";
 import {
   cascadeChatCardRect,
   placeChatCardBesideAnchor,
-  raiseChatCard,
   type ChatCardRect,
 } from "./star-map-chat-card-geometry";
 
 export type StarMapChatCardEntry = {
   key: string;
+  ownerInstanceId: string;
+  threadKey: string;
   rect: ChatCardRect;
-  thread: NavigationThreadSummary;
-  /** The context satellite card is open, docked to the right. */
-  contextOpen?: boolean;
-  /** The terminal satellite card is open, docked below. */
-  terminalOpen?: boolean;
-  /** Operator-resized terminal height; the dock geometry supplies a default. */
+  thread: StarMapWorkspaceThreadSnapshot;
+  anchor: StarMapWorkspaceAnchor;
+  anchorDx: number;
+  anchorDy: number;
+  /** One initial relative-anchor resolution; a later peer connection must
+   * not teleport an already-visible card away from its fallback rectangle. */
+  pendingAnchorRestore: boolean;
+  contextOpen: boolean;
+  terminalOpen: boolean;
   terminalHeight?: number;
+};
+
+export type StarMapChatCardAnchorPlacement = {
+  anchor: StarMapWorkspaceAnchor;
+  point: { x: number; y: number };
+};
+
+type StarMapChatCardsState = {
+  cards: StarMapChatCardEntry[];
+  views: Partial<Record<StarMapWorkspaceLayout, StarMapWorkspaceView>>;
 };
 
 export type StarMapChatCardsController = {
   cards: StarMapChatCardEntry[];
+  hydrated: boolean;
   close: (cardKey: string) => void;
   closeAll: () => void;
-  /** Stack depth of a card, lowest first. */
   depthOf: (cardKey: string) => number;
-  /**
-   * Open a card for a thread. `placement` puts it beside the thread's own
-   * card on the map; without one the card cascades from a corner, which
-   * is the fallback when the thread has no card on screen (filtered out,
-   * or folded into a cloud's overflow).
-   */
   open: (
+    ownerInstanceId: string,
     thread: NavigationThreadSummary,
     placement?: {
-      anchor: { x: number; y: number; width: number; height: number };
+      anchor: StarMapChatCardAnchorPlacement;
       bounds: { width: number; height: number };
+      sourceRect: { x: number; y: number; width: number; height: number };
     },
   ) => void;
   raise: (cardKey: string) => void;
+  /** Pointer-frame update. Deliberately memory-only. */
   setRect: (cardKey: string, rect: ChatCardRect) => void;
-  /** Open/close the satellites. They live on the entry, so closing the
-   * chat card closes its whole group for free. */
+  /** Completed gesture: update relative geometry and persist once. */
+  commitRect: (
+    cardKey: string,
+    rect: ChatCardRect,
+    anchor?: StarMapChatCardAnchorPlacement,
+  ) => void;
+  resolveRestoredAnchors: (
+    resolve: (
+      anchor: StarMapWorkspaceAnchor,
+    ) => { x: number; y: number } | undefined,
+  ) => void;
   toggleContext: (cardKey: string) => void;
   toggleTerminal: (cardKey: string) => void;
   setTerminalHeight: (cardKey: string, height: number) => void;
+  commitTerminalHeight: (cardKey: string, height: number) => void;
+  viewFor: (layout: StarMapWorkspaceLayout) => StarMapWorkspaceView | undefined;
+  commitView: (
+    layout: StarMapWorkspaceLayout,
+    view: StarMapWorkspaceView,
+  ) => void;
+  resetView: (layout: StarMapWorkspaceLayout) => void;
 };
+
+const EMPTY_STATE: StarMapChatCardsState = { cards: [], views: {} };
 
 function viewportSize(): { width: number; height: number } {
   if (typeof window === "undefined") return { width: 1440, height: 900 };
   return { width: window.innerWidth, height: window.innerHeight };
 }
 
-/**
- * Owns the set of floating chat cards over the star map.
- *
- * Cards are keyed by thread identity, so clicking the same thread twice
- * raises the existing card instead of stacking a duplicate on top of it.
- * Geometry lives here rather than in each card so that the cascade can see
- * how many cards are already open.
- */
-export function useStarMapChatCards(): StarMapChatCardsController {
-  const [cards, setCards] = useState<StarMapChatCardEntry[]>([]);
-  const [order, setOrder] = useState<readonly string[]>([]);
+function snapshotFor(state: StarMapChatCardsState): StarMapWorkspaceSnapshot {
+  return {
+    version: STAR_MAP_WORKSPACE_VERSION,
+    cards: state.cards.map((card) => ({
+      key: card.key,
+      ownerInstanceId: card.ownerInstanceId,
+      thread: card.thread,
+      geometry: {
+        anchor: card.anchor,
+        dx: card.anchorDx,
+        dy: card.anchorDy,
+        fallbackRect: card.rect,
+      },
+      contextOpen: card.contextOpen,
+      terminalOpen: card.terminalOpen,
+      terminalHeight: card.terminalHeight,
+    })),
+    views: state.views,
+  };
+}
 
-  const raise = useCallback((cardKey: string) => {
-    setOrder((current) => raiseChatCard(current, cardKey));
-  }, []);
+function entryFromSnapshot(
+  card: StarMapWorkspaceSnapshot["cards"][number],
+): StarMapChatCardEntry {
+  return {
+    key: card.key,
+    ownerInstanceId: card.ownerInstanceId,
+    threadKey: buildThreadIdentityKey(card.thread.source, card.thread.id),
+    rect: card.geometry.fallbackRect,
+    thread: card.thread,
+    anchor: card.geometry.anchor,
+    anchorDx: card.geometry.dx,
+    anchorDy: card.geometry.dy,
+    pendingAnchorRestore: true,
+    contextOpen: card.contextOpen,
+    terminalOpen: card.terminalOpen,
+    terminalHeight: card.terminalHeight,
+  };
+}
+
+/**
+ * Owns the viewer-local Star Map desk. Live drag frames stay in React memory;
+ * completed gestures and explicit open/close/toggle actions enqueue one full,
+ * atomic workspace snapshot through the main-process profile database.
+ */
+export function useStarMapChatCards(params: {
+  desktopApi?: DesktopApi;
+}): StarMapChatCardsController {
+  const [state, setState] = useState<StarMapChatCardsState>(EMPTY_STATE);
+  const [hydrated, setHydrated] = useState(false);
+  const stateRef = useRef(state);
+  const mutatedBeforeHydrationRef = useRef(false);
+  const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const desktopApi = params.desktopApi;
+
+  const enqueueWrite = useCallback(
+    (next: StarMapChatCardsState) => {
+      if (!desktopApi?.writeStarMapWorkspace) return;
+      const snapshot = snapshotFor(next);
+      writeQueueRef.current = writeQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          await desktopApi.writeStarMapWorkspace?.({ workspace: snapshot });
+        });
+    },
+    [desktopApi],
+  );
+
+  const applyState = useCallback(
+    (next: StarMapChatCardsState, persist: boolean) => {
+      stateRef.current = next;
+      setState(next);
+      if (persist) {
+        if (!hydrated) {
+          mutatedBeforeHydrationRef.current = true;
+        } else {
+          enqueueWrite(next);
+        }
+      }
+    },
+    [enqueueWrite, hydrated],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    void desktopApi
+      ?.readStarMapWorkspace?.()
+      .then((response) => {
+        if (cancelled) return;
+        const restored: StarMapChatCardsState = {
+          cards: response.workspace.cards.map(entryFromSnapshot),
+          views: response.workspace.views,
+        };
+        const current = stateRef.current;
+        const next = mutatedBeforeHydrationRef.current
+          ? {
+              cards: [
+                ...restored.cards.filter(
+                  (card) => !current.cards.some((entry) => entry.key === card.key),
+                ),
+                ...current.cards,
+              ],
+              views: { ...restored.views, ...current.views },
+            }
+          : restored;
+        stateRef.current = next;
+        setState(next);
+        setHydrated(true);
+        if (mutatedBeforeHydrationRef.current) enqueueWrite(next);
+      })
+      .catch(() => {
+        if (!cancelled) setHydrated(true);
+      });
+    if (!desktopApi?.readStarMapWorkspace) setHydrated(true);
+    return () => {
+      cancelled = true;
+    };
+  }, [desktopApi, enqueueWrite]);
+
+  const raise = useCallback(
+    (cardKey: string) => {
+      const current = stateRef.current;
+      const index = current.cards.findIndex((card) => card.key === cardKey);
+      if (index === -1 || index === current.cards.length - 1) return;
+      const card = current.cards[index];
+      applyState(
+        {
+          ...current,
+          cards: [
+            ...current.cards.slice(0, index),
+            ...current.cards.slice(index + 1),
+            card,
+          ],
+        },
+        true,
+      );
+    },
+    [applyState],
+  );
 
   const open = useCallback(
     (
+      ownerInstanceId: string,
       thread: NavigationThreadSummary,
       placement?: {
-        anchor: { x: number; y: number; width: number; height: number };
+        anchor: StarMapChatCardAnchorPlacement;
         bounds: { width: number; height: number };
+        sourceRect: { x: number; y: number; width: number; height: number };
       },
     ) => {
-      const key = buildThreadIdentityKey(thread.source, thread.id);
-      setCards((current) => {
-        if (current.some((card) => card.key === key)) return current;
-        return [
-          ...current,
-          {
-            key,
-            rect: placement
-              ? placeChatCardBesideAnchor({
-                  anchor: placement.anchor,
-                  bounds: placement.bounds,
-                  occupied: current.map((card) => card.rect),
-                })
-              : cascadeChatCardRect({
-                  openCardCount: current.length,
-                  viewport: viewportSize(),
-                }),
-            thread,
-          },
-        ];
+      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const key = starMapWorkspaceCardKey({
+        instanceId: ownerInstanceId,
+        threadKey,
       });
-      raise(key);
-    },
-    [raise],
-  );
-
-  const close = useCallback((cardKey: string) => {
-    setCards((current) => current.filter((card) => card.key !== cardKey));
-    setOrder((current) => current.filter((entry) => entry !== cardKey));
-  }, []);
-
-  const closeAll = useCallback(() => {
-    setCards([]);
-    setOrder([]);
-  }, []);
-
-  const setRect = useCallback((cardKey: string, rect: ChatCardRect) => {
-    setCards((current) =>
-      current.map((card) => (card.key === cardKey ? { ...card, rect } : card)),
-    );
-  }, []);
-
-  const toggleContext = useCallback((cardKey: string) => {
-    setCards((current) =>
-      current.map((card) =>
-        card.key === cardKey
-          ? { ...card, contextOpen: !card.contextOpen }
-          : card,
-      ),
-    );
-  }, []);
-
-  const toggleTerminal = useCallback((cardKey: string) => {
-    setCards((current) =>
-      current.map((card) =>
-        card.key === cardKey
-          ? { ...card, terminalOpen: !card.terminalOpen }
-          : card,
-      ),
-    );
-  }, []);
-
-  const setTerminalHeight = useCallback(
-    (cardKey: string, height: number) => {
-      setCards((current) =>
-        current.map((card) =>
-          card.key === cardKey ? { ...card, terminalHeight: height } : card,
-        ),
+      const current = stateRef.current;
+      const existingIndex = current.cards.findIndex((card) => card.key === key);
+      if (existingIndex >= 0) {
+        const existing = current.cards[existingIndex];
+        applyState(
+          {
+            ...current,
+            cards: [
+              ...current.cards.slice(0, existingIndex),
+              ...current.cards.slice(existingIndex + 1),
+              {
+                ...existing,
+                thread: snapshotStarMapWorkspaceThread(thread),
+              },
+            ],
+          },
+          true,
+        );
+        return;
+      }
+      const rect = placement
+        ? placeChatCardBesideAnchor({
+            anchor: placement.sourceRect,
+            bounds: placement.bounds,
+            occupied: current.cards.map((card) => card.rect),
+          })
+        : cascadeChatCardRect({
+            openCardCount: current.cards.length,
+            viewport: viewportSize(),
+          });
+      const anchor = placement?.anchor ?? {
+        anchor: { kind: "canvas" } as const,
+        point: { x: 0, y: 0 },
+      };
+      applyState(
+        {
+          ...current,
+          cards: [
+            ...current.cards,
+            {
+              key,
+              ownerInstanceId,
+              threadKey,
+              rect,
+              thread: snapshotStarMapWorkspaceThread(thread),
+              anchor: anchor.anchor,
+              anchorDx: rect.left - anchor.point.x,
+              anchorDy: rect.top - anchor.point.y,
+              pendingAnchorRestore: false,
+              contextOpen: false,
+              terminalOpen: false,
+            },
+          ],
+        },
+        true,
       );
     },
-    [],
+    [applyState],
+  );
+
+  const close = useCallback(
+    (cardKey: string) => {
+      const current = stateRef.current;
+      const cards = current.cards.filter((card) => card.key !== cardKey);
+      if (cards.length === current.cards.length) return;
+      applyState({ ...current, cards }, true);
+    },
+    [applyState],
+  );
+
+  const closeAll = useCallback(() => {
+    const current = stateRef.current;
+    if (current.cards.length === 0) return;
+    applyState({ ...current, cards: [] }, true);
+  }, [applyState]);
+
+  const setRect = useCallback(
+    (cardKey: string, rect: ChatCardRect) => {
+      const current = stateRef.current;
+      const cards = current.cards.map((card) =>
+        card.key === cardKey ? { ...card, rect } : card,
+      );
+      applyState({ ...current, cards }, false);
+    },
+    [applyState],
+  );
+
+  const commitRect = useCallback(
+    (
+      cardKey: string,
+      rect: ChatCardRect,
+      anchor?: StarMapChatCardAnchorPlacement,
+    ) => {
+      const current = stateRef.current;
+      const cards = current.cards.map((card) => {
+        if (card.key !== cardKey) return card;
+        const placement = anchor ?? {
+          anchor: { kind: "canvas" } as const,
+          point: { x: 0, y: 0 },
+        };
+        return {
+          ...card,
+          rect,
+          anchor: placement.anchor,
+          anchorDx: rect.left - placement.point.x,
+          anchorDy: rect.top - placement.point.y,
+          pendingAnchorRestore: false,
+        };
+      });
+      applyState({ ...current, cards }, true);
+    },
+    [applyState],
+  );
+
+  const resolveRestoredAnchors = useCallback(
+    (
+      resolve: (
+        anchor: StarMapWorkspaceAnchor,
+      ) => { x: number; y: number } | undefined,
+    ) => {
+      const current = stateRef.current;
+      if (!current.cards.some((card) => card.pendingAnchorRestore)) return;
+      const cards = current.cards.map((card) => {
+        if (!card.pendingAnchorRestore) return card;
+        const point = resolve(card.anchor);
+        return {
+          ...card,
+          rect: point
+            ? {
+                ...card.rect,
+                left: point.x + card.anchorDx,
+                top: point.y + card.anchorDy,
+              }
+            : card.rect,
+          pendingAnchorRestore: false,
+        };
+      });
+      applyState({ ...current, cards }, false);
+    },
+    [applyState],
+  );
+
+  const toggleFlag = useCallback(
+    (cardKey: string, flag: "contextOpen" | "terminalOpen") => {
+      const current = stateRef.current;
+      const cards = current.cards.map((card) =>
+        card.key === cardKey ? { ...card, [flag]: !card[flag] } : card,
+      );
+      applyState({ ...current, cards }, true);
+    },
+    [applyState],
+  );
+
+  const toggleContext = useCallback(
+    (cardKey: string) => toggleFlag(cardKey, "contextOpen"),
+    [toggleFlag],
+  );
+  const toggleTerminal = useCallback(
+    (cardKey: string) => toggleFlag(cardKey, "terminalOpen"),
+    [toggleFlag],
+  );
+
+  const updateTerminalHeight = useCallback(
+    (cardKey: string, height: number, persist: boolean) => {
+      const current = stateRef.current;
+      const cards = current.cards.map((card) =>
+        card.key === cardKey ? { ...card, terminalHeight: height } : card,
+      );
+      applyState({ ...current, cards }, persist);
+    },
+    [applyState],
+  );
+
+  const setTerminalHeight = useCallback(
+    (cardKey: string, height: number) =>
+      updateTerminalHeight(cardKey, height, false),
+    [updateTerminalHeight],
+  );
+  const commitTerminalHeight = useCallback(
+    (cardKey: string, height: number) =>
+      updateTerminalHeight(cardKey, height, true),
+    [updateTerminalHeight],
+  );
+
+  const viewFor = useCallback(
+    (layout: StarMapWorkspaceLayout) => state.views[layout],
+    [state.views],
+  );
+
+  const commitView = useCallback(
+    (layout: StarMapWorkspaceLayout, view: StarMapWorkspaceView) => {
+      const current = stateRef.current;
+      applyState(
+        { ...current, views: { ...current.views, [layout]: view } },
+        true,
+      );
+    },
+    [applyState],
+  );
+
+  const resetView = useCallback(
+    (layout: StarMapWorkspaceLayout) => {
+      const current = stateRef.current;
+      if (!current.views[layout]) return;
+      const views = { ...current.views };
+      delete views[layout];
+      applyState({ ...current, views }, true);
+    },
+    [applyState],
   );
 
   const depthOf = useCallback(
     (cardKey: string) => {
-      const index = order.indexOf(cardKey);
+      const index = state.cards.findIndex((card) => card.key === cardKey);
       return index === -1 ? 0 : index;
     },
-    [order],
+    [state.cards],
   );
 
-  return {
-    cards,
-    close,
-    closeAll,
-    depthOf,
-    open,
-    raise,
-    setRect,
-    setTerminalHeight,
-    toggleContext,
-    toggleTerminal,
-  };
+  return useMemo(
+    () => ({
+      cards: state.cards,
+      hydrated,
+      close,
+      closeAll,
+      commitRect,
+      commitTerminalHeight,
+      commitView,
+      depthOf,
+      open,
+      raise,
+      resetView,
+      resolveRestoredAnchors,
+      setRect,
+      setTerminalHeight,
+      toggleContext,
+      toggleTerminal,
+      viewFor,
+    }),
+    [
+      close,
+      closeAll,
+      commitRect,
+      commitTerminalHeight,
+      commitView,
+      depthOf,
+      hydrated,
+      open,
+      raise,
+      resetView,
+      resolveRestoredAnchors,
+      setRect,
+      setTerminalHeight,
+      state.cards,
+      toggleContext,
+      toggleTerminal,
+      viewFor,
+    ],
+  );
 }

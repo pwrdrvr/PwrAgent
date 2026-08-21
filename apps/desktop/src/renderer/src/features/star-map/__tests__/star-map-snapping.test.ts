@@ -3,6 +3,7 @@ import {
   marqueeRect,
   observedGaps,
   rectIntersects,
+  resolveResizeSnap,
   resolveSnap,
   type SnapRect,
 } from "../star-map-snapping";
@@ -93,6 +94,30 @@ describe("resolveSnap alignment", () => {
     });
     expect(result.dx).toBe(-4);
     expect(result.dy).toBe(-3);
+  });
+});
+
+describe("resolveResizeSnap", () => {
+  it("matches a neighbouring card width without moving the origin", () => {
+    const result = resolveResizeSnap({
+      moving: { x: 100, y: 400, width: 194, height: 100 },
+      others: [card(500, 0)],
+      threshold: 8,
+    });
+
+    expect(result.dw).toBe(6);
+    expect(result.guides.some((guide) => guide.axis === "x")).toBe(true);
+  });
+
+  it("aligns the resized bottom edge with a neighbour", () => {
+    const result = resolveResizeSnap({
+      moving: { x: 500, y: 0, width: 200, height: 96 },
+      others: [card(0, 0)],
+      threshold: 8,
+    });
+
+    expect(result.dh).toBe(4);
+    expect(result.guides.some((guide) => guide.axis === "y")).toBe(true);
   });
 });
 

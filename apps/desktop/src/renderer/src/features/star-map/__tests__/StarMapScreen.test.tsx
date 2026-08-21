@@ -51,7 +51,7 @@ function unreadThread(id: string): NavigationThreadSummary {
   return {
     id,
     title: `Thread ${id}`,
-    titleSource: "generated",
+              titleSource: "derived",
     linkedDirectories: [
       {
         id: "dir-1",
@@ -810,6 +810,91 @@ describe("StarMapScreen", () => {
     expect(
       screen.getAllByRole("region", { name: "Chat: Thread t1" }),
     ).toHaveLength(1);
+  });
+
+  it("restores an open disconnected chat with its context and terminal", async () => {
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      readStarMapWorkspace: vi.fn(async () => ({
+        workspace: {
+          version: 1 as const,
+          revision: 3,
+          updatedAt: 100,
+          cards: [
+            {
+              key: "pwr_remote::codex:t-remote",
+              ownerInstanceId: "pwr_remote",
+              thread: {
+                id: "t-remote",
+                inbox: { inInbox: true },
+                linkedDirectories: [],
+                source: "codex" as const,
+                title: "Disconnected workspace chat",
+                titleSource: "derived" as const,
+                federation: {
+                  ref: {
+                    backend: "codex" as const,
+                    threadId: "t-remote",
+                    target: {
+                      scope: "remote" as const,
+                      instanceId: "pwr_remote",
+                    },
+                  },
+                  instanceLabel: "Remote Mac",
+                  peerStatus: "disconnected" as const,
+                },
+              },
+              geometry: {
+                anchor: {
+                  kind: "thread" as const,
+                  instanceId: "pwr_remote",
+                  threadKey: "codex:t-remote",
+                },
+                dx: 20,
+                dy: 30,
+                fallbackRect: {
+                  left: 600,
+                  top: 240,
+                  width: 420,
+                  height: 520,
+                },
+              },
+              contextOpen: true,
+              terminalOpen: true,
+              terminalHeight: 300,
+            },
+          ],
+          views: {},
+        },
+      })),
+    };
+
+    render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    expect(
+      await screen.findByRole("region", {
+        name: "Chat: Disconnected workspace chat",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("region", {
+        name: "Thread context: Disconnected workspace chat",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("region", {
+        name: "Terminal: Disconnected workspace chat",
+      }),
+    ).toBeTruthy();
   });
 
   it("keeps a stopped monitor disabled until local navigation refreshes", async () => {

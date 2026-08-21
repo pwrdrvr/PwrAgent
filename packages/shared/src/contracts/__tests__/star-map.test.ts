@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   isStarMapArrangementEntry,
+  isStarMapWorkspaceSnapshot,
   mergeStarMapArrangementEntries,
+  parseStarMapWorkspaceSnapshot,
   starMapArrangementEntryKey,
+  starMapWorkspaceCardKey,
+  STAR_MAP_WORKSPACE_VERSION,
   type StarMapArrangementEntry,
 } from "../star-map";
 
@@ -16,6 +20,77 @@ const entry = (
   updatedAt: 100,
   by: "pwr_a",
   ...overrides,
+});
+
+describe("isStarMapWorkspaceSnapshot", () => {
+  const workspace = () => ({
+    version: STAR_MAP_WORKSPACE_VERSION,
+    cards: [
+      {
+        key: starMapWorkspaceCardKey({
+          instanceId: "pwr_remote",
+          threadKey: "acp:gemini:t1",
+        }),
+        ownerInstanceId: "pwr_remote",
+        thread: {
+          id: "t1",
+          inbox: { inInbox: true },
+          linkedDirectories: [],
+          source: "acp:gemini" as const,
+          title: "Saved remote chat",
+          titleSource: "derived" as const,
+        },
+        geometry: {
+          anchor: {
+            kind: "thread" as const,
+            instanceId: "pwr_remote",
+            threadKey: "acp:gemini:t1",
+          },
+          dx: 20,
+          dy: 30,
+          fallbackRect: {
+            left: 400,
+            top: 200,
+            width: 420,
+            height: 520,
+          },
+        },
+        contextOpen: true,
+        terminalOpen: false,
+      },
+    ],
+    views: { orbit: { x: 10, y: -20, scale: 0.75 } },
+  });
+
+  it("accepts fleet-qualified cards and finite per-lens views", () => {
+    expect(isStarMapWorkspaceSnapshot(workspace())).toBe(true);
+  });
+
+  it("rejects mismatched owner keys and non-finite geometry", () => {
+    const wrongKey = workspace();
+    wrongKey.cards[0].key = "pwr_other::acp:gemini:t1";
+    expect(isStarMapWorkspaceSnapshot(wrongKey)).toBe(false);
+
+    const nonFinite = workspace();
+    nonFinite.cards[0].geometry.fallbackRect.left = Number.NaN;
+    expect(isStarMapWorkspaceSnapshot(nonFinite)).toBe(false);
+  });
+
+  it("recovers valid cards and views from a partially corrupt payload", () => {
+    const partial = workspace();
+    partial.cards.push({
+      ...partial.cards[0],
+      key: "wrong-owner::acp:gemini:t2",
+      thread: { ...partial.cards[0].thread, id: "t2" },
+    });
+    partial.views.orbit.scale = Number.NaN;
+
+    expect(parseStarMapWorkspaceSnapshot(partial)).toEqual({
+      version: STAR_MAP_WORKSPACE_VERSION,
+      cards: [workspace().cards[0]],
+      views: {},
+    });
+  });
 });
 
 const sorted = (entries: StarMapArrangementEntry[]) =>

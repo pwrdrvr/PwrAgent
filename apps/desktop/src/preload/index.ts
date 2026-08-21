@@ -352,9 +352,11 @@ import type {
   SetFederationEventSubscriptionsRequest,
   SetFederationEventSubscriptionsResponse,
   ReadStarMapArrangementResponse,
+  ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
   StarMapIntakeRequest,
   StarMapIntakeResponse,
+  WriteStarMapWorkspaceRequest,
   FederationTarget,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
@@ -574,7 +576,9 @@ import {
   STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL,
   STAR_MAP_OPEN_WINDOW_CHANNEL,
   STAR_MAP_READ_ARRANGEMENT_CHANNEL,
+  STAR_MAP_READ_WORKSPACE_CHANNEL,
   STAR_MAP_SET_CARD_POSITION_CHANNEL,
+  STAR_MAP_WRITE_WORKSPACE_CHANNEL,
   FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
   FEDERATION_TAILSCALE_STATUS_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
@@ -1067,6 +1071,12 @@ const desktopApi = Object.freeze({
     request: SetStarMapCardPositionRequest,
   ): Promise<ReadStarMapArrangementResponse> =>
     await ipcRenderer.invoke(STAR_MAP_SET_CARD_POSITION_CHANNEL, request),
+  readStarMapWorkspace: async (): Promise<ReadStarMapWorkspaceResponse> =>
+    await ipcRenderer.invoke(STAR_MAP_READ_WORKSPACE_CHANNEL),
+  writeStarMapWorkspace: async (
+    request: WriteStarMapWorkspaceRequest,
+  ): Promise<ReadStarMapWorkspaceResponse> =>
+    await ipcRenderer.invoke(STAR_MAP_WRITE_WORKSPACE_CHANNEL, request),
   dispatchStarMapIntake: async (
     request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
   ): Promise<StarMapIntakeResponse> =>

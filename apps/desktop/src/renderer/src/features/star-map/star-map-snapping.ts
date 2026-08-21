@@ -43,6 +43,12 @@ export type SnapResult = {
   spacing?: { axis: SnapAxis; gap: number };
 };
 
+export type ResizeSnapResult = {
+  dw: number;
+  dh: number;
+  guides: AlignmentGuide[];
+};
+
 /** Gaps below this are treated as "touching" rather than a real interval. */
 const MIN_MEANINGFUL_GAP = 4;
 /** Two cards count as stacked when they overlap this much across the axis. */
@@ -226,6 +232,63 @@ export function resolveSnap(params: {
     if (axis === "x") result.dx = spaced.delta;
     else result.dy = spaced.delta;
     result.spacing = { axis, gap: spaced.gap };
+  }
+  return result;
+}
+
+/**
+ * Snap a bottom-right resize. Unlike movement, the top-left stays pinned:
+ * candidates change width/height to align the moving right/bottom edge or to
+ * match a neighbour's dimension. This is the missing half of making chat
+ * cards form deliberate rows and columns rather than merely aligning their
+ * origins.
+ */
+export function resolveResizeSnap(params: {
+  moving: SnapRect;
+  others: readonly SnapRect[];
+  threshold: number;
+}): ResizeSnapResult {
+  const result: ResizeSnapResult = { dw: 0, dh: 0, guides: [] };
+  if (params.threshold <= 0 || params.others.length === 0) return result;
+
+  for (const axis of ["x", "y"] as const) {
+    const movingStart = axis === "x" ? params.moving.x : params.moving.y;
+    const movingSize = axis === "x" ? params.moving.width : params.moving.height;
+    const movingEnd = movingStart + movingSize;
+    let best:
+      | { delta: number; guide: AlignmentGuide }
+      | undefined;
+    for (const other of params.others) {
+      const otherSize = axis === "x" ? other.width : other.height;
+      const targets = [
+        ...edgesFor(other, axis),
+        movingStart + otherSize,
+      ];
+      for (const target of targets) {
+        const delta = target - movingEnd;
+        if (Math.abs(delta) > params.threshold) continue;
+        if (best && Math.abs(delta) >= Math.abs(best.delta)) continue;
+        best = {
+          delta,
+          guide: {
+            axis,
+            at: target,
+            start: Math.min(
+              spanStart(params.moving, axis),
+              spanStart(other, axis),
+            ),
+            end: Math.max(
+              spanEnd(params.moving, axis),
+              spanEnd(other, axis),
+            ),
+          },
+        };
+      }
+    }
+    if (!best) continue;
+    if (axis === "x") result.dw = best.delta;
+    else result.dh = best.delta;
+    result.guides.push(best.guide);
   }
   return result;
 }

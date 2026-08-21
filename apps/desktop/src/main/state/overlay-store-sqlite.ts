@@ -37,6 +37,8 @@ import type {
   ThreadPullRequestWatchSummary,
   RemoteThreadPin,
   StarMapArrangementEntry,
+  StarMapWorkspaceSnapshot,
+  StarMapWorkspaceState,
   ThreadQuestionnaireActivity,
   ThreadSubAgentSummary,
   ThreadTurnFailure,
@@ -45,8 +47,12 @@ import type {
 } from "@pwragent/shared";
 import {
   isStarMapArrangementEntry,
+  isStarMapWorkspaceSnapshot,
   mergeStarMapArrangementEntries,
+  parseStarMapWorkspaceSnapshot,
   starMapArrangementEntryKey,
+  emptyStarMapWorkspaceState,
+  STAR_MAP_WORKSPACE_KEY,
   DEFAULT_PULL_REQUEST_PROVIDER,
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
@@ -3381,6 +3387,69 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     });
     write();
     return { accepted };
+  }
+
+  async readStarMapWorkspace(): Promise<StarMapWorkspaceState> {
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT revision, updated_at, payload FROM star_map_workspace
+         WHERE workspace_key = ?`,
+      )
+      .get(STAR_MAP_WORKSPACE_KEY) as
+      | { revision: number; updated_at: number; payload: string }
+      | undefined;
+    if (!row) return emptyStarMapWorkspaceState();
+    try {
+      const snapshot = parseStarMapWorkspaceSnapshot(
+        JSON.parse(row.payload) as unknown,
+      );
+      if (!snapshot) {
+        return emptyStarMapWorkspaceState();
+      }
+      return {
+        ...snapshot,
+        revision: row.revision,
+        updatedAt: row.updated_at,
+      };
+    } catch {
+      return emptyStarMapWorkspaceState();
+    }
+  }
+
+  async writeStarMapWorkspace(
+    snapshot: StarMapWorkspaceSnapshot,
+  ): Promise<StarMapWorkspaceState> {
+    if (!isStarMapWorkspaceSnapshot(snapshot)) {
+      throw new Error("Invalid Star Map workspace");
+    }
+    const updatedAt = Date.now();
+    const write = this.stateDb.raw.transaction(() => {
+      const current = this.stateDb.raw.prepare(
+        `SELECT revision FROM star_map_workspace
+         WHERE workspace_key = ?`,
+      ).get(STAR_MAP_WORKSPACE_KEY) as { revision: number } | undefined;
+      const revision = (current?.revision ?? 0) + 1;
+      this.stateDb.raw.prepare(
+        `INSERT OR REPLACE INTO star_map_workspace(
+           workspace_key,
+           revision,
+           updated_at,
+           payload
+         ) VALUES (?, ?, ?, ?)`,
+      ).run(
+        STAR_MAP_WORKSPACE_KEY,
+        revision,
+        updatedAt,
+        JSON.stringify(snapshot),
+      );
+      return revision;
+    });
+    const revision = write();
+    return {
+      ...snapshot,
+      revision,
+      updatedAt,
+    };
   }
 
   async setThreadPullRequests(params: {

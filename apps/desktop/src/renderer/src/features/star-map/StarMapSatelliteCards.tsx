@@ -164,6 +164,7 @@ export function StarMapTerminalCard(props: {
   zIndex: number;
   onClose: () => void;
   onHeightChange: (height: number) => void;
+  onHeightCommit?: (height: number) => void;
 }) {
   const thread = props.thread;
   const target = thread.federation?.ref.target ?? readRendererFederationTarget();
@@ -186,9 +187,6 @@ export function StarMapTerminalCard(props: {
   };
 
   const onHeightChange = props.onHeightChange;
-  const resizeBy = (delta: number) => {
-    onHeightChange(clampTerminalCardHeight(props.rect.height + delta));
-  };
 
   const startResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
@@ -199,15 +197,20 @@ export function StarMapTerminalCard(props: {
     // The card lives inside the pan/zoom canvas, so a screen pixel is not a
     // card pixel. Same conversion the host card's own resize grip makes.
     const zoom = props.scale > 0 ? props.scale : 1;
+    let changed = false;
+    let lastHeight = startHeight;
 
     const handlePointerMove = (moveEvent: PointerEvent) => {
       const delta = (moveEvent.clientY - startY) / zoom;
-      onHeightChange(clampTerminalCardHeight(startHeight + delta));
+      lastHeight = clampTerminalCardHeight(startHeight + delta);
+      changed = true;
+      onHeightChange(lastHeight);
     };
     const stopResize = () => {
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", stopResize);
       window.removeEventListener("pointercancel", stopResize);
+      if (changed) props.onHeightCommit?.(lastHeight);
     };
 
     window.addEventListener("pointermove", handlePointerMove);
@@ -218,10 +221,18 @@ export function StarMapTerminalCard(props: {
   const handleResizeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      resizeBy(STAR_MAP_TERMINAL_RESIZE_STEP);
+      const height = clampTerminalCardHeight(
+        props.rect.height + STAR_MAP_TERMINAL_RESIZE_STEP,
+      );
+      onHeightChange(height);
+      props.onHeightCommit?.(height);
     } else if (event.key === "ArrowUp") {
       event.preventDefault();
-      resizeBy(-STAR_MAP_TERMINAL_RESIZE_STEP);
+      const height = clampTerminalCardHeight(
+        props.rect.height - STAR_MAP_TERMINAL_RESIZE_STEP,
+      );
+      onHeightChange(height);
+      props.onHeightCommit?.(height);
     }
   };
 
