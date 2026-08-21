@@ -17,6 +17,7 @@ import {
   placeChatCardBesideAnchor,
   raiseChatCard,
   resizeChatCardRect,
+  tetherExitPoint,
 } from "../star-map-chat-card-geometry";
 
 const viewport = { width: 1440, height: 900 };
@@ -272,6 +273,59 @@ describe("chatCardEdgeToward", () => {
       x: 200,
       y: 150,
     });
+  });
+});
+
+describe("tetherExitPoint", () => {
+  // Thread card 200x100 at (100,100); its centre is (200,150).
+  const rect = { left: 100, top: 100, width: 200, height: 100 };
+  const to = { x: 200, y: 150 };
+
+  it("lands just outside the edge the arc leaves through", () => {
+    // Chat card off to the right: a straight chord would leave through
+    // the right edge at x=300.
+    const from = { x: 800, y: 150 };
+    const point = tetherExitPoint({
+      from,
+      control: { x: 500, y: 150 },
+      to,
+      rect,
+      margin: 4,
+    });
+    expect(point).toBeDefined();
+    expect(point!.x).toBeCloseTo(304, 1);
+    expect(point!.y).toBeCloseTo(150, 1);
+  });
+
+  it("follows the bowed arc rather than the straight chord", () => {
+    const from = { x: 800, y: 150 };
+    // Control point pulled well below the chord: the arc dips, so it
+    // surfaces below the centre line.
+    const point = tetherExitPoint({
+      from,
+      control: { x: 500, y: 450 },
+      to,
+      rect,
+      margin: 4,
+    });
+    expect(point).toBeDefined();
+    expect(point!.y).toBeGreaterThan(150);
+    // Still sits on the inflated border, clear of the card.
+    const onRight = Math.abs(point!.x - 304) < 0.5;
+    const onBottom = Math.abs(point!.y - 204) < 0.5;
+    expect(onRight || onBottom).toBe(true);
+  });
+
+  it("reports nothing when the arc never leaves the card", () => {
+    // Chat card opened on top of its own thread card: both ends inside.
+    const point = tetherExitPoint({
+      from: { x: 150, y: 120 },
+      control: { x: 170, y: 130 },
+      to,
+      rect,
+      margin: 4,
+    });
+    expect(point).toBeUndefined();
   });
 });
 

@@ -213,6 +213,81 @@ export function chatCardEdgeToward(
   return { x: centerX + dx * scale, y: centerY + dy * scale };
 }
 
+type Point = { x: number; y: number };
+
+function quadraticPointAt(
+  from: Point,
+  control: Point,
+  to: Point,
+  t: number,
+): Point {
+  const u = 1 - t;
+  return {
+    x: u * u * from.x + 2 * u * t * control.x + t * t * to.x,
+    y: u * u * from.y + 2 * u * t * control.y + t * t * to.y,
+  };
+}
+
+/**
+ * Where a tether surfaces from under the thread card it belongs to.
+ *
+ * The tether is a quadratic arc from the chat card's edge to the thread
+ * card's CENTRE, painted underneath the cards. Aiming at the centre keeps
+ * the line pointing at the card however the pair is arranged; painting it
+ * underneath hides the stretch that would otherwise cross the card's
+ * text. What the eye then needs is a mark at the point where the line
+ * comes out from under the card, so the pairing reads edge-to-edge.
+ *
+ * Walked along the arc from the centre outward rather than intersected
+ * with the chord: the arc bows, so the straight-line exit would put the
+ * dot beside the line instead of on it. `margin` inflates the rect so the
+ * dot (radius plus the card's border) sits fully clear of the card instead
+ * of half under it. Returns nothing when the arc never leaves the inflated
+ * rect — the chat card sits on top of its own thread card, and a dot
+ * under the chat would be invisible anyway.
+ */
+export function tetherExitPoint(args: {
+  from: Point;
+  control: Point;
+  to: Point;
+  rect: ChatCardRect;
+  margin: number;
+}): Point | undefined {
+  const { from, control, to, rect, margin } = args;
+  const left = rect.left - margin;
+  const top = rect.top - margin;
+  const right = rect.left + rect.width + margin;
+  const bottom = rect.top + rect.height + margin;
+  const inside = (point: Point): boolean =>
+    point.x >= left && point.x <= right && point.y >= top && point.y <= bottom;
+  if (!inside(to)) return to;
+  const STEPS = 128;
+  let insideT = 1;
+  let firstOutsideT: number | undefined;
+  for (let step = STEPS - 1; step >= 0; step -= 1) {
+    const t = step / STEPS;
+    if (inside(quadraticPointAt(from, control, to, t))) {
+      insideT = t;
+    } else {
+      firstOutsideT = t;
+      break;
+    }
+  }
+  if (firstOutsideT === undefined) return undefined;
+  // Bisect the crossing so the dot lands on the edge, not up to one step
+  // past it.
+  let outsideT: number = firstOutsideT;
+  for (let i = 0; i < 16; i += 1) {
+    const mid = (insideT + outsideT) / 2;
+    if (inside(quadraticPointAt(from, control, to, mid))) {
+      insideT = mid;
+    } else {
+      outsideT = mid;
+    }
+  }
+  return quadraticPointAt(from, control, to, outsideT);
+}
+
 /** Gap between a chat card and a satellite docked to it. */
 export const CHAT_CARD_DOCK_GAP = 12;
 /** Panel width inside the docked context card; the rail's own minimum. */
