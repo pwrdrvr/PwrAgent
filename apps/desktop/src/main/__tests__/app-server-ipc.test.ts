@@ -3344,6 +3344,45 @@ describe("app server ipc", () => {
     );
   });
 
+  it("treats an empty full thread list as a complete lightweight baseline", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+
+    const discoveredThread = {
+      id: "thread-discovered",
+      title: "Discovered thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      updatedAt: 2_000,
+    };
+    listThreads
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([discoveredThread]);
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {} satisfies GetNavigationSnapshotRequest,
+    );
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {
+        forceRefresh: true,
+        refreshMode: "active-recent",
+      } satisfies GetNavigationSnapshotRequest,
+    );
+
+    expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        threads: [expect.objectContaining({ id: "thread-discovered" })],
+      }),
+    );
+    expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ partial: true }),
+    );
+  });
+
   it("returns backend scope all when listing threads without a backend filter", async () => {
     const { APP_SERVER_LIST_THREADS_CHANNEL } = await import("../../shared/ipc");
 

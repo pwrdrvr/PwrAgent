@@ -2126,6 +2126,7 @@ class DesktopAppServerService {
     const refreshMode = request.refreshMode ?? "full";
     const activeRecentRefresh = refreshMode === "active-recent";
     const cacheKey = buildThreadSnapshotCacheKey(backend, request.filter);
+    const hasCachedFullThreads = this.lastFullNavigationThreadsByKey.has(cacheKey);
     const cachedFullThreads = this.lastFullNavigationThreadsByKey.get(cacheKey);
     const fetchedThreads = await getDesktopBackendRegistry().listThreads({
       backend: backend === "all" ? undefined : backend,
@@ -2146,7 +2147,7 @@ class DesktopAppServerService {
       : fetchedThreads;
     const partialSnapshot =
       activeRecentRefresh
-      && (!cachedFullThreads || cachedFullThreads.length === 0);
+      && !hasCachedFullThreads;
     if (!activeRecentRefresh) {
       this.lastFullNavigationThreadsByKey.set(cacheKey, threads);
     }
