@@ -47,8 +47,13 @@ export function SignalCount(props: {
    */
   ariaHidden?: boolean;
   className?: string;
-  /** Extra `data-*` hooks, spread verbatim onto the wrapper. */
-  data?: Record<string, number | string | undefined>;
+  /**
+   * Extra `data-*` hooks, spread verbatim onto the wrapper. Keys are typed
+   * to the `data-` prefix rather than left open: the spread lands after this
+   * component's own attributes, so an open record could silently replace the
+   * computed class or the zero state.
+   */
+  data?: Record<`data-${string}`, number | string | undefined>;
   /**
    * A count with no words has to be able to explain itself. The directory
    * rail hangs a `useViewportTooltip` off these; the Attention readouts

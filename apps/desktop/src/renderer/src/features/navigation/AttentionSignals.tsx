@@ -43,7 +43,7 @@ import {
  * untouched component tinted by its parent's tokens — a peer's turn is running
  * for real, so it sweeps for real, on the same epoch as the rest.
  */
-export function AttentionTurnScanner(props: { count: number }) {
+function AttentionTurnScanner(props: { count: number }) {
   return props.count === 0 ? (
     <span className="signal-count__dormant-scanner" />
   ) : (

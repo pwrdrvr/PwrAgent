@@ -171,11 +171,17 @@ export function ActiveSubAgentsStrip(props: {
           <span className="live-strip__chevron" aria-hidden="true" />
           {/* The sidebar's mark-and-number, not a bordered pill: the same
               statement ("this many, working") must not look like a different
-              kind of object in another part of the window. Only genuine work
-              sweeps — a strip holding nothing but blocked or failed rows
-              draws the dormant bar beside its count. The count keeps its
-              full weight either way: a failure you have not dismissed is
-              still something to act on. */}
+              kind of object in another part of the window.
+
+              The two halves answer different questions, so they read
+              different values. The MARK answers "is anything progressing?"
+              — only genuine work sweeps, so a strip of blocked or failed
+              rows gets the dormant bar. The TONE answers "what is this a
+              count of?", which is what the heading and `headingCount`
+              already answer: `activeCount` for a live strip, failures
+              otherwise. Keying the tone on `running` instead would paint a
+              blocked-only strip's count idle grey under an "Active
+              sub-agents" heading. */}
           <span className="live-strip__label">{heading}</span>
           <SignalCount
             className="live-strip__count"
@@ -187,7 +193,7 @@ export function ActiveSubAgentsStrip(props: {
                 <span className="signal-count__dormant-scanner" />
               )
             }
-            tone={running.length > 0 ? "active" : "idle"}
+            tone={activeCount > 0 ? "active" : "idle"}
           />
           <span className="live-strip__row-spacer" />
           {/* Trailing, so the tally sits next to the Dismiss all that acts on

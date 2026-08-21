@@ -410,14 +410,23 @@ function getDirectoryRowLinkedDirectoryMode(
 }
 
 /**
- * One activity count in a directory header: the number, then the indicator
- * (mark last, so the trailing count's mark sits at one x on every row — see
- * the inline comment; when both counts render, the leading scanner still
- * moves with the review digits). The words ("active", "to review") moved
- * into the tooltip — a
- * directory row is a dense line already carrying a chevron, a folder glyph,
- * an elided path, and a new-thread button, and two trailing phrases pushed
- * the label it belongs to down to a few characters.
+ * One activity count in a directory header.
+ *
+ * `SignalCount`'s shape, which is the Attention tab's shape directly above
+ * it: the mark, then the digits. The words ("active", "to review") live in
+ * the tooltip — a directory row is a dense line already carrying a chevron,
+ * a folder glyph, an elided path, and a new-thread button, and two trailing
+ * phrases pushed the label they belong to down to a few characters.
+ *
+ * This read count-then-mark until the rail and the tab were two renderings
+ * of one idea. That order existed to hold the mark at a constant x down the
+ * right-aligned rail; the flip keeps that with a fixed two-digit box on the
+ * digits instead (`.directory-row__summary-meta .signal-count__value`), so
+ * a 1-digit row and a 2-digit row still line their marks up.
+ *
+ * Not `aria-hidden`, unlike the tab's readouts: the tab spells every count
+ * out in its control's `aria-label`, and here the digits ARE the
+ * announcement, with the tooltip text as the description.
  *
  * The scanner and the orange cookie are the same marks the thread rows below
  * use for the same two states, so the header reads as a summary of the rows
@@ -432,20 +441,6 @@ function getDirectoryRowLinkedDirectoryMode(
  * `pointer-events: none` today, which masks it, but every other call site in
  * the app keeps the node outside the interactive element and a structured
  * hover card (which AGENTS.md contemplates) would not be inert.
- */
-/**
- * A directory header's live-turn or to-review count.
- *
- * `SignalCount`'s shape, which is the sidebar's Attention tab's shape: the
- * mark first, then the digits. It used to be the other way round here, to
- * keep the mark at a constant x down the right-aligned rail — the flip keeps
- * that by giving the digits a fixed two-digit box instead (see
- * `.directory-row__summary-meta .signal-count__value`), so the rail reads the
- * same as the tab directly above it.
- *
- * Not `aria-hidden`, unlike the tab's readouts: the tab spells every count
- * out in its control's `aria-label`, and here the digits ARE the
- * announcement, with the tooltip text as the description.
  */
 function DirectoryCount(props: {
   activeCount?: number;
