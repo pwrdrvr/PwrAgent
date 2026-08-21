@@ -2380,6 +2380,34 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return nextState;
   }
 
+  /**
+   * Records the one thread-lifetime total-spend warning boundary. Repeated
+   * calls are read-only so later pricing updates cannot turn this into a
+   * per-item SQLite write.
+   */
+  async markThreadSpendAlerted(params: {
+    alertedAt?: number;
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    if (current.threadSpendAlertedAt !== undefined) {
+      return current;
+    }
+    const nextState: ThreadOverlayState = {
+      ...current,
+      threadSpendAlertedAt: params.alertedAt ?? Date.now(),
+    };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
   async setThreadArchiveTombstone(params: {
     backend: ThreadOverlayState["backend"];
     threadId: string;

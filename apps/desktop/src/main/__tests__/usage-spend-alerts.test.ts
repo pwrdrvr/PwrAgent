@@ -127,6 +127,20 @@ describe("usage spend alerts", () => {
       triggeredAlertIds,
     })).toEqual([]);
   });
+
+  it("suppresses the total-spend alert after the thread boundary is persisted", () => {
+    expect(detectUsageSpendAlerts({
+      backend: "codex",
+      policy: POLICY,
+      pricing: {
+        lines: [],
+        summaries: [pricingSummary(40_000_000)],
+      },
+      threadId: "thread-1",
+      threadSpendAlerted: true,
+      triggeredAlertIds: new Set(),
+    })).toEqual([]);
+  });
 });
 
 function usageLine(

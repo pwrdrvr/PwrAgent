@@ -67,14 +67,14 @@ describe("desktop settings contracts", () => {
           source: "default",
         },
         toolOutputAlerts: {
-          outputCapHitsEnabled: { value: true, source: "default" },
-          repeatedLargeOutputsEnabled: { value: true, source: "default" },
+          outputCapHitsEnabled: { value: false, source: "default" },
+          repeatedLargeOutputsEnabled: { value: false, source: "default" },
           repeatedLargeOutputMinimumCalls: { value: 5, source: "default" },
           repeatedLargeOutputMinimumPercent: { value: 50, source: "default" },
-          repeatedQueuedChecksEnabled: { value: true, source: "default" },
+          repeatedQueuedChecksEnabled: { value: false, source: "default" },
         },
         spendAlerts: {
-          activeTurnSpendEnabled: { value: true, source: "default" },
+          activeTurnSpendEnabled: { value: false, source: "default" },
           activeTurnSpendThresholdUsd: { value: 5, source: "default" },
           threadSpendEnabled: { value: true, source: "default" },
           threadSpendThresholdUsd: { value: 25, source: "default" },

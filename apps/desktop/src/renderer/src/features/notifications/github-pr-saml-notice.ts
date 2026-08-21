@@ -15,10 +15,6 @@ export function buildGithubPrSamlEnforcementNotice(params: {
   return {
     actions: [
       {
-        label: "Dismiss",
-        onClick: params.onDismiss,
-      },
-      {
         label: "Open Git settings",
         onClick: params.onOpenGitSettings,
         tone: "primary",
@@ -29,6 +25,7 @@ export function buildGithubPrSamlEnforcementNotice(params: {
     id: `github-pr-saml:${githubPrAccessTargetKey(params.event.target)}`,
     message:
       "PwrAgent can't read pull requests for this repository because its organization requires SAML SSO. Re-authorize the GitHub CLI for that organization, then retry.",
+    onDismiss: params.onDismiss,
     title: "GitHub access blocked by SSO",
     tone: "error",
   };

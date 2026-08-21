@@ -1864,6 +1864,12 @@ export type ThreadOverlayState = {
    * the cost baseline does not reset on restart.
    */
   toolIncidentNotice?: ThreadToolIncidentNoticeState;
+  /**
+   * Set when the total-spend alert first interrupts for this thread. The
+   * boundary is intentionally threshold-independent: total spend is a single
+   * thread-lifetime warning, even when the configured threshold later moves.
+   */
+  threadSpendAlertedAt?: number;
   /** User-curated position in the pinned section. Undefined means unpinned. */
   pinnedRank?: string;
   /**

@@ -28,12 +28,11 @@ describe("buildGithubPrSamlEnforcementNotice", () => {
     });
     expect(notice.message).toMatch(/SAML SSO/);
     expect(notice.actions?.map((action) => action.label)).toEqual([
-      "Dismiss",
       "Open Git settings",
     ]);
 
+    notice.onDismiss?.();
     notice.actions?.[0]?.onClick();
-    notice.actions?.[1]?.onClick();
     expect(onDismiss).toHaveBeenCalledOnce();
     expect(onOpenGitSettings).toHaveBeenCalledOnce();
   });

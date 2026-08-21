@@ -6954,6 +6954,7 @@ textarea,
   left: 16px;
   bottom: 16px;
   display: flex;
+  width: min(420px, calc(100vw - 32px));
   max-width: min(420px, calc(100vw - 32px));
   flex-direction: column;
   align-items: flex-start;
@@ -6982,6 +6983,7 @@ textarea,
 
 .app-notice-toast {
   overflow: hidden;
+  width: 100%;
   grid-template-columns: minmax(0, 1fr) auto;
   border: 1px solid var(--border-subtle);
   background: color-mix(in srgb, var(--bg-panel-elevated) 96%, var(--text-muted) 4%);
@@ -7094,6 +7096,7 @@ textarea,
 }
 
 .app-notice-toast__actions,
+.app-notice-toast__custom-actions,
 .app-update-banner__actions {
   display: flex;
   flex-wrap: wrap;
@@ -7104,7 +7107,7 @@ textarea,
   align-self: start;
 }
 
-.app-notice-toast__actions[data-custom-actions="true"] {
+.app-notice-toast__custom-actions {
   grid-column: 1 / -1;
   justify-content: flex-end;
 }

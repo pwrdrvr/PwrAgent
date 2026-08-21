@@ -459,6 +459,30 @@ function createOverlayStoreMock(params?: {
       backend: ThreadOverlayState["backend"];
       threadId: string;
     }) => overlays.get(`${backend}:${threadId}`),
+    markThreadSpendAlerted: async ({
+      alertedAt,
+      backend,
+      threadId,
+    }: {
+      alertedAt?: number;
+      backend: ThreadOverlayState["backend"];
+      threadId: string;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key) ?? {
+        backend,
+        threadId,
+        executionMode: "default" as const,
+        extraLinkedDirectories: [],
+      };
+      if (current.threadSpendAlertedAt !== undefined) return current;
+      const next = {
+        ...current,
+        threadSpendAlertedAt: alertedAt ?? Date.now(),
+      };
+      overlays.set(key, next);
+      return next;
+    },
     getThreadOverlayStates: async ({
       backend,
       threadIds,
@@ -19838,7 +19862,7 @@ command = "pnpm dev"
     });
   });
 
-  it("emits configured spend alerts once per threshold", async () => {
+  it("emits active-turn alerts once per threshold and total spend once per thread", async () => {
     const activeLine: ThreadUsageLineRecord = {
       backend: "codex",
       cachedInputCostMicros: 0,
@@ -19883,12 +19907,13 @@ command = "pnpm dev"
         usageLineCount: 1,
       }],
     };
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadPricing: vi.fn(async () => pricing),
+    };
     const registry = new DesktopBackendRegistry({
       codexClient: new MockBackendClient({ threads: [] }),
-      overlayStore: {
-        ...createOverlayStoreMock(),
-        readThreadPricing: vi.fn(async () => pricing),
-      } as never,
+      overlayStore: overlayStore as never,
       resolveSpendAlertPolicy: () => ({
         activeTurnSpendEnabled: true,
         activeTurnSpendThresholdUsd: 5,
@@ -19933,6 +19958,34 @@ command = "pnpm dev"
     );
 
     await registry.close();
+
+    const restartedRegistry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: overlayStore as never,
+      resolveSpendAlertPolicy: () => ({
+        activeTurnSpendEnabled: true,
+        activeTurnSpendThresholdUsd: 5,
+        threadSpendEnabled: true,
+        threadSpendThresholdUsd: 25,
+      }),
+    });
+    const restartedEvents: AgentEvent[] = [];
+    restartedRegistry.onEvent((event) => {
+      restartedEvents.push(event);
+    });
+    await (restartedRegistry as unknown as {
+      emitThreadPricingUpdated(params: {
+        backend: AppServerBackendKind;
+        threadId: string;
+      }): Promise<void>;
+    }).emitThreadPricingUpdated({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(restartedEvents[0]?.notification.params).not.toHaveProperty(
+      "triggeredSpendAlerts",
+    );
+    await restartedRegistry.close();
   });
 
   it("preserves every active turn while coalescing pricing updates", async () => {

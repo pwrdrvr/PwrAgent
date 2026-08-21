@@ -153,6 +153,13 @@
     "rowsChanged": 27,
     "statements": 27
   },
+  "thread-spend-alert-boundary": {
+    "commits": 1,
+    "note": "one total-spend alert boundary for a thread; later pricing updates are read-only",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "tool-output-history-analysis": {
     "commits": 1,
     "note": "replace 25 deterministic history findings plus coverage metadata in one explicit analysis transaction",
