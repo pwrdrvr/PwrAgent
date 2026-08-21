@@ -154,11 +154,11 @@
     "statements": 27
   },
   "thread-spend-alert-boundary": {
-    "commits": 1,
-    "note": "one total-spend alert boundary for a thread; later pricing updates are read-only",
-    "observedWalBytes": 16480,
-    "rowsChanged": 1,
-    "statements": 1
+    "commits": 2,
+    "note": "one pending total-spend alert and one renderer acknowledgement; repeated updates and acknowledgements are read-only",
+    "observedWalBytes": 32960,
+    "rowsChanged": 2,
+    "statements": 2
   },
   "tool-output-history-analysis": {
     "commits": 1,

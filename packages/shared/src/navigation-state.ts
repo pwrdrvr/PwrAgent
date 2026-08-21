@@ -266,6 +266,9 @@ export function materializeNavigationThreads(params: {
       modelMigrationRevision: overlay?.modelMigrationRevision,
       modelSettingsManuallyUpdatedAt:
         overlay?.modelSettingsManuallyUpdatedAt,
+      ...(overlay?.threadSpendAlertPending
+        ? { threadSpendAlertPending: overlay.threadSpendAlertPending }
+        : {}),
       serviceTier: overlay?.serviceTier ?? thread.serviceTier,
       fastMode: overlay?.fastMode ?? thread.fastMode,
       prAutoDispatchEnabled: overlay?.prAutoDispatchEnabled ?? false,

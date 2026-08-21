@@ -60,6 +60,7 @@ import type {
   ThreadOverlayState,
   ThreadToolAccounting,
   ThreadToolInvocationAlert,
+  ThreadSpendAlert,
   ThreadUsageLineRecord,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
@@ -459,12 +460,12 @@ function createOverlayStoreMock(params?: {
       backend: ThreadOverlayState["backend"];
       threadId: string;
     }) => overlays.get(`${backend}:${threadId}`),
-    markThreadSpendAlerted: async ({
-      alertedAt,
+    setThreadSpendAlertPending: async ({
+      alert,
       backend,
       threadId,
     }: {
-      alertedAt?: number;
+      alert: ThreadSpendAlert;
       backend: ThreadOverlayState["backend"];
       threadId: string;
     }) => {
@@ -475,13 +476,36 @@ function createOverlayStoreMock(params?: {
         executionMode: "default" as const,
         extraLinkedDirectories: [],
       };
-      if (current.threadSpendAlertedAt !== undefined) return current;
+      if (
+        current.threadSpendAlertedAt !== undefined
+        || current.threadSpendAlertPending !== undefined
+      ) return current;
       const next = {
         ...current,
-        threadSpendAlertedAt: alertedAt ?? Date.now(),
+        threadSpendAlertPending: alert,
       };
       overlays.set(key, next);
       return next;
+    },
+    acknowledgeThreadSpendAlert: async ({
+      alertId,
+      backend,
+      threadId,
+    }: {
+      alertId: string;
+      backend: ThreadOverlayState["backend"];
+      threadId: string;
+    }) => {
+      const key = `${backend}:${threadId}`;
+      const current = overlays.get(key);
+      if (current?.threadSpendAlertPending?.alertId !== alertId) return false;
+      const next: ThreadOverlayState = {
+        ...current,
+        threadSpendAlertedAt: Date.now(),
+      };
+      delete next.threadSpendAlertPending;
+      overlays.set(key, next);
+      return true;
     },
     getThreadOverlayStates: async ({
       backend,
@@ -19862,7 +19886,7 @@ command = "pnpm dev"
     });
   });
 
-  it("emits active-turn alerts once per threshold and total spend once per thread", async () => {
+  it("replays total spend until renderer acknowledgement, then suppresses it", async () => {
     const activeLine: ThreadUsageLineRecord = {
       backend: "codex",
       cachedInputCostMicros: 0,
@@ -19953,10 +19977,15 @@ command = "pnpm dev"
         { kind: "thread-spend", spendMicros: 30_000_000 },
       ],
     });
-    expect(pricingEvents[1]?.notification.params).not.toHaveProperty(
-      "triggeredSpendAlerts",
-    );
-
+    expect(pricingEvents[1]?.notification.params).toMatchObject({
+      triggeredSpendAlerts: [
+        { kind: "thread-spend", spendMicros: 30_000_000 },
+      ],
+    });
+    const pendingAlert = (pricingEvents[1]?.notification.params as {
+      triggeredSpendAlerts?: ThreadSpendAlert[];
+    }).triggeredSpendAlerts?.[0];
+    expect(pendingAlert?.kind).toBe("thread-spend");
     await registry.close();
 
     const restartedRegistry = new DesktopBackendRegistry({
@@ -19973,7 +20002,58 @@ command = "pnpm dev"
     restartedRegistry.onEvent((event) => {
       restartedEvents.push(event);
     });
-    await (restartedRegistry as unknown as {
+    const emitRestartedPricing = (restartedRegistry as unknown as {
+      emitThreadPricingUpdated(params: {
+        backend: AppServerBackendKind;
+        threadId: string;
+      }): Promise<void>;
+    }).emitThreadPricingUpdated.bind(restartedRegistry);
+    await emitRestartedPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(restartedEvents[0]?.notification.params).toMatchObject({
+      triggeredSpendAlerts: [
+        { kind: "thread-spend", spendMicros: 30_000_000 },
+      ],
+    });
+
+    await (overlayStore as typeof overlayStore & {
+      acknowledgeThreadSpendAlert(params: {
+        alertId: string;
+        backend: AppServerBackendKind;
+        threadId: string;
+      }): Promise<boolean>;
+    }).acknowledgeThreadSpendAlert({
+      alertId: pendingAlert?.alertId ?? "missing",
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    await emitRestartedPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    const acknowledgedPricingEvent = restartedEvents[1];
+    expect(acknowledgedPricingEvent?.notification.params).not.toHaveProperty(
+      "triggeredSpendAlerts",
+    );
+    await restartedRegistry.close();
+
+    const acknowledgedRegistry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: overlayStore as never,
+      resolveSpendAlertPolicy: () => ({
+        activeTurnSpendEnabled: true,
+        activeTurnSpendThresholdUsd: 5,
+        threadSpendEnabled: true,
+        threadSpendThresholdUsd: 25,
+      }),
+    });
+    const acknowledgedEvents: AgentEvent[] = [];
+    acknowledgedRegistry.onEvent((event) => {
+      acknowledgedEvents.push(event);
+    });
+    await (acknowledgedRegistry as unknown as {
       emitThreadPricingUpdated(params: {
         backend: AppServerBackendKind;
         threadId: string;
@@ -19982,10 +20062,10 @@ command = "pnpm dev"
       backend: "codex",
       threadId: "thread-1",
     });
-    expect(restartedEvents[0]?.notification.params).not.toHaveProperty(
+    expect(acknowledgedEvents[0]?.notification.params).not.toHaveProperty(
       "triggeredSpendAlerts",
     );
-    await restartedRegistry.close();
+    await acknowledgedRegistry.close();
   });
 
   it("preserves every active turn while coalescing pricing updates", async () => {

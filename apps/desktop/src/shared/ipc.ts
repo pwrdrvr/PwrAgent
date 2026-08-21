@@ -162,6 +162,8 @@ export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
 export const NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL =
   "navigation:set-thread-tool-incident-notice";
+export const NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL =
+  "navigation:acknowledge-thread-spend-alert";
 export const NAVIGATION_SET_THREAD_PIN_CHANNEL =
   "navigation:set-thread-pin";
 export const NAVIGATION_SET_THREAD_AGENT_CHANNEL =

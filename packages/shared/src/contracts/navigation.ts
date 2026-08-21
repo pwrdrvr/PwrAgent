@@ -39,6 +39,19 @@ import type {
   TaskMonitorUsageSnapshot,
 } from "./task-monitor-tools";
 import type { ThreadHandoffOrigin } from "./thread-orchestration-tools";
+import type { ThreadSpendAlert } from "../token-usage-pricing";
+
+export type AcknowledgeThreadSpendAlertRequest = {
+  alertId: string;
+  backend?: AppServerBackendKind;
+  threadId: string;
+};
+
+export type AcknowledgeThreadSpendAlertResponse = {
+  acknowledged: boolean;
+  backend: AppServerBackendKind;
+  threadId: string;
+};
 
 export type InboxReason = "new-thread" | "updated-since-seen";
 
@@ -107,6 +120,8 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
   modelMigrationRevision?: string;
   /** Last explicit model/reasoning change made outside a migration. */
   modelSettingsManuallyUpdatedAt?: number;
+  /** Total-spend warning waiting for a local renderer to receive it. */
+  threadSpendAlertPending?: ThreadSpendAlert;
   /**
    * Optional Agent/persona marker. When present, this thread is intended
    * to act as a personal Agent surface.
@@ -1865,11 +1880,13 @@ export type ThreadOverlayState = {
    */
   toolIncidentNotice?: ThreadToolIncidentNoticeState;
   /**
-   * Set when the total-spend alert first interrupts for this thread. The
+   * Set when a local renderer confirms receipt of the total-spend alert. The
    * boundary is intentionally threshold-independent: total spend is a single
    * thread-lifetime warning, even when the configured threshold later moves.
    */
   threadSpendAlertedAt?: number;
+  /** Durable alert payload retained until a local renderer acknowledges it. */
+  threadSpendAlertPending?: ThreadSpendAlert;
   /** User-curated position in the pinned section. Undefined means unpinned. */
   pinnedRank?: string;
   /**

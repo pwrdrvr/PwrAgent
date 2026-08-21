@@ -413,6 +413,27 @@ function DesktopAppShell(props: {
   const [ThreadViewComponent, setThreadViewComponent] =
     useState<ComponentType<ThreadViewProps>>();
   const desktopApi = props.desktopApi;
+  const acknowledgedSpendAlertIdsRef = useRef(new Set<string>());
+  const acknowledgeThreadSpendAlert = useCallback((params: {
+    alert: ThreadSpendAlert;
+    backend: AppServerBackendKind;
+  }): void => {
+    if (
+      params.alert.kind !== "thread-spend"
+      || acknowledgedSpendAlertIdsRef.current.has(params.alert.alertId)
+      || !desktopApi?.acknowledgeThreadSpendAlert
+    ) {
+      return;
+    }
+    acknowledgedSpendAlertIdsRef.current.add(params.alert.alertId);
+    void desktopApi.acknowledgeThreadSpendAlert({
+      alertId: params.alert.alertId,
+      backend: params.backend,
+      threadId: params.alert.threadId,
+    }).catch(() => {
+      acknowledgedSpendAlertIdsRef.current.delete(params.alert.alertId);
+    });
+  }, [desktopApi]);
   const {
     health: liveFederationHealth,
     refresh: refreshFederationHealth,
@@ -766,6 +787,12 @@ function DesktopAppShell(props: {
                 ...(threadLink ? { threadLink } : {}),
               }),
             });
+            if (!event.federationTarget) {
+              acknowledgeThreadSpendAlert({
+                alert,
+                backend: event.backend,
+              });
+            }
           }
         }
       }
@@ -1036,7 +1063,7 @@ function DesktopAppShell(props: {
         return;
       }
     });
-  }, [desktopApi]);
+  }, [acknowledgeThreadSpendAlert, desktopApi]);
   // `instant` is for callers that are about to hide the sidebar (the ⌘K peek):
   // a smooth scroll is animated over several frames, and hiding the sidebar
   // mid-animation abandons it wherever it got to. An instant scroll lands in one
@@ -1166,6 +1193,36 @@ function DesktopAppShell(props: {
     onThreadActionError: handleThreadActionError,
     threadViewVisible: mainView === "thread",
   });
+  useEffect(() => {
+    if (readRendererFederationTarget()) {
+      return;
+    }
+    for (const thread of navigation.threads) {
+      const alert = thread.threadSpendAlertPending;
+      if (!alert || thread.federation) {
+        continue;
+      }
+      dispatchAppNotice({
+        type: "show",
+        notice: buildSpendAlertNotice({
+          alert,
+          threadLink: {
+            backend: thread.source,
+            inThreadList: true,
+            threadId: thread.id,
+            title: thread.title,
+            titleSource: thread.titleSource,
+            gitBranch: thread.gitBranch,
+            linkedDirectories: thread.linkedDirectories,
+          },
+        }),
+      });
+      acknowledgeThreadSpendAlert({
+        alert,
+        backend: thread.source,
+      });
+    }
+  }, [acknowledgeThreadSpendAlert, navigation.threads]);
   useEffect(() => {
     if (!desktopApi?.onCopyLocalDiagnosticsInfoRequested) {
       return;

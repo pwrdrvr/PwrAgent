@@ -819,15 +819,36 @@ describe("sqlite write metrics", () => {
     });
   });
 
-  it("persists one total-spend alert boundary without repeat writes", async () => {
+  it("persists total-spend pending and acknowledgement without repeat writes", async () => {
+    const alert = {
+      alertId: "spend-alert:thread:codex:thread-spend-alert",
+      createdAt: 1_800_000_000_000,
+      currency: "USD" as const,
+      kind: "thread-spend" as const,
+      spendMicros: 30_000_000,
+      threadId: "thread-spend-alert",
+      thresholdMicros: 25_000_000,
+    };
     const { writes } = await measureSqliteWrites(async () => {
-      await store.markThreadSpendAlerted({
-        alertedAt: 1_800_000_000_000,
+      await store.setThreadSpendAlertPending({
+        alert,
         backend: "codex",
         threadId: "thread-spend-alert",
       });
-      await store.markThreadSpendAlerted({
-        alertedAt: 1_800_000_000_001,
+      await store.setThreadSpendAlertPending({
+        alert,
+        backend: "codex",
+        threadId: "thread-spend-alert",
+      });
+      await store.acknowledgeThreadSpendAlert({
+        acknowledgedAt: 1_800_000_000_001,
+        alertId: alert.alertId,
+        backend: "codex",
+        threadId: "thread-spend-alert",
+      });
+      await store.acknowledgeThreadSpendAlert({
+        acknowledgedAt: 1_800_000_000_002,
+        alertId: alert.alertId,
         backend: "codex",
         threadId: "thread-spend-alert",
       });
@@ -838,12 +859,13 @@ describe("sqlite write metrics", () => {
         backend: "codex",
         threadId: "thread-spend-alert",
       }))?.threadSpendAlertedAt,
-    ).toBe(1_800_000_000_000);
+    ).toBe(1_800_000_000_001);
     expectSqliteWriteBudget({
-      // The measured boundary is about 16 KB of WAL. Even 100 newly expensive
-      // threads per day project to roughly 1.6 MB/day, with no repeat writes.
+      // Pending delivery and its acknowledgement each commit once. At about
+      // 16 KB of WAL per commit, 100 newly expensive threads per day project
+      // to roughly 3.2 MB/day, with no repeat writes.
       note:
-        "one total-spend alert boundary for a thread; later pricing updates are read-only",
+        "one pending total-spend alert and one renderer acknowledgement; repeated updates and acknowledgements are read-only",
       scenario: "thread-spend-alert-boundary",
       writes,
     });
