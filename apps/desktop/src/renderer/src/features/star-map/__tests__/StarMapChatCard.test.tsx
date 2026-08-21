@@ -305,6 +305,36 @@ describe("StarMapChatCard slash commands", () => {
   );
 
   it.each(["codex", "acp:grok"] as const)(
+    "opens highlighted /review from a bare slash on the first Enter for %s",
+    async (backend) => {
+      const desktopApi = buildApi({ startReview: vi.fn() });
+      renderCard({
+        desktopApi,
+        thread: localThread({ source: backend }),
+      });
+      const input = screen.getByRole("textbox", {
+        name: "Message Local work",
+      });
+      fireEvent.change(input, { target: { value: "/" } });
+      expect(
+        screen.getByRole("option", { name: /\/review/i }).getAttribute(
+          "aria-selected",
+        ),
+      ).toBe("true");
+
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      expect(
+        await screen.findByRole("dialog", {
+          name: "Start review for Local work",
+        }),
+      ).toBeTruthy();
+      expect(desktopApi.startReview).not.toHaveBeenCalled();
+      expect(desktopApi.startTurn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["codex", "acp:grok"] as const)(
     "submits the configured review through the %s review API",
     async (backend) => {
       const startReview = vi.fn(async () => ({

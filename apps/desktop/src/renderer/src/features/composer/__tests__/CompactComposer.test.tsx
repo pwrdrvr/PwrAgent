@@ -91,6 +91,39 @@ describe("CompactComposer", () => {
     });
   });
 
+  it("sends the highlighted slash command on the first Enter", async () => {
+    const { onSend } = renderComposer({
+      mentionSources: {
+        commands: [
+          {
+            name: "review",
+            description: "Review current changes",
+            sourceLabel: "PwrAgent",
+          },
+          {
+            name: "mcp",
+            description: "List MCP tools",
+            sourceLabel: "Codex",
+          },
+        ],
+      },
+    });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    fireEvent.change(input, { target: { value: "/" } });
+    expect(
+      screen.getByRole("option", { name: /\/review/i }).getAttribute(
+        "aria-selected",
+      ),
+    ).toBe("true");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(onSend).toHaveBeenCalledTimes(1);
+      expect(onSend).toHaveBeenCalledWith("/review");
+    });
+  });
+
   it.each([
     ["review", "PwrAgent"],
     ["compact", "Codex"],

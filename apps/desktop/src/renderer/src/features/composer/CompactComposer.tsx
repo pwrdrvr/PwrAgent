@@ -178,10 +178,10 @@ export function CompactComposer(props: CompactComposerProps) {
     Boolean(segment),
   );
 
-  const send = useCallback(async () => {
+  const send = useCallback(async (commandText?: string) => {
     // The serialized text, not the plain draft: a mention chip is
     // zero-width until this splices its markdown back in.
-    const text = mentions.text.trim();
+    const text = (commandText ?? mentions.text).trim();
     if (!text) return;
     // Clear optimistically so the input frees up immediately, then put the
     // draft back — chips and all — if the send turned out to fail.
@@ -198,6 +198,21 @@ export function CompactComposer(props: CompactComposerProps) {
   // it has no binding for — Escape and Tab among them.
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (
+        event.key === "Enter"
+        && !event.shiftKey
+        && !event.altKey
+        && !event.metaKey
+        && !event.ctrlKey
+        && mentions.activeCommandText
+      ) {
+        // Enter runs the highlighted command in one step, matching the main
+        // composer. Tab and pointer selection still flow through the mention
+        // hook below and insert the command for further editing.
+        event.preventDefault();
+        void send(mentions.activeCommandText);
+        return;
+      }
       // An open mention popover claims the arrows, Enter, Tab, and Escape
       // before the send path sees them.
       if (mentions.handleKeyDown(event)) return;

@@ -107,6 +107,8 @@ export type ComposerMentionDraft = {
 };
 
 export type ComposerMentions = {
+  /** Canonical text for the highlighted runnable slash command. */
+  activeCommandText?: string;
   /** `aria-activedescendant` for the editor while a popover is open. */
   activeOptionId?: string;
   clear: () => void;
@@ -782,8 +784,15 @@ export function useComposerMentions(params: {
       {options}
     </div>
   ) : null;
+  const activeCommand =
+    open && kind === "commands"
+      ? commandOptions[activeOption] ?? commandOptions[0]
+      : undefined;
 
   return {
+    activeCommandText: activeCommand
+      ? `/${normalizeSlashCommandName(activeCommand.name)}`
+      : undefined,
     activeOptionId: open ? optionId(activeOption) : undefined,
     clear: () => {
       pendingProgrammaticChangeRef.current = undefined;
