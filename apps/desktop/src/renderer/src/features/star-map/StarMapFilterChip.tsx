@@ -103,11 +103,10 @@ function StarMapAttentionFilterChip(
     title: props.definition.label,
     caption: "Threads in progress or unread",
     reviewLabel: "Unread",
-    formatReviewCount: formatUnreadThreadCount,
     footer: `Click to ${chrome.next}`,
-    // Inside `.star-map-window`, which opens its own stacking context: the
-    // portal needs the explicit layer the map's other tooltips carry.
-    className: "attention-card attention-card--star-map",
+    // Inside `.star-map-window`: the same explicit layer the map's other
+    // body-portaled tooltips carry (see `.star-map-card__tooltip`).
+    className: "attention-card star-map-card__tooltip",
   });
 
   return (

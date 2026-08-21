@@ -28,6 +28,7 @@ import {
   resolveThreadParentKey,
 } from "@pwragent/shared";
 import {
+  isFederationViewerWindow,
   readRendererFederationLabel,
   readRendererFederationTarget,
 } from "../../lib/federation-window";
@@ -79,7 +80,6 @@ import {
   isThreadActive,
   isThreadNeedingAttention,
   isThreadRemoteWork,
-  windowSplitsTurnsByMachine,
 } from "./ThreadRowStatus";
 import {
   AttentionReviewReadout,
@@ -608,23 +608,12 @@ export function Sidebar(props: SidebarProps) {
    * Live turns split again by where they run, but only in a window that can
    * see both kinds. Only this instance's turns hold shutdown open, so "can I
    * quit now?" is answerable from the tab alone — which it is not while one
-   * number mixes work on two machines.
-   *
-   * A window fronting a peer is exactly the window where that question has no
-   * content. Every row in it is that peer's work, and closing the viewer
-   * interrupts none of it — telling the operator what quitting would do to
-   * work they cannot interrupt is worse than saying nothing. So a viewer keeps
-   * the plain single readout, counting the peer's turns the way an unfederated
-   * instance counts its own.
-   *
-   * The gate has to be here rather than inside the predicate. A viewer reads
-   * its whole snapshot through the peer, and the main process stamps every row
-   * it returns as remote (`stampRemoteNavigationSnapshot`), so left to itself
-   * the split would report "0 here, everything elsewhere" — permanently, by
-   * construction rather than by state. Only the window knows it has no stake
-   * in any of it.
+   * number mixes work on two machines. A window fronting a peer never splits:
+   * every row in it is that peer's work, so the viewer counts the peer's turns
+   * the way an unfederated instance counts its own. Same gate as the rows'
+   * own marks — see `isThreadRemoteWorkHere`.
    */
-  const splitTurnsByMachine = useMemo(() => windowSplitsTurnsByMachine(), []);
+  const splitTurnsByMachine = useMemo(() => !isFederationViewerWindow(), []);
   const attentionCounts = useMemo(() => {
     let activeLocal = 0;
     let activeRemote = 0;
@@ -2960,22 +2949,25 @@ const REMOTE_ACTIVE_SIGNAL_LINGER_MS = 30_000;
  * running, or one that ended inside the linger window.
  */
 function useLingeringRemoteActiveSignal(count: number): boolean {
-  const [visible, setVisible] = useState(count > 0);
+  const [lingering, setLingering] = useState(count > 0);
   useEffect(() => {
     if (count > 0) {
-      setVisible(true);
+      setLingering(true);
       return;
     }
-    if (!visible) {
+    if (!lingering) {
       return;
     }
     const timer = setTimeout(
-      () => setVisible(false),
+      () => setLingering(false),
       REMOTE_ACTIVE_SIGNAL_LINGER_MS,
     );
     return () => clearTimeout(timer);
-  }, [count, visible]);
-  return visible;
+  }, [count, lingering]);
+  // A live count shows synchronously rather than one effect tick later: the
+  // thread rows colour a peer's turn in the same render it appears, and the
+  // tab must not lag them by a frame. State only carries the linger-out.
+  return count > 0 || lingering;
 }
 
 /**
@@ -3024,7 +3016,6 @@ function AttentionLensTab(props: {
     title: browseModeLabels.attention,
     caption: "Threads in progress or waiting to be reviewed",
     reviewLabel: "To review",
-    formatReviewCount: formatReviewThreadCount,
   });
   const accessibleName = `${browseModeLabels.attention}, ${describeAttentionCounts(
     counts,

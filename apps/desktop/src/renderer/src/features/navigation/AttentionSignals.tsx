@@ -1,4 +1,4 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, type ReactNode } from "react";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import {
@@ -177,8 +177,6 @@ export type AttentionCardOptions = {
   caption: string;
   /** The third row's label — the tab says "To review", the map "Unread". */
   reviewLabel: string;
-  /** How the third row's count is read out, e.g. `formatReviewThreadCount`. */
-  formatReviewCount: (count: number) => string;
   /**
    * An optional closing line. The map's chip uses it to say what a click
    * does now that the chip shows no word — without it a sighted operator
@@ -268,10 +266,11 @@ export function describeAttentionCounts(
  * peer work after a peer starts a turn, on the one surface that exists to
  * answer "can I quit now?".
  *
- * The key guard is not optional: a React element is a new object on every
- * render, so feeding one straight into `update` would set state on every
- * render that very update caused. Compare the card's DATA and push only when
- * it moved.
+ * The push is keyed on the card's DATA, not its identity per render: the
+ * element is memoized on its counts and labels, so a new element means the
+ * numbers moved, and only then is an open card updated — feeding a fresh
+ * element in on every render would set state on every render that very
+ * update caused.
  */
 export function useAttentionHoverCard(
   props: AttentionCardCounts & AttentionCardOptions & {
@@ -289,28 +288,36 @@ export function useAttentionHoverCard(
   const tooltip = useViewportTooltip({
     className: props.className ?? "attention-card",
   });
-  const card = <AttentionCard {...props} />;
-  const latestCardRef = useRef(card);
-  latestCardRef.current = card;
-  const cardKey = [
-    props.activeLocal,
-    props.activeRemote ?? "off",
-    props.review,
-    props.title,
-    props.caption,
-    props.reviewLabel,
-    props.footer ?? "",
-  ].join("|");
-  const pushedCardKeyRef = useRef<string | undefined>(undefined);
+  const { activeLocal, activeRemote, review, title, caption, reviewLabel, footer } =
+    props;
+  // Built only when its data moves, not on every render of a host that
+  // re-renders per streamed item (the tab) or per pan frame (the map chip):
+  // the element is inert until hover, and the memo key below is also what
+  // decides whether an open card is pushed fresh content.
+  const card = useMemo(
+    () => (
+      <AttentionCard
+        activeLocal={activeLocal}
+        activeRemote={activeRemote}
+        review={review}
+        title={title}
+        caption={caption}
+        reviewLabel={reviewLabel}
+        footer={footer}
+      />
+    ),
+    [activeLocal, activeRemote, review, title, caption, reviewLabel, footer],
+  );
+  const pushedCardRef = useRef<ReactNode>(undefined);
   const tooltipVisible = tooltip.visible;
   const updateTooltip = tooltip.update;
   useEffect(() => {
-    const moved = pushedCardKeyRef.current !== cardKey;
-    pushedCardKeyRef.current = cardKey;
+    const moved = pushedCardRef.current !== card;
+    pushedCardRef.current = card;
     if (!moved || !tooltipVisible) {
       return;
     }
-    updateTooltip(latestCardRef.current);
-  }, [cardKey, tooltipVisible, updateTooltip]);
+    updateTooltip(card);
+  }, [card, tooltipVisible, updateTooltip]);
   return { card, tooltip };
 }

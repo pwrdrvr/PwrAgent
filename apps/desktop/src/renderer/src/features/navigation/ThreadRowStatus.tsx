@@ -1,6 +1,6 @@
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
-import { readRendererFederationTarget } from "../../lib/federation-window";
+import { isFederationViewerWindow } from "../../lib/federation-window";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 
 export type ThreadRowStatusKind = "thinking" | "unread";
@@ -47,25 +47,22 @@ export function isThreadRemoteWork(thread: NavigationThreadSummary): boolean {
 }
 
 /**
- * Whether this window tells a peer's turns apart from its own at all.
+ * Whether a thread's turn is a peer's work AS SEEN FROM THIS WINDOW — the
+ * predicate every surface that colours a turn reads, so they cannot disagree.
  *
  * The main window can hold both kinds, and only its own turns hold shutdown
  * open, so it colours them apart: accent here, neutral elsewhere. A window
  * fronting a peer is exactly the window where that question has no content —
- * every row in it is that peer's work (the main process stamps the whole
- * snapshot remote, see `isThreadRemoteWork`), and closing the viewer
- * interrupts none of it. Telling the operator what quitting would do to work
- * they cannot interrupt is worse than saying nothing, so a viewer keeps the
- * plain accent everywhere and counts the peer's turns the way an unfederated
- * instance counts its own.
- *
- * One gate for every surface that colours a turn: the Attention tab's split
- * counts, the thread rows' scanners, and the transcript's pending line. They
- * agree by construction — a row's beam is neutral exactly when the tab counts
- * it under "elsewhere".
+ * every row in it is that peer's work, and closing the viewer interrupts none
+ * of it. Telling the operator what quitting would do to work they cannot
+ * interrupt is worse than saying nothing, so a viewer keeps the plain accent
+ * everywhere and counts the peer's turns the way an unfederated instance
+ * counts its own (`isFederationViewerWindow`). The Attention tab's counts
+ * split on the same gate, so a row's beam is neutral exactly when the tab
+ * counts it under "elsewhere".
  */
-export function windowSplitsTurnsByMachine(): boolean {
-  return readRendererFederationTarget() === undefined;
+export function isThreadRemoteWorkHere(thread: NavigationThreadSummary): boolean {
+  return isThreadRemoteWork(thread) && !isFederationViewerWindow();
 }
 
 export function formatLocalActiveThreadCount(count: number): string {
@@ -123,12 +120,9 @@ export function getThreadRowStatus(
 type ThreadRowStatusProps = {
   status?: ThreadRowStatusKind;
   /**
-   * The live turn belongs to another instance. Same beam, neutral tokens:
-   * the accent means "this holds the app open", and a peer's turn does not.
-   * The caller decides — the sidebar row gates it on
-   * `windowSplitsTurnsByMachine()` to match its Attention tab, the Star Map
-   * card on the bare `isThreadRemoteWork` to match its Attention chip — so
-   * the mark always agrees with the readout that counts it.
+   * The live turn belongs to another instance (`isThreadRemoteWorkHere`).
+   * Same beam, neutral tokens: the accent means "this holds the app open",
+   * and a peer's turn does not. Read only for the thinking mark.
    */
   remoteWork?: boolean;
 };

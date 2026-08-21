@@ -228,7 +228,7 @@ describe("star map attention filter", () => {
     // The same card the sidebar tab opens, lifted above the map's stacking
     // context.
     expect(card).toHaveClass("attention-card");
-    expect(card).toHaveClass("attention-card--star-map");
+    expect(card).toHaveClass("star-map-card__tooltip");
     expect(card).toHaveTextContent(
       /AttentionThreads in progress or unreadIn progress hereQuitting interrupts these1In progress elsewhereQuitting leaves these running2Unread3/,
     );
