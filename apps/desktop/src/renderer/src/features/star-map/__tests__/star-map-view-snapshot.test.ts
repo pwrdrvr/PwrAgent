@@ -172,13 +172,13 @@ describe("buildStarMapViewSnapshot", () => {
   it("reports only the filters the operator actually set", () => {
     const snapshot = buildStarMapViewSnapshot(
       baseInput({
-        filterSelection: { unread: "include", pinned: "exclude" },
+        filterSelection: { attention: "include", pinned: "exclude" },
       }),
     );
     expect(
       snapshot.filters.map((filter) => [filter.key, filter.state]),
     ).toEqual([
-      ["unread", "include"],
+      ["attention", "include"],
       ["pinned", "exclude"],
     ]);
   });
