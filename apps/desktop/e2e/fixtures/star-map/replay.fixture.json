@@ -17,7 +17,8 @@
         "methods": [
           "thread/list",
           "thread/read",
-          "skills/list"
+          "skills/list",
+          "turn/start"
         ]
       }
     },
@@ -30,11 +31,18 @@
           "id": "thread-star-map-active",
           "title": "Star map attention thread",
           "titleSource": "explicit",
-          "summary": "An active thread, so the map has a card to audit.",
+          "summary": "An idle thread with unpushed work, so the map has a card to audit.",
           "source": "codex",
           "executionMode": "default",
-          "threadStatus": "active",
+          "threadStatus": "idle",
           "gitBranch": "feature/star-map-audit",
+          "gitWorkingState": {
+            "dirtyFiles": 0,
+            "dirtyAdditions": 0,
+            "dirtyDeletions": 0,
+            "untrackedFiles": 0,
+            "unpushedCommits": 1
+          },
           "linkedDirectories": [
             {
               "id": "star-map-worktree-dir",
@@ -110,6 +118,15 @@
           "supportsPagination": false,
           "hasPreviousPage": false
         }
+      }
+    },
+    {
+      "id": "turn-start-1",
+      "kind": "response",
+      "method": "turn/start",
+      "result": {
+        "threadId": "thread-star-map-active",
+        "turnId": "turn-star-map-attachment"
       }
     }
   ]
