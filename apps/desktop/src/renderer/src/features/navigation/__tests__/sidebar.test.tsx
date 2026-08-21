@@ -2762,6 +2762,72 @@ describe("Sidebar", () => {
         expect(tab.querySelectorAll(".thinking-scanner")).toHaveLength(2);
       });
 
+      it("sweeps a peer's row in neutral, and says so, where the tab splits", () => {
+        // The row's mark is the tab's "elsewhere" readout, one thread at a
+        // time: same live sweep, neutral by token, so the list answers
+        // "which of these does quitting interrupt?" without the tab.
+        render(
+          <Sidebar {...remoteSidebarProps([activeThread, remoteActiveThread])} />,
+        );
+        const browseSection = screen.getByRole("region", { name: "Thread browser" });
+        const remoteButton = within(browseSection as HTMLElement).getByRole(
+          "button",
+          { name: "Remote active thread" },
+        );
+        const remoteMark = threadCard(remoteButton).querySelector(
+          '[data-thread-status="thinking"]',
+        );
+        expect(remoteMark).toHaveAttribute("data-remote-work", "true");
+        expect(remoteMark).toHaveClass("thread-row__status-indicator--remote");
+        expect(remoteMark).toHaveAttribute("title", "Thinking on another instance");
+        expect(remoteMark).toHaveAttribute(
+          "aria-label",
+          "Thinking on another instance",
+        );
+        // Not switched off: a peer's turn is running for real.
+        expect(remoteMark?.querySelector(".thinking-scanner")).not.toBeNull();
+
+        const localButton = within(browseSection as HTMLElement).getByRole(
+          "button",
+          { name: "Active thread" },
+        );
+        const localMark = threadCard(localButton).querySelector(
+          '[data-thread-status="thinking"]',
+        );
+        expect(localMark).not.toHaveAttribute("data-remote-work");
+        expect(localMark).toHaveAttribute("title", "Thinking");
+      });
+
+      it("keeps a peer's rows in accent in a window fronting that peer", () => {
+        // Same gate as the tab: a viewer has no stake in any of it, so its
+        // rows do not claim a distinction its tab does not make.
+        const windowWithTarget = window as typeof window & {
+          __pwragentFederationTarget?: unknown;
+        };
+        windowWithTarget.__pwragentFederationTarget = {
+          instanceId: "peer-1",
+          scope: "remote",
+        };
+        try {
+          render(<Sidebar {...remoteSidebarProps([remoteActiveThread])} />);
+          const browseSection = screen.getByRole("region", {
+            name: "Thread browser",
+          });
+          const remoteButton = within(browseSection as HTMLElement).getByRole(
+            "button",
+            { name: /Remote active thread/i },
+          );
+          const mark = threadCard(remoteButton).querySelector(
+            '[data-thread-status="thinking"]',
+          );
+          expect(mark).not.toBeNull();
+          expect(mark).not.toHaveAttribute("data-remote-work");
+          expect(mark).toHaveAttribute("title", "Thinking");
+        } finally {
+          delete windowWithTarget.__pwragentFederationTarget;
+        }
+      });
+
       it("holds a zeroed peer readout for the linger window, then drops it", () => {
         vi.useFakeTimers();
         try {

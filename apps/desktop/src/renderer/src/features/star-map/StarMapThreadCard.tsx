@@ -14,6 +14,7 @@ import {
 import { ThreadMetaChips } from "../navigation/ThreadMetaChips";
 import {
   getThreadRowStatus,
+  isThreadRemoteWork,
   ThreadRowStatus,
 } from "../navigation/ThreadRowStatus";
 import {
@@ -103,6 +104,11 @@ export function StarMapThreadCard(props: {
     thread,
     props.sessionKeys?.thinkingThreadKeys,
   );
+  // Ungated, unlike the sidebar row: the map's Attention chip splits its turn
+  // counts on the bare `isThreadRemoteWork` (`countAttentionSignals`), so the
+  // card's beam goes neutral exactly when the chip counts it under
+  // "elsewhere".
+  const remoteWork = status === "thinking" && isThreadRemoteWork(thread);
   // Cards live inside the clipped, transformed canvas, and a native
   // `title` cannot be styled, times out differently per platform, and
   // does not wrap on macOS Electron — see UI-THEME.md.
@@ -195,7 +201,7 @@ export function StarMapThreadCard(props: {
               Chat card open on the map
             </span>
           ) : null}
-          <ThreadRowStatus status={status} />
+          <ThreadRowStatus remoteWork={remoteWork} status={status} />
           <span
             className="star-map-card__title"
             onMouseEnter={(event) =>

@@ -75,15 +75,18 @@ import { DirectoriesList } from "./DirectoriesList";
 import { RecentsList } from "./RecentsList";
 import { useHoverStableSnapshot } from "./useHoverStableSnapshot";
 import {
-  formatActiveThreadCount,
-  formatLocalActiveThreadCount,
-  formatRemoteActiveThreadCount,
   formatReviewThreadCount,
   isThreadActive,
   isThreadNeedingAttention,
   isThreadRemoteWork,
+  windowSplitsTurnsByMachine,
 } from "./ThreadRowStatus";
-import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
+import {
+  AttentionReviewReadout,
+  AttentionTurnReadouts,
+  describeAttentionCounts,
+  useAttentionHoverCard,
+} from "./AttentionSignals";
 
 type ThreadContextMenuPosition = {
   x: number;
@@ -621,10 +624,7 @@ export function Sidebar(props: SidebarProps) {
    * construction rather than by state. Only the window knows it has no stake
    * in any of it.
    */
-  const splitTurnsByMachine = useMemo(
-    () => readRendererFederationTarget() === undefined,
-    [],
-  );
+  const splitTurnsByMachine = useMemo(() => windowSplitsTurnsByMachine(), []);
   const attentionCounts = useMemo(() => {
     let activeLocal = 0;
     let activeRemote = 0;
@@ -2998,6 +2998,9 @@ function useLingeringRemoteActiveSignal(count: number): boolean {
  * makes an idle tab indistinguishable from a tab that lost its data. Grey is
  * also the honest colour — the accent is a signal here, so only a nonzero
  * count earns it.
+ *
+ * The readouts and the hover card are `AttentionSignals.tsx`'s, shared with
+ * the Star Map's Attention chip so the two windows draw one vocabulary.
  */
 function AttentionLensTab(props: {
   active: boolean;
@@ -3011,96 +3014,22 @@ function AttentionLensTab(props: {
   reviewThreadCount: number;
   onSelect: () => void;
 }) {
-  // A card, not a text tooltip. Every other lens tab explains itself in one
-  // line; this one reports two or three counts, each with its own indicator
-  // and — once a peer is running work — a consequence. Run through
-  // `.viewport-tooltip` that became four stacked sentences with em-dashes
-  // doing the structural work. See "Structured hover cards" in AGENTS.md.
-  const tooltip = useViewportTooltip({ className: "attention-card" });
-  const remoteActiveThreadCount = props.remoteActiveThreadCount;
-  // Creating this element is not rendering it: it stays an inert object until
-  // `show` hands it to the portal on hover or focus.
-  const card = (
-    <>
-      <div className="attention-card__eyebrow">{browseModeLabels.attention}</div>
-      <div className="attention-card__caption">
-        Threads in progress or waiting to be reviewed
-      </div>
-      <div className="attention-card__section">
-        <AttentionCardRow
-          count={props.activeThreadCount}
-          indicator="turn"
-          // Only qualify the row once there is something to tell it apart
-          // from. "In progress" is the whole truth on an unfederated
-          // instance, and naming the machine would raise a question the
-          // operator does not have.
-          label={
-            remoteActiveThreadCount === undefined
-              ? "In progress"
-              : "In progress here"
-          }
-          note={
-            remoteActiveThreadCount === undefined
-              ? undefined
-              : "Quitting interrupts these"
-          }
-        />
-        {remoteActiveThreadCount === undefined ? null : (
-          <AttentionCardRow
-            count={remoteActiveThreadCount}
-            indicator="remote-turn"
-            label="In progress elsewhere"
-            note="Quitting leaves these running"
-          />
-        )}
-        <AttentionCardRow
-          count={props.reviewThreadCount}
-          indicator="review"
-          label="To review"
-        />
-      </div>
-    </>
-  );
-  const accessibleName = [
-    browseModeLabels.attention,
-    ...(remoteActiveThreadCount === undefined
-      ? [formatActiveThreadCount(props.activeThreadCount)]
-      : [
-        formatLocalActiveThreadCount(props.activeThreadCount),
-        formatRemoteActiveThreadCount(remoteActiveThreadCount),
-      ]),
-    formatReviewThreadCount(props.reviewThreadCount),
-  ].join(", ");
-
-  // Turns start and end while the pointer rests on the tab, so push fresh
-  // numbers into an already-open card rather than freezing it at hover-time
-  // values — the same thing `PrChip` does for a live PR status. Freezing is
-  // not cosmetic here: the card would keep claiming there is no peer work
-  // after a peer starts a turn, on the one surface that exists to answer
-  // "can I quit now?".
-  //
-  // The key guard is not optional: a React element is a new object on every
-  // render, so feeding one straight into `update` would set state on every
-  // render that very update caused. Compare the card's DATA and push only
-  // when it moved.
-  const latestCardRef = useRef(card);
-  latestCardRef.current = card;
-  const cardKey = [
-    props.activeThreadCount,
-    remoteActiveThreadCount ?? "off",
-    props.reviewThreadCount,
-  ].join("|");
-  const pushedCardKeyRef = useRef<string | undefined>(undefined);
-  const tooltipVisible = tooltip.visible;
-  const updateTooltip = tooltip.update;
-  useEffect(() => {
-    const moved = pushedCardKeyRef.current !== cardKey;
-    pushedCardKeyRef.current = cardKey;
-    if (!moved || !tooltipVisible) {
-      return;
-    }
-    updateTooltip(latestCardRef.current);
-  }, [cardKey, tooltipVisible, updateTooltip]);
+  const counts = {
+    activeLocal: props.activeThreadCount,
+    activeRemote: props.remoteActiveThreadCount,
+    review: props.reviewThreadCount,
+  };
+  const { card, tooltip } = useAttentionHoverCard({
+    ...counts,
+    title: browseModeLabels.attention,
+    caption: "Threads in progress or waiting to be reviewed",
+    reviewLabel: "To review",
+    formatReviewCount: formatReviewThreadCount,
+  });
+  const accessibleName = `${browseModeLabels.attention}, ${describeAttentionCounts(
+    counts,
+    formatReviewThreadCount,
+  )}`;
 
   return (
     <>
@@ -3126,113 +3055,14 @@ function AttentionLensTab(props: {
         onMouseEnter={(event) => tooltip.show(event.currentTarget, card)}
         onMouseLeave={tooltip.hide}
       >
-        {/* One column so the second readout stacks under the first instead of
-            widening the tab. The Attention tab already floors the switch's
-            narrowest track (see `.lens-switch`), and a third readout laid out
-            across would take that room from the four icon tabs. */}
-        <span aria-hidden="true" className="lens-switch__turns">
-          <span
-            className="lens-switch__signal lens-switch__signal--active"
-            data-attention-active-count={props.activeThreadCount}
-            data-zero={props.activeThreadCount === 0 ? "true" : undefined}
-          >
-            <AttentionTurnScanner count={props.activeThreadCount} />
-            <span>{props.activeThreadCount}</span>
-          </span>
-          {remoteActiveThreadCount === undefined ? null : (
-            <span
-              className="lens-switch__signal lens-switch__signal--remote-active"
-              data-attention-remote-active-count={remoteActiveThreadCount}
-              data-zero={remoteActiveThreadCount === 0 ? "true" : undefined}
-            >
-              <AttentionTurnScanner count={remoteActiveThreadCount} />
-              <span>{remoteActiveThreadCount}</span>
-            </span>
-          )}
-        </span>
-        <span
-          aria-hidden="true"
-          className="lens-switch__signal lens-switch__signal--review"
-          data-attention-review-count={props.reviewThreadCount}
-          data-zero={props.reviewThreadCount === 0 ? "true" : undefined}
-        >
-          <span className="thread-row__status-cookie" />
-          <span>{props.reviewThreadCount}</span>
-        </span>
+        <AttentionTurnReadouts
+          activeLocal={props.activeThreadCount}
+          activeRemote={props.remoteActiveThreadCount}
+        />
+        <AttentionReviewReadout count={props.reviewThreadCount} />
       </button>
       {tooltip.tooltipNode}
     </>
-  );
-}
-
-/**
- * The sweeping bar next to one of the Attention tab's turn counts, or its idle
- * stand-in.
- *
- * At zero this is a static element, NOT a greyed-out `ThinkingScanner`.
- * Killing the sweep with CSS on a mounted scanner is a desync trap: `data-zero`
- * lives on the parent span, so React would keep the same scanner element across
- * the flip, its ref would never re-run, and the restarted animation would never
- * be re-pinned to the shared epoch — leaving this tab drifting against every
- * other scanner on screen. Swapping the element type guarantees a mount, so
- * `syncThinkingScannerAnimation` runs and the beam comes back in phase. See
- * ThinkingScanner.tsx and PR #1187.
- *
- * The remote readout's beam is neutral rather than accent, but it is the same
- * untouched component tinted by its parent's tokens — a peer's turn is running
- * for real, so it sweeps for real, on the same epoch as the rest.
- */
-function AttentionTurnScanner(props: { count: number }) {
-  return props.count === 0 ? (
-    <span className="lens-switch__dormant-scanner" />
-  ) : (
-    <ThinkingScanner compact />
-  );
-}
-
-/**
- * One line of the Attention hover card: the tab's own indicator, what it
- * counts, and the count. Repeating the indicator is what ties a row to the
- * readout the operator just hovered — a card of bare labels would make them
- * re-derive which number is which.
- */
-function AttentionCardRow(props: {
-  count: number;
-  indicator: "turn" | "remote-turn" | "review";
-  label: string;
-  /** What quitting does to this row's work. Omitted when nothing is at stake. */
-  note?: string;
-}) {
-  return (
-    <div
-      className="attention-card__row"
-      data-zero={props.count === 0 ? "true" : undefined}
-    >
-      <span
-        aria-hidden="true"
-        className={`lens-switch__signal lens-switch__signal--${
-          props.indicator === "review"
-            ? "review"
-            : props.indicator === "remote-turn"
-              ? "remote-active"
-              : "active"
-        }`}
-        data-zero={props.count === 0 ? "true" : undefined}
-      >
-        {props.indicator === "review" ? (
-          <span className="thread-row__status-cookie" />
-        ) : (
-          <AttentionTurnScanner count={props.count} />
-        )}
-      </span>
-      <span className="attention-card__row-text">
-        <span className="attention-card__row-label">{props.label}</span>
-        {props.note ? (
-          <span className="attention-card__row-note">{props.note}</span>
-        ) : null}
-      </span>
-      <span className="attention-card__row-value">{props.count}</span>
-    </div>
   );
 }
 

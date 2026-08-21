@@ -1,5 +1,6 @@
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
+import { readRendererFederationTarget } from "../../lib/federation-window";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 
 export type ThreadRowStatusKind = "thinking" | "unread";
@@ -43,6 +44,28 @@ export function formatActiveThreadCount(count: number): string {
  */
 export function isThreadRemoteWork(thread: NavigationThreadSummary): boolean {
   return thread.federation?.ref.target.scope === "remote";
+}
+
+/**
+ * Whether this window tells a peer's turns apart from its own at all.
+ *
+ * The main window can hold both kinds, and only its own turns hold shutdown
+ * open, so it colours them apart: accent here, neutral elsewhere. A window
+ * fronting a peer is exactly the window where that question has no content —
+ * every row in it is that peer's work (the main process stamps the whole
+ * snapshot remote, see `isThreadRemoteWork`), and closing the viewer
+ * interrupts none of it. Telling the operator what quitting would do to work
+ * they cannot interrupt is worse than saying nothing, so a viewer keeps the
+ * plain accent everywhere and counts the peer's turns the way an unfederated
+ * instance counts its own.
+ *
+ * One gate for every surface that colours a turn: the Attention tab's split
+ * counts, the thread rows' scanners, and the transcript's pending line. They
+ * agree by construction — a row's beam is neutral exactly when the tab counts
+ * it under "elsewhere".
+ */
+export function windowSplitsTurnsByMachine(): boolean {
+  return readRendererFederationTarget() === undefined;
 }
 
 export function formatLocalActiveThreadCount(count: number): string {
@@ -99,6 +122,15 @@ export function getThreadRowStatus(
 
 type ThreadRowStatusProps = {
   status?: ThreadRowStatusKind;
+  /**
+   * The live turn belongs to another instance. Same beam, neutral tokens:
+   * the accent means "this holds the app open", and a peer's turn does not.
+   * The caller decides — the sidebar row gates it on
+   * `windowSplitsTurnsByMachine()` to match its Attention tab, the Star Map
+   * card on the bare `isThreadRemoteWork` to match its Attention chip — so
+   * the mark always agrees with the readout that counts it.
+   */
+  remoteWork?: boolean;
 };
 
 export function ThreadRowStatus(props: ThreadRowStatusProps) {
@@ -113,13 +145,19 @@ export function ThreadRowStatus(props: ThreadRowStatusProps) {
   // since the transcript-gaps pass — the img role makes the label valid
   // on both surfaces and says what the mark is: a meaningful graphic.
   if (props.status === "thinking") {
+    // "on another instance" echoes `formatRemoteActiveThreadCount`, the
+    // phrase the Attention tab already reads out for the same turns.
+    const label = props.remoteWork ? "Thinking on another instance" : "Thinking";
     return (
       <span
-        aria-label="Thinking"
-        className="thread-row__status-indicator thread-row__status-indicator--thinking"
+        aria-label={label}
+        className={`thread-row__status-indicator thread-row__status-indicator--thinking${
+          props.remoteWork ? " thread-row__status-indicator--remote" : ""
+        }`}
+        data-remote-work={props.remoteWork ? "true" : undefined}
         data-thread-status="thinking"
         role="img"
-        title="Thinking"
+        title={label}
       >
         <ThinkingScanner compact />
       </span>

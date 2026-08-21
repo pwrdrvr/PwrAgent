@@ -43,6 +43,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { parseReviewCommand } from "../../../../shared/review-command";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { agentEventMatchesThread } from "../../lib/federated-thread-events";
+import { isThreadRemoteWork } from "../navigation/ThreadRowStatus";
 import { useThreadSessionState } from "../../lib/useThreadSessionState";
 import { useThreadSkills } from "../../lib/useThreadSkills";
 import {
@@ -1464,6 +1465,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             pendingMcpInteraction={session.pendingMcpInteraction}
             pendingRequest={session.pendingRequest}
             pendingStatusText={session.pendingStatusText}
+            // Ungated, like the map's thread cards: the map's Attention chip
+            // splits on the bare predicate, so the chat card's pending line
+            // agrees with the chip rather than with the main window's tab.
+            pendingRemoteWork={isThreadRemoteWork(thread)}
             pendingUserInput={session.pendingUserInput}
             runningTurnUsageText={session.runningTurnUsageText}
             threadId={thread.id}

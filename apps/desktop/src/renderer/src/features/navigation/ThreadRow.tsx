@@ -26,7 +26,12 @@ import { PrChip } from "../pr-status/PrChip";
 import type { DropIndicatorPosition } from "./drag-drop";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
-import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
+import {
+  getThreadRowStatus,
+  isThreadRemoteWork,
+  ThreadRowStatus,
+  windowSplitsTurnsByMachine,
+} from "./ThreadRowStatus";
 import { setThreadRowNativeDragPreview } from "./thread-row-drag-preview";
 
 const HOVER_PREFETCH_DELAY_MS = 750;
@@ -151,6 +156,14 @@ export function ThreadRow(props: ThreadRowProps) {
     && props.thread.federation.peerStatus !== "connected",
   );
   const status = getThreadRowStatus(props.thread, props.thinkingThreadKeys);
+  // A peer's live turn sweeps in neutral rather than accent, on the same gate
+  // the Attention tab splits its counts on: in the main window the row's beam
+  // is grey exactly when the tab counts it under "elsewhere", and in a viewer
+  // fronting a peer neither of them makes the distinction.
+  const remoteWork =
+    status === "thinking"
+    && isThreadRemoteWork(props.thread)
+    && windowSplitsTurnsByMachine();
   // One expression for "this row carries the in-title pin": the row's
   // `--pinned` modifier class, the ", pinned" accessible-name suffix,
   // and the in-title pin render all derive from it, so the CSS class
@@ -387,7 +400,7 @@ export function ThreadRow(props: ThreadRowProps) {
             "Thinking"/"Unread update" tooltip) is not a dead zone. */}
         <span className="thread-row__header">
           <span className="thread-row__heading">
-            <ThreadRowStatus status={status} />
+            <ThreadRowStatus remoteWork={remoteWork} status={status} />
             <span className="thread-row__title">{props.thread.title}</span>
             {isPinnedRow ? (
               onSetThreadPin ? (

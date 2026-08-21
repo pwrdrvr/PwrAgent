@@ -1931,6 +1931,35 @@ Implementation notes remain in a readable bubble.`;
     );
   });
 
+  it("sweeps the pending line in neutral for a peer's turn", () => {
+    // Same vocabulary as the thread row's mark and the Attention readouts:
+    // the accent holds the app open, a peer's turn does not. The scanner
+    // still mounts — the turn is running, just not here — and only its
+    // tokens change, through the modifier class.
+    render(
+      <TranscriptList
+        entries={[
+          {
+            type: "message",
+            id: "message-1",
+            role: "user",
+            text: "Keep going.",
+          },
+        ]}
+        loading={false}
+        loadingMore={false}
+        pendingRemoteWork
+        pendingStatusText="Thinking"
+        threadId="thread-1"
+        onLoadOlder={async () => undefined}
+      />,
+    );
+
+    const status = screen.getByRole("status");
+    expect(status).toHaveClass("transcript-list__pending--remote");
+    expect(status.querySelector(".thinking-scanner")).not.toBeNull();
+  });
+
   // The other half of that contract. `.transcript-list__pending-item` is what
   // the bottom-padding override in app.css tests for `:last-child`, and the
   // wrapper made the pre-wrapper `.transcript-list__pending:last-child` form

@@ -3557,6 +3557,25 @@ textarea,
   color: var(--text-muted);
 }
 
+/* The Star Map chip's closing line ("Click to show only these"). Muted and
+   set off from the rows: it is an affordance note, not a fourth count. */
+.attention-card__footer {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+/* The same card opened from the Star Map's Attention chip. Its trigger sits
+   inside `.star-map-window`, which opens a stacking context that scopes the
+   card z-scale — a body-portaled card left at 90 paints under the map, the
+   same escape `.star-map-card__tooltip` makes. */
+.attention-card--star-map {
+  z-index: 140;
+}
+
 /* The turn readouts, stacked. One row is the common case and reads exactly as
    it did when it was a bare child of the tab — a single-item column is its own
    content box, so nothing moves. The second row only exists while a peer has
@@ -3597,7 +3616,13 @@ textarea,
   color: var(--text-muted);
 }
 
-.lens-switch__signal--remote-active .thinking-scanner {
+/* One recipe for every beam that sweeps a peer's turn: the Attention
+   readout, the thread row's mark (sidebar and Star Map card), and the
+   transcript's pending line. They are the same statement — "running, but
+   not here" — so a second tint for one of them would be a second meaning. */
+.lens-switch__signal--remote-active .thinking-scanner,
+.thread-row__status-indicator--remote .thinking-scanner,
+.transcript-list__pending--remote .thinking-scanner {
   --thinking-scanner-tint: var(--text-muted);
   --thinking-scanner-tint-bright: var(--text-secondary);
   --thinking-scanner-track: var(--bg-panel-hover);
@@ -12938,78 +12963,41 @@ textarea,
 /* Stacked chips are full width, so the count goes to the far edge and
    makes a column. Only the count - `space-between` would also push the
    exclude mark off the label it negates, and "− ... Open PR" reads as two
-   separate things rather than one struck-through chip. */
-.star-map__filter-panel /* The Attention chip's readouts.
-   Token references copied from `.lens-switch__signal` and its modifiers, not
-   chosen to look similar: the map and the sidebar are reporting the SAME
-   three numbers, and an operator glancing between them must not have to
-   work out whether two different oranges mean two different things. If the
-   tab's tokens change, change these with them. */
+   separate things rather than one struck-through chip. The Attention chip's
+   readouts stay at the left edge like a label would: with no word on that
+   chip they ARE its label, and a column of indicators under the other
+   chips' counts would read as their count column. */
+.star-map__filter-panel .star-map__filter-count {
+  margin-left: auto;
+}
+
+/* The Attention chip's readouts: the sidebar Attention tab's own elements
+   (`AttentionSignals.tsx`), under the tab's own `.lens-switch__turns` and
+   `.lens-switch__signal` rules — not a copy of their tokens. The map and the
+   sidebar report the SAME three numbers, and an operator glancing between
+   the two windows must not have to work out whether two different oranges,
+   or a row here and a column there, mean two different things. This wrapper
+   only gives the pair the tab's inner gap (`.lens-switch__button--attention`).
+
+   NB: this is its own rule on purpose. It was once fused onto the panel
+   rule above by a stray comment between two selectors (PR #1805), which
+   scoped it to the popover and left the strip's chip with no layout at all:
+   the turn column and the cookie ran together with no gap. */
 .star-map__filter-signals {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 7px;
-}
-
-.star-map__filter-signal {
-  display: inline-flex;
-  /* Never the thing that gives: a half-eaten count reads as a different
-     number, so the indicator shrinks before the digits do. */
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 3px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-}
-
-.star-map__filter-signal--active {
-  color: var(--accent-bright);
-}
-
-/* Turns on another instance. Neutral rather than accent, and that is the
-   whole point: the accent means "this holds the app open", and a peer's turn
-   does not. Still a live sweeping scanner — the work IS running, just not
-   on this machine. */
-.star-map__filter-signal--remote-active {
-  color: var(--text-muted);
-}
-
-.star-map__filter-signal--remote-active .thinking-scanner {
-  --thinking-scanner-tint: var(--text-muted);
-  --thinking-scanner-tint-bright: var(--text-secondary);
-  --thinking-scanner-track: var(--bg-panel-hover);
-}
-
-.star-map__filter-signal--review {
-  color: var(--text-secondary);
-}
-
-.star-map__filter-signal--review .thread-row__status-cookie {
-  width: 8px;
-  height: 8px;
-}
-
-/* Zero is still shown — an idle chip has to read as "nothing running,
-   nothing unread", which a vanishing count cannot do. It just stops
-   claiming the accent. */
-.star-map__filter-signal[data-zero="true"] {
-  color: var(--text-muted);
-}
-
-/* The cookie paints itself from accent tokens rather than `currentColor`,
-   so greying the text is not enough. */
-.star-map__filter-signal[data-zero="true"] .thread-row__status-cookie {
-  border-color: var(--border-subtle);
-  background: var(--text-muted);
-  box-shadow: none;
-}
-
-.star-map__filter-count {
-  margin-left: auto;
+  /* As tall as a labelled chip's content, so this chip stands level with
+     its neighbours whether it shows one turn row or two. The neighbours'
+     height comes from their count badge (`.star-map__filter-count`, a 15px
+     line box) plus the chip's 4px padding each side = 23px inside the
+     border; the stacked turn column is 22px (two 10px rows and a 2px gap),
+     so it fits without growing the chip. The chip's own padding goes to
+     zero for this: the tab does the same sum in a fixed 26px, and a strip
+     that grew by 7px whenever a peer started a turn would move the whole
+     top band. */
+  min-height: 23px;
 }
 
 .star-map__filter-chip {
@@ -13023,6 +13011,14 @@ textarea,
   color: var(--text-muted);
   font-size: 11px;
   cursor: pointer;
+}
+
+/* The Attention chip gives its vertical padding to `.star-map__filter-signals`
+   (its `min-height`, which see) so two stacked turn rows fit the height of a
+   labelled chip. After the base rule: same specificity, and source order is
+   what lets it win. */
+.star-map__filter-chip--attention {
+  padding-block: 0;
 }
 
 /* Tri-state. Neutral is the resting style above: not filtering on this.
