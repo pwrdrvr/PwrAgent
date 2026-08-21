@@ -10,11 +10,15 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
+  isRemoteFederationTarget,
   type CelestialIconId,
+  type NavigationLaunchpadFileAttachment,
+  type NavigationLaunchpadImageAttachment,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
+import { buildDirectoryReferenceMarkdown } from "../../lib/directory-references";
 import { useBackendSummaries } from "../../lib/useBackendSummaries";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
@@ -71,6 +75,7 @@ export type StarMapChatCardProps = {
   thread: NavigationThreadSummary;
   /** Stack position; the host owns the order, we only read our depth. */
   zIndex: number;
+  pastedImageMaxPatches?: number;
 };
 
 type DragState = {
@@ -357,9 +362,46 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
    * allow.
    */
   const send = useCallback(
-    async (text: string): Promise<boolean> => {
+    async (
+      text: string,
+      imageAttachments: NavigationLaunchpadImageAttachment[] = [],
+      fileAttachments: NavigationLaunchpadFileAttachment[] = [],
+    ): Promise<boolean> => {
       setSendError(undefined);
       setSendNotice(undefined);
+      const fileReferences = fileAttachments
+        .map((attachment) =>
+          buildDirectoryReferenceMarkdown({
+            label: attachment.label,
+            path: attachment.path,
+          }),
+        )
+        .join("\n");
+      const displayText = fileReferences
+        ? text
+          ? `${text}\n\n${fileReferences}`
+          : fileReferences
+        : text;
+      const imageParts = imageAttachments.map((attachment, index) => ({
+        alt: attachment.name || `Pasted image ${index + 1}`,
+        type: "image" as const,
+        url: attachment.url,
+      }));
+      const input = [
+        ...(displayText
+          ? [{ type: "text" as const, text: displayText }]
+          : []),
+        ...imageAttachments.map((attachment) => ({
+          name: attachment.name,
+          type: "image" as const,
+          url: attachment.url,
+        })),
+        ...fileAttachments.map((attachment) => ({
+          name: attachment.label,
+          path: attachment.path,
+          type: "localFile" as const,
+        })),
+      ];
 
       if (sessionRef.current.threadBusy) {
         if (!desktopApi?.steerTurn) {
@@ -378,13 +420,16 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           );
           return false;
         }
-        const optimisticId = sessionRef.current.addOptimisticUserMessage(text);
+        const optimisticId = sessionRef.current.addOptimisticUserMessage(
+          displayText,
+          imageParts,
+        );
         try {
           const response = await desktopApi.steerTurn({
             backend: thread.source,
             expectedTurnId: activeTurnId,
             federationTarget,
-            input: [{ type: "text", text }],
+            input,
             // Main dedupes retries by request id, so it has to be fresh per
             // attempt or a corrected resend would return the first result.
             requestId: `star-map-chat-card:${cardKey}:${activeTurnId}:${Date.now()}`,
@@ -408,13 +453,16 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       }
 
       if (!desktopApi?.startTurn) return false;
-      const optimisticId = sessionRef.current.addOptimisticUserMessage(text);
+      const optimisticId = sessionRef.current.addOptimisticUserMessage(
+        displayText,
+        imageParts,
+      );
       try {
         await desktopApi.startTurn({
           backend: thread.source,
           federationTarget,
           threadId: thread.id,
-          input: [{ type: "text", text }],
+          input,
         });
         return true;
       } catch (error) {
@@ -874,13 +922,20 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
 
       <MemoizedCompactComposer
         busy={session.threadBusy}
+        canAttachLocalFiles={
+          !federationTarget || !isRemoteFederationTarget(federationTarget)
+        }
         canSteer={canSteer}
         executionMode={threadExecutionMode}
         fastMode={threadFastMode}
+        getPathForFile={desktopApi?.getPathForFile}
         mentionSources={mentionSources}
         model={threadModel}
+        normalizeImageForUpload={desktopApi?.normalizeImageForUpload}
+        onAttachmentError={setSendError}
         onInterrupt={onInterrupt}
         onSend={send}
+        pastedImageMaxPatches={props.pastedImageMaxPatches}
         reasoningEffort={threadReasoningEffort}
         secondaryActions={secondaryActions}
         settingsMenu={settingsMenu}

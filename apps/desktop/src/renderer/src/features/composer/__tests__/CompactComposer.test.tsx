@@ -1,10 +1,63 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   NavigationDirectorySummary,
   NavigationThreadSummary,
 } from "@pwragent/shared";
+import { normalizeImageFile } from "../../../lib/image-normalization";
 import { CompactComposer } from "../CompactComposer";
+
+vi.mock("../../../lib/image-normalization", () => ({
+  normalizeImageFile: vi.fn(),
+}));
+
+type NormalizedImage = Awaited<ReturnType<typeof normalizeImageFile>>;
+
+function normalizedImage(file: File): NormalizedImage {
+  return {
+    conversionPath: "renderer",
+    dataUrl: `data:image/png;base64,${file.name}`,
+    height: 24,
+    mimeType: "image/png",
+    original: {
+      height: 24,
+      mimeType: file.type,
+      name: file.name,
+      size: file.size,
+      width: 32,
+    },
+    size: file.size,
+    width: 32,
+  };
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+function pasteImage(input: HTMLElement, file: File): void {
+  fireEvent.paste(input, {
+    clipboardData: {
+      files: [file],
+      getData: () => "",
+      items: [
+        {
+          getAsFile: () => file,
+          kind: "file",
+          type: file.type,
+        },
+      ],
+      types: ["Files"],
+    },
+  });
+}
 
 function renderComposer(overrides: Partial<Parameters<typeof CompactComposer>[0]> = {}) {
   const onSend = vi.fn();
@@ -31,6 +84,12 @@ function pasteMarkdown(input: HTMLElement, text: string): void {
 }
 
 describe("CompactComposer", () => {
+  beforeEach(() => {
+    vi.mocked(normalizeImageFile).mockImplementation(async (file) =>
+      normalizedImage(file),
+    );
+  });
+
   it("sends on Enter and clears the draft", () => {
     const { onSend } = renderComposer();
     const input = screen.getByRole("textbox", { name: "Message Thread t1" });
@@ -66,6 +125,48 @@ describe("CompactComposer", () => {
     fireEvent.change(input, { target: { value: "should not go" } });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onSend).not.toHaveBeenCalled();
+  });
+
+  it("keeps send disabled until every overlapping image batch finishes", async () => {
+    const first = deferred<NormalizedImage>();
+    const second = deferred<NormalizedImage>();
+    vi.mocked(normalizeImageFile)
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    const { onSend } = renderComposer();
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    const firstFile = new File(["first"], "first.png", {
+      type: "image/png",
+    });
+    const secondFile = new File(["second"], "second.png", {
+      type: "image/png",
+    });
+
+    pasteImage(input, firstFile);
+    pasteImage(input, secondFile);
+    fireEvent.change(input, { target: { value: "Send both" } });
+    const send = screen.getByRole("button", { name: "Send" }) as HTMLButtonElement;
+    expect(send.disabled).toBe(true);
+
+    await act(async () => first.resolve(normalizedImage(firstFile)));
+    await screen.findByRole("img", { name: "first.png" });
+    expect(send.disabled).toBe(true);
+    fireEvent.click(send);
+    expect(onSend).not.toHaveBeenCalled();
+
+    await act(async () => second.resolve(normalizedImage(secondFile)));
+    await screen.findByRole("img", { name: "second.png" });
+    await waitFor(() => expect(send.disabled).toBe(false));
+    fireEvent.click(send);
+
+    expect(onSend).toHaveBeenCalledWith(
+      "Send both",
+      expect.arrayContaining([
+        expect.objectContaining({ name: "first.png" }),
+        expect.objectContaining({ name: "second.png" }),
+      ]),
+      [],
+    );
   });
 
   it("shows model, effort, and access mode as the status chip", () => {
