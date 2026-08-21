@@ -9,6 +9,7 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   BackendCapabilities,
+  CelestialIconId,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -160,7 +161,10 @@ function card(params: CardParams) {
     <StarMapChatCard
       cardKey="card-1"
       desktopApi={params.desktopApi}
-      instanceIcon={params.instanceIcon as never}
+      /* Cast the VALUE, not the prop: the unknown-id case needs to pass
+         an id this build does not know, but the prop's own type must stay
+         checked so a future change to it still fails here. */
+      instanceIcon={params.instanceIcon as CelestialIconId | undefined}
       instanceLabel={params.instanceLabel}
       onClose={() => undefined}
       onOpenFull={() => undefined}
@@ -2398,6 +2402,46 @@ describe("StarMapChatCard title bar tooltips", () => {
       "Close terminal",
     );
     view.unmount();
+  });
+
+  it("leaves a tooltip another control owns alone when a toggle fires", () => {
+    // A toggle re-labels its own tooltip after the click. `update` writes
+    // to whatever tooltip is on screen, so without an owner check a
+    // keyboard activation — pointer still resting on the title, focus
+    // moved by Tab — rewrote the TITLE's tooltip in place.
+    renderCard({
+      desktopApi: buildApi(),
+      instanceLabel: "Studio Mac",
+      thread: remoteThread(),
+    });
+
+    const title = document.querySelector(".star-map-chat-card__title");
+    expect(hoverTooltipText(title as Element)).toBe("Remote work");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show thread context for Remote work" }),
+    );
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(
+      "Remote work",
+    );
+  });
+
+  it("tells a peer card where ↗ lands even with no label for that peer", () => {
+    // The label is decoration; the destination is not. StarMapScreen
+    // reads the label straight out of `displayLabelById`, so an unlinked
+    // peer leaves it undefined — and the sentence used to collapse to
+    // "the main window" while ↗ opened a federation window.
+    renderCard({
+      desktopApi: buildApi(),
+      thread: remoteThread(),
+    });
+
+    expect(
+      hoverTooltipText(
+        screen.getByRole("button", {
+          name: "Open Remote work in the full thread view",
+        }),
+      ),
+    ).toBe("Open in a window connected to that instance");
   });
 
   it("names the peer in the ↗ tooltip, since the bar only shows its icon", () => {

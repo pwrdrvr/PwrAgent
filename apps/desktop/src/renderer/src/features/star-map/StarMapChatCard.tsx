@@ -7,6 +7,7 @@ import {
   useState,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import {
   buildThreadIdentityKey,
@@ -155,6 +156,27 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // The card is draggable and clipped; a native `title` fights both, and
   // UI-THEME.md rules it out regardless.
   const barTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  /* Which element the visible bar tooltip belongs to. A toggle re-labels
+     its tooltip after the click (the pointer has not left the button, so
+     a stale label would sit there offering the action just taken), and
+     `update` writes to whatever is on screen — including a tooltip some
+     OTHER control put there. Keyboard-activating a toggle while the
+     pointer rests on the title used to rewrite the title's tooltip in
+     place. Only the owner re-labels. */
+  const barTooltipAnchorRef = useRef<HTMLElement | null>(null);
+  const showBarTooltip = (target: HTMLElement, content: ReactNode): void => {
+    barTooltipAnchorRef.current = target;
+    barTooltip.show(target, content);
+  };
+  const hideBarTooltip = (): void => {
+    barTooltipAnchorRef.current = null;
+    barTooltip.hide();
+  };
+  const relabelBarTooltip = (owner: HTMLElement, content: ReactNode): void => {
+    if (barTooltipAnchorRef.current === owner) {
+      barTooltip.update(content);
+    }
+  };
 
   // Without a limit `readThread` returns the thread from its first message.
   // On a large thread that is the entire transcript — hundreds of MB over
@@ -224,10 +246,26 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
      a peer's thread opens in a window fronting that peer, a local one in
      the main window. The glyph alone cannot say that, so the tooltip
      does — and it names the peer, since a card only shows its instance
-     as an icon now. */
-  const openFullTooltip = props.instanceLabel && remoteInstanceId
-    ? `Open in a window connected to ${props.instanceLabel}`
-    : "Open in the main window";
+     as an icon now.
+
+     Asks the SAME question `openThreadFully` asks — the thread's own ref,
+     not `remoteInstanceId`, which also answers yes for a local thread in
+     a window that carries a federation target. Two predicates for one
+     sentence is how a tooltip ends up describing the other branch.
+
+     The peer's name is decoration here, never the deciding factor:
+     StarMapScreen reads it straight out of `displayLabelById` with no
+     fallback, so an unlinked peer leaves it undefined — and gating the
+     whole sentence on it told the operator "main window" right before
+     opening a federation window. */
+  const opensPeerWindow = Boolean(
+    threadFederationTarget && isRemoteFederationTarget(threadFederationTarget),
+  );
+  const openFullTooltip = !opensPeerWindow
+    ? "Open in the main window"
+    : props.instanceLabel
+      ? `Open in a window connected to ${props.instanceLabel}`
+      : "Open in a window connected to that instance";
   const isAcpThread = thread.source.startsWith("acp:");
   const backendSummaries = useBackendSummaries(desktopApi, {
     // The composer needs model/runtime image capability before its first
@@ -1096,9 +1134,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         <span
           className="star-map-chat-card__title"
           onMouseEnter={(event) =>
-            barTooltip.show(event.currentTarget, thread.title)
+            showBarTooltip(event.currentTarget, thread.title)
           }
-          onMouseLeave={barTooltip.hide}
+          onMouseLeave={hideBarTooltip}
         >
           {thread.title}
         </span>
@@ -1124,9 +1162,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
                 : ""
             }`}
             onMouseEnter={(event) =>
-              barTooltip.show(event.currentTarget, props.instanceLabel)
+              showBarTooltip(event.currentTarget, props.instanceLabel)
             }
-            onMouseLeave={barTooltip.hide}
+            onMouseLeave={hideBarTooltip}
           >
             {isCelestialIconId(props.instanceIcon) ? (
               <CelestialIcon
@@ -1155,22 +1193,20 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             className={`star-map-chat-card__rail-toggle${
               props.contextOpen ? " is-on" : ""
             }`}
-            onClick={() => {
+            onClick={(event) => {
               props.onToggleContext(cardKey);
-              // The pointer is still on the button and the label just
-              // flipped. Without this the tooltip keeps offering the
-              // action the operator already took.
-              barTooltip.update(
+              relabelBarTooltip(
+                event.currentTarget,
                 props.contextOpen ? contextTooltip.show : contextTooltip.hide,
               );
             }}
             onMouseEnter={(event) =>
-              barTooltip.show(
+              showBarTooltip(
                 event.currentTarget,
                 props.contextOpen ? contextTooltip.hide : contextTooltip.show,
               )
             }
-            onMouseLeave={barTooltip.hide}
+            onMouseLeave={hideBarTooltip}
             onPointerDown={(event) => event.stopPropagation()}
             type="button"
           >
@@ -1186,19 +1222,20 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             className={`star-map-chat-card__rail-toggle${
               props.terminalOpen ? " is-on" : ""
             }`}
-            onClick={() => {
+            onClick={(event) => {
               props.onToggleTerminal(cardKey);
-              barTooltip.update(
+              relabelBarTooltip(
+                event.currentTarget,
                 props.terminalOpen ? terminalTooltip.open : terminalTooltip.close,
               );
             }}
             onMouseEnter={(event) =>
-              barTooltip.show(
+              showBarTooltip(
                 event.currentTarget,
                 props.terminalOpen ? terminalTooltip.close : terminalTooltip.open,
               )
             }
-            onMouseLeave={barTooltip.hide}
+            onMouseLeave={hideBarTooltip}
             onPointerDown={(event) => event.stopPropagation()}
             type="button"
           >
@@ -1209,9 +1246,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             className="star-map-chat-card__expand"
             onClick={() => onOpenFull(thread)}
             onMouseEnter={(event) =>
-              barTooltip.show(event.currentTarget, openFullTooltip)
+              showBarTooltip(event.currentTarget, openFullTooltip)
             }
-            onMouseLeave={barTooltip.hide}
+            onMouseLeave={hideBarTooltip}
             onPointerDown={(event) => event.stopPropagation()}
             type="button"
           >
@@ -1226,9 +1263,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           className="star-map-chat-card__close"
           onClick={() => props.onClose(cardKey)}
           onMouseEnter={(event) =>
-            barTooltip.show(event.currentTarget, "Close chat")
+            showBarTooltip(event.currentTarget, "Close chat")
           }
-          onMouseLeave={barTooltip.hide}
+          onMouseLeave={hideBarTooltip}
           onPointerDown={(event) => event.stopPropagation()}
           type="button"
         >
