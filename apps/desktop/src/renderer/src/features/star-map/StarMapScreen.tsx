@@ -404,6 +404,7 @@ type StarMapScreenProps = {
   onRefreshLocalThreads?: () => void;
   /** Settings -> Pricing, for the chat cards' context satellites. */
   pricingDisplayOptions?: { codexCredits: boolean; usd: boolean };
+  pastedImageMaxPatches?: number;
   threadPricingSummaryEnabled?: boolean;
 };
 
@@ -4454,6 +4455,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
               onOpenFull={openThreadFully}
               onRaise={chatCards.raise}
               onRectChange={chatCards.setRect}
+              pastedImageMaxPatches={props.pastedImageMaxPatches}
               rect={card.rect}
               thread={liveThread}
               scale={view.scale}

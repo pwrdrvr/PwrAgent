@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { normalizeImageFile } from "../../../lib/image-normalization";
 import { StarMapChatCard } from "../StarMapChatCard";
 import { resetComposerMentionSourcesCache } from "../../composer/useComposerMentionSources";
 import { isStarMapTypingTarget } from "../star-map-keyboard";
@@ -93,6 +94,7 @@ function buildApi(overrides: Partial<DesktopApi> = {}): DesktopApi {
 
 type CardParams = {
   desktopApi: DesktopApi;
+  pastedImageMaxPatches?: number;
   thread: NavigationThreadSummary;
 };
 
@@ -105,6 +107,7 @@ function card(params: CardParams) {
       onOpenFull={() => undefined}
       onRaise={() => undefined}
       onRectChange={() => undefined}
+      pastedImageMaxPatches={params.pastedImageMaxPatches}
       rect={RECT}
       thread={params.thread}
       scale={1}
@@ -277,6 +280,41 @@ describe("StarMapChatCard federation routing", () => {
         }),
       );
     });
+  });
+
+  it("uses the configured image patch budget when normalizing", async () => {
+    vi.mocked(normalizeImageFile).mockClear();
+    const desktopApi = buildApi();
+    renderCard({
+      desktopApi,
+      pastedImageMaxPatches: 321,
+      thread: localThread(),
+    });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const image = new File(["star-map"], "star-map.png", {
+      type: "image/png",
+    });
+
+    fireEvent.paste(input, {
+      clipboardData: {
+        files: [image],
+        getData: () => "",
+        items: [
+          {
+            getAsFile: () => image,
+            kind: "file",
+            type: "image/png",
+          },
+        ],
+        types: ["Files"],
+      },
+    });
+
+    await screen.findByRole("img", { name: "star-map.png" });
+    expect(normalizeImageFile).toHaveBeenCalledWith(
+      image,
+      expect.objectContaining({ maxPatchCount: 321 }),
+    );
   });
 
   it("preserves an animated GIF instead of normalizing it", async () => {

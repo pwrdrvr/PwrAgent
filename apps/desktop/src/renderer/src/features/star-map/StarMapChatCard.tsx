@@ -75,6 +75,7 @@ export type StarMapChatCardProps = {
   thread: NavigationThreadSummary;
   /** Stack position; the host owns the order, we only read our depth. */
   zIndex: number;
+  pastedImageMaxPatches?: number;
 };
 
 type DragState = {
@@ -934,6 +935,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         onAttachmentError={setSendError}
         onInterrupt={onInterrupt}
         onSend={send}
+        pastedImageMaxPatches={props.pastedImageMaxPatches}
         reasoningEffort={threadReasoningEffort}
         secondaryActions={secondaryActions}
         settingsMenu={settingsMenu}

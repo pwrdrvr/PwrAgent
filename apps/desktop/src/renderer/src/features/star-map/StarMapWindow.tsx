@@ -97,6 +97,9 @@ export function StarMapWindow() {
           thinkingThreadKeys: session.thinkingThreadKeys,
         }}
         localInstanceLabel={settings.snapshot?.federation.instanceLabel.value}
+        pastedImageMaxPatches={
+          settings.snapshot?.imageUploads.pastedImageMaxPatches.value
+        }
         pricingDisplayOptions={{
           codexCredits:
             settings.snapshot?.experimental.threadPricingDisplayCodexCredits

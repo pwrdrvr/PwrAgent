@@ -184,7 +184,8 @@ export function CompactComposer(props: CompactComposerProps) {
   const [fileAttachments, setFileAttachments] = useState<
     NavigationLaunchpadFileAttachment[]
   >([]);
-  const [normalizingImages, setNormalizingImages] = useState(false);
+  const [normalizingImageBatches, setNormalizingImageBatches] = useState(0);
+  const normalizingImages = normalizingImageBatches > 0;
   // Click-away and Escape close the menu, same hook as the composer
   // dropdowns. Without it the menu survives a click on the transcript
   // behind it and covers the conversation.
@@ -272,7 +273,7 @@ export function CompactComposer(props: CompactComposerProps) {
         );
       }
 
-      setNormalizingImages(true);
+      setNormalizingImageBatches((current) => current + 1);
       void Promise.all(
         accepted.map(async ({ file, type }, index) => {
           const fallbackName = formatPastedImageName(type, index);
@@ -318,7 +319,9 @@ export function CompactComposer(props: CompactComposerProps) {
               : "The pasted image could not be read.",
           );
         })
-        .finally(() => setNormalizingImages(false));
+        .finally(() => {
+          setNormalizingImageBatches((current) => Math.max(0, current - 1));
+        });
     },
     [
       imageAttachments.length,
