@@ -120,6 +120,7 @@ function buildApi(entries: AppServerThreadEntry[] = []): DesktopApi {
           kind: "codex",
           label: "OpenAI",
           available: true,
+          executionModes: [],
         },
       ],
     })),

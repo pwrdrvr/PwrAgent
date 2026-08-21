@@ -186,13 +186,24 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     threadKey: buildThreadIdentityKey(thread.source, thread.id),
   });
 
-  // `readRendererFederationTarget` mints a fresh object per call, so in a
-  // federation window an unmemoized read would rebind every callback that
-  // routes through it on each render.
+  // Backend capability belongs to the instance the thread lives on. Reduce
+  // the target to its stable identity before rebuilding the object: every
+  // navigation poll replaces `thread.federation.ref.target`, and handing that
+  // fresh object to `useBackendSummaries` would eagerly describe the remote
+  // backend again for every open card on every poll.
   const threadFederationTarget = thread.federation?.ref.target;
+  const remoteInstanceId = useMemo(() => {
+    const target = threadFederationTarget ?? readRendererFederationTarget();
+    return target && isRemoteFederationTarget(target)
+      ? target.instanceId
+      : undefined;
+  }, [threadFederationTarget]);
   const federationTarget = useMemo(
-    () => threadFederationTarget ?? readRendererFederationTarget(),
-    [threadFederationTarget],
+    () =>
+      remoteInstanceId
+        ? ({ scope: "remote", instanceId: remoteInstanceId } as const)
+        : undefined,
+    [remoteInstanceId],
   );
   const isAcpThread = thread.source.startsWith("acp:");
   const backendSummaries = useBackendSummaries(desktopApi, {
