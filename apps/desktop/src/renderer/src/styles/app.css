@@ -3462,9 +3462,14 @@ textarea,
 
    Measurements are `.context-usage-card`'s (width, padding, radius, shadow,
    eyebrow, row scale) so the app's hover cards stay one family — that one
-   rather than `.pr-status-card` because both of these sit at z-index 90:
-   the lens switch is sidebar chrome and is not reachable from the Settings
-   overlay at 120, so neither needs the 140 a PR chip does. */
+   rather than `.pr-status-card`.
+
+   90 is the base layer, which is all the lens switch needs: it is sidebar
+   chrome and is not reachable from the Settings overlay at 120. A trigger
+   inside a window that opens its own stacking context appends that window's
+   escape class instead of getting a modifier here — the Star Map's Attention
+   chip wears `.star-map-card__tooltip` (140), declared later in this file, so
+   raising the map's z-scale moves both its card tooltips and this one. */
 .attention-card {
   position: fixed;
   z-index: 90;

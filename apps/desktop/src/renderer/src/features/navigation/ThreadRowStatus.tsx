@@ -47,8 +47,14 @@ export function isThreadRemoteWork(thread: NavigationThreadSummary): boolean {
 }
 
 /**
- * Whether a thread's turn is a peer's work AS SEEN FROM THIS WINDOW — the
- * predicate every surface that colours a turn reads, so they cannot disagree.
+ * Whether a thread's turn is a peer's work AS SEEN FROM THIS WINDOW.
+ *
+ * Read by every surface that colours ONE thread's turn — the sidebar row and
+ * the Star Map card's marks, the transcript's pending line, and the Attention
+ * tab's split counts — so those cannot disagree. The aggregate directory
+ * header count (`DirectoriesList`) is deliberately NOT on it yet: it draws
+ * one scanner for N threads, so "some of these are a peer's" has no single
+ * colour, and splitting that readout is a design change rather than a gate.
  *
  * The main window can hold both kinds, and only its own turns hold shutdown
  * open, so it colours them apart: accent here, neutral elsewhere. A window

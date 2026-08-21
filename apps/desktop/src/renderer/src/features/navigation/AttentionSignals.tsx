@@ -42,7 +42,7 @@ import {
  * untouched component tinted by its parent's tokens — a peer's turn is running
  * for real, so it sweeps for real, on the same epoch as the rest.
  */
-export function AttentionTurnScanner(props: { count: number }) {
+function AttentionTurnScanner(props: { count: number }) {
   return props.count === 0 ? (
     <span className="lens-switch__dormant-scanner" />
   ) : (
@@ -116,7 +116,7 @@ export function AttentionReviewReadout(props: { count: number }) {
  * readout the operator just hovered — a card of bare labels would make them
  * re-derive which number is which.
  */
-export function AttentionCardRow(props: {
+function AttentionCardRow(props: {
   count: number;
   indicator: "turn" | "remote-turn" | "review";
   label: string;
@@ -193,7 +193,7 @@ export type AttentionCardOptions = {
  * sentences with em-dashes doing the structural work. See "Structured hover
  * cards" in AGENTS.md.
  */
-export function AttentionCard(props: AttentionCardCounts & AttentionCardOptions) {
+function AttentionCard(props: AttentionCardCounts & AttentionCardOptions) {
   const activeRemote = props.activeRemote;
   return (
     <>
@@ -276,8 +276,10 @@ export function useAttentionHoverCard(
   props: AttentionCardCounts & AttentionCardOptions & {
     /**
      * The portal element's class. `attention-card` at the sidebar's layer;
-     * surfaces inside a window that opens its own stacking context add a
-     * modifier that lifts the card above it (see `.attention-card--star-map`).
+     * a surface inside a window that opens its own stacking context appends
+     * that window's escape class to lift the card above it — the Star Map's
+     * chip passes `attention-card star-map-card__tooltip`, the same escape
+     * its thread-card tooltips use.
      */
     className?: string;
   },

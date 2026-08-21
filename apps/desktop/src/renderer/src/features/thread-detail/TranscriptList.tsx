@@ -109,7 +109,7 @@ type TranscriptListProps = {
    * sweeps in neutral rather than accent — the same vocabulary as the
    * thread row's mark and the Attention readouts: accent holds the app open,
    * a peer's turn does not. The caller owns the gate (see
-   * `windowSplitsTurnsByMachine`).
+   * `isThreadRemoteWorkHere`).
    */
   pendingRemoteWork?: boolean;
   runningTurnUsageText?: string;

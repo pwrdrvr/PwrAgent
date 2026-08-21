@@ -28,7 +28,6 @@ import {
   resolveThreadParentKey,
 } from "@pwragent/shared";
 import {
-  isFederationViewerWindow,
   readRendererFederationLabel,
   readRendererFederationTarget,
 } from "../../lib/federation-window";
@@ -79,7 +78,7 @@ import {
   formatReviewThreadCount,
   isThreadActive,
   isThreadNeedingAttention,
-  isThreadRemoteWork,
+  isThreadRemoteWorkHere,
 } from "./ThreadRowStatus";
 import {
   AttentionReviewReadout,
@@ -610,10 +609,13 @@ export function Sidebar(props: SidebarProps) {
    * quit now?" is answerable from the tab alone — which it is not while one
    * number mixes work on two machines. A window fronting a peer never splits:
    * every row in it is that peer's work, so the viewer counts the peer's turns
-   * the way an unfederated instance counts its own. Same gate as the rows'
-   * own marks — see `isThreadRemoteWorkHere`.
+   * the way an unfederated instance counts its own.
+   *
+   * `isThreadRemoteWorkHere` IS that rule, and calling it here rather than
+   * re-spelling it is what makes "the tab counts it under elsewhere exactly
+   * when its row sweeps neutral" true by construction instead of by two
+   * expressions happening to agree.
    */
-  const splitTurnsByMachine = useMemo(() => !isFederationViewerWindow(), []);
   const attentionCounts = useMemo(() => {
     let activeLocal = 0;
     let activeRemote = 0;
@@ -621,14 +623,14 @@ export function Sidebar(props: SidebarProps) {
     for (const thread of attentionThreads) {
       if (!isThreadActive(thread, props.thinkingThreadKeys)) {
         review += 1;
-      } else if (splitTurnsByMachine && isThreadRemoteWork(thread)) {
+      } else if (isThreadRemoteWorkHere(thread)) {
         activeRemote += 1;
       } else {
         activeLocal += 1;
       }
     }
     return { activeLocal, activeRemote, review };
-  }, [attentionThreads, props.thinkingThreadKeys, splitTurnsByMachine]);
+  }, [attentionThreads, props.thinkingThreadKeys]);
   const remoteSignalVisible = useLingeringRemoteActiveSignal(
     attentionCounts.activeRemote,
   );
