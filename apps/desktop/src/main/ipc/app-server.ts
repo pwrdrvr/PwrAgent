@@ -127,6 +127,8 @@ import {
   type SetThreadReactionResponse,
   type SetThreadToolIncidentNoticeRequest,
   type SetThreadToolIncidentNoticeResponse,
+  type AcknowledgeThreadSpendAlertRequest,
+  type AcknowledgeThreadSpendAlertResponse,
   type SetNavigationBrowseModeRequest,
   type SetNavigationBrowseModeResponse,
   type ListThreadMigrationSourceThreadsRequest,
@@ -257,6 +259,7 @@ import {
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
+  NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_ENSURE_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_LIST_MODEL_SETTINGS_RECENTS_CHANNEL,
@@ -374,6 +377,7 @@ type AppServerOverlayStoreLike = OverlayStoreLike &
     | "listRemoteThreadPins"
     | "updateRemoteThreadPinSnapshots"
     | "setThreadToolIncidentNotice"
+    | "acknowledgeThreadSpendAlert"
   >;
 
 type ThreadPrRefreshContext = {
@@ -5848,6 +5852,29 @@ class DesktopAppServerService {
     };
   }
 
+  async acknowledgeThreadSpendAlert(
+    request: AcknowledgeThreadSpendAlertRequest,
+  ): Promise<AcknowledgeThreadSpendAlertResponse> {
+    const backend = request.backend ?? "codex";
+    const acknowledged = await this.getOverlayStore()
+      .acknowledgeThreadSpendAlert({
+        alertId: request.alertId,
+        backend,
+        threadId: request.threadId,
+      });
+    logDebug("acknowledgeThreadSpendAlert", {
+      acknowledged,
+      alertId: request.alertId,
+      backend,
+      threadId: request.threadId,
+    });
+    return {
+      acknowledged,
+      backend,
+      threadId: request.threadId,
+    };
+  }
+
   async setThreadReaction(
     request: SetThreadReactionRequest,
   ): Promise<SetThreadReactionResponse> {
@@ -7756,6 +7783,16 @@ export function registerAppServerIpcHandlers(): void {
       request: SetThreadToolIncidentNoticeRequest,
     ): Promise<SetThreadToolIncidentNoticeResponse> => {
       return await appServerService.setThreadToolIncidentNotice(request);
+    },
+  );
+  ipcMain.removeHandler(NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL);
+  ipcMain.handle(
+    NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
+    async (
+      _event,
+      request: AcknowledgeThreadSpendAlertRequest,
+    ): Promise<AcknowledgeThreadSpendAlertResponse> => {
+      return await appServerService.acknowledgeThreadSpendAlert(request);
     },
   );
   ipcMain.removeHandler(NAVIGATION_SET_THREAD_PIN_CHANNEL);

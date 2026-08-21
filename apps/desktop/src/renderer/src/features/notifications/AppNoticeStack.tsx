@@ -63,7 +63,7 @@ export function AppNoticeStack(props: {
         desktopApi={props.desktopApi}
         notice={activeNotice}
         onOpenThread={props.onOpenThread}
-        navigation={activeNotice && durableNotices.length > 1
+        navigation={activeNotice
           ? {
               current: activeIndex + 1,
               total: durableNotices.length,

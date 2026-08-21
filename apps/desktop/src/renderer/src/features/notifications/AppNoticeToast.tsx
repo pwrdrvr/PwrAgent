@@ -22,6 +22,8 @@ export type AppNoticeToastNotice = {
   id: string;
   title: string;
   message: string;
+  /** Optional notice-specific dismissal, including any durable disposition. */
+  onDismiss?: () => void;
   detail?: string;
   threadLink?: ResolvedThreadLink;
   copyText?: string;
@@ -147,42 +149,42 @@ export function AppNoticeToast(props: {
       </div>
       <div
         className="app-notice-toast__actions"
-        data-custom-actions={customActions.length > 0 ? "true" : undefined}
       >
-        {customActions.length > 0
-          ? customActions.map((action) => (
-              <button
-                key={action.label}
-                className={`button button--${action.tone ?? "secondary"}`}
-                type="button"
-                onClick={action.onClick}
-              >
-                {action.label}
-              </button>
-            ))
-          : <>
-              <button
-                className="app-notice-toast__icon-button"
-                type="button"
-                aria-label="Copy notice"
-                title="Copy notice"
-                onClick={() => {
-                  void copyText(copyValue, props.desktopApi);
-                }}
-              >
-                <CopyIcon size={14} aria-hidden="true" />
-              </button>
-              <button
-                className="app-notice-toast__icon-button"
-                type="button"
-                aria-label="Dismiss notice"
-                title="Dismiss notice"
-                onClick={props.onDismiss}
-              >
-                <CloseIcon size={14} aria-hidden="true" />
-              </button>
-            </>}
+        <button
+          className="app-notice-toast__icon-button"
+          type="button"
+          aria-label="Copy notice"
+          title="Copy notice"
+          onClick={() => {
+            void copyText(copyValue, props.desktopApi);
+          }}
+        >
+          <CopyIcon size={14} aria-hidden="true" />
+        </button>
+        <button
+          className="app-notice-toast__icon-button"
+          type="button"
+          aria-label="Dismiss notice"
+          title="Dismiss notice"
+          onClick={props.notice.onDismiss ?? props.onDismiss}
+        >
+          <CloseIcon size={14} aria-hidden="true" />
+        </button>
       </div>
+      {customActions.length > 0 ? (
+        <div className="app-notice-toast__custom-actions">
+          {customActions.map((action) => (
+            <button
+              key={action.label}
+              className={`button button--${action.tone ?? "secondary"}`}
+              type="button"
+              onClick={action.onClick}
+            >
+              {action.label}
+            </button>
+          ))}
+        </div>
+      ) : null}
       {props.navigation ? (
         <nav
           className="app-notice-toast__navigation"

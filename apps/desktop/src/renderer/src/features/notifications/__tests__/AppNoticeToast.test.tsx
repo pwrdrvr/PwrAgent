@@ -227,7 +227,7 @@ describe("AppNoticeToast", () => {
     expect(onNext).toHaveBeenCalledTimes(1);
   });
 
-  it("uses exactly the supplied operator actions for a persistent safety notice", () => {
+  it("keeps copy and dismiss controls alongside supplied operator actions", () => {
     vi.useFakeTimers();
     const leaveDisabled = vi.fn();
     const resume = vi.fn();
@@ -251,19 +251,38 @@ describe("AppNoticeToast", () => {
       />,
     );
 
-    expect(screen.getAllByRole("button")).toHaveLength(2);
-    expect(screen.queryByRole("button", { name: "Copy notice" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Dismiss notice" })).toBeNull();
+    expect(screen.getAllByRole("button")).toHaveLength(4);
+    expect(screen.getByRole("button", { name: "Copy notice" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dismiss notice" }))
+      .toBeInTheDocument();
     expect(
-      container.querySelector(".app-notice-toast__actions"),
-    ).toHaveAttribute("data-custom-actions", "true");
+      container.querySelector(".app-notice-toast__custom-actions"),
+    ).toBeInTheDocument();
     expect(container.querySelector(".app-notice-toast__timer")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Leave disabled" }));
     fireEvent.click(screen.getByRole("button", { name: "Resume" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
     expect(leaveDisabled).toHaveBeenCalledTimes(1);
     expect(resume).toHaveBeenCalledTimes(1);
-    expect(onDismiss).not.toHaveBeenCalled();
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses a notice-specific durable dismissal when supplied", () => {
+    const durableDismiss = vi.fn();
+    const stackDismiss = vi.fn();
+
+    render(
+      <AppNoticeToast
+        notice={{ ...notice, autoDismiss: false, onDismiss: durableDismiss }}
+        onDismiss={stackDismiss}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    expect(durableDismiss).toHaveBeenCalledOnce();
+    expect(stackDismiss).not.toHaveBeenCalled();
   });
 
   it("starts a hover-paused countdown when repair progress flips to success", () => {

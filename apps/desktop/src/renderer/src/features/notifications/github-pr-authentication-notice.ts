@@ -8,7 +8,6 @@ export function buildGithubPrAuthenticationNotice(params: {
 }): AppNoticeToastNotice {
   return {
     actions: [
-      { label: "Dismiss", onClick: params.onDismiss },
       {
         label: "Open Git settings",
         onClick: params.onOpenGitSettings,
@@ -20,6 +19,7 @@ export function buildGithubPrAuthenticationNotice(params: {
     id: "github-pr-authentication-failure",
     message:
       "PwrAgent couldn't read pull request status through the GitHub CLI. Check `gh auth status`, then re-authenticate with `gh auth login` if needed.",
+    onDismiss: params.onDismiss,
     title: "GitHub PR status unavailable",
     tone: "error",
   };

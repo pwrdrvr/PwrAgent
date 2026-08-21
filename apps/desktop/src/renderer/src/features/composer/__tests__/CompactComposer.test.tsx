@@ -272,6 +272,79 @@ describe("CompactComposer", () => {
     );
   });
 
+  it("rejects pasted and dropped images when image input is unsupported", () => {
+    vi.mocked(normalizeImageFile).mockClear();
+    const onAttachmentError = vi.fn();
+    const { container } = renderComposer({
+      imagesSupported: false,
+      imagesUnsupportedLabel: "GPT-5.3-Codex-Spark",
+      onAttachmentError,
+    });
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    const pasted = new File(["pasted"], "pasted.png", {
+      type: "image/png",
+    });
+    const dropped = new File(["dropped"], "dropped.png", {
+      type: "image/png",
+    });
+
+    pasteImage(input, pasted);
+    fireEvent.drop(input, {
+      dataTransfer: {
+        files: [dropped],
+        items: [
+          {
+            getAsFile: () => dropped,
+            kind: "file",
+            type: dropped.type,
+          },
+        ],
+      },
+    });
+
+    expect(onAttachmentError).toHaveBeenLastCalledWith(
+      "GPT-5.3-Codex-Spark doesn't support image attachments.",
+    );
+    expect(normalizeImageFile).not.toHaveBeenCalled();
+    expect(container.querySelector(".compact-composer__attachment")).toBeNull();
+  });
+
+  it("stops an attached image from sending when image support changes", async () => {
+    const onAttachmentError = vi.fn();
+    const onSend = vi.fn();
+    const view = render(
+      <CompactComposer
+        imagesSupported
+        imagesUnsupportedLabel="Visionless model"
+        onAttachmentError={onAttachmentError}
+        onSend={onSend}
+        threadTitle="Thread t1"
+      />,
+    );
+    const input = screen.getByRole("textbox", { name: "Message Thread t1" });
+    const image = new File(["image"], "image.png", { type: "image/png" });
+
+    pasteImage(input, image);
+    await screen.findByRole("img", { name: "image.png" });
+
+    view.rerender(
+      <CompactComposer
+        imagesSupported={false}
+        imagesUnsupportedLabel="Visionless model"
+        onAttachmentError={onAttachmentError}
+        onSend={onSend}
+        threadTitle="Thread t1"
+      />,
+    );
+    fireEvent.change(input, { target: { value: "Describe this" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onSend).not.toHaveBeenCalled();
+    expect(onAttachmentError).toHaveBeenLastCalledWith(
+      "Visionless model doesn't support image attachments.",
+    );
+  });
+
   it("shows model, effort, and access mode as the status chip", () => {
     renderComposer({
       executionMode: "full-access",

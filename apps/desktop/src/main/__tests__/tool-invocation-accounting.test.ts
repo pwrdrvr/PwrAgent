@@ -12,6 +12,14 @@ import {
   toolInvocationFromNotification,
 } from "../app-server/tool-invocation-accounting";
 
+const ALERTING_TOOL_OUTPUT_POLICY = {
+  outputCapHitsEnabled: true,
+  repeatedLargeOutputsEnabled: true,
+  repeatedLargeOutputMinimumCalls: 5,
+  repeatedLargeOutputMinimumPercent: 50,
+  repeatedQueuedChecksEnabled: true,
+};
+
 describe("tool invocation accounting", () => {
   it("normalizes shell commands into durable command categories", () => {
     expect(
@@ -255,7 +263,10 @@ describe("tool invocation accounting", () => {
       status: "completed",
       toolName: "browser_tabs",
     });
-    expect(detectLargeToolOutput({ current: invocation! })?.alert).toMatchObject({
+    expect(detectLargeToolOutput({
+      current: invocation!,
+      policy: ALERTING_TOOL_OUTPUT_POLICY,
+    })?.alert).toMatchObject({
       kind: "large-output",
       severity: "warning",
       toolName: "browser_tabs",
@@ -429,10 +440,12 @@ describe("tool invocation accounting", () => {
   it("detects output at half of the observed cap and escalates at the cap", () => {
     const warning = detectLargeToolOutput({
       current: buildOutputInvocation(20_000),
+      policy: ALERTING_TOOL_OUTPUT_POLICY,
       previousOutputChars: 19_999,
     });
     const critical = detectLargeToolOutput({
       current: buildOutputInvocation(40_000),
+      policy: ALERTING_TOOL_OUTPUT_POLICY,
       previousOutputChars: 39_999,
     });
 
@@ -480,6 +493,7 @@ describe("tool invocation accounting", () => {
           invocationId: `command-${index + 1}`,
           itemId: `command-${index + 1}`,
         },
+        policy: ALERTING_TOOL_OUTPUT_POLICY,
       })!;
       const incident = mergeLargeToolOutputIncident({
         current: aggregate,
@@ -533,6 +547,7 @@ describe("tool invocation accounting", () => {
   it("aggregates cases by turn and keeps a stable worst-case summary", () => {
     const first = detectLargeToolOutput({
       current: buildOutputInvocation(20_000),
+      policy: ALERTING_TOOL_OUTPUT_POLICY,
       previousOutputChars: 0,
     })!;
     const firstIncident = mergeLargeToolOutputIncident({ detection: first });
@@ -542,6 +557,7 @@ describe("tool invocation accounting", () => {
         invocationId: "command-2",
         itemId: "command-2",
       },
+      policy: ALERTING_TOOL_OUTPUT_POLICY,
       previousOutputChars: 0,
     })!;
     const secondIncident = mergeLargeToolOutputIncident({
@@ -561,11 +577,13 @@ describe("tool invocation accounting", () => {
   it("does not rewrite a live warning at terminal completion", () => {
     const live = detectLargeToolOutput({
       current: buildOutputInvocation(20_000),
+      policy: ALERTING_TOOL_OUTPUT_POLICY,
       previousOutputChars: 0,
     })!;
     const incident = mergeLargeToolOutputIncident({ detection: live });
     const terminal = detectLargeToolOutput({
       current: { ...buildOutputInvocation(20_000), status: "completed" },
+      policy: ALERTING_TOOL_OUTPUT_POLICY,
     })!;
     const completed = mergeLargeToolOutputIncident({
       current: incident.aggregate,
@@ -617,6 +635,7 @@ describe("tool invocation accounting", () => {
     const warning = mergeLargeToolOutputIncident({
       detection: detectLargeToolOutput({
         current: buildOutputInvocation(20_000),
+        policy: ALERTING_TOOL_OUTPUT_POLICY,
         previousOutputChars: 0,
       })!,
     });
@@ -624,6 +643,7 @@ describe("tool invocation accounting", () => {
       current: warning.aggregate,
       detection: detectLargeToolOutput({
         current: buildOutputInvocation(40_000),
+        policy: ALERTING_TOOL_OUTPUT_POLICY,
         previousOutputChars: 20_000,
       })!,
     });

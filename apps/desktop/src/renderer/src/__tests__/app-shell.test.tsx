@@ -741,7 +741,7 @@ describe("App", () => {
       ),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
     expect(
       screen.getByText("Repository: github.com/historical/retained-repo"),
     ).toBeInTheDocument();
@@ -758,6 +758,96 @@ describe("App", () => {
     });
     const gitSettingsButton = screen.getByRole("button", { name: "Git" });
     expect(gitSettingsButton).toHaveAttribute("aria-current", "page");
+  });
+
+  it.each([
+    {
+      label: "the local window",
+      rendererTarget: undefined,
+      expected: true,
+    },
+    {
+      label: "a federation-only window",
+      rendererTarget: {
+        scope: "remote" as const,
+        instanceId: "remote-gateway",
+      },
+      expected: false,
+    },
+  ])("replays pending spend alerts only to $label", async ({
+    rendererTarget,
+    expected,
+  }) => {
+    if (rendererTarget) {
+      (window as typeof window & {
+        __pwragentFederationTarget?: unknown;
+      }).__pwragentFederationTarget = rendererTarget;
+    }
+    const acknowledgeThreadSpendAlert = vi.fn(async () => ({
+      acknowledged: true,
+      backend: "codex",
+      threadId: "thread-spend-pending",
+    }));
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [{
+        id: "thread-spend-pending",
+        title: "Expensive build",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+        updatedAt: 2_000,
+        threadSpendAlertPending: {
+          alertId: "spend-alert:thread:codex:thread-spend-pending",
+          createdAt: 1_800_000_000_000,
+          currency: "USD" as const,
+          kind: "thread-spend" as const,
+          spendMicros: 31_000_000,
+          threadId: "thread-spend-pending",
+          thresholdMicros: 25_000_000,
+        },
+      }],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+      ...(rendererTarget ? { federationTarget: rendererTarget } : {}),
+    }));
+    Object.defineProperty(window, "pwragent", {
+      configurable: true,
+      value: {
+        acknowledgeThreadSpendAlert,
+        getNavigationSnapshot,
+        listBackends: async () => ({ fetchedAt: Date.now(), backends: [] }),
+        onAgentEvent: () => () => undefined,
+        onWindowFocus: () => () => undefined,
+      },
+    });
+
+    render(<App />);
+    await waitFor(() => expect(getNavigationSnapshot).toHaveBeenCalled());
+
+    if (!expected) {
+      expect(screen.queryByText("Thread spend threshold reached"))
+        .not.toBeInTheDocument();
+      expect(acknowledgeThreadSpendAlert).not.toHaveBeenCalled();
+      return;
+    }
+
+    expect(await screen.findByText("Thread spend threshold reached"))
+      .toBeInTheDocument();
+    await waitFor(() => {
+      expect(acknowledgeThreadSpendAlert).toHaveBeenCalledWith({
+        alertId: "spend-alert:thread:codex:thread-spend-pending",
+        backend: "codex",
+        threadId: "thread-spend-pending",
+      });
+    });
   });
 
   it.each([
@@ -1380,14 +1470,14 @@ describe("App", () => {
           source: "default",
         },
         toolOutputAlerts: {
-          outputCapHitsEnabled: { value: true, source: "default" },
-          repeatedLargeOutputsEnabled: { value: true, source: "default" },
+          outputCapHitsEnabled: { value: true, source: "config" },
+          repeatedLargeOutputsEnabled: { value: true, source: "config" },
           repeatedLargeOutputMinimumCalls: { value: 5, source: "default" },
           repeatedLargeOutputMinimumPercent: { value: 50, source: "default" },
-          repeatedQueuedChecksEnabled: { value: true, source: "default" },
+          repeatedQueuedChecksEnabled: { value: true, source: "config" },
         },
         spendAlerts: {
-          activeTurnSpendEnabled: { value: true, source: "default" },
+          activeTurnSpendEnabled: { value: true, source: "config" },
           activeTurnSpendThresholdUsd: { value: 5, source: "default" },
           threadSpendEnabled: { value: true, source: "default" },
           threadSpendThresholdUsd: { value: 25, source: "default" },

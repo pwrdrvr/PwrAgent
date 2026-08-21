@@ -158,6 +158,8 @@ import type {
   SetThreadReactionResponse,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
+  AcknowledgeThreadSpendAlertRequest,
+  AcknowledgeThreadSpendAlertResponse,
   GetGhStatusRequest,
   GhStatus,
   ApproveMessagingPairingRequest,
@@ -365,6 +367,8 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  SlackCreateAppRequest,
+  SlackCreateAppResponse,
   DesktopBootInfo,
   GraduateDesktopBootstrapConfigToProfileRequest,
   GraduateDesktopBootstrapConfigToProfileResponse,
@@ -656,6 +660,7 @@ import {
   NAVIGATION_SET_THREAD_PIN_CHANNEL,
   NAVIGATION_SET_THREAD_REACTION_CHANNEL,
   NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
+  NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
   NAVIGATION_SET_ELIGIBLE_THREADS_PR_AUTO_DISPATCH_CHANNEL,
   NAVIGATION_RESET_DIRECTORY_LAUNCHPAD_CHANNEL,
   NAVIGATION_SNAPSHOT_CHANNEL,
@@ -681,6 +686,7 @@ import {
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
+  SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
@@ -1173,6 +1179,10 @@ const desktopApi = Object.freeze({
     request: SettingsCredentialTestRequest,
   ): Promise<SettingsCredentialTestResult> =>
     await ipcRenderer.invoke(SETTINGS_TEST_CREDENTIALS_CHANNEL, request),
+  openSlackCreateApp: async (
+    request?: SlackCreateAppRequest,
+  ): Promise<SlackCreateAppResponse> =>
+    await ipcRenderer.invoke(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL, request),
   readLastSettingsCredentialTest: async (
     request: { kind: SettingsCredentialTestKind },
   ): Promise<SettingsCredentialTestResult | undefined> =>
@@ -1692,6 +1702,13 @@ const desktopApi = Object.freeze({
   ): Promise<SetThreadToolIncidentNoticeResponse> =>
     await ipcRenderer.invoke(
       NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL,
+      request,
+    ),
+  acknowledgeThreadSpendAlert: async (
+    request: AcknowledgeThreadSpendAlertRequest,
+  ): Promise<AcknowledgeThreadSpendAlertResponse> =>
+    await ipcRenderer.invoke(
+      NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL,
       request,
     ),
   setThreadPin: async (

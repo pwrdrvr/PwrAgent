@@ -29,6 +29,7 @@ function grokEntry(
 describe("buildGrokCliUpdateNotice", () => {
   it("builds a version-keyed durable update notice", () => {
     const onOpenUpdatePage = vi.fn();
+    const onDismiss = vi.fn();
     const notice = buildGrokCliUpdateNotice({
       entry: grokEntry({
         status: "available",
@@ -38,7 +39,7 @@ describe("buildGrokCliUpdateNotice", () => {
       }),
       now: 200,
       onOpenUpdatePage,
-      onDismiss: vi.fn(),
+      onDismiss,
       onSnooze: vi.fn(),
     });
 
@@ -51,6 +52,8 @@ describe("buildGrokCliUpdateNotice", () => {
     });
     notice?.actions?.[0]?.onClick();
     expect(onOpenUpdatePage).toHaveBeenCalledWith(GROK_BUILD_UPDATE_URL);
+    notice?.onDismiss?.();
+    expect(onDismiss).toHaveBeenCalledOnce();
   });
 
   it("hides dismissed, snoozed, current, and failed checks", () => {

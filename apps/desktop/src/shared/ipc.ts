@@ -162,6 +162,8 @@ export const NAVIGATION_SET_THREAD_REACTION_CHANNEL =
   "navigation:set-thread-reaction";
 export const NAVIGATION_SET_THREAD_TOOL_INCIDENT_NOTICE_CHANNEL =
   "navigation:set-thread-tool-incident-notice";
+export const NAVIGATION_ACKNOWLEDGE_THREAD_SPEND_ALERT_CHANNEL =
+  "navigation:acknowledge-thread-spend-alert";
 export const NAVIGATION_SET_THREAD_PIN_CHANNEL =
   "navigation:set-thread-pin";
 export const NAVIGATION_SET_THREAD_AGENT_CHANNEL =
@@ -318,6 +320,14 @@ export const SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL =
   "settings:last-credential-test";
 export const SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL =
   "settings:resolve-messaging-contact";
+/**
+ * Builds the official Slack create-from-manifest URL and optionally
+ * opens it in the system browser. Request: `SlackCreateAppRequest`.
+ * Response: `SlackCreateAppResponse`. The renderer never opens the
+ * Slack login page itself.
+ */
+export const SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL =
+  "settings:open-slack-create-app";
 /**
  * Fired main → renderer whenever the messaging store has had bindings or
  * default Agent assignments created, changed, or revoked. The

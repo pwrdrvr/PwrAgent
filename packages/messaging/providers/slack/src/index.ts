@@ -1,5 +1,25 @@
 export type { SlackMessagingConfig, SlackInboundMode } from "./slack-config.ts";
-export { validateCredentials } from "./validate-credentials.ts";
+export {
+  DEFAULT_SLACK_SLASH_COMMAND_PREFIX,
+  SLACK_APP_MANIFEST_BOT_EVENTS,
+  SLACK_APP_MANIFEST_BOT_SCOPES,
+  SLACK_APP_MANIFEST_VERSION,
+  buildOfficialSlackAppManifest,
+  slackAppManifestJson,
+  slackAppManifestYaml,
+  type SlackAppManifest,
+} from "./slack-app-manifest.ts";
+export {
+  SLACK_CREATE_APP_URL_BASE,
+  SLACK_CREATE_APP_URL_MAX_LENGTH,
+  buildSlackCreateAppUrl,
+  type SlackCreateAppUrl,
+} from "./slack-create-app-url.ts";
+export {
+  SLACK_CREDENTIAL_ERROR,
+  validateCredentials,
+} from "./validate-credentials.ts";
+export type { SlackCredentialValidationConfig } from "./validate-credentials.ts";
 export { resolveContact } from "./resolve-contact.ts";
 export { buildSlackHomeView, type SlackHomeView } from "./slack-home.ts";
 export type {

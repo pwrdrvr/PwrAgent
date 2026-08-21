@@ -172,6 +172,8 @@ import type {
   SetThreadReactionResponse,
   SetThreadToolIncidentNoticeRequest,
   SetThreadToolIncidentNoticeResponse,
+  AcknowledgeThreadSpendAlertRequest,
+  AcknowledgeThreadSpendAlertResponse,
   SetThreadParentRequest,
   SetThreadParentResponse,
   SetThreadPinRequest,
@@ -388,6 +390,8 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  SlackCreateAppRequest,
+  SlackCreateAppResponse,
   DesktopBootInfo,
   GraduateDesktopBootstrapConfigToProfileRequest,
   GraduateDesktopBootstrapConfigToProfileResponse,
@@ -830,6 +834,10 @@ export type DesktopApi = {
   testSettingsCredentials?: (
     request: SettingsCredentialTestRequest,
   ) => Promise<SettingsCredentialTestResult>;
+  /** Open Slack's create-from-manifest page in the system browser. */
+  openSlackCreateApp?: (
+    request?: SlackCreateAppRequest,
+  ) => Promise<SlackCreateAppResponse>;
   /** Read the last-known credential-test result without firing a new
    *  probe. Used by the test-block primitive to render the previous
    *  status on settings-pane mount. */
@@ -926,6 +934,9 @@ export type DesktopApi = {
   setThreadToolIncidentNotice?: (
     request: SetThreadToolIncidentNoticeRequest,
   ) => Promise<SetThreadToolIncidentNoticeResponse>;
+  acknowledgeThreadSpendAlert?: (
+    request: AcknowledgeThreadSpendAlertRequest,
+  ) => Promise<AcknowledgeThreadSpendAlertResponse>;
   setThreadPin?: (
     request: SetThreadPinRequest
   ) => Promise<SetThreadPinResponse>;

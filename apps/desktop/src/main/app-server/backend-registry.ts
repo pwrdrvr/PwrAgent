@@ -6687,6 +6687,7 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     | "listRemoteThreadPins"
     | "reconcileOrphanedThreadSubAgents"
     | "markThreadToolInvocationsNoisy"
+    | "setThreadSpendAlertPending"
     | "persistThreadToolInvocationBoundary"
     | "upsertThreadUsageLines"
     | "writeThreadGitWorkingStateCacheEntry"
@@ -11317,17 +11318,47 @@ export class DesktopBackendRegistry {
       backend: params.backend,
       threadId: params.threadId,
     });
-    const triggeredSpendAlerts = detectUsageSpendAlerts({
+    const overlay = this.spendAlertPolicy.threadSpendEnabled
+      ? await this.overlayStore.getThreadOverlayState({
+          backend: params.backend,
+          threadId: params.threadId,
+        })
+      : undefined;
+    const detectedSpendAlerts = detectUsageSpendAlerts({
       ...(params.activeTurnIds ? { activeTurnIds: params.activeTurnIds } : {}),
       backend: params.backend,
       policy: this.spendAlertPolicy,
       pricing,
       threadId: params.threadId,
+      threadSpendAlerted:
+        overlay?.threadSpendAlertedAt !== undefined
+        || overlay?.threadSpendAlertPending !== undefined,
       triggeredAlertIds: this.triggeredSpendAlertIds,
     });
-    for (const alert of triggeredSpendAlerts) {
-      this.triggeredSpendAlertIds.add(alert.alertId);
+    for (const alert of detectedSpendAlerts) {
+      if (alert.kind === "active-turn-spend") {
+        this.triggeredSpendAlertIds.add(alert.alertId);
+      }
     }
+    const detectedThreadSpendAlert = detectedSpendAlerts.find(
+      (alert) => alert.kind === "thread-spend",
+    );
+    const pendingOverlay = detectedThreadSpendAlert
+      ? await this.overlayStore.setThreadSpendAlertPending?.({
+          alert: detectedThreadSpendAlert,
+          backend: params.backend,
+          threadId: params.threadId,
+        })
+      : overlay;
+    const pendingThreadSpendAlert =
+      pendingOverlay?.threadSpendAlertPending
+      ?? detectedThreadSpendAlert;
+    const triggeredSpendAlerts = [
+      ...detectedSpendAlerts.filter(
+        (alert) => alert.kind === "active-turn-spend",
+      ),
+      ...(pendingThreadSpendAlert ? [pendingThreadSpendAlert] : []),
+    ];
     await this.emit({
       backend: params.backend,
       notification: {

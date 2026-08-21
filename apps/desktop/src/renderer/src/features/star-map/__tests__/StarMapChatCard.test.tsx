@@ -213,6 +213,30 @@ async function typeAndSend(title: string, text: string) {
   return input as HTMLElement & { value: string };
 }
 
+function transferImage(
+  input: HTMLElement,
+  file: File,
+  event: "drop" | "paste",
+): void {
+  const transfer = {
+    files: [file],
+    getData: () => "",
+    items: [
+      {
+        getAsFile: () => file,
+        kind: "file",
+        type: file.type,
+      },
+    ],
+    types: ["Files"],
+  };
+  if (event === "paste") {
+    fireEvent.paste(input, { clipboardData: transfer });
+  } else {
+    fireEvent.drop(input, { dataTransfer: transfer });
+  }
+}
+
 /**
  * Text queries match the composer's own content, so a draft would satisfy a
  * "this reached the transcript" assertion on its own.
@@ -427,6 +451,123 @@ describe("StarMapChatCard federation routing", () => {
         }),
       );
     });
+  });
+
+  it("keeps image paste enabled for a remote thread with no negative capability", async () => {
+    const desktopApi = buildApi();
+    renderCard({ desktopApi, thread: remoteThread() });
+    const input = screen.getByRole("textbox", { name: "Message Remote work" });
+    const image = new File(["remote"], "remote.png", {
+      type: "image/png",
+    });
+
+    transferImage(input, image, "paste");
+    await screen.findByRole("img", { name: "remote.png" });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(desktopApi.startTurn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          federationTarget: { scope: "remote", instanceId: "pwr_peer" },
+          input: [
+            {
+              type: "image",
+              name: "remote.png",
+              url: "data:image/png;base64,c3Rhci1tYXA=",
+            },
+          ],
+        }),
+      );
+    });
+  });
+
+  it("rejects images for a Codex model that reports supportsImage false", async () => {
+    vi.mocked(normalizeImageFile).mockClear();
+    const desktopApi = buildApi({
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1,
+        backends: [
+          {
+            available: true,
+            capabilities: reviewCapabilities(false),
+            executionModes: [],
+            kind: "codex" as const,
+            label: "Codex",
+            launchpadOptions: {
+              models: [
+                {
+                  id: "gpt-5.3-codex-spark",
+                  label: "GPT-5.3-Codex-Spark",
+                  supportsImage: false,
+                },
+              ],
+            },
+            methods: [],
+          },
+        ],
+      })),
+    });
+    renderCard({
+      desktopApi,
+      thread: localThread({ model: "gpt-5.3-codex-spark" }),
+    });
+    await waitFor(() => expect(desktopApi.listBackends).toHaveBeenCalled());
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const image = new File(["spark"], "spark.png", { type: "image/png" });
+
+    transferImage(input, image, "paste");
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "GPT-5.3-Codex-Spark doesn't support image attachments.",
+    );
+    expect(normalizeImageFile).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Pasted images")).toBeNull();
+  });
+
+  it("rejects images when an ACP runtime reports prompt.image false", async () => {
+    vi.mocked(normalizeImageFile).mockClear();
+    const desktopApi = buildApi({
+      listBackends: vi.fn(async () => ({
+        fetchedAt: 1,
+        backends: [
+          {
+            acp: {
+              registryId: "grok",
+              distributionKinds: ["binary" as const],
+              installStatus: "installed" as const,
+              authStatus: "authenticated" as const,
+              verificationStatus: "verified" as const,
+              runtime: {
+                schemaVersion: 1 as const,
+                status: "discovered" as const,
+                agentCapabilities: { prompt: { image: false } },
+              },
+            },
+            available: true,
+            capabilities: reviewCapabilities(false),
+            executionModes: [],
+            kind: "acp:grok" as const,
+            label: "Grok",
+            methods: [],
+          },
+        ],
+      })),
+    });
+    renderCard({
+      desktopApi,
+      thread: localThread({ source: "acp:grok", model: "grok-4" }),
+    });
+    await waitFor(() => expect(desktopApi.listBackends).toHaveBeenCalled());
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const image = new File(["grok"], "grok.png", { type: "image/png" });
+
+    transferImage(input, image, "drop");
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "grok-4 doesn't support image attachments.",
+    );
+    expect(normalizeImageFile).not.toHaveBeenCalled();
+    expect(screen.queryByLabelText("Pasted images")).toBeNull();
   });
 
   it("uses the configured image patch budget when normalizing", async () => {
@@ -1969,7 +2110,11 @@ describe("StarMapChatCard settings menu", () => {
             launchpadOptions: {
               models: [
                 { id: "gpt-5-codex", supportsFast: true },
-                { id: "gpt-5-spark", supportsFast: false },
+                {
+                  id: "gpt-5-spark",
+                  supportsFast: false,
+                  supportsImage: false,
+                },
               ],
               reasoningEfforts: ["low", "medium", "high"],
               supportsFastMode: true,
@@ -1989,13 +2134,10 @@ describe("StarMapChatCard settings menu", () => {
     );
   }
 
-  it("describes the backend once, on first open, with the card's target", async () => {
+  it("describes the backend once on mount with the card's target", async () => {
     const desktopApi = settingsApi();
     renderCard({ desktopApi, thread: remoteThread({ model: "gpt-5-codex" }) });
     await screen.findByRole("button", { name: "Send" });
-    expect(desktopApi.listBackends).not.toHaveBeenCalled();
-
-    await openSettingsMenu();
     await waitFor(() => {
       expect(desktopApi.listBackends).toHaveBeenCalledTimes(1);
     });
@@ -2004,7 +2146,10 @@ describe("StarMapChatCard settings menu", () => {
       federationTarget: { scope: "remote", instanceId: "pwr_peer" },
     });
 
-    // Reopening reuses the loaded options rather than describing again.
+    // Opening and reopening reuse the loaded options rather than describing
+    // again. Image capability gating needs the same summary before the first
+    // paste, not only after the settings door has opened.
+    await openSettingsMenu();
     fireEvent.keyDown(document, { key: "Escape" });
     await openSettingsMenu();
     expect(desktopApi.listBackends).toHaveBeenCalledTimes(1);
@@ -2029,6 +2174,28 @@ describe("StarMapChatCard settings menu", () => {
         }),
       );
     });
+  });
+
+  it("updates image gating immediately after an optimistic model change", async () => {
+    vi.mocked(normalizeImageFile).mockClear();
+    const desktopApi = settingsApi();
+    renderCard({ desktopApi, thread: localThread({ model: "gpt-5-codex" }) });
+    await openSettingsMenu();
+
+    fireEvent.click(await screen.findByRole("menuitem", { name: /Model/ }));
+    fireEvent.click(
+      await screen.findByRole("menuitemradio", { name: "gpt-5-spark" }),
+    );
+    await screen.findByText("gpt-5-spark");
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    const image = new File(["spark"], "spark.png", { type: "image/png" });
+
+    transferImage(input, image, "paste");
+
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "gpt-5-spark doesn't support image attachments.",
+    );
+    expect(normalizeImageFile).not.toHaveBeenCalled();
   });
 
   /**

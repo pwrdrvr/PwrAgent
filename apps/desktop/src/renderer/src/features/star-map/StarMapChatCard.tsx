@@ -152,6 +152,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const rectRef = useRef(rect);
   rectRef.current = rect;
   const [sendError, setSendError] = useState<string | undefined>(undefined);
+  const [attachmentError, setAttachmentError] = useState<string | undefined>(
+    undefined,
+  );
   const [reviewSetupOpen, setReviewSetupOpen] = useState(false);
   const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [reviewError, setReviewError] = useState<string | undefined>(undefined);
@@ -161,6 +164,14 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   // backend, so the card says which one happened.
   const [sendNotice, setSendNotice] = useState<string | undefined>(undefined);
   const startRequestPendingRef = useRef(false);
+  const onAttachmentError = useCallback((message?: string): void => {
+    setAttachmentError(message);
+    if (message) {
+      // One card-local feedback slot: the newest actionable problem wins.
+      setSendError(undefined);
+      setSendNotice(undefined);
+    }
+  }, []);
   // The card is draggable and clipped; a native `title` fights both, and
   // UI-THEME.md rules it out regardless.
   const titleTooltip = useViewportTooltip({ className: "viewport-tooltip" });
@@ -196,13 +207,24 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     threadKey: buildThreadIdentityKey(thread.source, thread.id),
   });
 
-  // `readRendererFederationTarget` mints a fresh object per call, so in a
-  // federation window an unmemoized read would rebind every callback that
-  // routes through it on each render.
+  // Backend capability belongs to the instance the thread lives on. Reduce
+  // the target to its stable identity before rebuilding the object: every
+  // navigation poll replaces `thread.federation.ref.target`, and handing that
+  // fresh object to `useBackendSummaries` would eagerly describe the remote
+  // backend again for every open card on every poll.
   const threadFederationTarget = thread.federation?.ref.target;
+  const remoteInstanceId = useMemo(() => {
+    const target = threadFederationTarget ?? readRendererFederationTarget();
+    return target && isRemoteFederationTarget(target)
+      ? target.instanceId
+      : undefined;
+  }, [threadFederationTarget]);
   const federationTarget = useMemo(
-    () => threadFederationTarget ?? readRendererFederationTarget(),
-    [threadFederationTarget],
+    () =>
+      remoteInstanceId
+        ? ({ scope: "remote", instanceId: remoteInstanceId } as const)
+        : undefined,
+    [remoteInstanceId],
   );
   const composerScopeKey = buildThreadComposerScopeKey(thread.source, thread.id);
   const subscribeQueuedTurns = useCallback(
@@ -259,18 +281,15 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     });
   }, [composerScopeKey, desktopApi, props.composerDraftStore, thread]);
   const isAcpThread = thread.source.startsWith("acp:");
-  const [settingsMenuOpened, setSettingsMenuOpened] = useState(false);
   const backendSummaries = useBackendSummaries(desktopApi, {
-    // Codex review is native and needs no describe. ACP review is a
-    // PwrAgent-managed child, so its explicit capability is authoritative
-    // even before the settings menu has ever been opened.
-    enabled: settingsMenuOpened || isAcpThread,
+    // The composer needs model/runtime image capability before its first
+    // paste or drop. Keep this target-scoped so a remote card reads the
+    // owning peer's provider summary rather than the viewer's.
     federationTarget,
   });
   const backendSummariesRef = useRef(backendSummaries);
   backendSummariesRef.current = backendSummaries;
   const onSettingsMenuOpen = useCallback(() => {
-    setSettingsMenuOpened(true);
     // A failed describe retries on the next open through the hook's
     // exported refresh path (a plain re-list for remote targets).
     if (backendSummariesRef.current.error) {
@@ -570,6 +589,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       fileAttachments: NavigationLaunchpadFileAttachment[] = [],
     ): Promise<boolean> => {
       setSendError(undefined);
+      setAttachmentError(undefined);
       setSendNotice(undefined);
       const fileReferences = fileAttachments
         .map((attachment) =>
@@ -883,6 +903,28 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   const threadFastMode = optimisticSettings.fastMode ?? thread.fastMode;
   const threadExecutionMode =
     optimisticSettings.executionMode ?? thread.executionMode;
+  const modelOptions = backendSummary?.launchpadOptions?.models ?? [];
+  const selectedModelOption =
+    modelOptions.find((option) => option.id === threadModel)
+    ?? modelOptions.find((option) => option.current)
+    ?? modelOptions.find((option) => option.supportsReasoning)
+    ?? modelOptions[0];
+  // Match the full composer: only explicit negative capability signals gate
+  // images. An absent summary or undefined field remains backward-compatible
+  // and assumes support, including for remote owners on older versions.
+  const imagesSupported =
+    selectedModelOption?.supportsImage !== false
+    && backendSummary?.acp?.runtime?.agentCapabilities?.prompt?.image !== false;
+  const imagesUnsupportedLabel =
+    selectedModelOption?.label
+    ?? threadModel
+    ?? backendSummary?.label
+    ?? "This mode";
+  useEffect(() => {
+    if (imagesSupported) {
+      setAttachmentError(undefined);
+    }
+  }, [imagesSupported]);
   useEffect(() => {
     // Via the ref so the effect can key on the four scalar fields alone.
     const summary = threadRef.current;
@@ -1259,9 +1301,9 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           thread={thread}
         />
 
-        {sendError ? (
+        {sendError || attachmentError ? (
           <p className="star-map-chat-card__error" role="alert">
-            {sendError}
+            {sendError ?? attachmentError}
           </p>
         ) : sendNotice ? (
           <p className="star-map-chat-card__notice" role="status">
@@ -1304,11 +1346,13 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           executionMode={threadExecutionMode}
           fastMode={threadFastMode}
           getPathForFile={desktopApi?.getPathForFile}
+          imagesSupported={imagesSupported}
+          imagesUnsupportedLabel={imagesUnsupportedLabel}
           key={reviewComposerKey}
           mentionSources={mentionSources}
           model={threadModel}
           normalizeImageForUpload={desktopApi?.normalizeImageForUpload}
-          onAttachmentError={setSendError}
+          onAttachmentError={onAttachmentError}
           onInterrupt={onInterrupt}
           onSend={send}
           pastedImageMaxPatches={props.pastedImageMaxPatches}

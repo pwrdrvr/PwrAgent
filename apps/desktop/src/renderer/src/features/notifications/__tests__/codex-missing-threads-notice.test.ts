@@ -29,8 +29,6 @@ describe("buildCodexMissingThreadsNotice", () => {
     expect(notice?.message).toContain("40%");
     expect(notice?.message).toContain('"work"');
     expect(notice?.message).toContain("2 of 5");
-    // The notice replaces the toast's own dismiss control when it carries
-    // actions, so the two answers are the only way out of it.
     expect(notice?.actions?.map((action) => action.label)).toEqual([
       "Leave Everything Alone",
       "Archive the Missing Threads",
@@ -42,6 +40,9 @@ describe("buildCodexMissingThreadsNotice", () => {
 
     notice?.actions?.[1]?.onClick();
     expect(onArchive).toHaveBeenCalledTimes(1);
+
+    notice?.onDismiss?.();
+    expect(onKeep).toHaveBeenCalledTimes(2);
   });
 
   it("reports an automatic archive without asking anything", () => {

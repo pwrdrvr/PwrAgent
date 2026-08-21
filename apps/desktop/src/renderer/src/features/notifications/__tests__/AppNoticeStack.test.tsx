@@ -46,5 +46,13 @@ describe("AppNoticeStack", () => {
     fireEvent.click(screen.getByRole("button", { name: "Previous notice" }));
     expect(screen.getByText("First")).toBeInTheDocument();
     expect(screen.queryByText("Second")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss notice" }));
+    expect(await screen.findByText("Third")).toBeInTheDocument();
+    expect(screen.getByText("1 of 1")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Previous notice" }))
+      .toBeDisabled();
+    expect(screen.getByRole("button", { name: "Next notice" }))
+      .toBeDisabled();
   });
 });

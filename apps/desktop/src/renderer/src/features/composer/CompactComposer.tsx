@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useId,
   useMemo,
   useRef,
@@ -99,6 +100,14 @@ export type CompactComposerProps = {
   executionMode?: ThreadExecutionMode;
   /** Thread's current fast-mode state, shown on the chip menu's toggle. */
   fastMode?: boolean;
+  /**
+   * Whether the active model/runtime accepts image input. `undefined` keeps
+   * the backward-compatible assumption that images are supported; only an
+   * explicit `false` gates paste, drop, and send.
+   */
+  imagesSupported?: boolean;
+  /** Model/runtime label used in the image-capability feedback. */
+  imagesUnsupportedLabel?: string;
   /**
    * Populations the `$` / `/` / `@` / `#` popovers pick from. Optional on
    * purpose: a host that supplies nothing keeps the trigger characters as
@@ -231,6 +240,17 @@ export function CompactComposer(props: CompactComposerProps) {
     onSend,
     pastedImageMaxPatches,
   } = props;
+  const imagesSupported = props.imagesSupported !== false;
+  const imagesUnsupportedMessage = `${
+    props.imagesUnsupportedLabel ?? "This mode"
+  } doesn't support image attachments.`;
+  // Image normalization is asynchronous. A model can change while it is in
+  // flight, so completion must consult the live gate rather than the value
+  // captured when the paste began.
+  const imagesSupportedRef = useRef(imagesSupported);
+  const imagesUnsupportedMessageRef = useRef(imagesUnsupportedMessage);
+  imagesSupportedRef.current = imagesSupported;
+  imagesUnsupportedMessageRef.current = imagesUnsupportedMessage;
   // Several cards can be open at once and the editor puts this on a DOM
   // `id`; a shared literal would give the map duplicate ids.
   const inputId = `compact-composer-${useId()}`;
@@ -268,6 +288,10 @@ export function CompactComposer(props: CompactComposerProps) {
       (!text && imageAttachments.length === 0 && fileAttachments.length === 0)
       || normalizingImages
     ) return;
+    if (!imagesSupported && imageAttachments.length > 0) {
+      onAttachmentError?.(imagesUnsupportedMessage);
+      return;
+    }
     // Clear optimistically so the input frees up immediately, then put the
     // draft back — chips and all — if the send turned out to fail.
     const previous = mentions.snapshot;
@@ -322,17 +346,35 @@ export function CompactComposer(props: CompactComposerProps) {
   }, [
     fileAttachments,
     imageAttachments,
+    imagesSupported,
+    imagesUnsupportedMessage,
     mentions,
     normalizingImages,
+    onAttachmentError,
     onSend,
     props.disabled,
     props.draftScopeKey,
     props.draftStore,
   ]);
 
+  useEffect(() => {
+    if (!imagesSupported && imageAttachments.length > 0) {
+      onAttachmentError?.(imagesUnsupportedMessage);
+    }
+  }, [
+    imageAttachments.length,
+    imagesSupported,
+    imagesUnsupportedMessage,
+    onAttachmentError,
+  ]);
+
   const attachImages = useCallback(
     (pastedImages: ReturnType<typeof getImageFilesFromDataTransfer>) => {
       if (pastedImages.length === 0) return;
+      if (!imagesSupported) {
+        onAttachmentError?.(imagesUnsupportedMessage);
+        return;
+      }
       const remaining =
         MAX_COMPACT_COMPOSER_IMAGE_ATTACHMENTS - imageAttachments.length;
       if (remaining <= 0) {
@@ -379,6 +421,10 @@ export function CompactComposer(props: CompactComposerProps) {
         }),
       )
         .then((attachments) => {
+          if (!imagesSupportedRef.current) {
+            onAttachmentError?.(imagesUnsupportedMessageRef.current);
+            return;
+          }
           setImageAttachments((current) => [
             ...current,
             ...attachments.filter(
@@ -400,6 +446,8 @@ export function CompactComposer(props: CompactComposerProps) {
     },
     [
       imageAttachments.length,
+      imagesSupported,
+      imagesUnsupportedMessage,
       normalizeImageForUpload,
       onAttachmentError,
       pastedImageMaxPatches,
@@ -983,6 +1031,7 @@ export function CompactComposer(props: CompactComposerProps) {
             props.disabled
             || sending
             || normalizingImages
+            || (!imagesSupported && imageAttachments.length > 0)
             || (
               mentions.text.trim().length === 0
               && imageAttachments.length === 0

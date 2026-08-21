@@ -11,11 +11,6 @@ export function buildPrAutoDispatchBudgetNotice(params: {
   return {
     actions: [
       {
-        label: "Leave disabled",
-        onClick: params.onLeaveDisabled,
-        tone: "secondary",
-      },
-      {
         label: "Resume",
         onClick: params.onResume,
         tone: "primary",
@@ -27,6 +22,7 @@ export function buildPrAutoDispatchBudgetNotice(params: {
     id: `pr-auto-dispatch-budget-paused:${params.status.pausedAt ?? "current"}`,
     message:
       "The automatic repair budget is empty, so Auto-fix PR is paused for this PwrAgent profile.",
+    onDismiss: params.onLeaveDisabled,
     title: "Auto-fix PR paused",
     tone: "warning",
   };

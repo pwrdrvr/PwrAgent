@@ -29,6 +29,8 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  SlackCreateAppRequest,
+  SlackCreateAppResponse,
   StartDesktopCodexAuthProfileLoginRequest,
   StartDesktopCodexAuthProfileLoginResponse,
   WriteDesktopSettingsConfigRequest,
@@ -47,6 +49,7 @@ import {
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
+  SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
@@ -82,6 +85,7 @@ import {
   resolveCodexHomeForProfile,
   resolveDefaultCodexHome,
 } from "@pwrdrvr/codex-discovery";
+import { isSafeExternalOpenUrl } from "../external-url-policy";
 import { getMainLogger } from "../log";
 import { timeStartupProfileOperation } from "../diagnostics/startup-profile-events";
 import { BUILT_IN_ACP_STRATEGIES, type AcpAgentStrategy } from "@pwrdrvr/agent-acp";
@@ -1058,6 +1062,8 @@ function getCredentialTester(
         resolveService().resolveMattermostServerUrlSync(),
       resolveSlackBotToken: () =>
         resolveService().resolveSlackBotTokenSync(),
+      resolveSlackAppToken: () =>
+        resolveService().resolveSlackAppTokenSync(),
       resolveFeishuAppId: () =>
         resolveService().resolveFeishuAppIdSync(),
       resolveFeishuAppSecret: () =>
@@ -1379,6 +1385,33 @@ export function registerSettingsIpcHandlers(
     },
   );
 
+  ipcMain.removeHandler(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
+    async (
+      _event,
+      request: SlackCreateAppRequest = {},
+    ): Promise<SlackCreateAppResponse> => {
+      const slackProvider = await import("@pwragent/messaging-provider-slack");
+      const prepared = slackProvider.buildSlackCreateAppUrl();
+      const shouldOpen = request.open !== false;
+      let opened = false;
+      if (shouldOpen) {
+        if (!isSafeExternalOpenUrl(prepared.url)) {
+          throw new Error("Refused to open an unsafe Slack create-app URL.");
+        }
+        await shell.openExternal(prepared.url);
+        opened = true;
+      }
+      return {
+        url: prepared.url,
+        oversized: prepared.oversized,
+        manifestJson: prepared.manifestJson,
+        opened,
+      };
+    },
+  );
+
   ipcMain.removeHandler(SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL);
   ipcMain.handle(
     SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
@@ -1453,6 +1486,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_PICK_GH_COMMAND_CHANNEL);
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL);
   ipcMain.removeHandler(SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL);
   ipcMain.removeHandler(ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL);
   disposeCredentialTester();

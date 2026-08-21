@@ -115,6 +115,7 @@ export function buildGrokCliUpdateNotice(params: {
     title: "Grok update available",
     message: `Grok ${update.latestVersion} is available; ${update.currentVersion} is installed.`,
     detail: "Update Grok from x.ai/build, then restart active Grok sessions.",
+    onDismiss: params.onDismiss,
     tone: "warning",
     actions: [
       {
@@ -123,7 +124,6 @@ export function buildGrokCliUpdateNotice(params: {
         tone: "primary",
       },
       { label: "Tomorrow", onClick: params.onSnooze },
-      { label: "Dismiss version", onClick: params.onDismiss },
     ],
   };
 }

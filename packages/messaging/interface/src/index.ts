@@ -2194,6 +2194,14 @@ export type MattermostCredentialValidationConfig = {
   serverUrl: string;
 };
 
+/** Slack-shaped probe input — bot token plus the Socket Mode app-level
+ *  token. `auth.test` proves the bot identity; `apps.connections.open`
+ *  proves the xapp- token can open Socket Mode. */
+export type SlackCredentialValidationConfig = {
+  botToken: string;
+  appToken?: string;
+};
+
 /* -----------------------------------------------------------------
  * Contact identity lookup (Settings → authorized contact rows)
  * -----------------------------------------------------------------
