@@ -10,7 +10,7 @@ import { openStarMapWindow } from "./fixtures/star-map-window";
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 const fixturePath = path.resolve(
   specDir,
-  "fixtures/star-map/replay.fixture.json",
+  "fixtures/star-map/composer-attachments.fixture.json",
 );
 const LOCAL_THREAD_TITLE = "Star map attention thread";
 const REMOTE_THREAD_TITLE = "Remote attachment thread";
@@ -166,7 +166,7 @@ test("sends pasted, dropped, and local-file attachments from a Star Map chat car
 
     await expect.poll(async () => await app.getLastStartTurn()).not.toBeNull();
     const request = await app.getLastStartTurn() as StartTurnRequest;
-    expect(request.threadId).toBe("thread-star-map-active");
+    expect(request.threadId).toBe("thread-star-map-attachments");
 
     const textInput = request.input.find((item) => item.type === "text");
     expect(textInput?.text).toContain("Inspect these Star Map attachments");

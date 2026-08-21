@@ -1,8 +1,8 @@
 {
   "metadata": {
     "backend": "codex",
-    "scenario": "star-map-attention",
-    "threadId": "thread-star-map-active"
+    "scenario": "star-map-composer-attachments",
+    "threadId": "thread-star-map-attachments"
   },
   "steps": [
     {
@@ -17,7 +17,8 @@
         "methods": [
           "thread/list",
           "thread/read",
-          "skills/list"
+          "skills/list",
+          "turn/start"
         ]
       }
     },
@@ -27,14 +28,21 @@
       "method": "thread/list",
       "result": [
         {
-          "id": "thread-star-map-active",
+          "id": "thread-star-map-attachments",
           "title": "Star map attention thread",
           "titleSource": "explicit",
-          "summary": "An active thread, so the map has a card to audit.",
+          "summary": "An idle thread with unpushed work for attachment sends.",
           "source": "codex",
           "executionMode": "default",
-          "threadStatus": "active",
+          "threadStatus": "idle",
           "gitBranch": "feature/star-map-audit",
+          "gitWorkingState": {
+            "dirtyFiles": 0,
+            "dirtyAdditions": 0,
+            "dirtyDeletions": 0,
+            "untrackedFiles": 0,
+            "unpushedCommits": 1
+          },
           "linkedDirectories": [
             {
               "id": "star-map-worktree-dir",
@@ -49,29 +57,14 @@
             "reason": "new-thread"
           },
           "updatedAt": 1760000100000
-        },
-        {
-          "id": "thread-star-map-second",
-          "title": "Second star map attention thread",
-          "titleSource": "explicit",
-          "summary": "A second card, so the lane stacks more than one body.",
-          "source": "codex",
-          "executionMode": "default",
-          "threadStatus": "active",
-          "linkedDirectories": [
-            {
-              "id": "star-map-local-dir",
-              "kind": "local",
-              "label": "PwrSnap",
-              "path": "/repo/PwrSnap"
-            }
-          ],
-          "inbox": {
-            "inInbox": false
-          },
-          "updatedAt": 1760000000000
         }
       ]
+    },
+    {
+      "id": "skills-list-1",
+      "kind": "response",
+      "method": "skills/list",
+      "result": []
     },
     {
       "id": "thread-read-1",
@@ -110,6 +103,15 @@
           "supportsPagination": false,
           "hasPreviousPage": false
         }
+      }
+    },
+    {
+      "id": "turn-start-1",
+      "kind": "response",
+      "method": "turn/start",
+      "result": {
+        "threadId": "thread-star-map-attachments",
+        "turnId": "turn-star-map-attachment"
       }
     }
   ]
