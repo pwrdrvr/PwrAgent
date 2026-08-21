@@ -1,5 +1,3 @@
-import { afterEach } from "vitest";
-
 /**
  * jsdom implements `getClientRects` on Element but not on Range, and
  * ProseMirror asks a Range for its rects whenever it scrolls a selection
@@ -25,13 +23,6 @@ if (typeof Range.prototype.getClientRects !== "function") {
 }
 
 const originalConsoleError = console.error.bind(console);
-
-afterEach(() => {
-  // Renderer windows keep reload-only state in sessionStorage. Vitest reuses
-  // one jsdom window across files in a worker, so clear that window-scoped
-  // state at the test boundary just as closing a real BrowserWindow would.
-  window.sessionStorage.clear();
-});
 
 console.error = (...args: unknown[]) => {
   // The renderer suite asserts the visible states around these async paths.
