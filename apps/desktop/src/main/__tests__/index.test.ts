@@ -1229,6 +1229,9 @@ describe("bootstrapApp", () => {
     });
     expect(listThreadsMock).toHaveBeenCalledWith({
       callerReason: "startup-prewarm",
+      limit: 50,
+      maxPages: 1,
+      skipArchivedMetadataRefresh: true,
     });
   });
 
