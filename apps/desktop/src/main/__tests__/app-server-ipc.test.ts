@@ -3278,6 +3278,11 @@ describe("app server ipc", () => {
       maxPages: 1,
       skipArchivedMetadataRefresh: true,
     });
+    expect(reconcileNavigationSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({
+        partial: true,
+      }),
+    );
     expect(rememberCompleteNavigationSnapshot).not.toHaveBeenCalled();
   });
 
@@ -3333,6 +3338,48 @@ describe("app server ipc", () => {
           expect.objectContaining({ id: "thread-stale" }),
         ],
       }),
+    );
+    expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ partial: true }),
+    );
+  });
+
+  it("treats an empty full thread list as a complete lightweight baseline", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+
+    const discoveredThread = {
+      id: "thread-discovered",
+      title: "Discovered thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      updatedAt: 2_000,
+    };
+    listThreads
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([discoveredThread]);
+
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {} satisfies GetNavigationSnapshotRequest,
+    );
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {
+        forceRefresh: true,
+        refreshMode: "active-recent",
+      } satisfies GetNavigationSnapshotRequest,
+    );
+
+    expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        threads: [expect.objectContaining({ id: "thread-discovered" })],
+      }),
+    );
+    expect(reconcileNavigationSnapshot).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ partial: true }),
     );
   });
 

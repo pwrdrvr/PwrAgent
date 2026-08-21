@@ -2815,6 +2815,7 @@ function reviewDisplayTextFromTarget(
 type UseThreadNavigationOptions = {
   enabled?: boolean;
   lightweightNavigationRefresh?: boolean;
+  progressiveInitialRefresh?: boolean;
   threadViewVisible?: boolean;
   /**
    * Publishes create / rename / archive / discard failures to the app's
@@ -3084,6 +3085,7 @@ export function useThreadNavigation(
   const rendererFederationTarget = readRendererFederationTarget();
   const isRendererFederationWindow = Boolean(rendererFederationTarget);
   const lightweightNavigationRefresh = options.lightweightNavigationRefresh ?? false;
+  const progressiveInitialRefresh = options.progressiveInitialRefresh ?? false;
   const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useState<BrowseMode>(readBridgedBrowseMode);
   const [selectedItemKey, setSelectedItemKey] = useState<string>();
@@ -3342,6 +3344,7 @@ export function useThreadNavigation(
           forceRefresh: Boolean(options?.forceRefresh),
           hasCurrentResponse: Boolean(stateRef.current.response),
           preferredSelectionKey: preferredSelectionKey ?? null,
+          refreshMode: options?.refreshMode ?? "full",
         });
         const snapshotRequest =
           options?.forceRefresh || options?.refreshMode || federationTarget
@@ -3422,6 +3425,7 @@ export function useThreadNavigation(
         desktopApi.recordStartupProfileEvent?.("navigation-refresh:snapshot", {
           directoryCount: snapshot.directories.length,
           forceRefresh: Boolean(options?.forceRefresh),
+          refreshMode: options?.refreshMode ?? "full",
           threadCount: snapshot.threads.length,
           transportKind,
           unchanged: Boolean(snapshot.unchanged),
@@ -3794,8 +3798,27 @@ export function useThreadNavigation(
       return;
     }
 
+    if (
+      progressiveInitialRefresh
+      && desktopApi?.getNavigationSnapshotTransport
+      && !readRendererFederationTarget()
+    ) {
+      void refresh(undefined, undefined, false, {
+        refreshMode: "active-recent",
+      });
+      void refresh(undefined, undefined, false, {
+        refreshMode: "full",
+      });
+      return;
+    }
+
     void refresh();
-  }, [enabled, refresh]);
+  }, [
+    desktopApi?.getNavigationSnapshotTransport,
+    enabled,
+    progressiveInitialRefresh,
+    refresh,
+  ]);
 
   useEffect(() => {
     if (

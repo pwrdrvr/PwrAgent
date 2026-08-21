@@ -1431,6 +1431,44 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("keeps a bounded startup list on the summary protocol surface", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.listThreads({
+      enrichDirectories: false,
+      limit: 50,
+      maxPages: 1,
+      skipArchivedMetadataRefresh: true,
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const requests = transport!.sentMessages.map((message) =>
+      JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    expect(requests.filter((request) => request.method === "thread/list"))
+      .toEqual([
+        expect.objectContaining({
+          params: {
+            archived: false,
+            limit: 50,
+            sortKey: "updated_at",
+            sourceKinds: ["cli", "vscode"],
+            useStateDbOnly: true,
+          },
+        }),
+      ]);
+    expect(requests.some((request) => request.method === "thread/read")).toBe(false);
+
+    await client.close();
+  });
+
   it("keeps spawned agents out of navigation and exposes them for parent disclosure", async () => {
     MockTransport.threadListResultBySearchTerm.set("native-subagent-source", [
       {

@@ -163,6 +163,147 @@ describe("useThreadNavigation", () => {
     expect(result.current.error).toBeUndefined();
   });
 
+  it("renders a recent page before reconciling the full startup snapshot", async () => {
+    const recentSnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: ["codex:thread-recent"],
+      threads: [
+        {
+          id: "thread-recent",
+          title: "Recent thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "updated-since-seen" },
+          pinnedRank: "1024",
+          updatedAt: 3_000,
+        },
+      ],
+      directories: [
+        {
+          key: "directory:/repo/alpha",
+          kind: "directory",
+          label: "alpha",
+          path: "/repo/alpha",
+          threadKeys: ["codex:thread-recent"],
+          needsAttentionCount: 1,
+          latestUpdatedAt: 3_000,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const fullSnapshot: NavigationSnapshot = {
+      ...recentSnapshot,
+      fetchedAt: 2,
+      inboxThreadKeys: ["codex:thread-new", "codex:thread-recent"],
+      threads: [
+        {
+          id: "thread-new",
+          title: "Newer thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: true, reason: "updated-since-seen" },
+          updatedAt: 4_000,
+        },
+        recentSnapshot.threads[0]!,
+      ],
+      directories: [
+        ...recentSnapshot.directories,
+        {
+          key: "directory:/repo/beta",
+          kind: "directory",
+          label: "beta",
+          path: "/repo/beta",
+          threadKeys: ["codex:thread-new"],
+          needsAttentionCount: 1,
+          latestUpdatedAt: 4_000,
+        },
+      ],
+    };
+    const recentResponse = createDeferred<
+      Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>>
+    >();
+    const fullResponse = createDeferred<
+      Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>>
+    >();
+    const getNavigationSnapshotTransport = vi
+      .fn<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>()
+      .mockReturnValueOnce(recentResponse.promise)
+      .mockReturnValueOnce(fullResponse.promise);
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshotTransport,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { progressiveInitialRefresh: true }),
+    );
+
+    await waitFor(() => {
+      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(1);
+    });
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(1, {
+      refreshMode: "active-recent",
+      transport: { protocol: 1 },
+    });
+
+    act(() => {
+      recentResponse.resolve({
+        kind: "full",
+        revision: "recent-revision",
+        snapshot: recentSnapshot,
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.threads.map((thread) => thread.id)).toEqual([
+        "thread-recent",
+      ]);
+      expect(result.current.selectedThread?.id).toBe("thread-recent");
+    });
+    await waitFor(() => {
+      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(2);
+    });
+    expect(getNavigationSnapshotTransport).toHaveBeenNthCalledWith(2, {
+      refreshMode: "full",
+      transport: { protocol: 1 },
+    });
+
+    act(() => {
+      fullResponse.resolve({
+        kind: "full",
+        revision: "full-revision",
+        snapshot: fullSnapshot,
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.threads.map((thread) => thread.id)).toEqual([
+        "thread-new",
+        "thread-recent",
+      ]);
+    });
+
+    expect(result.current.selectedThread?.id).toBe("thread-recent");
+    expect(result.current.threads.find((thread) => thread.id === "thread-recent"))
+      .toMatchObject({
+        inbox: { inInbox: true, reason: "updated-since-seen" },
+        pinnedRank: "1024",
+      });
+    expect(result.current.directories.map((directory) => directory.path)).toEqual([
+      "/repo/alpha",
+      "/repo/beta",
+    ]);
+    expect(result.current.inboxThreads.map((thread) => thread.id)).toEqual([
+      "thread-new",
+      "thread-recent",
+    ]);
+  });
+
   it("defers navigation deltas during a drag and preserves the dropped pin rank", async () => {
     const buildSnapshot = (title: string): NavigationSnapshot => ({
       backend: "all",

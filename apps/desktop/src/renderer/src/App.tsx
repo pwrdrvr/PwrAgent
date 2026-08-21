@@ -1191,6 +1191,7 @@ function DesktopAppShell(props: {
     lightweightNavigationRefresh:
       settings.snapshot?.experimental.lightweightNavigationRefresh?.value ?? false,
     onThreadActionError: handleThreadActionError,
+    progressiveInitialRefresh: true,
     threadViewVisible: mainView === "thread",
   });
   useEffect(() => {

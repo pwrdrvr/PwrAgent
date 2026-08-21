@@ -425,6 +425,9 @@ function prewarmInitialThreadList(): void {
   void getDesktopBackendRegistry()
     .listThreads({
       callerReason: "startup-prewarm",
+      limit: 50,
+      maxPages: 1,
+      skipArchivedMetadataRefresh: true,
     })
     .then((threads) => {
       recordStartupProfileEvent({
