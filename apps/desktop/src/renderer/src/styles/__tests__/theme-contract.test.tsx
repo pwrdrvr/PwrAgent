@@ -1056,6 +1056,41 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("gives floating Star Map cards an edge the eye can find on a black sky", () => {
+    // Chat cards and their satellites float over the sky and over each
+    // other. The sky is black and the card surface one step above it, so
+    // a dark popover shadow alone vanishes where one card overlaps the
+    // next, and a `--border-subtle` edge weighs the same as the message
+    // bubbles inside the card — the operator could not see where one card
+    // stopped and the next began. Both families must read the shared
+    // float tokens (edge and lift treatment), and the dark theme must
+    // keep the light halo that separates a card from the sky.
+    for (const selector of [".star-map-chat-card", ".star-map-satellite-card"]) {
+      const rule = extractRuleBody(css, selector);
+      expect(rule).toContain("border: 1px solid var(--star-map-float-border);");
+      expect(rule).toContain("box-shadow: var(--star-map-float-shadow);");
+      expect(rule).not.toContain("var(--border-subtle)");
+      expect(rule).not.toContain("var(--shadow-popover)");
+    }
+    const darkRoot = extractRuleBody(css, ":root");
+    expect(darkRoot).toMatch(
+      /--star-map-float-border:\s*color-mix\(in srgb, var\(--text-primary\) \d+%, transparent\);/,
+    );
+    // Inner highlight, 1px dark ring, light halo, lift shadow — in that
+    // order, so the ring sits between the rim and the glow.
+    expect(darkRoot).toMatch(
+      /--star-map-float-shadow:\s*inset 0 0 0 1px color-mix\(in srgb, var\(--text-primary\) \d+%, transparent\),\s*0 0 0 1px color-mix\(in srgb, var\(--shadow-base\) \d+%, transparent\),\s*0 0 0 2px color-mix\(in srgb, var\(--text-primary\) \d+%, transparent\),\s*0 0 \d+px color-mix\(in srgb, var\(--text-primary\) \d+%, transparent\),\s*0 \d+px \d+px color-mix\(in srgb, var\(--shadow-base\) \d+%, transparent\);/,
+    );
+    // Light theme drops the glow (invisible on white) and softens the
+    // ring so it does not read as a drawn outline.
+    const lightRoot = extractRuleBody(css, ':root[data-theme="light"]');
+    expect(lightRoot).toContain("--star-map-float-border: var(--border-strong);");
+    expect(lightRoot).toMatch(/--star-map-float-shadow:\s*inset 0 0 0 1px/);
+    expect(lightRoot).not.toMatch(
+      /--star-map-float-shadow:[^;]*,\s*0 0 \d+px color-mix\(in srgb, var\(--text-primary\)/,
+    );
+  });
+
   it("lays the Star Map's top band out as one row its controls cannot escape", () => {
     // The band's clusters used to position themselves independently —
     // chrome pinned to the left edge, chips translated to the window's

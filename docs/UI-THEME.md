@@ -243,6 +243,10 @@ custom theme:
   derive from it.
 - `--shadow-popover` — light theme reduces alpha (0.42 → 0.18) because
   heavy shadows over white read poorly; not a base color.
+- `--star-map-float-border` / `--star-map-float-shadow` — the edge and
+  lift of the Star Map's floating chat cards and satellites. The dark
+  stack adds a light halo so a card separates from the black sky and from
+  a card beneath it; light theme drops the halo and softens the ring.
 - `--chat-column-max` (`940px`) — layout token, not a color.
 
 #### Derived tokens
