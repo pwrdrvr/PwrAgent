@@ -2348,3 +2348,74 @@ describe("StarMapChatCard title bar", () => {
     expect(actions?.querySelector(".star-map-chat-card__close")).toBeNull();
   });
 });
+
+describe("StarMapChatCard title bar tooltips", () => {
+  function hoverTooltipText(control: Element): string | undefined {
+    fireEvent.mouseEnter(control);
+    return document.querySelector('[role="tooltip"]')?.textContent ?? undefined;
+  }
+
+  it("gives every bar control a hover tooltip, not just some of them", () => {
+    // The bar lost its words: the instance is an icon, Open is ↗, and the
+    // toggles were always glyphs. A tooltip on only one of them reads as
+    // the others being broken — which is exactly how it shipped and how
+    // it got caught. This asserts the SET, so the next glyph added here
+    // cannot land without one.
+    renderCard({
+      desktopApi: buildApi(),
+      instanceIcon: "moon",
+      instanceLabel: "Studio Mac",
+      thread: remoteThread(),
+    });
+
+    const bar = screen.getByRole("banner", { hidden: true });
+    const controls = [
+      ...bar.querySelectorAll("button, .star-map-chat-card__instance"),
+    ];
+    expect(controls.length).toBe(5);
+    for (const control of controls) {
+      expect(hoverTooltipText(control)).toBeTruthy();
+      fireEvent.mouseLeave(control);
+    }
+  });
+
+  it("says what a toggle will do, and keeps saying it after the click", () => {
+    // A toggle's tooltip names the ACTION, which is the opposite of the
+    // state it is in. The pointer does not leave on click, so a label
+    // left un-flipped would sit there offering the thing just done.
+    const view = renderCard({
+      desktopApi: buildApi(),
+      instanceLabel: "Studio Mac",
+      thread: remoteThread(),
+    });
+
+    const terminal = screen.getByRole("button", {
+      name: "Open terminal for Remote work",
+    });
+    expect(hoverTooltipText(terminal)).toBe("Open terminal");
+    fireEvent.click(terminal);
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(
+      "Close terminal",
+    );
+    view.unmount();
+  });
+
+  it("names the peer in the ↗ tooltip, since the bar only shows its icon", () => {
+    // ↗ does not land in the same place for every card, and the machine
+    // is no longer written out beside it.
+    renderCard({
+      desktopApi: buildApi(),
+      instanceIcon: "moon",
+      instanceLabel: "Studio Mac",
+      thread: remoteThread(),
+    });
+
+    expect(
+      hoverTooltipText(
+        screen.getByRole("button", {
+          name: "Open Remote work in the full thread view",
+        }),
+      ),
+    ).toBe("Open in a window connected to Studio Mac");
+  });
+});

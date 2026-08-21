@@ -206,6 +206,20 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         : undefined,
     [remoteInstanceId],
   );
+  /* Every control in the bar is a glyph now, so every one of them needs
+     the same hover affordance — a lone tooltip on ↗ reads as the other
+     two being broken. The toggles say what the click will DO, which is
+     the opposite of the state they are in. Short on purpose: the
+     `aria-label` carries the thread title for screen readers, but a
+     tooltip repeating it beside the title it names is noise. */
+  const contextTooltip = {
+    hide: "Hide thread context",
+    show: "Show thread context",
+  };
+  const terminalTooltip = {
+    close: "Close terminal",
+    open: "Open terminal",
+  };
   /* Where ↗ actually lands, which is not the same place for every card:
      a peer's thread opens in a window fronting that peer, a local one in
      the main window. The glyph alone cannot say that, so the tooltip
@@ -1141,7 +1155,22 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             className={`star-map-chat-card__rail-toggle${
               props.contextOpen ? " is-on" : ""
             }`}
-            onClick={() => props.onToggleContext(cardKey)}
+            onClick={() => {
+              props.onToggleContext(cardKey);
+              // The pointer is still on the button and the label just
+              // flipped. Without this the tooltip keeps offering the
+              // action the operator already took.
+              barTooltip.update(
+                props.contextOpen ? contextTooltip.show : contextTooltip.hide,
+              );
+            }}
+            onMouseEnter={(event) =>
+              barTooltip.show(
+                event.currentTarget,
+                props.contextOpen ? contextTooltip.hide : contextTooltip.show,
+              )
+            }
+            onMouseLeave={barTooltip.hide}
             onPointerDown={(event) => event.stopPropagation()}
             type="button"
           >
@@ -1157,7 +1186,19 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             className={`star-map-chat-card__rail-toggle${
               props.terminalOpen ? " is-on" : ""
             }`}
-            onClick={() => props.onToggleTerminal(cardKey)}
+            onClick={() => {
+              props.onToggleTerminal(cardKey);
+              barTooltip.update(
+                props.terminalOpen ? terminalTooltip.open : terminalTooltip.close,
+              );
+            }}
+            onMouseEnter={(event) =>
+              barTooltip.show(
+                event.currentTarget,
+                props.terminalOpen ? terminalTooltip.close : terminalTooltip.open,
+              )
+            }
+            onMouseLeave={barTooltip.hide}
             onPointerDown={(event) => event.stopPropagation()}
             type="button"
           >
@@ -1184,6 +1225,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           aria-label={`Close chat: ${thread.title}`}
           className="star-map-chat-card__close"
           onClick={() => props.onClose(cardKey)}
+          onMouseEnter={(event) =>
+            barTooltip.show(event.currentTarget, "Close chat")
+          }
+          onMouseLeave={barTooltip.hide}
           onPointerDown={(event) => event.stopPropagation()}
           type="button"
         >
