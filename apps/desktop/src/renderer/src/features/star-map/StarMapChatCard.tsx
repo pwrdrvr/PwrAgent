@@ -12,10 +12,12 @@ import {
   buildThreadIdentityKey,
   type CelestialIconId,
   type NavigationThreadSummary,
+  type ThreadExecutionMode,
 } from "@pwragent/shared";
 import { CelestialIcon } from "../../icons";
 import { formatExecutionModeLabel } from "../../lib/execution-mode";
 import { useBackendSummaries } from "../../lib/useBackendSummaries";
+import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   CompactComposer,
@@ -538,6 +540,46 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   ]);
 
   /**
+   * Escalating a thread to Full Access goes through the shared gate
+   * rather than straight to `setThreadExecutionMode`. The confirmation
+   * used to be composer-local state, which made this chip a one-click,
+   * un-gated escalation. This window carries no settings state of its
+   * own, so the gate reads the dismissed-forever preference itself.
+   */
+  const applyExecutionMode = useCallback(
+    (executionMode: ThreadExecutionMode): void => {
+      const setExecutionMode = desktopApi?.setThreadExecutionMode;
+      if (!setExecutionMode) return;
+      setOptimisticSettings((current) => ({
+        ...current,
+        executionMode,
+      }));
+      void setExecutionMode({
+        backend: threadSource,
+        executionMode,
+        federationTarget,
+        threadId,
+      }).catch((error: unknown) => {
+        setOptimisticSettings({});
+        setSendError(
+          error instanceof Error
+            ? error.message
+            : "Could not change access mode.",
+        );
+      });
+    },
+    [desktopApi, federationTarget, threadId, threadSource],
+  );
+  const { fullAccessRiskDialog, requestExecutionModeSelection } =
+    useExecutionModeSelection({
+      applyExecutionMode,
+      // The optimistic value, so a second click while the first
+      // escalation round-trips does not re-prompt.
+      currentExecutionMode: threadExecutionMode,
+      desktopApi,
+    });
+
+  /**
    * The settings chip's menu: the same mutations the full composer's chip
    * row drives, minus what a floating card cannot honestly host (workspace
    * handoff and environments need the handoff dialog and launchpad state —
@@ -636,26 +678,10 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       })),
       reasoningEfforts: supportsReasoning ? reasoningEfforts : [],
       supportsFastMode: supportsFast,
+      // The gate decides between prompting and applying; the apply half
+      // is `applyExecutionMode` above.
       onSelectExecutionMode: setExecutionMode
-        ? (mode) => {
-            setOptimisticSettings((current) => ({
-              ...current,
-              executionMode: mode,
-            }));
-            void setExecutionMode({
-              backend: threadSource,
-              executionMode: mode,
-              federationTarget,
-              threadId,
-            }).catch((error: unknown) => {
-              setOptimisticSettings({});
-              setSendError(
-                error instanceof Error
-                  ? error.message
-                  : "Could not change access mode.",
-              );
-            });
-          }
+        ? requestExecutionModeSelection
         : undefined,
       onSelectModel: setModelSettings
         ? (model) => {
@@ -693,6 +719,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     desktopApi,
     federationTarget,
     onSettingsMenuOpen,
+    requestExecutionModeSelection,
     threadId,
     threadModel,
     threadSource,
@@ -888,6 +915,8 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       />
 
       {titleTooltip.tooltipNode}
+      {/* Portals to the body, so the card's clip and transform miss it. */}
+      {fullAccessRiskDialog}
       <span
         aria-hidden="true"
         className="star-map-chat-card__resize"

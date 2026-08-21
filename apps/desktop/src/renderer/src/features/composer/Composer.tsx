@@ -139,6 +139,7 @@ import {
   FEDERATED_THREAD_SEARCH_LIMIT,
   useFederatedThreadSearch,
 } from "../../lib/useFederatedThreadSearch";
+import { useExecutionModeSelection } from "../../lib/useExecutionModeSelection";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   findSkillTrigger,
@@ -2934,12 +2935,6 @@ export function Composer(props: ComposerProps) {
       }
     };
   }, []);
-  const [fullAccessRiskDialogOpen, setFullAccessRiskDialogOpen] =
-    useState(false);
-  const [fullAccessRiskDontWarnAgain, setFullAccessRiskDontWarnAgain] =
-    useState(false);
-  const [fullAccessRiskSaving, setFullAccessRiskSaving] = useState(false);
-  const [fullAccessRiskError, setFullAccessRiskError] = useState<string>();
   const [autocompleteLayout, setAutocompleteLayout] = useState<{
     maxHeight: number;
     placement: "above" | "below";
@@ -8652,40 +8647,21 @@ export function Composer(props: ComposerProps) {
     }
   };
 
-  const requestExecutionModeSelection = (
-    executionMode: ThreadExecutionMode,
-  ): void => {
-    const currentExecutionMode =
-      props.launchpad?.executionMode ?? props.thread?.executionMode ?? "default";
-    if (
-      currentExecutionMode === "default" &&
-      executionMode === "full-access" &&
-      !props.fullAccessRiskWarningDismissed
-    ) {
-      setFullAccessRiskDontWarnAgain(false);
-      setFullAccessRiskError(undefined);
-      setFullAccessRiskDialogOpen(true);
-      return;
-    }
-
-    applyExecutionModeSelection(executionMode);
-  };
-
-  const confirmFullAccessRisk = async (): Promise<void> => {
-    setFullAccessRiskSaving(true);
-    setFullAccessRiskError(undefined);
-    try {
-      if (fullAccessRiskDontWarnAgain) {
-        await props.onDismissFullAccessRiskWarning?.();
-      }
-      setFullAccessRiskDialogOpen(false);
-      applyExecutionModeSelection("full-access");
-    } catch (error) {
-      setFullAccessRiskError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setFullAccessRiskSaving(false);
-    }
-  };
+  // The Full Access confirmation lives in the shared gate so every
+  // surface that can escalate a thread honors it; `App` owns this
+  // window's settings snapshot, so the composer hands the preference and
+  // its write down rather than letting the gate read them again.
+  const { fullAccessRiskDialog, requestExecutionModeSelection } =
+    useExecutionModeSelection({
+      applyExecutionMode: applyExecutionModeSelection,
+      currentExecutionMode:
+        props.launchpad?.executionMode
+        ?? props.thread?.executionMode
+        ?? "default",
+      desktopApi: props.desktopApi,
+      dismissed: props.fullAccessRiskWarningDismissed ?? false,
+      onDismiss: props.onDismissFullAccessRiskWarning,
+    });
 
   const handleThreadModelSettingsPatch = (
     patch: Partial<
@@ -9605,82 +9581,6 @@ export function Composer(props: ComposerProps) {
     handlePlainComposerKeyDown(event);
   };
 
-  const fullAccessRiskDialog = fullAccessRiskDialogOpen
-    ? createPortal(
-        <div className="full-access-warning-modal">
-          <div
-            aria-labelledby="full-access-warning-title"
-            aria-modal="true"
-            className="full-access-warning-dialog"
-            role="dialog"
-          >
-            <div className="full-access-warning-dialog__header">
-              <h2 id="full-access-warning-title">Enable Full Access?</h2>
-              <button
-                aria-label="Cancel Full Access warning"
-                className="workspace-handoff-dialog__close"
-                disabled={fullAccessRiskSaving}
-                type="button"
-                onClick={() => {
-                  setFullAccessRiskDialogOpen(false);
-                }}
-              >
-                ×
-              </button>
-            </div>
-            <p>
-              Full Access allows network access and read/write access to almost
-              all files on this machine.
-            </p>
-            <p>
-              That means data can be exfiltrated unintentionally, or by
-              malicious code the agent downloads and executes through a supply
-              chain attack on npm, PyPI, Rust crates, Go modules, or a similar
-              dependency source.
-            </p>
-            <label className="composer__checkbox full-access-warning-dialog__checkbox">
-              <input
-                checked={fullAccessRiskDontWarnAgain}
-                disabled={fullAccessRiskSaving}
-                type="checkbox"
-                onChange={(event) =>
-                  setFullAccessRiskDontWarnAgain(event.currentTarget.checked)
-                }
-              />
-              <span>Do not warn me again on this desktop.</span>
-            </label>
-            {fullAccessRiskError ? (
-              <p className="full-access-warning-dialog__error" role="alert">
-                {fullAccessRiskError}
-              </p>
-            ) : null}
-            <div className="full-access-warning-dialog__actions">
-              <button
-                className="button button--secondary"
-                disabled={fullAccessRiskSaving}
-                type="button"
-                onClick={() => {
-                  setFullAccessRiskDialogOpen(false);
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                className="button button--primary"
-                disabled={fullAccessRiskSaving}
-                type="button"
-                onClick={() => {
-                  void confirmFullAccessRisk();
-                }}
-              >
-                I Understand and Accept the Risks
-              </button>
-            </div>
-          </div>
-        </div>,
-        document.body,
-      )
-    : null;
   const pdfPreviewPathSet = new Set(
     pdfPreviewReferences.map((reference) => reference.path),
   );
