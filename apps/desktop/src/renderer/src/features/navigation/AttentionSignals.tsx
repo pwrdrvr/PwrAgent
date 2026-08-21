@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { SignalCount } from "../../components/SignalCount";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import {
@@ -42,9 +43,9 @@ import {
  * untouched component tinted by its parent's tokens — a peer's turn is running
  * for real, so it sweeps for real, on the same epoch as the rest.
  */
-function AttentionTurnScanner(props: { count: number }) {
+export function AttentionTurnScanner(props: { count: number }) {
   return props.count === 0 ? (
-    <span className="lens-switch__dormant-scanner" />
+    <span className="signal-count__dormant-scanner" />
   ) : (
     <ThinkingScanner compact />
   );
@@ -72,24 +73,20 @@ export function AttentionTurnReadouts(props: {
   activeRemote?: number;
 }) {
   return (
-    <span aria-hidden="true" className="lens-switch__turns">
-      <span
-        className="lens-switch__signal lens-switch__signal--active"
-        data-attention-active-count={props.activeLocal}
-        data-zero={props.activeLocal === 0 ? "true" : undefined}
-      >
-        <AttentionTurnScanner count={props.activeLocal} />
-        <span>{props.activeLocal}</span>
-      </span>
+    <span aria-hidden="true" className="signal-count-stack">
+      <SignalCount
+        count={props.activeLocal}
+        data={{ "data-attention-active-count": props.activeLocal }}
+        indicator={<AttentionTurnScanner count={props.activeLocal} />}
+        tone="active"
+      />
       {props.activeRemote === undefined ? null : (
-        <span
-          className="lens-switch__signal lens-switch__signal--remote-active"
-          data-attention-remote-active-count={props.activeRemote}
-          data-zero={props.activeRemote === 0 ? "true" : undefined}
-        >
-          <AttentionTurnScanner count={props.activeRemote} />
-          <span>{props.activeRemote}</span>
-        </span>
+        <SignalCount
+          count={props.activeRemote}
+          data={{ "data-attention-remote-active-count": props.activeRemote }}
+          indicator={<AttentionTurnScanner count={props.activeRemote} />}
+          tone="remote-active"
+        />
       )}
     </span>
   );
@@ -98,15 +95,13 @@ export function AttentionTurnReadouts(props: {
 /** The orange cookie and its count: threads waiting to be looked at. */
 export function AttentionReviewReadout(props: { count: number }) {
   return (
-    <span
-      aria-hidden="true"
-      className="lens-switch__signal lens-switch__signal--review"
-      data-attention-review-count={props.count}
-      data-zero={props.count === 0 ? "true" : undefined}
-    >
-      <span className="thread-row__status-cookie" />
-      <span>{props.count}</span>
-    </span>
+    <SignalCount
+      ariaHidden
+      count={props.count}
+      data={{ "data-attention-review-count": props.count }}
+      indicator={<span className="thread-row__status-cookie" />}
+      tone="idle"
+    />
   );
 }
 
@@ -130,9 +125,9 @@ function AttentionCardRow(props: {
     >
       <span
         aria-hidden="true"
-        className={`lens-switch__signal lens-switch__signal--${
+        className={`signal-count signal-count--${
           props.indicator === "review"
-            ? "review"
+            ? "idle"
             : props.indicator === "remote-turn"
               ? "remote-active"
               : "active"

@@ -119,8 +119,8 @@ describe("star map attention filter", () => {
     const { container } = renderMap([working, idle]);
     await waitFor(() => expect(chip()).toBeTruthy());
 
-    const active = container.querySelector(".lens-switch__signal--active");
-    const review = container.querySelector(".lens-switch__signal--review");
+    const active = container.querySelector(".signal-count--active");
+    const review = container.querySelector(".signal-count--idle");
     expect(active?.textContent).toBe("1");
     expect(active?.getAttribute("data-zero")).toBeNull();
     // Zero is drawn, not hidden: a missing indicator makes an idle chip
@@ -129,7 +129,7 @@ describe("star map attention filter", () => {
     expect(review?.getAttribute("data-zero")).toBe("true");
     // No peers on this map, so the remote readout is absent entirely.
     expect(
-      container.querySelector(".lens-switch__signal--remote-active"),
+      container.querySelector(".signal-count--remote-active"),
     ).toBeNull();
   });
 
@@ -154,8 +154,8 @@ describe("star map attention filter", () => {
   it("swaps the scanner element at zero rather than freezing it", async () => {
     const { container } = renderMap([idle]);
     await waitFor(() => expect(chip()).toBeTruthy());
-    const active = container.querySelector(".lens-switch__signal--active");
-    expect(active?.querySelector(".lens-switch__dormant-scanner")).not.toBeNull();
+    const active = container.querySelector(".signal-count--active");
+    expect(active?.querySelector(".signal-count__dormant-scanner")).not.toBeNull();
     expect(active?.querySelector(".thinking-scanner")).toBeNull();
   });
 
@@ -194,14 +194,14 @@ describe("star map attention filter", () => {
 
   it("stacks peer turns under local ones, in the tab's own column", () => {
     // The sidebar tab's layout, element for element: both turn readouts in
-    // one `.lens-switch__turns` column, the cookie beside the column rather
+    // one `.signal-count-stack` column, the cookie beside the column rather
     // than in it. A row of three was the drift this replaces.
     const { container } = renderChip(
       { activeLocal: 1, activeRemote: 2, unread: 3 },
       { showRemoteTurns: true },
     );
     const signals = container.querySelector(".star-map__filter-signals")!;
-    const turns = signals.querySelector(".lens-switch__turns")!;
+    const turns = signals.querySelector(".signal-count-stack")!;
     expect(turns).not.toBeNull();
     expect(
       turns.querySelector("[data-attention-active-count]"),

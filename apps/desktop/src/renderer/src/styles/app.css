@@ -3427,7 +3427,15 @@ textarea,
   padding: 0 7px;
 }
 
-.lens-switch__signal {
+/* One mark and the number it counts, on every surface that says it: the
+   Attention tab and the Star Map's Attention chip, the directory header
+   counts, and the sub-agent / automation strips. See `SignalCount.tsx` for
+   why they share it — three of these renderings were visible at once, in
+   three different shapes.
+
+   Mark first, then the digits: the mark is what says WHICH number this is.
+   Mono and tabular so 9 → 10 does not shove the mark and a column lines up. */
+.signal-count {
   display: inline-flex;
   /* Never the thing that gives: a half-eaten count reads as a different
      number, so the indicator shrinks before the digits do. */
@@ -3438,6 +3446,14 @@ textarea,
   font-size: 10px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* The cookie is a mark like any other here, so its size belongs to the
+   primitive rather than to one tone — the review readout is not the only
+   place it can appear. */
+.signal-count .thread-row__status-cookie {
+  width: 8px;
+  height: 8px;
 }
 
 /* The Drafts tab's count. Same mono, size and tabular figures as the Attention
@@ -3522,7 +3538,7 @@ textarea,
 /* Reuse of the tab's own readout classes, which carry the colour and the zero
    state. Inside the card they hold only the indicator, so drop the tab's inner
    gap and let the grid do the spacing. */
-.attention-card__row .lens-switch__signal {
+.attention-card__row .signal-count {
   justify-content: center;
   gap: 0;
 }
@@ -3581,7 +3597,7 @@ textarea,
 
    `flex-start` rather than centring: the two scanners have to share a left
    edge, or a one-digit count above a two-digit one visibly staggers them. */
-.lens-switch__turns {
+.signal-count-stack {
   display: flex;
   min-width: 0;
   flex: 0 0 auto;
@@ -3594,11 +3610,11 @@ textarea,
 /* Two rows have to fit the 26px tab, so the readouts drop to their own
    line box here. Only in the stacked column: a lone readout is centred in the
    tab and the line box never shows. */
-.lens-switch__turns .lens-switch__signal {
+.signal-count-stack .signal-count {
   line-height: 1;
 }
 
-.lens-switch__signal--active {
+.signal-count--active {
   color: var(--accent-bright);
 }
 
@@ -3609,7 +3625,7 @@ textarea,
 
    Still a live sweeping scanner, not a dormant bar: the work IS running, just
    not on this machine. */
-.lens-switch__signal--remote-active {
+.signal-count--remote-active {
   color: var(--text-muted);
 }
 
@@ -3617,7 +3633,7 @@ textarea,
    readout, the thread row's mark (sidebar and Star Map card), and the
    transcript's pending line. They are the same statement — "running, but
    not here" — so a second tint for one of them would be a second meaning. */
-.lens-switch__signal--remote-active .thinking-scanner,
+.signal-count--remote-active .thinking-scanner,
 .thread-row__status-indicator--remote .thinking-scanner,
 .transcript-list__pending--remote .thinking-scanner {
   --thinking-scanner-tint: var(--text-muted);
@@ -3625,13 +3641,11 @@ textarea,
   --thinking-scanner-track: var(--bg-panel-hover);
 }
 
-.lens-switch__signal--review {
+/* Nothing is running behind this number: threads waiting to be reviewed, or
+   a strip holding only failures. Secondary rather than muted — the count is
+   still something to act on, it just is not work in flight. */
+.signal-count--idle {
   color: var(--text-secondary);
-}
-
-.lens-switch__signal--review .thread-row__status-cookie {
-  width: 8px;
-  height: 8px;
 }
 
 /* Zero is still shown — an idle tab has to read as "nothing running, nothing
@@ -3640,7 +3654,7 @@ textarea,
    `--text-muted` rather than `--text-subtle`: the zero is the message here,
    not decoration, and only the muted token is on the ramp that clears AA
    against the darkest surface it can land on. */
-.lens-switch__signal[data-zero="true"] {
+.signal-count[data-zero="true"] {
   color: var(--text-muted);
 }
 
@@ -3648,7 +3662,7 @@ textarea,
    greying the text is not enough — it has to be neutralized explicitly. Safe
    to restyle in place: it is a static mark with no animation to fall out of
    step. */
-.lens-switch__signal[data-zero="true"] .thread-row__status-cookie {
+.signal-count[data-zero="true"] .thread-row__status-cookie {
   border-color: var(--border-subtle);
   background: var(--text-muted);
   box-shadow: none;
@@ -3662,7 +3676,7 @@ textarea,
    never re-pinned. So the zero state is its own element and the live state is
    an untouched `ThinkingScanner`. Matches `.thinking-scanner--mini`'s footprint
    so the tab does not reflow when the count leaves zero. */
-.lens-switch__dormant-scanner {
+.signal-count__dormant-scanner {
   display: block;
   flex: 0 0 auto;
   width: 16px;
@@ -3688,11 +3702,11 @@ textarea,
     padding: 0 4px;
   }
 
-  .lens-switch__signal {
+  .signal-count {
     gap: 2px;
   }
 
-  .lens-switch__turns {
+  .signal-count-stack {
     gap: 1px;
   }
 }
@@ -5943,24 +5957,24 @@ textarea,
   font-size: calc(var(--sidebar-title-size) - 1px);
 }
 
+/* Type, tone and the mark-first order are `.signal-count`'s; these two keep
+   only what is theirs. */
 .directory-row__active-count,
 .directory-row__review-count {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.directory-row__active-count {
-  color: var(--accent-bright);
-}
-
-.directory-row__review-count {
-  color: var(--text-secondary);
+/* The meta block is right-aligned, so whatever ends the row lands at one x on
+   every directory. Under the old count-then-mark order that was the mark
+   itself; mark-first (see `SignalCount.tsx`) ends the row with the digits
+   instead, and a 1-digit count would pull the mark a whole digit right of a
+   2-digit neighbour — a ragged column of the one glyph the eye scans the rail
+   for. A fixed two-digit box with the digits flush right restores the constant
+   mark x without giving up the shared order. Three digits still shift it, the
+   way three digits always shifted this row's left edge. */
+.directory-row__summary-meta .signal-count__value {
+  min-width: 2ch;
+  text-align: right;
 }
 
 /* The header count cookie inherits the base 10px size — it used to be a
@@ -12969,8 +12983,8 @@ textarea,
 }
 
 /* The Attention chip's readouts: the sidebar Attention tab's own elements
-   (`AttentionSignals.tsx`), under the tab's own `.lens-switch__turns` and
-   `.lens-switch__signal` rules — not a copy of their tokens. The map and the
+   (`AttentionSignals.tsx`), under the shared `.signal-count-stack` and
+   `.signal-count` rules — not a copy of their tokens. The map and the
    sidebar report the SAME three numbers, and an operator glancing between
    the two windows must not have to work out whether two different oranges,
    or a row here and a column there, mean two different things. This wrapper
@@ -24161,21 +24175,11 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 /* Counts rank via neutrals, never the accent ramp (UI-THEME "Accent ramp"). */
-.live-strip__count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  flex: 0 0 auto;
-  padding: 0 5px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
+/* Was a bordered 18px pill with no mark beside it, which made the same
+   statement the sidebar makes ("this many, working") look like a different
+   kind of object in the same window. It is `.signal-count` now; nothing is
+   left to say here beyond keeping it out of the flex squeeze, which the
+   primitive already does. */
 
 /* Secondary tally next to the count, e.g. "12 failed" beside one live run.
    Ranks below the count via neutrals, never the accent ramp. */

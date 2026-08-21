@@ -2294,6 +2294,17 @@ describe("Sidebar", () => {
     const reviewCount = summary!.querySelector("[data-review-thread-count]");
     expect(reviewCount).toHaveAttribute("data-review-thread-count", "1");
     expect(reviewCount).toHaveTextContent(/^1$/);
+    // The Attention tab's shape, not a second one: `.signal-count` with the
+    // mark BEFORE the digits. These counts read count-then-mark until the
+    // rail and the tab above it were three different renderings of one idea
+    // — see `SignalCount.tsx`.
+    for (const count of [activeCount!, reviewCount!]) {
+      expect(count).toHaveClass("signal-count");
+      expect(count.lastElementChild).toHaveClass("signal-count__value");
+      expect(count.firstElementChild).not.toHaveClass("signal-count__value");
+    }
+    expect(activeCount).toHaveClass("signal-count--active");
+    expect(reviewCount).toHaveClass("signal-count--idle");
 
     fireEvent.mouseEnter(activeCount!);
     expect((await screen.findByRole("tooltip")).textContent).toBe(
@@ -2628,7 +2639,7 @@ describe("Sidebar", () => {
 
         const zeroTab = screen.getByRole("tab", { name: /^Attention,/ });
         expect(
-          zeroTab.querySelector(".lens-switch__dormant-scanner"),
+          zeroTab.querySelector(".signal-count__dormant-scanner"),
         ).not.toBeNull();
         expect(zeroTab.querySelector(".thinking-scanner")).toBeNull();
         expect(getAnimations).not.toHaveBeenCalled();
@@ -2639,7 +2650,7 @@ describe("Sidebar", () => {
         const liveTab = screen.getByRole("tab", { name: /^Attention,/ });
         expect(liveTab.querySelector(".thinking-scanner")).not.toBeNull();
         expect(
-          liveTab.querySelector(".lens-switch__dormant-scanner"),
+          liveTab.querySelector(".signal-count__dormant-scanner"),
         ).toBeNull();
         expect(getAnimations).toHaveBeenCalled();
         expect(animations[0]!.startTime).toBe(0);

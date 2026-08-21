@@ -47,6 +47,10 @@ import {
 } from "../../lib/native-drag-interaction";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import {
+  SignalCount,
+  type SignalCountTone,
+} from "../../components/SignalCount";
+import {
   getSubthreadDisclosureCount,
   isSubthreadSectionCollapsed,
   NativeSubAgentsDisclosure,
@@ -429,37 +433,47 @@ function getDirectoryRowLinkedDirectoryMode(
  * the app keeps the node outside the interactive element and a structured
  * hover card (which AGENTS.md contemplates) would not be inert.
  */
+/**
+ * A directory header's live-turn or to-review count.
+ *
+ * `SignalCount`'s shape, which is the sidebar's Attention tab's shape: the
+ * mark first, then the digits. It used to be the other way round here, to
+ * keep the mark at a constant x down the right-aligned rail — the flip keeps
+ * that by giving the digits a fixed two-digit box instead (see
+ * `.directory-row__summary-meta .signal-count__value`), so the rail reads the
+ * same as the tab directly above it.
+ *
+ * Not `aria-hidden`, unlike the tab's readouts: the tab spells every count
+ * out in its control's `aria-label`, and here the digits ARE the
+ * announcement, with the tooltip text as the description.
+ */
 function DirectoryCount(props: {
   activeCount?: number;
   className: string;
   count: number;
   indicator: ReactElement;
   reviewCount?: number;
+  tone: SignalCountTone;
   tooltipText: string;
 }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
 
   return (
     <>
-      <span
+      <SignalCount
         className={props.className}
-        data-active-thread-count={props.activeCount}
-        data-review-thread-count={props.reviewCount}
+        count={props.count}
+        data={{
+          "data-active-thread-count": props.activeCount,
+          "data-review-thread-count": props.reviewCount,
+        }}
+        indicator={props.indicator}
+        tone={props.tone}
         onMouseEnter={(event) =>
           tooltip.show(event.currentTarget, props.tooltipText)
         }
         onMouseLeave={tooltip.hide}
-      >
-        {/* Count BEFORE the mark. The meta block is right-aligned, so
-            the mark (cookie / scanner) is the last thing before the row
-            edge and lands at one x on every directory; the count is
-            variable-width (1–3 digits) and grows LEFT into empty space.
-            Mark-first put the cookie left of the digits, so it zigzagged
-            row to row with the digit count — a ragged column of the one
-            glyph the eye scans the rail for. */}
-        <span>{props.count}</span>
-        {props.indicator}
-      </span>
+      />
       {tooltip.tooltipNode}
     </>
   );
@@ -1640,6 +1654,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   className="directory-row__active-count"
                   count={activeThreadCount}
                   indicator={<ThinkingScanner compact />}
+                  tone="active"
                   tooltipText={formatActiveThreadCount(activeThreadCount)}
                 />
               ) : null}
@@ -1651,6 +1666,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     <span aria-hidden="true" className="thread-row__status-cookie" />
                   }
                   reviewCount={reviewThreadCount}
+                  tone="idle"
                   tooltipText={formatReviewThreadCount(reviewThreadCount)}
                 />
               ) : null}

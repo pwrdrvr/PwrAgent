@@ -1766,7 +1766,7 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toContain("@keyframes pwragent-thinking-scanner-sweep");
     // Read the blocks out by selector rather than matching declarations
     // anywhere after the first `.thinking-scanner {` in the file. A descendant
-    // rule that retints the scanner (`.lens-switch__signal--remote-active
+    // rule that retints the scanner (`.signal-count--remote-active
     // .thinking-scanner`) ends with the same three characters, so an
     // unanchored pattern starts THERE and lazily bridges thousands of lines to
     // collect these declarations from wherever they happen to live — which
