@@ -518,6 +518,8 @@ import {
   GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
   MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,
+  MANAGED_GROK_SIGNATURE_REJECTION_ACKNOWLEDGE_CHANNEL,
+  MANAGED_GROK_SIGNATURE_REJECTIONS_READ_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
@@ -2087,12 +2089,33 @@ const desktopApi = Object.freeze({
   onManagedGrokSignatureRejected: (
     callback: (event: ManagedGrokSignatureRejectedEvent) => void,
   ): (() => void) => {
+    let active = true;
+    const deliveredIds = new Set<string>();
+    const deliver = (payload: ManagedGrokSignatureRejectedEvent): void => {
+      if (!active || deliveredIds.has(payload.id)) {
+        return;
+      }
+      deliveredIds.add(payload.id);
+      callback(payload);
+      void ipcRenderer.invoke(
+        MANAGED_GROK_SIGNATURE_REJECTION_ACKNOWLEDGE_CHANNEL,
+        payload.id,
+      ).catch(() => undefined);
+    };
     const listener = (
       _event: Electron.IpcRendererEvent,
       payload: ManagedGrokSignatureRejectedEvent,
-    ) => callback(payload);
+    ) => deliver(payload);
     ipcRenderer.on(MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL, listener);
+    void ipcRenderer.invoke(
+      MANAGED_GROK_SIGNATURE_REJECTIONS_READ_CHANNEL,
+    ).then((pending: ManagedGrokSignatureRejectedEvent[]) => {
+      for (const event of pending) {
+        deliver(event);
+      }
+    }).catch(() => undefined);
     return () => {
+      active = false;
       ipcRenderer.off(MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL, listener);
     };
   },

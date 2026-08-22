@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   createReadStream,
   createWriteStream,
@@ -51,6 +51,19 @@ export class ManagedGrokSignatureRejectedError extends Error {
   }
 }
 
+/**
+ * Platform verification completed and proved that the runtime and PwrAgent
+ * were signed by different identities. Verifier availability, malformed
+ * output, and invalid signatures are ordinary validation errors instead: they
+ * do not prove an identity mismatch and must not trigger destructive cleanup.
+ */
+export class ManagedGrokPlatformSignerMismatchError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = "ManagedGrokPlatformSignerMismatchError";
+  }
+}
+
 let signatureRejectionReporter:
   | ((event: ManagedGrokSignatureRejectedEvent) => void)
   | undefined;
@@ -82,6 +95,7 @@ function reportSignatureRejection(
     signatureRejectionReporter?.({
       detail: error.message,
       directory: error.directory,
+      id: randomUUID(),
       occurredAt: Date.now(),
       removed,
       stage,
@@ -713,7 +727,10 @@ async function validateExtractedBundle(
         options.platform,
       );
     } catch (error) {
-      throw new ManagedGrokSignatureRejectedError(directory, options.tag, error);
+      if (error instanceof ManagedGrokPlatformSignerMismatchError) {
+        throw new ManagedGrokSignatureRejectedError(directory, options.tag, error);
+      }
+      throw error;
     }
   }
   const versionOutput = options.probeVersion
@@ -756,10 +773,11 @@ export function windowsSignatureVerification(
         ...WINDOWS_SIGNATURE_PRELUDE,
         "$application = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_APPLICATION",
         "$runtime = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_RUNTIME",
-        "if ($application.Status -ne 'Valid' -or $runtime.Status -ne 'Valid') { exit 1 }",
-        "if ($null -eq $application.SignerCertificate -or $null -eq $runtime.SignerCertificate) { exit 1 }",
-        "if ($runtime.SignerCertificate.Subject -cne $application.SignerCertificate.Subject) { exit 1 }",
-        "if ($runtime.SignerCertificate.Issuer -cne $application.SignerCertificate.Issuer) { exit 1 }",
+        "if ($application.Status -ne 'Valid') { throw \"PwrAgent Authenticode status is $($application.Status)\" }",
+        "if ($runtime.Status -ne 'Valid') { throw \"Managed Grok Authenticode status is $($runtime.Status)\" }",
+        "if ($null -eq $application.SignerCertificate) { throw 'PwrAgent signer certificate is unavailable' }",
+        "if ($null -eq $runtime.SignerCertificate) { throw 'Managed Grok signer certificate is unavailable' }",
+        "if ($runtime.SignerCertificate.Subject -cne $application.SignerCertificate.Subject -or $runtime.SignerCertificate.Issuer -cne $application.SignerCertificate.Issuer) { Write-Output 'PWRAGENT_MANAGED_GROK_SIGNER_MISMATCH'; exit 42 }",
       ].join("; "),
     ],
     env: {
@@ -798,18 +816,48 @@ async function verifyMatchingPlatformSignature(
       "--verify",
       "--strict",
       "--verbose=2",
-      "--test-requirement",
-      `=anchor apple generic and certificate leaf[subject.OU] = "${teamIdentifier}"`,
       command,
     ]);
+    const runtimeSignature = await execFile("codesign", [
+      "--display",
+      "--verbose=4",
+      command,
+    ]);
+    const runtimeSignatureDetails =
+      `${runtimeSignature.stdout ?? ""}\n${runtimeSignature.stderr ?? ""}`;
+    const runtimeTeamIdentifier = /^TeamIdentifier=([A-Z0-9]+)$/mu.exec(
+      runtimeSignatureDetails,
+    )?.[1];
+    if (!runtimeTeamIdentifier) {
+      throw new Error("Signed managed Grok executable has no Apple team identifier");
+    }
+    if (runtimeTeamIdentifier !== teamIdentifier) {
+      throw new ManagedGrokPlatformSignerMismatchError(
+        `Apple team identifier ${runtimeTeamIdentifier} does not match ${teamIdentifier}`,
+      );
+    }
     return;
   }
 
   if (platform === "win32") {
     const verification = windowsSignatureVerification(applicationCommand, command);
-    await execFile("powershell.exe", verification.args, {
-      env: { ...process.env, ...verification.env },
-    });
+    try {
+      await execFile("powershell.exe", verification.args, {
+        env: { ...process.env, ...verification.env },
+      });
+    } catch (error) {
+      const output = error && typeof error === "object"
+        ? `${"stdout" in error ? String(error.stdout ?? "") : ""}\n${
+          "stderr" in error ? String(error.stderr ?? "") : ""
+        }`
+        : "";
+      if (output.includes("PWRAGENT_MANAGED_GROK_SIGNER_MISMATCH")) {
+        throw new ManagedGrokPlatformSignerMismatchError(
+          "Windows Authenticode signer does not match PwrAgent",
+        );
+      }
+      throw error;
+    }
   }
 }
 

@@ -6,6 +6,7 @@ import { buildManagedGrokSignatureRejectedNotice } from "../managed-grok-signatu
 const event: ManagedGrokSignatureRejectedEvent = {
   detail: "Managed Grok bundle signature does not match this PwrAgent build: signer mismatch",
   directory: "/Users/me/.pwragent/agents/grok/versions/pwragent-v1.0.4-pwragent.2",
+  id: "rejection-1",
   occurredAt: 1_700_000_000_000,
   removed: true,
   stage: "installed",
@@ -26,7 +27,9 @@ describe("buildManagedGrokSignatureRejectedNotice", () => {
     expect(notice.id).toBe(`managed-grok-signature:${event.directory}`);
     expect(notice.title).toContain("rejected");
     expect(notice.message).toContain(event.tag);
-    expect(notice.detail).toContain("deleted and never run");
+    expect(notice.detail).toContain("during this validation attempt");
+    expect(notice.detail).not.toContain("never run");
+    expect(notice.message).not.toContain("unavailable");
     expect(notice.copyText).toBe(event.detail);
   });
 
@@ -38,7 +41,18 @@ describe("buildManagedGrokSignatureRejectedNotice", () => {
     });
 
     expect(notice.detail).toContain("remove it manually");
-    expect(notice.detail).not.toContain("deleted and never run");
+    expect(notice.detail).toContain("during this validation attempt");
+  });
+
+  it("says a staged download was deleted before installation", () => {
+    const notice = buildManagedGrokSignatureRejectedNotice({
+      event: { ...event, stage: "download" },
+      onDismiss: vi.fn(),
+    });
+
+    expect(notice.title).toContain("download rejected");
+    expect(notice.detail).toContain("before installation");
+    expect(notice.detail).not.toContain("never run");
   });
 
   it("omits the release name when the tag is unknown", () => {
@@ -47,6 +61,6 @@ describe("buildManagedGrokSignatureRejectedNotice", () => {
       onDismiss: vi.fn(),
     });
 
-    expect(notice.message).toContain("The downloaded Grok runtime is not signed");
+    expect(notice.message).toContain("The installed Grok runtime is not signed");
   });
 });

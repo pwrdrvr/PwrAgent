@@ -44,6 +44,9 @@ describe("Windows Authenticode verification prelude", () => {
     expect(args.join(" ")).not.toContain("$args[");
     expect(args[4]).toContain("$env:PWRAGENT_VERIFY_APPLICATION");
     expect(args[4]).toContain("$env:PWRAGENT_VERIFY_RUNTIME");
+    expect(args[4]).toContain("throw \"PwrAgent Authenticode status");
+    expect(args[4]).toContain("throw \"Managed Grok Authenticode status");
+    expect(args[4]).toContain("PWRAGENT_MANAGED_GROK_SIGNER_MISMATCH");
     expect(env).toEqual({
       PWRAGENT_VERIFY_APPLICATION: "C:\\Program Files\\PwrAgent\\PwrAgent.exe",
       PWRAGENT_VERIFY_RUNTIME:

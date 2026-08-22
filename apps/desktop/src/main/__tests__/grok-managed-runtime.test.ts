@@ -14,6 +14,7 @@ import { existsSync } from "node:fs";
 import {
   ensureManagedGrokRuntime,
   isManagedGrokTagEligible,
+  ManagedGrokPlatformSignerMismatchError,
   managedGrokAssetPlatform,
   MANAGED_GROK_MINIMUM_SIGNED_TAG,
   MANAGED_GROK_RELEASES_FEED_URL,
@@ -289,7 +290,7 @@ describe("ensureManagedGrokRuntime", () => {
       requirePlatformSignature: true,
       rootDir,
       verifyPlatformSignature: async () => {
-        throw new Error("signer mismatch");
+        throw new ManagedGrokPlatformSignerMismatchError("signer mismatch");
       },
     });
 
@@ -321,7 +322,7 @@ describe("ensureManagedGrokRuntime", () => {
         requirePlatformSignature: true,
         rootDir,
         verifyPlatformSignature: async () => {
-          throw new Error("signer mismatch");
+          throw new ManagedGrokPlatformSignerMismatchError("signer mismatch");
         },
       });
 
@@ -331,6 +332,7 @@ describe("ensureManagedGrokRuntime", () => {
         {
           detail: expect.stringContaining("signer mismatch"),
           directory: versionRoot,
+          id: expect.any(String),
           occurredAt: expect.any(Number),
           removed: true,
           stage: "installed",
@@ -342,10 +344,10 @@ describe("ensureManagedGrokRuntime", () => {
     }
   });
 
-  // An ordinary failure must not delete an installed runtime: a missing
-  // probe or an unreadable file resolves by reinstalling, not by wiping a
-  // bundle that may still be the correct one.
-  it("keeps an installed copy when validation fails for another reason", async () => {
+  // A verifier failure does not prove an identity mismatch. In particular,
+  // codesign/PowerShell availability and PwrAgent's own signature validation
+  // must not wipe a cache that may still be correctly signed.
+  it("keeps an installed copy when platform verification cannot complete", async () => {
     const rootDir = await temporaryRoot();
     const tag = "pwragent-v1.0.4-pwragent.2";
     await writeManagedCache(rootDir, {
@@ -364,15 +366,68 @@ describe("ensureManagedGrokRuntime", () => {
         checkMode: "ttl",
         fetch: vi.fn(async () => new Response("offline", { status: 503 })),
         platform: "darwin",
-        probeVersion: async () => "unrecognized runtime banner",
+        probeVersion: async () => "grok 1.0.4-pwragent.2",
         requirePlatformSignature: true,
         rootDir,
-        verifyPlatformSignature: async () => undefined,
+        verifyPlatformSignature: async () => {
+          throw new Error("codesign could not inspect the PwrAgent executable");
+        },
       });
 
       expect(runtime).toBeUndefined();
       expect(existsSync(versionRoot)).toBe(true);
       expect(rejections).toEqual([]);
+    } finally {
+      setManagedGrokSignatureRejectionReporter(undefined);
+    }
+  });
+
+  it("keeps using a verified cache when a newer download has another signer", async () => {
+    const rootDir = await temporaryRoot();
+    const cachedTag = "pwragent-v1.0.4-pwragent.2";
+    const releaseTag = "pwragent-v1.0.5-pwragent.1";
+    const archiveName =
+      "pwragent-grok-1.0.5-pwragent.1-macos-universal.tar.gz";
+    const archive = Buffer.from("new signed archive");
+    const digest = createHash("sha256").update(archive).digest("hex");
+    await writeManagedCache(rootDir, {
+      asset: "pwragent-grok-1.0.4-pwragent.2-macos-universal.tar.gz",
+      tag: cachedTag,
+    });
+    const rejections: unknown[] = [];
+    setManagedGrokSignatureRejectionReporter((event) => {
+      rejections.push(event);
+    });
+
+    try {
+      const runtime = await ensureManagedGrokRuntime({
+        arch: "arm64",
+        checkMode: "force",
+        extractArchive: async (_archivePath, targetDir) => {
+          await writeFakeBundle(targetDir);
+        },
+        fetch: releaseFetch(releaseTag, archiveName, archive, digest),
+        platform: "darwin",
+        probeVersion: async () => "grok 1.0.5-pwragent.1",
+        requirePlatformSignature: true,
+        rootDir,
+        verifyPlatformSignature: async (command) => {
+          if (!command.includes(`${path.sep}versions${path.sep}`)) {
+            throw new ManagedGrokPlatformSignerMismatchError("signer mismatch");
+          }
+        },
+      });
+
+      expect(runtime?.metadata.tag).toBe(cachedTag);
+      expect(rejections).toEqual([
+        expect.objectContaining({
+          detail: expect.stringContaining("signer mismatch"),
+          id: expect.any(String),
+          removed: true,
+          stage: "download",
+          tag: releaseTag,
+        }),
+      ]);
     } finally {
       setManagedGrokSignatureRejectionReporter(undefined);
     }
