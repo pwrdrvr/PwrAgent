@@ -6,7 +6,10 @@ import {
   computeStarMapEdgeArrows,
   STAR_MAP_EDGE_INSET,
 } from "../star-map-edge-arrows";
-import { starMapViewFocusedOn } from "../star-map-flight";
+import {
+  STAR_MAP_FLIGHT_SCALE,
+  starMapViewFocusedOn,
+} from "../star-map-flight";
 import { StarMapScreen } from "../StarMapScreen";
 
 /**
@@ -137,7 +140,10 @@ async function flushFrame() {
   });
 }
 
-async function renderMap(layout: "orbit" | "projects", threads: NavigationThreadSummary[]) {
+async function renderMap(
+  layout: "orbit" | "projects" | "lanes",
+  threads: NavigationThreadSummary[],
+) {
   window.localStorage.setItem(
     "pwragent.starMap.viewPreferences",
     JSON.stringify({ layout }),
@@ -241,7 +247,7 @@ describe("star map edge arrows", () => {
     fireEvent.pointerUp(window, { clientX: 500, clientY: 550 });
   });
 
-  it("flies the camera to the body when clicked, at the operator's zoom, and the arrow goes away", async () => {
+  it("flies the camera to the body when clicked, and the arrow goes away", async () => {
     await renderMap("orbit", [thread("t1", "PwrSnap")]);
     await waitFor(() => {
       expect(screen.getByRole("button", { name: /Open this instance/ })).toBeTruthy();
@@ -267,6 +273,147 @@ describe("star map edge arrows", () => {
     });
     // The body is back in the window, so nothing points at it any more.
     expect(arrowFor(LOCAL_LABEL)).toBeNull();
+  });
+
+  it("arrives at the operator's own zoom rather than the palette's landing zoom", async () => {
+    // The claim this file is named for, made falsifiable. At scale 1 the
+    // operator's zoom and `starMapFlightScale`'s 1:1 landing are the same
+    // number, so the assertion above passes either way — swapping the one
+    // for the other in `flyToEdgeTarget` left all five tests green. Zoom
+    // out first and the two diverge: the palette would pull the map back
+    // to 1, and a body is legible at every zoom the map allows, so someone
+    // looking at the whole fleet asked to be taken to a body, not zoomed
+    // in on it.
+    await renderMap("orbit", [thread("t1", "PwrSnap")]);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Open this instance/ })).toBeTruthy();
+    });
+    // One gentle pinch: half scale, well below STAR_MAP_FLIGHT_SCALE but
+    // still leaving the pan clamp room to push a body off the window —
+    // slammed to MIN_ZOOM the whole canvas fits and nothing can leave.
+    fireEvent.wheel(viewport(), {
+      ctrlKey: true,
+      deltaY: 120,
+      clientX: 640,
+      clientY: 400,
+    });
+    const zoomedOut = canvasView().scale;
+    expect(zoomedOut).toBeLessThan(STAR_MAP_FLIGHT_SCALE);
+    // Push a body out of the window at that zoom.
+    pan(-1000, -400);
+    const arrow = arrowFor(LOCAL_LABEL);
+    expect(arrow).not.toBeNull();
+
+    fireEvent.click(arrow!);
+    await waitFor(() => {
+      expect(arrowFor(LOCAL_LABEL)).toBeNull();
+    });
+    // The zoom the operator set, untouched.
+    expect(canvasView().scale).toBeCloseTo(zoomedOut, 6);
+    expect(canvasView().scale).not.toBeCloseTo(STAR_MAP_FLIGHT_SCALE, 6);
+  });
+
+  it("keeps the map's keyboard after an arrow click, so Escape still unwinds", async () => {
+    // The clicked button is culled the moment the flight lands — the test
+    // above asserts exactly that — and Chromium focuses a button on
+    // mousedown. Without an explicit hand-back, focus falls to
+    // `document.body`, which is outside the layer, and the layer's Escape
+    // handler is a React onKeyDown: the selection could no longer be
+    // dropped from the keyboard until the operator clicked the sky.
+    await renderMap("orbit", [thread("t1", "PwrSnap"), thread("t2", "PwrAgent")]);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Open this instance/ })).toBeTruthy();
+    });
+    // Sweep a selection so Escape has something to unwind. Shift-drag on
+    // bare sky is the map's own marquee gesture.
+    fireEvent.pointerDown(viewport(), {
+      button: 0,
+      shiftKey: true,
+      clientX: -4000,
+      clientY: -4000,
+    });
+    fireEvent.pointerMove(window, { clientX: 4000, clientY: 4000 });
+    fireEvent.pointerUp(window, { clientX: 4000, clientY: 4000 });
+    await screen.findByText(/card[s]? selected/);
+
+    pan(-1000, 0);
+    const arrow = arrowFor(LOCAL_LABEL);
+    expect(arrow).not.toBeNull();
+    // jsdom does not focus on click the way Chromium does; do it by hand
+    // so the assertion is about the hand-back, not about jsdom.
+    arrow!.focus();
+    fireEvent.click(arrow!);
+
+    await waitFor(() => {
+      expect(arrowFor(LOCAL_LABEL)).toBeNull();
+    });
+    const layer = document.querySelector(".star-map");
+    expect(document.activeElement).toBe(layer);
+    expect(document.activeElement).not.toBe(document.body);
+
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByText(/card selected/)).toBeNull();
+    });
+  });
+
+  it("still pans and zooms the map when the wheel is over an arrow pill", async () => {
+    // The overlay is a sibling of the CANVAS, inside the viewport, because
+    // the viewport owns the only non-passive wheel listener on the map.
+    // Mounted beside the viewport instead, an arrow pill was a dead zone:
+    // `pointer-events: auto` made it the wheel's target and the event
+    // reached no listener, so the map froze under the cursor.
+    await renderMap("orbit", [thread("t1", "PwrSnap")]);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Open this instance/ })).toBeTruthy();
+    });
+    pan(-1000, 0);
+    const arrow = arrowFor(LOCAL_LABEL);
+    expect(arrow).not.toBeNull();
+
+    // Negative deltas move the map back toward where it came from: the
+    // drag above parked it against the pan clamp, and a wheel further into
+    // the clamp is legitimately a no-op.
+    const beforePan = canvasView();
+    fireEvent.wheel(arrow!, { deltaX: -40, deltaY: -30 });
+    const afterPan = canvasView();
+    expect(afterPan.x).not.toBeCloseTo(beforePan.x, 3);
+    expect(afterPan.y).not.toBeCloseTo(beforePan.y, 3);
+
+    const beforeZoom = canvasView().scale;
+    fireEvent.wheel(arrow!, {
+      ctrlKey: true,
+      deltaY: -240,
+      clientX: 100,
+      clientY: 400,
+    });
+    expect(canvasView().scale).toBeGreaterThan(beforeZoom);
+  });
+
+  it("does not park the lanes lens above the top of its canvas", async () => {
+    // Lanes hangs its columns from a fixed top edge and seats every body
+    // on one row near it, so centring a body's y opens a band of empty sky
+    // above the lane headers with the columns shoved down — the state
+    // `topAnchored` exists to prevent, reachable from every single arrow
+    // click in this lens and escapable only through "Reset view".
+    await renderMap("lanes", [thread("t1", "PwrSnap"), thread("t2", "PwrAgent")]);
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Open this instance/ })).toBeTruthy();
+    });
+    // Push the body row off the top of the window.
+    pan(0, -400);
+    const arrow = arrowFor(LOCAL_LABEL);
+    expect(arrow).not.toBeNull();
+    expect(arrow!.className).toContain("star-map__edge-arrow--top");
+
+    fireEvent.click(arrow!);
+    await waitFor(() => {
+      expect(arrowFor(LOCAL_LABEL)).toBeNull();
+    });
+    // A positive y is the canvas origin sitting BELOW the window's, i.e.
+    // sky above the headers. Every other view write in this lens produces
+    // zero or less.
+    expect(canvasView().y).toBeLessThanOrEqual(0);
   });
 
   it("names project suns in the Projects lens, with the sun's core standing in for an icon", async () => {

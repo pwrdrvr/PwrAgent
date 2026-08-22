@@ -12304,13 +12304,21 @@ textarea,
   initial-value: 0px;
 }
 
-/* The button IS the label pill — the `.star-map__filter-chip` tokens, so
-   the edge reads as one family with the top band — and the head hangs
-   off it, back at the rail point. `left`/`top` are the TIP of the head;
-   the per-edge transforms below pull the pill inward by the head span
-   (18px glyph + 4px gap, `STAR_MAP_EDGE_HEAD_SPAN`) and slide it along
-   the edge by `--star-map-edge-shift`, which the geometry sets only when
-   a pill centred on the head would hang out of a corner. */
+/* The button IS the label pill, built on `.star-map__filter-chip`'s shape
+   and tokens so the edge reads as one family with the top band, with two
+   deliberate departures: the surface is mixed at 82% rather than 75% and
+   the text is `--text-secondary` rather than `--text-muted`. A chip sits
+   inside the band, on the band's own ground; a pill sits alone on bare
+   sky, where the chip's values read as a smudge. Anything else here that
+   differs from the chip is drift, not intent — fix it toward the chip.
+
+   The head hangs off the pill, back at the rail point. `left`/`top` are
+   the arrow's point ON the rail; the per-edge transforms below pull the
+   pill inward by the head span (18px glyph + 4px gap,
+   `STAR_MAP_EDGE_HEAD_SPAN`) and slide it along the edge by
+   `--star-map-edge-shift`, which the geometry sets when a pill centred on
+   the head would hang out of a corner or land on one of the map's own
+   readouts. */
 .star-map__edge-arrow {
   display: inline-flex;
   position: absolute;
@@ -12383,25 +12391,33 @@ textarea,
 .star-map__edge-arrow--right .star-map__edge-arrow-head {
   top: 50%;
   left: calc(100% + 4px);
-  transform: translate(0, calc(-50% - var(--star-map-edge-shift))) rotate(var(--star-map-edge-angle));
+  transform:
+    translate(0, calc(-50% - var(--star-map-edge-shift)))
+    rotate(var(--star-map-edge-angle));
 }
 
 .star-map__edge-arrow--left .star-map__edge-arrow-head {
   top: 50%;
   right: calc(100% + 4px);
-  transform: translate(0, calc(-50% - var(--star-map-edge-shift))) rotate(var(--star-map-edge-angle));
+  transform:
+    translate(0, calc(-50% - var(--star-map-edge-shift)))
+    rotate(var(--star-map-edge-angle));
 }
 
 .star-map__edge-arrow--top .star-map__edge-arrow-head {
   bottom: calc(100% + 4px);
   left: 50%;
-  transform: translate(calc(-50% - var(--star-map-edge-shift)), 0) rotate(var(--star-map-edge-angle));
+  transform:
+    translate(calc(-50% - var(--star-map-edge-shift)), 0)
+    rotate(var(--star-map-edge-angle));
 }
 
 .star-map__edge-arrow--bottom .star-map__edge-arrow-head {
   top: calc(100% + 4px);
   left: 50%;
-  transform: translate(calc(-50% - var(--star-map-edge-shift)), 0) rotate(var(--star-map-edge-angle));
+  transform:
+    translate(calc(-50% - var(--star-map-edge-shift)), 0)
+    rotate(var(--star-map-edge-angle));
 }
 
 .star-map__edge-arrow:hover .star-map__edge-arrow-head {

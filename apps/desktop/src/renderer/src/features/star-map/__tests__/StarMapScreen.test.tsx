@@ -29,6 +29,19 @@ function starMapCard(openButton: HTMLElement): HTMLElement {
   return card;
 }
 
+/**
+ * The transformed canvas the map's bodies and cards live on.
+ *
+ * Queries about what the LENS drew scope to this, because the edge-arrow
+ * overlay is a sibling of it and repeats body and project names for
+ * everything currently off-screen.
+ */
+function canvas(): HTMLElement {
+  const element = document.querySelector(".star-map__canvas");
+  if (!(element instanceof HTMLElement)) throw new Error("no canvas");
+  return element;
+}
+
 function buildDesktopApi(): DesktopApi {
   return {
     readFederationHealth: vi.fn(async () => ({
@@ -1258,17 +1271,22 @@ describe("StarMapScreen", () => {
         onFocusLocalInstance={() => undefined}
       />,
     );
+    // Scoped to the canvas, not the window: the body sits off-screen at
+    // the opening view, so its edge arrow names it too, and an unscoped
+    // query would resolve to two. Scoping rather than relaxing to
+    // `getAllByText` keeps the guarantee that matters here — that the
+    // BODY rendered exactly once — instead of accepting any count.
+    const bodyLabel = () =>
+      within(canvas()).getAllByText(/Sleepy-Dev-Box/);
     await waitFor(() => {
-      // Disambiguated label: the profile suffix rides along. The name can
-      // show more than once — the body sits off-screen at the opening
-      // view, so its edge arrow names it too — and hiding the instance
-      // has to take every one of them with it.
-      expect(screen.getAllByText(/Sleepy-Dev-Box/).length).toBeGreaterThan(0);
+      // Disambiguated label: the profile suffix rides along.
+      expect(bodyLabel()).toHaveLength(1);
     });
 
     fireEvent.click(screen.getByRole("button", { name: "View" }));
     fireEvent.click(screen.getByLabelText("Hide offline instances"));
     await waitFor(() => {
+      // Hidden everywhere, arrow included.
       expect(screen.queryAllByText(/Sleepy-Dev-Box/)).toHaveLength(0);
     });
     // The local instance is never hidden by this option.
