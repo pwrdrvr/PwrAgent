@@ -53,6 +53,10 @@ if (electronShutdownCircuitEnabled) {
 
 export default defineConfig({
   testDir: "./e2e",
+  // Manual inspectors and documentation capture workflows have their own
+  // explicit config. Collecting always-skipped inspect specs here still makes
+  // Playwright assign them to CI shards, which distorts file-level balancing.
+  testIgnore: "**/*.inspect.spec.ts",
   // One bounded Electron launch before the suite. A persistent CI guest can
   // reach a state where no Electron process can start; without this the run
   // spends its whole time budget timing out one test at a time and blames
