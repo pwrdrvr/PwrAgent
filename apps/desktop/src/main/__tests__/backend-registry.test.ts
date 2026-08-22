@@ -20265,7 +20265,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("does not emit an incident notification for ephemeral sub-agent accounting", async () => {
+  it("does not emit an incident notification for managed sub-agent accounting", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
     });
@@ -20286,7 +20286,7 @@ command = "pnpm dev"
       }>;
     }).taskMonitorDelegations.set("monitor-1", {
       backend: "codex",
-      monitorThreadId: "ephemeral-child",
+      monitorThreadId: "managed-child",
       parentBackend: "codex",
       parentThreadId: "parent-thread",
     });
@@ -20299,9 +20299,9 @@ command = "pnpm dev"
       }) => Promise<void>;
     }).emitThreadToolAccountingUpdated({
       backend: "codex",
-      threadId: "ephemeral-child",
+      threadId: "managed-child",
       triggeredAlerts: [{
-        alertId: "large-output:codex:ephemeral-child:child-turn",
+        alertId: "large-output:codex:managed-child:child-turn",
         backend: "codex",
         createdAt: 1,
         estimatedOutputTokens: 2_000,
@@ -20312,7 +20312,7 @@ command = "pnpm dev"
         message: "The sub-agent returned too much output.",
         severity: "warning",
         suggestedPrompt: "Use a bounded command.",
-        threadId: "ephemeral-child",
+        threadId: "managed-child",
         toolName: "commandExecution",
         totalOutputChars: 8_000,
         turnId: "child-turn",
@@ -20328,7 +20328,7 @@ command = "pnpm dev"
       notification: expect.objectContaining({
         method: "thread/toolAccounting/updated",
         params: expect.objectContaining({
-          threadId: "ephemeral-child",
+          threadId: "managed-child",
           toolAccounting: expect.any(Object),
         }),
       }),
@@ -20700,7 +20700,7 @@ command = "pnpm dev"
     expect(codexClient.lastStartThreadParams).toMatchObject({
       approvalPolicy: "never",
       cwd: "/repo/worktree",
-      ephemeral: true,
+      ephemeral: false,
       fastMode: true,
       model: "gpt-5.5",
       reasoningEffort: "high",
@@ -21109,7 +21109,7 @@ command = "pnpm dev"
     expect(codexClient.lastStartReviewParams).toBeUndefined();
     expect(codexClient.lastStartThreadParams).toMatchObject({
       cwd: "/repo/selected",
-      ephemeral: true,
+      ephemeral: false,
     });
     expect(
       codexClient.lastStartThreadParams?.codexEnvironmentRuntime,
@@ -21182,7 +21182,7 @@ command = "pnpm dev"
     expect(codexClient.lastStartThreadParams).toMatchObject({
       cwd: "/remote/selected",
       codexEnvironmentRuntime: remoteRuntime,
-      ephemeral: true,
+      ephemeral: false,
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "remote-project-review",
@@ -29885,7 +29885,7 @@ script = "printf setup"
     expect(codexClient.lastStartReviewParams).toBeUndefined();
     expect(codexClient.lastStartThreadParams).toMatchObject({
       cwd: "/repo/pwragent",
-      ephemeral: true,
+      ephemeral: false,
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-1",
@@ -35672,7 +35672,7 @@ script = "printf setup"
     expect(String(payload.parentAgentGuidance)).toContain("Do not sleep");
     expect(String(payload.parentAgentGuidance)).not.toContain("make at most one startup observation");
     expect(codexClient.lastStartThreadParams).toMatchObject({
-      ephemeral: true,
+      ephemeral: false,
       model: "gpt-5.6-luna",
       reasoningEffort: "medium",
       approvalPolicy: "on-request",
@@ -35915,7 +35915,7 @@ script = "printf setup"
 
     expect(response).toMatchObject({ success: true });
     expect(codexClient.lastStartThreadParams).toMatchObject({
-      ephemeral: true,
+      ephemeral: false,
       model: "gpt-5.6-luna",
     });
     expect(codexClient.lastStartThreadParams?.threadSource).toBeUndefined();
@@ -35992,7 +35992,7 @@ script = "printf setup"
       approvalPolicy: "never",
       codexEnvironmentRuntime,
       cwd: "/repo/app",
-      ephemeral: true,
+      ephemeral: false,
       sandbox: "danger-full-access",
     });
     expect(codexClient.lastStartThreadParams?.threadSource).toBeUndefined();

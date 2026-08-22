@@ -13909,7 +13909,10 @@ export class DesktopBackendRegistry {
     const thread = await client.startThread({
       ...(params.cwd ? { cwd: params.cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
-      ephemeral: true,
+      // App-server threads are excluded from the default interactive thread
+      // listing by source kind. Keep review children durable so their
+      // inspection-only transcript can use thread/read with includeTurns.
+      ephemeral: false,
       sandbox: modeSettings.sandbox,
       ...params.modelSettings,
       ...(params.codexEnvironmentRuntime
@@ -29074,7 +29077,10 @@ export class DesktopBackendRegistry {
       ...(cwd ? { cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
       dynamicTools,
-      ephemeral: true,
+      // App-server threads are excluded from the default interactive thread
+      // listing by source kind. Keep monitor children durable so their
+      // inspection-only transcript can use thread/read with includeTurns.
+      ephemeral: false,
       model: params.preferredModel,
       reasoningEffort: params.preferredReasoningEffort,
       sandbox: modeSettings.sandbox,
