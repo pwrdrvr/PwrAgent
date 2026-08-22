@@ -11,6 +11,7 @@ import type {
 import { buildFederatedThreadRef } from "@pwragent/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
+import { ensureStarMapIntakeLaunchpad } from "../app-server/star-map-intake";
 import { AutomationStore } from "../automations/automation-store";
 import { DesktopAutomationService } from "../automations/desktop-automation-service";
 import { RuntimeLeaseManager } from "../runtime-lease-manager";
@@ -200,6 +201,41 @@ describe("sqlite write metrics", () => {
     const metrics = readSqliteWriteMetrics();
     expect(metrics?.statements).toBe(2);
     expect(metrics?.commits).toBe(2);
+  });
+
+  it("budgets first-use Star Map intake launchpad initialization", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+
+    try {
+      // Intake pays this once for a directory that has no saved launchpad;
+      // later intakes reuse the persisted draft. Even an implausible 100 new
+      // directory targets per day stays below 2 MB/day at the measured WAL
+      // cost, and the commit count cannot scale with prompt or stream events.
+      const { writes } = await measureSqliteWrites(async () => {
+        await ensureStarMapIntakeLaunchpad(
+          registry,
+          {
+            key: "directory:/repos/PwrSuiteLab",
+            kind: "directory",
+            label: "PwrSuiteLab",
+            path: "/repos/PwrSuiteLab",
+            threadKeys: [],
+            needsAttentionCount: 0,
+          },
+        );
+      });
+
+      expectSqliteWriteBudget({
+        note: "initialize one missing directory launchpad for its first Star Map intake",
+        scenario: "star-map-intake-launchpad-initialization",
+        writes,
+      });
+    } finally {
+      await registry.close();
+    }
   });
 
   it("holds streamed command output to one commit per flush window", async () => {

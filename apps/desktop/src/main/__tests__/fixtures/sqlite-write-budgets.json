@@ -125,6 +125,13 @@
     "rowsChanged": 8,
     "statements": 8
   },
+  "star-map-intake-launchpad-initialization": {
+    "commits": 2,
+    "note": "initialize one missing directory launchpad for its first Star Map intake",
+    "observedWalBytes": 16480,
+    "rowsChanged": 6,
+    "statements": 7
+  },
   "streamed-command-output": {
     "commits": 2,
     "note": "500 streamed output deltas plus the completion for one command",

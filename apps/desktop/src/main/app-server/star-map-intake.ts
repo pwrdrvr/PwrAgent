@@ -10,7 +10,10 @@ import type {
 import { getMainLogger } from "../log";
 import { resolveActiveProfileDir, resolvePwragentRoot } from "../profile";
 import { DesktopMessagingBackendBridge } from "../messaging/desktop-backend-bridge";
-import { getDesktopBackendRegistry } from "./backend-registry";
+import {
+  getDesktopBackendRegistry,
+  type DesktopBackendRegistry,
+} from "./backend-registry";
 
 const log = getMainLogger("pwragent:star-map-intake");
 
@@ -178,6 +181,20 @@ function candidateOf(
   };
 }
 
+export async function ensureStarMapIntakeLaunchpad(
+  registry: Pick<DesktopBackendRegistry, "ensureDirectoryLaunchpad">,
+  directory: NavigationDirectorySummary,
+) {
+  return (await registry.ensureDirectoryLaunchpad({
+    directoryKey: directory.key,
+    directoryKind: directory.kind,
+    directoryLabel: directory.label,
+    directoryPath: directory.path,
+    currentBranch: directory.gitStatus?.currentBranch,
+    preferredBackend: directory.launchpad?.backend,
+  })).launchpad;
+}
+
 /**
  * The Star Map [+] intake: resolve the operator's natural-language request
  * to a project (Grok structured call over the directory registry +
@@ -248,18 +265,11 @@ export async function dispatchStarMapIntake(
       throw new Error(`Directory is no longer available: ${directoryKey}`);
     }
     const registry = getDesktopBackendRegistry();
-    const ensured = await registry.ensureDirectoryLaunchpad({
-      directoryKey: directory.key,
-      directoryKind: directory.kind,
-      directoryLabel: directory.label,
-      directoryPath: directory.path,
-      currentBranch: directory.gitStatus?.currentBranch,
-      preferredBackend: directory.launchpad?.backend,
-    });
+    const launchpad = await ensureStarMapIntakeLaunchpad(registry, directory);
     const materialized = await registry.materializeDirectoryLaunchpad(
       {
         directoryKey,
-        launchpad: ensured.launchpad,
+        launchpad,
         input: [{ type: "text", text }],
       },
       { messageOrigin: { kind: "pwragent" } },
