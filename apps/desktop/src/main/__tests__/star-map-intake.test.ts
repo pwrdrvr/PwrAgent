@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { NavigationDirectorySummary } from "@pwragent/shared";
 
 const generateStructuredObject = vi.fn();
+const ensureDirectoryLaunchpad = vi.fn();
 const materializeDirectoryLaunchpad = vi.fn();
 const publishLocalEvent = vi.fn(async () => undefined);
 const getNavigationSnapshot = vi.fn();
 
 vi.mock("../app-server/backend-registry", () => ({
   getDesktopBackendRegistry: () => ({
+    ensureDirectoryLaunchpad,
     generateStructuredObject,
     materializeDirectoryLaunchpad,
     publishLocalEvent,
@@ -53,6 +55,21 @@ beforeEach(() => {
     backend: "codex",
     threadId: "thread-9",
   });
+  ensureDirectoryLaunchpad.mockImplementation(async (request) => ({
+    launchpad: {
+      ...request,
+      backend: "codex",
+      executionMode: "default",
+      prompt: "",
+      workMode: "local",
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    defaults: {
+      backend: "codex",
+      executionMode: "default",
+    },
+  }));
 });
 
 describe("dispatchStarMapIntake", () => {
@@ -77,9 +94,21 @@ describe("dispatchStarMapIntake", () => {
       threadId: "thread-9",
       title: "Investigate PwrSnap issue",
     });
+    expect(ensureDirectoryLaunchpad).toHaveBeenCalledWith({
+      directoryKey: "dir-snap",
+      directoryKind: "directory",
+      directoryLabel: "PwrSnap",
+      directoryPath: "/repos/PwrSnap",
+      currentBranch: undefined,
+      preferredBackend: undefined,
+    });
     expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
       {
         directoryKey: "dir-snap",
+        launchpad: expect.objectContaining({
+          directoryKey: "dir-snap",
+          directoryLabel: "PwrSnap",
+        }),
         input: [
           { type: "text", text: "Look into the screenshot issue in PwrSnap" },
         ],

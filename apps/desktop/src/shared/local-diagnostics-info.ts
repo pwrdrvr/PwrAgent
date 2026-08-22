@@ -2,6 +2,7 @@ import {
   isRemoteFederationTarget,
   type AppServerBackendKind,
   type FederationHealthStatus,
+  type FederationTarget,
   type FederationRemoteTarget,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
@@ -16,6 +17,14 @@ export type LocalThreadDiagnosticsContext = {
   projectPath?: string;
   threadId?: string;
   title?: string;
+};
+
+export type StarMapDiagnosticsContext = {
+  intakeTarget?: {
+    federationTarget?: FederationTarget;
+    instanceId: string;
+    label: string;
+  };
 };
 
 function available(value: string | undefined): string {
@@ -130,6 +139,33 @@ export function buildTroubleshootingDiagnosticsInfo(
     `PwrAgent profile: ${metadata.activeProfileName}`,
     ...processIdLines(metadata),
     `PwrAgent log path: ${available(metadata.logFilePath)}`,
+  ].join("\n");
+}
+
+export function buildStarMapDiagnosticsInfo(
+  context: StarMapDiagnosticsContext,
+  metadata: AppMetadata,
+): string {
+  const intakeTarget = context.intakeTarget;
+  const routingTarget = intakeTarget?.federationTarget?.scope === "remote"
+    ? `remote:${intakeTarget.federationTarget.instanceId}`
+    : intakeTarget
+      ? `local:${intakeTarget.instanceId}`
+      : undefined;
+  return [
+    "Surface: Federation Star Map",
+    ...(intakeTarget
+      ? [
+          "Thread creation state: Intake open; no thread created yet",
+          `Target instance ID: ${intakeTarget.instanceId}`,
+          `Target instance label: ${intakeTarget.label}`,
+          `Federation routing target: ${routingTarget}`,
+        ]
+      : ["Thread creation state: No intake open"]),
+    `PwrAgent profile: ${metadata.activeProfileName}`,
+    ...processIdLines(metadata),
+    `PwrAgent log path: ${available(metadata.logFilePath)}`,
+    `Codex profile path: ${available(metadata.codexProfilePath)}`,
   ].join("\n");
 }
 

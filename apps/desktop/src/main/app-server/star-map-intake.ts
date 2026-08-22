@@ -243,14 +243,27 @@ export async function dispatchStarMapIntake(
     }
 
     publishIntakeStatus({ requestId, phase: "creating" });
-    const materialized = await getDesktopBackendRegistry()
-      .materializeDirectoryLaunchpad(
-        {
-          directoryKey,
-          input: [{ type: "text", text }],
-        },
-        { messageOrigin: { kind: "pwragent" } },
-      );
+    const directory = directories.find((entry) => entry.key === directoryKey);
+    if (!directory) {
+      throw new Error(`Directory is no longer available: ${directoryKey}`);
+    }
+    const registry = getDesktopBackendRegistry();
+    const ensured = await registry.ensureDirectoryLaunchpad({
+      directoryKey: directory.key,
+      directoryKind: directory.kind,
+      directoryLabel: directory.label,
+      directoryPath: directory.path,
+      currentBranch: directory.gitStatus?.currentBranch,
+      preferredBackend: directory.launchpad?.backend,
+    });
+    const materialized = await registry.materializeDirectoryLaunchpad(
+      {
+        directoryKey,
+        launchpad: ensured.launchpad,
+        input: [{ type: "text", text }],
+      },
+      { messageOrigin: { kind: "pwragent" } },
+    );
     publishIntakeStatus({
       requestId,
       phase: "done",
