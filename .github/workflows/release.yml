@@ -335,6 +335,33 @@ jobs:
           node apps/desktop/scripts/release.mjs
           --win --sign-stage-only --no-publish --require-signing
 
+      # `/releases/latest/download/<name>` only resolves for a version-independent
+      # asset name. macOS publishes `PwrAgent.dmg` and Linux publishes
+      # `PwrAgent-linux-<arch>.deb`; this is the Windows equivalent. The copy has
+      # to happen after the packaging step above so the alias carries the same
+      # Authenticode signature as the installer it copies.
+      - name: Prepare stable-name Windows installer alias
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dist = "apps/desktop/release-stage/dist"
+          $versioned = Get-ChildItem -Path $dist -File -Filter "PwrAgent-*-windows-x64-setup.exe" |
+            Sort-Object -Property Name |
+            Select-Object -First 1
+          if (-not $versioned) {
+            throw "No versioned Windows installer found under $dist."
+          }
+          $aliasName = "PwrAgent-windows-x64-setup.exe"
+          $aliasPath = Join-Path $dist $aliasName
+          Copy-Item -LiteralPath $versioned.FullName -Destination $aliasPath -Force
+          # release.mjs wrote SHA256SUMS before this copy existed. Append the alias
+          # so the manifest names every published installer, the way the Linux
+          # manifest covers both the versioned package and its stable-name alias.
+          $digest = (Get-FileHash -Algorithm SHA256 -LiteralPath $aliasPath).Hash.ToLowerInvariant()
+          $manifest = Join-Path $dist "SHA256SUMS"
+          Add-Content -LiteralPath $manifest -Value "$digest  $aliasName`n" -NoNewline -Encoding ascii
+          Write-Host "alias: $aliasPath"
+
       - name: Upload Windows installer artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
