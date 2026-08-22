@@ -477,7 +477,9 @@ describe("star map view stability", () => {
       threads: [...kept, ...threadsIn("PwrAgent", 3)],
     });
     await waitFor(() => {
-      expect(screen.getByText("PwrAgent")).toBeTruthy();
+      // Possibly twice: the lighter project seats off-screen at the
+      // opening view, so its edge arrow names it as well as its sun.
+      expect(screen.getAllByText("PwrAgent").length).toBeGreaterThan(0);
     });
 
     pan(-300, -200);
@@ -496,7 +498,7 @@ describe("star map view stability", () => {
     );
 
     await waitFor(() => {
-      expect(screen.queryByText("PwrAgent")).toBeNull();
+      expect(screen.queryAllByText("PwrAgent")).toHaveLength(0);
     });
 
     // Precondition: the surviving body really did move on the canvas. Only

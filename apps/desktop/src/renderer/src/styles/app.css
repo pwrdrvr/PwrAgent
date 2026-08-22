@@ -12265,6 +12265,189 @@ textarea,
   letter-spacing: 0.04em;
 }
 
+/* Edge arrows: pointers on the window edge to every body the window is
+   not showing, turned to the bearing of the body and clickable to fly
+   there. Screen-space, so they sit beside the viewport rather than in the
+   canvas; the geometry (which edge, where on it, the angle) is
+   `star-map-edge-arrows.ts`, and the overlay re-renders on every painted
+   frame of a gesture so the arrows slide with the map.
+
+   Layered at 3: above the window's glass drag strip (2) so an arrow near
+   the top paints crisp, below the top band (4) and every readout (8+) so
+   chrome always wins a collision — the arrows are wayfinding, the chrome
+   is the controls. The rail insets in the geometry keep them out of the
+   band in the first place. */
+.star-map__edge-arrows {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* Per-arrow geometry, written inline on each button by the overlay: the
+   ray's bearing and the pill's slide along its edge. Registered so an
+   arrow always has a typed, valid value to transform by, and — unlike the
+   sky's parallax offset — INHERITED on purpose: the button sets them and
+   the head inside it reads them, and a non-inherited property would hand
+   the head the initial value instead. A button has a handful of
+   descendants, so the inheritance costs nothing worth avoiding. */
+@property --star-map-edge-angle {
+  syntax: "<angle>";
+  inherits: true;
+  initial-value: 0deg;
+}
+
+@property --star-map-edge-shift {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+/* The button IS the label pill — the `.star-map__filter-chip` tokens, so
+   the edge reads as one family with the top band — and the head hangs
+   off it, back at the rail point. `left`/`top` are the TIP of the head;
+   the per-edge transforms below pull the pill inward by the head span
+   (18px glyph + 4px gap, `STAR_MAP_EDGE_HEAD_SPAN`) and slide it along
+   the edge by `--star-map-edge-shift`, which the geometry sets only when
+   a pill centred on the head would hang out of a corner. */
+.star-map__edge-arrow {
+  display: inline-flex;
+  position: absolute;
+  align-items: center;
+  gap: 6px;
+  max-width: 180px;
+  height: 25px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-panel) 82%, transparent);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+  transition: border-color 90ms ease, color 90ms ease, background 90ms ease;
+}
+
+.star-map__edge-arrow--right {
+  transform: translate(calc(-100% - 22px), calc(-50% + var(--star-map-edge-shift)));
+}
+
+.star-map__edge-arrow--left {
+  transform: translate(22px, calc(-50% + var(--star-map-edge-shift)));
+}
+
+.star-map__edge-arrow--top {
+  transform: translate(calc(-50% + var(--star-map-edge-shift)), 22px);
+}
+
+.star-map__edge-arrow--bottom {
+  transform: translate(calc(-50% + var(--star-map-edge-shift)), calc(-100% - 22px));
+}
+
+.star-map__edge-arrow:hover {
+  border-color: var(--accent-border);
+  background: color-mix(in srgb, var(--bg-panel) 94%, transparent);
+  color: var(--text-primary);
+}
+
+.star-map__edge-arrow:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+/* The dart. Centred on the rail point (it undoes the pill's corner slide)
+   and turned along the ray, so its tip touches the rail and its tail
+   points back toward the middle of the window. The glow is what makes it
+   read as a signal on the sky rather than a chip's corner. */
+.star-map__edge-arrow-head {
+  display: block;
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  color: var(--accent);
+  filter: drop-shadow(0 0 4px var(--accent-shadow));
+  transition: color 90ms ease;
+}
+
+.star-map__edge-arrow-head svg {
+  display: block;
+  fill: currentColor;
+}
+
+.star-map__edge-arrow--right .star-map__edge-arrow-head {
+  top: 50%;
+  left: calc(100% + 4px);
+  transform: translate(0, calc(-50% - var(--star-map-edge-shift))) rotate(var(--star-map-edge-angle));
+}
+
+.star-map__edge-arrow--left .star-map__edge-arrow-head {
+  top: 50%;
+  right: calc(100% + 4px);
+  transform: translate(0, calc(-50% - var(--star-map-edge-shift))) rotate(var(--star-map-edge-angle));
+}
+
+.star-map__edge-arrow--top .star-map__edge-arrow-head {
+  bottom: calc(100% + 4px);
+  left: 50%;
+  transform: translate(calc(-50% - var(--star-map-edge-shift)), 0) rotate(var(--star-map-edge-angle));
+}
+
+.star-map__edge-arrow--bottom .star-map__edge-arrow-head {
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translate(calc(-50% - var(--star-map-edge-shift)), 0) rotate(var(--star-map-edge-angle));
+}
+
+.star-map__edge-arrow:hover .star-map__edge-arrow-head {
+  color: var(--accent-bright);
+}
+
+.star-map__edge-arrow-icon {
+  flex: none;
+  color: var(--text-primary);
+}
+
+/* A project has no celestial icon; its sun's core stands in, at pill
+   scale — the same fill and ring as `.star-map-project__core`. */
+.star-map__edge-arrow-core {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+}
+
+.star-map__edge-arrow-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* An arrow arrives as its body leaves the window. A short fade, and only
+   a fade: the pill already carries a transform, and a body crossing the
+   edge mid-pan is not an event worth more than a blink. */
+@media (prefers-reduced-motion: no-preference) {
+  .star-map__edge-arrow {
+    animation: star-map-edge-arrow-in 160ms ease-out;
+  }
+}
+
+@keyframes star-map-edge-arrow-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
 /* Alignment guides, drawn only while a card is being dragged. They exist
    so a snap is explainable: without the line, a card latching reads as the
    drag sticking for no reason. */

@@ -1259,14 +1259,17 @@ describe("StarMapScreen", () => {
       />,
     );
     await waitFor(() => {
-      // Disambiguated label: the profile suffix rides along.
-      expect(screen.getByText(/Sleepy-Dev-Box/)).toBeTruthy();
+      // Disambiguated label: the profile suffix rides along. The name can
+      // show more than once — the body sits off-screen at the opening
+      // view, so its edge arrow names it too — and hiding the instance
+      // has to take every one of them with it.
+      expect(screen.getAllByText(/Sleepy-Dev-Box/).length).toBeGreaterThan(0);
     });
 
     fireEvent.click(screen.getByRole("button", { name: "View" }));
     fireEvent.click(screen.getByLabelText("Hide offline instances"));
     await waitFor(() => {
-      expect(screen.queryByText(/Sleepy-Dev-Box/)).toBeNull();
+      expect(screen.queryAllByText(/Sleepy-Dev-Box/)).toHaveLength(0);
     });
     // The local instance is never hidden by this option.
     expect(screen.getByText("Local")).toBeTruthy();

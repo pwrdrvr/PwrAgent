@@ -138,6 +138,11 @@ import {
   type StarMapFilterFit,
 } from "./star-map-filter-fit";
 import { StarMapKeyHint } from "./StarMapKeyHint";
+import {
+  StarMapEdgeArrows,
+  type StarMapEdgeArrowTarget,
+} from "./StarMapEdgeArrows";
+import { estimateStarMapEdgeLabelWidth } from "./star-map-edge-arrows";
 import { useStarMapCameraKeys } from "./useStarMapCameraKeys";
 import { StarMapInstanceCard } from "./StarMapInstanceCard";
 import {
@@ -608,6 +613,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const panBaseRef = useRef<StarMapView | undefined>(undefined);
 
   /**
+   * Whoever wants to know about a view write the moment it is painted,
+   * committed or not. Today that is the edge arrows: they sit in screen
+   * space over the map, and the transform string on the canvas is the
+   * only other record of a gesture frame. Pinged from `paintView`, so a
+   * subscriber sees exactly the frames the canvas does — no more, and no
+   * frame late.
+   */
+  const viewListenersRef = useRef(new Set<() => void>());
+  const subscribeToLiveView = useCallback((listener: () => void) => {
+    viewListenersRef.current.add(listener);
+    return () => {
+      viewListenersRef.current.delete(listener);
+    };
+  }, []);
+  const readLiveView = useCallback(() => viewRef.current, []);
+
+  /**
    * Move the view without telling React. For gesture frames: writes the
    * live ref and the transform, so the next frame of any writer composes
    * on top of it rather than on a stale base.
@@ -631,6 +653,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       sky.style.setProperty("--star-map-sky-x", `${offset.x}px`);
       sky.style.setProperty("--star-map-sky-y", `${offset.y}px`);
     }
+    for (const listener of viewListenersRef.current) listener();
   }, []);
 
   /**
@@ -3099,6 +3122,94 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   /**
+   * The bodies the edge arrows can point at, in the current lens: every
+   * instance in the radial and lane lenses, every project sun in
+   * Projects. Canvas units, like the bodies themselves. The arrows only
+   * want a point, a name and an icon, so this is a projection of the
+   * layout rather than the layout — the overlay re-renders on every
+   * gesture frame and should hold nothing it does not read.
+   */
+  const edgeArrowTargets = useMemo((): StarMapEdgeArrowTarget[] => {
+    if (projectsMode) {
+      const labelByKey = new Map(
+        projects.map((project) => [project.key, project.label]),
+      );
+      return projectLayout.projects.map((placement) => {
+        const label = labelByKey.get(placement.key) ?? placement.key;
+        return {
+          key: `project:${placement.key}`,
+          x: placement.x,
+          y: placement.y,
+          label,
+          kind: "project" as const,
+          labelWidth: estimateStarMapEdgeLabelWidth(label, { icon: true }),
+        };
+      });
+    }
+    return bodies.map((body) => {
+      const label = displayLabelById.get(body.instanceId) ?? body.instanceId;
+      const icon = celestialIcons.iconFor(
+        body.instanceId === localInstanceId ? undefined : body.instanceId,
+      );
+      return {
+        key: `instance:${body.instanceId}`,
+        x: body.x,
+        y: body.y,
+        label,
+        kind: "instance" as const,
+        icon,
+        labelWidth: estimateStarMapEdgeLabelWidth(label, {
+          icon: icon !== undefined,
+        }),
+      };
+    });
+  }, [
+    bodies,
+    celestialIcons,
+    displayLabelById,
+    localInstanceId,
+    projectLayout,
+    projects,
+    projectsMode,
+  ]);
+
+  /**
+   * An edge arrow's click: fly to the body it points at.
+   *
+   * Flies now rather than arming `pendingFlight`: the arrow was drawn
+   * from the body's current geometry, so there is somewhere to fly to by
+   * definition. At the operator's own zoom, not the ⌘K landing zoom — a
+   * body is legible at every zoom the map allows, and someone looking at
+   * the fleet from far out asked to be taken to a body, not to be zoomed
+   * in on it.
+   */
+  const flyToEdgeTarget = useCallback(
+    (target: StarMapEdgeArrowTarget) => {
+      // A ⌘K pick still waiting for its card would otherwise land later
+      // and fly the map away again.
+      setPendingFlight(undefined);
+      // Arriving somewhere is the operator moving the view — the same
+      // claim a drag, a camera key and a ⌘K flight make.
+      operatorMovedViewRef.current = true;
+      flight.flyTo(
+        starMapViewFocusedOn({
+          rect: { x: target.x, y: target.y, width: 0, height: 0 },
+          canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+          viewport: { width: viewportSize.width, height: viewportSize.height },
+          scale: viewRef.current.scale,
+        }),
+      );
+    },
+    [
+      flight,
+      panZoomCanvas.width,
+      panZoomCanvas.height,
+      viewportSize.width,
+      viewportSize.height,
+    ],
+  );
+
+  /**
    * Everything the ⌘K palette can search: this window's own threads and
    * every peer feed the map has fetched, deduped by identity (a pinned
    * remote thread appears in both). Archived threads are left out — the map
@@ -4618,6 +4729,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
             })}
         </div>
       </div>
+      {/* Every body the window is not showing, pointed at from the edge.
+          Beside the viewport rather than in it on purpose: the arrows are
+          screen-space and the canvas transform must not move them. */}
+      <StarMapEdgeArrows
+        targets={edgeArrowTargets}
+        viewport={viewportSize}
+        subscribe={subscribeToLiveView}
+        getView={readLiveView}
+        onFlyTo={flyToEdgeTarget}
+      />
       {jumpOpen ? (
         // The same palette the main window's ⌘K opens, doing the same job
         // for a different surface: there it scrolls a list to a row, here
