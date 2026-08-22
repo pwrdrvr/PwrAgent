@@ -159,7 +159,7 @@ export function ThreadRow(props: ThreadRowProps) {
   // instead of a per-hover `:has()` subtree scan (same optimization the
   // DirectoriesList header modifiers document).
   const isPinnedRow =
-    Boolean(props.thread.pinnedRank) && !props.thread.parentThreadId;
+    Boolean(props.thread.pinnedRank) && !props.nested;
   const [pickerOpen, setPickerOpen] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
   const openButtonRef = useRef<HTMLButtonElement>(null);
@@ -519,9 +519,11 @@ export function ThreadRow(props: ThreadRowProps) {
         {/* Hover-revealed pin affordance for UNPINNED rows only — a
             pinned row's always-visible in-title pin IS the unpin
             control, so a second pin here would be a double affordance.
-            Sub-threads cannot be pinned. */}
+            Visibly nested sub-threads cannot be pinned. A remote child
+            whose parent is absent from a full remote-viewer snapshot is
+            rendered as a top-level row and remains pinnable. */}
         {onSetThreadPin
-          && !props.thread.parentThreadId
+          && !props.nested
           && !props.thread.pinnedRank ? (
           <button
             aria-label="Pin thread"
