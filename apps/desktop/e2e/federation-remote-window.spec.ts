@@ -5,9 +5,11 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
+import type { FederationHealthStatus } from "@pwragent/shared";
 import { generateFederationIdentityKeyPair } from "../src/main/federation/federation-identity";
 import { generateFederationNoiseStaticKeyPair } from "../src/main/federation/federation-noise";
 import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
+import type { AppLogSnapshot } from "../src/shared/app-metadata";
 import { launchElectronApp, rightClickThreadRow } from "./fixtures/electron-app";
 import {
   buildFakeAgentConfigToml,
@@ -201,6 +203,57 @@ async function restoreE2eFederationIdentity(params: {
       restartMode: params.restartMode,
     },
   );
+}
+
+async function readFederationLifecycleDiagnostics(page: Page) {
+  return await page.evaluate(async () => {
+    const api = (window as typeof window & {
+      pwragent?: {
+        readAppMetadata?: () => Promise<{
+          mainProcessId: number;
+        }>;
+        readAppLogSnapshot?: () => Promise<AppLogSnapshot>;
+        readFederationHealth?: () => Promise<{
+          health: FederationHealthStatus;
+        }>;
+      };
+    }).pwragent;
+    const [appMetadata, healthResponse, logSnapshot] = await Promise.all([
+      api?.readAppMetadata?.(),
+      api?.readFederationHealth?.(),
+      api?.readAppLogSnapshot?.(),
+    ]);
+    const health = healthResponse?.health;
+    return {
+      health: health
+        ? {
+            enabled: health.enabled,
+            gatewayEndpoints: health.gatewayEndpoints?.map((endpoint) => ({
+              lastError: endpoint.lastError,
+              state: endpoint.state,
+              url: endpoint.url,
+            })),
+            leaseHolder: health.leaseHolder,
+            listenUrl: health.listenUrl,
+            peers: health.peers?.map((peer) => ({
+              id: peer.id,
+              status: peer.status,
+              unavailableReason: peer.unavailableReason,
+            })),
+            status: health.status,
+            unavailableReason: health.unavailableReason,
+          }
+        : undefined,
+      logs: (logSnapshot?.entries ?? [])
+        .filter((entry) =>
+          entry.scope?.includes("federation")
+          || /lease|listen|network|socket/i.test(entry.line)
+        )
+        .slice(-12)
+        .map((entry) => entry.line),
+      mainProcessId: appMetadata?.mainProcessId,
+    };
+  });
 }
 
 function disableE2eFederationBeforeRelaunch(homeRoot: string): void {
@@ -1221,6 +1274,8 @@ test.describe("federation remote window", () => {
       expect(relationship.parentThread?.pinnedRank).toBeTruthy();
 
       const ownerHomeRoot = owner.homeRoot;
+      const previousOwnerMainProcessId =
+        (await readFederationLifecycleDiagnostics(owner.window)).mainProcessId;
       await owner.closeApplication();
       disableE2eFederationBeforeRelaunch(ownerHomeRoot);
       const remoteParentRow = viewer.window.locator(".thread-row", {
@@ -1243,9 +1298,66 @@ test.describe("federation remote window", () => {
         page: owner.window,
         restartMode: "gateway",
       });
-      await expect(remoteParentRow).not.toHaveClass(/is-remote-offline/, {
-        timeout: 90_000,
-      });
+      let lastRestartState = "";
+      let lastRestartStateReportedAt = 0;
+      const readRestartState = async () => {
+        const [ownerDiagnostics, viewerDiagnostics, rowClass] =
+          await Promise.all([
+            readFederationLifecycleDiagnostics(owner!.window),
+            readFederationLifecycleDiagnostics(viewer!.window),
+            remoteParentRow.getAttribute("class"),
+          ]);
+        const state = {
+          owner: ownerDiagnostics.health,
+          ownerMainProcessId: ownerDiagnostics.mainProcessId,
+          previousOwnerMainProcessId,
+          viewer: viewerDiagnostics.health,
+          viewerMainProcessId: viewerDiagnostics.mainProcessId,
+          rowClass,
+        };
+        const serializedState = JSON.stringify(state);
+        const now = Date.now();
+        if (
+          serializedState !== lastRestartState
+          || now - lastRestartStateReportedAt >= 10_000
+        ) {
+          console.log(`[pwragent-e2e-federation-lifecycle] ${JSON.stringify({
+            ...state,
+            ownerLogs: ownerDiagnostics.logs,
+            viewerLogs: viewerDiagnostics.logs,
+          })}`);
+          lastRestartState = serializedState;
+          lastRestartStateReportedAt = now;
+        }
+        return state;
+      };
+      await expect
+        .poll(
+          async () => (await readRestartState()).owner?.status,
+          {
+            message: "relaunched federation owner should reacquire its lease and listen",
+            timeout: 15_000,
+          },
+        )
+        .toBe("listening");
+      await expect
+        .poll(
+          async () => (await readRestartState()).viewer?.status,
+          {
+            message: "federation viewer should reconnect to the relaunched owner",
+            timeout: 30_000,
+          },
+        )
+        .toBe("connected");
+      await expect
+        .poll(
+          async () => (await readRestartState()).rowClass,
+          {
+            message: "remote parent row should reflect the restored connection",
+            timeout: 30_000,
+          },
+        )
+        .not.toMatch(/is-remote-offline/);
 
       // Anchored regex, not `exact: true`: this test pins the parent, and
       // a pinned row's accessible name is "<title>, pinned" — while the
@@ -1285,6 +1397,12 @@ test.describe("federation remote window", () => {
       await expect
         .poll(async () => (await readViewerRelationship()).parentThread)
         .toBeUndefined();
+    } catch (error) {
+      console.error(
+        "[pwragent-e2e-federation-lifecycle-body-error]",
+        error instanceof Error ? (error.stack ?? error.message) : error,
+      );
+      throw error;
     } finally {
       await viewer?.close();
       await owner?.close();
