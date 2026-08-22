@@ -30111,12 +30111,20 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 /* Tether from an open chat card to the thread card it belongs to. Drawn
-   inside the canvas, so it pans and zooms with both endpoints. */
+   inside the canvas, so it pans and zooms with both endpoints.
+
+   Painted UNDER the clouds (`.star-map__cloud` is z-index 1): the line is a
+   wayfinding aid, not a foreground object, and at z-index 2 it crossed
+   thread cards, their kebab menus and cluster chrome as a dashed scribble
+   over the text. Below them, the stretch that runs under its own card is
+   hidden too, which is what lets the anchor dot mark the edge where the
+   line comes out — the arc still aims at the card's centre. Chat cards sit
+   far above either way. Pinned by star-map-z-layers.test.ts. */
 .star-map__tethers {
   position: absolute;
   left: 0;
   top: 0;
-  z-index: 2;
+  z-index: 0;
   pointer-events: none;
 }
 

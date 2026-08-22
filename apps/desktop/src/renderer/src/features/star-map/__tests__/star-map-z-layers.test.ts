@@ -69,4 +69,14 @@ describe("star map cloud paint layers", () => {
   it("keeps the nebula smudge under its cards", () => {
     expect(zIndexIn(".star-map__cluster-halo")).toBe(0);
   });
+
+  it("paints chat tethers under the clouds", () => {
+    // The tether aims at its thread card's centre and relies on the card
+    // to hide the stretch underneath it; above the clouds it crossed the
+    // cards, their kebab menus and the cluster chrome as a dashed line
+    // over the text.
+    expect(zIndexIn(".star-map__tethers")).toBeLessThan(
+      zIndexIn(".star-map__cloud"),
+    );
+  });
 });

@@ -659,6 +659,13 @@ describe("star map chat cards in map space", () => {
     await waitFor(() => {
       expect(container.querySelector(".star-map__tether")).not.toBeNull();
     });
+    // One dot at each end: the line reads card-edge to card-edge, not
+    // centre to centre. Both are placed by walking the same arc from
+    // opposite ends, so a missing one means an endpoint stopped clearing
+    // its own card.
+    expect(
+      container.querySelectorAll(".star-map__tether-anchor"),
+    ).toHaveLength(2);
     const shell = cardShell(container, "codex:a1");
     const chat = container.querySelector(".star-map-chat-card") as HTMLElement;
     // Beside its card rather than cascaded into a corner: the horizontal

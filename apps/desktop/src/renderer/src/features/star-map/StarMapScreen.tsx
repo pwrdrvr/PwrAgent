@@ -103,6 +103,7 @@ import {
   chatCardEdgeToward,
   dockContextRect,
   dockTerminalRect,
+  tetherExitPoint,
 } from "./star-map-chat-card-geometry";
 import type { StarMapCardMenuAction } from "./StarMapCardMenu";
 import { useStarMapChatCards } from "./useStarMapChatCards";
@@ -225,6 +226,12 @@ const STAR_MAP_LOAD_CARD_Z = 7000;
  * options) so a card being read is never underneath a control strip.
  */
 const STAR_MAP_CHAT_CARD_BASE_Z = 40;
+/**
+ * The dot at each end of a chat tether, where the line clears its card.
+ * Also sets how far the exit point is pushed out (plus the 1px border) so
+ * a dot is never half-hidden under the card it belongs to.
+ */
+const TETHER_ANCHOR_RADIUS = 3;
 /**
  * How close an edge has to come before it latches, in SCREEN pixels so the
  * pull feels identical at every zoom. Wide enough to catch a deliberate
@@ -3454,6 +3461,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
    * A chat card whose thread has no card on the map (filtered out, or
    * folded into a cloud's overflow) simply gets no tether: a line to
    * nowhere is worse than no line.
+   *
+   * The arc runs to the thread card's centre but is painted UNDER the
+   * clouds (`.star-map__tethers` z-index), so the stretch across the card
+   * — and across any other card or menu in its way — is hidden. A dot at
+   * each end marks where the line clears its own card, so the pairing
+   * reads edge-to-edge rather than centre-to-centre. See
+   * `tetherExitPoint`.
    */
   const chatTethers = useMemo(() => {
     if (chatCards.cards.length === 0 || projectsMode) return [];
@@ -3476,15 +3490,45 @@ export function StarMapScreen(props: StarMapScreenProps) {
       // A shallow arc, so the tether reads as part of the same sky as the
       // instance links rather than as a UI connector.
       const lift = 0.12;
+      const control = {
+        x: midX + (target.y - from.y) * lift,
+        y: midY - (target.x - from.x) * lift,
+      };
+      const margin = TETHER_ANCHOR_RADIUS + 1;
+      const threadAnchor = tetherExitPoint({
+        from,
+        control,
+        to: target,
+        rect: {
+          left: source.x,
+          top: source.y,
+          width: source.width,
+          height: source.height,
+        },
+        margin,
+      });
+      // The same walk from the other end. A quadratic reversed is the
+      // same curve with the same control point, so swapping the
+      // endpoints traces this arc backwards from the chat card and finds
+      // where it clears ITS border — no second algorithm, and the two
+      // dots sit the same distance clear of their own card.
+      const chatAnchor = tetherExitPoint({
+        from: target,
+        control,
+        to: from,
+        rect: card.rect,
+        margin,
+      });
       return [
         {
           key: card.key,
           path:
             `M ${from.x.toFixed(2)} ${from.y.toFixed(2)}`
-            + ` Q ${(midX + (target.y - from.y) * lift).toFixed(2)}`
-            + ` ${(midY - (target.x - from.x) * lift).toFixed(2)}`
+            + ` Q ${control.x.toFixed(2)} ${control.y.toFixed(2)}`
             + ` ${target.x.toFixed(2)} ${target.y.toFixed(2)}`,
-          target,
+          anchors: [chatAnchor, threadAnchor].filter(
+            (point): point is { x: number; y: number } => point !== undefined,
+          ),
         },
       ];
     });
@@ -3501,12 +3545,15 @@ export function StarMapScreen(props: StarMapScreenProps) {
         {chatTethers.map((tether) => (
           <g key={tether.key}>
             <path className="star-map__tether" d={tether.path} />
-            <circle
-              className="star-map__tether-anchor"
-              cx={tether.target.x}
-              cy={tether.target.y}
-              r={3}
-            />
+            {tether.anchors.map((point, index) => (
+              <circle
+                key={index}
+                className="star-map__tether-anchor"
+                cx={point.x.toFixed(2)}
+                cy={point.y.toFixed(2)}
+                r={TETHER_ANCHOR_RADIUS}
+              />
+            ))}
           </g>
         ))}
       </svg>
