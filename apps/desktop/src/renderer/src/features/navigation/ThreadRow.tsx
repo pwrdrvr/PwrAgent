@@ -302,6 +302,7 @@ export function ThreadRow(props: ThreadRowProps) {
       ) : null}
       <div
         ref={rowRef}
+        data-federation-peer-status={props.thread.federation?.peerStatus}
         className={`thread-row${props.compact ? " thread-row--compact" : ""}${
           isPinnedRow ? " thread-row--pinned" : ""
         }${selected ? " is-selected" : ""}${

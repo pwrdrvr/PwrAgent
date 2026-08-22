@@ -1301,11 +1301,12 @@ test.describe("federation remote window", () => {
       let lastRestartState = "";
       let lastRestartStateReportedAt = 0;
       const readRestartState = async () => {
-        const [ownerDiagnostics, viewerDiagnostics, rowClass] =
+        const [ownerDiagnostics, viewerDiagnostics, rowClass, rowPeerStatus] =
           await Promise.all([
             readFederationLifecycleDiagnostics(owner!.window),
             readFederationLifecycleDiagnostics(viewer!.window),
             remoteParentRow.getAttribute("class"),
+            remoteParentRow.getAttribute("data-federation-peer-status"),
           ]);
         const state = {
           owner: ownerDiagnostics.health,
@@ -1314,6 +1315,7 @@ test.describe("federation remote window", () => {
           viewer: viewerDiagnostics.health,
           viewerMainProcessId: viewerDiagnostics.mainProcessId,
           rowClass,
+          rowPeerStatus,
         };
         const serializedState = JSON.stringify(state);
         const now = Date.now();

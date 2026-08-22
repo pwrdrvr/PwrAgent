@@ -15,6 +15,9 @@ import {
   threadHasExactPrNumberMatch,
   threadMatchesQuery,
 } from "@pwragent/shared";
+import { getMainLogger } from "../log";
+
+const log = getMainLogger("pwragent:federation-remote-summary");
 
 export type RemoteThreadSummaryPeer = {
   target: FederationRemoteTarget;
@@ -610,8 +613,12 @@ export class RemoteThreadSummaryCache {
           this.options.onPinnedSummariesRefreshed?.(instanceId);
         }
       },
-      () => {
+      (error) => {
         this.refreshFailures.add(instanceId);
+        log.warn("remote pinned summary refresh failed", {
+          error: error instanceof Error ? error.message : String(error),
+          instanceId,
+        });
         if (!failedBefore) {
           this.options.onPinnedSummariesRefreshed?.(instanceId);
         }
