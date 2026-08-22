@@ -145,6 +145,14 @@ import {
   type StarMapFilterFit,
 } from "./star-map-filter-fit";
 import { StarMapKeyHint } from "./StarMapKeyHint";
+import {
+  StarMapEdgeArrows,
+  type StarMapEdgeArrowTarget,
+} from "./StarMapEdgeArrows";
+import {
+  estimateStarMapEdgeLabelWidth,
+  type StarMapEdgeObstacle,
+} from "./star-map-edge-arrows";
 import { useStarMapCameraKeys } from "./useStarMapCameraKeys";
 import { StarMapInstanceCard } from "./StarMapInstanceCard";
 import {
@@ -451,6 +459,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLDivElement>(null);
   const skyRef = useRef<SVGSVGElement>(null);
+  // The two always-on readouts the edge arrows have to route around.
+  const keyHintRef = useRef<HTMLDivElement>(null);
+  const selectionBarRef = useRef<HTMLDivElement>(null);
   const { health } = useFederationHealth({ desktopApi: props.desktopApi });
   const celestialIcons = useCelestialIcons({ desktopApi: props.desktopApi });
   const [filterSelection, setFilterSelection] =
@@ -624,6 +635,36 @@ export function StarMapScreen(props: StarMapScreenProps) {
   const panBaseRef = useRef<StarMapView | undefined>(undefined);
 
   /**
+   * Whoever wants to know about a view write the moment it is painted,
+   * committed or not. Today that is the edge arrows: they sit in screen
+   * space over the map, and the transform string on the canvas is the
+   * only other record of a gesture frame. Pinged from `paintView`, so a
+   * subscriber sees exactly the frames the canvas does — no more, and no
+   * frame late.
+   */
+  // Lazily, not `useRef(new Set())`: a ref's argument is evaluated on every
+  // render and discarded on all but the first, and this is the map's hottest
+  // component — a pinch alone would allocate 60-120 throwaway Sets a second
+  // on the very render path `paintView` exists to keep cheap.
+  const viewListenersRef = useRef<Set<() => void> | undefined>(undefined);
+  const subscribeToLiveView = useCallback((listener: () => void) => {
+    const listeners = (viewListenersRef.current ??= new Set());
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  }, []);
+  const readLiveView = useCallback(() => viewRef.current, []);
+  /**
+   * The window box as the live path sees it, for the same reason
+   * `readLiveView` exists: the edge arrows are placed against BOTH, and
+   * reading one from a ref and the other from React state left them
+   * positioning against the previous window for a frame after every
+   * resize step — arrows trailing the window edge through a drag-resize.
+   */
+  const readLiveViewport = useCallback(() => viewportSizeRef.current, []);
+
+  /**
    * Move the view without telling React. For gesture frames: writes the
    * live ref and the transform, so the next frame of any writer composes
    * on top of it rather than on a stale base.
@@ -647,6 +688,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
       sky.style.setProperty("--star-map-sky-x", `${offset.x}px`);
       sky.style.setProperty("--star-map-sky-y", `${offset.y}px`);
     }
+    // Copied before iterating: a listener is free to unsubscribe from
+    // inside its own notification (React does exactly that when the
+    // overlay unmounts mid-frame), and mutating the Set under its own
+    // iterator is how that turns into a skipped listener.
+    const listeners = viewListenersRef.current;
+    if (listeners?.size) for (const listener of [...listeners]) listener();
   }, []);
 
   /**
@@ -747,7 +794,13 @@ export function StarMapScreen(props: StarMapScreenProps) {
         // stale wrap from a wider window leaves the sky short of the new
         // right or bottom edge for that frame.
         viewportSizeRef.current = { width: rect.width, height: rect.height };
-        paintView(viewRef.current);
+        // A COPY, not the live object: `paintView` notifies the live-view
+        // subscribers, and they compare snapshots by identity. Handed the
+        // same object back they would correctly conclude the view had not
+        // moved — and the edge arrows, which are placed against the window
+        // as well as the view, would keep last frame's rail until the state
+        // commit below landed a frame later.
+        paintView({ ...viewRef.current });
         setViewportSize((current) =>
           current.width === rect.width && current.height === rect.height
             ? current
@@ -2358,6 +2411,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     operatorMovedViewRef.current = true;
   }, [abortFlight]);
 
+
   /**
    * WASD / arrows fly the camera, `-` and `=` work the zoom, `0` resets.
    *
@@ -2608,6 +2662,68 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   /** Cards the operator has gathered, by card key. */
   const [selection, setSelection] = useState<ReadonlySet<string>>(new Set());
+
+  /**
+   * Where the map's own readouts sit, so an edge arrow can slide clear of
+   * them instead of being drawn underneath one.
+   *
+   * The key hint and the selection bar paint ABOVE the arrows and are
+   * near-opaque, and both live in the bottom band the arrows' own rail
+   * reaches — a body off the bottom-left put its pill entirely inside the
+   * hint, and a body straight down put its dart under the selection bar,
+   * where the bar's own pointer-events made it unclickable too.
+   *
+   * Measured off a ResizeObserver rather than per frame: the hint's box is
+   * effectively constant and the bar's changes only when the selection
+   * count's width does, so reading it on the arrows' render path would be
+   * a forced layout sixty times a second for a number that almost never
+   * moves. Rects are relative to the layer, which is the arrows' own
+   * coordinate space (both it and the overlay are `inset: 0`).
+   */
+  const [edgeArrowObstacles, setEdgeArrowObstacles] = useState<
+    readonly StarMapEdgeObstacle[]
+  >([]);
+  const hasSelection = selection.size > 0;
+  useLayoutEffect(() => {
+    const layer = layerRef.current;
+    if (!layer) return;
+    const measure = () => {
+      const origin = layer.getBoundingClientRect();
+      const next: StarMapEdgeObstacle[] = [];
+      for (const element of [keyHintRef.current, selectionBarRef.current]) {
+        if (!element) continue;
+        const rect = element.getBoundingClientRect();
+        if (!(rect.width > 0) || !(rect.height > 0)) continue;
+        next.push({
+          left: rect.left - origin.left,
+          top: rect.top - origin.top,
+          right: rect.right - origin.left,
+          bottom: rect.bottom - origin.top,
+        });
+      }
+      setEdgeArrowObstacles((current) =>
+        current.length === next.length
+        && current.every(
+          (box, index) =>
+            box.left === next[index].left
+            && box.top === next[index].top
+            && box.right === next[index].right
+            && box.bottom === next[index].bottom,
+        )
+          ? current
+          : next,
+      );
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    for (const element of [keyHintRef.current, selectionBarRef.current]) {
+      if (element) observer.observe(element);
+    }
+    return () => observer.disconnect();
+    // `hasSelection` swaps the selection bar in and out, so the observed
+    // element set changes with it; the viewport size moves both boxes.
+  }, [hasSelection, viewportSize.height, viewportSize.width]);
   /** The live sweep rect, while a marquee drag is in flight. */
   const [marquee, setMarquee] = useState<SnapRect | undefined>(undefined);
 
@@ -3217,6 +3333,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
         canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
         viewport: { width: viewportSize.width, height: viewportSize.height },
         scale: starMapFlightScale(viewRef.current.scale),
+        // Same latent hole the edge arrows made systematic: a ⌘K pick of a
+        // card near the top of a lane column would otherwise open sky above
+        // the headers. A cap, so a card deep in a column still travels.
+        topAnchored: topAnchoredView,
       }),
     );
     // Canvas and viewport enter as their measurements rather than as the
@@ -3232,6 +3352,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
     panZoomCanvas.height,
     pendingFlight,
     toggleClusterExpanded,
+    topAnchoredView,
     viewportSize.width,
     viewportSize.height,
   ]);
@@ -3278,6 +3399,104 @@ export function StarMapScreen(props: StarMapScreenProps) {
       }, STAR_MAP_SUMMON_TIMEOUT_MS);
     },
     [flightRects, markThreadEntering],
+  );
+
+  /**
+   * The bodies the edge arrows can point at, in the current lens: every
+   * instance in the radial and lane lenses, every project sun in
+   * Projects. Canvas units, like the bodies themselves. The arrows only
+   * want a point, a name and an icon, so this is a projection of the
+   * layout rather than the layout — the overlay re-renders on every
+   * gesture frame and should hold nothing it does not read.
+   */
+  const edgeArrowTargets = useMemo((): StarMapEdgeArrowTarget[] => {
+    if (projectsMode) {
+      const labelByKey = new Map(
+        projects.map((project) => [project.key, project.label]),
+      );
+      return projectLayout.projects.map((placement) => {
+        const label = labelByKey.get(placement.key) ?? placement.key;
+        return {
+          key: `project:${placement.key}`,
+          x: placement.x,
+          y: placement.y,
+          label,
+          kind: "project" as const,
+          labelWidth: estimateStarMapEdgeLabelWidth(label, { icon: true }),
+        };
+      });
+    }
+    return bodies.map((body) => {
+      const label = displayLabelById.get(body.instanceId) ?? body.instanceId;
+      const icon = celestialIcons.iconFor(
+        body.instanceId === localInstanceId ? undefined : body.instanceId,
+      );
+      return {
+        key: `instance:${body.instanceId}`,
+        x: body.x,
+        y: body.y,
+        label,
+        kind: "instance" as const,
+        icon,
+        labelWidth: estimateStarMapEdgeLabelWidth(label, {
+          icon: icon !== undefined,
+        }),
+      };
+    });
+  }, [
+    bodies,
+    celestialIcons,
+    displayLabelById,
+    localInstanceId,
+    projectLayout,
+    projects,
+    projectsMode,
+  ]);
+
+  /**
+   * An edge arrow's click: fly to the body it points at.
+   *
+   * Flies now rather than arming `pendingFlight`: the arrow was drawn
+   * from the body's current geometry, so there is somewhere to fly to by
+   * definition. At the operator's own zoom, not the ⌘K landing zoom — a
+   * body is legible at every zoom the map allows, and someone looking at
+   * the fleet from far out asked to be taken to a body, not to be zoomed
+   * in on it.
+   */
+  const flyToEdgeTarget = useCallback(
+    (target: StarMapEdgeArrowTarget) => {
+      // A ⌘K pick still waiting for its card would otherwise land later
+      // and fly the map away again.
+      setPendingFlight(undefined);
+      // Arriving somewhere is the operator moving the view — the same
+      // claim a drag, a camera key and a ⌘K flight make.
+      operatorMovedViewRef.current = true;
+      // The arrow is about to be culled: it exists only while its body is
+      // off-screen, and this flight brings the body back. Chromium focused
+      // the button on mousedown, so without this the focused element is
+      // removed mid-flight and focus lands on `document.body` — outside
+      // the layer, whose Escape handler is a React `onKeyDown` and so
+      // stops firing. `startCanvasPan` restores focus for exactly this
+      // reason (see its own comment); this path owes the same.
+      layerRef.current?.focus();
+      flight.flyTo(
+        starMapViewFocusedOn({
+          rect: { x: target.x, y: target.y, width: 0, height: 0 },
+          canvas: { width: panZoomCanvas.width, height: panZoomCanvas.height },
+          viewport: { width: viewportSize.width, height: viewportSize.height },
+          scale: viewRef.current.scale,
+          topAnchored: topAnchoredView,
+        }),
+      );
+    },
+    [
+      flight,
+      panZoomCanvas.width,
+      panZoomCanvas.height,
+      topAnchoredView,
+      viewportSize.width,
+      viewportSize.height,
+    ],
   );
 
   /**
@@ -4930,6 +5149,22 @@ export function StarMapScreen(props: StarMapScreenProps) {
               );
             })}
         </div>
+        {/* Every body the window is not showing, pointed at from the edge.
+            A sibling of the CANVAS, inside the viewport: screen-space, so
+            the canvas transform must not move it — but inside, because the
+            viewport owns the non-passive wheel listener. Mounted beside the
+            viewport instead, a wheel over an arrow pill reached no listener
+            at all and the map froze under the cursor. `shouldStartCanvasPan`
+            already excludes `button`, so being in the pan's subtree costs
+            nothing. */}
+        <StarMapEdgeArrows
+          targets={edgeArrowTargets}
+          obstacles={edgeArrowObstacles}
+          subscribe={subscribeToLiveView}
+          getView={readLiveView}
+          getViewport={readLiveViewport}
+          onFlyTo={flyToEdgeTarget}
+        />
       </div>
       {jumpOpen ? (
         // The same palette the main window's ⌘K opens, doing the same job
@@ -5167,12 +5402,17 @@ export function StarMapScreen(props: StarMapScreenProps) {
         </div>
       ) : null}
       {/* Bottom-left: the keys the map flies with. */}
-      <StarMapKeyHint held={heldCameraKeys} />
+      <StarMapKeyHint held={heldCameraKeys} ref={keyHintRef} />
       {/* The only thing on the surface that admits a selection exists.
           `role="status"` so the count is heard, not just seen — the cards
           themselves carry no selected state to a screen reader. */}
       {selection.size > 0 ? (
-        <div className="star-map__selection" role="status" aria-live="polite">
+        <div
+          className="star-map__selection"
+          ref={selectionBarRef}
+          role="status"
+          aria-live="polite"
+        >
           <span>
             {selection.size === 1 ? "1 card selected" : `${selection.size} cards selected`}
           </span>

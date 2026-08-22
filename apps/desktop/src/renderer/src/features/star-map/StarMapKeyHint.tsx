@@ -1,3 +1,4 @@
+import type { RefObject } from "react";
 import type { StarMapCameraKey } from "./star-map-keyboard";
 import { useKeyboardLayoutLabels } from "./useKeyboardLayoutLabels";
 
@@ -20,7 +21,16 @@ import { useKeyboardLayoutLabels } from "./useKeyboardLayoutLabels";
  * the correct keys are the ones engraved Z Q S D — drawing "W" there would
  * point at the wrong key while the right one silently worked.
  */
-export function StarMapKeyHint(props: { held: ReadonlySet<StarMapCameraKey> }) {
+export function StarMapKeyHint(props: {
+  held: ReadonlySet<StarMapCameraKey>;
+  /**
+   * The hint is opaque chrome parked in the bottom-left corner, which is
+   * also where an edge arrow for a body off that corner lands. The screen
+   * measures this box and hands it to the arrows as an obstacle to slide
+   * clear of, so the two no longer stack.
+   */
+  ref?: RefObject<HTMLDivElement | null>;
+}) {
   const labels = useKeyboardLayoutLabels();
 
   const cap = (key: StarMapCameraKey, label: string, modifier?: string) => (
@@ -36,6 +46,7 @@ export function StarMapKeyHint(props: { held: ReadonlySet<StarMapCameraKey> }) {
   return (
     <div
       className="star-map__key-hint"
+      ref={props.ref}
       role="note"
       // The caps are a picture of a keyboard; spelling them out one glyph
       // at a time is noise. One sentence carries the whole control set,

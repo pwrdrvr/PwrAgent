@@ -351,6 +351,11 @@ describe("Tangerine Terminal theme contract", () => {
       // Geometry, not theme.
       "star-map-sky-x",
       "star-map-sky-y",
+      // Star Map edge arrows — the ray's bearing and the pill's slide along
+      // its edge, registered with `@property` and written inline per arrow
+      // by the overlay on every painted frame. Geometry, not theme.
+      "star-map-edge-angle",
+      "star-map-edge-shift",
     ]);
     const tokenReferences = [...css.matchAll(/var\(--([a-z0-9-]+)\)/g)].map(
       ([, token]) => token

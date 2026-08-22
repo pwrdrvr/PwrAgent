@@ -182,8 +182,17 @@ function projectCanvasPosition(project: string): { x: number; y: number } {
   };
 }
 
+/**
+ * A project's sun, by name.
+ *
+ * Scoped to the canvas: the edge-arrow overlay is a sibling of it and
+ * names every project currently off-screen, so an unscoped `getByText`
+ * throws "Found multiple elements" as soon as a pan takes this project's
+ * sun out of the window — turning a geometry assertion into an unrelated
+ * query error.
+ */
 function projectBody(project: string): HTMLElement {
-  const body = screen
+  const body = within(canvas())
     .getByText(project)
     .closest(".star-map__project-cloud") as HTMLElement | null;
   if (!body) throw new Error(`no project cloud around ${project}`);
@@ -477,7 +486,10 @@ describe("star map view stability", () => {
       threads: [...kept, ...threadsIn("PwrAgent", 3)],
     });
     await waitFor(() => {
-      expect(screen.getByText("PwrAgent")).toBeTruthy();
+      // The SUN, not merely the name: the lighter project seats
+      // off-screen at the opening view, so its edge arrow names it too,
+      // and this barrier is what a geometry measurement below depends on.
+      expect(within(canvas()).getAllByText("PwrAgent")).toHaveLength(1);
     });
 
     pan(-300, -200);
@@ -496,7 +508,7 @@ describe("star map view stability", () => {
     );
 
     await waitFor(() => {
-      expect(screen.queryByText("PwrAgent")).toBeNull();
+      expect(screen.queryAllByText("PwrAgent")).toHaveLength(0);
     });
 
     // Precondition: the surviving body really did move on the canvas. Only
