@@ -169,6 +169,10 @@ type LaunchResult = {
     html?: string;
     text: string;
   } | undefined>;
+  getIntegratedTerminalQuitSnapshot: () => Promise<{
+    count: number;
+    sessionIds: string[];
+  } | undefined>;
   advance: (params?: {
     executionMode?: ThreadExecutionMode;
     stepId?: string;
@@ -502,6 +506,10 @@ async function finishElectronLaunch(args: {
     window,
     getClipboardSnapshot: async () =>
       await electronApp.evaluate(() => globalThis.__PWRAGENT_E2E_CLIPBOARD__),
+    getIntegratedTerminalQuitSnapshot: async () =>
+      await electronApp.evaluate(() =>
+        globalThis.__PWRAGENT_E2E_GET_INTEGRATED_TERMINAL_QUIT_SNAPSHOT__?.()
+      ),
     advance: async (advanceParams) => {
       await electronApp.evaluate(async (_electron, value) => {
         await globalThis.__PWRAGENT_REPLAY_DRIVER__?.advance(value);

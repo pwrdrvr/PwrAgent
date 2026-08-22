@@ -1,4 +1,4 @@
-import { ipcMain, type WebContents } from "electron";
+import { app, ipcMain, type WebContents } from "electron";
 import {
   INTEGRATED_TERMINAL_CLOSE_CHANNEL,
   INTEGRATED_TERMINAL_CREATE_CHANNEL,
@@ -35,6 +35,12 @@ let service: IntegratedTerminalService | undefined;
 let federationBridge: FederationTerminalBridge | undefined;
 let serviceDisposalPromise: Promise<void> | undefined;
 
+declare global {
+  var __PWRAGENT_E2E_GET_INTEGRATED_TERMINAL_QUIT_SNAPSHOT__:
+    | (() => IntegratedTerminalQuitSnapshot)
+    | undefined;
+}
+
 function broadcastSessions(
   sessions: IntegratedTerminalSessionSummary[],
 ): void {
@@ -66,6 +72,10 @@ export function registerIntegratedTerminalIpcHandlers(): void {
   federationBridge ??= new FederationTerminalBridge({
     localSessionsFor: () => service?.listSessions() ?? [],
   });
+  if (process.env.PWRAGENT_E2E === "1" && !app.isPackaged) {
+    globalThis.__PWRAGENT_E2E_GET_INTEGRATED_TERMINAL_QUIT_SNAPSHOT__ =
+      getIntegratedTerminalQuitSnapshot;
+  }
 
   ipcMain.removeHandler(INTEGRATED_TERMINAL_CREATE_CHANNEL);
   ipcMain.handle(
@@ -181,6 +191,7 @@ export function disposeIntegratedTerminalIpcHandlers(): Promise<void> {
   // tearing down anyway and the owner's disconnect reap ends the shells.
   federationBridge?.dispose();
   federationBridge = undefined;
+  delete globalThis.__PWRAGENT_E2E_GET_INTEGRATED_TERMINAL_QUIT_SNAPSHOT__;
   return serviceDisposalPromise;
 }
 
