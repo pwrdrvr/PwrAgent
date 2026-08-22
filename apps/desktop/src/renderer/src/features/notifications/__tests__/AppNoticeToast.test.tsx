@@ -303,7 +303,7 @@ describe("AppNoticeToast", () => {
     );
     const actionGroup = footer?.querySelector<HTMLElement>(
       ".app-notice-toast__custom-actions",
-    );
+    ) ?? null;
     const examineButton = screen.getByRole("button", {
       name: "Examine 20 cases",
     });
