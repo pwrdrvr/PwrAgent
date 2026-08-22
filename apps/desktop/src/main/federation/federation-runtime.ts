@@ -4272,6 +4272,12 @@ export class DesktopFederationRuntime {
       return;
     }
     this.publishedPeerStatuses.set(instanceId, { status, unavailableReason });
+    // A connection transition changes whether cached remote rows are live.
+    // Drop both the snapshot and any remembered refresh failure before the
+    // renderer refreshes. Otherwise a fetch that races the disconnect can
+    // leave a still-fresh cache marked degraded, and the reconnect refresh
+    // has no reason to retry it until another navigation event arrives.
+    this.remoteThreadSummaryCache?.invalidate(instanceId);
     if (status === "connected") {
       // Hooked to the status TRANSITION (this method already de-dupes
       // repeats) rather than to a specific enrollment call site, so every

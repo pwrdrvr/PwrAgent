@@ -88,6 +88,11 @@ type RuntimeHarness = {
     envelope: FederationProtocolEnvelope,
     sourcePeerId: FederationInstanceId,
   ) => boolean;
+  publishPeerStatus: (
+    instanceId: FederationInstanceId,
+    status: "connected" | "disconnected",
+    unavailableReason?: string,
+  ) => void;
   remoteThreadSummaryCache?: {
     invalidate: (instanceId?: string) => void;
   };
@@ -1025,6 +1030,24 @@ describe("DesktopFederationRuntime", () => {
     expect(visibleSnapshots).toEqual([
       ["gateway_one", "client_2018", "client_m5"],
     ]);
+  });
+
+  it("invalidates remote summaries on peer status transitions", () => {
+    const invalidated: Array<string | undefined> = [];
+    const runtime = new DesktopFederationRuntime() as unknown as RuntimeHarness;
+    runtime.remoteThreadSummaryCache = {
+      invalidate: (instanceId) => invalidated.push(instanceId),
+    };
+
+    runtime.publishPeerStatus(
+      "owner_one",
+      "disconnected",
+      "Federation peer connection closed.",
+    );
+    runtime.publishPeerStatus("owner_one", "connected");
+    runtime.publishPeerStatus("owner_one", "connected");
+
+    expect(invalidated).toEqual(["owner_one", "owner_one"]);
   });
 
   it("propagates advertised viewer disconnects and reconnects to remote PTY sessions", () => {
