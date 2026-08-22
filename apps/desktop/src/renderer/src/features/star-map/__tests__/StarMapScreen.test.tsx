@@ -73,6 +73,17 @@ function seedLayout(layout: "lanes" | "orbit" | "projects") {
   );
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+} {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 describe("StarMapScreen", () => {
   it("marks a card whose thread holds an unsent draft", async () => {
     // Drafts ride a prop of their own rather than `sessionKeys`, which the
@@ -640,6 +651,138 @@ describe("StarMapScreen", () => {
       }),
     );
     expect(onOpenLocalThread).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes a remote card only after its accepted reply is marked seen", async () => {
+    const remoteTarget = {
+      scope: "remote" as const,
+      instanceId: "pwr_peer",
+    };
+    const remoteUnreadThread = {
+      ...unreadThread("remote"),
+      federation: {
+        instanceLabel: "Studio Mac",
+        ref: {
+          backend: "codex" as const,
+          target: remoteTarget,
+          threadId: "remote",
+        },
+      },
+    } as NavigationThreadSummary;
+    const remoteSeenThread = {
+      ...remoteUnreadThread,
+      inbox: { inInbox: false, lastSeenUpdatedAt: 100 },
+    } as NavigationThreadSummary;
+    const markSeen = createDeferred<void>();
+    const onUserRepliedToThread = vi.fn(() => markSeen.promise);
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: 1_000,
+      threads:
+        getNavigationSnapshot.mock.calls.length === 1
+          ? [remoteUnreadThread]
+          : [remoteSeenThread],
+      inboxThreadKeys:
+        getNavigationSnapshot.mock.calls.length === 1
+          ? ["codex:remote"]
+          : [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const startTurn = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "remote",
+      turnId: "turn-remote",
+    }));
+    const desktopApi = {
+      readFederationHealth: vi.fn(async () => ({
+        health: {
+          enabled: true,
+          role: "gateway" as const,
+          status: "listening" as const,
+          instanceId: "pwr_local",
+          localLabel: "Local Mac",
+          peers: [{
+            id: "pwr_peer",
+            label: "Studio Mac",
+            role: "client" as const,
+            status: "connected" as const,
+            capabilities: ["thread_navigation" as const],
+          }],
+        },
+      })),
+      getNavigationSnapshot,
+      onAgentEvent: vi.fn(() => () => undefined),
+      readThread: vi.fn(async () => ({
+        backend: "codex" as const,
+        threadId: "remote",
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: { supportsPagination: false, hasPreviousPage: false },
+        },
+      })),
+      startTurn,
+    } as unknown as DesktopApi;
+
+    render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        onOpenLocalThread={() => undefined}
+        onUserRepliedToThread={onUserRepliedToThread}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    const remoteOpenButton = await screen.findByRole("button", {
+      name: "Open thread: Thread remote",
+    });
+    expect(
+      starMapCard(remoteOpenButton).querySelector(
+        '[data-thread-status="unread"]',
+      ),
+    ).not.toBeNull();
+    fireEvent.click(remoteOpenButton);
+    const chat = await screen.findByRole("region", {
+      name: "Chat: Thread remote",
+    });
+    const input = within(chat).getByRole("textbox", {
+      name: "Message Thread remote",
+    });
+    fireEvent.change(input, { target: { value: "ship the fix" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(startTurn).toHaveBeenCalled();
+      expect(onUserRepliedToThread).toHaveBeenCalledWith(remoteUnreadThread);
+    });
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      markSeen.resolve();
+      await markSeen.promise;
+    });
+
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+    });
+    expect(getNavigationSnapshot).toHaveBeenLastCalledWith({
+      federationTarget: remoteTarget,
+    });
+    await waitFor(() => {
+      expect(
+        starMapCard(
+          screen.getByRole("button", {
+            name: "Open thread: Thread remote",
+          }),
+        ).querySelector('[data-thread-status="unread"]'),
+      ).toBeNull();
+    });
   });
 
   it("raises an already-open chat card instead of stacking a duplicate", async () => {

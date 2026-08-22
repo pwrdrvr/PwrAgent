@@ -173,6 +173,9 @@ type CardParams = {
   desktopApi: DesktopApi;
   instanceIcon?: string;
   instanceLabel?: string;
+  onUserRepliedToThread?: (
+    thread: NavigationThreadSummary,
+  ) => void | Promise<void>;
   pastedImageMaxPatches?: number;
   thread: NavigationThreadSummary;
 };
@@ -190,6 +193,7 @@ function card(params: CardParams) {
       instanceLabel={params.instanceLabel}
       onClose={() => undefined}
       onOpenFull={() => undefined}
+      onUserRepliedToThread={params.onUserRepliedToThread}
       onRaise={() => undefined}
       onRectChange={() => undefined}
       pastedImageMaxPatches={params.pastedImageMaxPatches}
@@ -386,7 +390,11 @@ describe("StarMapChatCard federation routing", () => {
 
   it("starts a turn on the owning peer and clears the sent draft", async () => {
     const desktopApi = buildApi();
-    renderCard({ desktopApi, thread: remoteThread() });
+    const onUserRepliedToThread = vi.fn();
+    const thread = remoteThread({
+      inbox: { inInbox: true, reason: "updated-since-seen" },
+    });
+    renderCard({ desktopApi, onUserRepliedToThread, thread });
     const input = await typeAndSend("Remote work", "ship it");
 
     await waitFor(() => {
@@ -402,6 +410,7 @@ describe("StarMapChatCard federation routing", () => {
     await waitFor(() => {
       expect(input.value).toBe("");
     });
+    expect(onUserRepliedToThread).toHaveBeenCalledWith(thread);
   });
 
   it("leaves a local thread's target to the window's own scope", async () => {
@@ -941,8 +950,10 @@ describe("StarMapChatCard slash commands", () => {
         turnId: "turn-review-1",
       }));
       const desktopApi = reviewCapableApi(backend, { startReview });
+      const onUserRepliedToThread = vi.fn();
       renderCard({
         desktopApi,
+        onUserRepliedToThread,
         thread: localThread({ source: backend }),
       });
       const input = screen.getByRole("textbox", {
@@ -979,6 +990,7 @@ describe("StarMapChatCard slash commands", () => {
           }),
         ).toBeNull();
       });
+      expect(onUserRepliedToThread).not.toHaveBeenCalled();
     },
   );
 
@@ -1248,7 +1260,12 @@ describe("StarMapChatCard slash commands", () => {
             }
           : {}),
       });
-      renderCard({ desktopApi, thread: localThread() });
+      const onUserRepliedToThread = vi.fn();
+      renderCard({
+        desktopApi,
+        onUserRepliedToThread,
+        thread: localThread(),
+      });
       const input = screen.getByRole("textbox", {
         name: "Message Local work",
       });
@@ -1265,6 +1282,7 @@ describe("StarMapChatCard slash commands", () => {
         });
       });
       expect(desktopApi.startTurn).not.toHaveBeenCalled();
+      expect(onUserRepliedToThread).not.toHaveBeenCalled();
     },
   );
 
@@ -1618,12 +1636,13 @@ describe("StarMapChatCard send failures", () => {
   });
 
   it("restores the draft and rolls back its optimistic message when the peer refuses", async () => {
+    const onUserRepliedToThread = vi.fn();
     const desktopApi = buildApi({
       startTurn: vi.fn(async () => {
         throw new Error("peer is offline");
       }),
     } as unknown as Partial<DesktopApi>);
-    renderCard({ desktopApi, thread: remoteThread() });
+    renderCard({ desktopApi, onUserRepliedToThread, thread: remoteThread() });
     const input = await typeAndSend("Remote work", "do not lose me");
 
     // A send that never reached the backend must not cost the operator
@@ -1641,20 +1660,23 @@ describe("StarMapChatCard send failures", () => {
     expect((await screen.findByRole("alert")).textContent).toMatch(
       /peer is offline/,
     );
+    expect(onUserRepliedToThread).not.toHaveBeenCalled();
   });
 
   it("shows the message optimistically while the turn is in flight", async () => {
     // Baseline for the rollback test below: without this, "the message is
     // gone after a failure" could pass simply because it never appeared.
+    const onUserRepliedToThread = vi.fn();
     const desktopApi = buildApi({
       startTurn: vi.fn(() => new Promise(() => undefined)),
     } as unknown as Partial<DesktopApi>);
-    renderCard({ desktopApi, thread: remoteThread() });
+    renderCard({ desktopApi, onUserRepliedToThread, thread: remoteThread() });
     await typeAndSend("Remote work", "in flight");
 
     expect(
       await screen.findByText("in flight", { ignore: IGNORE_COMPOSER }),
     ).toBeTruthy();
+    expect(onUserRepliedToThread).not.toHaveBeenCalled();
   });
 });
 
@@ -1775,7 +1797,9 @@ describe("StarMapChatCard steering a live turn", () => {
 
   it("steers the running turn instead of starting a second one", async () => {
     const desktopApi = busyApi();
-    renderCard({ desktopApi, thread: localThread(BUSY) });
+    const onUserRepliedToThread = vi.fn();
+    const thread = localThread(BUSY);
+    renderCard({ desktopApi, onUserRepliedToThread, thread });
     await screen.findByRole("button", { name: "Steer" });
     await typeAndSend("Local work", "also check the logs");
 
@@ -1793,9 +1817,11 @@ describe("StarMapChatCard steering a live turn", () => {
     expect(
       await screen.findByText("Steered into the running turn."),
     ).toBeTruthy();
+    expect(onUserRepliedToThread).toHaveBeenCalledWith(thread);
   });
 
   it("says so when the backend held the message for the next turn", async () => {
+    const onUserRepliedToThread = vi.fn();
     const desktopApi = busyApi({
       steerTurn: vi.fn(async () => ({
         backend: "codex",
@@ -1804,22 +1830,29 @@ describe("StarMapChatCard steering a live turn", () => {
         disposition: "queued",
       })),
     } as unknown as Partial<DesktopApi>);
-    renderCard({ desktopApi, thread: localThread(BUSY) });
+    const thread = localThread(BUSY);
+    renderCard({ desktopApi, onUserRepliedToThread, thread });
     await screen.findByRole("button", { name: "Steer" });
     await typeAndSend("Local work", "and then deploy");
 
     // Steered and queued are both accepted sends that land in different
     // places, and only the backend knows which happened.
     expect(await screen.findByText("Queued for the next turn.")).toBeTruthy();
+    expect(onUserRepliedToThread).toHaveBeenCalledWith(thread);
   });
 
   it("gives the text back when the backend refuses to steer", async () => {
+    const onUserRepliedToThread = vi.fn();
     const desktopApi = busyApi({
       steerTurn: vi.fn(async () => {
         throw new Error("Selected backend does not support turn/steer");
       }),
     } as unknown as Partial<DesktopApi>);
-    renderCard({ desktopApi, thread: localThread(BUSY) });
+    renderCard({
+      desktopApi,
+      onUserRepliedToThread,
+      thread: localThread(BUSY),
+    });
     await screen.findByRole("button", { name: "Steer" });
     const input = await typeAndSend("Local work", "do not lose me");
 
@@ -1834,6 +1867,7 @@ describe("StarMapChatCard steering a live turn", () => {
         screen.queryByText("do not lose me", { ignore: IGNORE_COMPOSER }),
       ).toBeNull();
     });
+    expect(onUserRepliedToThread).not.toHaveBeenCalled();
   });
 
   it("keeps a peer's steer pointed at that peer", async () => {
