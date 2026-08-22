@@ -57,6 +57,8 @@ function workspace(): StarMapWorkspaceSnapshot {
           },
           dx: 28,
           dy: -10,
+          instanceDx: 160,
+          instanceDy: 80,
           fallbackRect: { left: 500, top: 220, width: 420, height: 520 },
         },
         contextOpen: true,
@@ -224,6 +226,34 @@ describe("star map workspace overlay", () => {
     const recovered = await store.writeStarMapWorkspace(workspace(), 1);
     expect(recovered.revision).toBe(2);
     expect(await store.readStarMapWorkspace()).toEqual(recovered);
+  });
+
+  it("refuses to overwrite a workspace written by a future version", async () => {
+    const futurePayload = JSON.stringify({
+      ...workspace(),
+      version: STAR_MAP_WORKSPACE_VERSION + 1,
+      futureField: { preserve: true },
+    });
+    stateDb.raw.prepare(
+      `INSERT INTO star_map_workspace(
+         workspace_key,
+         revision,
+         updated_at,
+         payload
+       ) VALUES (?, 9, 100, ?)`,
+    ).run(STAR_MAP_WORKSPACE_KEY, futurePayload);
+
+    await expect(store.readStarMapWorkspace()).rejects.toThrow(
+      "Unsupported Star Map workspace version: 2",
+    );
+    await expect(
+      store.writeStarMapWorkspace(workspace(), 9),
+    ).rejects.toThrow("Unsupported Star Map workspace version: 2");
+    expect(
+      stateDb.raw.prepare(
+        "SELECT revision, payload FROM star_map_workspace",
+      ).get(),
+    ).toEqual({ revision: 9, payload: futurePayload });
   });
 
   it("keeps valid cards when another saved card is corrupt", async () => {

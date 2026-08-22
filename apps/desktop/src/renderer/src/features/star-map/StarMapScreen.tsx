@@ -2546,6 +2546,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
           break;
         }
       }
+      const ownerBody = bodies.find(
+        (body) => body.instanceId === ownerInstanceId,
+      );
       const placement = anchor
         ? {
             anchor: {
@@ -2555,6 +2558,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 threadKey,
               },
               point: { x: anchor.x, y: anchor.y },
+              instancePoint: ownerBody
+                ? { x: ownerBody.x, y: ownerBody.y }
+                : undefined,
             },
             sourceRect: {
               height: anchor.height,
@@ -2572,7 +2578,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         { persist: Boolean(remoteOwner || health?.instanceId) },
       );
     },
-    [chatCards, health?.instanceId, localInstanceId],
+    [bodies, chatCards, health?.instanceId, localInstanceId],
   );
 
   /**
@@ -3128,7 +3134,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
 
   const resolveWorkspaceAnchor = useCallback(
     (anchor: StarMapWorkspaceAnchor) => {
-      if (anchor.kind === "canvas") return { x: 0, y: 0 };
+      if (anchor.kind === "canvas") {
+        return { point: { x: 0, y: 0 }, basis: "anchor" as const };
+      }
       if (anchor.kind === "thread") {
         const rect = flightRects.get(
           starMapWorkspaceCardKey({
@@ -3136,13 +3144,31 @@ export function StarMapScreen(props: StarMapScreenProps) {
             threadKey: anchor.threadKey,
           }),
         );
-        if (rect) return { x: rect.x, y: rect.y };
-        return undefined;
+        if (rect) {
+          return {
+            point: { x: rect.x, y: rect.y },
+            basis: "anchor" as const,
+          };
+        }
+        const ownerBody = bodies.find(
+          (candidate) => candidate.instanceId === anchor.instanceId,
+        );
+        return ownerBody
+          ? {
+              point: { x: ownerBody.x, y: ownerBody.y },
+              basis: "instance" as const,
+            }
+          : undefined;
       }
       const body = bodies.find(
         (candidate) => candidate.instanceId === anchor.instanceId,
       );
-      return body ? { x: body.x, y: body.y } : undefined;
+      return body
+        ? {
+            point: { x: body.x, y: body.y },
+            basis: "anchor" as const,
+          }
+        : undefined;
     },
     [bodies, flightRects],
   );
@@ -3696,6 +3722,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
       if (!card) return;
       const source = flightRects.get(cardKey);
       if (source) {
+        const body = bodies.find(
+          (candidate) => candidate.instanceId === card.ownerInstanceId,
+        );
         chatCards.commitRect(cardKey, rect, {
           anchor: {
             kind: "thread",
@@ -3703,6 +3732,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
             threadKey: card.threadKey,
           },
           point: { x: source.x, y: source.y },
+          instancePoint: body ? { x: body.x, y: body.y } : undefined,
         });
         return;
       }
@@ -4879,7 +4909,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                     <StarMapTerminalCard
                       desktopApi={props.desktopApi}
                       thread={card.thread}
-                      threadKey={card.key}
+                      threadKey={card.threadKey}
                       rect={dockTerminalRect(card.rect, {
                         contextOpen: card.contextOpen,
                         height:

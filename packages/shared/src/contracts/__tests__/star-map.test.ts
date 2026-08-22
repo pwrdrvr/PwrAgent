@@ -76,6 +76,19 @@ describe("isStarMapWorkspaceSnapshot", () => {
     expect(isStarMapWorkspaceSnapshot(nonFinite)).toBe(false);
   });
 
+  it("accepts only complete finite instance-relative fallback offsets", () => {
+    const complete = workspace();
+    Object.assign(complete.cards[0].geometry, {
+      instanceDx: 100,
+      instanceDy: -40,
+    });
+    expect(isStarMapWorkspaceSnapshot(complete)).toBe(true);
+
+    const halfOffset = workspace();
+    Object.assign(halfOffset.cards[0].geometry, { instanceDx: 100 });
+    expect(isStarMapWorkspaceSnapshot(halfOffset)).toBe(false);
+  });
+
   it("recovers valid cards and views from a partially corrupt payload", () => {
     const partial = workspace();
     partial.cards.push({

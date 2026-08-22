@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   marqueeRect,
+  observedGaps,
   rectIntersects,
   resolveResizeSnap,
   resolveSnap,
@@ -159,12 +160,31 @@ describe("snapCandidates", () => {
   });
 });
 
+describe("observedGaps", () => {
+  it("derives adjacent row gaps without spanning an intervening card", () => {
+    expect(
+      observedGaps({
+        axis: "y",
+        maxGap: 96,
+        rects: [card(0, 0), card(0, 130), card(0, 250)],
+      }),
+    ).toEqual([20, 30]);
+  });
+
+  it("does not learn gaps beyond the proximity specification", () => {
+    expect(
+      observedGaps({
+        axis: "y",
+        maxGap: 96,
+        rects: [card(0, 0), card(0, 300)],
+      }),
+    ).toEqual([]);
+  });
+});
+
 describe("resolveSnap spacing", () => {
-  it("matches an explicitly configured layout gap", () => {
-    const result = snap(card(0, 264), [card(0, 130)], {
-      ...THREAD_SPEC,
-      spacingGaps: [12, 30],
-    });
+  it("matches a gap observed in the nearby arrangement", () => {
+    const result = snap(card(0, 264), [card(0, 0), card(0, 130)]);
     expect(result.dy).toBe(-4);
     expect(result.spacing).toEqual({ axis: "y", gap: 30 });
   });

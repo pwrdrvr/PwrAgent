@@ -43,6 +43,8 @@ function savedWorkspace(): ReadStarMapWorkspaceResponse {
             },
             dx: 40,
             dy: 30,
+            instanceDx: -100,
+            instanceDy: -50,
             fallbackRect: {
               left: 700,
               top: 300,
@@ -94,14 +96,37 @@ describe("useStarMapChatCards", () => {
     await waitFor(() => expect(result.current.hydrated).toBe(true));
 
     act(() => {
-      result.current.resolveRestoredAnchors(() => ({ x: 100, y: 200 }));
+      result.current.resolveRestoredAnchors(() => ({
+        point: { x: 100, y: 200 },
+        basis: "anchor",
+      }));
     });
     expect(result.current.cards[0].rect).toMatchObject({ left: 140, top: 230 });
 
     act(() => {
-      result.current.resolveRestoredAnchors(() => ({ x: 900, y: 900 }));
+      result.current.resolveRestoredAnchors(() => ({
+        point: { x: 900, y: 900 },
+        basis: "anchor",
+      }));
     });
     expect(result.current.cards[0].rect).toMatchObject({ left: 140, top: 230 });
+  });
+
+  it("uses the separately persisted instance basis when a thread is absent", async () => {
+    const desktopApi: DesktopApi = {
+      readStarMapWorkspace: vi.fn(async () => savedWorkspace()),
+    };
+    const { result } = renderHook(() => useStarMapChatCards({ desktopApi }));
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+
+    act(() => {
+      result.current.resolveRestoredAnchors(() => ({
+        point: { x: 500, y: 400 },
+        basis: "instance",
+      }));
+    });
+
+    expect(result.current.cards[0].rect).toMatchObject({ left: 400, top: 350 });
   });
 
   it("keeps pointer frames memory-only and writes once at commit", async () => {
@@ -277,6 +302,48 @@ describe("useStarMapChatCards", () => {
     await waitFor(() => expect(writeStarMapWorkspace).toHaveBeenCalledTimes(2));
     expect(writeStarMapWorkspace.mock.calls[0][0].baseRevision).toBe(4);
     expect(writeStarMapWorkspace.mock.calls[1][0].baseRevision).toBe(5);
+  });
+
+  it("carries a failed workspace change into the next boundary", async () => {
+    let failNextWrite = true;
+    const writeStarMapWorkspace = vi.fn(
+      async ({ baseRevision, workspace }: WriteStarMapWorkspaceRequest) => {
+        if (failNextWrite) {
+          failNextWrite = false;
+          throw new Error("temporary database failure");
+        }
+        return {
+          workspace: {
+            ...workspace,
+            revision: baseRevision + 1,
+            updatedAt: 200,
+          },
+        };
+      },
+    );
+    const desktopApi: DesktopApi = {
+      readStarMapWorkspace: vi.fn(async () => savedWorkspace()),
+      writeStarMapWorkspace,
+    };
+    const { result } = renderHook(() => useStarMapChatCards({ desktopApi }));
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+
+    act(() => result.current.toggleContext("pwr_remote::codex:t-remote"));
+    await waitFor(() => expect(writeStarMapWorkspace).toHaveBeenCalledTimes(1));
+    act(() => result.current.toggleTerminal("pwr_remote::codex:t-remote"));
+
+    await waitFor(() => expect(writeStarMapWorkspace).toHaveBeenCalledTimes(2));
+    expect(writeStarMapWorkspace.mock.calls[1][0]).toMatchObject({
+      baseRevision: 4,
+      workspace: {
+        cards: [
+          expect.objectContaining({
+            contextOpen: false,
+            terminalOpen: false,
+          }),
+        ],
+      },
+    });
   });
 
   it("rebases queued semantic changes after a revision conflict", async () => {

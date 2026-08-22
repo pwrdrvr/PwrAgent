@@ -27,6 +27,8 @@ export type StarMapChatCardEntry = {
   anchor: StarMapWorkspaceAnchor;
   anchorDx: number;
   anchorDy: number;
+  instanceDx?: number;
+  instanceDy?: number;
   /** One initial relative-anchor resolution; a later peer connection must
    * not teleport an already-visible card away from its fallback rectangle. */
   pendingAnchorRestore: boolean;
@@ -38,6 +40,13 @@ export type StarMapChatCardEntry = {
 export type StarMapChatCardAnchorPlacement = {
   anchor: StarMapWorkspaceAnchor;
   point: { x: number; y: number };
+  /** Owner-body basis used when a thread card is unavailable on restore. */
+  instancePoint?: { x: number; y: number };
+};
+
+export type StarMapChatCardAnchorResolution = {
+  point: { x: number; y: number };
+  basis: "anchor" | "instance";
 };
 
 type StarMapChatCardsState = {
@@ -74,7 +83,7 @@ export type StarMapChatCardsController = {
   resolveRestoredAnchors: (
     resolve: (
       anchor: StarMapWorkspaceAnchor,
-    ) => { x: number; y: number } | undefined,
+    ) => StarMapChatCardAnchorResolution | undefined,
   ) => void;
   toggleContext: (cardKey: string) => void;
   toggleTerminal: (cardKey: string) => void;
@@ -100,6 +109,13 @@ function viewportSize(): { width: number; height: number } {
   return { width: window.innerWidth, height: window.innerHeight };
 }
 
+function instancePointForPlacement(
+  placement: StarMapChatCardAnchorPlacement,
+): { x: number; y: number } | undefined {
+  if (placement.instancePoint) return placement.instancePoint;
+  return placement.anchor.kind === "instance" ? placement.point : undefined;
+}
+
 function snapshotCard(
   card: StarMapChatCardEntry,
 ): StarMapWorkspaceSnapshot["cards"][number] {
@@ -111,6 +127,8 @@ function snapshotCard(
       anchor: card.anchor,
       dx: card.anchorDx,
       dy: card.anchorDy,
+      instanceDx: card.instanceDx,
+      instanceDy: card.instanceDy,
       fallbackRect: card.rect,
     },
     contextOpen: card.contextOpen,
@@ -259,6 +277,8 @@ function entryFromSnapshot(
     anchor: card.geometry.anchor,
     anchorDx: card.geometry.dx,
     anchorDy: card.geometry.dy,
+    instanceDx: card.geometry.instanceDx,
+    instanceDy: card.geometry.instanceDy,
     pendingAnchorRestore: true,
     contextOpen: card.contextOpen,
     terminalOpen: card.terminalOpen,
@@ -282,6 +302,7 @@ export function useStarMapChatCards(params: {
   const persistedWorkspaceRef = useRef(snapshotFor(EMPTY_STATE));
   const queuedWorkspaceRef = useRef(snapshotFor(EMPTY_STATE));
   const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const writeFailedRef = useRef(false);
   const desktopApi = params.desktopApi;
 
   const enqueueWrite = useCallback(
@@ -289,12 +310,18 @@ export function useStarMapChatCards(params: {
       const writeWorkspace = desktopApi?.writeStarMapWorkspace;
       if (!writeWorkspace) return;
       const readWorkspace = desktopApi?.readStarMapWorkspace;
-      const base = queuedWorkspaceRef.current;
+      const queuedBase = queuedWorkspaceRef.current;
       const snapshot = snapshotFor(next);
       queuedWorkspaceRef.current = snapshot;
-      writeQueueRef.current = writeQueueRef.current
-        .catch(() => undefined)
-        .then(async () => {
+      writeQueueRef.current = writeQueueRef.current.then(async () => {
+        // If the prior boundary failed, `queuedBase` contains state that was
+        // never durable. Reapply the complete local delta from the last
+        // successful snapshot so a later gesture carries the failed change
+        // forward instead of silently treating it as already saved.
+        const base = writeFailedRef.current
+          ? persistedWorkspaceRef.current
+          : queuedBase;
+        try {
           let rebased = rebaseWorkspaceChange({
             base,
             next: snapshot,
@@ -312,6 +339,7 @@ export function useStarMapChatCards(params: {
                 cards: response.workspace.cards,
                 views: response.workspace.views,
               };
+              writeFailedRef.current = false;
               return;
             } catch (error) {
               if (!readWorkspace || !isWorkspaceRevisionConflict(error)) {
@@ -331,7 +359,10 @@ export function useStarMapChatCards(params: {
               });
             }
           }
-        });
+        } catch {
+          writeFailedRef.current = true;
+        }
+      });
     },
     [desktopApi],
   );
@@ -497,6 +528,7 @@ export function useStarMapChatCards(params: {
         anchor: { kind: "canvas" } as const,
         point: { x: 0, y: 0 },
       };
+      const instancePoint = instancePointForPlacement(anchor);
       applyState(
         {
           ...current,
@@ -511,6 +543,12 @@ export function useStarMapChatCards(params: {
               anchor: anchor.anchor,
               anchorDx: rect.left - anchor.point.x,
               anchorDy: rect.top - anchor.point.y,
+              instanceDx: instancePoint
+                ? rect.left - instancePoint.x
+                : undefined,
+              instanceDy: instancePoint
+                ? rect.top - instancePoint.y
+                : undefined,
               pendingAnchorRestore: false,
               contextOpen: false,
               terminalOpen: false,
@@ -563,12 +601,19 @@ export function useStarMapChatCards(params: {
           anchor: { kind: "canvas" } as const,
           point: { x: 0, y: 0 },
         };
+        const instancePoint = instancePointForPlacement(placement);
         return {
           ...card,
           rect,
           anchor: placement.anchor,
           anchorDx: rect.left - placement.point.x,
           anchorDy: rect.top - placement.point.y,
+          instanceDx: instancePoint
+            ? rect.left - instancePoint.x
+            : undefined,
+          instanceDy: instancePoint
+            ? rect.top - instancePoint.y
+            : undefined,
           pendingAnchorRestore: false,
         };
       });
@@ -581,20 +626,27 @@ export function useStarMapChatCards(params: {
     (
       resolve: (
         anchor: StarMapWorkspaceAnchor,
-      ) => { x: number; y: number } | undefined,
+      ) => StarMapChatCardAnchorResolution | undefined,
     ) => {
       const current = stateRef.current;
       if (!current.cards.some((card) => card.pendingAnchorRestore)) return;
       const cards = current.cards.map((card) => {
         if (!card.pendingAnchorRestore) return card;
-        const point = resolve(card.anchor);
+        const resolution = resolve(card.anchor);
+        const offset = resolution?.basis === "instance"
+          && card.instanceDx !== undefined
+          && card.instanceDy !== undefined
+            ? { dx: card.instanceDx, dy: card.instanceDy }
+            : resolution?.basis === "anchor"
+              ? { dx: card.anchorDx, dy: card.anchorDy }
+              : undefined;
         return {
           ...card,
-          rect: point
+          rect: resolution && offset
             ? {
                 ...card.rect,
-                left: point.x + card.anchorDx,
-                top: point.y + card.anchorDy,
+                left: resolution.point.x + offset.dx,
+                top: resolution.point.y + offset.dy,
               }
             : card.rect,
           pendingAnchorRestore: false,

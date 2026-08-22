@@ -5,8 +5,8 @@
  *
  * - **Alignment** — a dragged card's left / centre / right (and top /
  *   middle / bottom) latching onto the same edge of a nearby card.
- * - **Spacing** — once cards are stacked, matching one of the explicit
- *   layout gaps supplied by the caller.
+ * - **Spacing** — once cards are stacked, matching an explicit layout gap
+ *   or an adjacent gap already used by nearby cards of the allowed type.
  *
  * Candidate selection is part of the engine rather than a caller-side
  * convention. Each moving object and target has a type, and a proximity
@@ -70,6 +70,8 @@ export type ResizeSnapResult = {
 
 /** Two cards count as stacked when they overlap this much across the axis. */
 const CROSS_AXIS_OVERLAP = 8;
+/** Smaller positive intervals read as touching rather than deliberate gaps. */
+const MIN_MEANINGFUL_GAP = 4;
 
 function edgesFor(rect: SnapRect, axis: SnapAxis): number[] {
   return axis === "x"
@@ -93,7 +95,8 @@ function rectDistance(a: SnapRect, b: SnapRect): number {
 
 /**
  * Resolve the typed, nearby target set once per pointer frame. Alignment,
- * spacing, and resize all consume this same bounded set.
+ * spacing latches, and resize consume this strict set; observed-gap discovery
+ * looks only one card span farther through `spacingObservationCandidates`.
  */
 export function snapCandidates(params: {
   moving: SnapTarget;
@@ -112,6 +115,77 @@ export function snapCandidates(params: {
     candidates.push(target.rect);
   }
   return candidates;
+}
+
+function primaryStart(rect: SnapRect, axis: SnapAxis): number {
+  return axis === "x" ? rect.x : rect.y;
+}
+
+function primaryEnd(rect: SnapRect, axis: SnapAxis): number {
+  return primaryStart(rect, axis)
+    + (axis === "x" ? rect.width : rect.height);
+}
+
+/**
+ * Adjacent gaps in local rows or columns. Grouping and sorting replace the
+ * old all-pairs scan: the work is O(n log n), and an interval spanning an
+ * intervening card no longer masquerades as reusable whitespace.
+ */
+export function observedGaps(params: {
+  axis: SnapAxis;
+  maxGap: number;
+  rects: readonly SnapRect[];
+}): number[] {
+  if (params.rects.length < 2 || params.maxGap < MIN_MEANINGFUL_GAP) return [];
+  const byCrossAxis = [...params.rects].sort(
+    (left, right) => spanStart(left, params.axis) - spanStart(right, params.axis),
+  );
+  const groups: SnapRect[][] = [];
+  let groupEnd = Number.NEGATIVE_INFINITY;
+  for (const rect of byCrossAxis) {
+    const start = spanStart(rect, params.axis);
+    if (groups.length === 0 || start > groupEnd - CROSS_AXIS_OVERLAP) {
+      groups.push([rect]);
+      groupEnd = spanEnd(rect, params.axis);
+      continue;
+    }
+    groups[groups.length - 1].push(rect);
+    groupEnd = Math.max(groupEnd, spanEnd(rect, params.axis));
+  }
+
+  const gaps = new Set<number>();
+  for (const group of groups) {
+    group.sort(
+      (left, right) => primaryStart(left, params.axis)
+        - primaryStart(right, params.axis),
+    );
+    for (let index = 1; index < group.length; index += 1) {
+      const gap = primaryStart(group[index], params.axis)
+        - primaryEnd(group[index - 1], params.axis);
+      if (gap < MIN_MEANINGFUL_GAP || gap > params.maxGap) continue;
+      gaps.add(Math.round(gap));
+    }
+  }
+  return [...gaps].sort((left, right) => left - right);
+}
+
+function spacingObservationCandidates(params: {
+  moving: SnapTarget;
+  targets: readonly SnapTarget[];
+  spec: SnapSpec;
+}): SnapRect[] {
+  // One card-span beyond the active snap radius is enough to see the prior
+  // neighbour whose gap the moving card is continuing, without reopening a
+  // galaxy-wide alignment search.
+  return snapCandidates({
+    ...params,
+    spec: {
+      ...params.spec,
+      proximity:
+        params.spec.proximity
+        + Math.max(params.moving.rect.width, params.moving.rect.height),
+    },
+  });
 }
 
 /**
@@ -225,6 +299,7 @@ export function resolveSnap(params: {
 
   const others = snapCandidates(params);
   if (others.length === 0) return { dx: 0, dy: 0, guides: [] };
+  const spacingObservations = spacingObservationCandidates(params);
 
   const result: SnapResult = { dx: 0, dy: 0, guides: [] };
   for (const axis of ["x", "y"] as const) {
@@ -242,7 +317,16 @@ export function resolveSnap(params: {
     }
     const spaced = spaceAxis({
       axis,
-      gaps: params.spec.spacingGaps,
+      gaps: [
+        ...new Set([
+          ...params.spec.spacingGaps,
+          ...observedGaps({
+            axis,
+            maxGap: params.spec.proximity,
+            rects: spacingObservations,
+          }),
+        ]),
+      ],
       moving: params.moving.rect,
       others,
       threshold: params.threshold,

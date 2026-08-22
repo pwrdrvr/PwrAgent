@@ -11,6 +11,12 @@ import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapScreen } from "../StarMapScreen";
 
+vi.mock("../../thread-detail/IntegratedTerminal", () => ({
+  IntegratedTerminal: (props: { threadKey: string }) => (
+    <div data-testid="star-map-terminal-pane" data-thread-key={props.threadKey} />
+  ),
+}));
+
 /**
  * The whole card for a thread, given its open-thread button.
  *
@@ -943,6 +949,8 @@ describe("StarMapScreen", () => {
                 },
                 dx: 20,
                 dy: 30,
+                instanceDx: 50,
+                instanceDy: 60,
                 fallbackRect: {
                   left: 600,
                   top: 240,
@@ -974,8 +982,16 @@ describe("StarMapScreen", () => {
     const chat = await screen.findByRole("region", {
       name: "Chat: Disconnected workspace chat",
     });
-    expect(chat.style.left).toBe("600px");
-    expect(chat.style.top).toBe("240px");
+    const remoteBody = screen.getByRole("button", {
+      name: "Focus Remote Mac",
+    }).closest<HTMLElement>(".star-map__anchor");
+    expect(remoteBody).toBeTruthy();
+    expect(Number.parseFloat(chat.style.left)).toBeCloseTo(
+      Number.parseFloat(remoteBody?.style.left ?? "") + 50,
+    );
+    expect(Number.parseFloat(chat.style.top)).toBeCloseTo(
+      Number.parseFloat(remoteBody?.style.top ?? "") + 60,
+    );
     expect(
       screen.getByRole("region", {
         name: "Thread context: Disconnected workspace chat",
@@ -986,6 +1002,11 @@ describe("StarMapScreen", () => {
         name: "Terminal: Disconnected workspace chat",
       }),
     ).toBeTruthy();
+    expect(
+      (await screen.findByTestId("star-map-terminal-pane")).getAttribute(
+        "data-thread-key",
+      ),
+    ).toBe("codex:t-remote");
   });
 
   it("waits for the owning thread layout before restoring a chat anchor", async () => {

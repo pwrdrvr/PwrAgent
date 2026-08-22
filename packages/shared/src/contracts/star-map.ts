@@ -214,6 +214,13 @@ export type StarMapWorkspaceCard = {
     anchor: StarMapWorkspaceAnchor;
     dx: number;
     dy: number;
+    /**
+     * Separate owner-body basis for a thread card that is filtered, folded,
+     * or unavailable on the next launch. Optional for version-1 rows written
+     * before this fallback was recorded.
+     */
+    instanceDx?: number;
+    instanceDy?: number;
     fallbackRect: StarMapWorkspaceRect;
   };
   contextOpen: boolean;
@@ -352,6 +359,8 @@ function isStarMapWorkspaceCard(value: unknown): value is StarMapWorkspaceCard {
   const geometry = card.geometry as
     | Partial<StarMapWorkspaceCard["geometry"]>
     | undefined;
+  const hasInstanceOffset =
+    geometry?.instanceDx !== undefined || geometry?.instanceDy !== undefined;
   if (
     typeof card.key !== "string"
     || typeof card.ownerInstanceId !== "string"
@@ -361,6 +370,11 @@ function isStarMapWorkspaceCard(value: unknown): value is StarMapWorkspaceCard {
     || !isStarMapWorkspaceAnchor(geometry.anchor)
     || !isFiniteNumber(geometry.dx)
     || !isFiniteNumber(geometry.dy)
+    || (hasInstanceOffset
+      && (
+        !isFiniteNumber(geometry.instanceDx)
+        || !isFiniteNumber(geometry.instanceDy)
+      ))
     || !isStarMapWorkspaceRect(geometry.fallbackRect)
     || typeof card.contextOpen !== "boolean"
     || typeof card.terminalOpen !== "boolean"
