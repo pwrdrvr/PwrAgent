@@ -90,6 +90,28 @@
   --button-text: #120800;
   --shadow-popover: 0 18px 48px rgba(0, 0, 0, 0.42);
 
+  /* Edge treatment for the Star Map's floating chat cards and their
+     satellites (`.star-map-chat-card`, `.star-map-satellite-card`). The
+     sky is black and the card surface sits one step above it, so a plain
+     popover shadow vanishes: where one card overlaps another it lands on
+     an equally dark surface, and a `--border-subtle` edge weighs the same
+     as the message bubbles INSIDE the card, so nothing told the eye where
+     one card stopped and the next began. The rim is brighter than
+     `--border-strong` and the shadow stacks four layers: a 1px inner
+     highlight lifts the rim above the card's own content, a 1px dark ring
+     outside the rim keeps two touching rims from merging into one, a soft
+     light halo lets the card glow against the sky the way every other
+     map body does, and a heavy lift shadow darkens whatever it sits on.
+     Light theme overrides both: on white the glow is invisible and a
+     black ring would read as a hard outline. */
+  --star-map-float-border: color-mix(in srgb, var(--text-primary) 26%, transparent);
+  --star-map-float-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 8%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--shadow-base) 85%, transparent),
+    0 0 0 2px color-mix(in srgb, var(--text-primary) 5%, transparent),
+    0 0 28px color-mix(in srgb, var(--text-primary) 7%, transparent),
+    0 22px 56px color-mix(in srgb, var(--shadow-base) 70%, transparent);
+
   /* Theme-following surface overlays. Derived from base tokens via
      color-mix so they follow whichever theme is active — flip the base
      and every alpha variant follows automatically. Mathematically
@@ -379,6 +401,15 @@
   /* Lighter drop-shadow on light surface (the dark theme's 42% is too
      heavy against white). */
   --shadow-popover: 0 18px 48px rgba(0, 0, 0, 0.18);
+
+  /* Floating Star Map cards on white: the strong border already separates
+     card from sky and card from card, so no glow, and the dark ring drops
+     to a hairline so it does not read as a drawn outline. */
+  --star-map-float-border: var(--border-strong);
+  --star-map-float-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--text-primary) 4%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--shadow-base) 10%, transparent),
+    0 18px 48px color-mix(in srgb, var(--shadow-base) 18%, transparent);
 
   /* Light-surface drop shadows need much lower alpha than dark-surface
      ones — at the dark-theme values (32 / 40 / 58%) on white, the soft
@@ -13143,12 +13174,14 @@ textarea,
   position: absolute;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--star-map-float-border);
   border-radius: 8px;
   /* Opaque: cards overlap each other and the map, and a translucent card
      would let the transcript underneath bleed into this one's text. */
   background: var(--bg-panel);
-  box-shadow: var(--shadow-popover);
+  /* Edge and lift come from the --star-map-float-* tokens; the rationale
+     sits on their definition. */
+  box-shadow: var(--star-map-float-shadow);
   color: var(--text-primary);
 }
 
@@ -13197,8 +13230,40 @@ textarea,
 .star-map-chat-card__instance {
   z-index: 1;
   flex: 0 0 auto;
+  /* Cap the text fallback. A hostname plus directory can run past the
+     title itself, and the fallback only appears while the instance has
+     no icon assigned — it must never win the bar back. */
+  max-width: 140px;
+  overflow: hidden;
   color: var(--text-muted);
   font-size: 10px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The icon form: the same celestial mark the map gives this instance,
+   at bar scale. `--text-muted` keeps it a quiet identity stamp rather
+   than a third control competing with the two live toggles beside it. */
+.star-map-chat-card__instance--icon {
+  display: inline-flex;
+  align-items: center;
+  max-width: none;
+  color: var(--text-muted);
+}
+
+/* The card's controls, gathered. 8px is the bar's own rhythm and reads
+   as three unrelated glyphs; 2px makes them one group with the title's
+   gap on one side and the close button's on the other. */
+.star-map-chat-card__actions {
+  z-index: 1;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  /* Plus the bar's own 8px: the instance mark is identity, not a control,
+     and at the bar's flat rhythm it read as a fourth button in the row.
+     The wider gutter puts the boundary where the meaning changes. */
+  margin-left: 6px;
 }
 
 .star-map-chat-card__expand,
@@ -13212,6 +13277,16 @@ textarea,
   color: var(--text-secondary);
   font-size: 11px;
   cursor: pointer;
+}
+
+/* Sized and coloured with the rail toggles it now sits beside, so the
+   group reads as one row of controls instead of a word wearing a
+   button. Same radius as those toggles, not the close button's. */
+.star-map-chat-card__expand {
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
 }
 
 .star-map-chat-card__close {
@@ -30115,10 +30190,10 @@ a.transcript-message__messaging-origin:focus-visible {
   position: absolute;
   flex-direction: column;
   overflow: hidden;
-  border: 1px solid var(--border-subtle);
+  border: 1px solid var(--star-map-float-border);
   border-radius: 8px;
   background: var(--bg-panel);
-  box-shadow: var(--shadow-popover);
+  box-shadow: var(--star-map-float-shadow);
   color: var(--text-primary);
 }
 

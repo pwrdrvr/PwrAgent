@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   AgentEvent,
   BackendCapabilities,
+  CelestialIconId,
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -170,6 +171,8 @@ function reviewCapableApi(
 type CardParams = {
   composerDraftStore?: ComposerDraftStore;
   desktopApi: DesktopApi;
+  instanceIcon?: string;
+  instanceLabel?: string;
   pastedImageMaxPatches?: number;
   thread: NavigationThreadSummary;
 };
@@ -180,6 +183,11 @@ function card(params: CardParams) {
       cardKey="card-1"
       composerDraftStore={params.composerDraftStore}
       desktopApi={params.desktopApi}
+      /* Cast the VALUE, not the prop: the unknown-id case needs to pass
+         an id this build does not know, but the prop's own type must stay
+         checked so a future change to it still fails here. */
+      instanceIcon={params.instanceIcon as CelestialIconId | undefined}
+      instanceLabel={params.instanceLabel}
       onClose={() => undefined}
       onOpenFull={() => undefined}
       onRaise={() => undefined}
@@ -2483,5 +2491,187 @@ describe("StarMapChatCard settings menu", () => {
         }),
       );
     });
+  });
+});
+
+describe("StarMapChatCard title bar", () => {
+  it("carries the instance as its celestial mark, not as bar text", () => {
+    // The bar has one scarce resource: horizontal room the thread title
+    // needs. A full hostname plus directory ("Harold-MBP-M2-Max / work")
+    // spent more of it than the title did, so the machine reads as the
+    // same mark the map already gives it and the name moves to the
+    // accessible name and the hover tooltip. Assert BOTH halves: the
+    // name must be gone from the bar's text, and still reachable by
+    // name — dropping it entirely would trade a cramped title for an
+    // unidentifiable card.
+    renderCard({
+      desktopApi: buildApi(),
+      instanceIcon: "moon",
+      instanceLabel: "Studio Mac",
+      thread: remoteThread(),
+    });
+
+    const banner = screen.getByRole("banner", { hidden: true });
+    expect(banner.textContent).not.toContain("Studio Mac");
+    expect(
+      screen.getByRole("img", { name: "Instance: Studio Mac" }),
+    ).toBeTruthy();
+  });
+
+  it("keeps the name visible when no celestial mark can render", () => {
+    // Two ways to have a label and no usable icon: the assignment
+    // snapshot has not landed yet (undefined), or a peer on a newer
+    // build named an id this build does not know — the celestial
+    // contract makes that "unassigned" and CelestialIcon renders null
+    // for it. Either way the slot must fall back to the name rather
+    // than going blank.
+    for (const instanceIcon of [undefined, "quasar"]) {
+      const view = renderCard({
+        desktopApi: buildApi(),
+        instanceIcon,
+        instanceLabel: "Studio Mac",
+        thread: remoteThread(),
+      });
+
+      const banner = screen.getByRole("banner", { hidden: true });
+      expect(banner.textContent).toContain("Studio Mac");
+      view.unmount();
+    }
+  });
+
+  it("gathers the card's controls into one group, close kept apart", () => {
+    // Three lone glyphs drifting across the bar read as unrelated; the
+    // group is what makes them one row of controls. Close stays outside
+    // it — a destructive control should not sit flush against the ones
+    // the hand reaches for repeatedly.
+    renderCard({
+      desktopApi: buildApi(),
+      instanceIcon: "moon",
+      instanceLabel: "Studio Mac",
+      thread: remoteThread(),
+    });
+
+    const actions = document.querySelector(".star-map-chat-card__actions");
+    expect(actions).toBeTruthy();
+    const grouped = [...(actions?.querySelectorAll("button") ?? [])].map(
+      (button) => button.getAttribute("aria-label"),
+    );
+    expect(grouped).toEqual([
+      "Show thread context for Remote work",
+      "Open terminal for Remote work",
+      "Open Remote work in the full thread view",
+    ]);
+    expect(actions?.querySelector(".star-map-chat-card__close")).toBeNull();
+  });
+});
+
+describe("StarMapChatCard title bar tooltips", () => {
+  function hoverTooltipText(control: Element): string | undefined {
+    fireEvent.mouseEnter(control);
+    return document.querySelector('[role="tooltip"]')?.textContent ?? undefined;
+  }
+
+  it("gives every bar control a hover tooltip, not just some of them", () => {
+    // The bar lost its words: the instance is an icon, Open is ↗, and the
+    // toggles were always glyphs. A tooltip on only one of them reads as
+    // the others being broken — which is exactly how it shipped and how
+    // it got caught. This asserts the SET, so the next glyph added here
+    // cannot land without one.
+    renderCard({
+      desktopApi: buildApi(),
+      instanceIcon: "moon",
+      instanceLabel: "Studio Mac",
+      thread: remoteThread(),
+    });
+
+    const bar = screen.getByRole("banner", { hidden: true });
+    const controls = [
+      ...bar.querySelectorAll("button, .star-map-chat-card__instance"),
+    ];
+    expect(controls.length).toBe(5);
+    for (const control of controls) {
+      expect(hoverTooltipText(control)).toBeTruthy();
+      fireEvent.mouseLeave(control);
+    }
+  });
+
+  it("says what a toggle will do, and keeps saying it after the click", () => {
+    // A toggle's tooltip names the ACTION, which is the opposite of the
+    // state it is in. The pointer does not leave on click, so a label
+    // left un-flipped would sit there offering the thing just done.
+    const view = renderCard({
+      desktopApi: buildApi(),
+      instanceLabel: "Studio Mac",
+      thread: remoteThread(),
+    });
+
+    const terminal = screen.getByRole("button", {
+      name: "Open terminal for Remote work",
+    });
+    expect(hoverTooltipText(terminal)).toBe("Open terminal");
+    fireEvent.click(terminal);
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(
+      "Close terminal",
+    );
+    view.unmount();
+  });
+
+  it("leaves a tooltip another control owns alone when a toggle fires", () => {
+    // A toggle re-labels its own tooltip after the click. `update` writes
+    // to whatever tooltip is on screen, so without an owner check a
+    // keyboard activation — pointer still resting on the title, focus
+    // moved by Tab — rewrote the TITLE's tooltip in place.
+    renderCard({
+      desktopApi: buildApi(),
+      instanceLabel: "Studio Mac",
+      thread: remoteThread(),
+    });
+
+    const title = document.querySelector(".star-map-chat-card__title");
+    expect(hoverTooltipText(title as Element)).toBe("Remote work");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Show thread context for Remote work" }),
+    );
+    expect(document.querySelector('[role="tooltip"]')?.textContent).toBe(
+      "Remote work",
+    );
+  });
+
+  it("tells a peer card where ↗ lands even with no label for that peer", () => {
+    // The label is decoration; the destination is not. StarMapScreen
+    // reads the label straight out of `displayLabelById`, so an unlinked
+    // peer leaves it undefined — and the sentence used to collapse to
+    // "the main window" while ↗ opened a federation window.
+    renderCard({
+      desktopApi: buildApi(),
+      thread: remoteThread(),
+    });
+
+    expect(
+      hoverTooltipText(
+        screen.getByRole("button", {
+          name: "Open Remote work in the full thread view",
+        }),
+      ),
+    ).toBe("Open in a window connected to that instance");
+  });
+
+  it("names the peer in the ↗ tooltip, since the bar only shows its icon", () => {
+    // ↗ does not land in the same place for every card, and the machine
+    // is no longer written out beside it.
+    renderCard({
+      desktopApi: buildApi(),
+      instanceIcon: "moon",
+      instanceLabel: "Studio Mac",
+      thread: remoteThread(),
+    });
+
+    expect(
+      hoverTooltipText(
+        screen.getByRole("button", {
+          name: "Open Remote work in the full thread view",
+        }),
+      ),
+    ).toBe("Open in a window connected to Studio Mac");
   });
 });

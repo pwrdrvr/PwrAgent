@@ -8,9 +8,11 @@ import {
   useSyncExternalStore,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
 } from "react";
 import {
   buildThreadIdentityKey,
+  isCelestialIconId,
   isRemoteFederationTarget,
   type CelestialIconId,
   type NavigationLaunchpadFileAttachment,
@@ -174,7 +176,28 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
   }, []);
   // The card is draggable and clipped; a native `title` fights both, and
   // UI-THEME.md rules it out regardless.
-  const titleTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const barTooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  /* Which element the visible bar tooltip belongs to. A toggle re-labels
+     its tooltip after the click (the pointer has not left the button, so
+     a stale label would sit there offering the action just taken), and
+     `update` writes to whatever is on screen — including a tooltip some
+     OTHER control put there. Keyboard-activating a toggle while the
+     pointer rests on the title used to rewrite the title's tooltip in
+     place. Only the owner re-labels. */
+  const barTooltipAnchorRef = useRef<HTMLElement | null>(null);
+  const showBarTooltip = (target: HTMLElement, content: ReactNode): void => {
+    barTooltipAnchorRef.current = target;
+    barTooltip.show(target, content);
+  };
+  const hideBarTooltip = (): void => {
+    barTooltipAnchorRef.current = null;
+    barTooltip.hide();
+  };
+  const relabelBarTooltip = (owner: HTMLElement, content: ReactNode): void => {
+    if (barTooltipAnchorRef.current === owner) {
+      barTooltip.update(content);
+    }
+  };
 
   // Without a limit `readThread` returns the thread from its first message.
   // On a large thread that is the entire transcript — hundreds of MB over
@@ -280,6 +303,44 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       }
     });
   }, [composerScopeKey, desktopApi, props.composerDraftStore, thread]);
+  /* Every control in the bar is a glyph now, so every one of them needs
+     the same hover affordance — a lone tooltip on ↗ reads as the other
+     two being broken. The toggles say what the click will DO, which is
+     the opposite of the state they are in. Short on purpose: the
+     `aria-label` carries the thread title for screen readers, but a
+     tooltip repeating it beside the title it names is noise. */
+  const contextTooltip = {
+    hide: "Hide thread context",
+    show: "Show thread context",
+  };
+  const terminalTooltip = {
+    close: "Close terminal",
+    open: "Open terminal",
+  };
+  /* Where ↗ actually lands, which is not the same place for every card:
+     a peer's thread opens in a window fronting that peer, a local one in
+     the main window. The glyph alone cannot say that, so the tooltip
+     does — and it names the peer, since a card only shows its instance
+     as an icon now.
+
+     Asks the SAME question `openThreadFully` asks — the thread's own ref,
+     not `remoteInstanceId`, which also answers yes for a local thread in
+     a window that carries a federation target. Two predicates for one
+     sentence is how a tooltip ends up describing the other branch.
+
+     The peer's name is decoration here, never the deciding factor:
+     StarMapScreen reads it straight out of `displayLabelById` with no
+     fallback, so an unlinked peer leaves it undefined — and gating the
+     whole sentence on it told the operator "main window" right before
+     opening a federation window. */
+  const opensPeerWindow = Boolean(
+    threadFederationTarget && isRemoteFederationTarget(threadFederationTarget),
+  );
+  const openFullTooltip = !opensPeerWindow
+    ? "Open in the main window"
+    : props.instanceLabel
+      ? `Open in a window connected to ${props.instanceLabel}`
+      : "Open in a window connected to that instance";
   const isAcpThread = thread.source.startsWith("acp:");
   const backendSummaries = useBackendSummaries(desktopApi, {
     // The composer needs model/runtime image capability before its first
@@ -1208,62 +1269,138 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
         <span
           className="star-map-chat-card__title"
           onMouseEnter={(event) =>
-            titleTooltip.show(event.currentTarget, thread.title)
+            showBarTooltip(event.currentTarget, thread.title)
           }
-          onMouseLeave={titleTooltip.hide}
+          onMouseLeave={hideBarTooltip}
         >
           {thread.title}
         </span>
         {props.instanceLabel ? (
-          <span className="star-map-chat-card__instance">
-            {props.instanceLabel}
+          /* Identity, not prose. The machine name ran to a full hostname
+             plus directory ("Harold-MBP-M2-Max / work") and took more of
+             the bar than the thread title beside it, so the icon carries
+             it and the name lives in the tooltip and the accessible
+             name. The icon is the SAME celestial mark the map gives this
+             instance, so a card and its star read as one thing.
+
+             Text is the fallback whenever no mark can render: before the
+             assignment snapshot lands `iconFor` returns undefined, and a
+             peer on a newer build can name an icon this build has never
+             heard of — the celestial contract says treat that as
+             unassigned, and `CelestialIcon` renders null for it, which
+             would leave an empty slot where the instance should be.
+             Identity must never silently vanish. */
+          <span
+            className={`star-map-chat-card__instance${
+              isCelestialIconId(props.instanceIcon)
+                ? " star-map-chat-card__instance--icon"
+                : ""
+            }`}
+            onMouseEnter={(event) =>
+              showBarTooltip(event.currentTarget, props.instanceLabel)
+            }
+            onMouseLeave={hideBarTooltip}
+          >
+            {isCelestialIconId(props.instanceIcon) ? (
+              <CelestialIcon
+                aria-label={`Instance: ${props.instanceLabel}`}
+                icon={props.instanceIcon}
+                size={14}
+              />
+            ) : (
+              props.instanceLabel
+            )}
           </span>
         ) : undefined}
-        <button
-          aria-expanded={props.contextOpen ?? false}
-          aria-label={
-            props.contextOpen
-              ? `Hide thread context for ${thread.title}`
-              : `Show thread context for ${thread.title}`
-          }
-          className={`star-map-chat-card__rail-toggle${
-            props.contextOpen ? " is-on" : ""
-          }`}
-          onClick={() => props.onToggleContext(cardKey)}
-          onPointerDown={(event) => event.stopPropagation()}
-          type="button"
-        >
-          ⌸
-        </button>
-        <button
-          aria-expanded={props.terminalOpen ?? false}
-          aria-label={
-            props.terminalOpen
-              ? `Close terminal for ${thread.title}`
-              : `Open terminal for ${thread.title}`
-          }
-          className={`star-map-chat-card__rail-toggle${
-            props.terminalOpen ? " is-on" : ""
-          }`}
-          onClick={() => props.onToggleTerminal(cardKey)}
-          onPointerDown={(event) => event.stopPropagation()}
-          type="button"
-        >
-          &gt;_
-        </button>
-        <button
-          aria-label={`Open ${thread.title} in the full thread view`}
-          className="star-map-chat-card__expand"
-          onClick={() => onOpenFull(thread)}
-          onPointerDown={(event) => event.stopPropagation()}
-          type="button"
-        >
-          Open
-        </button>
+        {/* One group, so the three things the operator DOES to a card read
+            as a cluster instead of three lone glyphs drifting between the
+            title and the close button. Close stays outside it: a
+            destructive control should not sit flush against the controls
+            the hand reaches for repeatedly. */}
+        <span className="star-map-chat-card__actions">
+          <button
+            aria-expanded={props.contextOpen ?? false}
+            aria-label={
+              props.contextOpen
+                ? `Hide thread context for ${thread.title}`
+                : `Show thread context for ${thread.title}`
+            }
+            className={`star-map-chat-card__rail-toggle${
+              props.contextOpen ? " is-on" : ""
+            }`}
+            onClick={(event) => {
+              props.onToggleContext(cardKey);
+              relabelBarTooltip(
+                event.currentTarget,
+                props.contextOpen ? contextTooltip.show : contextTooltip.hide,
+              );
+            }}
+            onMouseEnter={(event) =>
+              showBarTooltip(
+                event.currentTarget,
+                props.contextOpen ? contextTooltip.hide : contextTooltip.show,
+              )
+            }
+            onMouseLeave={hideBarTooltip}
+            onPointerDown={(event) => event.stopPropagation()}
+            type="button"
+          >
+            ⌸
+          </button>
+          <button
+            aria-expanded={props.terminalOpen ?? false}
+            aria-label={
+              props.terminalOpen
+                ? `Close terminal for ${thread.title}`
+                : `Open terminal for ${thread.title}`
+            }
+            className={`star-map-chat-card__rail-toggle${
+              props.terminalOpen ? " is-on" : ""
+            }`}
+            onClick={(event) => {
+              props.onToggleTerminal(cardKey);
+              relabelBarTooltip(
+                event.currentTarget,
+                props.terminalOpen ? terminalTooltip.open : terminalTooltip.close,
+              );
+            }}
+            onMouseEnter={(event) =>
+              showBarTooltip(
+                event.currentTarget,
+                props.terminalOpen ? terminalTooltip.close : terminalTooltip.open,
+              )
+            }
+            onMouseLeave={hideBarTooltip}
+            onPointerDown={(event) => event.stopPropagation()}
+            type="button"
+          >
+            &gt;_
+          </button>
+          <button
+            aria-label={`Open ${thread.title} in the full thread view`}
+            className="star-map-chat-card__expand"
+            onClick={() => onOpenFull(thread)}
+            onMouseEnter={(event) =>
+              showBarTooltip(event.currentTarget, openFullTooltip)
+            }
+            onMouseLeave={hideBarTooltip}
+            onPointerDown={(event) => event.stopPropagation()}
+            type="button"
+          >
+            {/* Was the word "Open". The glyph says the same thing in a
+                sixth of the bar, and it is the one control here that leaves
+                the map, so it earns the direction the other two do not. */}
+            ↗
+          </button>
+        </span>
         <button
           aria-label={`Close chat: ${thread.title}`}
           className="star-map-chat-card__close"
           onClick={() => props.onClose(cardKey)}
+          onMouseEnter={(event) =>
+            showBarTooltip(event.currentTarget, "Close chat")
+          }
+          onMouseLeave={hideBarTooltip}
           onPointerDown={(event) => event.stopPropagation()}
           type="button"
         >
@@ -1374,7 +1511,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
           />
         ) : null}
       </div>
-      {titleTooltip.tooltipNode}
+      {barTooltip.tooltipNode}
       {/* Portals to the body, so the card's clip and transform miss it. */}
       {fullAccessRiskDialog}
       <span
