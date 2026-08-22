@@ -204,7 +204,7 @@ describe("star map workspace overlay", () => {
     });
   });
 
-  it("degrades a malformed payload to an empty workspace", async () => {
+  it("degrades a malformed payload without losing its durable revision", async () => {
     stateDb.raw.prepare(
       `INSERT INTO star_map_workspace(
          workspace_key,
@@ -216,10 +216,14 @@ describe("star map workspace overlay", () => {
 
     expect(await store.readStarMapWorkspace()).toMatchObject({
       cards: [],
-      revision: 0,
-      updatedAt: 0,
+      revision: 1,
+      updatedAt: 100,
       views: {},
     });
+
+    const recovered = await store.writeStarMapWorkspace(workspace(), 1);
+    expect(recovered.revision).toBe(2);
+    expect(await store.readStarMapWorkspace()).toEqual(recovered);
   });
 
   it("keeps valid cards when another saved card is corrupt", async () => {

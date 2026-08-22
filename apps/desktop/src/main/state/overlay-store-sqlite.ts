@@ -3404,7 +3404,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         JSON.parse(row.payload) as unknown,
       );
       if (!snapshot) {
-        return emptyStarMapWorkspaceState();
+        return {
+          ...emptyStarMapWorkspaceState(),
+          revision: row.revision,
+          updatedAt: row.updated_at,
+        };
       }
       return {
         ...snapshot,
@@ -3412,7 +3416,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         updatedAt: row.updated_at,
       };
     } catch {
-      return emptyStarMapWorkspaceState();
+      return {
+        ...emptyStarMapWorkspaceState(),
+        revision: row.revision,
+        updatedAt: row.updated_at,
+      };
     }
   }
 

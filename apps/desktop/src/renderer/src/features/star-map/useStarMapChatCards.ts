@@ -89,31 +89,162 @@ export type StarMapChatCardsController = {
 };
 
 const EMPTY_STATE: StarMapChatCardsState = { cards: [], views: {} };
+const WORKSPACE_LAYOUTS: readonly StarMapWorkspaceLayout[] = [
+  "lanes",
+  "orbit",
+  "projects",
+];
 
 function viewportSize(): { width: number; height: number } {
   if (typeof window === "undefined") return { width: 1440, height: 900 };
   return { width: window.innerWidth, height: window.innerHeight };
 }
 
+function snapshotCard(
+  card: StarMapChatCardEntry,
+): StarMapWorkspaceSnapshot["cards"][number] {
+  return {
+    key: card.key,
+    ownerInstanceId: card.ownerInstanceId,
+    thread: card.thread,
+    geometry: {
+      anchor: card.anchor,
+      dx: card.anchorDx,
+      dy: card.anchorDy,
+      fallbackRect: card.rect,
+    },
+    contextOpen: card.contextOpen,
+    terminalOpen: card.terminalOpen,
+    terminalHeight: card.terminalHeight,
+  };
+}
+
 function snapshotFor(state: StarMapChatCardsState): StarMapWorkspaceSnapshot {
   return {
     version: STAR_MAP_WORKSPACE_VERSION,
-    cards: state.cards.map((card) => ({
-      key: card.key,
-      ownerInstanceId: card.ownerInstanceId,
-      thread: card.thread,
-      geometry: {
-        anchor: card.anchor,
-        dx: card.anchorDx,
-        dy: card.anchorDy,
-        fallbackRect: card.rect,
-      },
-      contextOpen: card.contextOpen,
-      terminalOpen: card.terminalOpen,
-      terminalHeight: card.terminalHeight,
-    })),
+    cards: state.cards.map(snapshotCard),
     views: state.views,
   };
+}
+
+function snapshotsMatch(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function raisedCardKey(
+  base: StarMapWorkspaceSnapshot,
+  next: StarMapWorkspaceSnapshot,
+): string | undefined {
+  if (base.cards.length !== next.cards.length || next.cards.length === 0) {
+    return undefined;
+  }
+  const candidate = next.cards.at(-1)?.key;
+  if (!candidate) return undefined;
+  const baseKeys = base.cards.map((card) => card.key);
+  const nextKeys = next.cards.map((card) => card.key);
+  if (
+    !baseKeys.every((key) => nextKeys.includes(key))
+    || snapshotsMatch(baseKeys, nextKeys)
+  ) {
+    return undefined;
+  }
+  const moved = [...baseKeys.filter((key) => key !== candidate), candidate];
+  return snapshotsMatch(moved, nextKeys) ? candidate : undefined;
+}
+
+function rebaseCardChange(params: {
+  base: StarMapWorkspaceSnapshot["cards"][number];
+  next: StarMapWorkspaceSnapshot["cards"][number];
+  latest?: StarMapWorkspaceSnapshot["cards"][number];
+}): StarMapWorkspaceSnapshot["cards"][number] {
+  const latest = params.latest ?? params.base;
+  return {
+    key: params.next.key,
+    ownerInstanceId:
+      params.base.ownerInstanceId === params.next.ownerInstanceId
+        ? latest.ownerInstanceId
+        : params.next.ownerInstanceId,
+    thread: snapshotsMatch(params.base.thread, params.next.thread)
+      ? latest.thread
+      : params.next.thread,
+    geometry: snapshotsMatch(params.base.geometry, params.next.geometry)
+      ? latest.geometry
+      : params.next.geometry,
+    contextOpen:
+      params.base.contextOpen === params.next.contextOpen
+        ? latest.contextOpen
+        : params.next.contextOpen,
+    terminalOpen:
+      params.base.terminalOpen === params.next.terminalOpen
+        ? latest.terminalOpen
+        : params.next.terminalOpen,
+    terminalHeight:
+      params.base.terminalHeight === params.next.terminalHeight
+        ? latest.terminalHeight
+        : params.next.terminalHeight,
+  };
+}
+
+/**
+ * Reapply one viewer gesture to a newer durable snapshot. Each queued write
+ * carries the before/after pair from the local semantic boundary, so a peer
+ * window's intervening cards and camera changes survive a revision conflict.
+ */
+function rebaseWorkspaceChange(params: {
+  base: StarMapWorkspaceSnapshot;
+  next: StarMapWorkspaceSnapshot;
+  latest: StarMapWorkspaceSnapshot;
+}): StarMapWorkspaceSnapshot {
+  const baseByKey = new Map(params.base.cards.map((card) => [card.key, card]));
+  const nextByKey = new Map(params.next.cards.map((card) => [card.key, card]));
+  let cards = params.latest.cards.filter(
+    (card) => !(baseByKey.has(card.key) && !nextByKey.has(card.key)),
+  );
+  for (const nextCard of params.next.cards) {
+    const baseCard = baseByKey.get(nextCard.key);
+    if (baseCard && snapshotsMatch(baseCard, nextCard)) continue;
+    const index = cards.findIndex((card) => card.key === nextCard.key);
+    const rebasedCard = baseCard
+      ? rebaseCardChange({
+          base: baseCard,
+          next: nextCard,
+          latest: index >= 0 ? cards[index] : undefined,
+        })
+      : nextCard;
+    if (index >= 0) {
+      cards = [
+        ...cards.slice(0, index),
+        rebasedCard,
+        ...cards.slice(index + 1),
+      ];
+    } else {
+      cards = [...cards, rebasedCard];
+    }
+  }
+  const raised = raisedCardKey(params.base, params.next);
+  if (raised) {
+    const card = cards.find((entry) => entry.key === raised);
+    if (card) cards = [...cards.filter((entry) => entry.key !== raised), card];
+  }
+
+  const views = { ...params.latest.views };
+  for (const layout of WORKSPACE_LAYOUTS) {
+    if (snapshotsMatch(params.base.views[layout], params.next.views[layout])) {
+      continue;
+    }
+    const nextView = params.next.views[layout];
+    if (nextView) views[layout] = nextView;
+    else delete views[layout];
+  }
+  return {
+    version: STAR_MAP_WORKSPACE_VERSION,
+    cards,
+    views,
+  };
+}
+
+function isWorkspaceRevisionConflict(error: unknown): boolean {
+  return String(error).includes("Star Map workspace revision conflict");
 }
 
 function entryFromSnapshot(
@@ -148,21 +279,58 @@ export function useStarMapChatCards(params: {
   const stateRef = useRef(state);
   const mutatedBeforeHydrationRef = useRef(false);
   const revisionRef = useRef(0);
+  const persistedWorkspaceRef = useRef(snapshotFor(EMPTY_STATE));
+  const queuedWorkspaceRef = useRef(snapshotFor(EMPTY_STATE));
   const writeQueueRef = useRef<Promise<void>>(Promise.resolve());
   const desktopApi = params.desktopApi;
 
   const enqueueWrite = useCallback(
     (next: StarMapChatCardsState) => {
-      if (!desktopApi?.writeStarMapWorkspace) return;
+      const writeWorkspace = desktopApi?.writeStarMapWorkspace;
+      if (!writeWorkspace) return;
+      const readWorkspace = desktopApi?.readStarMapWorkspace;
+      const base = queuedWorkspaceRef.current;
       const snapshot = snapshotFor(next);
+      queuedWorkspaceRef.current = snapshot;
       writeQueueRef.current = writeQueueRef.current
         .catch(() => undefined)
         .then(async () => {
-          const response = await desktopApi.writeStarMapWorkspace?.({
-            baseRevision: revisionRef.current,
-            workspace: snapshot,
+          let rebased = rebaseWorkspaceChange({
+            base,
+            next: snapshot,
+            latest: persistedWorkspaceRef.current,
           });
-          if (response) revisionRef.current = response.workspace.revision;
+          for (;;) {
+            try {
+              const response = await writeWorkspace({
+                baseRevision: revisionRef.current,
+                workspace: rebased,
+              });
+              revisionRef.current = response.workspace.revision;
+              persistedWorkspaceRef.current = {
+                version: response.workspace.version,
+                cards: response.workspace.cards,
+                views: response.workspace.views,
+              };
+              return;
+            } catch (error) {
+              if (!readWorkspace || !isWorkspaceRevisionConflict(error)) {
+                throw error;
+              }
+              const response = await readWorkspace();
+              revisionRef.current = response.workspace.revision;
+              persistedWorkspaceRef.current = {
+                version: response.workspace.version,
+                cards: response.workspace.cards,
+                views: response.workspace.views,
+              };
+              rebased = rebaseWorkspaceChange({
+                base,
+                next: snapshot,
+                latest: persistedWorkspaceRef.current,
+              });
+            }
+          }
         });
     },
     [desktopApi],
@@ -189,6 +357,9 @@ export function useStarMapChatCards(params: {
           cards: response.workspace.cards.map(entryFromSnapshot),
           views: response.workspace.views,
         };
+        const restoredSnapshot = snapshotFor(restored);
+        persistedWorkspaceRef.current = restoredSnapshot;
+        queuedWorkspaceRef.current = restoredSnapshot;
         const current = stateRef.current;
         const next = mutatedBeforeHydrationRef.current
           ? {
@@ -205,6 +376,7 @@ export function useStarMapChatCards(params: {
         setState(next);
         setHydrated(true);
         if (mutatedBeforeHydrationRef.current) enqueueWrite(next);
+        else queuedWorkspaceRef.current = snapshotFor(next);
       })
       .catch(() => {
         if (!cancelled) setHydrated(true);

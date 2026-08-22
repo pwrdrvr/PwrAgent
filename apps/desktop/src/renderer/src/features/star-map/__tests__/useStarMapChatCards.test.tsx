@@ -279,6 +279,122 @@ describe("useStarMapChatCards", () => {
     expect(writeStarMapWorkspace.mock.calls[1][0].baseRevision).toBe(5);
   });
 
+  it("rebases queued semantic changes after a revision conflict", async () => {
+    const initial = savedWorkspace();
+    const concurrentCard = {
+      ...initial.workspace.cards[0],
+      key: "pwr_remote::codex:t-concurrent",
+      thread: {
+        ...initial.workspace.cards[0].thread,
+        id: "t-concurrent",
+        title: "Opened in another window",
+      },
+    };
+    const concurrent: ReadStarMapWorkspaceResponse = {
+      workspace: {
+        ...initial.workspace,
+        revision: 5,
+        updatedAt: 150,
+        cards: [
+          {
+            ...initial.workspace.cards[0],
+            geometry: {
+              ...initial.workspace.cards[0].geometry,
+              fallbackRect: {
+                ...initial.workspace.cards[0].geometry.fallbackRect,
+                left: 920,
+              },
+            },
+          },
+          concurrentCard,
+        ],
+      },
+    };
+    const readStarMapWorkspace = vi
+      .fn<NonNullable<DesktopApi["readStarMapWorkspace"]>>()
+      .mockResolvedValueOnce(initial)
+      .mockResolvedValue(concurrent);
+    let rejectForConflict = true;
+    const writeStarMapWorkspace = vi.fn(
+      async ({ baseRevision, workspace }: WriteStarMapWorkspaceRequest) => {
+        if (rejectForConflict) {
+          rejectForConflict = false;
+          throw new Error(
+            "Star Map workspace revision conflict: expected 4, found 5",
+          );
+        }
+        return {
+          workspace: {
+            ...workspace,
+            revision: baseRevision + 1,
+            updatedAt: 200,
+          },
+        };
+      },
+    );
+    const desktopApi: DesktopApi = {
+      readStarMapWorkspace,
+      writeStarMapWorkspace,
+    };
+    const { result } = renderHook(() => useStarMapChatCards({ desktopApi }));
+    await waitFor(() => expect(result.current.hydrated).toBe(true));
+
+    act(() => {
+      result.current.toggleContext("pwr_remote::codex:t-remote");
+      result.current.toggleTerminal("pwr_remote::codex:t-remote");
+    });
+
+    await waitFor(() => expect(writeStarMapWorkspace).toHaveBeenCalledTimes(3));
+    expect(readStarMapWorkspace).toHaveBeenCalledTimes(2);
+    expect(writeStarMapWorkspace.mock.calls[1][0]).toMatchObject({
+      baseRevision: 5,
+      workspace: {
+        cards: [
+          expect.objectContaining({
+            key: "pwr_remote::codex:t-remote",
+            contextOpen: false,
+            terminalOpen: true,
+            geometry: expect.objectContaining({
+              fallbackRect: expect.objectContaining({ left: 920 }),
+            }),
+          }),
+          expect.objectContaining({
+            key: "pwr_remote::codex:t-concurrent",
+          }),
+        ],
+      },
+    });
+    expect(writeStarMapWorkspace.mock.calls[2][0]).toMatchObject({
+      baseRevision: 6,
+      workspace: {
+        cards: [
+          expect.objectContaining({
+            key: "pwr_remote::codex:t-remote",
+            contextOpen: false,
+            terminalOpen: false,
+            geometry: expect.objectContaining({
+              fallbackRect: expect.objectContaining({ left: 920 }),
+            }),
+          }),
+          expect.objectContaining({
+            key: "pwr_remote::codex:t-concurrent",
+          }),
+        ],
+      },
+    });
+
+    act(() => result.current.toggleContext("pwr_remote::codex:t-remote"));
+    await waitFor(() => expect(writeStarMapWorkspace).toHaveBeenCalledTimes(4));
+    expect(writeStarMapWorkspace.mock.calls[3][0].baseRevision).toBe(7);
+    expect(
+      writeStarMapWorkspace.mock.calls[3][0].workspace.cards,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: "pwr_remote::codex:t-concurrent" }),
+      ]),
+    );
+  });
+
   it("merges operator changes made while the saved workspace is loading", async () => {
     let resolveRead: (value: ReadStarMapWorkspaceResponse) => void = () => {};
     const read = new Promise<ReadStarMapWorkspaceResponse>((resolve) => {

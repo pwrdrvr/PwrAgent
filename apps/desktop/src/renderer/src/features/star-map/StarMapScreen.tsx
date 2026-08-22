@@ -1042,6 +1042,21 @@ export function StarMapScreen(props: StarMapScreenProps) {
     enabled: true,
     refreshNonce: remoteRefreshNonce,
   });
+  const federationLayoutReady =
+    !props.desktopApi?.readFederationHealth
+    || (
+      health !== undefined
+      && (
+        !props.desktopApi.getNavigationSnapshot
+        || peers.every(
+          (peer) =>
+            peer.status !== "connected"
+            || !peer.capabilities.includes("thread_navigation")
+            || remote.threadsByInstance.has(peer.id)
+            || remote.unreachableInstanceIds.has(peer.id),
+        )
+      )
+    );
   const queueProjectionThreads = useMemo(
     () => [
       ...props.localThreads,
@@ -2088,9 +2103,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
   useLayoutEffect(() => {
     if (!chatCards.hydrated) return;
     if (restoredViewLayoutRef.current === preferences.layout) return;
-    restoredViewLayoutRef.current = preferences.layout;
     const saved = chatCards.viewFor(preferences.layout);
-    if (!saved) return;
+    if (!saved) {
+      restoredViewLayoutRef.current = preferences.layout;
+      return;
+    }
+    if (!federationLayoutReady) return;
+    restoredViewLayoutRef.current = preferences.layout;
+    // The operator may use the map while a peer's first snapshot is still
+    // loading. Their movement outranks a delayed startup restoration.
+    if (operatorMovedViewRef.current) return;
     operatorMovedViewRef.current = true;
     commitView(
       clampStarMapView({
@@ -2102,6 +2124,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
   }, [
     chatCards,
     commitView,
+    federationLayoutReady,
     panZoomCanvas.height,
     panZoomCanvas.width,
     preferences.layout,

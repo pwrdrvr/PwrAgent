@@ -988,6 +988,100 @@ describe("StarMapScreen", () => {
     ).toBeTruthy();
   });
 
+  it("waits for the initial federation layout before restoring the camera", async () => {
+    seedLayout("orbit");
+    type HealthResponse = Awaited<
+      ReturnType<NonNullable<DesktopApi["readFederationHealth"]>>
+    >;
+    type SnapshotResponse = Awaited<
+      ReturnType<NonNullable<DesktopApi["getNavigationSnapshot"]>>
+    >;
+    const health = createDeferred<HealthResponse>();
+    const remoteSnapshot = createDeferred<SnapshotResponse>();
+    const getNavigationSnapshot = vi.fn(() => remoteSnapshot.promise);
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      readFederationHealth: vi.fn(() => health.promise),
+      getNavigationSnapshot,
+      readStarMapWorkspace: vi.fn(async () => ({
+        workspace: {
+          version: 1 as const,
+          revision: 3,
+          updatedAt: 100,
+          cards: [],
+          views: { orbit: { x: -600, y: 0, scale: 0.5 } },
+        },
+      })),
+    };
+    const { container } = render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    const canvas = () =>
+      container.querySelector<HTMLElement>(".star-map__canvas");
+    const savedTransform = "translate(-600px, 0px) scale(0.5)";
+
+    await waitFor(() => expect(canvas()).not.toBeNull());
+    expect(canvas()?.style.transform).not.toBe(savedTransform);
+
+    await act(async () => {
+      health.resolve({
+        health: {
+          enabled: true,
+          role: "gateway",
+          status: "listening",
+          instanceId: "pwr_local",
+          peers: [
+            {
+              id: "pwr_remote",
+              label: "Remote Mac",
+              role: "client",
+              status: "connected",
+              capabilities: ["thread_navigation"],
+            },
+          ],
+        },
+      });
+      await health.promise;
+    });
+    await waitFor(() => expect(getNavigationSnapshot).toHaveBeenCalledTimes(1));
+    expect(canvas()?.style.transform).not.toBe(savedTransform);
+    const transformBeforeRemoteSnapshot = canvas()?.style.transform;
+
+    await act(async () => {
+      remoteSnapshot.resolve({
+        fetchedAt: 200,
+        threads: Array.from({ length: 30 }, (_, index) => ({
+          ...unreadThread(`remote-${index}`),
+          federation: {
+            ref: {
+              backend: "codex" as const,
+              threadId: `remote-${index}`,
+              target: {
+                scope: "remote" as const,
+                instanceId: "pwr_remote",
+              },
+            },
+            instanceLabel: "Remote Mac",
+            peerStatus: "connected" as const,
+          },
+        })),
+      } as unknown as SnapshotResponse);
+      await remoteSnapshot.promise;
+    });
+
+    await waitFor(() => {
+      expect(canvas()?.style.transform).toContain("scale(0.5)");
+    });
+    expect(canvas()?.style.transform).not.toBe(transformBeforeRemoteSnapshot);
+  });
+
   it("keeps a stopped monitor disabled until local navigation refreshes", async () => {
     let resolveRefresh: (() => void) | undefined;
     const refreshPending = new Promise<void>((resolve) => {
