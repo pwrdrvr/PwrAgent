@@ -1,0 +1,132 @@
+name: macOS Lifecycle Diagnostic
+
+on:
+  push:
+    branches:
+      - diagnostic/macos-federation-lifecycle
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  lifecycle:
+    name: macOS lifecycle diagnostic (${{ matrix.lane }} of 3)
+    runs-on: [self-hosted, macOS, ARM64, pwrdrvr-macos]
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        lane: [1, 2, 3]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        timeout-minutes: 10
+        with:
+          lfs: true
+
+      - name: Materialize Git LFS assets
+        timeout-minutes: 5
+        run: git lfs pull
+
+      - name: Install Node.js and dependencies
+        uses: pwrdrvr/configure-nodejs@v1
+        timeout-minutes: 10
+        with:
+          node-version: 24.18.0
+          cache-electron: "true"
+
+      - name: Clear leftover Electron state from previous jobs
+        shell: bash
+        timeout-minutes: 5
+        run: bash ./scripts/ci/macos-e2e-pre-run-cleanup.sh
+
+      - name: Report assigned runner
+        shell: bash
+        run: |
+          echo "runner=${RUNNER_NAME}"
+          echo "macOS=$(/usr/bin/sw_vers -productVersion)"
+
+      - name: Run focused federation lifecycle tests
+        timeout-minutes: 10
+        env:
+          PWRAGENT_E2E_DISABLE_GPU: "1"
+          PWRAGENT_E2E_RUN_MACOS_26_6_LIFECYCLE: "1"
+          PWRAGENT_E2E_SHUTDOWN_CIRCUIT_BREAKER: "1"
+        run: >-
+          pnpm --filter @pwragent/desktop test:e2e
+          e2e/federation-remote-window.spec.ts
+          --grep="enrolls, browses remote threads|keeps a cross-instance child attached"
+          --retries=0
+
+      - name: Upload focused Playwright artifacts
+        uses: actions/upload-artifact@v7
+        if: ${{ !cancelled() }}
+        timeout-minutes: 10
+        with:
+          name: macos-lifecycle-diagnostic-${{ matrix.lane }}
+          path: |
+            apps/desktop/playwright-report/
+            apps/desktop/test-results/
+          retention-days: 30
+
+  verify-runner-spread:
+    name: Verify three-runner diagnostic spread
+    if: ${{ always() }}
+    needs: lifecycle
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require three distinct macOS runners
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const jobs = await github.paginate(
+              github.rest.actions.listJobsForWorkflowRun,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: context.runId,
+                per_page: 100,
+              },
+            );
+            const lanes = jobs.filter((job) =>
+              job.name.startsWith("macOS lifecycle diagnostic (")
+            );
+            const runnerNames = lanes
+              .map((job) => job.runner_name)
+              .filter(Boolean);
+            const distinctRunnerNames = [...new Set(runnerNames)];
+            const table = lanes.map((job) => [
+              job.name,
+              job.runner_name || "unassigned",
+              job.conclusion || job.status,
+            ]);
+            await core.summary
+              .addHeading("macOS lifecycle runner spread")
+              .addTable([
+                [
+                  {data: "Lane", header: true},
+                  {data: "Runner", header: true},
+                  {data: "Result", header: true},
+                ],
+                ...table,
+              ])
+              .write();
+            if (lanes.length !== 3) {
+              core.setFailed(`Expected 3 lifecycle jobs, found ${lanes.length}.`);
+            }
+            if (distinctRunnerNames.length !== 3) {
+              core.setFailed(
+                `Expected 3 distinct runners, found ${distinctRunnerNames.length}: ${distinctRunnerNames.join(", ")}`,
+              );
+            }
+            const unsuccessful = lanes.filter(
+              (job) => job.conclusion !== "success",
+            );
+            if (unsuccessful.length > 0) {
+              core.setFailed(
+                `${unsuccessful.length} focused lifecycle lane(s) did not pass.`,
+              );
+            }

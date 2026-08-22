@@ -865,6 +865,7 @@ test.describe("federation remote window", () => {
       : undefined;
     test.skip(
       process.env.CI === "true"
+        && process.env.PWRAGENT_E2E_RUN_MACOS_26_6_LIFECYCLE !== "1"
         && macOsProductVersion?.startsWith("26.6.") === true,
       "macOS 26.6 CI guests hang both Playwright quit transports in this two-process lifecycle; retain coverage on other macOS versions and in the focused manual lab.",
     );
