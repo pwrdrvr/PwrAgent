@@ -167,6 +167,14 @@ nsis:
   perMachine: false
   allowToChangeInstallationDirectory: true
   shortcutName: PwrAgent
+  # Without this, electron-builder defaults uninstallDisplayName to
+  # "${productName} ${version}", so Add or Remove Programs shows
+  # "PwrAgent 1.2.3" next to a Version column that already says 1.2.3.
+  # Safe to change: the installer rewrites DisplayName on every install
+  # and the upgrade path uninstalls the prior version first, so existing
+  # installs self-heal. Upgrade and uninstall detection are unaffected --
+  # both registry keys are derived from appId, not from this string.
+  uninstallDisplayName: PwrAgent
   artifactName: "${productName}-${version}-windows-${arch}-setup.${ext}"
 
 dmg:
