@@ -2,6 +2,8 @@ import { useState, type ReactNode } from "react";
 import type { AutomationDetail, NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { formatRunningDurationMs } from "../../lib/format-duration";
+import { SignalCount } from "../../components/SignalCount";
+import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import { useNowWhileActive } from "../thread-detail/context-panels/RailCardTiming";
 import { useAutomations } from "./useAutomations";
 
@@ -78,8 +80,23 @@ export function ActiveAutomationRunsStrip(props: {
     <section className="live-strip" aria-label={heading}>
       <div className="live-strip__header">
         <div className="live-strip__row live-strip__row--static">
+          {/* Same mark-and-number as the sub-agents strip below it and the
+              sidebar rail beside it — see `SignalCount.tsx`. This strip drew
+              a bare pill and no mark at all, so two sibling strips reported
+              the same kind of thing two different ways. */}
           <span className="live-strip__label">{heading}</span>
-          <span className="live-strip__count">{headingCount}</span>
+          <SignalCount
+            className="live-strip__count"
+            count={headingCount}
+            indicator={
+              running.length > 0 ? (
+                <ThinkingScanner compact />
+              ) : (
+                <span className="signal-count__dormant-scanner" />
+              )
+            }
+            tone={running.length > 0 ? "active" : "idle"}
+          />
           <span className="live-strip__row-spacer" />
           {failedNote ? (
             <span className="live-strip__note">{failedNote}</span>

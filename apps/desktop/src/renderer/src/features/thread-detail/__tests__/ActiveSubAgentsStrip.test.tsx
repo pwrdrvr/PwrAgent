@@ -51,6 +51,72 @@ describe("ActiveSubAgentsStrip", () => {
       expect(container).toBeEmptyDOMElement();
     });
 
+    it("counts on the app's shared mark-and-number, not a pill of its own", () => {
+      // This strip drew its count inside a bordered 18px pill with the
+      // scanner parked after it, so the same statement the sidebar makes
+      // two panes away ("this many, working") looked like a different kind
+      // of object in one window. See `SignalCount.tsx`.
+      const { container } = render(
+        <ActiveSubAgentsStrip
+          thread={buildThread([buildSubAgent({ monitorId: "running-1" })])}
+        />,
+      );
+
+      const count = container.querySelector(".live-strip__count")!;
+      expect(count).toHaveClass("signal-count");
+      expect(count).toHaveClass("signal-count--active");
+      // Mark first, digits last — the order every other surface uses.
+      expect(count.firstElementChild).toHaveClass("thinking-scanner");
+      expect(count.lastElementChild).toHaveClass("signal-count__value");
+      expect(count.lastElementChild).toHaveTextContent("1");
+    });
+
+    it("keeps the tone with the heading when only blocked rows are left", () => {
+      // The two halves of the readout answer different questions: the mark
+      // says whether anything is progressing (nothing is), the tone says
+      // what the number counts. A blocked sub-agent is still an ACTIVE one —
+      // `activeCount` includes it and the heading says so — so painting the
+      // count in the idle grey would have the strip contradict its own label.
+      const { container } = render(
+        <ActiveSubAgentsStrip
+          thread={buildThread([
+            buildSubAgent({ monitorId: "blocked-1", status: "blocked" }),
+          ])}
+        />,
+      );
+
+      expect(screen.getByText("Active sub-agents")).toBeInTheDocument();
+      const count = container.querySelector(".live-strip__count")!;
+      expect(count).toHaveClass("signal-count--active");
+      expect(count).not.toHaveClass("signal-count--idle");
+      // Blocked is not progressing, so the beam still must not sweep.
+      expect(count.querySelector(".thinking-scanner")).toBeNull();
+      expect(count.firstElementChild).toHaveClass(
+        "signal-count__dormant-scanner",
+      );
+    });
+
+    it("swaps the sweep for the dormant bar when nothing is running", () => {
+      // A failure you have not dismissed still holds the strip open, but
+      // nothing is progressing — and the count keeps its full weight,
+      // because an undismissed failure is something to act on.
+      const { container } = render(
+        <ActiveSubAgentsStrip
+          thread={buildThread([
+            buildSubAgent({ monitorId: "failed-1", status: "failed" }),
+          ])}
+        />,
+      );
+
+      const count = container.querySelector(".live-strip__count")!;
+      expect(count).toHaveClass("signal-count--idle");
+      expect(count.querySelector(".thinking-scanner")).toBeNull();
+      expect(count.firstElementChild).toHaveClass(
+        "signal-count__dormant-scanner",
+      );
+      expect(count).not.toHaveAttribute("data-zero");
+    });
+
     it("renders nothing when every sub-agent has finished", () => {
       // Successful and cancelled sub-agents leave immediately — the sidebar
       // and the rail panel already hold them.

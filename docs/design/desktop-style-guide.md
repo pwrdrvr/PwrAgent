@@ -185,6 +185,24 @@ Rules:
   and the tooltip, never as visible text
 - Attention leads the switch and is the only tab that reports state: two
   indicators with counts, both grey at zero, zeros always shown
+- once a peer's turn is visible, the turn readout splits into a stacked
+  column: accent scanner for turns on this machine (quitting interrupts
+  them), neutral scanner under it for turns on other instances (quitting
+  leaves them running). The same neutral beam marks a peer's live turn on
+  its thread row and on the transcript's pending line. A window fronting a
+  peer never splits — every row there is that peer's work
+- the Star Map's Attention chip is the same control: the tab's readouts and
+  column, the tab's hover card, and no visible word (the name lives in the
+  `aria-label` and the card). See `AttentionSignals.tsx`
+- **one mark-and-number everywhere.** Any surface saying "this many, and here
+  is what kind" uses `SignalCount` (`.signal-count`): the mark first, then the
+  digits, mono and tabular, no border and no fill. Tone says where the work is
+  — accent `--active` here, neutral `--remote-active` elsewhere, secondary
+  `--idle` for a number with nothing running behind it. It covers the Attention
+  tab, the Star Map's Attention chip, the directory header counts and the
+  sub-agent / automation strips; the strips' bordered count pill and the
+  directory rail's count-then-mark order are gone. A zero is greyed, never
+  hidden
 - Inbox is the default thread lens, sorted by recent activity
 - Recents sorts by thread creation time
 - Inbox and Recents are pure sort orders: no pinned section, no pinned-first

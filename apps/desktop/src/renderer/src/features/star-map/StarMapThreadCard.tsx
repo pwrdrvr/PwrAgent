@@ -14,6 +14,7 @@ import {
 import { ThreadMetaChips } from "../navigation/ThreadMetaChips";
 import {
   getThreadRowStatus,
+  isThreadRemoteWorkHere,
   ThreadRowStatus,
 } from "../navigation/ThreadRowStatus";
 import {
@@ -195,7 +196,10 @@ export function StarMapThreadCard(props: {
               Chat card open on the map
             </span>
           ) : null}
-          <ThreadRowStatus status={status} />
+          <ThreadRowStatus
+            remoteWork={isThreadRemoteWorkHere(thread)}
+            status={status}
+          />
           <span
             className="star-map-card__title"
             onMouseEnter={(event) =>

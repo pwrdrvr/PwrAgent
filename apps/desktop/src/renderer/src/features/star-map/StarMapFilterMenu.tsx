@@ -25,7 +25,7 @@ import {
 export function StarMapFilterMenu(props: {
   selection: StarMapFilterSelection;
   counts: Record<StarMapFilterKey, number>;
-  /** The Attention chip's two indicators; see `StarMapFilterChip`. */
+  /** The Attention chip's readouts; see `StarMapFilterChip`. */
   attention: StarMapAttentionCounts;
   showRemoteTurns: boolean;
   onCycle: (key: StarMapFilterKey) => void;

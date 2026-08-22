@@ -43,6 +43,7 @@ import type { DesktopApi } from "../../lib/desktop-api";
 import { parseReviewCommand } from "../../../../shared/review-command";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { agentEventMatchesThread } from "../../lib/federated-thread-events";
+import { isThreadRemoteWorkHere } from "../navigation/ThreadRowStatus";
 import { useThreadSessionState } from "../../lib/useThreadSessionState";
 import { useThreadSkills } from "../../lib/useThreadSkills";
 import {
@@ -1464,6 +1465,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
             pendingMcpInteraction={session.pendingMcpInteraction}
             pendingRequest={session.pendingRequest}
             pendingStatusText={session.pendingStatusText}
+            pendingRemoteWork={isThreadRemoteWorkHere(thread)}
             pendingUserInput={session.pendingUserInput}
             runningTurnUsageText={session.runningTurnUsageText}
             threadId={thread.id}

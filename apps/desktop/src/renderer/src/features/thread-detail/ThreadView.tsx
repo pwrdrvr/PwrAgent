@@ -61,6 +61,7 @@ import { agentEventMatchesThread } from "../../lib/federated-thread-events";
 import { useCelestialIcons } from "../../lib/useCelestialIcons";
 import { CelestialWatermark } from "../../components/CelestialWatermark";
 import { readRendererFederationTarget } from "../../lib/federation-window";
+import { isThreadRemoteWorkHere } from "../navigation/ThreadRowStatus";
 import type {
   IntegratedTerminalPaneRemote,
   IntegratedTerminalsController,
@@ -1425,6 +1426,11 @@ export function ThreadView(props: ThreadViewProps) {
       ? selectedThread.federation.ref.target.instanceId
       : undefined,
   );
+  // The pending line's scanner goes neutral for a peer's turn on the same
+  // predicate the thread row uses, so the transcript, the row and the
+  // Attention tab colour one turn the same way.
+  const transcriptRemoteWork =
+    selectedThread !== undefined && isThreadRemoteWorkHere(selectedThread);
   const envActionRuns = readCodexEnvironmentActionRuns(
     selectedThread?.codexEnvironmentRuntime,
   );
@@ -3539,6 +3545,7 @@ export function ThreadView(props: ThreadViewProps) {
               pendingRequestBusy={pendingRequestBusy}
               pendingUserInput={props.pendingUserInput}
               pendingStatusText={props.pendingStatusText}
+              pendingRemoteWork={transcriptRemoteWork}
               runningTurnUsageText={props.runningTurnUsageText}
               expandedActivityIds={props.expandedTranscriptActivityIds}
               expandedWorkPhaseGroupIds={

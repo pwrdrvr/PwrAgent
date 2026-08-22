@@ -3427,7 +3427,15 @@ textarea,
   padding: 0 7px;
 }
 
-.lens-switch__signal {
+/* One mark and the number it counts, on every surface that says it: the
+   Attention tab and the Star Map's Attention chip, the directory header
+   counts, and the sub-agent / automation strips. See `SignalCount.tsx` for
+   why they share it — three of these renderings were visible at once, in
+   three different shapes.
+
+   Mark first, then the digits: the mark is what says WHICH number this is.
+   Mono and tabular so 9 → 10 does not shove the mark and a column lines up. */
+.signal-count {
   display: inline-flex;
   /* Never the thing that gives: a half-eaten count reads as a different
      number, so the indicator shrinks before the digits do. */
@@ -3438,6 +3446,14 @@ textarea,
   font-size: 10px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* The cookie is a mark like any other here, so its size belongs to the
+   primitive rather than to one tone — the review readout is not the only
+   place it can appear. */
+.signal-count .thread-row__status-cookie {
+  width: 8px;
+  height: 8px;
 }
 
 /* The Drafts tab's count. Same mono, size and tabular figures as the Attention
@@ -3462,9 +3478,14 @@ textarea,
 
    Measurements are `.context-usage-card`'s (width, padding, radius, shadow,
    eyebrow, row scale) so the app's hover cards stay one family — that one
-   rather than `.pr-status-card` because both of these sit at z-index 90:
-   the lens switch is sidebar chrome and is not reachable from the Settings
-   overlay at 120, so neither needs the 140 a PR chip does. */
+   rather than `.pr-status-card`.
+
+   90 is the base layer, which is all the lens switch needs: it is sidebar
+   chrome and is not reachable from the Settings overlay at 120. A trigger
+   inside a window that opens its own stacking context appends that window's
+   escape class instead of getting a modifier here — the Star Map's Attention
+   chip wears `.star-map-card__tooltip` (140), declared later in this file, so
+   raising the map's z-scale moves both its card tooltips and this one. */
 .attention-card {
   position: fixed;
   z-index: 90;
@@ -3517,7 +3538,7 @@ textarea,
 /* Reuse of the tab's own readout classes, which carry the colour and the zero
    state. Inside the card they hold only the indicator, so drop the tab's inner
    gap and let the grid do the spacing. */
-.attention-card__row .lens-switch__signal {
+.attention-card__row .signal-count {
   justify-content: center;
   gap: 0;
 }
@@ -3557,6 +3578,17 @@ textarea,
   color: var(--text-muted);
 }
 
+/* The Star Map chip's closing line ("Click to show only these"). Muted and
+   set off from the rows: it is an affordance note, not a fourth count. */
+.attention-card__footer {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
 /* The turn readouts, stacked. One row is the common case and reads exactly as
    it did when it was a bare child of the tab — a single-item column is its own
    content box, so nothing moves. The second row only exists while a peer has
@@ -3565,7 +3597,7 @@ textarea,
 
    `flex-start` rather than centring: the two scanners have to share a left
    edge, or a one-digit count above a two-digit one visibly staggers them. */
-.lens-switch__turns {
+.signal-count-stack {
   display: flex;
   min-width: 0;
   flex: 0 0 auto;
@@ -3578,11 +3610,11 @@ textarea,
 /* Two rows have to fit the 26px tab, so the readouts drop to their own
    line box here. Only in the stacked column: a lone readout is centred in the
    tab and the line box never shows. */
-.lens-switch__turns .lens-switch__signal {
+.signal-count-stack .signal-count {
   line-height: 1;
 }
 
-.lens-switch__signal--active {
+.signal-count--active {
   color: var(--accent-bright);
 }
 
@@ -3593,23 +3625,27 @@ textarea,
 
    Still a live sweeping scanner, not a dormant bar: the work IS running, just
    not on this machine. */
-.lens-switch__signal--remote-active {
+.signal-count--remote-active {
   color: var(--text-muted);
 }
 
-.lens-switch__signal--remote-active .thinking-scanner {
+/* One recipe for every beam that sweeps a peer's turn: the Attention
+   readout, the thread row's mark (sidebar and Star Map card), and the
+   transcript's pending line. They are the same statement — "running, but
+   not here" — so a second tint for one of them would be a second meaning. */
+.signal-count--remote-active .thinking-scanner,
+.thread-row__status-indicator--remote .thinking-scanner,
+.transcript-list__pending--remote .thinking-scanner {
   --thinking-scanner-tint: var(--text-muted);
   --thinking-scanner-tint-bright: var(--text-secondary);
   --thinking-scanner-track: var(--bg-panel-hover);
 }
 
-.lens-switch__signal--review {
+/* Nothing is running behind this number: threads waiting to be reviewed, or
+   a strip holding only failures. Secondary rather than muted — the count is
+   still something to act on, it just is not work in flight. */
+.signal-count--idle {
   color: var(--text-secondary);
-}
-
-.lens-switch__signal--review .thread-row__status-cookie {
-  width: 8px;
-  height: 8px;
 }
 
 /* Zero is still shown — an idle tab has to read as "nothing running, nothing
@@ -3618,7 +3654,7 @@ textarea,
    `--text-muted` rather than `--text-subtle`: the zero is the message here,
    not decoration, and only the muted token is on the ramp that clears AA
    against the darkest surface it can land on. */
-.lens-switch__signal[data-zero="true"] {
+.signal-count[data-zero="true"] {
   color: var(--text-muted);
 }
 
@@ -3626,7 +3662,7 @@ textarea,
    greying the text is not enough — it has to be neutralized explicitly. Safe
    to restyle in place: it is a static mark with no animation to fall out of
    step. */
-.lens-switch__signal[data-zero="true"] .thread-row__status-cookie {
+.signal-count[data-zero="true"] .thread-row__status-cookie {
   border-color: var(--border-subtle);
   background: var(--text-muted);
   box-shadow: none;
@@ -3640,7 +3676,7 @@ textarea,
    never re-pinned. So the zero state is its own element and the live state is
    an untouched `ThinkingScanner`. Matches `.thinking-scanner--mini`'s footprint
    so the tab does not reflow when the count leaves zero. */
-.lens-switch__dormant-scanner {
+.signal-count__dormant-scanner {
   display: block;
   flex: 0 0 auto;
   width: 16px;
@@ -3666,11 +3702,11 @@ textarea,
     padding: 0 4px;
   }
 
-  .lens-switch__signal {
+  .signal-count {
     gap: 2px;
   }
 
-  .lens-switch__turns {
+  .signal-count-stack {
     gap: 1px;
   }
 }
@@ -5921,24 +5957,24 @@ textarea,
   font-size: calc(var(--sidebar-title-size) - 1px);
 }
 
+/* Type, tone and the mark-first order are `.signal-count`'s; these two keep
+   only what is theirs. */
 .directory-row__active-count,
 .directory-row__review-count {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.directory-row__active-count {
-  color: var(--accent-bright);
-}
-
-.directory-row__review-count {
-  color: var(--text-secondary);
+/* The meta block is right-aligned, so whatever ends the row lands at one x on
+   every directory. Under the old count-then-mark order that was the mark
+   itself; mark-first (see `SignalCount.tsx`) ends the row with the digits
+   instead, and a 1-digit count would pull the mark a whole digit right of a
+   2-digit neighbour — a ragged column of the one glyph the eye scans the rail
+   for. A fixed two-digit box with the digits flush right restores the constant
+   mark x without giving up the shared order. Three digits still shift it, the
+   way three digits always shifted this row's left edge. */
+.directory-row__summary-meta .signal-count__value {
+  min-width: 2ch;
+  text-align: right;
 }
 
 /* The header count cookie inherits the base 10px size — it used to be a
@@ -12938,78 +12974,31 @@ textarea,
 /* Stacked chips are full width, so the count goes to the far edge and
    makes a column. Only the count - `space-between` would also push the
    exclude mark off the label it negates, and "− ... Open PR" reads as two
-   separate things rather than one struck-through chip. */
-.star-map__filter-panel /* The Attention chip's readouts.
-   Token references copied from `.lens-switch__signal` and its modifiers, not
-   chosen to look similar: the map and the sidebar are reporting the SAME
-   three numbers, and an operator glancing between them must not have to
-   work out whether two different oranges mean two different things. If the
-   tab's tokens change, change these with them. */
+   separate things rather than one struck-through chip. The Attention chip's
+   readouts stay at the left edge like a label would: with no word on that
+   chip they ARE its label, and a column of indicators under the other
+   chips' counts would read as their count column. */
+.star-map__filter-panel .star-map__filter-count {
+  margin-left: auto;
+}
+
+/* The Attention chip's readouts: the sidebar Attention tab's own elements
+   (`AttentionSignals.tsx`), under the shared `.signal-count-stack` and
+   `.signal-count` rules — not a copy of their tokens. The map and the
+   sidebar report the SAME three numbers, and an operator glancing between
+   the two windows must not have to work out whether two different oranges,
+   or a row here and a column there, mean two different things. This wrapper
+   only gives the pair the tab's inner gap (`.lens-switch__button--attention`).
+
+   NB: this is its own rule on purpose. It was once fused onto the panel
+   rule above by a stray comment between two selectors (PR #1805), which
+   scoped it to the popover and left the strip's chip with no layout at all:
+   the turn column and the cookie ran together with no gap. */
 .star-map__filter-signals {
   display: inline-flex;
   flex: 0 0 auto;
   align-items: center;
   gap: 7px;
-}
-
-.star-map__filter-signal {
-  display: inline-flex;
-  /* Never the thing that gives: a half-eaten count reads as a different
-     number, so the indicator shrinks before the digits do. */
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 3px;
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-}
-
-.star-map__filter-signal--active {
-  color: var(--accent-bright);
-}
-
-/* Turns on another instance. Neutral rather than accent, and that is the
-   whole point: the accent means "this holds the app open", and a peer's turn
-   does not. Still a live sweeping scanner — the work IS running, just not
-   on this machine. */
-.star-map__filter-signal--remote-active {
-  color: var(--text-muted);
-}
-
-.star-map__filter-signal--remote-active .thinking-scanner {
-  --thinking-scanner-tint: var(--text-muted);
-  --thinking-scanner-tint-bright: var(--text-secondary);
-  --thinking-scanner-track: var(--bg-panel-hover);
-}
-
-.star-map__filter-signal--review {
-  color: var(--text-secondary);
-}
-
-.star-map__filter-signal--review .thread-row__status-cookie {
-  width: 8px;
-  height: 8px;
-}
-
-/* Zero is still shown — an idle chip has to read as "nothing running,
-   nothing unread", which a vanishing count cannot do. It just stops
-   claiming the accent. */
-.star-map__filter-signal[data-zero="true"] {
-  color: var(--text-muted);
-}
-
-/* The cookie paints itself from accent tokens rather than `currentColor`,
-   so greying the text is not enough. */
-.star-map__filter-signal[data-zero="true"] .thread-row__status-cookie {
-  border-color: var(--border-subtle);
-  background: var(--text-muted);
-  box-shadow: none;
-}
-
-.star-map__filter-count {
-  margin-left: auto;
 }
 
 .star-map__filter-chip {
@@ -13023,6 +13012,20 @@ textarea,
   color: var(--text-muted);
   font-size: 11px;
   cursor: pointer;
+}
+
+/* The Attention chip stands level with its labelled neighbours whether it
+   shows one turn row or two. 25px is a labelled chip's height: the count
+   badge's 15px line box (`.star-map__filter-count`) plus the 4px padding each
+   side plus the 1px borders, under the global border-box reset. The stacked
+   turn column is 22px (two 10px rows and a 2px gap), so with the vertical
+   padding handed to the min-height it fits without growing the chip — the tab
+   does the same sum in a fixed 26px, and a strip that grew by 7px whenever a
+   peer started a turn would move the whole top band. After the base rule:
+   same specificity, so source order is what lets it win. */
+.star-map__filter-chip--attention {
+  min-height: 25px;
+  padding-block: 0;
 }
 
 /* Tri-state. Neutral is the resting style above: not filtering on this.
@@ -13042,6 +13045,13 @@ textarea,
   color: var(--text-muted);
   text-decoration: line-through;
   text-decoration-color: var(--danger-text);
+}
+
+/* The strike is for a label, and the Attention chip has none: the only text
+   on it is its counts, and a struck digit reads as a different number. The
+   dashed border and the `−` mark already carry "hidden" on their own. */
+.star-map__filter-chip--attention.star-map__filter-chip--exclude {
+  text-decoration: none;
 }
 
 .star-map__filter-mark {
@@ -24165,21 +24175,11 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 /* Counts rank via neutrals, never the accent ramp (UI-THEME "Accent ramp"). */
-.live-strip__count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  flex: 0 0 auto;
-  padding: 0 5px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-}
+/* Was a bordered 18px pill with no mark beside it, which made the same
+   statement the sidebar makes ("this many, working") look like a different
+   kind of object in the same window. It is `.signal-count` now; nothing is
+   left to say here beyond keeping it out of the flex squeeze, which the
+   primitive already does. */
 
 /* Secondary tally next to the count, e.g. "12 failed" beside one live run.
    Ranks below the count via neutrals, never the accent ramp. */

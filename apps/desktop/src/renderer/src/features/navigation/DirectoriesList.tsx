@@ -47,6 +47,10 @@ import {
 } from "../../lib/native-drag-interaction";
 import { ThinkingScanner } from "../thread-detail/ThinkingScanner";
 import {
+  SignalCount,
+  type SignalCountTone,
+} from "../../components/SignalCount";
+import {
   getSubthreadDisclosureCount,
   isSubthreadSectionCollapsed,
   NativeSubAgentsDisclosure,
@@ -406,14 +410,23 @@ function getDirectoryRowLinkedDirectoryMode(
 }
 
 /**
- * One activity count in a directory header: the number, then the indicator
- * (mark last, so the trailing count's mark sits at one x on every row — see
- * the inline comment; when both counts render, the leading scanner still
- * moves with the review digits). The words ("active", "to review") moved
- * into the tooltip — a
- * directory row is a dense line already carrying a chevron, a folder glyph,
- * an elided path, and a new-thread button, and two trailing phrases pushed
- * the label it belongs to down to a few characters.
+ * One activity count in a directory header.
+ *
+ * `SignalCount`'s shape, which is the Attention tab's shape directly above
+ * it: the mark, then the digits. The words ("active", "to review") live in
+ * the tooltip — a directory row is a dense line already carrying a chevron,
+ * a folder glyph, an elided path, and a new-thread button, and two trailing
+ * phrases pushed the label they belong to down to a few characters.
+ *
+ * This read count-then-mark until the rail and the tab were two renderings
+ * of one idea. That order existed to hold the mark at a constant x down the
+ * right-aligned rail; the flip keeps that with a fixed two-digit box on the
+ * digits instead (`.directory-row__summary-meta .signal-count__value`), so
+ * a 1-digit row and a 2-digit row still line their marks up.
+ *
+ * Not `aria-hidden`, unlike the tab's readouts: the tab spells every count
+ * out in its control's `aria-label`, and here the digits ARE the
+ * announcement, with the tooltip text as the description.
  *
  * The scanner and the orange cookie are the same marks the thread rows below
  * use for the same two states, so the header reads as a summary of the rows
@@ -435,31 +448,27 @@ function DirectoryCount(props: {
   count: number;
   indicator: ReactElement;
   reviewCount?: number;
+  tone: SignalCountTone;
   tooltipText: string;
 }) {
   const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
 
   return (
     <>
-      <span
+      <SignalCount
         className={props.className}
-        data-active-thread-count={props.activeCount}
-        data-review-thread-count={props.reviewCount}
+        count={props.count}
+        data={{
+          "data-active-thread-count": props.activeCount,
+          "data-review-thread-count": props.reviewCount,
+        }}
+        indicator={props.indicator}
+        tone={props.tone}
         onMouseEnter={(event) =>
           tooltip.show(event.currentTarget, props.tooltipText)
         }
         onMouseLeave={tooltip.hide}
-      >
-        {/* Count BEFORE the mark. The meta block is right-aligned, so
-            the mark (cookie / scanner) is the last thing before the row
-            edge and lands at one x on every directory; the count is
-            variable-width (1–3 digits) and grows LEFT into empty space.
-            Mark-first put the cookie left of the digits, so it zigzagged
-            row to row with the digit count — a ragged column of the one
-            glyph the eye scans the rail for. */}
-        <span>{props.count}</span>
-        {props.indicator}
-      </span>
+      />
       {tooltip.tooltipNode}
     </>
   );
@@ -1640,6 +1649,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                   className="directory-row__active-count"
                   count={activeThreadCount}
                   indicator={<ThinkingScanner compact />}
+                  tone="active"
                   tooltipText={formatActiveThreadCount(activeThreadCount)}
                 />
               ) : null}
@@ -1651,6 +1661,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                     <span aria-hidden="true" className="thread-row__status-cookie" />
                   }
                   reviewCount={reviewThreadCount}
+                  tone="idle"
                   tooltipText={formatReviewThreadCount(reviewThreadCount)}
                 />
               ) : null}

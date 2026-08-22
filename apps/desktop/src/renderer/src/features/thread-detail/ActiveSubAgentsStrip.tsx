@@ -5,6 +5,7 @@ import type {
 } from "@pwragent/shared";
 import { isTerminalSubAgent } from "./context-panels/subagent-format";
 import { useNowWhileActive } from "./context-panels/RailCardTiming";
+import { SignalCount } from "../../components/SignalCount";
 import { ThinkingScanner } from "./ThinkingScanner";
 import { formatRunningDurationMs } from "../../lib/format-duration";
 import type { DesktopApi } from "../../lib/desktop-api";
@@ -168,14 +169,32 @@ export function ActiveSubAgentsStrip(props: {
           onClick={() => setExpanded((current) => !current)}
         >
           <span className="live-strip__chevron" aria-hidden="true" />
+          {/* The sidebar's mark-and-number, not a bordered pill: the same
+              statement ("this many, working") must not look like a different
+              kind of object in another part of the window.
+
+              The two halves answer different questions, so they read
+              different values. The MARK answers "is anything progressing?"
+              — only genuine work sweeps, so a strip of blocked or failed
+              rows gets the dormant bar. The TONE answers "what is this a
+              count of?", which is what the heading and `headingCount`
+              already answer: `activeCount` for a live strip, failures
+              otherwise. Keying the tone on `running` instead would paint a
+              blocked-only strip's count idle grey under an "Active
+              sub-agents" heading. */}
           <span className="live-strip__label">{heading}</span>
-          <span className="live-strip__count">{headingCount}</span>
-          {/* Beside the count, not at the far edge. Parked after the spacer it
-              sat ~730px from the label it modifies and read as a stray artifact
-              rather than "these are working". Only genuine work sweeps — a
-              strip holding nothing but blocked or failed rows must not imply
-              something is progressing. */}
-          {running.length > 0 ? <ThinkingScanner compact /> : null}
+          <SignalCount
+            className="live-strip__count"
+            count={headingCount}
+            indicator={
+              running.length > 0 ? (
+                <ThinkingScanner compact />
+              ) : (
+                <span className="signal-count__dormant-scanner" />
+              )
+            }
+            tone={activeCount > 0 ? "active" : "idle"}
+          />
           <span className="live-strip__row-spacer" />
           {/* Trailing, so the tally sits next to the Dismiss all that acts on
               it. Leading, it collided with the count and read as "1 12". */}

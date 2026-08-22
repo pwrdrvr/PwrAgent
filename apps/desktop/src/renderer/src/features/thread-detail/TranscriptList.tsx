@@ -104,6 +104,14 @@ type TranscriptListProps = {
   pendingMcpInteraction?: PendingMcpInteractionState;
   pendingUserInput?: PendingQuestionnaireState;
   pendingStatusText?: string;
+  /**
+   * The live turn belongs to another instance, so the pending line's scanner
+   * sweeps in neutral rather than accent — the same vocabulary as the
+   * thread row's mark and the Attention readouts: accent holds the app open,
+   * a peer's turn does not. The caller owns the gate (see
+   * `isThreadRemoteWorkHere`).
+   */
+  pendingRemoteWork?: boolean;
   runningTurnUsageText?: string;
   pagination?: AppServerThreadReplayPagination;
   parentThreadId?: string;
@@ -1600,7 +1608,12 @@ export function TranscriptList(props: TranscriptListProps) {
               className="transcript-list__item transcript-list__pending-item"
               role="listitem"
             >
-              <div className="transcript-list__pending" role="status">
+              <div
+                className={`transcript-list__pending${
+                  props.pendingRemoteWork ? " transcript-list__pending--remote" : ""
+                }`}
+                role="status"
+              >
                 {props.pendingStatusText ? <ThinkingScanner /> : null}
                 {props.pendingStatusText ? <span>{props.pendingStatusText}</span> : null}
                 {props.runningTurnUsageText ? (

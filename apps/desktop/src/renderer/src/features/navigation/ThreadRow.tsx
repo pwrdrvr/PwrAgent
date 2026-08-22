@@ -26,7 +26,11 @@ import { PrChip } from "../pr-status/PrChip";
 import type { DropIndicatorPosition } from "./drag-drop";
 import { ReactionPicker } from "./ReactionPicker";
 import { ThreadMetaChips } from "./ThreadMetaChips";
-import { getThreadRowStatus, ThreadRowStatus } from "./ThreadRowStatus";
+import {
+  getThreadRowStatus,
+  isThreadRemoteWorkHere,
+  ThreadRowStatus,
+} from "./ThreadRowStatus";
 import { setThreadRowNativeDragPreview } from "./thread-row-drag-preview";
 
 const HOVER_PREFETCH_DELAY_MS = 750;
@@ -387,7 +391,10 @@ export function ThreadRow(props: ThreadRowProps) {
             "Thinking"/"Unread update" tooltip) is not a dead zone. */}
         <span className="thread-row__header">
           <span className="thread-row__heading">
-            <ThreadRowStatus status={status} />
+            <ThreadRowStatus
+              remoteWork={isThreadRemoteWorkHere(props.thread)}
+              status={status}
+            />
             <span className="thread-row__title">{props.thread.title}</span>
             {isPinnedRow ? (
               onSetThreadPin ? (
