@@ -485,14 +485,36 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
-  it("keeps custom toast actions from collapsing the message column", () => {
+  it("keeps standalone toast actions from collapsing the message column", () => {
     const customActionsRule = extractRuleBody(
       css,
-      ".app-notice-toast__custom-actions",
+      ".app-notice-toast > .app-notice-toast__custom-actions",
     );
 
     expect(customActionsRule).toContain("grid-column: 1 / -1;");
     expect(customActionsRule).toContain("justify-content: flex-end;");
+  });
+
+  it("lets long durable toast actions wrap without compressing labels", () => {
+    const footerRule = extractRuleBody(
+      css,
+      ".app-notice-toast__footer",
+    );
+    const customActionsRule = extractRuleBody(
+      css,
+      ".app-notice-toast__footer .app-notice-toast__custom-actions",
+    );
+    const actionButtonRule = extractRuleBody(
+      css,
+      ".app-notice-toast__footer .app-notice-toast__custom-actions .button",
+    );
+
+    expect(footerRule).toContain(
+      "grid-template-columns: auto minmax(0, 1fr) auto;",
+    );
+    expect(customActionsRule).toContain("min-width: 0;");
+    expect(customActionsRule).toContain("flex-wrap: wrap;");
+    expect(actionButtonRule).toContain("white-space: nowrap;");
   });
 
   it("lets transcript scroll restoration own scroll anchoring", () => {
