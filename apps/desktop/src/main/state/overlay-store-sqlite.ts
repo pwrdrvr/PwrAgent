@@ -37,6 +37,8 @@ import type {
   ThreadPullRequestWatchSummary,
   RemoteThreadPin,
   StarMapArrangementEntry,
+  StarMapWorkspaceSnapshot,
+  StarMapWorkspaceState,
   ThreadQuestionnaireActivity,
   ThreadSubAgentSummary,
   ThreadTurnFailure,
@@ -45,8 +47,13 @@ import type {
 } from "@pwragent/shared";
 import {
   isStarMapArrangementEntry,
+  isStarMapWorkspaceSnapshot,
   mergeStarMapArrangementEntries,
+  parseStarMapWorkspaceSnapshot,
   starMapArrangementEntryKey,
+  emptyStarMapWorkspaceState,
+  STAR_MAP_WORKSPACE_KEY,
+  STAR_MAP_WORKSPACE_VERSION,
   DEFAULT_PULL_REQUEST_PROVIDER,
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
   MAX_MESSAGING_BINDING_TRANSITION_LOG_ENTRIES,
@@ -78,6 +85,21 @@ import type {
 } from "./remote-thread-target-store.js";
 
 const THREAD_PRICING_LAZY_REPRICE_BATCH_SIZE = 10;
+
+class UnsupportedStarMapWorkspaceVersionError extends Error {}
+
+function assertSupportedStarMapWorkspacePayload(value: unknown): void {
+  if (!value || typeof value !== "object") return;
+  const version = (value as { version?: unknown }).version;
+  if (
+    typeof version === "number"
+    && version !== STAR_MAP_WORKSPACE_VERSION
+  ) {
+    throw new UnsupportedStarMapWorkspaceVersionError(
+      `Unsupported Star Map workspace version: ${version}`,
+    );
+  }
+}
 
 export type DirectoryGitStatusCacheEntry = {
   directoryKey: string;
@@ -3381,6 +3403,100 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     });
     write();
     return { accepted };
+  }
+
+  async readStarMapWorkspace(): Promise<StarMapWorkspaceState> {
+    const row = this.stateDb.raw
+      .prepare(
+        `SELECT revision, updated_at, payload FROM star_map_workspace
+         WHERE workspace_key = ?`,
+      )
+      .get(STAR_MAP_WORKSPACE_KEY) as
+      | { revision: number; updated_at: number; payload: string }
+      | undefined;
+    if (!row) return emptyStarMapWorkspaceState();
+    let payload: unknown;
+    try {
+      payload = JSON.parse(row.payload) as unknown;
+    } catch {
+      return {
+        ...emptyStarMapWorkspaceState(),
+        revision: row.revision,
+        updatedAt: row.updated_at,
+      };
+    }
+    assertSupportedStarMapWorkspacePayload(payload);
+    const snapshot = parseStarMapWorkspaceSnapshot(payload);
+    if (!snapshot) {
+      return {
+        ...emptyStarMapWorkspaceState(),
+        revision: row.revision,
+        updatedAt: row.updated_at,
+      };
+    }
+    return {
+      ...snapshot,
+      revision: row.revision,
+      updatedAt: row.updated_at,
+    };
+  }
+
+  async writeStarMapWorkspace(
+    snapshot: StarMapWorkspaceSnapshot,
+    baseRevision: number,
+  ): Promise<StarMapWorkspaceState> {
+    if (!isStarMapWorkspaceSnapshot(snapshot)) {
+      throw new Error("Invalid Star Map workspace");
+    }
+    const updatedAt = Date.now();
+    const write = this.stateDb.raw.transaction(() => {
+      const current = this.stateDb.raw.prepare(
+        `SELECT revision, payload FROM star_map_workspace
+         WHERE workspace_key = ?`,
+      ).get(STAR_MAP_WORKSPACE_KEY) as
+        | { revision: number; payload: string }
+        | undefined;
+      if (current) {
+        try {
+          assertSupportedStarMapWorkspacePayload(
+            JSON.parse(current.payload) as unknown,
+          );
+        } catch (error) {
+          if (error instanceof UnsupportedStarMapWorkspaceVersionError) {
+            throw error;
+          }
+          // Malformed same-version payloads remain recoverable by a guarded
+          // revision-matched write, as the read path already promises.
+        }
+      }
+      const currentRevision = current?.revision ?? 0;
+      if (currentRevision !== baseRevision) {
+        throw new Error(
+          `Star Map workspace revision conflict: expected ${baseRevision}, found ${currentRevision}`,
+        );
+      }
+      const revision = currentRevision + 1;
+      this.stateDb.raw.prepare(
+        `INSERT OR REPLACE INTO star_map_workspace(
+           workspace_key,
+           revision,
+           updated_at,
+           payload
+         ) VALUES (?, ?, ?, ?)`,
+      ).run(
+        STAR_MAP_WORKSPACE_KEY,
+        revision,
+        updatedAt,
+        JSON.stringify(snapshot),
+      );
+      return revision;
+    });
+    const revision = write();
+    return {
+      ...snapshot,
+      revision,
+      updatedAt,
+    };
   }
 
   async setThreadPullRequests(params: {

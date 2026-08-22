@@ -10,6 +10,7 @@ import {
   CHAT_CARD_MIN_HEIGHT,
   CHAT_CARD_MIN_WIDTH,
   cascadeChatCardRect,
+  chatCardGroupRect,
   chatCardEdgeToward,
   clampChatCardRect,
   dockContextRect,
@@ -367,5 +368,21 @@ describe("satellite docking", () => {
     const after = dockContextRect(moved);
     expect(after.left - before.left).toBe(300);
     expect(after.top - before.top).toBe(-120);
+  });
+
+  it("treats open satellites as occupied group space for snapping", () => {
+    const group = chatCardGroupRect(host, {
+      contextOpen: true,
+      terminalOpen: true,
+      terminalHeight: 300,
+    });
+    const context = dockContextRect(host);
+    const terminal = dockTerminalRect(host, {
+      contextOpen: true,
+      height: 300,
+    });
+
+    expect(group.width).toBe(context.left + context.width - host.left);
+    expect(group.height).toBe(terminal.top + terminal.height - host.top);
   });
 });

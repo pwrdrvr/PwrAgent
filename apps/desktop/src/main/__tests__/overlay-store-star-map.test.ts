@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { StarMapArrangementEntry } from "@pwragent/shared";
+import {
+  STAR_MAP_WORKSPACE_KEY,
+  STAR_MAP_WORKSPACE_VERSION,
+  type StarMapArrangementEntry,
+  type StarMapWorkspaceSnapshot,
+} from "@pwragent/shared";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
@@ -18,6 +23,52 @@ function entry(
     updatedAt: 1_000,
     by: "pwr_local",
     ...overrides,
+  };
+}
+
+function workspace(): StarMapWorkspaceSnapshot {
+  return {
+    version: STAR_MAP_WORKSPACE_VERSION,
+    cards: [
+      {
+        key: "pwr_remote::codex:t1",
+        ownerInstanceId: "pwr_remote",
+        thread: {
+          id: "t1",
+          title: "Persist this chat",
+          titleSource: "derived",
+          linkedDirectories: [],
+          source: "codex",
+          inbox: { inInbox: true },
+          federation: {
+            ref: {
+              backend: "codex",
+              threadId: "t1",
+              target: { scope: "remote", instanceId: "pwr_remote" },
+            },
+            instanceLabel: "Remote Mac",
+          },
+        },
+        geometry: {
+          anchor: {
+            kind: "thread",
+            instanceId: "pwr_remote",
+            threadKey: "codex:t1",
+          },
+          dx: 28,
+          dy: -10,
+          instanceDx: 160,
+          instanceDy: 80,
+          fallbackRect: { left: 500, top: 220, width: 420, height: 520 },
+        },
+        contextOpen: true,
+        terminalOpen: true,
+        terminalHeight: 300,
+      },
+    ],
+    views: {
+      orbit: { x: -120, y: 80, scale: 0.8 },
+    },
   };
 }
 
@@ -103,5 +154,128 @@ describe("star map arrangement overlay", () => {
     const result = await store.mergeStarMapArrangement([malformed]);
     expect(result.accepted).toEqual([]);
     expect(await store.readStarMapArrangement()).toEqual([]);
+  });
+});
+
+describe("star map workspace overlay", () => {
+  it("round-trips viewer-owned cards, satellites, geometry, and cameras", async () => {
+    const written = await store.writeStarMapWorkspace(workspace(), 0);
+
+    expect(written).toMatchObject({
+      ...workspace(),
+      revision: 1,
+    });
+    expect(written.updatedAt).toBeGreaterThan(0);
+    expect(await store.readStarMapWorkspace()).toEqual(written);
+  });
+
+  it("increments the revision while replacing the workspace atomically", async () => {
+    await store.writeStarMapWorkspace(workspace(), 0);
+    const next = workspace();
+    next.cards[0].terminalOpen = false;
+
+    const written = await store.writeStarMapWorkspace(next, 1);
+
+    expect(written.revision).toBe(2);
+    expect((await store.readStarMapWorkspace()).cards[0].terminalOpen).toBe(
+      false,
+    );
+    expect(
+      stateDb.raw.prepare(
+        "SELECT COUNT(*) AS count FROM star_map_workspace",
+      ).get(),
+    ).toEqual({ count: 1 });
+  });
+
+  it("rejects a stale full-snapshot write instead of losing newer state", async () => {
+    const otherInstanceStore = new SqliteOverlayStore(stateDb);
+    const first = workspace();
+    const second = workspace();
+    second.cards[0].terminalOpen = false;
+
+    await store.writeStarMapWorkspace(first, 0);
+
+    await expect(
+      otherInstanceStore.writeStarMapWorkspace(second, 0),
+    ).rejects.toThrow(
+      "Star Map workspace revision conflict: expected 0, found 1",
+    );
+    expect(await store.readStarMapWorkspace()).toMatchObject({
+      cards: first.cards,
+      revision: 1,
+    });
+  });
+
+  it("degrades a malformed payload without losing its durable revision", async () => {
+    stateDb.raw.prepare(
+      `INSERT INTO star_map_workspace(
+         workspace_key,
+         revision,
+         updated_at,
+         payload
+       ) VALUES (?, 1, 100, ?)`,
+    ).run(STAR_MAP_WORKSPACE_KEY, "{not-json");
+
+    expect(await store.readStarMapWorkspace()).toMatchObject({
+      cards: [],
+      revision: 1,
+      updatedAt: 100,
+      views: {},
+    });
+
+    const recovered = await store.writeStarMapWorkspace(workspace(), 1);
+    expect(recovered.revision).toBe(2);
+    expect(await store.readStarMapWorkspace()).toEqual(recovered);
+  });
+
+  it("refuses to overwrite a workspace written by a future version", async () => {
+    const futurePayload = JSON.stringify({
+      ...workspace(),
+      version: STAR_MAP_WORKSPACE_VERSION + 1,
+      futureField: { preserve: true },
+    });
+    stateDb.raw.prepare(
+      `INSERT INTO star_map_workspace(
+         workspace_key,
+         revision,
+         updated_at,
+         payload
+       ) VALUES (?, 9, 100, ?)`,
+    ).run(STAR_MAP_WORKSPACE_KEY, futurePayload);
+
+    await expect(store.readStarMapWorkspace()).rejects.toThrow(
+      "Unsupported Star Map workspace version: 2",
+    );
+    await expect(
+      store.writeStarMapWorkspace(workspace(), 9),
+    ).rejects.toThrow("Unsupported Star Map workspace version: 2");
+    expect(
+      stateDb.raw.prepare(
+        "SELECT revision, payload FROM star_map_workspace",
+      ).get(),
+    ).toEqual({ revision: 9, payload: futurePayload });
+  });
+
+  it("keeps valid cards when another saved card is corrupt", async () => {
+    const partial = workspace();
+    partial.cards.push({
+      ...partial.cards[0],
+      key: "wrong-owner::codex:t2",
+      thread: { ...partial.cards[0].thread, id: "t2" },
+    });
+    stateDb.raw.prepare(
+      `INSERT INTO star_map_workspace(
+         workspace_key,
+         revision,
+         updated_at,
+         payload
+       ) VALUES (?, 3, 100, ?)`,
+    ).run(STAR_MAP_WORKSPACE_KEY, JSON.stringify(partial));
+
+    expect(await store.readStarMapWorkspace()).toMatchObject({
+      cards: workspace().cards,
+      revision: 3,
+      updatedAt: 100,
+    });
   });
 });

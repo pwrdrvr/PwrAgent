@@ -1,3 +1,5 @@
+import type { NavigationThreadSummary } from "./navigation";
+
 /**
  * Star Map card arrangement: operator-dragged offsets for attention-thread
  * cards, keyed by owning instance + thread identity, synced across the
@@ -148,6 +150,317 @@ export type SetStarMapCardPositionRequest = {
   dx: number | null;
   dy: number | null;
 };
+
+/* ==== Viewer-owned workspace ==== */
+
+export const STAR_MAP_WORKSPACE_VERSION = 1 as const;
+export const STAR_MAP_WORKSPACE_KEY = "default";
+
+export type StarMapWorkspaceLayout = "lanes" | "orbit" | "projects";
+
+export type StarMapWorkspaceRect = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+};
+
+export type StarMapWorkspaceAnchor =
+  | {
+      kind: "thread";
+      instanceId: string;
+      threadKey: string;
+    }
+  | {
+      kind: "instance";
+      instanceId: string;
+    }
+  | { kind: "canvas" };
+
+/**
+ * The bounded part of a navigation row needed to paint and reconnect an open
+ * chat before its owning instance has answered the first federation poll.
+ * Transcript entries, tool output, PR history, and other growing collections
+ * deliberately do not belong in this snapshot.
+ */
+export type StarMapWorkspaceThreadSnapshot = Pick<
+  NavigationThreadSummary,
+  "id" | "inbox" | "linkedDirectories" | "source" | "title" | "titleSource"
+> &
+  Partial<
+    Pick<
+      NavigationThreadSummary,
+      | "createdAt"
+      | "executionMode"
+      | "fastMode"
+      | "federation"
+      | "forkSourceThreadId"
+      | "model"
+      | "primaryGitRepository"
+      | "projectKey"
+      | "reasoningEffort"
+      | "serviceTier"
+      | "updatedAt"
+      | "workspaceHandoff"
+    >
+  >;
+
+export type StarMapWorkspaceCard = {
+  /** Fleet-qualified key; see `starMapWorkspaceCardKey`. */
+  key: string;
+  ownerInstanceId: string;
+  thread: StarMapWorkspaceThreadSnapshot;
+  geometry: {
+    anchor: StarMapWorkspaceAnchor;
+    dx: number;
+    dy: number;
+    /**
+     * Separate owner-body basis for a thread card that is filtered, folded,
+     * or unavailable on the next launch. Optional for version-1 rows written
+     * before this fallback was recorded.
+     */
+    instanceDx?: number;
+    instanceDy?: number;
+    fallbackRect: StarMapWorkspaceRect;
+  };
+  contextOpen: boolean;
+  terminalOpen: boolean;
+  terminalHeight?: number;
+};
+
+export type StarMapWorkspaceView = {
+  x: number;
+  y: number;
+  scale: number;
+};
+
+export type StarMapWorkspaceSnapshot = {
+  version: typeof STAR_MAP_WORKSPACE_VERSION;
+  /** Lowest first, highest/front-most last. */
+  cards: StarMapWorkspaceCard[];
+  views: Partial<Record<StarMapWorkspaceLayout, StarMapWorkspaceView>>;
+};
+
+export type StarMapWorkspaceState = StarMapWorkspaceSnapshot & {
+  revision: number;
+  updatedAt: number;
+};
+
+export type ReadStarMapWorkspaceResponse = {
+  workspace: StarMapWorkspaceState;
+};
+
+export type WriteStarMapWorkspaceRequest = {
+  /** Revision returned by the read or previous successful write. */
+  baseRevision: number;
+  workspace: StarMapWorkspaceSnapshot;
+};
+
+export function emptyStarMapWorkspaceState(): StarMapWorkspaceState {
+  return {
+    version: STAR_MAP_WORKSPACE_VERSION,
+    cards: [],
+    views: {},
+    revision: 0,
+    updatedAt: 0,
+  };
+}
+
+export function starMapWorkspaceCardKey(params: {
+  instanceId: string;
+  threadKey: string;
+}): string {
+  return `${params.instanceId}::${params.threadKey}`;
+}
+
+export function snapshotStarMapWorkspaceThread(
+  thread: NavigationThreadSummary,
+): StarMapWorkspaceThreadSnapshot {
+  return {
+    id: thread.id,
+    inbox: thread.inbox,
+    linkedDirectories: thread.linkedDirectories.slice(0, 32),
+    source: thread.source,
+    title: thread.title.slice(0, 512),
+    titleSource: thread.titleSource,
+    createdAt: thread.createdAt,
+    executionMode: thread.executionMode,
+    fastMode: thread.fastMode,
+    federation: thread.federation,
+    forkSourceThreadId: thread.forkSourceThreadId,
+    model: thread.model,
+    primaryGitRepository: thread.primaryGitRepository,
+    projectKey: thread.projectKey,
+    reasoningEffort: thread.reasoningEffort,
+    serviceTier: thread.serviceTier,
+    updatedAt: thread.updatedAt,
+    workspaceHandoff: thread.workspaceHandoff,
+  };
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function isStarMapWorkspaceRect(value: unknown): value is StarMapWorkspaceRect {
+  if (!value || typeof value !== "object") return false;
+  const rect = value as Partial<StarMapWorkspaceRect>;
+  return (
+    isFiniteNumber(rect.left)
+    && isFiniteNumber(rect.top)
+    && isFiniteNumber(rect.width)
+    && rect.width > 0
+    && isFiniteNumber(rect.height)
+    && rect.height > 0
+  );
+}
+
+function isStarMapWorkspaceAnchor(
+  value: unknown,
+): value is StarMapWorkspaceAnchor {
+  if (!value || typeof value !== "object") return false;
+  const anchor = value as Partial<StarMapWorkspaceAnchor> & {
+    instanceId?: unknown;
+    threadKey?: unknown;
+  };
+  if (anchor.kind === "canvas") return true;
+  if (
+    (anchor.kind === "instance" || anchor.kind === "thread")
+    && typeof anchor.instanceId === "string"
+    && anchor.instanceId.length > 0
+  ) {
+    return anchor.kind === "instance"
+      || (typeof anchor.threadKey === "string" && anchor.threadKey.length > 0);
+  }
+  return false;
+}
+
+function isStarMapWorkspaceThreadSnapshot(
+  value: unknown,
+): value is StarMapWorkspaceThreadSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const thread = value as Partial<StarMapWorkspaceThreadSnapshot>;
+  return (
+    typeof thread.id === "string"
+    && thread.id.length > 0
+    && typeof thread.source === "string"
+    && thread.source.length > 0
+    && typeof thread.title === "string"
+    && typeof thread.titleSource === "string"
+    && Array.isArray(thread.linkedDirectories)
+    && thread.linkedDirectories.length <= 32
+    && Boolean(thread.inbox && typeof thread.inbox === "object")
+  );
+}
+
+function isStarMapWorkspaceCard(value: unknown): value is StarMapWorkspaceCard {
+  if (!value || typeof value !== "object") return false;
+  const card = value as Partial<StarMapWorkspaceCard>;
+  const geometry = card.geometry as
+    | Partial<StarMapWorkspaceCard["geometry"]>
+    | undefined;
+  const hasInstanceOffset =
+    geometry?.instanceDx !== undefined || geometry?.instanceDy !== undefined;
+  if (
+    typeof card.key !== "string"
+    || typeof card.ownerInstanceId !== "string"
+    || card.ownerInstanceId.length === 0
+    || !isStarMapWorkspaceThreadSnapshot(card.thread)
+    || !geometry
+    || !isStarMapWorkspaceAnchor(geometry.anchor)
+    || !isFiniteNumber(geometry.dx)
+    || !isFiniteNumber(geometry.dy)
+    || (hasInstanceOffset
+      && (
+        !isFiniteNumber(geometry.instanceDx)
+        || !isFiniteNumber(geometry.instanceDy)
+      ))
+    || !isStarMapWorkspaceRect(geometry.fallbackRect)
+    || typeof card.contextOpen !== "boolean"
+    || typeof card.terminalOpen !== "boolean"
+    || (card.terminalHeight !== undefined
+      && (!isFiniteNumber(card.terminalHeight) || card.terminalHeight <= 0))
+  ) {
+    return false;
+  }
+  return card.key === starMapWorkspaceCardKey({
+    instanceId: card.ownerInstanceId,
+    threadKey: buildThreadKey(card.thread),
+  });
+}
+
+function buildThreadKey(thread: StarMapWorkspaceThreadSnapshot): string {
+  return `${thread.source}:${thread.id}`;
+}
+
+function isStarMapWorkspaceView(value: unknown): value is StarMapWorkspaceView {
+  if (!value || typeof value !== "object") return false;
+  const view = value as Partial<StarMapWorkspaceView>;
+  return (
+    isFiniteNumber(view.x)
+    && isFiniteNumber(view.y)
+    && isFiniteNumber(view.scale)
+    && view.scale > 0
+  );
+}
+
+/**
+ * Decode a stored workspace defensively. A corrupt card or lens camera is
+ * omitted without taking the operator's remaining desk state with it.
+ */
+export function parseStarMapWorkspaceSnapshot(
+  value: unknown,
+): StarMapWorkspaceSnapshot | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const snapshot = value as Partial<StarMapWorkspaceSnapshot>;
+  if (
+    snapshot.version !== STAR_MAP_WORKSPACE_VERSION
+    || !Array.isArray(snapshot.cards)
+    || snapshot.cards.length > 256
+    || !snapshot.views
+    || typeof snapshot.views !== "object"
+  ) {
+    return undefined;
+  }
+  const keys = new Set<string>();
+  const cards: StarMapWorkspaceCard[] = [];
+  for (const card of snapshot.cards) {
+    if (!isStarMapWorkspaceCard(card) || keys.has(card.key)) continue;
+    keys.add(card.key);
+    cards.push(card);
+  }
+  const views: StarMapWorkspaceSnapshot["views"] = {};
+  for (const layout of ["lanes", "orbit", "projects"] as const) {
+    const view = snapshot.views[layout];
+    if (isStarMapWorkspaceView(view)) views[layout] = view;
+  }
+  return { version: STAR_MAP_WORKSPACE_VERSION, cards, views };
+}
+
+export function isStarMapWorkspaceSnapshot(
+  value: unknown,
+): value is StarMapWorkspaceSnapshot {
+  if (!value || typeof value !== "object") return false;
+  const snapshot = value as Partial<StarMapWorkspaceSnapshot>;
+  if (
+    snapshot.version !== STAR_MAP_WORKSPACE_VERSION
+    || !Array.isArray(snapshot.cards)
+    || snapshot.cards.length > 256
+    || !snapshot.cards.every(isStarMapWorkspaceCard)
+    || !snapshot.views
+    || typeof snapshot.views !== "object"
+  ) {
+    return false;
+  }
+  const keys = new Set(snapshot.cards.map((card) => card.key));
+  if (keys.size !== snapshot.cards.length) return false;
+  for (const layout of ["lanes", "orbit", "projects"] as const) {
+    const view = snapshot.views[layout];
+    if (!view) continue;
+    if (!isStarMapWorkspaceView(view)) return false;
+  }
+  return true;
+}
 
 /* ==== AI intake ==== */
 

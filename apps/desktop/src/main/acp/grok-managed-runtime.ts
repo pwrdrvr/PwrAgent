@@ -22,11 +22,76 @@ import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
 import { execFile as execFileCallback } from "node:child_process";
 import { promisify } from "node:util";
+import type { ManagedGrokSignatureRejectedEvent } from "../../shared/managed-grok-signature.js";
 import { resolvePwragentRoot } from "../profile.js";
 import { getMainLogger } from "../log.js";
 
 const execFile = promisify(execFileCallback);
 const managedGrokLog = getMainLogger("pwragent:grok-managed-runtime");
+
+/**
+ * The bundle's signer is not the signer of the running PwrAgent build. This is
+ * deliberately its own error type: every other install failure (offline, rate
+ * limited, checksum mismatch on a truncated download) is routine and retried
+ * silently, while this one is reported to the operator and deletes the bundle.
+ */
+export class ManagedGrokSignatureRejectedError extends Error {
+  readonly directory: string;
+  readonly tag: string | undefined;
+
+  constructor(directory: string, tag: string | undefined, cause: unknown) {
+    super(
+      `Managed Grok bundle signature does not match this PwrAgent build: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+    );
+    this.name = "ManagedGrokSignatureRejectedError";
+    this.directory = directory;
+    this.tag = tag;
+  }
+}
+
+let signatureRejectionReporter:
+  | ((event: ManagedGrokSignatureRejectedEvent) => void)
+  | undefined;
+
+/**
+ * Install the surface that tells the operator about a rejected bundle. The
+ * runtime module stays free of window and IPC imports; main wires this once at
+ * startup so every discovery path reports through it.
+ */
+export function setManagedGrokSignatureRejectionReporter(
+  reporter: ((event: ManagedGrokSignatureRejectedEvent) => void) | undefined,
+): void {
+  signatureRejectionReporter = reporter;
+}
+
+function reportSignatureRejection(
+  error: ManagedGrokSignatureRejectedError,
+  stage: ManagedGrokSignatureRejectedEvent["stage"],
+  removed: boolean,
+): void {
+  managedGrokLog.error("managed_grok_signature_rejected", {
+    directory: error.directory,
+    reason: error.message,
+    removed,
+    stage,
+    tag: error.tag,
+  });
+  try {
+    signatureRejectionReporter?.({
+      detail: error.message,
+      directory: error.directory,
+      occurredAt: Date.now(),
+      removed,
+      stage,
+      ...(error.tag ? { tag: error.tag } : {}),
+    });
+  } catch {
+    // A reporting failure must not turn a rejected bundle into a crash. The
+    // error-level log above is the durable record either way.
+  }
+}
 
 export const MANAGED_GROK_REPOSITORY = "pwrdrvr/grok-build";
 export const MANAGED_GROK_RELEASES_URL =
@@ -111,6 +176,8 @@ type BundleValidationOptions = {
   platform: NodeJS.Platform;
   probeVersion?: (command: string) => Promise<string>;
   requirePlatformSignature: boolean;
+  /** Release tag under validation, used to name a rejection to the operator. */
+  tag?: string;
   verifyPlatformSignature?: ManagedGrokRuntimeOptions["verifyPlatformSignature"];
 };
 
@@ -190,6 +257,11 @@ async function ensureManagedGrokRuntimeInner(
     });
     return await activateRuntime(rootDir, runtime, options);
   } catch (error) {
+    if (error instanceof ManagedGrokSignatureRejectedError) {
+      // installRelease removes its staging directory in a finally block, so the
+      // rejected bundle is already gone by the time we get here.
+      reportSignatureRejection(error, "download", true);
+    }
     managedGrokLog.warn("managed_grok_runtime_update_failed", {
       error: error instanceof Error ? error.message : String(error),
       usingCachedTag: cached?.metadata.tag,
@@ -468,7 +540,10 @@ async function installRelease(
     const extractedRoot = path.join(stagingRoot, "extracted");
     await mkdir(extractedRoot);
     await (options.extractArchive ?? extractArchive)(archivePath, extractedRoot);
-    const validationOptions = bundleValidationOptions(options);
+    const validationOptions = {
+      ...bundleValidationOptions(options),
+      tag: release.tag,
+    };
     const command = await validateExtractedBundle(
       extractedRoot,
       validationOptions,
@@ -629,13 +704,17 @@ async function validateExtractedBundle(
     options.requirePlatformSignature
     && (options.platform === "darwin" || options.platform === "win32")
   ) {
-    await (
-      options.verifyPlatformSignature ?? verifyMatchingPlatformSignature
-    )(
-      command,
-      options.applicationCommand,
-      options.platform,
-    );
+    try {
+      await (
+        options.verifyPlatformSignature ?? verifyMatchingPlatformSignature
+      )(
+        command,
+        options.applicationCommand,
+        options.platform,
+      );
+    } catch (error) {
+      throw new ManagedGrokSignatureRejectedError(directory, options.tag, error);
+    }
   }
   const versionOutput = options.probeVersion
     ? await options.probeVersion(command)
@@ -804,12 +883,25 @@ async function readCachedRuntime(
       return undefined;
     }
     const versionRoot = path.join(rootDir, "versions", metadata.tag);
-    const command = await validateExtractedBundle(
-      versionRoot,
-      bundleValidationOptions(options),
-    );
+    const command = await validateExtractedBundle(versionRoot, {
+      ...bundleValidationOptions(options),
+      tag: metadata.tag,
+    });
     return { command, metadata: metadata as ManagedGrokMetadata };
-  } catch {
+  } catch (error) {
+    // Every other failure here is ordinary (no install yet, a partially
+    // written directory, unreadable metadata) and resolves by reinstalling.
+    // A signer mismatch on an already-installed copy is not: whatever is in
+    // that directory is not ours, so remove it and say so.
+    if (error instanceof ManagedGrokSignatureRejectedError) {
+      let removed = true;
+      try {
+        await rm(error.directory, { force: true, recursive: true });
+      } catch {
+        removed = false;
+      }
+      reportSignatureRejection(error, "installed", removed);
+    }
     return undefined;
   }
 }

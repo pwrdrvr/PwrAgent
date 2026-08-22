@@ -15,6 +15,7 @@ import type {
   CodexProtocolCaptureStatus,
 } from "../../../shared/codex-protocol-capture";
 import type { HotCpuProfileCapturedEvent } from "../../../shared/hot-cpu-profile";
+import type { ManagedGrokSignatureRejectedEvent } from "../../../shared/managed-grok-signature";
 import type {
   GithubPrAuthenticationFailureEvent,
   GithubPrSamlEnforcementEvent,
@@ -154,9 +155,11 @@ import type {
   SetFederationEventSubscriptionsRequest,
   SetFederationEventSubscriptionsResponse,
   ReadStarMapArrangementResponse,
+  ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
   StarMapIntakeRequest,
   StarMapIntakeResponse,
+  WriteStarMapWorkspaceRequest,
   FederationTarget,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
@@ -606,6 +609,10 @@ export type DesktopApi = {
   setStarMapCardPosition?: (
     request: SetStarMapCardPositionRequest,
   ) => Promise<ReadStarMapArrangementResponse>;
+  readStarMapWorkspace?: () => Promise<ReadStarMapWorkspaceResponse>;
+  writeStarMapWorkspace?: (
+    request: WriteStarMapWorkspaceRequest,
+  ) => Promise<ReadStarMapWorkspaceResponse>;
   dispatchStarMapIntake?: (
     request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
   ) => Promise<StarMapIntakeResponse>;
@@ -1138,6 +1145,9 @@ export type DesktopApi = {
   ) => () => void;
   onGithubPrAuthenticationFailure?: (
     callback: (event: GithubPrAuthenticationFailureEvent) => void,
+  ) => () => void;
+  onManagedGrokSignatureRejected?: (
+    callback: (event: ManagedGrokSignatureRejectedEvent) => void,
   ) => () => void;
   /**
    * Subscription for main → renderer appearance broadcasts. Fired

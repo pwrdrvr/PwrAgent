@@ -339,3 +339,40 @@ export function dockTerminalRect(
     height: options?.height ?? CHAT_CARD_TERMINAL_HEIGHT,
   };
 }
+
+/** Compound bounds used when a chat group aligns or spaces against another
+ * object. Satellites occupy real map space even though their positions derive
+ * from the host, so snapping only the host would invite another card to land
+ * underneath an open context rail or terminal. */
+export function chatCardGroupRect(
+  host: ChatCardRect,
+  options?: {
+    contextOpen?: boolean;
+    terminalOpen?: boolean;
+    terminalHeight?: number;
+  },
+): ChatCardRect {
+  const context = options?.contextOpen ? dockContextRect(host) : undefined;
+  const terminal = options?.terminalOpen
+    ? dockTerminalRect(host, {
+        contextOpen: options.contextOpen,
+        height: options.terminalHeight,
+      })
+    : undefined;
+  const right = Math.max(
+    host.left + host.width,
+    context ? context.left + context.width : Number.NEGATIVE_INFINITY,
+    terminal ? terminal.left + terminal.width : Number.NEGATIVE_INFINITY,
+  );
+  const bottom = Math.max(
+    host.top + host.height,
+    context ? context.top + context.height : Number.NEGATIVE_INFINITY,
+    terminal ? terminal.top + terminal.height : Number.NEGATIVE_INFINITY,
+  );
+  return {
+    left: host.left,
+    top: host.top,
+    width: right - host.left,
+    height: bottom - host.top,
+  };
+}

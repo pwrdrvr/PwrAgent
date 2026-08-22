@@ -352,9 +352,11 @@ import type {
   SetFederationEventSubscriptionsRequest,
   SetFederationEventSubscriptionsResponse,
   ReadStarMapArrangementResponse,
+  ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
   StarMapIntakeRequest,
   StarMapIntakeResponse,
+  WriteStarMapWorkspaceRequest,
   FederationTarget,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
@@ -404,6 +406,7 @@ import type {
   ImageUploadNormalizationLogRequest,
 } from "../shared/image-normalization";
 import type { HotCpuProfileCapturedEvent } from "../shared/hot-cpu-profile";
+import type { ManagedGrokSignatureRejectedEvent } from "../shared/managed-grok-signature";
 import type {
   GithubPrAuthenticationFailureEvent,
   GithubPrSamlEnforcementEvent,
@@ -516,6 +519,7 @@ import {
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
   GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
+  MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
@@ -574,7 +578,9 @@ import {
   STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL,
   STAR_MAP_OPEN_WINDOW_CHANNEL,
   STAR_MAP_READ_ARRANGEMENT_CHANNEL,
+  STAR_MAP_READ_WORKSPACE_CHANNEL,
   STAR_MAP_SET_CARD_POSITION_CHANNEL,
+  STAR_MAP_WRITE_WORKSPACE_CHANNEL,
   FEDERATION_TAILSCALE_CONFIGURE_CHANNEL,
   FEDERATION_TAILSCALE_STATUS_CHANNEL,
   CODEX_ENVIRONMENT_SETUP_PROGRESS_CHANNEL,
@@ -1067,6 +1073,12 @@ const desktopApi = Object.freeze({
     request: SetStarMapCardPositionRequest,
   ): Promise<ReadStarMapArrangementResponse> =>
     await ipcRenderer.invoke(STAR_MAP_SET_CARD_POSITION_CHANNEL, request),
+  readStarMapWorkspace: async (): Promise<ReadStarMapWorkspaceResponse> =>
+    await ipcRenderer.invoke(STAR_MAP_READ_WORKSPACE_CHANNEL),
+  writeStarMapWorkspace: async (
+    request: WriteStarMapWorkspaceRequest,
+  ): Promise<ReadStarMapWorkspaceResponse> =>
+    await ipcRenderer.invoke(STAR_MAP_WRITE_WORKSPACE_CHANNEL, request),
   dispatchStarMapIntake: async (
     request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
   ): Promise<StarMapIntakeResponse> =>
@@ -2080,6 +2092,18 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL, listener);
+    };
+  },
+  onManagedGrokSignatureRejected: (
+    callback: (event: ManagedGrokSignatureRejectedEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: ManagedGrokSignatureRejectedEvent,
+    ) => callback(payload);
+    ipcRenderer.on(MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL, listener);
     };
   },
   onGithubPrAuthenticationFailure: (

@@ -255,6 +255,56 @@ function transferImage(
  */
 const IGNORE_COMPOSER = ".composer-tiptap-input, .composer-tiptap-input *";
 
+describe("StarMapChatCard gesture persistence", () => {
+  it("raises in memory and commits once when dragging a non-top card", () => {
+    const onRaise = vi.fn(() => true);
+    const onRectChange = vi.fn();
+    const onRectCommit = vi.fn();
+    const { container } = render(
+      <StarMapChatCard
+        cardKey="card-1"
+        desktopApi={buildApi()}
+        onClose={() => undefined}
+        onOpenFull={() => undefined}
+        onRaise={onRaise}
+        onRectChange={onRectChange}
+        onRectCommit={onRectCommit}
+        rect={RECT}
+        thread={localThread()}
+        scale={1}
+        bounds={{ width: 4000, height: 3000 }}
+        onToggleContext={() => undefined}
+        onToggleTerminal={() => undefined}
+        zIndex={40}
+      />,
+    );
+    const header = container.querySelector(".star-map-chat-card__bar");
+    expect(header).not.toBeNull();
+
+    fireEvent.pointerDown(header as Element, {
+      button: 0,
+      clientX: 100,
+      clientY: 100,
+      pointerId: 1,
+    });
+    fireEvent.pointerMove(header as Element, {
+      clientX: 125,
+      clientY: 120,
+      pointerId: 1,
+    });
+    fireEvent.pointerUp(header as Element, {
+      clientX: 125,
+      clientY: 120,
+      pointerId: 1,
+    });
+
+    expect(onRaise).toHaveBeenCalledTimes(1);
+    expect(onRaise).toHaveBeenCalledWith("card-1", false);
+    expect(onRectChange).toHaveBeenCalledTimes(1);
+    expect(onRectCommit).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("StarMapChatCard transcript loading", () => {
   it("asks for the last few turns rather than the whole thread", async () => {
     const desktopApi = buildApi();

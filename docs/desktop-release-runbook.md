@@ -178,7 +178,9 @@ seven job definitions (the Linux package job fans out across two architectures):
    --sign-stage-only --no-publish --require-signing`. The post-package ASAR
    verifier resolves from the staged toolchain, not the workspace. The Azure
    service-principal secrets are injected only into this signing-aware packaging
-   step.
+   step. After packaging it copies the signed installer to the stable name
+   `PwrAgent-windows-x64-setup.exe` and appends that copy to the Windows
+   `SHA256SUMS` manifest.
 6. `Publish release assets`, which waits for successful macOS signing, both
    Linux packages, and the signed Windows installer. Only then does it create
    the GitHub Release — always as a `Pre-release`, whatever the tag suffix —
@@ -284,6 +286,13 @@ Stable landing-page URL:
 https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent.dmg
 ```
 
+Stable Windows download URLs:
+
+```text
+https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-windows-x64-setup.exe
+https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-windows-SHA256SUMS
+```
+
 Stable Linux download URLs:
 
 ```text
@@ -291,6 +300,12 @@ https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-x64.
 https://github.com/pwrdrvr/PwrAgent/releases/latest/download/PwrAgent-linux-arm64.deb
 https://github.com/pwrdrvr/PwrAgent/releases/latest/download/SHA256SUMS
 ```
+
+Each stable name is a byte-identical copy of the versioned asset from the same
+release, so `pwragent.ai` can link these URLs directly instead of resolving the
+versioned asset name through the GitHub Releases API. GitHub serves
+`/releases/latest/download/` only from a release promoted to Latest, so these
+URLs keep serving the previous release until the promotion step below runs.
 
 For the current arm64-only beta, backfill the stable alias:
 

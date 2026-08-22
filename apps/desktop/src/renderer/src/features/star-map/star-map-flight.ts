@@ -72,14 +72,31 @@ export function starMapViewFocusedOn(params: {
   canvas: StarMapViewBox;
   viewport: StarMapViewBox;
   scale: number;
+  /**
+   * A column lens, whose canvas hangs from a fixed top edge.
+   *
+   * Centring the y of something near the TOP of such a canvas puts the
+   * canvas origin below the window's, i.e. opens a band of empty sky
+   * above the lane headers with the columns shoved down — the state
+   * `placeStarMapView`'s own `topAnchored` exists to prevent. Lanes seats
+   * every instance body on one fixed row at y=190, so flying to a body
+   * there hits it every single time: ~210px of sky at 1:1, more as the
+   * zoom drops, recoverable only through "Reset view".
+   *
+   * A cap rather than a pin, unlike placement: a flight to a card deep in
+   * a column legitimately wants a negative y, and forcing zero would
+   * simply not travel there.
+   */
+  topAnchored?: boolean;
 }): StarMapView {
   const scale = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, params.scale));
   const centerX = params.rect.x + params.rect.width / 2;
   const centerY = params.rect.y + params.rect.height / 2;
+  const y = params.viewport.height / 2 - centerY * scale;
   return clampStarMapView({
     view: {
       x: params.viewport.width / 2 - centerX * scale,
-      y: params.viewport.height / 2 - centerY * scale,
+      y: params.topAnchored ? Math.min(0, y) : y,
       scale,
     },
     canvas: params.canvas,

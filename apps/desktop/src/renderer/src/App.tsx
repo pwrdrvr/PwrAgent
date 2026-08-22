@@ -123,6 +123,7 @@ import { buildPrAutoDispatchBudgetNotice } from "./features/notifications/pr-aut
 import { MessagingErrorNotices } from "./features/notifications/MessagingErrorNotices";
 import { GrokCliUpdateNotice } from "./features/notifications/GrokCliUpdateNotice";
 import { buildGithubPrSamlEnforcementNotice } from "./features/notifications/github-pr-saml-notice";
+import { buildManagedGrokSignatureRejectedNotice } from "./features/notifications/managed-grok-signature-notice";
 import { buildGithubPrAuthenticationNotice } from "./features/notifications/github-pr-authentication-notice";
 import {
   buildToolAccountingNotice,
@@ -608,6 +609,25 @@ function DesktopAppShell(props: {
       setGithubPrAuthenticationFailure(event);
     });
   }, [desktopApi]);
+
+  // A rejected Grok download has no screen of its own: whatever triggered the
+  // discovery may already be closed, so the notice is raised here and stays
+  // until the operator dismisses it.
+  useEffect(() => {
+    return desktopApi?.onManagedGrokSignatureRejected?.((event) => {
+      showAppNotice(
+        buildManagedGrokSignatureRejectedNotice({
+          event,
+          onDismiss: () => {
+            dispatchAppNotice({
+              type: "dismiss-prefix",
+              prefix: "managed-grok-signature:",
+            });
+          },
+        }),
+      );
+    });
+  }, [desktopApi, showAppNotice]);
 
   useEffect(() => {
     let cancelled = false;

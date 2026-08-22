@@ -20,6 +20,8 @@ export const FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL =
   "federation:set-event-subscriptions";
 export const STAR_MAP_READ_ARRANGEMENT_CHANNEL = "star-map:read-arrangement";
 export const STAR_MAP_SET_CARD_POSITION_CHANNEL = "star-map:set-card-position";
+export const STAR_MAP_READ_WORKSPACE_CHANNEL = "star-map:read-workspace";
+export const STAR_MAP_WRITE_WORKSPACE_CHANNEL = "star-map:write-workspace";
 export const STAR_MAP_INTAKE_CHANNEL = "star-map:intake";
 /**
  * Fire-and-forget IPC: opens the dedicated Federation Star Map window
@@ -59,6 +61,8 @@ export const PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL =
   "app-server:pr-auto-dispatch-budget-changed";
 export const GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL =
   "app-server:github-pr-saml-enforcement";
+export const MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL =
+  "acp:managed-grok-signature-rejected";
 export const GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL =
   "app-server:github-pr-authentication-failure";
 export const APP_SERVER_ARCHIVE_THREAD_CHANNEL = "app-server:archive-thread";

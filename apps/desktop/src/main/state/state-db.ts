@@ -14,7 +14,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 52;
+export const CURRENT_STATE_DB_USER_VERSION = 53;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -255,6 +255,18 @@ const STAR_MAP_ARRANGEMENT_SCHEMA = `
 CREATE TABLE IF NOT EXISTS star_map_arrangement (
   entry_key TEXT PRIMARY KEY,
   payload   TEXT NOT NULL
+);
+`;
+
+/* Viewer-owned Star Map desk state. Unlike `star_map_arrangement`, this is
+   local profile state and never crosses federation. One atomic payload keeps
+   the open-card set, z-order, satellite flags, and lens cameras consistent. */
+const STAR_MAP_WORKSPACE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS star_map_workspace (
+  workspace_key TEXT PRIMARY KEY,
+  revision      INTEGER NOT NULL,
+  updated_at    INTEGER NOT NULL,
+  payload       TEXT NOT NULL
 );
 `;
 
@@ -1534,6 +1546,12 @@ export class StateDb {
       if ((db.pragma("user_version", { simple: true }) as number) < 52) {
         db.transaction(() => {
           repairCodexTurnUsageFromCumulativeSnapshots(db);
+          db.pragma("user_version = 52");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 53) {
+        db.transaction(() => {
+          db.exec(STAR_MAP_WORKSPACE_SCHEMA);
           db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
         })();
       }
@@ -2123,6 +2141,7 @@ function ensureCurrentSchema(db: BetterSqlite3.Database): void {
     ensureRemoteThreadPinRevokedAtColumn(db);
     db.exec(REMOTE_THREAD_TARGET_SCHEMA);
     db.exec(STAR_MAP_ARRANGEMENT_SCHEMA);
+    db.exec(STAR_MAP_WORKSPACE_SCHEMA);
     if ((db.pragma("user_version", { simple: true }) as number) < 4) {
       db.pragma("user_version = 4");
     }
