@@ -210,6 +210,10 @@ for (const expected of [
   "target: deb",
   "arch: [x64, arm64]",
   "artifactName: \"${productName}-${version}-linux-${arch}.${ext}\"",
+  // Pins the Windows Add or Remove Programs name. Without an explicit value
+  // electron-builder falls back to "${productName} ${version}", which repeats
+  // the version next to the ARP Version column.
+  "uninstallDisplayName: PwrAgent",
   "desktop:",
   "entry:",
   "StartupWMClass: PwrAgent",
