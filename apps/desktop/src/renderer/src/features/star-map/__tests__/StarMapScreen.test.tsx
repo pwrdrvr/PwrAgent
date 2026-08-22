@@ -988,6 +988,151 @@ describe("StarMapScreen", () => {
     ).toBeTruthy();
   });
 
+  it("waits for the owning thread layout before restoring a chat anchor", async () => {
+    type HealthResponse = Awaited<
+      ReturnType<NonNullable<DesktopApi["readFederationHealth"]>>
+    >;
+    type SnapshotResponse = Awaited<
+      ReturnType<NonNullable<DesktopApi["getNavigationSnapshot"]>>
+    >;
+    const health = createDeferred<HealthResponse>();
+    const remoteSnapshot = createDeferred<SnapshotResponse>();
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      readFederationHealth: vi.fn(() => health.promise),
+      getNavigationSnapshot: vi.fn(() => remoteSnapshot.promise),
+      readStarMapWorkspace: vi.fn(async () => ({
+        workspace: {
+          version: 1 as const,
+          revision: 3,
+          updatedAt: 100,
+          cards: [
+            {
+              key: "pwr_remote::codex:t-remote",
+              ownerInstanceId: "pwr_remote",
+              thread: {
+                ...unreadThread("t-remote"),
+                title: "Anchored remote chat",
+                federation: {
+                  ref: {
+                    backend: "codex" as const,
+                    threadId: "t-remote",
+                    target: {
+                      scope: "remote" as const,
+                      instanceId: "pwr_remote",
+                    },
+                  },
+                  instanceLabel: "Remote Mac",
+                  peerStatus: "connected" as const,
+                },
+              },
+              geometry: {
+                anchor: {
+                  kind: "thread" as const,
+                  instanceId: "pwr_remote",
+                  threadKey: "codex:t-remote",
+                },
+                dx: 24,
+                dy: 36,
+                fallbackRect: {
+                  left: 300,
+                  top: 240,
+                  width: 420,
+                  height: 520,
+                },
+              },
+              contextOpen: false,
+              terminalOpen: false,
+            },
+          ],
+          views: {},
+        },
+      })),
+    };
+    render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    const chat = await screen.findByRole("region", {
+      name: "Chat: Anchored remote chat",
+    });
+    expect(chat.style.left).toBe("300px");
+    expect(chat.style.top).toBe("240px");
+
+    await act(async () => {
+      health.resolve({
+        health: {
+          enabled: true,
+          role: "gateway",
+          status: "listening",
+          instanceId: "pwr_local",
+          peers: [
+            {
+              id: "pwr_remote",
+              label: "Remote Mac",
+              role: "client",
+              status: "connected",
+              capabilities: ["thread_navigation"],
+            },
+          ],
+        },
+      });
+      await health.promise;
+    });
+    expect(chat.style.left).toBe("300px");
+    expect(chat.style.top).toBe("240px");
+
+    await act(async () => {
+      remoteSnapshot.resolve({
+        fetchedAt: 200,
+        threads: [
+          {
+            ...unreadThread("t-remote"),
+            title: "Anchored remote chat",
+            federation: {
+              ref: {
+                backend: "codex" as const,
+                threadId: "t-remote",
+                target: {
+                  scope: "remote" as const,
+                  instanceId: "pwr_remote",
+                },
+              },
+              instanceLabel: "Remote Mac",
+              peerStatus: "connected" as const,
+            },
+          },
+        ],
+      } as unknown as SnapshotResponse);
+      await remoteSnapshot.promise;
+    });
+
+    await waitFor(() => {
+      const shell = document.querySelector<HTMLElement>(
+        '[data-card-key="pwr_remote::codex:t-remote"]',
+      );
+      const cloud = shell?.closest<HTMLElement>(".star-map__cloud");
+      expect(shell).toBeTruthy();
+      expect(cloud).toBeTruthy();
+      const threadLeft =
+        Number.parseFloat(cloud?.style.left ?? "")
+        + Number.parseFloat(shell?.style.left ?? "")
+        + Number.parseFloat(shell?.style.marginLeft ?? "");
+      const threadTop =
+        Number.parseFloat(cloud?.style.top ?? "")
+        + Number.parseFloat(shell?.style.top ?? "");
+      expect(Number.parseFloat(chat.style.left)).toBeCloseTo(threadLeft + 24);
+      expect(Number.parseFloat(chat.style.top)).toBeCloseTo(threadTop + 36);
+    });
+  });
+
   it("waits for the initial federation layout before restoring the camera", async () => {
     seedLayout("orbit");
     type HealthResponse = Awaited<

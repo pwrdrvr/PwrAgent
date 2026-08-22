@@ -84,6 +84,7 @@ import {
   resolveSnap,
   type AlignmentGuide,
   type SnapRect,
+  type SnapTarget,
 } from "./star-map-snapping";
 import { buildFederationTopology } from "./star-map-topology";
 import {
@@ -245,6 +246,14 @@ const TETHER_ANCHOR_RADIUS = 3;
  * operator was not aiming at.
  */
 const SNAP_THRESHOLD_PX = 6;
+/**
+ * Ignore objects beyond this SCREEN-space edge distance. Alignment along one
+ * axis alone is not enough: without this bound a card can latch to a matching
+ * edge on the other side of the galaxy and draw a guide across the map.
+ */
+const SNAP_PROXIMITY_PX = 96;
+const THREAD_SNAP_TARGET_TYPES = ["thread-card"] as const;
+const CHAT_SNAP_TARGET_TYPES = ["chat-card"] as const;
 /**
  * How far a press on empty canvas may travel and still count as a click
  * that clears the selection, rather than a pan the operator abandoned.
@@ -3139,9 +3148,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
   );
 
   useLayoutEffect(() => {
-    if (!chatCards.hydrated) return;
+    if (!chatCards.hydrated || !federationLayoutReady) return;
     chatCards.resolveRestoredAnchors(resolveWorkspaceAnchor);
-  }, [chatCards, resolveWorkspaceAnchor]);
+  }, [chatCards, federationLayoutReady, resolveWorkspaceAnchor]);
 
   useEffect(() => {
     if (!pendingFlight) return;
@@ -3550,12 +3559,12 @@ export function StarMapScreen(props: StarMapScreenProps) {
         // offset never changes and every "alignment" against them is a
         // false latch at whatever spacing the group already had.
         const passengers = selection.has(selfKey) ? selection : undefined;
-        const others: SnapRect[] = [];
+        const targets: SnapTarget[] = [];
         for (const [key, rect] of cardRects) {
           if (key === selfKey || passengers?.has(key)) continue;
-          others.push(rect);
+          targets.push({ type: "thread-card", rect });
         }
-        if (others.length === 0) return unchanged;
+        if (targets.length === 0) return unchanged;
 
         const body = bodies.find((entry) => entry.instanceId === instanceId);
         const lane = lanes.get(instanceId);
@@ -3575,16 +3584,23 @@ export function StarMapScreen(props: StarMapScreenProps) {
           ?? (lane?.heights[index] || STAR_MAP_ESTIMATED_CARD_HEIGHT);
         const scale = view.scale > 0 ? view.scale : 1;
         const snap = resolveSnap({
-          defaultGap: STAR_MAP_CARD_GAP,
           moving: {
-            // Cards are centred on their slot (marginLeft is -width/2), so
-            // the rect's left edge sits half a card back.
-            x: body.x + baseSlot.dx + offset.dx - cardWidth / 2,
-            y: body.y + baseSlot.dy + offset.dy,
-            width: cardWidth,
-            height,
+            type: "thread-card",
+            rect: {
+              // Cards are centred on their slot (marginLeft is -width/2), so
+              // the rect's left edge sits half a card back.
+              x: body.x + baseSlot.dx + offset.dx - cardWidth / 2,
+              y: body.y + baseSlot.dy + offset.dy,
+              width: cardWidth,
+              height,
+            },
           },
-          others,
+          targets,
+          spec: {
+            targetTypes: THREAD_SNAP_TARGET_TYPES,
+            proximity: SNAP_PROXIMITY_PX / scale,
+            spacingGaps: [STAR_MAP_CARD_GAP],
+          },
           threshold: SNAP_THRESHOLD_PX / scale,
         });
         return {
@@ -3610,13 +3626,16 @@ export function StarMapScreen(props: StarMapScreenProps) {
         terminalOpen: card.terminalOpen,
         terminalHeight: card.terminalHeight,
       });
-      const moving: SnapRect = {
-        x: movingGroup.left,
-        y: movingGroup.top,
-        width: movingGroup.width,
-        height: movingGroup.height,
+      const moving: SnapTarget = {
+        type: "chat-card",
+        rect: {
+          x: movingGroup.left,
+          y: movingGroup.top,
+          width: movingGroup.width,
+          height: movingGroup.height,
+        },
       };
-      const others: SnapRect[] = [...flightRects.values()];
+      const targets: SnapTarget[] = [];
       for (const other of chatCards.cards) {
         if (other.key === cardKey) continue;
         const group = chatCardGroupRect(other.rect, {
@@ -3624,16 +3643,25 @@ export function StarMapScreen(props: StarMapScreenProps) {
           terminalOpen: other.terminalOpen,
           terminalHeight: other.terminalHeight,
         });
-        others.push({
-          x: group.left,
-          y: group.top,
-          width: group.width,
-          height: group.height,
+        targets.push({
+          type: "chat-card",
+          rect: {
+            x: group.left,
+            y: group.top,
+            width: group.width,
+            height: group.height,
+          },
         });
       }
-      const threshold = SNAP_THRESHOLD_PX / (view.scale > 0 ? view.scale : 1);
+      const scale = view.scale > 0 ? view.scale : 1;
+      const threshold = SNAP_THRESHOLD_PX / scale;
+      const spec = {
+        targetTypes: CHAT_SNAP_TARGET_TYPES,
+        proximity: SNAP_PROXIMITY_PX / scale,
+        spacingGaps: [STAR_MAP_CARD_GAP],
+      };
       if (kind === "resize") {
-        const snap = resolveResizeSnap({ moving, others, threshold });
+        const snap = resolveResizeSnap({ moving, targets, spec, threshold });
         return {
           rect: resizeChatCardRect({
             rect: next,
@@ -3645,9 +3673,9 @@ export function StarMapScreen(props: StarMapScreenProps) {
         };
       }
       const snap = resolveSnap({
-        defaultGap: STAR_MAP_CARD_GAP,
         moving,
-        others,
+        targets,
+        spec,
         threshold,
       });
       return {
@@ -3659,7 +3687,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
         guides: snap.guides,
       };
     },
-    [chatCards.cards, flightRects, panZoomCanvas, view.scale],
+    [chatCards.cards, panZoomCanvas, view.scale],
   );
 
   const commitChatCardRect = useCallback(

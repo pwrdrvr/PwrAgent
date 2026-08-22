@@ -1,15 +1,18 @@
 /**
  * Snapping for hand-arranged star map cards.
  *
- * Two kinds, both computed in absolute canvas coordinates so cards from
- * different clouds can align with each other:
+ * Two kinds, both computed in absolute canvas coordinates:
  *
  * - **Alignment** — a dragged card's left / centre / right (and top /
  *   middle / bottom) latching onto the same edge of a nearby card.
- * - **Spacing** — once cards are stacked, matching a gap that already
- *   exists in the arrangement rather than a fixed ladder of pixel values.
- *   An arbitrary 2/5/10px ladder fights the operator; a spacing they
- *   already chose is one they meant.
+ * - **Spacing** — once cards are stacked, matching one of the explicit
+ *   layout gaps supplied by the caller.
+ *
+ * Candidate selection is part of the engine rather than a caller-side
+ * convention. Each moving object and target has a type, and a proximity
+ * spec limits both the allowed target types and the search radius. This
+ * keeps a card from latching onto an aligned object several clouds away,
+ * and keeps each pointer frame linear in the number of potential targets.
  */
 
 export type SnapRect = {
@@ -21,6 +24,22 @@ export type SnapRect = {
 };
 
 export type SnapAxis = "x" | "y";
+
+export type SnapTargetType = "thread-card" | "chat-card";
+
+export type SnapTarget = {
+  type: SnapTargetType;
+  rect: SnapRect;
+};
+
+export type SnapSpec = {
+  /** Candidate types this moving object is allowed to snap to. */
+  targetTypes: readonly SnapTargetType[];
+  /** Maximum edge-to-edge distance, in canvas units. */
+  proximity: number;
+  /** Deliberate layout gaps, in canvas units. */
+  spacingGaps: readonly number[];
+};
 
 /**
  * A line to draw so the operator can see WHY the card latched. Without it
@@ -49,8 +68,6 @@ export type ResizeSnapResult = {
   guides: AlignmentGuide[];
 };
 
-/** Gaps below this are treated as "touching" rather than a real interval. */
-const MIN_MEANINGFUL_GAP = 4;
 /** Two cards count as stacked when they overlap this much across the axis. */
 const CROSS_AXIS_OVERLAP = 8;
 
@@ -66,6 +83,35 @@ function spanStart(rect: SnapRect, axis: SnapAxis): number {
 
 function spanEnd(rect: SnapRect, axis: SnapAxis): number {
   return axis === "x" ? rect.y + rect.height : rect.x + rect.width;
+}
+
+function rectDistance(a: SnapRect, b: SnapRect): number {
+  const dx = Math.max(a.x - (b.x + b.width), b.x - (a.x + a.width), 0);
+  const dy = Math.max(a.y - (b.y + b.height), b.y - (a.y + a.height), 0);
+  return Math.hypot(dx, dy);
+}
+
+/**
+ * Resolve the typed, nearby target set once per pointer frame. Alignment,
+ * spacing, and resize all consume this same bounded set.
+ */
+export function snapCandidates(params: {
+  moving: SnapTarget;
+  targets: readonly SnapTarget[];
+  spec: SnapSpec;
+}): SnapRect[] {
+  if (params.spec.proximity < 0 || params.spec.targetTypes.length === 0) {
+    return [];
+  }
+  const candidates: SnapRect[] = [];
+  for (const target of params.targets) {
+    if (!params.spec.targetTypes.includes(target.type)) continue;
+    if (rectDistance(params.moving.rect, target.rect) > params.spec.proximity) {
+      continue;
+    }
+    candidates.push(target.rect);
+  }
+  return candidates;
 }
 
 /**
@@ -122,46 +168,16 @@ function overlapsAcross(
 }
 
 /**
- * Gaps the arrangement already contains along `axis`, between cards that
- * are stacked on it. These become the detents, which is why the snapping
- * gets tighter the more the operator has already arranged.
- */
-export function observedGaps(
-  rects: readonly SnapRect[],
-  axis: SnapAxis,
-): number[] {
-  const gaps = new Set<number>();
-  for (let i = 0; i < rects.length; i += 1) {
-    for (let j = i + 1; j < rects.length; j += 1) {
-      const a = rects[i];
-      const b = rects[j];
-      if (!overlapsAcross(a, b, axis)) continue;
-      const aStart = axis === "x" ? a.x : a.y;
-      const aSize = axis === "x" ? a.width : a.height;
-      const bStart = axis === "x" ? b.x : b.y;
-      const bSize = axis === "x" ? b.width : b.height;
-      const gap =
-        aStart < bStart ? bStart - (aStart + aSize) : aStart - (bStart + bSize);
-      if (gap >= MIN_MEANINGFUL_GAP) gaps.add(Math.round(gap));
-    }
-  }
-  return [...gaps].sort((left, right) => left - right);
-}
-
-/**
- * Snap the moving card so it sits a known gap from a stacked neighbour.
+ * Snap the moving card so it sits a configured gap from a stacked neighbour.
  * Only considered on an axis alignment did not already claim.
  */
 function spaceAxis(params: {
   axis: SnapAxis;
-  defaultGap: number;
+  gaps: readonly number[];
   moving: SnapRect;
   others: readonly SnapRect[];
   threshold: number;
 }): { delta: number; gap: number } | undefined {
-  const gaps = [...observedGaps(params.others, params.axis)];
-  if (!gaps.includes(params.defaultGap)) gaps.push(params.defaultGap);
-
   const movingStart = params.axis === "x" ? params.moving.x : params.moving.y;
   const movingSize =
     params.axis === "x" ? params.moving.width : params.moving.height;
@@ -171,7 +187,7 @@ function spaceAxis(params: {
     if (!overlapsAcross(params.moving, other, params.axis)) continue;
     const otherStart = params.axis === "x" ? other.x : other.y;
     const otherSize = params.axis === "x" ? other.width : other.height;
-    for (const gap of gaps) {
+    for (const gap of params.gaps) {
       // Sitting after the neighbour, and sitting before it.
       const candidates = [
         otherStart + otherSize + gap,
@@ -197,22 +213,25 @@ function spaceAxis(params: {
  * the arrangement this exists to make easy.
  */
 export function resolveSnap(params: {
-  defaultGap: number;
-  moving: SnapRect;
-  others: readonly SnapRect[];
+  moving: SnapTarget;
+  targets: readonly SnapTarget[];
+  spec: SnapSpec;
   /** Canvas-space tolerance; callers convert from a screen-space value. */
   threshold: number;
 }): SnapResult {
-  if (params.threshold <= 0 || params.others.length === 0) {
+  if (params.threshold <= 0 || params.targets.length === 0) {
     return { dx: 0, dy: 0, guides: [] };
   }
+
+  const others = snapCandidates(params);
+  if (others.length === 0) return { dx: 0, dy: 0, guides: [] };
 
   const result: SnapResult = { dx: 0, dy: 0, guides: [] };
   for (const axis of ["x", "y"] as const) {
     const aligned = alignAxis({
       axis,
-      moving: params.moving,
-      others: params.others,
+      moving: params.moving.rect,
+      others,
       threshold: params.threshold,
     });
     if (aligned) {
@@ -223,9 +242,9 @@ export function resolveSnap(params: {
     }
     const spaced = spaceAxis({
       axis,
-      defaultGap: params.defaultGap,
-      moving: params.moving,
-      others: params.others,
+      gaps: params.spec.spacingGaps,
+      moving: params.moving.rect,
+      others,
       threshold: params.threshold,
     });
     if (!spaced) continue;
@@ -244,21 +263,28 @@ export function resolveSnap(params: {
  * origins.
  */
 export function resolveResizeSnap(params: {
-  moving: SnapRect;
-  others: readonly SnapRect[];
+  moving: SnapTarget;
+  targets: readonly SnapTarget[];
+  spec: SnapSpec;
   threshold: number;
 }): ResizeSnapResult {
   const result: ResizeSnapResult = { dw: 0, dh: 0, guides: [] };
-  if (params.threshold <= 0 || params.others.length === 0) return result;
+  if (params.threshold <= 0 || params.targets.length === 0) return result;
+  const others = snapCandidates(params);
+  if (others.length === 0) return result;
 
   for (const axis of ["x", "y"] as const) {
-    const movingStart = axis === "x" ? params.moving.x : params.moving.y;
-    const movingSize = axis === "x" ? params.moving.width : params.moving.height;
+    const movingStart = axis === "x"
+      ? params.moving.rect.x
+      : params.moving.rect.y;
+    const movingSize = axis === "x"
+      ? params.moving.rect.width
+      : params.moving.rect.height;
     const movingEnd = movingStart + movingSize;
     let best:
       | { delta: number; guide: AlignmentGuide }
       | undefined;
-    for (const other of params.others) {
+    for (const other of others) {
       const otherSize = axis === "x" ? other.width : other.height;
       const targets = [
         ...edgesFor(other, axis),
@@ -274,11 +300,11 @@ export function resolveResizeSnap(params: {
             axis,
             at: target,
             start: Math.min(
-              spanStart(params.moving, axis),
+              spanStart(params.moving.rect, axis),
               spanStart(other, axis),
             ),
             end: Math.max(
-              spanEnd(params.moving, axis),
+              spanEnd(params.moving.rect, axis),
               spanEnd(other, axis),
             ),
           },
