@@ -495,6 +495,15 @@ describe("Tangerine Terminal theme contract", () => {
     expect(customActionsRule).toContain("justify-content: flex-end;");
   });
 
+  it("keeps durable toast actions on one navigation row", () => {
+    const customActionsRule = extractRuleBody(
+      css,
+      ".app-notice-toast__navigation .app-notice-toast__custom-actions",
+    );
+
+    expect(customActionsRule).toContain("flex-wrap: nowrap;");
+  });
+
   it("lets transcript scroll restoration own scroll anchoring", () => {
     expect(css).toMatch(
       /\.transcript-list__items\s*\{[\s\S]*?overflow-anchor:\s*none;[\s\S]*?\}/

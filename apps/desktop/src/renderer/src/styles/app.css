@@ -7145,6 +7145,7 @@ textarea,
 
 .app-notice-toast__navigation .app-notice-toast__custom-actions {
   min-width: 0;
+  flex-wrap: nowrap;
   justify-content: flex-end;
 }
 

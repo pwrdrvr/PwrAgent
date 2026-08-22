@@ -271,16 +271,24 @@ describe("AppNoticeToast", () => {
 
   it("keeps operator actions in the existing durable-navigation row", () => {
     const onExamine = vi.fn();
+    const onMute = vi.fn();
     const { container } = render(
       <AppNoticeToast
         navigation={{ current: 1, total: 1 }}
         notice={{
           ...notice,
-          actions: [{
-            label: "Examine 20 cases",
-            onClick: onExamine,
-            tone: "primary",
-          }],
+          actions: [
+            {
+              label: "Examine 20 cases",
+              onClick: onExamine,
+              tone: "primary",
+            },
+            {
+              label: "Don't warn again",
+              onClick: onMute,
+              tone: "secondary",
+            },
+          ],
           autoDismiss: false,
         }}
         onDismiss={vi.fn()}
@@ -299,7 +307,9 @@ describe("AppNoticeToast", () => {
     )).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Examine 20 cases" }));
+    fireEvent.click(screen.getByRole("button", { name: "Don't warn again" }));
     expect(onExamine).toHaveBeenCalledTimes(1);
+    expect(onMute).toHaveBeenCalledTimes(1);
   });
 
   it("uses a notice-specific durable dismissal when supplied", () => {
