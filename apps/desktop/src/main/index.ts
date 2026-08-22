@@ -69,6 +69,9 @@ import {
   disposeDesktopFederationRuntime,
   getDesktopFederationRuntime,
 } from "./federation/federation-runtime";
+import {
+  E2E_FAST_FEDERATION_RECONNECT_ENV,
+} from "./federation/federation-reconnect-policy";
 import { createFederationWindow } from "./federation/federation-window";
 import {
   disposeIntegratedTerminalIpcHandlers,
@@ -1085,6 +1088,7 @@ function rejectDevOnlyEnvVarsInProduction(): void {
   const devOnlyVars = [
     PWRAGENT_PROFILE_AUTO_CREATE_ENV,
     SECRET_STORAGE_DISABLED_ENV,
+    E2E_FAST_FEDERATION_RECONNECT_ENV,
     SQLITE_WRITE_METRICS_ENV,
     SQLITE_WRITE_METRICS_FILE_ENV,
   ];

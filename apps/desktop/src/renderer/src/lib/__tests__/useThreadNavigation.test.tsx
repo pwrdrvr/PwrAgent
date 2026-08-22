@@ -3445,6 +3445,9 @@ describe("useThreadNavigation", () => {
       }
     });
 
+    expect(result.current.threads[1]?.federation?.peerStatus).toBe(
+      "connected",
+    );
     await waitFor(() => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
       expect(result.current.threads[1]?.federation?.peerStatus).toBe(
