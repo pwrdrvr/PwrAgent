@@ -2,14 +2,17 @@ import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import type {
   FederationTarget,
   ReadStarMapArrangementResponse,
+  ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
   StarMapArrangementEntry,
   StarMapIntakeRequest,
   StarMapIntakeResponse,
+  WriteStarMapWorkspaceRequest,
 } from "@pwragent/shared";
 import {
   isRemoteFederationTarget,
   isStarMapArrangementEntry,
+  isStarMapWorkspaceSnapshot,
 } from "@pwragent/shared";
 import {
   STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL,
@@ -17,7 +20,9 @@ import {
   STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL,
   STAR_MAP_OPEN_WINDOW_CHANNEL,
   STAR_MAP_READ_ARRANGEMENT_CHANNEL,
+  STAR_MAP_READ_WORKSPACE_CHANNEL,
   STAR_MAP_SET_CARD_POSITION_CHANNEL,
+  STAR_MAP_WRITE_WORKSPACE_CHANNEL,
   WINDOW_SHOW_THREAD_CHANNEL,
 } from "../../shared/ipc";
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
@@ -43,7 +48,9 @@ function primaryMainWindowWebContents(): WebContents | undefined {
 
 export function registerStarMapIpcHandlers(): void {
   ipcMain.removeHandler(STAR_MAP_READ_ARRANGEMENT_CHANNEL);
+  ipcMain.removeHandler(STAR_MAP_READ_WORKSPACE_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_SET_CARD_POSITION_CHANNEL);
+  ipcMain.removeHandler(STAR_MAP_WRITE_WORKSPACE_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_INTAKE_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_OPEN_WINDOW_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL);
@@ -135,11 +142,41 @@ export function registerStarMapIpcHandlers(): void {
       };
     },
   );
+  ipcMain.handle(
+    STAR_MAP_READ_WORKSPACE_CHANNEL,
+    async (): Promise<ReadStarMapWorkspaceResponse> => ({
+      workspace: await getDesktopOverlayStore().readStarMapWorkspace(),
+    }),
+  );
+  ipcMain.handle(
+    STAR_MAP_WRITE_WORKSPACE_CHANNEL,
+    async (
+      _event,
+      request: WriteStarMapWorkspaceRequest,
+    ): Promise<ReadStarMapWorkspaceResponse> => {
+      if (!isStarMapWorkspaceSnapshot(request?.workspace)) {
+        throw new Error("Invalid Star Map workspace");
+      }
+      if (
+        typeof request.baseRevision !== "number"
+        || !Number.isSafeInteger(request.baseRevision)
+        || request.baseRevision < 0
+      ) {
+        throw new Error("Invalid Star Map workspace base revision");
+      }
+      return {
+        workspace: await getDesktopOverlayStore()
+          .writeStarMapWorkspace(request.workspace, request.baseRevision),
+      };
+    },
+  );
 }
 
 export function disposeStarMapIpcHandlers(): void {
   ipcMain.removeHandler(STAR_MAP_READ_ARRANGEMENT_CHANNEL);
+  ipcMain.removeHandler(STAR_MAP_READ_WORKSPACE_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_SET_CARD_POSITION_CHANNEL);
+  ipcMain.removeHandler(STAR_MAP_WRITE_WORKSPACE_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_INTAKE_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_OPEN_WINDOW_CHANNEL);
   ipcMain.removeHandler(STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL);

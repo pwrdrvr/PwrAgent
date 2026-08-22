@@ -11,6 +11,12 @@ import type { NavigationThreadSummary } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { StarMapScreen } from "../StarMapScreen";
 
+vi.mock("../../thread-detail/IntegratedTerminal", () => ({
+  IntegratedTerminal: (props: { threadKey: string }) => (
+    <div data-testid="star-map-terminal-pane" data-thread-key={props.threadKey} />
+  ),
+}));
+
 /**
  * The whole card for a thread, given its open-thread button.
  *
@@ -51,7 +57,7 @@ function unreadThread(id: string): NavigationThreadSummary {
   return {
     id,
     title: `Thread ${id}`,
-    titleSource: "generated",
+              titleSource: "derived",
     linkedDirectories: [
       {
         id: "dir-1",
@@ -810,6 +816,436 @@ describe("StarMapScreen", () => {
     expect(
       screen.getAllByRole("region", { name: "Chat: Thread t1" }),
     ).toHaveLength(1);
+  });
+
+  it("does not persist a local chat under the pre-health placeholder id", async () => {
+    type HealthResponse = Awaited<
+      ReturnType<NonNullable<DesktopApi["readFederationHealth"]>>
+    >;
+    let resolveHealth: (value: HealthResponse) => void = () => {};
+    const healthRead = new Promise<HealthResponse>((resolve) => {
+      resolveHealth = resolve;
+    });
+    const writeStarMapWorkspace = vi.fn(
+      async ({ baseRevision, workspace }) => ({
+        workspace: {
+          ...workspace,
+          revision: baseRevision + 1,
+          updatedAt: 200,
+        },
+      }),
+    );
+    const desktopApi: DesktopApi = {
+      readFederationHealth: vi.fn(() => healthRead),
+      readStarMapWorkspace: vi.fn(async () => ({
+        workspace: {
+          version: 1 as const,
+          cards: [],
+          views: {},
+          revision: 0,
+          updatedAt: 0,
+        },
+      })),
+      writeStarMapWorkspace,
+      onAgentEvent: vi.fn(() => () => undefined),
+    };
+    render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[unreadThread("t1")]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Open thread: Thread t1/ }),
+    );
+    await screen.findByRole("region", { name: "Chat: Thread t1" });
+    expect(writeStarMapWorkspace).not.toHaveBeenCalled();
+
+    await act(async () => {
+      resolveHealth({
+        health: {
+          enabled: false,
+          role: "client",
+          status: "disabled",
+          instanceId: "pwr_local",
+          peers: [],
+        },
+      });
+    });
+
+    await waitFor(() => expect(writeStarMapWorkspace).toHaveBeenCalledTimes(1));
+    expect(writeStarMapWorkspace).toHaveBeenCalledWith({
+      baseRevision: 0,
+      workspace: expect.objectContaining({
+        cards: [
+          expect.objectContaining({
+            key: "pwr_local::codex:t1",
+            ownerInstanceId: "pwr_local",
+          }),
+        ],
+      }),
+    });
+  });
+
+  it("restores an open disconnected chat with its context and terminal", async () => {
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      readFederationHealth: vi.fn(async () => ({
+        health: {
+          enabled: true,
+          role: "gateway" as const,
+          status: "listening" as const,
+          instanceId: "pwr_local",
+          peers: [
+            {
+              id: "pwr_remote",
+              label: "Remote Mac",
+              role: "client" as const,
+              status: "disconnected" as const,
+              capabilities: [],
+            },
+          ],
+        },
+      })) as unknown as DesktopApi["readFederationHealth"],
+      readStarMapWorkspace: vi.fn(async () => ({
+        workspace: {
+          version: 1 as const,
+          revision: 3,
+          updatedAt: 100,
+          cards: [
+            {
+              key: "pwr_remote::codex:t-remote",
+              ownerInstanceId: "pwr_remote",
+              thread: {
+                id: "t-remote",
+                inbox: { inInbox: true },
+                linkedDirectories: [],
+                source: "codex" as const,
+                title: "Disconnected workspace chat",
+                titleSource: "derived" as const,
+                federation: {
+                  ref: {
+                    backend: "codex" as const,
+                    threadId: "t-remote",
+                    target: {
+                      scope: "remote" as const,
+                      instanceId: "pwr_remote",
+                    },
+                  },
+                  instanceLabel: "Remote Mac",
+                  peerStatus: "disconnected" as const,
+                },
+              },
+              geometry: {
+                anchor: {
+                  kind: "thread" as const,
+                  instanceId: "pwr_remote",
+                  threadKey: "codex:t-remote",
+                },
+                dx: 20,
+                dy: 30,
+                instanceDx: 50,
+                instanceDy: 60,
+                fallbackRect: {
+                  left: 600,
+                  top: 240,
+                  width: 420,
+                  height: 520,
+                },
+              },
+              contextOpen: true,
+              terminalOpen: true,
+              terminalHeight: 300,
+            },
+          ],
+          views: {},
+        },
+      })),
+    };
+
+    render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    const chat = await screen.findByRole("region", {
+      name: "Chat: Disconnected workspace chat",
+    });
+    const remoteBody = screen.getByRole("button", {
+      name: "Focus Remote Mac",
+    }).closest<HTMLElement>(".star-map__anchor");
+    expect(remoteBody).toBeTruthy();
+    expect(Number.parseFloat(chat.style.left)).toBeCloseTo(
+      Number.parseFloat(remoteBody?.style.left ?? "") + 50,
+    );
+    expect(Number.parseFloat(chat.style.top)).toBeCloseTo(
+      Number.parseFloat(remoteBody?.style.top ?? "") + 60,
+    );
+    expect(
+      screen.getByRole("region", {
+        name: "Thread context: Disconnected workspace chat",
+      }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole("region", {
+        name: "Terminal: Disconnected workspace chat",
+      }),
+    ).toBeTruthy();
+    expect(
+      (await screen.findByTestId("star-map-terminal-pane")).getAttribute(
+        "data-thread-key",
+      ),
+    ).toBe("codex:t-remote");
+  });
+
+  it("waits for the owning thread layout before restoring a chat anchor", async () => {
+    type HealthResponse = Awaited<
+      ReturnType<NonNullable<DesktopApi["readFederationHealth"]>>
+    >;
+    type SnapshotResponse = Awaited<
+      ReturnType<NonNullable<DesktopApi["getNavigationSnapshot"]>>
+    >;
+    const health = createDeferred<HealthResponse>();
+    const remoteSnapshot = createDeferred<SnapshotResponse>();
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      readFederationHealth: vi.fn(() => health.promise),
+      getNavigationSnapshot: vi.fn(() => remoteSnapshot.promise),
+      readStarMapWorkspace: vi.fn(async () => ({
+        workspace: {
+          version: 1 as const,
+          revision: 3,
+          updatedAt: 100,
+          cards: [
+            {
+              key: "pwr_remote::codex:t-remote",
+              ownerInstanceId: "pwr_remote",
+              thread: {
+                ...unreadThread("t-remote"),
+                title: "Anchored remote chat",
+                federation: {
+                  ref: {
+                    backend: "codex" as const,
+                    threadId: "t-remote",
+                    target: {
+                      scope: "remote" as const,
+                      instanceId: "pwr_remote",
+                    },
+                  },
+                  instanceLabel: "Remote Mac",
+                  peerStatus: "connected" as const,
+                },
+              },
+              geometry: {
+                anchor: {
+                  kind: "thread" as const,
+                  instanceId: "pwr_remote",
+                  threadKey: "codex:t-remote",
+                },
+                dx: 24,
+                dy: 36,
+                fallbackRect: {
+                  left: 300,
+                  top: 240,
+                  width: 420,
+                  height: 520,
+                },
+              },
+              contextOpen: false,
+              terminalOpen: false,
+            },
+          ],
+          views: {},
+        },
+      })),
+    };
+    render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+
+    const chat = await screen.findByRole("region", {
+      name: "Chat: Anchored remote chat",
+    });
+    expect(chat.style.left).toBe("300px");
+    expect(chat.style.top).toBe("240px");
+
+    await act(async () => {
+      health.resolve({
+        health: {
+          enabled: true,
+          role: "gateway",
+          status: "listening",
+          instanceId: "pwr_local",
+          peers: [
+            {
+              id: "pwr_remote",
+              label: "Remote Mac",
+              role: "client",
+              status: "connected",
+              capabilities: ["thread_navigation"],
+            },
+          ],
+        },
+      });
+      await health.promise;
+    });
+    expect(chat.style.left).toBe("300px");
+    expect(chat.style.top).toBe("240px");
+
+    await act(async () => {
+      remoteSnapshot.resolve({
+        fetchedAt: 200,
+        threads: [
+          {
+            ...unreadThread("t-remote"),
+            title: "Anchored remote chat",
+            federation: {
+              ref: {
+                backend: "codex" as const,
+                threadId: "t-remote",
+                target: {
+                  scope: "remote" as const,
+                  instanceId: "pwr_remote",
+                },
+              },
+              instanceLabel: "Remote Mac",
+              peerStatus: "connected" as const,
+            },
+          },
+        ],
+      } as unknown as SnapshotResponse);
+      await remoteSnapshot.promise;
+    });
+
+    await waitFor(() => {
+      const shell = document.querySelector<HTMLElement>(
+        '[data-card-key="pwr_remote::codex:t-remote"]',
+      );
+      const cloud = shell?.closest<HTMLElement>(".star-map__cloud");
+      expect(shell).toBeTruthy();
+      expect(cloud).toBeTruthy();
+      const threadLeft =
+        Number.parseFloat(cloud?.style.left ?? "")
+        + Number.parseFloat(shell?.style.left ?? "")
+        + Number.parseFloat(shell?.style.marginLeft ?? "");
+      const threadTop =
+        Number.parseFloat(cloud?.style.top ?? "")
+        + Number.parseFloat(shell?.style.top ?? "");
+      expect(Number.parseFloat(chat.style.left)).toBeCloseTo(threadLeft + 24);
+      expect(Number.parseFloat(chat.style.top)).toBeCloseTo(threadTop + 36);
+    });
+  });
+
+  it("waits for the initial federation layout before restoring the camera", async () => {
+    seedLayout("orbit");
+    type HealthResponse = Awaited<
+      ReturnType<NonNullable<DesktopApi["readFederationHealth"]>>
+    >;
+    type SnapshotResponse = Awaited<
+      ReturnType<NonNullable<DesktopApi["getNavigationSnapshot"]>>
+    >;
+    const health = createDeferred<HealthResponse>();
+    const remoteSnapshot = createDeferred<SnapshotResponse>();
+    const getNavigationSnapshot = vi.fn(() => remoteSnapshot.promise);
+    const desktopApi: DesktopApi = {
+      ...buildDesktopApi(),
+      readFederationHealth: vi.fn(() => health.promise),
+      getNavigationSnapshot,
+      readStarMapWorkspace: vi.fn(async () => ({
+        workspace: {
+          version: 1 as const,
+          revision: 3,
+          updatedAt: 100,
+          cards: [],
+          views: { orbit: { x: -600, y: 0, scale: 0.5 } },
+        },
+      })),
+    };
+    const { container } = render(
+      <StarMapScreen
+        desktopApi={desktopApi}
+        localThreads={[]}
+        sessionKeys={{}}
+        localInstanceLabel="Mac-Mini-M4"
+        onOpenLocalThread={() => undefined}
+        onFocusLocalInstance={() => undefined}
+      />,
+    );
+    const canvas = () =>
+      container.querySelector<HTMLElement>(".star-map__canvas");
+    const savedTransform = "translate(-600px, 0px) scale(0.5)";
+
+    await waitFor(() => expect(canvas()).not.toBeNull());
+    expect(canvas()?.style.transform).not.toBe(savedTransform);
+
+    await act(async () => {
+      health.resolve({
+        health: {
+          enabled: true,
+          role: "gateway",
+          status: "listening",
+          instanceId: "pwr_local",
+          peers: [
+            {
+              id: "pwr_remote",
+              label: "Remote Mac",
+              role: "client",
+              status: "connected",
+              capabilities: ["thread_navigation"],
+            },
+          ],
+        },
+      });
+      await health.promise;
+    });
+    await waitFor(() => expect(getNavigationSnapshot).toHaveBeenCalledTimes(1));
+    expect(canvas()?.style.transform).not.toBe(savedTransform);
+    const transformBeforeRemoteSnapshot = canvas()?.style.transform;
+
+    await act(async () => {
+      remoteSnapshot.resolve({
+        fetchedAt: 200,
+        threads: Array.from({ length: 30 }, (_, index) => ({
+          ...unreadThread(`remote-${index}`),
+          federation: {
+            ref: {
+              backend: "codex" as const,
+              threadId: `remote-${index}`,
+              target: {
+                scope: "remote" as const,
+                instanceId: "pwr_remote",
+              },
+            },
+            instanceLabel: "Remote Mac",
+            peerStatus: "connected" as const,
+          },
+        })),
+      } as unknown as SnapshotResponse);
+      await remoteSnapshot.promise;
+    });
+
+    await waitFor(() => {
+      expect(canvas()?.style.transform).toContain("scale(0.5)");
+    });
+    expect(canvas()?.style.transform).not.toBe(transformBeforeRemoteSnapshot);
   });
 
   it("keeps a stopped monitor disabled until local navigation refreshes", async () => {

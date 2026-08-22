@@ -62,6 +62,7 @@ import {
   resizeChatCardRect,
   type ChatCardRect,
 } from "./star-map-chat-card-geometry";
+import type { AlignmentGuide } from "./star-map-snapping";
 import {
   StarMapReviewSetup,
   type StarMapReviewRequest,
@@ -86,8 +87,14 @@ export type StarMapChatCardProps = {
   ) => void | Promise<void>;
   /** Refresh the owning navigation feed after a monitor is stopped. */
   onRefreshNavigation?: () => Promise<void>;
-  onRaise: (cardKey: string) => void;
+  onRaise: (cardKey: string, persist?: boolean) => boolean | void;
   onRectChange: (cardKey: string, rect: ChatCardRect) => void;
+  onRectCommit?: (cardKey: string, rect: ChatCardRect) => void;
+  resolveRect?: (
+    rect: ChatCardRect,
+    kind: "move" | "resize",
+  ) => { rect: ChatCardRect; guides: AlignmentGuide[] };
+  onGuidesChange?: (guides: AlignmentGuide[]) => void;
   /** Satellite cards, docked to this card and owned by the controller. */
   contextOpen?: boolean;
   terminalOpen?: boolean;
@@ -110,10 +117,13 @@ export type StarMapChatCardProps = {
 
 type DragState = {
   kind: "move" | "resize";
+  moved: boolean;
+  raised: boolean;
   pointerId: number;
   originX: number;
   originY: number;
   startRect: ChatCardRect;
+  lastRect: ChatCardRect;
 };
 
 function queuedTurnPreview(queued: ComposerQueuedTurnSnapshot): string {
@@ -159,11 +169,14 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     bounds,
     cardKey,
     desktopApi,
+    onGuidesChange,
     onOpenFull,
     onRaise,
     onRectChange,
+    onRectCommit,
     onUserRepliedToThread,
     rect,
+    resolveRect,
     scale,
     thread,
   } = props;
@@ -503,13 +516,16 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
     (event: ReactPointerEvent, kind: DragState["kind"]) => {
       if (event.button !== 0) return;
       event.preventDefault();
-      onRaise(cardKey);
+      event.stopPropagation();
       dragRef.current = {
         kind,
+        moved: false,
+        raised: onRaise(cardKey, false) === true,
         pointerId: event.pointerId,
         originX: event.clientX,
         originY: event.clientY,
         startRect: rect,
+        lastRect: rect,
       };
       event.currentTarget.setPointerCapture?.(event.pointerId);
     },
@@ -524,7 +540,7 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
       const zoom = scale > 0 ? scale : 1;
       const deltaX = (event.clientX - drag.originX) / zoom;
       const deltaY = (event.clientY - drag.originY) / zoom;
-      const next =
+      const raw =
         drag.kind === "move"
           ? clampChatCardRect(
               {
@@ -540,17 +556,31 @@ export function StarMapChatCard(props: StarMapChatCardProps) {
               deltaY,
               viewport: bounds,
             });
+      const resolved = !event.altKey && resolveRect
+        ? resolveRect(raw, drag.kind)
+        : { rect: raw, guides: [] };
+      const next = resolved.rect;
+      drag.moved = true;
+      drag.lastRect = next;
+      onGuidesChange?.(resolved.guides);
       onRectChange(cardKey, next);
     },
-    [bounds, cardKey, onRectChange, scale],
+    [bounds, cardKey, onGuidesChange, onRectChange, resolveRect, scale],
   );
 
-  const endDrag = useCallback((event: ReactPointerEvent) => {
-    const drag = dragRef.current;
-    if (!drag || drag.pointerId !== event.pointerId) return;
-    dragRef.current = undefined;
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
-  }, []);
+  const endDrag = useCallback(
+    (event: ReactPointerEvent) => {
+      const drag = dragRef.current;
+      if (!drag || drag.pointerId !== event.pointerId) return;
+      dragRef.current = undefined;
+      onGuidesChange?.([]);
+      if (drag.moved || drag.raised) {
+        onRectCommit?.(cardKey, drag.lastRect);
+      }
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+    },
+    [cardKey, onGuidesChange, onRectCommit],
+  );
 
   // No window-resize clamp: the card is anchored in the map, not in the
   // window. Resizing the window changes what part of the galaxy is on

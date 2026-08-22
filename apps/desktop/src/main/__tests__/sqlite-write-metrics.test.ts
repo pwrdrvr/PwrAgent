@@ -5,6 +5,7 @@ import type {
   AgentEvent,
   AppServerThreadReplay,
   AppServerThreadSummary,
+  StarMapWorkspaceSnapshot,
   TaskMonitorUsageSnapshot,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
@@ -97,6 +98,62 @@ describe("sqlite write metrics", () => {
     const metrics = readSqliteWriteMetrics();
     expect(metrics?.statements).toBe(50);
     expect(metrics?.commits).toBe(1);
+  });
+
+  it("persists one completed Star Map workspace gesture in one commit", async () => {
+    const workspace: StarMapWorkspaceSnapshot = {
+      version: 1,
+      cards: [
+        {
+          key: "pwr_local::codex:thread-1",
+          ownerInstanceId: "pwr_local",
+          thread: {
+            id: "thread-1",
+            inbox: { inInbox: true },
+            linkedDirectories: [],
+            source: "codex",
+            title: "A saved desk",
+            titleSource: "derived",
+          },
+          geometry: {
+            anchor: {
+              kind: "thread",
+              instanceId: "pwr_local",
+              threadKey: "codex:thread-1",
+            },
+            dx: 24,
+            dy: 12,
+            fallbackRect: {
+              left: 300,
+              top: 200,
+              width: 420,
+              height: 520,
+            },
+          },
+          contextOpen: true,
+          terminalOpen: true,
+          terminalHeight: 280,
+        },
+      ],
+      views: { orbit: { x: -40, y: 60, scale: 0.8 } },
+    };
+
+    // The renderer card test pins raise + drag to one commit callback, and the
+    // controller test "coalesces raising a non-top card and dragging it into
+    // one write" pins that callback to one API call. This measured region is
+    // the API call's database half: one row and one transaction, independent
+    // of pointermove count. At an intentionally heavy 1,000 completed
+    // actions/day, the observed ~8 KB WAL cost projects to about 8 MB/day;
+    // ordinary use is far below that.
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.writeStarMapWorkspace(workspace, 0);
+    });
+
+    expectSqliteWriteBudget({
+      note: "one coalesced Star Map open/close/move/resize/toggle or camera gesture, feature-pinned to one API call and persisted as one atomic workspace row",
+      scenario: "star-map-workspace-gesture",
+      writes,
+    });
   });
 
   it("persists one explicit history analysis in one transaction", async () => {

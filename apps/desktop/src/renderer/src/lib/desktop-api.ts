@@ -155,9 +155,11 @@ import type {
   SetFederationEventSubscriptionsRequest,
   SetFederationEventSubscriptionsResponse,
   ReadStarMapArrangementResponse,
+  ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
   StarMapIntakeRequest,
   StarMapIntakeResponse,
+  WriteStarMapWorkspaceRequest,
   FederationTarget,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
@@ -607,6 +609,10 @@ export type DesktopApi = {
   setStarMapCardPosition?: (
     request: SetStarMapCardPositionRequest,
   ) => Promise<ReadStarMapArrangementResponse>;
+  readStarMapWorkspace?: () => Promise<ReadStarMapWorkspaceResponse>;
+  writeStarMapWorkspace?: (
+    request: WriteStarMapWorkspaceRequest,
+  ) => Promise<ReadStarMapWorkspaceResponse>;
   dispatchStarMapIntake?: (
     request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
   ) => Promise<StarMapIntakeResponse>;

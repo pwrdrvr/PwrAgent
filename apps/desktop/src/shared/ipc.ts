@@ -20,6 +20,8 @@ export const FEDERATION_SET_EVENT_SUBSCRIPTIONS_CHANNEL =
   "federation:set-event-subscriptions";
 export const STAR_MAP_READ_ARRANGEMENT_CHANNEL = "star-map:read-arrangement";
 export const STAR_MAP_SET_CARD_POSITION_CHANNEL = "star-map:set-card-position";
+export const STAR_MAP_READ_WORKSPACE_CHANNEL = "star-map:read-workspace";
+export const STAR_MAP_WRITE_WORKSPACE_CHANNEL = "star-map:write-workspace";
 export const STAR_MAP_INTAKE_CHANNEL = "star-map:intake";
 /**
  * Fire-and-forget IPC: opens the dedicated Federation Star Map window
