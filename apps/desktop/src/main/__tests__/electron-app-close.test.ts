@@ -1,6 +1,9 @@
-import type { ElectronApplication } from "@playwright/test";
+import type { ElectronApplication, Page } from "@playwright/test";
 import { describe, expect, it, vi } from "vitest";
-import { closeElectronApplication } from "../../../e2e/fixtures/electron-app";
+import {
+  closeElectronApplication,
+  requestElectronQuitWithRendererFallback,
+} from "../../../e2e/fixtures/electron-app";
 
 describe("closeElectronApplication", () => {
   it("is a no-op when Playwright throws for an exited Electron handle", async () => {
@@ -27,5 +30,40 @@ describe("closeElectronApplication", () => {
       forceExitOutcome: "not-needed",
     });
     expect(process).toHaveBeenCalledOnce();
+  });
+
+  it("uses the main-process quit route while Playwright can reach it", async () => {
+    const evaluate = vi.fn(async () => undefined);
+    const rendererEvaluate = vi.fn(async () => undefined);
+
+    await requestElectronQuitWithRendererFallback({
+      electronApp: { evaluate } as unknown as ElectronApplication,
+      launchId: "healthy-launch",
+      window: { evaluate: rendererEvaluate } as unknown as Page,
+    });
+
+    expect(evaluate).toHaveBeenCalledOnce();
+    expect(rendererEvaluate).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the renderer quit IPC when main-process evaluation rejects", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const evaluate = vi.fn(async () => {
+      throw new Error("Playwright main-process channel closed");
+    });
+    const rendererEvaluate = vi.fn(async () => undefined);
+
+    await requestElectronQuitWithRendererFallback({
+      electronApp: { evaluate } as unknown as ElectronApplication,
+      launchId: "stale-main-channel",
+      window: { evaluate: rendererEvaluate } as unknown as Page,
+    });
+
+    expect(rendererEvaluate).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining(
+        '"reason":"main-process-evaluation-rejected","route":"renderer-ipc"',
+      ),
+    );
   });
 });
