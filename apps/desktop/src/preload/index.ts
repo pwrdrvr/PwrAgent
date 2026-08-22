@@ -404,6 +404,7 @@ import type {
   ImageUploadNormalizationLogRequest,
 } from "../shared/image-normalization";
 import type { HotCpuProfileCapturedEvent } from "../shared/hot-cpu-profile";
+import type { ManagedGrokSignatureRejectedEvent } from "../shared/managed-grok-signature";
 import type {
   GithubPrAuthenticationFailureEvent,
   GithubPrSamlEnforcementEvent,
@@ -516,6 +517,7 @@ import {
   PR_AUTO_DISPATCH_BUDGET_CHANGED_EVENT_CHANNEL,
   GITHUB_PR_AUTHENTICATION_FAILURE_EVENT_CHANNEL,
   GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL,
+  MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL,
   APP_SERVER_LIST_THREADS_CHANNEL,
   THREAD_SEARCH_CHANNEL,
   APP_SERVER_ARCHIVE_THREAD_CHANNEL,
@@ -2080,6 +2082,18 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(GITHUB_PR_SAML_ENFORCEMENT_EVENT_CHANNEL, listener);
+    };
+  },
+  onManagedGrokSignatureRejected: (
+    callback: (event: ManagedGrokSignatureRejectedEvent) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: ManagedGrokSignatureRejectedEvent,
+    ) => callback(payload);
+    ipcRenderer.on(MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(MANAGED_GROK_SIGNATURE_REJECTED_EVENT_CHANNEL, listener);
     };
   },
   onGithubPrAuthenticationFailure: (

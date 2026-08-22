@@ -10,6 +10,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { existsSync } from "node:fs";
 import {
   ensureManagedGrokRuntime,
   isManagedGrokTagEligible,
@@ -19,6 +20,7 @@ import {
   MANAGED_GROK_RELEASES_URL,
   selectManagedGrokRelease,
   selectManagedGrokReleaseFromFeed,
+  setManagedGrokSignatureRejectionReporter,
 } from "../acp/grok-managed-runtime";
 
 const cleanupPaths: string[] = [];
@@ -292,6 +294,88 @@ describe("ensureManagedGrokRuntime", () => {
     });
 
     expect(runtime).toBeUndefined();
+  });
+
+  // A bundle signed by someone else is the one managed-runtime failure the
+  // operator has to hear about, and the copy on disk is not ours to keep.
+  it("deletes a signer-rejected installed copy and reports it", async () => {
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v1.0.4-pwragent.2";
+    await writeManagedCache(rootDir, {
+      asset: "pwragent-grok-1.0.4-pwragent.2-macos-universal.tar.gz",
+      tag,
+    });
+    const versionRoot = path.join(rootDir, "versions", tag);
+    const rejections: unknown[] = [];
+    setManagedGrokSignatureRejectionReporter((event) => {
+      rejections.push(event);
+    });
+
+    try {
+      const runtime = await ensureManagedGrokRuntime({
+        arch: "arm64",
+        checkMode: "ttl",
+        fetch: vi.fn(async () => new Response("offline", { status: 503 })),
+        platform: "darwin",
+        probeVersion: async () => "grok 1.0.4-pwragent.2",
+        requirePlatformSignature: true,
+        rootDir,
+        verifyPlatformSignature: async () => {
+          throw new Error("signer mismatch");
+        },
+      });
+
+      expect(runtime).toBeUndefined();
+      expect(existsSync(versionRoot)).toBe(false);
+      expect(rejections).toEqual([
+        {
+          detail: expect.stringContaining("signer mismatch"),
+          directory: versionRoot,
+          occurredAt: expect.any(Number),
+          removed: true,
+          stage: "installed",
+          tag,
+        },
+      ]);
+    } finally {
+      setManagedGrokSignatureRejectionReporter(undefined);
+    }
+  });
+
+  // An ordinary failure must not delete an installed runtime: a missing
+  // probe or an unreadable file resolves by reinstalling, not by wiping a
+  // bundle that may still be the correct one.
+  it("keeps an installed copy when validation fails for another reason", async () => {
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v1.0.4-pwragent.2";
+    await writeManagedCache(rootDir, {
+      asset: "pwragent-grok-1.0.4-pwragent.2-macos-universal.tar.gz",
+      tag,
+    });
+    const versionRoot = path.join(rootDir, "versions", tag);
+    const rejections: unknown[] = [];
+    setManagedGrokSignatureRejectionReporter((event) => {
+      rejections.push(event);
+    });
+
+    try {
+      const runtime = await ensureManagedGrokRuntime({
+        arch: "arm64",
+        checkMode: "ttl",
+        fetch: vi.fn(async () => new Response("offline", { status: 503 })),
+        platform: "darwin",
+        probeVersion: async () => "unrecognized runtime banner",
+        requirePlatformSignature: true,
+        rootDir,
+        verifyPlatformSignature: async () => undefined,
+      });
+
+      expect(runtime).toBeUndefined();
+      expect(existsSync(versionRoot)).toBe(true);
+      expect(rejections).toEqual([]);
+    } finally {
+      setManagedGrokSignatureRejectionReporter(undefined);
+    }
   });
 
   it("replaces a same-tag cache built for another architecture", async () => {
