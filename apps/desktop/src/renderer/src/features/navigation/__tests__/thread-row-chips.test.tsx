@@ -388,6 +388,49 @@ describe("ThreadRow chip flow", () => {
     );
   });
 
+  it("pins a remote child rendered as a top-level row", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    renderRow({
+      thread: {
+        ...baseThread,
+        parentThreadId: "parent-on-another-instance",
+        parentThreadInstanceId: "parent-instance",
+        federation: {
+          instanceLabel: "Remote Mac",
+          ref: {
+            backend: "codex",
+            target: {
+              scope: "remote",
+              instanceId: "child-instance",
+            },
+            threadId: baseThread.id,
+          },
+        },
+      },
+      onSetThreadPin,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Pin thread" }));
+    expect(onSetThreadPin).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "thread-chips" }),
+      true,
+    );
+  });
+
+  it("keeps a visibly nested sub-thread out of the pinned section", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    renderRow({
+      nested: true,
+      thread: {
+        ...baseThread,
+        parentThreadId: "visible-parent",
+      },
+      onSetThreadPin,
+    });
+
+    expect(screen.queryByRole("button", { name: "Pin thread" })).toBeNull();
+  });
+
   it("does not invoke onSelectThread when the add-reaction smiley is clicked", () => {
     const { container, onSelectThread } = renderRow();
     const addReaction = container.querySelector(
