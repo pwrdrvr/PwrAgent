@@ -286,9 +286,7 @@ import {
   parseFederationSshEndpoint,
 } from "./federation-ssh";
 import { noiseKeyPairFromRawPrivate } from "./federation-noise";
-import {
-  resolveFederationReconnectMaxDelayMs,
-} from "./federation-reconnect-policy";
+import { federationReconnectDelayMs } from "./federation-reconnect-policy";
 
 const log = getMainLogger("pwragent:federation-runtime");
 const INSTANCE_ID_META_KEY = "federation_instance_id";
@@ -2845,10 +2843,7 @@ export class DesktopFederationRuntime {
       this.reconnectAttempt = 0;
     }
     this.lastConnectedAt = undefined;
-    const delayMs = Math.min(
-      1_000 * 2 ** this.reconnectAttempt,
-      resolveFederationReconnectMaxDelayMs(),
-    );
+    const delayMs = federationReconnectDelayMs(this.reconnectAttempt);
     this.reconnectAttempt += 1;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = undefined;

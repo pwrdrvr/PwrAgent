@@ -36,9 +36,6 @@ import {
   readE2eShutdownPhaseEvents,
 } from "../../src/main/e2e-shutdown-diagnostics";
 import {
-  E2E_FAST_FEDERATION_RECONNECT_ENV,
-} from "../../src/main/federation/federation-reconnect-policy";
-import {
   appendElectronShutdownSummary,
   assertElectronShutdownCircuitClosed,
   buildElectronShutdownSummary,
@@ -332,7 +329,6 @@ export async function launchElectronApp(
     HOME: homeRoot,
     NODE_ENV: "production",
     PWRAGENT_E2E: "1",
-    [E2E_FAST_FEDERATION_RECONNECT_ENV]: "1",
     PWRAGENT_CODEX_ENVIRONMENT_SETUP_TIMEOUT_MS: "15000",
     ...(params.fixturePath
       ? { PWRAGENT_REPLAY_FIXTURE_PATH: params.fixturePath }
