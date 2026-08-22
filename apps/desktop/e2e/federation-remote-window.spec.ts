@@ -858,6 +858,16 @@ test.describe("federation remote window", () => {
       process.platform !== "darwin",
       "The full process-restart lifecycle targets the macOS VM reproduction; cross-platform federation transport remains covered above.",
     );
+    const macOsProductVersion = process.platform === "darwin"
+      ? execFileSync("/usr/bin/sw_vers", ["-productVersion"], {
+          encoding: "utf8",
+        }).trim()
+      : undefined;
+    test.skip(
+      process.env.CI === "true"
+        && macOsProductVersion?.startsWith("26.6.") === true,
+      "macOS 26.6 CI guests hang both Playwright quit transports in this two-process lifecycle; retain coverage on other macOS versions and in the focused manual lab.",
+    );
     test.setTimeout(300_000);
 
     const fixtureRoot = await mkdtemp(

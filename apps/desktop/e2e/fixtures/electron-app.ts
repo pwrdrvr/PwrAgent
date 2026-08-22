@@ -206,7 +206,6 @@ type ElectronCloseOptions = {
   circuitStateFile?: string;
   diagnosticsFile?: string;
   launchId?: string;
-  requestQuit?: () => Promise<void>;
 };
 
 type LaunchElectronAppParams = {
@@ -474,22 +473,15 @@ async function finishElectronLaunch(args: {
     seedConfigPath,
     suppressOnboarding,
   } = args;
-  const window = await electronApp.firstWindow();
   const closeApplicationOnce = memoizeElectronClose(async () =>
     await closeElectronApplication(electronApp, {
       circuitEnabled,
       circuitStateFile,
       diagnosticsFile,
       launchId,
-      requestQuit: async () => {
-        await requestElectronQuitWithRendererFallback({
-          electronApp,
-          launchId,
-          window,
-        });
-      },
     }),
   );
+  const window = await electronApp.firstWindow();
 
   await waitForRendererReady({
     electronApp,
@@ -1089,9 +1081,15 @@ export async function closeElectronApplication(
   }
   const execution = await executeElectronClose({
     now: performance.now.bind(performance),
-    requestQuit: options.requestQuit ?? (async () => {
-      await requestElectronQuitThroughMainProcess(electronApp);
-    }),
+    requestQuit: async () => {
+      await withTimeout(
+        electronApp.evaluate(({ app }) => {
+          app.quit();
+        }),
+        ELECTRON_EVALUATE_QUIT_TIMEOUT_MS,
+        "Electron quit evaluation timed out",
+      );
+    },
     startClose: () => {
       const closePromise = electronApp.close();
       closePromise.catch(() => undefined);
@@ -1114,62 +1112,6 @@ export async function closeElectronApplication(
     },
   });
   return recordElectronCloseSummary(execution, options);
-}
-
-async function requestElectronQuitThroughMainProcess(
-  electronApp: ElectronApplication,
-): Promise<void> {
-  await withTimeout(
-    electronApp.evaluate(({ app }) => {
-      app.quit();
-    }),
-    ELECTRON_EVALUATE_QUIT_TIMEOUT_MS,
-    "Electron quit evaluation timed out",
-  );
-}
-
-export async function requestElectronQuitWithRendererFallback(params: {
-  electronApp: ElectronApplication;
-  launchId: string;
-  window: Page;
-}): Promise<void> {
-  try {
-    await requestElectronQuitThroughMainProcess(params.electronApp);
-    return;
-  } catch (error) {
-    console.warn(
-      `[pwragent-e2e-shutdown] ${JSON.stringify({
-        schemaVersion: 1,
-        kind: "quit-fallback",
-        launchId: params.launchId,
-        reason: error instanceof Error
-          && error.message === "Electron quit evaluation timed out"
-          ? "main-process-evaluation-timeout"
-          : "main-process-evaluation-rejected",
-        route: "renderer-ipc",
-      })}`,
-    );
-  }
-
-  // The two-app federation lifecycle on macOS 26.6.1 can leave a live,
-  // interactive renderer while Playwright's Electron main-process evaluation
-  // channel rejects every request. Use the existing production quit IPC as a
-  // second transport before teardown reaches for SIGKILL. The page callback
-  // deliberately does not await quitApp(): a successful app.quit() destroys
-  // the renderer before its IPC promise can settle.
-  await withTimeout(
-    params.window.evaluate(() => {
-      const api = (window as typeof window & {
-        pwragent?: { quitApp?: () => Promise<void> };
-      }).pwragent;
-      if (!api?.quitApp) {
-        throw new Error("Renderer quit API is unavailable");
-      }
-      void api.quitApp().catch(() => undefined);
-    }),
-    ELECTRON_EVALUATE_QUIT_TIMEOUT_MS,
-    "Electron renderer quit evaluation timed out",
-  );
 }
 
 function alreadyExitedCloseExecution(): ElectronCloseExecution {
