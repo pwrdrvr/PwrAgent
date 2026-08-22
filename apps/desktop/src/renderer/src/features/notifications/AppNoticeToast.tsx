@@ -186,10 +186,7 @@ export function AppNoticeToast(props: {
         </div>
       ) : null}
       {props.navigation ? (
-        <nav
-          className="app-notice-toast__navigation"
-          aria-label="Durable notices"
-        >
+        <div className="app-notice-toast__footer">
           <span className="app-notice-toast__position">
             {props.navigation.current} of {props.navigation.total}
           </span>
@@ -207,25 +204,30 @@ export function AppNoticeToast(props: {
               ))}
             </div>
           ) : null}
-          <button
-            className="app-notice-toast__icon-button"
-            type="button"
-            aria-label="Previous notice"
-            disabled={!props.navigation.onPrevious}
-            onClick={props.navigation.onPrevious}
+          <nav
+            className="app-notice-toast__navigation"
+            aria-label="Durable notices"
           >
-            <ChevronLeftIcon size={14} aria-hidden="true" />
-          </button>
-          <button
-            className="app-notice-toast__icon-button"
-            type="button"
-            aria-label="Next notice"
-            disabled={!props.navigation.onNext}
-            onClick={props.navigation.onNext}
-          >
-            <ChevronRightIcon size={14} aria-hidden="true" />
-          </button>
-        </nav>
+            <button
+              className="app-notice-toast__icon-button"
+              type="button"
+              aria-label="Previous notice"
+              disabled={!props.navigation.onPrevious}
+              onClick={props.navigation.onPrevious}
+            >
+              <ChevronLeftIcon size={14} aria-hidden="true" />
+            </button>
+            <button
+              className="app-notice-toast__icon-button"
+              type="button"
+              aria-label="Next notice"
+              disabled={!props.navigation.onNext}
+              onClick={props.navigation.onNext}
+            >
+              <ChevronRightIcon size={14} aria-hidden="true" />
+            </button>
+          </nav>
+        </div>
       ) : null}
       {autoDismiss ? (
         <span

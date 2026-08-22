@@ -269,7 +269,7 @@ describe("AppNoticeToast", () => {
     expect(onDismiss).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps operator actions in the existing durable-navigation row", () => {
+  it("keeps durable actions in the footer but outside navigation", () => {
     const onExamine = vi.fn();
     const onMute = vi.fn();
     const { container } = render(
@@ -298,16 +298,36 @@ describe("AppNoticeToast", () => {
     const navigation = screen.getByRole("navigation", {
       name: "Durable notices",
     });
-    const actionGroup = navigation.querySelector<HTMLElement>(
+    const footer = container.querySelector<HTMLElement>(
+      ".app-notice-toast__footer",
+    );
+    const actionGroup = footer?.querySelector<HTMLElement>(
       ".app-notice-toast__custom-actions",
     );
+    const examineButton = screen.getByRole("button", {
+      name: "Examine 20 cases",
+    });
+    const muteButton = screen.getByRole("button", {
+      name: "Don't warn again",
+    });
+
+    expect(footer).toBeInTheDocument();
     expect(actionGroup).toBeInTheDocument();
+    expect(navigation).not.toContainElement(actionGroup);
+    expect(navigation).not.toContainElement(examineButton);
+    expect(navigation).not.toContainElement(muteButton);
+    expect(navigation).toContainElement(
+      screen.getByRole("button", { name: "Previous notice" }),
+    );
+    expect(navigation).toContainElement(
+      screen.getByRole("button", { name: "Next notice" }),
+    );
     expect(container.querySelector(
       ".app-notice-toast > .app-notice-toast__custom-actions",
     )).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: "Examine 20 cases" }));
-    fireEvent.click(screen.getByRole("button", { name: "Don't warn again" }));
+    fireEvent.click(examineButton);
+    fireEvent.click(muteButton);
     expect(onExamine).toHaveBeenCalledTimes(1);
     expect(onMute).toHaveBeenCalledTimes(1);
   });
