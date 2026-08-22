@@ -286,6 +286,9 @@ import {
   parseFederationSshEndpoint,
 } from "./federation-ssh";
 import { noiseKeyPairFromRawPrivate } from "./federation-noise";
+import {
+  resolveFederationReconnectMaxDelayMs,
+} from "./federation-reconnect-policy";
 
 const log = getMainLogger("pwragent:federation-runtime");
 const INSTANCE_ID_META_KEY = "federation_instance_id";
@@ -308,7 +311,6 @@ const CELESTIAL_ICON_ASSIGNMENTS_META_KEY =
  * removal; after that the entry is pure bloat and gets deleted locally.
  */
 const CELESTIAL_TOMBSTONE_TTL_MS = 7 * 24 * 60 * 60_000;
-const FEDERATION_RECONNECT_MAX_DELAY_MS = 30_000;
 const DUPLICATE_IDENTITY_NOTE_TTL_MS = 5 * 60_000;
 /** A session must last this long before it counts as stable enough to reset backoff. */
 const FEDERATION_STABLE_SESSION_MS = 60_000;
@@ -2845,7 +2847,7 @@ export class DesktopFederationRuntime {
     this.lastConnectedAt = undefined;
     const delayMs = Math.min(
       1_000 * 2 ** this.reconnectAttempt,
-      FEDERATION_RECONNECT_MAX_DELAY_MS,
+      resolveFederationReconnectMaxDelayMs(),
     );
     this.reconnectAttempt += 1;
     this.reconnectTimer = setTimeout(() => {
