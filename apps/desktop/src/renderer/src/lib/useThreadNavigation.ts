@@ -165,6 +165,11 @@ type ThreadStatusObservation = {
   threadStatus: AppServerThreadStatus;
 };
 
+type FederationPeerStatusObservation = {
+  sequence: number;
+  status: FederationPeerSummary["status"];
+};
+
 type ThreadNameObservation = {
   threadName: string;
 };
@@ -1037,6 +1042,55 @@ function applyConcurrentThreadStatusObservations(
     };
   });
   return changed ? { ...snapshot, threads } : snapshot;
+}
+
+function applyFederationPeerStatusUpdate(
+  snapshot: NavigationSnapshot | undefined,
+  instanceId: string,
+  status: FederationPeerSummary["status"],
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (
+      !thread.federation
+      || !isRemoteFederationTarget(thread.federation.ref.target)
+      || thread.federation.ref.target.instanceId !== instanceId
+      || thread.federation.peerStatus === status
+    ) {
+      return thread;
+    }
+    changed = true;
+    return {
+      ...thread,
+      federation: {
+        ...thread.federation,
+        peerStatus: status,
+      },
+    };
+  });
+  return changed ? { ...snapshot, threads } : snapshot;
+}
+
+function applyConcurrentFederationPeerStatusObservations(
+  snapshot: NavigationSnapshot,
+  observations: ReadonlyMap<string, FederationPeerStatusObservation>,
+  sequenceAtRefreshStart: number,
+): NavigationSnapshot {
+  let next = snapshot;
+  for (const [instanceId, observation] of observations) {
+    if (observation.sequence <= sequenceAtRefreshStart) {
+      continue;
+    }
+    next = applyFederationPeerStatusUpdate(
+      next,
+      instanceId,
+      observation.status,
+    ) ?? next;
+  }
+  return next;
 }
 
 function applyObservedThreadNames(
@@ -3227,6 +3281,10 @@ export function useThreadNavigation(
   const threadStatusObservationsRef = useRef(
     new Map<string, ThreadStatusObservation>(),
   );
+  const federationPeerStatusObservationSequenceRef = useRef(0);
+  const federationPeerStatusObservationsRef = useRef(
+    new Map<string, FederationPeerStatusObservation>(),
+  );
   // A newly-created thread can be named by the helper before the materialize
   // IPC response gives the renderer an optimistic row to update. Retain the
   // authoritative event so that response and a stale first refresh cannot
@@ -3356,6 +3414,8 @@ export function useThreadNavigation(
             : undefined;
         const threadStatusSequenceAtRefreshStart =
           threadStatusObservationSequenceRef.current;
+        const federationPeerStatusSequenceAtRefreshStart =
+          federationPeerStatusObservationSequenceRef.current;
         let snapshot: NavigationSnapshot;
         let transportKind:
           | "changes"
@@ -3480,12 +3540,16 @@ export function useThreadNavigation(
 
           const responseWithConcurrentThreadStatuses =
             applyConcurrentThreadStatusObservations(
-              deferredForNativeDrag
-                ? preserveNavigationPinState(
-                    current.response,
-                    responseWithObservedThreadNames,
-                  )
-                : responseWithObservedThreadNames,
+              applyConcurrentFederationPeerStatusObservations(
+                deferredForNativeDrag
+                  ? preserveNavigationPinState(
+                      current.response,
+                      responseWithObservedThreadNames,
+                    )
+                  : responseWithObservedThreadNames,
+                federationPeerStatusObservationsRef.current,
+                federationPeerStatusSequenceAtRefreshStart,
+              ),
               threadStatusObservationsRef.current,
               threadStatusSequenceAtRefreshStart,
             );
@@ -3957,7 +4021,23 @@ export function useThreadNavigation(
           instanceId: string;
           status: string;
         };
+        const status = params.status as FederationPeerSummary["status"];
+        const observationSequence =
+          federationPeerStatusObservationSequenceRef.current + 1;
+        federationPeerStatusObservationSequenceRef.current = observationSequence;
+        federationPeerStatusObservationsRef.current.set(params.instanceId, {
+          sequence: observationSequence,
+          status,
+        });
         markNavigationActivity({ refreshOnIdleResume: false });
+        setState((current) => ({
+          ...current,
+          response: applyFederationPeerStatusUpdate(
+            current.response,
+            params.instanceId,
+            status,
+          ),
+        }));
         if (params.status === "connected") {
           scheduleRefresh(undefined, undefined, false, {
             forceRefresh: true,
@@ -3965,31 +4045,6 @@ export function useThreadNavigation(
           });
           return;
         }
-        setState((current) => ({
-          ...current,
-          // Patch only the affected pinned rows. Unlike the federation
-          // window, no window-level error is raised: the rest of the list
-          // is local and healthy.
-          response: current.response
-            ? {
-                ...current.response,
-                threads: current.response.threads.map((thread) =>
-                  thread.federation &&
-                  isRemoteFederationTarget(thread.federation.ref.target) &&
-                  thread.federation.ref.target.instanceId === params.instanceId
-                    ? {
-                        ...thread,
-                        federation: {
-                          ...thread.federation,
-                          peerStatus:
-                            params.status as FederationPeerSummary["status"],
-                        },
-                      }
-                    : thread,
-                ),
-              }
-            : current.response,
-        }));
         return;
       }
 
@@ -4007,8 +4062,24 @@ export function useThreadNavigation(
           status: string;
           unavailableReason?: string;
         };
+        const status = params.status as FederationPeerSummary["status"];
+        const observationSequence =
+          federationPeerStatusObservationSequenceRef.current + 1;
+        federationPeerStatusObservationSequenceRef.current = observationSequence;
+        federationPeerStatusObservationsRef.current.set(params.instanceId, {
+          sequence: observationSequence,
+          status,
+        });
         if (params.status === "connected") {
           remotePeerDisconnectedRef.current = false;
+          setState((current) => ({
+            ...current,
+            response: applyFederationPeerStatusUpdate(
+              current.response,
+              params.instanceId,
+              status,
+            ),
+          }));
           scheduleRefresh(undefined, undefined, false, {
             forceRefresh: true,
             refreshMode: "full",
@@ -4021,25 +4092,11 @@ export function useThreadNavigation(
           // Patch the live peer status onto the affected rows so surfaces
           // keyed off it (the remote terminal toggle) disable immediately
           // instead of waiting for the next snapshot refresh.
-          response: current.response
-            ? {
-                ...current.response,
-                threads: current.response.threads.map((thread) =>
-                  thread.federation &&
-                  isRemoteFederationTarget(thread.federation.ref.target) &&
-                  thread.federation.ref.target.instanceId === params.instanceId
-                    ? {
-                        ...thread,
-                        federation: {
-                          ...thread.federation,
-                          peerStatus:
-                            params.status as FederationPeerSummary["status"],
-                        },
-                      }
-                    : thread,
-                ),
-              }
-            : current.response,
+          response: applyFederationPeerStatusUpdate(
+            current.response,
+            params.instanceId,
+            status,
+          ),
           loading: false,
           refreshing: false,
           error: params.unavailableReason ??
