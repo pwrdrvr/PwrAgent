@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AppMetadata } from "../app-metadata";
 import {
   buildLocalThreadDiagnosticsInfo,
+  buildStarMapDiagnosticsInfo,
   buildTroubleshootingDiagnosticsInfo,
 } from "../local-diagnostics-info";
 
@@ -22,6 +23,35 @@ const metadata: AppMetadata = {
 };
 
 describe("local diagnostics info", () => {
+  it("captures the Star Map intake target when no thread exists yet", () => {
+    expect(
+      buildStarMapDiagnosticsInfo(
+        {
+          intakeTarget: {
+            instanceId: "peer-harold-mbp-2018",
+            label: "Harold-MBP-2018",
+            federationTarget: {
+              scope: "remote",
+              instanceId: "peer-harold-mbp-2018",
+            },
+          },
+        },
+        metadata,
+      ),
+    ).toBe([
+      "Surface: Federation Star Map",
+      "Thread creation state: Intake open; no thread created yet",
+      "Target instance ID: peer-harold-mbp-2018",
+      "Target instance label: Harold-MBP-2018",
+      "Federation routing target: remote:peer-harold-mbp-2018",
+      "PwrAgent profile: personal",
+      "Main process PID: 4100",
+      "Renderer process PID: 4101",
+      "PwrAgent log path: /Users/operator/Library/Logs/PwrAgent/profile-personal.main.log",
+      "Codex profile path: /Users/operator/.codex/profiles/personal",
+    ].join("\n"));
+  });
+
   it("keeps local thread diagnostics focused on the thread and support paths", () => {
     expect(
       buildLocalThreadDiagnosticsInfo(

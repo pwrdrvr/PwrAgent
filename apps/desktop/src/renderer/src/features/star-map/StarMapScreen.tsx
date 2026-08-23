@@ -155,6 +155,7 @@ import {
 } from "./star-map-edge-arrows";
 import { useStarMapCameraKeys } from "./useStarMapCameraKeys";
 import { StarMapInstanceCard } from "./StarMapInstanceCard";
+import { StarMapDiagnosticsListener } from "./StarMapDiagnosticsListener";
 import {
   StarMapLoadCard,
   STAR_MAP_LOAD_CARD_HEIGHT,
@@ -4641,6 +4642,10 @@ export function StarMapScreen(props: StarMapScreenProps) {
         }
       }}
     >
+      <StarMapDiagnosticsListener
+        desktopApi={props.desktopApi}
+        intakeTarget={intakeTarget}
+      />
       <div
         ref={viewportRef}
         className="star-map__viewport"

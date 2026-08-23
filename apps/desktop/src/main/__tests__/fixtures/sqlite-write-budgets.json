@@ -125,6 +125,13 @@
     "rowsChanged": 8,
     "statements": 8
   },
+  "star-map-intake-launchpad-initialization": {
+    "commits": 2,
+    "note": "initialize one missing directory launchpad for its first Star Map intake",
+    "observedWalBytes": 16480,
+    "rowsChanged": 6,
+    "statements": 7
+  },
   "star-map-workspace-gesture": {
     "commits": 1,
     "note": "one coalesced Star Map open/close/move/resize/toggle or camera gesture, feature-pinned to one API call and persisted as one atomic workspace row",
