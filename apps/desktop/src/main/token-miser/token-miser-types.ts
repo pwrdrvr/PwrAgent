@@ -25,6 +25,13 @@ const TOKEN_MISER_CODE_MODE_ACCEPTANCE_KEYS = new Set([
   "call_id",
   "cell_id",
 ]);
+const TOKEN_MISER_POST_TOOL_USE_ACCEPTANCE_KEYS = new Set([
+  "version",
+  "response_id",
+  "session_id",
+  "turn_id",
+  "tool_use_id",
+]);
 
 export type TokenMiserPostToolUsePayload = {
   session_id: string;
@@ -32,8 +39,14 @@ export type TokenMiserPostToolUsePayload = {
   hook_event_name: "PostToolUse";
   tool_name: string;
   tool_use_id: string;
-  /** True only for a nested tool call whose result stays inside Code Mode. */
-  is_code_mode_nested?: boolean;
+  /**
+   * True for a result consumed inside Code Mode; false for a result that the
+   * direct PostToolUse hook can replace. Older Codex builds omit this marker,
+   * so its presence is the protocol opt-in that makes direct gating safe.
+   */
+  is_code_mode_nested: boolean;
+  /** Present only when the fork will acknowledge a selected replacement. */
+  token_miser_acceptance_version: 2;
   tool_input?: unknown;
   tool_response: unknown;
 };
@@ -94,6 +107,8 @@ export type TokenMiserHookOutput = {
   hookSpecificOutput: {
     hookEventName: "PostToolUse";
     additionalContext?: string;
+    /** Opaque fork acknowledgement id; ignored by unsupported Codex builds. */
+    response_id?: string;
   };
 };
 
@@ -140,6 +155,19 @@ export type TokenMiserCodeModeAcceptancePayload = {
   cell_id: string;
 };
 
+/**
+ * The Codex fork sends this only after selecting the hook replacement as the
+ * model-visible result. PwrAgent does not publish a direct-hook gate before
+ * this acknowledgement.
+ */
+export type TokenMiserPostToolUseAcceptancePayload = {
+  version: 2;
+  response_id: string;
+  session_id: string;
+  turn_id: string;
+  tool_use_id: string;
+};
+
 export function estimateTokenCount(characters: number): number {
   return Math.ceil(
     Math.max(0, characters) / TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
@@ -177,10 +205,8 @@ export function isTokenMiserPostToolUsePayload(
     && record.tool_name.length > 0
     && typeof record.tool_use_id === "string"
     && record.tool_use_id.length > 0
-    && (
-      record.is_code_mode_nested === undefined
-      || typeof record.is_code_mode_nested === "boolean"
-    )
+    && typeof record.is_code_mode_nested === "boolean"
+    && record.token_miser_acceptance_version === 2
     && Object.prototype.hasOwnProperty.call(record, "tool_response")
   );
 }
@@ -224,6 +250,23 @@ export function isTokenMiserCodeModeAcceptancePayload(
     && isNonEmptyString(record.turn_id)
     && isNonEmptyString(record.call_id)
     && isNonEmptyString(record.cell_id)
+  );
+}
+
+export function isTokenMiserPostToolUseAcceptancePayload(
+  value: unknown,
+): value is TokenMiserPostToolUseAcceptancePayload {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    hasOnlyKeys(record, TOKEN_MISER_POST_TOOL_USE_ACCEPTANCE_KEYS)
+    && record.version === 2
+    && isNonEmptyString(record.response_id)
+    && isNonEmptyString(record.session_id)
+    && isNonEmptyString(record.turn_id)
+    && isNonEmptyString(record.tool_use_id)
   );
 }
 

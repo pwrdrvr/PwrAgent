@@ -1,10 +1,11 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import path from "node:path";
 import { request } from "node:http";
 
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 55_000;
+const TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV =
+  "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH";
 
 type BridgeDescriptor = {
   version: 1;
@@ -21,6 +22,10 @@ async function main(): Promise<void> {
     }
     const hookOutput = await postHookPayload(descriptor, rawHookPayload);
     if (hookOutput) {
+      // A successful write is not acceptance: Codex parses and selects the
+      // replacement only after this subprocess exits. The supporting fork
+      // acknowledges hookSpecificOutput.response_id through the reducer
+      // descriptor after selection; this relay must never publish it early.
       writeFileSync(1, `${JSON.stringify(hookOutput)}\n`);
     }
   } catch {
@@ -30,9 +35,18 @@ async function main(): Promise<void> {
 }
 
 function readDescriptor(): BridgeDescriptor | undefined {
-  const descriptorPath = process.argv[2]?.trim() || defaultDescriptorPath();
+  const inheritedPath = process.env[TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV]?.trim();
+  const commandPath = process.argv[2]?.trim();
+  if (
+    !inheritedPath
+    || !commandPath
+    || !path.isAbsolute(inheritedPath)
+    || path.resolve(commandPath) !== path.resolve(inheritedPath)
+  ) {
+    return undefined;
+  }
   try {
-    const value = JSON.parse(readFileSync(descriptorPath, "utf8")) as BridgeDescriptor;
+    const value = JSON.parse(readFileSync(inheritedPath, "utf8")) as BridgeDescriptor;
     return (
       value?.version === 1
       && typeof value.url === "string"
@@ -45,20 +59,6 @@ function readDescriptor(): BridgeDescriptor | undefined {
   } catch {
     return undefined;
   }
-}
-
-function defaultDescriptorPath(): string {
-  const root = process.env.PWRAGENT_HOME?.trim()
-    || path.join(homedir(), ".pwragent");
-  const profile = process.env.PWRAGENT_PROFILE?.trim() || "default";
-  return path.join(
-    root,
-    "profiles",
-    profile,
-    "state",
-    "token-miser",
-    "bridge.json",
-  );
 }
 
 function readStdin(): Promise<string> {

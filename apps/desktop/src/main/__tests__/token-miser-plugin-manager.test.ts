@@ -56,6 +56,9 @@ describe("TokenMiserPluginManager", () => {
     expect(hooks.hooks.PostToolUse[0].hooks[0].command).toContain(
       "ELECTRON_RUN_AS_NODE=1",
     );
+    expect(hooks.hooks.PostToolUse[0].hooks[0].command).toContain(
+      '"$PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH"',
+    );
     expect(marketplace.name).toBe("pwragent-local-default");
     expect(marketplace.plugins[0].source.path).toBe(
       "./plugins/pwragent-token-miser",
@@ -65,20 +68,25 @@ describe("TokenMiserPluginManager", () => {
   it("quotes Windows and POSIX hook commands", () => {
     expect(
       buildHookCommand({
-        descriptorPath: "/tmp/profile's bridge.json",
         executablePath: "/Applications/Pwr Agent",
         hookEntryPath: "/tmp/hook.js",
         platform: "darwin",
       }),
-    ).toContain("'/tmp/profile'\"'\"'s bridge.json'");
+    ).toBe(
+      "ELECTRON_RUN_AS_NODE=1 '/Applications/Pwr Agent' '/tmp/hook.js' "
+      + '"$PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH"',
+    );
     expect(
       buildHookCommand({
-        descriptorPath: "C:\\Pwr Agent\\bridge.json",
         executablePath: "C:\\Pwr Agent\\PwrAgent.exe",
         hookEntryPath: "C:\\Pwr Agent\\hook.js",
         platform: "win32",
       }),
-    ).toContain('set "ELECTRON_RUN_AS_NODE=1"');
+    ).toBe(
+      'set "ELECTRON_RUN_AS_NODE=1" && "C:\\Pwr Agent\\PwrAgent.exe"'
+      + ' "C:\\Pwr Agent\\hook.js"'
+      + ' "%PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH%"',
+    );
   });
 
   it("registers and installs the plugin in the active Codex profile once", async () => {

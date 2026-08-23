@@ -74,6 +74,12 @@ export type TokenMiserPreparedCodeModeReduction = {
   staged: TokenMiserStagedObject;
 };
 
+export type TokenMiserPreparedPostToolUseReduction = {
+  hookOutput: TokenMiserHookOutput;
+  responseId: string;
+  staged: TokenMiserStagedObject;
+};
+
 export type TokenMiserServiceOptions = {
   store: TokenMiserStore;
   isEnabled: () => boolean;
@@ -117,14 +123,19 @@ export class TokenMiserService {
     this.summaryTimeoutMs = options.summaryTimeoutMs ?? 45_000;
   }
 
-  async handlePostToolUse(
+  /** Prepare a direct-hook replacement; only the bridge's v2 ack may commit it. */
+  async preparePostToolUse(
     payload: TokenMiserPostToolUsePayload,
-  ): Promise<TokenMiserHookOutput | undefined> {
-    // A nested Code Mode result is consumed by the running script, not the
-    // parent model. The v2 reducer independently gates the script's eventual
-    // model-visible result, so launching a helper here would charge twice and
-    // publish savings for a replacement Codex deliberately ignores.
-    if (payload.is_code_mode_nested === true) {
+    options: { signal?: AbortSignal } = {},
+  ): Promise<TokenMiserPreparedPostToolUseReduction | undefined> {
+    // This explicit false is the fork's protocol opt-in. A true marker is a
+    // nested result consumed by Code Mode, while a missing marker comes from
+    // an unsupported stock Codex whose handling of this replacement is not
+    // trustworthy enough to publish savings for it.
+    if (
+      payload.is_code_mode_nested !== false
+      || payload.token_miser_acceptance_version !== 2
+    ) {
       return undefined;
     }
     // A per-thread override wins over the global setting in both directions:
@@ -138,24 +149,30 @@ export class TokenMiserService {
       return undefined;
     }
 
-    const replacement = await this.summarizeAndStore({
+    const prepared = await this.summarizeAndStage({
       threadId: payload.session_id,
       turnId: payload.turn_id,
       toolUseId: payload.tool_use_id,
       toolName: payload.tool_name,
       output,
       prompt: buildSummaryPrompt(payload, output),
+      signal: options.signal,
     });
-    if (!replacement) {
+    if (!prepared) {
       return undefined;
     }
 
     return {
-      continue: false,
-      stopReason: replacement,
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse",
+      hookOutput: {
+        continue: false,
+        stopReason: prepared.replacement,
+        hookSpecificOutput: {
+          hookEventName: "PostToolUse",
+          response_id: prepared.staged.metadata.objectId,
+        },
       },
+      responseId: prepared.staged.metadata.objectId,
+      staged: prepared.staged,
     };
   }
 
@@ -214,25 +231,6 @@ export class TokenMiserService {
       ?.(threadId)
       .catch(() => undefined);
     return threadOverride ?? this.options.isEnabled();
-  }
-
-  private async summarizeAndStore(params: {
-    threadId: string;
-    turnId: string;
-    toolUseId: string;
-    toolName: string;
-    output: string;
-    prompt: string;
-    signal?: AbortSignal;
-    baselineParentTokenCap?: number;
-    replacementCharacters?: (replacement: string) => number;
-  }): Promise<string | undefined> {
-    const prepared = await this.summarizeAndStage(params);
-    if (!prepared) {
-      return undefined;
-    }
-    await prepared.staged.commit();
-    return prepared.replacement;
   }
 
   private async summarizeAndStage(params: {

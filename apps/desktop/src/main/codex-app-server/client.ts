@@ -289,6 +289,7 @@ type InitializeResult = Partial<CodexInitializeResponse>;
 
 export type CodexServerCapabilities = {
   codeModeOutputReducer?: {
+    dynamicToolsResumeField?: "dynamicTools";
     protocolVersion?: number;
   };
 };
@@ -324,9 +325,10 @@ type CodexThreadStartPayload = Omit<
 
 type CodexThreadResumePayload = Omit<
   CodexThreadResumeParams,
-  "approvalPolicy"
+  "approvalPolicy" | "dynamicTools"
 > & {
   approvalPolicy?: CompatibleApprovalPolicy;
+  dynamicTools?: CompatibleDynamicToolSpec[] | null;
   persistExtendedHistory?: boolean;
 };
 
@@ -6459,6 +6461,7 @@ function buildThreadResumePayloads(params: {
   config?: CodexThreadResumeParams["config"];
   defaultModeRequestUserInput?: boolean;
   bundledToolsDirectory?: string;
+  dynamicTools?: CodexDynamicToolSpec[];
 }, compatibility: CodexProtocolCompatibility): CodexThreadResumePayload[] {
   const base: CodexThreadResumePayload = {
     threadId: params.threadId,
@@ -6502,6 +6505,12 @@ function buildThreadResumePayloads(params: {
   );
   if (config) {
     base.config = config;
+  }
+  if (params.dynamicTools) {
+    base.dynamicTools = serializeCompatibleDynamicTools(
+      params.dynamicTools,
+      compatibility,
+    );
   }
 
   return [base];
@@ -7258,10 +7267,17 @@ export class CodexAppServerClient {
     );
     const outputReducer = asRecord(result?.codeModeOutputReducer);
     const protocolVersion = outputReducer?.protocolVersion;
+    const dynamicToolsResumeField =
+      outputReducer?.dynamicToolsResumeField === "dynamicTools"
+        ? "dynamicTools"
+        : undefined;
 
     return typeof protocolVersion === "number"
       ? {
           codeModeOutputReducer: {
+            ...(dynamicToolsResumeField
+              ? { dynamicToolsResumeField }
+              : {}),
             protocolVersion,
           },
         }
@@ -8168,6 +8184,7 @@ export class CodexAppServerClient {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadResumeParams["config"];
     defaultModeRequestUserInput?: boolean;
+    dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{
     threadId: string;
     turnId: string;
@@ -8177,13 +8194,16 @@ export class CodexAppServerClient {
     const pendingFirstTurnResult = this.pendingFirstTurnThreadResults.get(params.threadId);
     // thread/resume primes the per-thread permission profile in codex
     // before later turn/start calls. A just-created thread has no rollout
-    // yet, so resume is guaranteed to be too early; turn/start already
-    // carries the permission/model overrides needed for the first turn.
-    // Dynamic tools are intentionally absent here: Codex accepts them only
-    // on thread/start and restores that persisted catalog on thread/resume.
-    const resumeResult =
-      pendingFirstTurnResult ??
-      (await requestWithFallbacks({
+    // yet, so stock Codex cannot resume it before the first turn. The
+    // PwrAgent fork explicitly advertises a dynamic-tools resume extension
+    // that supports this no-rollout refresh. The registry passes a complete
+    // replacement catalog only after negotiating that exact capability.
+    const refreshPendingFirstTurn =
+      pendingFirstTurnResult !== undefined
+      && params.dynamicTools !== undefined;
+    let resumeResult = pendingFirstTurnResult;
+    if (!pendingFirstTurnResult || refreshPendingFirstTurn) {
+      const resume = requestWithFallbacks({
         client: this.connection,
         methods: ["thread/resume"],
         payloads: buildThreadResumePayloads(
@@ -8200,19 +8220,24 @@ export class CodexAppServerClient {
             config: params.config,
             defaultModeRequestUserInput: params.defaultModeRequestUserInput,
             bundledToolsDirectory: this.options.bundledToolsDirectory,
+            dynamicTools: params.dynamicTools,
           },
           this.getProtocolCompatibility(),
         ),
-        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-      }).catch((error: unknown) => {
-        codexClientLog.warn("thread/resume failed before turn/start", {
-          threadId: params.threadId,
-          requestedApprovalPolicy: params.approvalPolicy ?? null,
-          requestedSandbox: params.sandbox ?? null,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return undefined;
-      }));
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+      resumeResult = params.dynamicTools !== undefined
+        ? await resume
+        : await resume.catch((error: unknown) => {
+            codexClientLog.warn("thread/resume failed before turn/start", {
+              threadId: params.threadId,
+              requestedApprovalPolicy: params.approvalPolicy ?? null,
+              requestedSandbox: params.sandbox ?? null,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return undefined;
+          });
+    }
 
     const codexInput = await prepareCodexUserInput({
       input: params.input,
@@ -8575,11 +8600,15 @@ export class CodexAppServerClient {
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadStartParams["config"];
+    dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     await this.ensureInitialized();
 
-    if (!this.pendingFirstTurnThreadResults.has(params.threadId)) {
-      await requestWithFallbacks({
+    const pendingFirstTurn = this.pendingFirstTurnThreadResults.has(
+      params.threadId,
+    );
+    if (!pendingFirstTurn || params.dynamicTools !== undefined) {
+      const resume = requestWithFallbacks({
         client: this.connection,
         methods: ["thread/resume"],
         payloads: buildThreadResumePayloads(
@@ -8593,11 +8622,17 @@ export class CodexAppServerClient {
             codexEnvironmentRuntime: params.codexEnvironmentRuntime,
             config: params.config,
             bundledToolsDirectory: this.options.bundledToolsDirectory,
+            dynamicTools: params.dynamicTools,
           },
           this.getProtocolCompatibility(),
         ),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      }).catch(() => undefined);
+      });
+      if (params.dynamicTools !== undefined) {
+        await resume;
+      } else {
+        await resume.catch(() => undefined);
+      }
     }
 
     const settingsPayload = buildThreadSettingsUpdatePayload({

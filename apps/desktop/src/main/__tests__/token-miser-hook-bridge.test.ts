@@ -12,20 +12,33 @@ afterEach(async () => {
 });
 
 describe("TokenMiserHookBridge", () => {
-  it("requires its bearer token and returns a replacement to an authorized hook", async () => {
+  it("derives both descriptor paths from the owning process instance", () => {
+    const bridge = new TokenMiserHookBridge({
+      stateDir: "/tmp/pwragent-token-miser",
+      service: {} as TokenMiserService,
+      instanceId: "process-a",
+    });
+
+    expect(bridge.bridgeDescriptorPath).toBe(
+      path.join("/tmp/pwragent-token-miser", "bridge.process-a.json"),
+    );
+    expect(bridge.codeModeReducerDescriptorPath).toBe(
+      path.join(
+        "/tmp/pwragent-token-miser",
+        "code-mode-reducer.process-a.json",
+      ),
+    );
+  });
+
+  it("stages an authorized direct replacement and commits only after fork acceptance", async () => {
     const stateDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "pwragent-token-miser-bridge-"),
     );
-    const handlePostToolUse = vi.fn(async () => ({
-      continue: false as const,
-      stopReason: "replacement",
-      hookSpecificOutput: {
-        hookEventName: "PostToolUse" as const,
-      },
-    }));
+    const staged = stagedPostToolUse("replacement", "direct-response-1");
+    const preparePostToolUse = vi.fn(async () => staged.prepared);
     const bridge = new TokenMiserHookBridge({
       stateDir,
-      service: { handlePostToolUse } as unknown as TokenMiserService,
+      service: { preparePostToolUse } as unknown as TokenMiserService,
     });
     cleanups.push(async () => {
       await bridge.close();
@@ -51,12 +64,28 @@ describe("TokenMiserHookBridge", () => {
         stopReason: "replacement",
         hookSpecificOutput: {
           hookEventName: "PostToolUse",
+          response_id: "direct-response-1",
         },
       },
     });
-    expect(handlePostToolUse).toHaveBeenCalledOnce();
+    expect(preparePostToolUse).toHaveBeenCalledWith(
+      payload(),
+      { signal: expect.any(AbortSignal) },
+    );
+    expect(staged.persist).toHaveBeenCalledOnce();
+    expect(staged.commit).not.toHaveBeenCalled();
 
-    const descriptorStats = await fs.stat(path.join(stateDir, "bridge.json"));
+    const reducerDescriptor = await readCodeModeDescriptor(bridge);
+    const accepted = await postAcceptance(
+      reducerDescriptor,
+      directAcceptancePayload("direct-response-1"),
+    );
+    expect(accepted.status).toBe(200);
+    expect(await accepted.json()).toEqual({ accepted: true });
+    expect(staged.commit).toHaveBeenCalledOnce();
+    expect(staged.discard).not.toHaveBeenCalled();
+
+    const descriptorStats = await fs.stat(bridge.bridgeDescriptorPath);
     // The descriptor carries the bridge's bearer token, so it is written 0o600.
     // Windows does not map POSIX mode bits onto NTFS ACLs — Node reports 0o666
     // whatever mode was requested — so this assertion can only hold off win32.
@@ -65,6 +94,109 @@ describe("TokenMiserHookBridge", () => {
     if (process.platform !== "win32") {
       expect(descriptorStats.mode & 0o077).toBe(0);
     }
+  });
+
+  it("skips nested and rejects unversioned direct results before the gate", async () => {
+    const stateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-token-miser-direct-marker-"),
+    );
+    const preparePostToolUse = vi.fn();
+    const bridge = new TokenMiserHookBridge({
+      stateDir,
+      service: { preparePostToolUse } as unknown as TokenMiserService,
+    });
+    cleanups.push(async () => {
+      await bridge.close();
+      await fs.rm(stateDir, { force: true, recursive: true });
+    });
+    const descriptor = await bridge.start();
+
+    const nested = await postDirectHook(descriptor, {
+      ...payload(),
+      is_code_mode_nested: true,
+    });
+    expect(nested.status).toBe(200);
+    expect(await nested.json()).toEqual({ hookOutput: null });
+
+    const unmarked = payload() as Partial<ReturnType<typeof payload>>;
+    delete unmarked.is_code_mode_nested;
+    const missingMarker = await postDirectHook(descriptor, unmarked);
+    expect(missingMarker.status).toBe(400);
+
+    const unversioned = payload() as Partial<ReturnType<typeof payload>>;
+    delete unversioned.token_miser_acceptance_version;
+    const missingAcceptance = await postDirectHook(descriptor, unversioned);
+    expect(missingAcceptance.status).toBe(400);
+    expect(preparePostToolUse).not.toHaveBeenCalled();
+  });
+
+  it("binds direct acceptance to exact identity and commits duplicates once", async () => {
+    const stateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-token-miser-direct-acceptance-"),
+    );
+    const staged = stagedPostToolUse("replacement", "direct-response-2");
+    const bridge = new TokenMiserHookBridge({
+      stateDir,
+      service: {
+        preparePostToolUse: vi.fn(async () => staged.prepared),
+      } as unknown as TokenMiserService,
+    });
+    cleanups.push(async () => {
+      await bridge.close();
+      await fs.rm(stateDir, { force: true, recursive: true });
+    });
+    const descriptor = await bridge.start();
+    const reducerDescriptor = await readCodeModeDescriptor(bridge);
+    await postDirectHook(descriptor, payload());
+
+    const mismatched = await postAcceptance(reducerDescriptor, {
+      ...directAcceptancePayload("direct-response-2"),
+      tool_use_id: "different-tool",
+    });
+    expect(mismatched.status).toBe(404);
+    const wrongProtocol = await postAcceptance(
+      reducerDescriptor,
+      acceptancePayload("direct-response-2"),
+    );
+    expect(wrongProtocol.status).toBe(404);
+    expect(staged.commit).not.toHaveBeenCalled();
+
+    const acceptance = directAcceptancePayload("direct-response-2");
+    const concurrent = await Promise.all([
+      postAcceptance(reducerDescriptor, acceptance),
+      postAcceptance(reducerDescriptor, acceptance),
+    ]);
+    expect(concurrent.map((response) => response.status)).toEqual([200, 200]);
+    const duplicate = await postAcceptance(reducerDescriptor, acceptance);
+    expect(duplicate.status).toBe(200);
+    expect(staged.commit).toHaveBeenCalledOnce();
+    expect(staged.discard).not.toHaveBeenCalled();
+  });
+
+  it("discards a direct replacement that Codex never accepts", async () => {
+    const stateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-token-miser-direct-timeout-"),
+    );
+    const staged = stagedPostToolUse("replacement", "direct-response-3");
+    const bridge = new TokenMiserHookBridge({
+      stateDir,
+      service: {
+        preparePostToolUse: vi.fn(async () => staged.prepared),
+      } as unknown as TokenMiserService,
+      codeModeAcceptanceTimeoutMs: 100,
+    });
+    cleanups.push(async () => {
+      await bridge.close();
+      await fs.rm(stateDir, { force: true, recursive: true });
+    });
+    const descriptor = await bridge.start();
+
+    const response = await postDirectHook(descriptor, payload());
+    expect(response.status).toBe(200);
+    expect(staged.persist).toHaveBeenCalledOnce();
+    expect(staged.commit).not.toHaveBeenCalled();
+    await vi.waitFor(() => expect(staged.discard).toHaveBeenCalledOnce());
+    expect(staged.commit).not.toHaveBeenCalled();
   });
 
   it("publishes the authenticated v2 reducer and commits only after acceptance", async () => {
@@ -348,7 +480,7 @@ describe("TokenMiserHookBridge", () => {
     expect(prepareCodeModeOutput).not.toHaveBeenCalled();
   });
 
-  it("keeps same-profile reducer descriptors owned by their bridge instance", async () => {
+  it("keeps all same-profile descriptors owned by their bridge instance", async () => {
     const stateDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "pwragent-token-miser-multi-bridge-"),
     );
@@ -372,11 +504,21 @@ describe("TokenMiserHookBridge", () => {
       await Promise.all([first.close(), second.close()]);
       await fs.rm(stateDir, { force: true, recursive: true });
     });
-    await Promise.all([first.start(), second.start()]);
+    const [firstDirect, secondDirect] = await Promise.all([
+      first.start(),
+      second.start(),
+    ]);
 
+    expect(first.bridgeDescriptorPath).not.toBe(second.bridgeDescriptorPath);
     expect(first.codeModeReducerDescriptorPath).not.toBe(
       second.codeModeReducerDescriptorPath,
     );
+    await expect(
+      fs.readFile(first.bridgeDescriptorPath, "utf8"),
+    ).resolves.toContain(firstDirect.token);
+    await expect(
+      fs.readFile(second.bridgeDescriptorPath, "utf8"),
+    ).resolves.toContain(secondDirect.token);
     const firstDescriptor = JSON.parse(
       await fs.readFile(first.codeModeReducerDescriptorPath, "utf8"),
     ) as { url: string; token: string };
@@ -396,10 +538,18 @@ describe("TokenMiserHookBridge", () => {
     expect(secondHandler).toHaveBeenCalledOnce();
 
     await first.close();
+    await expect(fs.stat(first.bridgeDescriptorPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
     await expect(fs.stat(first.codeModeReducerDescriptorPath)).rejects.toMatchObject({
       code: "ENOENT",
     });
+    await expect(fs.stat(second.bridgeDescriptorPath)).resolves.toBeDefined();
     await expect(fs.stat(second.codeModeReducerDescriptorPath)).resolves.toBeDefined();
+    const secondDirectStillLive = await postDirectHook(secondDirect, {
+      unsupported: true,
+    });
+    expect(secondDirectStillLive.status).toBe(400);
     await expect(postReducer(secondDescriptor)).resolves.toEqual({
       replacement: [{ type: "input_text", text: "second" }],
       response_id: "second-response",
@@ -426,6 +576,9 @@ describe("TokenMiserHookBridge", () => {
     await closing;
 
     await expect(
+      fs.stat(bridge.bridgeDescriptorPath),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
       fs.stat(bridge.codeModeReducerDescriptorPath),
     ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fetch(descriptor.url)).rejects.toThrow();
@@ -450,9 +603,22 @@ async function postReducer(descriptor: {
 
 async function postAcceptance(
   descriptor: { acceptance_url: string; token: string },
-  body: ReturnType<typeof acceptancePayload>,
+  body:
+    | ReturnType<typeof acceptancePayload>
+    | ReturnType<typeof directAcceptancePayload>,
 ): Promise<Response> {
   return await fetch(descriptor.acceptance_url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${descriptor.token}` },
+    body: JSON.stringify(body),
+  });
+}
+
+async function postDirectHook(
+  descriptor: { url: string; token: string },
+  body: unknown,
+): Promise<Response> {
+  return await fetch(descriptor.url, {
     method: "POST",
     headers: { Authorization: `Bearer ${descriptor.token}` },
     body: JSON.stringify(body),
@@ -500,6 +666,27 @@ function stagedReduction(text: string, objectId: string) {
   };
 }
 
+function stagedPostToolUse(text: string, objectId: string) {
+  const staged = stagedReduction(text, objectId);
+  return {
+    persist: staged.persist,
+    commit: staged.commit,
+    discard: staged.discard,
+    prepared: {
+      hookOutput: {
+        continue: false as const,
+        stopReason: text,
+        hookSpecificOutput: {
+          hookEventName: "PostToolUse" as const,
+          response_id: objectId,
+        },
+      },
+      responseId: objectId,
+      staged: staged.prepared.staged,
+    },
+  };
+}
+
 function payload() {
   return {
     session_id: "thread-1",
@@ -507,6 +694,8 @@ function payload() {
     hook_event_name: "PostToolUse",
     tool_name: "Bash",
     tool_use_id: "tool-1",
+    is_code_mode_nested: false,
+    token_miser_acceptance_version: 2,
     tool_response: "large output",
   };
 }
@@ -533,5 +722,15 @@ function acceptancePayload(responseId: string) {
     turn_id: "turn-1",
     call_id: "call-1",
     cell_id: "cell-1",
+  };
+}
+
+function directAcceptancePayload(responseId: string) {
+  return {
+    version: 2,
+    response_id: responseId,
+    session_id: "thread-1",
+    turn_id: "turn-1",
+    tool_use_id: "tool-1",
   };
 }

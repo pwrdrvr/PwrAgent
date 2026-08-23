@@ -1309,11 +1309,18 @@ describe("CodexAppServerClient", () => {
   });
 
   it("reads the code-mode output reducer capability from the server", async () => {
+    MockTransport.serverCapabilitiesResult = {
+      codeModeOutputReducer: {
+        dynamicToolsResumeField: "dynamicTools",
+        protocolVersion: 2,
+      },
+    };
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({ command: "codex" });
 
     await expect(client.readServerCapabilities()).resolves.toEqual({
       codeModeOutputReducer: {
+        dynamicToolsResumeField: "dynamicTools",
         protocolVersion: 2,
       },
     });
@@ -1324,6 +1331,18 @@ describe("CodexAppServerClient", () => {
       },
     };
     await expect(client.readServerCapabilities()).resolves.toEqual({});
+
+    MockTransport.serverCapabilitiesResult = {
+      codeModeOutputReducer: {
+        dynamicToolsResumeField: "tools",
+        protocolVersion: 2,
+      },
+    };
+    await expect(client.readServerCapabilities()).resolves.toEqual({
+      codeModeOutputReducer: {
+        protocolVersion: 2,
+      },
+    });
 
     const requests = MockTransport.instances.at(-1)!.sentMessages.map(
       (message) => JSON.parse(message) as { method?: string; params?: unknown },
@@ -7250,6 +7269,155 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("passes a complete dynamic tool replacement when resuming a thread", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const dynamicTools: DynamicToolSpec[] = [
+      {
+        type: "namespace",
+        name: "pwragent",
+        description: "PwrAgent tools.",
+        tools: [
+          {
+            type: "function",
+            name: "read_token_miser_output",
+            description: "Read selected Token Miser output.",
+            inputSchema: {
+              type: "object",
+              additionalProperties: false,
+            },
+            deferLoading: false,
+          },
+        ],
+      },
+    ];
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await client.startTurn({
+      threadId: "thread-existing",
+      input: [{ type: "text", text: "Continue." }],
+      dynamicTools,
+    });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    expect(
+      requests.find((request) => request.method === "thread/resume")?.params,
+    ).toMatchObject({
+      threadId: "thread-existing",
+      dynamicTools,
+    });
+    expect(
+      requests.find((request) => request.method === "turn/start")?.params,
+    ).not.toHaveProperty("dynamicTools");
+
+    await client.close();
+  });
+
+  it("refreshes dynamic tools before the first turn only when requested", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadStartResult = {
+      thread: {
+        id: "thread-first-refresh",
+      },
+    };
+    MockTransport.turnStartResult = {
+      thread: {
+        id: "thread-first-refresh",
+      },
+      turn: {
+        id: "turn-first-refresh",
+      },
+    };
+    const dynamicTools: DynamicToolSpec[] = [
+      {
+        type: "namespace",
+        name: "pwragent",
+        description: "PwrAgent tools.",
+        tools: [
+          {
+            type: "function",
+            name: "read_token_miser_output",
+            description: "Read selected Token Miser output.",
+            inputSchema: {
+              type: "object",
+              additionalProperties: false,
+            },
+            deferLoading: false,
+          },
+        ],
+      },
+    ];
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const thread = await client.startThread({
+      dynamicTools: [],
+    });
+    await client.startTurn({
+      threadId: thread.threadId,
+      input: [{ type: "text", text: "First prompt." }],
+      dynamicTools,
+    });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    expect(requests.map((request) => request.method)).toEqual(
+      expect.arrayContaining(["thread/start", "thread/resume", "turn/start"]),
+    );
+    expect(
+      requests.find((request) => request.method === "thread/resume")?.params,
+    ).toMatchObject({
+      threadId: "thread-first-refresh",
+      dynamicTools,
+    });
+
+    await client.close();
+  });
+
+  it("refreshes a replacement catalog before a fork's first turn", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const fork = await client.forkThread({ threadId: "thread-source" });
+    await client.startTurn({
+      threadId: fork.threadId,
+      input: [{ type: "text", text: "First fork prompt." }],
+      dynamicTools: [],
+    });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    expect(
+      requests.find((request) => request.method === "thread/resume")?.params,
+    ).toMatchObject({
+      threadId: "thread-fork",
+      dynamicTools: [],
+    });
+    expect(requests.map((request) => request.method)).toContain("turn/start");
+
+    await client.close();
+  });
+
   it("passes thread-local MCP config and redacts MCP bearer headers from observers", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const observedMessages: string[] = [];
@@ -9719,6 +9887,40 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("does not start a turn when a required dynamic tool refresh fails", async () => {
+    MockTransport.threadResumeError = {
+      code: -32000,
+      message: "dynamic tool refresh failed",
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(client.startTurn({
+      threadId: "thread-stale-tools",
+      input: [{ type: "text", text: "Do not use stale tools." }],
+      dynamicTools: [],
+    })).rejects.toThrow("dynamic tool refresh failed");
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    expect(
+      requests.find((request) => request.method === "thread/resume")?.params,
+    ).toMatchObject({
+      threadId: "thread-stale-tools",
+      dynamicTools: [],
+    });
+    expect(requests.map((request) => request.method)).not.toContain("turn/start");
+
+    await client.close();
+  });
+
   it("persists a thread workspace without resuming or starting a turn", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({
@@ -9845,6 +10047,95 @@ describe("CodexAppServerClient", () => {
         },
       })
     );
+
+    await client.close();
+  });
+
+  it("refreshes dynamic tools before a pending first native review", async () => {
+    MockTransport.threadStartResult = {
+      thread: {
+        id: "thread-first-review",
+      },
+    };
+    const dynamicTools: DynamicToolSpec[] = [
+      {
+        type: "namespace",
+        name: "pwragent",
+        description: "PwrAgent tools.",
+        tools: [
+          {
+            type: "function",
+            name: "read_token_miser_output",
+            description: "Read selected Token Miser output.",
+            inputSchema: {
+              type: "object",
+              additionalProperties: false,
+            },
+            deferLoading: false,
+          },
+        ],
+      },
+    ];
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const thread = await client.startThread({ dynamicTools: [] });
+    await client.startReview({
+      threadId: thread.threadId,
+      target: { type: "baseBranch", branch: "main" },
+      dynamicTools,
+    });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    expect(
+      requests.find((request) => request.method === "thread/resume")?.params,
+    ).toMatchObject({
+      threadId: "thread-first-review",
+      dynamicTools,
+    });
+    expect(requests.map((request) => request.method)).toContain("review/start");
+
+    await client.close();
+  });
+
+  it("does not start a review when a required dynamic tool refresh fails", async () => {
+    MockTransport.threadResumeError = {
+      code: -32000,
+      message: "review dynamic tool refresh failed",
+    };
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(client.startReview({
+      threadId: "thread-stale-review-tools",
+      target: { type: "baseBranch", branch: "main" },
+      dynamicTools: [],
+    })).rejects.toThrow("review dynamic tool refresh failed");
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    expect(
+      requests.find((request) => request.method === "thread/resume")?.params,
+    ).toMatchObject({
+      threadId: "thread-stale-review-tools",
+      dynamicTools: [],
+    });
+    expect(requests.map((request) => request.method)).not.toContain("review/start");
 
     await client.close();
   });

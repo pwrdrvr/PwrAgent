@@ -4,6 +4,7 @@ import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createCommandInvocation } from "@pwrdrvr/agent-transport";
+import { TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV } from "./token-miser-hook-bridge.js";
 
 export const TOKEN_MISER_PLUGIN_NAME = "pwragent-token-miser";
 /**
@@ -79,7 +80,6 @@ export class TokenMiserPluginManager {
         mode: 0o700,
       }),
     ]);
-    const descriptorPath = path.join(this.options.stateDir, "bridge.json");
     await Promise.all([
       writePrivateJsonAtomic(path.join(manifestDir, "plugin.json"), {
         name: TOKEN_MISER_PLUGIN_NAME,
@@ -109,7 +109,6 @@ export class TokenMiserPluginManager {
                 {
                   type: "command",
                   command: buildHookCommand({
-                    descriptorPath,
                     executablePath: this.options.executablePath,
                     hookEntryPath: this.options.hookEntryPath,
                     platform: this.options.platform ?? process.platform,
@@ -224,7 +223,6 @@ export class TokenMiserPluginManager {
 }
 
 export function buildHookCommand(params: {
-  descriptorPath: string;
   executablePath: string;
   hookEntryPath: string;
   platform: NodeJS.Platform;
@@ -232,16 +230,18 @@ export function buildHookCommand(params: {
   if (params.platform === "win32") {
     return [
       'set "ELECTRON_RUN_AS_NODE=1"',
-      quoteWindows(params.executablePath),
-      quoteWindows(params.hookEntryPath),
-      quoteWindows(params.descriptorPath),
+      [
+        quoteWindows(params.executablePath),
+        quoteWindows(params.hookEntryPath),
+        `"%${TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV}%"`,
+      ].join(" "),
     ].join(" && ");
   }
   return [
     "ELECTRON_RUN_AS_NODE=1",
     quotePosix(params.executablePath),
     quotePosix(params.hookEntryPath),
-    quotePosix(params.descriptorPath),
+    `"$${TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV}"`,
   ].join(" ");
 }
 

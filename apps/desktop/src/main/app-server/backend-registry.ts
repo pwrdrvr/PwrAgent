@@ -433,7 +433,11 @@ import {
   toDynamicToolResponse,
 } from "../agent-tools/agent-tool-router";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
-import { TokenMiserHookBridge } from "../token-miser/token-miser-hook-bridge";
+import {
+  getTokenMiserBridgeDescriptorPath,
+  TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV,
+  TokenMiserHookBridge,
+} from "../token-miser/token-miser-hook-bridge";
 import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
 import {
   TOKEN_MISER_ACTIVATION_FILENAME,
@@ -783,6 +787,7 @@ type BackendClient = {
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadStartParams["config"];
+    dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }>;
   listModels?(diagnostics?: {
     callerReason?: string;
@@ -2155,6 +2160,27 @@ export function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
     );
   }
   return args;
+}
+
+export function withTokenMiserBridgeDescriptorEnv(
+  env: NodeJS.ProcessEnv,
+  descriptorPath: string | undefined,
+): NodeJS.ProcessEnv;
+export function withTokenMiserBridgeDescriptorEnv(
+  env: NodeJS.ProcessEnv | undefined,
+  descriptorPath: string | undefined,
+): NodeJS.ProcessEnv | undefined;
+export function withTokenMiserBridgeDescriptorEnv(
+  env: NodeJS.ProcessEnv | undefined,
+  descriptorPath: string | undefined,
+): NodeJS.ProcessEnv | undefined {
+  if (!descriptorPath) {
+    return env;
+  }
+  return {
+    ...(env ?? process.env),
+    [TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV]: descriptorPath,
+  };
 }
 
 function formatTomlString(value: string): string {
@@ -7700,10 +7726,12 @@ export class DesktopBackendRegistry {
   private readonly tokenMiserStore?: TokenMiserStore;
   private readonly tokenMiserHookBridge?: TokenMiserHookBridge;
   private tokenMiserCodeModeReducerDescriptorPath?: string;
-  private readonly tokenMiserCodeModeReducerSupport = new WeakMap<
+  private readonly tokenMiserServerCapabilities = new WeakMap<
     BackendClient,
-    Promise<boolean>
+    Promise<CodexServerCapabilities | undefined>
   >();
+  private tokenMiserReducerCapabilityState?: "supported" | "unsupported";
+  private tokenMiserRuntimePreparationFailure?: string;
   private readonly tokenMiserPluginManager?: TokenMiserPluginManager;
   private tokenMiserStateDir?: string;
   private readonly resolveTokenMiserCodexRuntimeFn?: () => Promise<{
@@ -7833,6 +7861,16 @@ export class DesktopBackendRegistry {
     ]);
     const settingsService = createsLiveCodexClient
       ? getDesktopSettingsService()
+      : undefined;
+    const tokenMiserStateDir =
+      createsLiveCodexClient && isAppStateInitialized()
+        ? resolveActiveProfilePath("state/token-miser")
+        : undefined;
+    const tokenMiserBridgeDescriptorPath = tokenMiserStateDir
+      ? getTokenMiserBridgeDescriptorPath(
+          tokenMiserStateDir,
+          this.runtimeInstanceId,
+        )
       : undefined;
     this.resolveCodexDefaultModeRequestUserInputFn =
       options?.resolveCodexDefaultModeRequestUserInput ??
@@ -7976,6 +8014,10 @@ export class DesktopBackendRegistry {
       typeof settingsService?.resolveCodexSpawnEnv === "function"
         ? settingsService.resolveCodexSpawnEnv()
         : undefined;
+    const codexSpawnEnv = withTokenMiserBridgeDescriptorEnv(
+      codexEnv,
+      tokenMiserBridgeDescriptorPath,
+    );
     this.resolveTokenMiserCodexRuntimeFn = settingsService
       ? async () => {
           const [resolvedCommand, resolvedEnv] = await Promise.all([
@@ -8007,7 +8049,7 @@ export class DesktopBackendRegistry {
         args: settingsService ? undefined : buildCodexClientArgs(codexEnv),
         command: codexCommand,
         connectionObserver: codexObserver,
-        env: codexEnv,
+        env: codexSpawnEnv,
         resolveArgs: settingsService
           ? async (env) => buildCodexClientArgs(env)
           : undefined,
@@ -8015,7 +8057,10 @@ export class DesktopBackendRegistry {
           ? async () => await settingsService.resolveCodexCommand()
           : undefined,
         resolveEnv: settingsService
-          ? async () => await settingsService.resolveCodexSpawnEnvAsync()
+          ? async () => withTokenMiserBridgeDescriptorEnv(
+              await settingsService.resolveCodexSpawnEnvAsync(),
+              tokenMiserBridgeDescriptorPath,
+            )
           : undefined,
         clientVersion,
         // Fire the gate at the client level too, not just the
@@ -8029,8 +8074,7 @@ export class DesktopBackendRegistry {
         // surfaces as `available: false` with a clean reason.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
-    if (createsLiveCodexClient && isAppStateInitialized()) {
-      const tokenMiserStateDir = resolveActiveProfilePath("state/token-miser");
+    if (tokenMiserStateDir) {
       this.tokenMiserStore = new TokenMiserStore(
         path.join(tokenMiserStateDir, "objects"),
         {
@@ -8099,6 +8143,7 @@ export class DesktopBackendRegistry {
       this.tokenMiserHookBridge = new TokenMiserHookBridge({
         stateDir: tokenMiserStateDir,
         service: tokenMiserService,
+        instanceId: this.runtimeInstanceId,
       });
       this.tokenMiserCodeModeReducerDescriptorPath =
         this.tokenMiserHookBridge.codeModeReducerDescriptorPath;
@@ -13888,26 +13933,32 @@ export class DesktopBackendRegistry {
               client,
               enabled: tokenMiserEnabledForThread,
             });
+          const dynamicTools =
+            await this.buildSupportedCodexDynamicToolsRefresh({
+              client,
+              tokenMiserEnabled: tokenMiserEnabledForThread,
+            });
           const supportedCodexThreadConfig = mergeCodexThreadConfigs(
             codexThreadConfig,
             tokenMiserConfig,
           );
           const started = await client.startTurn({
-              threadId: params.threadId,
-              input,
-              ...(cwd ? { cwd } : {}),
-              collaborationMode: params.collaborationMode,
-              ...turnParams,
-              approvalPolicy: params.approvalPolicy ?? modeSettings.approvalPolicy,
-              sandbox: params.sandbox ?? modeSettings.sandbox,
-              ...(overlay?.codexEnvironmentRuntime
-                ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
-                : {}),
-              ...(supportedCodexThreadConfig
-                ? { config: supportedCodexThreadConfig }
-                : {}),
-              defaultModeRequestUserInput:
-                this.resolveCodexDefaultModeRequestUserInputFn(),
+            threadId: params.threadId,
+            input,
+            ...(cwd ? { cwd } : {}),
+            collaborationMode: params.collaborationMode,
+            ...turnParams,
+            approvalPolicy: params.approvalPolicy ?? modeSettings.approvalPolicy,
+            sandbox: params.sandbox ?? modeSettings.sandbox,
+            ...(overlay?.codexEnvironmentRuntime
+              ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+              : {}),
+            ...(supportedCodexThreadConfig
+              ? { config: supportedCodexThreadConfig }
+              : {}),
+            defaultModeRequestUserInput:
+              this.resolveCodexDefaultModeRequestUserInputFn(),
+            ...(dynamicTools !== undefined ? { dynamicTools } : {}),
           });
           activeTurnMode = effectiveMode;
           return started;
@@ -14477,6 +14528,11 @@ export class DesktopBackendRegistry {
             client,
             enabled: tokenMiserEnabled,
           });
+        const dynamicTools =
+          await this.buildSupportedCodexDynamicToolsRefresh({
+            client,
+            tokenMiserEnabled,
+          });
         return await client.startReview({
           threadId: params.threadId,
           target: params.target,
@@ -14487,6 +14543,7 @@ export class DesktopBackendRegistry {
             ? { codexEnvironmentRuntime }
             : {}),
           ...(tokenMiserConfig ? { config: tokenMiserConfig } : {}),
+          ...(dynamicTools !== undefined ? { dynamicTools } : {}),
         });
       };
 
@@ -14666,6 +14723,8 @@ export class DesktopBackendRegistry {
     const tokenMiserDynamicTools = params.tokenMiserEnabled
       ? buildCodexTokenMiserDynamicToolSpecs(this.tokenMiserStore)
       : [];
+    const dynamicToolsResumeSupported =
+      await this.supportsTokenMiserDynamicToolsResume(client);
     const thread = await client.startThread({
       ...(params.cwd ? { cwd: params.cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
@@ -14697,6 +14756,9 @@ export class DesktopBackendRegistry {
         ...params.modelSettings,
         ...(params.codexEnvironmentRuntime
           ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
+          : {}),
+        ...(dynamicToolsResumeSupported
+          ? { dynamicTools: tokenMiserDynamicTools }
           : {}),
       });
       this.activeTurnKeys.add(
@@ -19463,21 +19525,41 @@ export class DesktopBackendRegistry {
   }
 
   /** Probe once per client; reducer support is immutable for one app-server. */
-  private async supportsTokenMiserCodeModeReducer(
+  private async readTokenMiserServerCapabilities(
     client: BackendClient,
-  ): Promise<boolean> {
-    const cached = this.tokenMiserCodeModeReducerSupport.get(client);
+  ): Promise<CodexServerCapabilities | undefined> {
+    const cached = this.tokenMiserServerCapabilities.get(client);
     if (cached) {
       return await cached;
     }
 
     const probe = (async () => {
       if (!client.readServerCapabilities) {
-        return false;
+        this.tokenMiserReducerCapabilityState = "unsupported";
+        await this.recordTokenMiserActivation({
+          reason: "Codex runtime lacks Token Miser output reducer v2.",
+          state: "unavailable",
+        });
+        return undefined;
       }
       try {
         const capabilities = await client.readServerCapabilities();
-        return capabilities.codeModeOutputReducer?.protocolVersion === 2;
+        const supported =
+          capabilities.codeModeOutputReducer?.protocolVersion === 2;
+        this.tokenMiserReducerCapabilityState = supported
+          ? "supported"
+          : "unsupported";
+        await this.recordTokenMiserActivation(
+          supported && !this.tokenMiserRuntimePreparationFailure
+            ? { state: "active" }
+            : {
+                reason:
+                  this.tokenMiserRuntimePreparationFailure
+                  ?? "Codex runtime lacks Token Miser output reducer v2.",
+                state: "unavailable",
+              },
+        );
+        return capabilities;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const normalized = message.toLowerCase();
@@ -19498,11 +19580,64 @@ export class DesktopBackendRegistry {
             { error: message },
           );
         }
-        return false;
+        this.tokenMiserReducerCapabilityState = "unsupported";
+        await this.recordTokenMiserActivation({
+          reason:
+            this.tokenMiserRuntimePreparationFailure
+            ?? "Codex runtime lacks Token Miser output reducer v2.",
+          state: "unavailable",
+        });
+        return undefined;
       }
     })();
-    this.tokenMiserCodeModeReducerSupport.set(client, probe);
+    this.tokenMiserServerCapabilities.set(client, probe);
     return await probe;
+  }
+
+  private async supportsTokenMiserCodeModeReducer(
+    client: BackendClient,
+  ): Promise<boolean> {
+    const capabilities = await this.readTokenMiserServerCapabilities(client);
+    return capabilities?.codeModeOutputReducer?.protocolVersion === 2;
+  }
+
+  private async supportsTokenMiserDynamicToolsResume(
+    client: BackendClient,
+  ): Promise<boolean> {
+    const capabilities = await this.readTokenMiserServerCapabilities(client);
+    return (
+      capabilities?.codeModeOutputReducer?.protocolVersion === 2
+      && capabilities.codeModeOutputReducer.dynamicToolsResumeField
+        === "dynamicTools"
+    );
+  }
+
+  private buildCodexParentDynamicTools(
+    tokenMiserEnabled: boolean,
+  ): CodexDynamicToolSpec[] {
+    return buildCodexParentDynamicToolSpecs(
+      resolveAgentToolCatalogs({
+        appManagementHandler: this.appManagementHandler,
+        automationInspectionHandler: this.automationInspectionHandler,
+        federationHandler: this.federationHandler,
+        messagingHandler: this.messagingHandler,
+        taskMonitorHandler: async (request) =>
+          await this.handleAgentTaskMonitorRequest(request),
+        threadInspectionHandler: this.threadInspectionHandler,
+        threadOrchestrationHandler: this.threadOrchestrationHandler,
+        ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore } : {}),
+      }),
+    );
+  }
+
+  private async buildSupportedCodexDynamicToolsRefresh(params: {
+    client: BackendClient;
+    tokenMiserEnabled: boolean;
+  }): Promise<CodexDynamicToolSpec[] | undefined> {
+    if (!(await this.supportsTokenMiserDynamicToolsResume(params.client))) {
+      return undefined;
+    }
+    return this.buildCodexParentDynamicTools(params.tokenMiserEnabled);
   }
 
   private async buildSupportedCodexTokenMiserConfig(params: {
@@ -19558,9 +19693,20 @@ export class DesktopBackendRegistry {
             })
           : Promise.resolve(),
       ]);
-      await this.recordTokenMiserActivation({ state: "active" });
+      this.tokenMiserRuntimePreparationFailure = undefined;
+      await this.recordTokenMiserActivation(
+        this.tokenMiserReducerCapabilityState === "supported"
+          ? { state: "active" }
+          : {
+              reason: this.tokenMiserReducerCapabilityState === "unsupported"
+                ? "Codex runtime lacks Token Miser output reducer v2."
+                : "Waiting for Codex to report Token Miser output reducer support.",
+              state: "unavailable",
+            },
+      );
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      this.tokenMiserRuntimePreparationFailure = reason;
       backendRegistryLog.warn("Token Miser runtime preparation failed open", {
         error: reason,
       });
@@ -27153,6 +27299,16 @@ export class DesktopBackendRegistry {
       tokenMiserCall
       && tokenMiserRouter.acceptsDynamicToolCall(tokenMiserCall)
     ) {
+      if (!(await this.isTokenMiserDynamicToolCallEnabled(
+        backend,
+        tokenMiserCall,
+      ))) {
+        return toDynamicToolResponse({
+          ok: false,
+          code: "forbidden",
+          message: "Token Miser retrieval is disabled for this thread.",
+        });
+      }
       if (!this.isLiveDynamicToolCall(backend, tokenMiserCall)) {
         return toDynamicToolResponse({
           ok: false,
@@ -27539,6 +27695,37 @@ export class DesktopBackendRegistry {
         );
       });
     });
+  }
+
+  private async isTokenMiserDynamicToolCallEnabled(
+    backend: AppServerBackendKind,
+    call: NonNullable<ReturnType<typeof readAgentDynamicToolCall>>,
+  ): Promise<boolean> {
+    if (backend !== "codex") {
+      return false;
+    }
+    const directOverlay = await this.overlayStore.getThreadOverlayState({
+      backend,
+      threadId: call.threadId,
+    });
+    if (directOverlay?.tokenMiserEnabled !== undefined) {
+      return directOverlay.tokenMiserEnabled;
+    }
+    const review = Array.from(this.activeReviewSubAgents.values()).find(
+      (record) =>
+        record.backend === backend
+        && record.reviewThreadId === call.threadId,
+    );
+    if (review?.parentBackend === "codex") {
+      const parentOverlay = await this.overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId: review.parentThreadId,
+      });
+      if (parentOverlay?.tokenMiserEnabled !== undefined) {
+        return parentOverlay.tokenMiserEnabled;
+      }
+    }
+    return this.resolveTokenMiserEnabledFn();
   }
 
   private isLiveDynamicToolCall(

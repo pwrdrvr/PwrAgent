@@ -5,10 +5,12 @@ import path from "node:path";
 import {
   isTokenMiserCodeModeAcceptancePayload,
   isTokenMiserCodeModeOutputPayload,
+  isTokenMiserPostToolUseAcceptancePayload,
   isTokenMiserPostToolUsePayload,
   type TokenMiserCodeModeAcceptancePayload,
   type TokenMiserCodeModeReductionOutput,
   type TokenMiserHookOutput,
+  type TokenMiserPostToolUseAcceptancePayload,
 } from "./token-miser-types.js";
 import type { TokenMiserService } from "./token-miser-service.js";
 import type { TokenMiserStagedObject } from "./token-miser-store.js";
@@ -17,6 +19,19 @@ const MAX_HOOK_REQUEST_BYTES = 32 * 1024 * 1024;
 const DEFAULT_CODE_MODE_ACCEPTANCE_TIMEOUT_MS = 60_000;
 export const TOKEN_MISER_CODE_MODE_REDUCER_DESCRIPTOR_FILENAME_PREFIX =
   "code-mode-reducer";
+export const TOKEN_MISER_BRIDGE_DESCRIPTOR_FILENAME_PREFIX = "bridge";
+export const TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV =
+  "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH";
+
+export function getTokenMiserBridgeDescriptorPath(
+  stateDir: string,
+  instanceId: string,
+): string {
+  return path.join(
+    stateDir,
+    `${TOKEN_MISER_BRIDGE_DESCRIPTOR_FILENAME_PREFIX}.${instanceId}.json`,
+  );
+}
 
 export function getTokenMiserCodeModeReducerDescriptorPath(
   stateDir: string,
@@ -41,8 +56,19 @@ export type TokenMiserCodeModeReducerDescriptor = {
   token: string;
 };
 
-type PendingCodeModeReduction = {
-  identity: Omit<TokenMiserCodeModeAcceptancePayload, "version" | "response_id">;
+type PendingReductionIdentity = {
+  kind: "code_mode";
+  payload: Omit<TokenMiserCodeModeAcceptancePayload, "version" | "response_id">;
+} | {
+  kind: "post_tool_use";
+  payload: Omit<
+    TokenMiserPostToolUseAcceptancePayload,
+    "version" | "response_id"
+  >;
+};
+
+type PendingReduction = {
+  identity: PendingReductionIdentity;
   staged: TokenMiserStagedObject;
   state: "pending" | "committing" | "committed" | "discarding";
   timer?: NodeJS.Timeout;
@@ -55,11 +81,12 @@ export class TokenMiserHookBridge {
   private descriptor?: TokenMiserBridgeDescriptor;
   private closing?: Promise<void>;
   private shuttingDown = false;
-  private readonly pendingCodeModeReductions = new Map<
+  private readonly pendingReductions = new Map<
     string,
-    PendingCodeModeReduction
+    PendingReduction
   >();
-  private readonly codeModeAcceptanceTimeoutMs: number;
+  private readonly acceptanceTimeoutMs: number;
+  readonly bridgeDescriptorPath: string;
   readonly codeModeReducerDescriptorPath: string;
 
   constructor(
@@ -67,16 +94,19 @@ export class TokenMiserHookBridge {
       stateDir: string;
       service: TokenMiserService;
       codeModeAcceptanceTimeoutMs?: number;
+      instanceId?: string;
     },
   ) {
-    this.codeModeAcceptanceTimeoutMs =
+    this.acceptanceTimeoutMs =
       options.codeModeAcceptanceTimeoutMs
       ?? DEFAULT_CODE_MODE_ACCEPTANCE_TIMEOUT_MS;
+    const instanceId = options.instanceId ?? `${process.pid}-${randomUUID()}`;
+    this.bridgeDescriptorPath = getTokenMiserBridgeDescriptorPath(
+      options.stateDir,
+      instanceId,
+    );
     this.codeModeReducerDescriptorPath =
-      getTokenMiserCodeModeReducerDescriptorPath(
-        options.stateDir,
-        `${process.pid}-${randomUUID()}`,
-      );
+      getTokenMiserCodeModeReducerDescriptorPath(options.stateDir, instanceId);
   }
 
   async start(): Promise<TokenMiserBridgeDescriptor> {
@@ -133,7 +163,7 @@ export class TokenMiserHookBridge {
     try {
       await Promise.all([
         writePrivateJsonAtomic(
-          path.join(this.options.stateDir, "bridge.json"),
+          this.bridgeDescriptorPath,
           descriptor,
         ),
         writePrivateJsonAtomic(
@@ -144,7 +174,7 @@ export class TokenMiserHookBridge {
     } catch (error) {
       this.server = undefined;
       await Promise.all([
-        fs.rm(path.join(this.options.stateDir, "bridge.json"), { force: true }),
+        fs.rm(this.bridgeDescriptorPath, { force: true }),
         fs.rm(
           this.codeModeReducerDescriptorPath,
           { force: true },
@@ -170,9 +200,9 @@ export class TokenMiserHookBridge {
     const server = this.server;
     this.server = undefined;
     this.descriptor = undefined;
-    await this.disposePendingCodeModeReductions();
+    await this.disposePendingReductions();
     await Promise.all([
-      fs.rm(path.join(this.options.stateDir, "bridge.json"), { force: true }),
+      fs.rm(this.bridgeDescriptorPath, { force: true }),
       fs.rm(
         this.codeModeReducerDescriptorPath,
         { force: true },
@@ -202,7 +232,7 @@ export class TokenMiserHookBridge {
       return;
     }
     if (request.url === "/v1/accept-code-mode-output") {
-      await this.handleCodeModeAcceptance(request, response);
+      await this.handleReductionAcceptance(request, response);
       return;
     }
     if (request.url !== "/v1/post-tool-use") {
@@ -216,8 +246,55 @@ export class TokenMiserHookBridge {
         sendJson(response, 400, { error: "invalid_hook_payload" });
         return;
       }
-      const hookOutput = await this.options.service.handlePostToolUse(payload);
-      sendJson(response, 200, { hookOutput: hookOutput ?? null });
+      if (payload.is_code_mode_nested !== false) {
+        sendJson(response, 200, { hookOutput: null });
+        return;
+      }
+      const controller = new AbortController();
+      const abortRequest = () => controller.abort();
+      request.once("aborted", abortRequest);
+      response.once("close", () => {
+        if (!response.writableFinished) {
+          abortRequest();
+        }
+      });
+      if (request.aborted || request.socket.destroyed || response.destroyed) {
+        abortRequest();
+      }
+      const prepared = await this.options.service.preparePostToolUse(
+        payload,
+        { signal: controller.signal },
+      );
+      if (!prepared) {
+        sendJson(response, 200, { hookOutput: null });
+        return;
+      }
+      await prepared.staged.persist();
+      if (request.socket.destroyed || response.destroyed) {
+        abortRequest();
+      }
+      if (controller.signal.aborted || this.shuttingDown) {
+        await prepared.staged.discard();
+        return;
+      }
+      this.registerPendingReduction(
+        prepared.responseId,
+        {
+          kind: "post_tool_use",
+          payload: {
+            session_id: payload.session_id,
+            turn_id: payload.turn_id,
+            tool_use_id: payload.tool_use_id,
+          },
+        },
+        prepared.staged,
+      );
+      const delivered = await sendJsonAndWait(response, 200, {
+        hookOutput: prepared.hookOutput,
+      });
+      if (!delivered) {
+        await this.discardPendingReduction(prepared.responseId);
+      }
     } catch (error) {
       const status = error instanceof RequestTooLargeError ? 413 : 500;
       sendJson(response, status, { error: "token_miser_unavailable" });
@@ -265,9 +342,17 @@ export class TokenMiserHookBridge {
         return;
       }
       const responseId = prepared.response.response_id;
-      this.registerPendingCodeModeReduction(
+      this.registerPendingReduction(
         responseId,
-        payload,
+        {
+          kind: "code_mode",
+          payload: {
+            thread_id: payload.thread_id,
+            turn_id: payload.turn_id,
+            call_id: payload.call_id,
+            cell_id: payload.cell_id,
+          },
+        },
         prepared.staged,
       );
       const delivered = await sendJsonAndWait(
@@ -276,7 +361,7 @@ export class TokenMiserHookBridge {
         prepared.response,
       );
       if (!delivered) {
-        await this.discardPendingCodeModeReduction(responseId);
+        await this.discardPendingReduction(responseId);
         return;
       }
     } catch (error) {
@@ -285,23 +370,25 @@ export class TokenMiserHookBridge {
     }
   }
 
-  private async handleCodeModeAcceptance(
+  private async handleReductionAcceptance(
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
     try {
       const body = await readBody(request);
       const payload: unknown = JSON.parse(body);
-      if (!isTokenMiserCodeModeAcceptancePayload(payload)) {
+      const acceptance = parseAcceptance(payload);
+      if (!acceptance) {
         sendJson(response, 400, { error: "invalid_acceptance_payload" });
         return;
       }
-      const pending = this.pendingCodeModeReductions.get(payload.response_id);
-      if (!pending || !acceptanceIdentityMatches(pending, payload)) {
+      const { identity, responseId } = acceptance;
+      const pending = this.pendingReductions.get(responseId);
+      if (!pending || !acceptanceIdentityMatches(pending, identity)) {
         sendJson(response, 404, { error: "acceptance_not_found" });
         return;
       }
-      await this.commitPendingCodeModeReduction(payload.response_id, pending);
+      await this.commitPendingReduction(responseId, pending);
       sendJson(response, 200, { accepted: true });
     } catch (error) {
       const status = error instanceof RequestTooLargeError ? 413 : 500;
@@ -309,38 +396,28 @@ export class TokenMiserHookBridge {
     }
   }
 
-  private registerPendingCodeModeReduction(
+  private registerPendingReduction(
     responseId: string,
-    payload: {
-      thread_id: string;
-      turn_id: string;
-      call_id: string;
-      cell_id: string;
-    },
+    identity: PendingReductionIdentity,
     staged: TokenMiserStagedObject,
   ): void {
-    const previous = this.pendingCodeModeReductions.get(responseId);
+    const previous = this.pendingReductions.get(responseId);
     if (previous) {
       clearPendingTimer(previous);
       void previous.staged.discard().catch(() => undefined);
     }
-    const pending: PendingCodeModeReduction = {
-      identity: {
-        thread_id: payload.thread_id,
-        turn_id: payload.turn_id,
-        call_id: payload.call_id,
-        cell_id: payload.cell_id,
-      },
+    const pending: PendingReduction = {
+      identity,
       staged,
       state: "pending",
     };
-    this.schedulePendingCodeModeDiscard(responseId, pending);
-    this.pendingCodeModeReductions.set(responseId, pending);
+    this.schedulePendingDiscard(responseId, pending);
+    this.pendingReductions.set(responseId, pending);
   }
 
-  private async commitPendingCodeModeReduction(
+  private async commitPendingReduction(
     responseId: string,
-    pending: PendingCodeModeReduction,
+    pending: PendingReduction,
   ): Promise<void> {
     if (pending.state === "committed") {
       return;
@@ -358,25 +435,25 @@ export class TokenMiserHookBridge {
       .then(() => {
         pending.state = "committed";
         pending.timer = setTimeout(() => {
-          if (this.pendingCodeModeReductions.get(responseId) === pending) {
-            this.pendingCodeModeReductions.delete(responseId);
+          if (this.pendingReductions.get(responseId) === pending) {
+            this.pendingReductions.delete(responseId);
           }
-        }, this.codeModeAcceptanceTimeoutMs);
+        }, this.acceptanceTimeoutMs);
         pending.timer.unref();
       })
       .catch((error: unknown) => {
         pending.state = "pending";
         pending.commitPromise = undefined;
-        this.schedulePendingCodeModeDiscard(responseId, pending);
+        this.schedulePendingDiscard(responseId, pending);
         throw error;
       });
     await pending.commitPromise;
   }
 
-  private async discardPendingCodeModeReduction(
+  private async discardPendingReduction(
     responseId: string,
   ): Promise<void> {
-    const pending = this.pendingCodeModeReductions.get(responseId);
+    const pending = this.pendingReductions.get(responseId);
     if (!pending) {
       return;
     }
@@ -391,77 +468,129 @@ export class TokenMiserHookBridge {
     clearPendingTimer(pending);
     pending.discardPromise = pending.staged.discard()
       .then(() => {
-        if (this.pendingCodeModeReductions.get(responseId) === pending) {
-          this.pendingCodeModeReductions.delete(responseId);
+        if (this.pendingReductions.get(responseId) === pending) {
+          this.pendingReductions.delete(responseId);
         }
       })
       .catch((error: unknown) => {
         pending.state = "pending";
         pending.discardPromise = undefined;
         if (!this.shuttingDown) {
-          this.schedulePendingCodeModeDiscard(responseId, pending);
+          this.schedulePendingDiscard(responseId, pending);
         }
         throw error;
       });
     await pending.discardPromise;
   }
 
-  private async disposePendingCodeModeReductions(): Promise<void> {
-    const pending = [...this.pendingCodeModeReductions.entries()];
+  private async disposePendingReductions(): Promise<void> {
+    const pending = [...this.pendingReductions.entries()];
     await Promise.all(pending.map(async ([responseId, reduction]) => {
       clearPendingTimer(reduction);
       if (reduction.state === "committing") {
         await reduction.commitPromise?.catch(() => undefined);
         clearPendingTimer(reduction);
-        const stateAfterCommit = reduction.state as PendingCodeModeReduction["state"];
+        const stateAfterCommit = reduction.state as PendingReduction["state"];
         if (stateAfterCommit === "pending") {
-          await this.discardPendingCodeModeReduction(responseId)
+          await this.discardPendingReduction(responseId)
             .catch(() => undefined);
           return;
         }
-        this.pendingCodeModeReductions.delete(responseId);
+        this.pendingReductions.delete(responseId);
         return;
       }
       if (reduction.state === "discarding") {
         await reduction.discardPromise?.catch(() => undefined);
         clearPendingTimer(reduction);
       }
-      const stateAfterDiscard = reduction.state as PendingCodeModeReduction["state"];
+      const stateAfterDiscard = reduction.state as PendingReduction["state"];
       if (stateAfterDiscard === "pending") {
-        await this.discardPendingCodeModeReduction(responseId)
+        await this.discardPendingReduction(responseId)
           .catch(() => undefined);
         return;
       }
-      this.pendingCodeModeReductions.delete(responseId);
+      this.pendingReductions.delete(responseId);
     }));
   }
 
-  private schedulePendingCodeModeDiscard(
+  private schedulePendingDiscard(
     responseId: string,
-    pending: PendingCodeModeReduction,
+    pending: PendingReduction,
   ): void {
     clearPendingTimer(pending);
     pending.timer = setTimeout(() => {
-      void this.discardPendingCodeModeReduction(responseId)
+      void this.discardPendingReduction(responseId)
         .catch(() => undefined);
-    }, this.codeModeAcceptanceTimeoutMs);
+    }, this.acceptanceTimeoutMs);
     pending.timer.unref();
   }
 }
 
-function acceptanceIdentityMatches(
-  pending: PendingCodeModeReduction,
-  payload: TokenMiserCodeModeAcceptancePayload,
-): boolean {
-  return (
-    pending.identity.thread_id === payload.thread_id
-    && pending.identity.turn_id === payload.turn_id
-    && pending.identity.call_id === payload.call_id
-    && pending.identity.cell_id === payload.cell_id
-  );
+function parseAcceptance(
+  payload: unknown,
+): { identity: PendingReductionIdentity; responseId: string } | undefined {
+  if (isTokenMiserCodeModeAcceptancePayload(payload)) {
+    return {
+      responseId: payload.response_id,
+      identity: {
+        kind: "code_mode",
+        payload: {
+          thread_id: payload.thread_id,
+          turn_id: payload.turn_id,
+          call_id: payload.call_id,
+          cell_id: payload.cell_id,
+        },
+      },
+    };
+  }
+  if (isTokenMiserPostToolUseAcceptancePayload(payload)) {
+    return {
+      responseId: payload.response_id,
+      identity: {
+        kind: "post_tool_use",
+        payload: {
+          session_id: payload.session_id,
+          turn_id: payload.turn_id,
+          tool_use_id: payload.tool_use_id,
+        },
+      },
+    };
+  }
+  return undefined;
 }
 
-function clearPendingTimer(pending: PendingCodeModeReduction): void {
+function acceptanceIdentityMatches(
+  pending: PendingReduction,
+  identity: PendingReductionIdentity,
+): boolean {
+  if (pending.identity.kind !== identity.kind) {
+    return false;
+  }
+  if (
+    pending.identity.kind === "code_mode"
+    && identity.kind === "code_mode"
+  ) {
+    return (
+      pending.identity.payload.thread_id === identity.payload.thread_id
+      && pending.identity.payload.turn_id === identity.payload.turn_id
+      && pending.identity.payload.call_id === identity.payload.call_id
+      && pending.identity.payload.cell_id === identity.payload.cell_id
+    );
+  }
+  if (
+    pending.identity.kind === "post_tool_use"
+    && identity.kind === "post_tool_use"
+  ) {
+    return (
+      pending.identity.payload.session_id === identity.payload.session_id
+      && pending.identity.payload.turn_id === identity.payload.turn_id
+      && pending.identity.payload.tool_use_id === identity.payload.tool_use_id
+    );
+  }
+  return false;
+}
+
+function clearPendingTimer(pending: PendingReduction): void {
   if (pending.timer) {
     clearTimeout(pending.timer);
     pending.timer = undefined;
@@ -524,6 +653,7 @@ async function sendJsonAndWait(
   response: ServerResponse,
   status: number,
   body: {
+    hookOutput?: TokenMiserHookOutput | null;
     replacement?: TokenMiserCodeModeReductionOutput["replacement"];
     response_id?: string;
     error?: string;

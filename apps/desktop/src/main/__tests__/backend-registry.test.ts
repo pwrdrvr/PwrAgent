@@ -75,6 +75,7 @@ import {
   CODEX_MISSING_THREAD_EVALUATION_DELAY_MS,
   DesktopBackendRegistry,
   getCodexFastModeMismatchWarning,
+  withTokenMiserBridgeDescriptorEnv,
 } from "../app-server/backend-registry";
 import type { AcpAvailableCommandsRecord } from "../acp/acp-available-commands-store";
 import {
@@ -1597,6 +1598,7 @@ class MockBackendClient {
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadStartParams["config"];
+    dynamicTools?: unknown;
   };
   lastCompactThreadParams?: {
     threadId: string;
@@ -1692,6 +1694,7 @@ class MockBackendClient {
       initializeError?: Error;
       serverCapabilities?: {
         codeModeOutputReducer?: {
+          dynamicToolsResumeField?: "dynamicTools";
           protocolVersion?: number;
         };
       };
@@ -2043,6 +2046,7 @@ class MockBackendClient {
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadStartParams["config"];
+    dynamicTools?: unknown;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     this.lastStartReviewParams = params;
     await this.options.startReviewDelay;
@@ -2725,6 +2729,25 @@ function rememberCollapsedDirectoryWithPinnedThread(params: {
 }
 
 describe("DesktopBackendRegistry", () => {
+  it("overlays only the Codex spawn env with its Token Miser bridge", () => {
+    const source = {
+      CODEX_HOME: "/tmp/codex-profile",
+      PATH: "/usr/bin",
+    };
+    const descriptorPath = "/tmp/token-miser/bridge.instance-a.json";
+
+    const result = withTokenMiserBridgeDescriptorEnv(source, descriptorPath);
+
+    expect(result).toEqual({
+      ...source,
+      PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH: descriptorPath,
+    });
+    expect(source).not.toHaveProperty(
+      "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+    );
+    expect(withTokenMiserBridgeDescriptorEnv(source, undefined)).toBe(source);
+  });
+
   it("refreshes only owner-known directory Git state for federation requests", async () => {
     const invalidateDirectoryStatus = vi.fn();
     const readDirectoryStatusEntries = vi.fn(
@@ -3646,8 +3669,104 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("records truthful Token Miser activation from reducer capability", async () => {
+    const readActivation = async (params: {
+      runtimeFailure?: string;
+      serverCapabilities: {
+        codeModeOutputReducer?: {
+          dynamicToolsResumeField?: "dynamicTools";
+          protocolVersion?: number;
+        };
+      };
+    }) => {
+      const tokenMiserStateDir = await mkdtemp(
+        path.join(os.tmpdir(), "pwragent-token-miser-activation-"),
+      );
+      const codexClient = new MockBackendClient({
+        threads: [],
+        serverCapabilities: params.serverCapabilities,
+      });
+      const registry = new DesktopBackendRegistry({
+        codexClient,
+        overlayStore: createOverlayStoreMock(),
+      });
+      const internals = registry as unknown as {
+        prepareTokenMiserRuntime: (
+          options?: { prune?: boolean },
+        ) => Promise<void>;
+        resolveTokenMiserEnabledFn: () => boolean;
+        tokenMiserCodeModeReducerDescriptorPath?: string;
+        tokenMiserRuntimePreparationFailure?: string;
+        tokenMiserStateDir?: string;
+      };
+      internals.tokenMiserCodeModeReducerDescriptorPath = path.join(
+        tokenMiserStateDir,
+        "code-mode-reducer.test.json",
+      );
+      internals.tokenMiserRuntimePreparationFailure = params.runtimeFailure;
+      internals.tokenMiserStateDir = tokenMiserStateDir;
+      internals.resolveTokenMiserEnabledFn = () => true;
+      vi.spyOn(internals, "prepareTokenMiserRuntime").mockResolvedValue(undefined);
+      try {
+        await registry.startTurn({
+          backend: "codex",
+          threadId: `thread-${path.basename(tokenMiserStateDir)}`,
+          input: [{ type: "text", text: "Continue." }],
+        });
+        return JSON.parse(
+          await readFile(
+            path.join(tokenMiserStateDir, "activation.json"),
+            "utf8",
+          ),
+        ) as { reason?: string; state?: string };
+      } finally {
+        await registry.close();
+        await rm(tokenMiserStateDir, { force: true, recursive: true });
+      }
+    };
+
+    await expect(readActivation({
+      serverCapabilities: {
+        codeModeOutputReducer: {
+          dynamicToolsResumeField: "dynamicTools",
+          protocolVersion: 2,
+        },
+      },
+    })).resolves.toMatchObject({ state: "active" });
+    await expect(readActivation({
+      serverCapabilities: {
+        codeModeOutputReducer: {
+          protocolVersion: 1,
+        },
+      },
+    })).resolves.toMatchObject({
+      reason: "Codex runtime lacks Token Miser output reducer v2.",
+      state: "unavailable",
+    });
+    await expect(readActivation({
+      runtimeFailure: "Token Miser bridge failed to bind.",
+      serverCapabilities: {
+        codeModeOutputReducer: {
+          dynamicToolsResumeField: "dynamicTools",
+          protocolVersion: 2,
+        },
+      },
+    })).resolves.toMatchObject({
+      reason: "Token Miser bridge failed to bind.",
+      state: "unavailable",
+    });
+  });
+
   it("configures the code-mode reducer before a native Token Miser review", async () => {
-    const codexClient = new MockBackendClient({ threads: [] });
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: {
+        codeModeOutputReducer: {
+          dynamicToolsResumeField: "dynamicTools",
+          protocolVersion: 2,
+        },
+      },
+    });
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
@@ -3657,11 +3776,15 @@ describe("DesktopBackendRegistry", () => {
       resolveTokenMiserEnabledFn: () => boolean;
       tokenMiserCodeModeReducerDescriptorPath?: string;
       tokenMiserStateDir?: string;
+      tokenMiserStore?: TokenMiserStore;
     };
     internals.tokenMiserStateDir = path.join("/tmp", "token-miser-review");
     internals.tokenMiserCodeModeReducerDescriptorPath = path.join(
       internals.tokenMiserStateDir,
       "code-mode-reducer.test.json",
+    );
+    internals.tokenMiserStore = new TokenMiserStore(
+      path.join(internals.tokenMiserStateDir, "objects"),
     );
     internals.resolveTokenMiserEnabledFn = () => true;
     const prepare = vi.spyOn(internals, "prepareTokenMiserRuntime");
@@ -3687,6 +3810,15 @@ describe("DesktopBackendRegistry", () => {
           },
         },
       });
+      const dynamicToolNames = pwragentDynamicTools(
+        codexClient.lastStartReviewParams?.dynamicTools,
+      ).map((tool) => tool.name);
+      expect(dynamicToolNames).toContain("search_threads");
+      expect(dynamicToolNames).toEqual(expect.arrayContaining([
+        "search_token_miser_output",
+        "read_token_miser_output",
+        "read_all_token_miser_output",
+      ]));
     } finally {
       await registry.close();
     }
@@ -3732,14 +3864,66 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("configures the reducer and retrieval tools for a managed Token Miser review", async () => {
+  it("removes Token Miser tools from an opted-out native review catalog", async () => {
     const codexClient = new MockBackendClient({
       threads: [],
-      startThreadResult: { threadId: "managed-review-child" },
+      serverCapabilities: {
+        codeModeOutputReducer: {
+          dynamicToolsResumeField: "dynamicTools",
+          protocolVersion: 2,
+        },
+      },
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
-      overlayStore: createOverlayStoreMock(),
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            tokenMiserEnabled: false,
+          },
+        },
+      }),
+    });
+
+    try {
+      await registry.startReview({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "custom", instructions: "Review without the gate." },
+      });
+
+      const dynamicToolNames = pwragentDynamicTools(
+        codexClient.lastStartReviewParams?.dynamicTools,
+      ).map((tool) => tool.name);
+      expect(dynamicToolNames).toContain("search_threads");
+      expect(dynamicToolNames).not.toContain("search_token_miser_output");
+      expect(dynamicToolNames).not.toContain("read_token_miser_output");
+      expect(dynamicToolNames).not.toContain("read_all_token_miser_output");
+      expect(codexClient.lastStartReviewParams?.config).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("configures the reducer and retrieval tools for a managed Token Miser review", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: {
+        codeModeOutputReducer: {
+          dynamicToolsResumeField: "dynamicTools",
+          protocolVersion: 2,
+        },
+      },
+      startThreadResult: { threadId: "managed-review-child" },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
       resolveManagedReviewEnabled: () => true,
     });
     const tokenMiserStateDir = path.join(
@@ -3792,6 +3976,47 @@ describe("DesktopBackendRegistry", () => {
           "read_all_token_miser_output",
         ],
       );
+      expectPwragentDynamicTools(
+        codexClient.lastStartTurnParams?.dynamicTools,
+        [
+          "search_token_miser_output",
+          "read_token_miser_output",
+          "read_all_token_miser_output",
+        ],
+      );
+      await overlayStore.setThreadTokenMiser?.({
+        backend: "codex",
+        threadId: "thread-1",
+        enabled: false,
+      });
+      const staleToolResponse = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "managed-review-child",
+          turnId: "turn-1",
+          callId: "call-stale-managed-review",
+          requestId: "call-stale-managed-review",
+          namespace: "pwragent",
+          tool: "read_token_miser_output",
+          arguments: { objectId: "stale-object" },
+        },
+      } as AppServerPendingRequestNotification);
+      expect(staleToolResponse).toEqual({
+        success: false,
+        contentItems: [
+          {
+            type: "inputText",
+            text: JSON.stringify(
+              {
+                code: "forbidden",
+                message: "Token Miser retrieval is disabled for this thread.",
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      });
     } finally {
       await registry.close();
     }
@@ -3843,6 +4068,7 @@ describe("DesktopBackendRegistry", () => {
           "read_all_token_miser_output",
         ],
       );
+      expect(codexClient.lastStartTurnParams?.dynamicTools).toBeUndefined();
     } finally {
       await registry.close();
     }
@@ -9957,11 +10183,16 @@ script = "echo setup"
     await registry.close();
   });
 
-  it("does not attempt to refresh dynamic tools on existing Codex threads", async () => {
+  it("omits dynamic tool refresh when the exact Codex capability is absent", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: {
         serverInfo: { name: "Codex App Server", version: "1.0.0" },
         methods: ["turn/start"],
+      },
+      serverCapabilities: {
+        codeModeOutputReducer: {
+          protocolVersion: 2,
+        },
       },
     });
     const registry = new DesktopBackendRegistry({
@@ -9977,8 +10208,103 @@ script = "echo setup"
     });
 
     expect(codexClient.lastStartTurnParams?.dynamicTools).toBeUndefined();
+    expect(codexClient.readServerCapabilitiesCallCount).toBe(1);
 
     await registry.close();
+  });
+
+  it("replaces the complete dynamic tool catalog across Token Miser toggles", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: {
+        serverInfo: { name: "Codex App Server", version: "1.0.0" },
+        methods: ["thread/start", "thread/resume", "turn/start"],
+      },
+      serverCapabilities: {
+        codeModeOutputReducer: {
+          dynamicToolsResumeField: "dynamicTools",
+          protocolVersion: 2,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    const tokenMiserRoot = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-token-miser-dynamic-tools-"),
+    );
+    let enabled = false;
+    const internals = registry as unknown as {
+      prepareTokenMiserRuntime: (options?: { prune?: boolean }) => Promise<void>;
+      resolveTokenMiserEnabledFn: () => boolean;
+      tokenMiserStore?: TokenMiserStore;
+    };
+    internals.resolveTokenMiserEnabledFn = () => enabled;
+    internals.tokenMiserStore = new TokenMiserStore(
+      path.join(tokenMiserRoot, "objects"),
+    );
+    vi.spyOn(internals, "prepareTokenMiserRuntime").mockResolvedValue(undefined);
+
+    try {
+      const thread = await registry.startThread({ backend: "codex" });
+      const initialNames = pwragentDynamicTools(
+        codexClient.lastStartThreadParams?.dynamicTools,
+      ).map((tool) => tool.name);
+      expect(initialNames).toContain("search_threads");
+      expect(initialNames).not.toContain("read_token_miser_output");
+
+      enabled = true;
+      const firstTurn = await registry.startTurn({
+        backend: "codex",
+        threadId: thread.threadId,
+        input: [{ type: "text", text: "Enable the gate." }],
+      });
+      const enabledNames = pwragentDynamicTools(
+        codexClient.startTurnCalls[0]?.dynamicTools,
+      ).map((tool) => tool.name);
+      expect(enabledNames).toContain("search_threads");
+      expect(enabledNames).toEqual(expect.arrayContaining([
+        "search_token_miser_output",
+        "read_token_miser_output",
+        "read_all_token_miser_output",
+      ]));
+
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/completed",
+          params: {
+            threadId: thread.threadId,
+            turnId: firstTurn.turnId,
+            turn: {
+              id: firstTurn.turnId,
+              status: "completed",
+              completedAt: Date.now(),
+              output: [],
+            },
+          },
+        },
+      });
+
+      enabled = false;
+      await registry.startTurn({
+        backend: "codex",
+        threadId: thread.threadId,
+        input: [{ type: "text", text: "Disable the gate." }],
+      });
+      const disabledNames = pwragentDynamicTools(
+        codexClient.startTurnCalls[1]?.dynamicTools,
+      ).map((tool) => tool.name);
+      expect(disabledNames).toContain("search_threads");
+      expect(disabledNames).not.toContain("search_token_miser_output");
+      expect(disabledNames).not.toContain("read_token_miser_output");
+      expect(disabledNames).not.toContain("read_all_token_miser_output");
+      expect(codexClient.readServerCapabilitiesCallCount).toBe(1);
+    } finally {
+      await registry.close();
+      await rm(tokenMiserRoot, { force: true, recursive: true });
+    }
   });
 
   it("repairs an exact invalid message-ID failure and retries the turn once", async () => {
@@ -35891,6 +36217,83 @@ script = "printf setup"
     expect(handler).not.toHaveBeenCalled();
 
     await registry.close();
+  });
+
+  it("rejects stale Token Miser retrieval tools after a thread opts out", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const tokenMiserRoot = await mkdtemp(
+      path.join(os.tmpdir(), "pwragent-token-miser-disabled-call-"),
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            tokenMiserEnabled: false,
+          },
+        },
+      }),
+    });
+    const internals = registry as unknown as {
+      tokenMiserStore?: TokenMiserStore;
+    };
+    internals.tokenMiserStore = new TokenMiserStore(
+      path.join(tokenMiserRoot, "objects"),
+    );
+
+    try {
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-1",
+            turn: { id: "turn-1" },
+          },
+        },
+      });
+      const response = await codexClient.emitRequest({
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          requestId: "call-1",
+          namespace: "pwragent",
+          tool: "read_token_miser_output",
+          arguments: {
+            objectId: "stale-object",
+          },
+        },
+      } as AppServerPendingRequestNotification);
+
+      expect(response).toEqual({
+        success: false,
+        contentItems: [
+          {
+            type: "inputText",
+            text: JSON.stringify(
+              {
+                code: "forbidden",
+                message: "Token Miser retrieval is disabled for this thread.",
+              },
+              null,
+              2,
+            ),
+          },
+        ],
+      });
+    } finally {
+      await registry.close();
+      await rm(tokenMiserRoot, { force: true, recursive: true });
+    }
   });
 
   it("handles PwrAgent app management tools from active ordinary threads", async () => {

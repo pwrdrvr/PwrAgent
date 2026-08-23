@@ -49,12 +49,14 @@ describe("TokenMiserService", () => {
       thresholdCharacters: 9,
     });
 
-    const result = await service.handlePostToolUse(payload("1\n2\n3\n4000"));
+    const prepared = await service.preparePostToolUse(payload("1\n2\n3\n4000"));
+    const result = prepared?.hookOutput;
 
     expect(result?.continue).toBe(false);
     expect(result?.stopReason).toContain("Token Miser intercepted");
     expect(result?.hookSpecificOutput).toEqual({
       hookEventName: "PostToolUse",
+      response_id: expect.any(String),
     });
     expect(result?.stopReason).toContain("pwragent.read_token_miser_output");
     expect(generateSummary).toHaveBeenCalledWith(
@@ -63,6 +65,11 @@ describe("TokenMiserService", () => {
         reasoningEffort: "medium",
       }),
     );
+    expect(await store.listMetadata()).toEqual([]);
+    expect(onInterceptionStored).not.toHaveBeenCalled();
+    await prepared?.staged.persist();
+    expect(await store.listMetadata()).toEqual([]);
+    await prepared?.staged.commit();
     const [metadata] = await store.listMetadata();
     expect(metadata).toMatchObject({
       threadId: "thread-1",
@@ -81,6 +88,7 @@ describe("TokenMiserService", () => {
     });
     expect(onInterceptionStored).toHaveBeenCalledWith(metadata);
     expect(result?.stopReason).toContain(metadata!.objectId);
+    expect(result?.hookSpecificOutput.response_id).toBe(metadata!.objectId);
   });
 
   it("fails open for disabled, small, and failed-summary output", async () => {
@@ -95,7 +103,7 @@ describe("TokenMiserService", () => {
       generateSummary,
       thresholdCharacters: 1,
     });
-    expect(await disabled.handlePostToolUse(payload("large"))).toBeUndefined();
+    expect(await disabled.preparePostToolUse(payload("large"))).toBeUndefined();
 
     const enabled = new TokenMiserService({
       store,
@@ -103,7 +111,7 @@ describe("TokenMiserService", () => {
       generateSummary,
       thresholdCharacters: 100,
     });
-    expect(await enabled.handlePostToolUse(payload("small"))).toBeUndefined();
+    expect(await enabled.preparePostToolUse(payload("small"))).toBeUndefined();
 
     const failing = new TokenMiserService({
       store,
@@ -111,7 +119,7 @@ describe("TokenMiserService", () => {
       generateSummary,
       thresholdCharacters: 1,
     });
-    expect(await failing.handlePostToolUse(payload("large"))).toBeUndefined();
+    expect(await failing.preparePostToolUse(payload("large"))).toBeUndefined();
     expect(await store.listMetadata()).toEqual([]);
   });
 
@@ -128,10 +136,45 @@ describe("TokenMiserService", () => {
       thresholdCharacters: 1,
     });
 
-    expect(await service.handlePostToolUse({
+    expect(await service.preparePostToolUse({
       ...payload("large nested output"),
       is_code_mode_nested: true,
     })).toBeUndefined();
+    expect(generateSummary).not.toHaveBeenCalled();
+    expect(await store.listMetadata()).toEqual([]);
+  });
+
+  it("fails open without both direct-result protocol markers", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({
+      status: "failed" as const,
+      reason: "must not run",
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 1,
+    });
+    const unsupported = payload("large unmarked output") as Partial<
+      TokenMiserPostToolUsePayload
+    >;
+    delete unsupported.is_code_mode_nested;
+
+    expect(
+      await service.preparePostToolUse(
+        unsupported as TokenMiserPostToolUsePayload,
+      ),
+    ).toBeUndefined();
+    const sourceMarkerOnly = payload("large unversioned output") as Partial<
+      TokenMiserPostToolUsePayload
+    >;
+    delete sourceMarkerOnly.token_miser_acceptance_version;
+    expect(
+      await service.preparePostToolUse(
+        sourceMarkerOnly as TokenMiserPostToolUsePayload,
+      ),
+    ).toBeUndefined();
     expect(generateSummary).not.toHaveBeenCalled();
     expect(await store.listMetadata()).toEqual([]);
   });
@@ -164,7 +207,7 @@ describe("TokenMiserService per-thread override", () => {
       generateSummary: summary,
       thresholdCharacters: 1,
     });
-    expect(await service.handlePostToolUse(payload("large"))).toBeUndefined();
+    expect(await service.preparePostToolUse(payload("large"))).toBeUndefined();
     expect(summary).not.toHaveBeenCalled();
   });
 
@@ -178,7 +221,7 @@ describe("TokenMiserService per-thread override", () => {
       generateSummary: summary,
       thresholdCharacters: 1,
     });
-    expect(await service.handlePostToolUse(payload("large"))).toBeDefined();
+    expect(await service.preparePostToolUse(payload("large"))).toBeDefined();
   });
 
   it("follows the global setting when no override is set", async () => {
@@ -190,7 +233,7 @@ describe("TokenMiserService per-thread override", () => {
       generateSummary: summary,
       thresholdCharacters: 1,
     });
-    expect(await service.handlePostToolUse(payload("large"))).toBeUndefined();
+    expect(await service.preparePostToolUse(payload("large"))).toBeUndefined();
   });
 });
 
@@ -404,6 +447,8 @@ function payload(output: string): TokenMiserPostToolUsePayload {
     hook_event_name: "PostToolUse",
     tool_name: "Bash",
     tool_use_id: "tool-1",
+    is_code_mode_nested: false,
+    token_miser_acceptance_version: 2,
     tool_input: { command: "seq 1 4000" },
     tool_response: output,
   };
