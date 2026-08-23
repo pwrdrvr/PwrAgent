@@ -213,6 +213,33 @@ describe("TokenMiserHookBridge", () => {
     });
     expect(secondHandler).toHaveBeenCalledTimes(2);
   });
+
+  it("serializes close against an in-flight start", async () => {
+    const stateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-token-miser-start-close-"),
+    );
+    const bridge = new TokenMiserHookBridge({
+      stateDir,
+      service: {} as TokenMiserService,
+    });
+    cleanups.push(async () => {
+      await bridge.close();
+      await fs.rm(stateDir, { force: true, recursive: true });
+    });
+
+    const starting = bridge.start();
+    const closing = bridge.close();
+    const descriptor = await starting;
+    await closing;
+
+    await expect(
+      fs.stat(bridge.codeModeReducerDescriptorPath),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fetch(descriptor.url)).rejects.toThrow();
+
+    const restarted = await bridge.start();
+    expect(restarted.url).not.toBe(descriptor.url);
+  });
 });
 
 async function postReducer(descriptor: {

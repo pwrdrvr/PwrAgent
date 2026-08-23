@@ -50,7 +50,9 @@ export class TokenMiserHookBridge {
   }
 
   async start(): Promise<TokenMiserBridgeDescriptor> {
-    await this.closing;
+    if (this.closing) {
+      await this.closing;
+    }
     if (this.descriptor) {
       return this.descriptor;
     }
