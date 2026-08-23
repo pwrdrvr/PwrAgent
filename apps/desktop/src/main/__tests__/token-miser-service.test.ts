@@ -114,6 +114,27 @@ describe("TokenMiserService", () => {
     expect(await failing.handlePostToolUse(payload("large"))).toBeUndefined();
     expect(await store.listMetadata()).toEqual([]);
   });
+
+  it("does not gate Code Mode nested calls that never enter parent context", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({
+      status: "failed" as const,
+      reason: "must not run",
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 1,
+    });
+
+    expect(await service.handlePostToolUse({
+      ...payload("large nested output"),
+      is_code_mode_nested: true,
+    })).toBeUndefined();
+    expect(generateSummary).not.toHaveBeenCalled();
+    expect(await store.listMetadata()).toEqual([]);
+  });
 });
 
 describe("TokenMiserService per-thread override", () => {
@@ -174,7 +195,7 @@ describe("TokenMiserService per-thread override", () => {
 });
 
 describe("TokenMiserService code-mode reduction", () => {
-  it("stores text output with code-mode context and returns a v1 replacement", async () => {
+  it("stores text output with code-mode context and returns a v2 response id", async () => {
     const store = await createStore();
     const generateSummary = vi.fn(async () => ({
       status: "ok" as const,
@@ -202,13 +223,14 @@ describe("TokenMiserService code-mode reduction", () => {
       { type: "input_text", text: "packages/shared/\n" },
     ]);
 
-    const result = await service.handleCodeModeOutput(request);
+    const result = await prepareAndCommit(service, request);
 
     expect(result).toEqual({
       replacement: [{
         type: "input_text",
         text: expect.stringContaining("Token Miser intercepted"),
       }],
+      response_id: expect.any(String),
     });
     expect(generateSummary).toHaveBeenCalledWith(expect.objectContaining({
       model: "gpt-5.6-luna",
@@ -227,6 +249,7 @@ describe("TokenMiserService code-mode reduction", () => {
       originalCharacters: 31,
       baselineParentTokens: 8,
     });
+    expect(result).toMatchObject({ response_id: metadata!.objectId });
     expect(metadata!.replacementCharacters).toBeGreaterThan(
       replacementText.length,
     );
@@ -249,7 +272,7 @@ describe("TokenMiserService code-mode reduction", () => {
       thresholdCharacters: 1,
     });
 
-    await service.handleCodeModeOutput({
+    await prepareAndCommit(service, {
       ...codeModePayload([{ type: "input_text", text: "x".repeat(1_000) }]),
       max_output_tokens: 25,
     });
@@ -272,7 +295,7 @@ describe("TokenMiserService code-mode reduction", () => {
       thresholdCharacters: 1,
     });
     expect(
-      await disabled.handleCodeModeOutput(
+      await disabled.prepareCodeModeOutput(
         codeModePayload([{ type: "input_text", text: "large" }]),
       ),
     ).toBeUndefined();
@@ -284,7 +307,7 @@ describe("TokenMiserService code-mode reduction", () => {
       thresholdCharacters: 100,
     });
     expect(
-      await enabled.handleCodeModeOutput(
+      await enabled.prepareCodeModeOutput(
         codeModePayload([{ type: "input_text", text: "small" }]),
       ),
     ).toBeUndefined();
@@ -296,7 +319,7 @@ describe("TokenMiserService code-mode reduction", () => {
       thresholdCharacters: 1,
     });
     expect(
-      await failing.handleCodeModeOutput(
+      await failing.prepareCodeModeOutput(
         codeModePayload([{ type: "input_text", text: "large" }]),
       ),
     ).toBeUndefined();
@@ -320,7 +343,7 @@ describe("TokenMiserService code-mode reduction", () => {
       thresholdCharacters: 1,
     });
     const controller = new AbortController();
-    const pending = service.handleCodeModeOutput(
+    const pending = service.prepareCodeModeOutput(
       codeModePayload([{ type: "input_text", text: "large output" }]),
       { signal: controller.signal },
     );
@@ -357,13 +380,22 @@ describe("TokenMiserService code-mode reduction", () => {
     });
 
     await expect(
-      service.handleCodeModeOutput(
+      service.prepareCodeModeOutput(
         codeModePayload([{ type: "input_text", text: "large output" }]),
       ),
     ).resolves.toBeUndefined();
     expect(await store.listMetadata()).toEqual([]);
   });
 });
+
+async function prepareAndCommit(
+  service: TokenMiserService,
+  request: TokenMiserCodeModeOutputPayload,
+) {
+  const prepared = await service.prepareCodeModeOutput(request);
+  await prepared?.staged.commit();
+  return prepared?.response;
+}
 
 function payload(output: string): TokenMiserPostToolUsePayload {
   return {
@@ -381,7 +413,7 @@ function codeModePayload(
   contentItems: TokenMiserCodeModeOutputPayload["content_items"],
 ): TokenMiserCodeModeOutputPayload {
   return {
-    version: 1,
+    version: 2,
     thread_id: "thread-1",
     turn_id: "turn-1",
     call_id: "call-1",

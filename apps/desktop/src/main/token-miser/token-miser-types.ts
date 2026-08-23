@@ -17,6 +17,14 @@ const TOKEN_MISER_CODE_MODE_PAYLOAD_KEYS = new Set([
   "content_items",
 ]);
 const TOKEN_MISER_CODE_MODE_TEXT_ITEM_KEYS = new Set(["type", "text"]);
+const TOKEN_MISER_CODE_MODE_ACCEPTANCE_KEYS = new Set([
+  "version",
+  "response_id",
+  "thread_id",
+  "turn_id",
+  "call_id",
+  "cell_id",
+]);
 
 export type TokenMiserPostToolUsePayload = {
   session_id: string;
@@ -24,6 +32,8 @@ export type TokenMiserPostToolUsePayload = {
   hook_event_name: "PostToolUse";
   tool_name: string;
   tool_use_id: string;
+  /** True only for a nested tool call whose result stays inside Code Mode. */
+  is_code_mode_nested?: boolean;
   tool_input?: unknown;
   tool_response: unknown;
 };
@@ -93,13 +103,13 @@ export type TokenMiserCodeModeTextContentItem = {
 };
 
 /**
- * Version 1 of the script-to-model reduction request emitted by the
+ * Version 2 of the script-to-model reduction request emitted by the
  * PwrAgent Codex fork. Non-text content is deliberately outside this host
  * implementation: images, audio, and encrypted content must reach Codex's
  * fail-open path unchanged rather than being flattened or silently lost.
  */
 export type TokenMiserCodeModeOutputPayload = {
-  version: 1;
+  version: 2;
   thread_id: string;
   turn_id: string;
   call_id: string;
@@ -111,7 +121,23 @@ export type TokenMiserCodeModeOutputPayload = {
 };
 
 export type TokenMiserCodeModeReductionOutput = {
-  replacement: TokenMiserCodeModeTextContentItem[] | null;
+  replacement: TokenMiserCodeModeTextContentItem[];
+  response_id: string;
+} | {
+  replacement: null;
+};
+
+/**
+ * Codex sends this only after it has parsed and selected a v2 replacement.
+ * PwrAgent does not publish a gate or its savings before this acknowledgement.
+ */
+export type TokenMiserCodeModeAcceptancePayload = {
+  version: 2;
+  response_id: string;
+  thread_id: string;
+  turn_id: string;
+  call_id: string;
+  cell_id: string;
 };
 
 export function estimateTokenCount(characters: number): number {
@@ -151,6 +177,10 @@ export function isTokenMiserPostToolUsePayload(
     && record.tool_name.length > 0
     && typeof record.tool_use_id === "string"
     && record.tool_use_id.length > 0
+    && (
+      record.is_code_mode_nested === undefined
+      || typeof record.is_code_mode_nested === "boolean"
+    )
     && Object.prototype.hasOwnProperty.call(record, "tool_response")
   );
 }
@@ -164,7 +194,7 @@ export function isTokenMiserCodeModeOutputPayload(
   const record = value as Record<string, unknown>;
   return (
     hasOnlyKeys(record, TOKEN_MISER_CODE_MODE_PAYLOAD_KEYS)
-    && record.version === 1
+    && record.version === 2
     && isNonEmptyString(record.thread_id)
     && isNonEmptyString(record.turn_id)
     && isNonEmptyString(record.call_id)
@@ -176,6 +206,24 @@ export function isTokenMiserCodeModeOutputPayload(
     && Array.isArray(record.content_items)
     && record.content_items.length > 0
     && record.content_items.every(isCodeModeTextContentItem)
+  );
+}
+
+export function isTokenMiserCodeModeAcceptancePayload(
+  value: unknown,
+): value is TokenMiserCodeModeAcceptancePayload {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    hasOnlyKeys(record, TOKEN_MISER_CODE_MODE_ACCEPTANCE_KEYS)
+    && record.version === 2
+    && isNonEmptyString(record.response_id)
+    && isNonEmptyString(record.thread_id)
+    && isNonEmptyString(record.turn_id)
+    && isNonEmptyString(record.call_id)
+    && isNonEmptyString(record.cell_id)
   );
 }
 

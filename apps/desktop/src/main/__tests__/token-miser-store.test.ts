@@ -367,6 +367,44 @@ describe("TokenMiserStore", () => {
     expect(await store.readMetadata(older.objectId)).toBeUndefined();
     expect(await store.readMetadata(newer.objectId)).toBeDefined();
   });
+
+  it("prunes stale hidden output without touching fresh cross-instance stages", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-token-miser-"),
+    );
+    temporaryDirectories.push(root);
+    const store = new TokenMiserStore(root);
+    const params = {
+      threadId: "thread-owner",
+      turnId: "turn-pending",
+      toolUseId: "tool-pending",
+      toolName: "Code Mode",
+      output: "pending raw output",
+      replacementCharacters: 100,
+      summary: {
+        summary: "Pending output.",
+        usefulDetails: [],
+        suggestedNextStep: "None.",
+      },
+    };
+    const stale = await store.stage(params);
+    const fresh = await store.stage(params);
+    await Promise.all([stale.persist(), fresh.persist()]);
+    const now = Date.now();
+    const stalePath = path.join(root, `${stale.metadata.objectId}.txt`);
+    const freshPath = path.join(root, `${fresh.metadata.objectId}.txt`);
+    const old = new Date(now - 10 * 60_000);
+    await fs.utimes(stalePath, old, old);
+
+    await store.prune({
+      maxAgeMs: 24 * 60 * 60_000,
+      maxBytes: 1024 * 1024,
+      now,
+    });
+
+    await expect(fs.stat(stalePath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(fs.stat(freshPath)).resolves.toBeDefined();
+  });
 });
 
 async function createStore(): Promise<TokenMiserStore> {

@@ -51,7 +51,7 @@ const TOKEN_MISER_SYSTEM_PROMPT = [
   "Do not repeat long passages. Do not give general advice. Keep the complete response under 450 words.",
 ].join("\n");
 
-// Pinned to pwrdrvr/codex reducer protocol v1. Codex inserts these two items
+// Pinned to pwrdrvr/codex reducer protocol v2. Codex inserts these two items
 // around every host replacement after this service responds. Include them in
 // replacement accounting even though they do not cross the HTTP boundary.
 const CODE_MODE_REPLACEMENT_FENCE_HEADER = [
@@ -67,7 +67,10 @@ export type TokenMiserStructuredGenerationResult =
   | { status: "unavailable" | "failed"; reason: string };
 
 export type TokenMiserPreparedCodeModeReduction = {
-  response: TokenMiserCodeModeReductionOutput;
+  response: Extract<
+    TokenMiserCodeModeReductionOutput,
+    { response_id: string }
+  >;
   staged: TokenMiserStagedObject;
 };
 
@@ -117,6 +120,13 @@ export class TokenMiserService {
   async handlePostToolUse(
     payload: TokenMiserPostToolUsePayload,
   ): Promise<TokenMiserHookOutput | undefined> {
+    // A nested Code Mode result is consumed by the running script, not the
+    // parent model. The v2 reducer independently gates the script's eventual
+    // model-visible result, so launching a helper here would charge twice and
+    // publish savings for a replacement Codex deliberately ignores.
+    if (payload.is_code_mode_nested === true) {
+      return undefined;
+    }
     // A per-thread override wins over the global setting in both directions:
     // a thread can opt out of the helper round trip when latency matters
     // more than context, or opt in while the feature is globally off.
@@ -149,23 +159,7 @@ export class TokenMiserService {
     };
   }
 
-  /**
-   * Reduces output at Codex's code-mode script-to-model boundary. Returning
-   * `undefined` asks the bridge to send `replacement: null`, which makes Codex
-   * retain the original under its normal truncation policy.
-   */
-  async handleCodeModeOutput(
-    payload: TokenMiserCodeModeOutputPayload,
-    options: { signal?: AbortSignal } = {},
-  ): Promise<TokenMiserCodeModeReductionOutput | undefined> {
-    const prepared = await this.prepareCodeModeOutput(payload, options);
-    if (!prepared) {
-      return undefined;
-    }
-    await prepared.staged.commit();
-    return prepared.response;
-  }
-
+  /** Prepare a code-mode replacement; only the bridge's v2 ack may commit it. */
   async prepareCodeModeOutput(
     payload: TokenMiserCodeModeOutputPayload,
     options: { signal?: AbortSignal } = {},
@@ -200,9 +194,10 @@ export class TokenMiserService {
     }
     const response = {
       replacement: [{ type: "input_text" as const, text: prepared.replacement }],
+      response_id: prepared.staged.metadata.objectId,
     };
     if (
-      Buffer.byteLength(JSON.stringify(response))
+      Buffer.byteLength(`${JSON.stringify(response)}\n`)
       > TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES
     ) {
       await prepared.staged.discard();

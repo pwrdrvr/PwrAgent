@@ -13,6 +13,10 @@ const METADATA_SUFFIX = ".json";
 const OUTPUT_SUFFIX = ".txt";
 const MAX_SEARCH_RESULTS = 100;
 const MAX_READ_LINES = 2_000;
+// Reducer acknowledgements expire after 60 seconds. A longer grace protects a
+// fresh pending output owned by another PwrAgent process sharing the profile,
+// while still reclaiming raw files left by a crash before acceptance.
+const PENDING_OUTPUT_ORPHAN_GRACE_MS = 5 * 60_000;
 
 export type TokenMiserStoredObject = {
   metadata: TokenMiserObjectMetadata;
@@ -404,6 +408,10 @@ export class TokenMiserStore {
   }): Promise<void> {
     const now = params.now ?? Date.now();
     const metadata = await this.listMetadata();
+    await this.pruneStalePendingOutputs(
+      new Set(metadata.map((entry) => entry.objectId)),
+      now,
+    );
     const retained: Array<{ metadata: TokenMiserObjectMetadata; bytes: number }> = [];
     for (const entry of metadata) {
       const outputPath = this.outputPath(entry.objectId);
@@ -441,6 +449,35 @@ export class TokenMiserStore {
       },
     );
     return output === undefined ? undefined : { metadata, output };
+  }
+
+  private async pruneStalePendingOutputs(
+    committedObjectIds: ReadonlySet<string>,
+    now: number,
+  ): Promise<void> {
+    const entries = await fs.readdir(this.rootDir).catch((error: unknown) => {
+      if (isMissingFileError(error)) {
+        return [];
+      }
+      throw error;
+    });
+    await Promise.all(entries.map(async (entry) => {
+      if (!entry.endsWith(OUTPUT_SUFFIX)) {
+        return;
+      }
+      const objectId = entry.slice(0, -OUTPUT_SUFFIX.length);
+      if (!isSafeObjectId(objectId) || committedObjectIds.has(objectId)) {
+        return;
+      }
+      const outputPath = this.outputPath(objectId);
+      const stats = await fs.stat(outputPath).catch(() => undefined);
+      if (
+        stats
+        && now - stats.mtimeMs > PENDING_OUTPUT_ORPHAN_GRACE_MS
+      ) {
+        await fs.rm(outputPath, { force: true });
+      }
+    }));
   }
 
   private async recordRetrieval(objectId: string, characters: number): Promise<void> {
