@@ -9727,6 +9727,15 @@ describe("CodexAppServerClient", () => {
           VIRTUAL_ENV: "/Users/example/project/.venv",
         },
       },
+      config: {
+        features: {
+          code_mode: {
+            output_reducer: {
+              descriptor_path: "/tmp/token-miser/code-mode-reducer.json",
+            },
+          },
+        },
+      },
     });
 
     expect(result).toEqual({
@@ -9751,6 +9760,13 @@ describe("CodexAppServerClient", () => {
           cwd: "/Users/example/project",
           "config": {
             fast_mode: true,
+            features: {
+              code_mode: {
+                output_reducer: {
+                  descriptor_path: "/tmp/token-miser/code-mode-reducer.json",
+                },
+              },
+            },
             "shell_environment_policy.set.PATH":
               "/Users/example/project/.venv/bin:/usr/bin",
             "shell_environment_policy.set.VIRTUAL_ENV":

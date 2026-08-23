@@ -85,6 +85,38 @@ export type TokenMiserStoreOptions = {
   ) => void | Promise<void>;
 };
 
+export type TokenMiserStoreParams = {
+  objectId?: string;
+  threadId: string;
+  turnId: string;
+  toolUseId: string;
+  toolName: string;
+  output: string;
+  /**
+   * Optional provider-enforced ceiling for the original model-visible result.
+   * Code mode supplies its resolved `max_output_tokens`; direct hook results
+   * retain the historical 10k-token cap below.
+   */
+  baselineParentTokenCap?: number;
+  replacementCharacters: number;
+  summary: TokenMiserSummary;
+  helperUsage?: TokenMiserHelperUsage;
+  parentCumulativeInputTokens?: number;
+  parentModel?: string;
+  parentServiceTier?: string;
+  now?: number;
+};
+
+export type TokenMiserStagedObject = {
+  metadata: TokenMiserObjectMetadata;
+  /** Persist the retrievable object before its replacement is delivered. */
+  persist(): Promise<void>;
+  /** Publish the already-persisted object to live accounting and cards. */
+  commit(): Promise<void>;
+  /** Remove an object whose replacement was not accepted by the caller. */
+  discard(): Promise<void>;
+};
+
 export class TokenMiserStore {
   private readonly updateLocks = new Map<string, Promise<void>>();
 
@@ -93,21 +125,13 @@ export class TokenMiserStore {
     private readonly options: TokenMiserStoreOptions = {},
   ) {}
 
-  async store(params: {
-    objectId?: string;
-    threadId: string;
-    turnId: string;
-    toolUseId: string;
-    toolName: string;
-    output: string;
-    replacementCharacters: number;
-    summary: TokenMiserSummary;
-    helperUsage?: TokenMiserHelperUsage;
-    parentCumulativeInputTokens?: number;
-    parentModel?: string;
-    parentServiceTier?: string;
-    now?: number;
-  }): Promise<TokenMiserObjectMetadata> {
+  async store(params: TokenMiserStoreParams): Promise<TokenMiserObjectMetadata> {
+    const staged = await this.stage(params);
+    await staged.commit();
+    return staged.metadata;
+  }
+
+  async stage(params: TokenMiserStoreParams): Promise<TokenMiserStagedObject> {
     await this.ensureRoot();
     const objectId = params.objectId ?? randomUUID();
     if (!isSafeObjectId(objectId)) {
@@ -123,8 +147,14 @@ export class TokenMiserStore {
       toolName: params.toolName,
       createdAt: params.now ?? Date.now(),
       originalCharacters,
-      baselineParentTokens: estimateTokenCount(
-        Math.min(originalCharacters, TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS),
+      baselineParentTokens: Math.min(
+        estimateTokenCount(
+          Math.min(originalCharacters, TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS),
+        ),
+        normalizePositiveInteger(
+          params.baselineParentTokenCap,
+          Number.MAX_SAFE_INTEGER,
+        ),
       ),
       replacementCharacters: params.replacementCharacters,
       retrievedCharacters: 0,
@@ -147,9 +177,46 @@ export class TokenMiserStore {
         : {}),
     };
     await writePrivateFileAtomic(this.outputPath(objectId), params.output);
-    await this.writeMetadata(metadata);
-    await this.options.onMetadataUpdated?.(metadata, "stored");
-    return metadata;
+    let persisted = false;
+    let committed = false;
+    let discarded = false;
+    let operation = Promise.resolve();
+    const serialize = async (next: () => Promise<void>): Promise<void> => {
+      operation = operation.catch(() => undefined).then(next);
+      await operation;
+    };
+    const persist = async (): Promise<void> => {
+      await serialize(async () => {
+        if (persisted || discarded) {
+          return;
+        }
+        await this.writeMetadata(metadata);
+        persisted = true;
+      });
+    };
+    return {
+      metadata,
+      persist,
+      commit: async () => {
+        await persist();
+        await serialize(async () => {
+          if (committed || discarded) {
+            return;
+          }
+          await this.options.onMetadataUpdated?.(metadata, "stored");
+          committed = true;
+        });
+      },
+      discard: async () => {
+        await serialize(async () => {
+          if (committed || discarded) {
+            return;
+          }
+          discarded = true;
+          await this.remove(objectId);
+        });
+      },
+    };
   }
 
   async readMetadata(objectId: string): Promise<TokenMiserObjectMetadata | undefined> {
@@ -381,6 +448,7 @@ export class TokenMiserStore {
   async recordParentModelRequest(params: {
     cumulativeInputTokens: number;
     objectId: string;
+    requestEpoch?: string;
   }): Promise<TokenMiserObjectMetadata | undefined> {
     return await this.updateMetadata(params.objectId, (metadata) => {
       // The caller owns the request boundary: it holds one cursor for the whole
@@ -389,13 +457,23 @@ export class TokenMiserStore {
       // never disagree with one that does — the thread cursor is seeded from
       // the highest gate mark and only ever moves above it, so anything the
       // caller accepts is already above every gate's own mark.
+      const requestEpochChanged = Boolean(
+        params.requestEpoch
+        && params.requestEpoch !== metadata.parentRequestEpoch,
+      );
       if (
         metadata.replayTrackingVersion !== 2
         || metadata.replayTrackingStoppedAt !== undefined
-        || params.cumulativeInputTokens
-          <= (metadata.lastParentCumulativeInputTokens ?? -1)
+        || (
+          !requestEpochChanged
+          && params.cumulativeInputTokens
+            <= (metadata.lastParentCumulativeInputTokens ?? -1)
+        )
       ) {
         return false;
+      }
+      if (params.requestEpoch) {
+        metadata.parentRequestEpoch = params.requestEpoch;
       }
       metadata.lastParentCumulativeInputTokens = params.cumulativeInputTokens;
       metadata.parentRequestsObservedAfterGate =
@@ -555,6 +633,15 @@ function splitLines(value: string): string[] {
 function clampInteger(value: number, minimum: number, maximum: number): number {
   const normalized = Number.isFinite(value) ? Math.floor(value) : minimum;
   return Math.min(maximum, Math.max(minimum, normalized));
+}
+
+function normalizePositiveInteger(
+  value: number | undefined,
+  fallback: number,
+): number {
+  return value !== undefined && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : fallback;
 }
 
 function isMissingFileError(error: unknown): boolean {

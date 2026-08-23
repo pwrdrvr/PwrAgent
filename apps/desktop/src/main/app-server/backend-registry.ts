@@ -436,6 +436,9 @@ import { TokenMiserHookBridge } from "../token-miser/token-miser-hook-bridge";
 import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
 import {
   TOKEN_MISER_ACTIVATION_FILENAME,
+  TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES,
+  TOKEN_MISER_DEFAULT_THRESHOLD_CHARACTERS,
+  TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS,
   type TokenMiserActivationStatus,
 } from "../token-miser/token-miser-types";
 import { TokenMiserService } from "../token-miser/token-miser-service";
@@ -777,6 +780,7 @@ type BackendClient = {
     fastMode?: boolean;
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadStartParams["config"];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }>;
   listModels?(diagnostics?: {
     callerReason?: string;
@@ -6460,6 +6464,19 @@ function buildCodexParentDynamicToolSpecs(
   );
 }
 
+function buildCodexTokenMiserDynamicToolSpecs(
+  store: TokenMiserStore | undefined,
+): CodexDynamicToolSpec[] {
+  if (!store) {
+    return [];
+  }
+  return buildCodexParentDynamicToolSpecs(
+    resolveAgentToolCatalogs({ tokenMiserStore: store }).filter(
+      (catalog) => catalog.id === "token_miser",
+    ),
+  );
+}
+
 const PWRAGENT_PDF_MCP_SERVER_NAME = "pwragent_pdf";
 const PWRAGENT_CONNECTION_MCP_SERVER_PREFIX = "pwragent_";
 const PWRAGENT_CONNECTION_MCP_SERVER_HASH_LENGTH = 32;
@@ -6577,6 +6594,8 @@ function mergeCodexThreadConfigs(
       const record = config as Record<string, unknown>;
       const currentServers = result.mcp_servers;
       const nextServers = record.mcp_servers;
+      const currentFeatures = result.features;
+      const nextFeatures = record.features;
       return {
         ...result,
         ...record,
@@ -6588,11 +6607,75 @@ function mergeCodexThreadConfigs(
               },
             }
           : {}),
+        ...(isConfigRecord(currentFeatures) && isConfigRecord(nextFeatures)
+          ? {
+              features: mergeCodexFeatureConfigs(
+                currentFeatures,
+                nextFeatures,
+              ),
+            }
+          : {}),
       };
     },
     {},
   );
   return merged as CodexThreadStartParams["config"];
+}
+
+function mergeCodexFeatureConfigs(
+  current: Record<string, unknown>,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  const currentCodeMode = current.code_mode;
+  const nextCodeMode = next.code_mode;
+  if (!isConfigRecord(currentCodeMode) || !isConfigRecord(nextCodeMode)) {
+    return { ...current, ...next };
+  }
+  const currentReducer = currentCodeMode.output_reducer;
+  const nextReducer = nextCodeMode.output_reducer;
+  return {
+    ...current,
+    ...next,
+    code_mode: {
+      ...currentCodeMode,
+      ...nextCodeMode,
+      ...(isConfigRecord(currentReducer) && isConfigRecord(nextReducer)
+        ? { output_reducer: { ...currentReducer, ...nextReducer } }
+        : {}),
+    },
+  };
+}
+
+function isConfigRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Configures the reducer added by pwrdrvr/codex at the script-to-model
+ * boundary. This does not enable Code Mode; it only applies when the thread's
+ * existing model/config selects it. Direct tool calls continue through the
+ * PostToolUse plugin.
+ */
+function buildCodexTokenMiserConfig(
+  reducerDescriptorPath: string,
+): CodexThreadStartParams["config"] {
+  return {
+    features: {
+      code_mode: {
+        max_output_tokens_ceiling: TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS,
+        output_reducer: {
+          descriptor_path: reducerDescriptorPath,
+          max_request_bytes: 32 * 1024 * 1024,
+          max_response_bytes: TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES,
+          min_trigger_bytes: TOKEN_MISER_DEFAULT_THRESHOLD_CHARACTERS,
+          // The Luna request has a 45-second application timeout. Leave enough
+          // room for serialization and the loopback response while staying
+          // below the existing 60-second PostToolUse hook budget.
+          timeout_ms: 55_000,
+        },
+      },
+    },
+  } as CodexThreadStartParams["config"];
 }
 
 function mergeCodexDynamicToolSpecs(
@@ -7338,10 +7421,12 @@ export class DesktopBackendRegistry {
    * One cursor per thread, not one per gate. The cumulative total is a property
    * of the thread's request sequence, so deciding "is this a new request?" once
    * keeps every gate on the same answer; per-gate marks made the answer depend
-   * on when each gate was created. Seeded from stored gate metadata at startup,
-   * which is why the mark is still persisted per gate.
+   * on when each gate was created. The process epoch passed to the store lets a
+   * resumed session re-anchor below the previous process's persisted watermark.
    */
   private readonly liveTokenMiserRequestCursor = new Map<string, number>();
+  private readonly tokenMiserRequestEpoch = randomUUID();
+  private readonly tokenMiserRequestEpochByCursor = new Map<string, string>();
   private readonly liveTokenMiserSubAgents = new Map<
     string,
     Map<string, ThreadSubAgentSummary>
@@ -7612,6 +7697,7 @@ export class DesktopBackendRegistry {
   private readonly pdfToolMcpServer?: AgentToolMcpServerLike;
   private readonly tokenMiserStore?: TokenMiserStore;
   private readonly tokenMiserHookBridge?: TokenMiserHookBridge;
+  private tokenMiserCodeModeReducerDescriptorPath?: string;
   private readonly tokenMiserPluginManager?: TokenMiserPluginManager;
   private tokenMiserStateDir?: string;
   private readonly resolveTokenMiserCodexRuntimeFn?: () => Promise<{
@@ -8008,6 +8094,8 @@ export class DesktopBackendRegistry {
         stateDir: tokenMiserStateDir,
         service: tokenMiserService,
       });
+      this.tokenMiserCodeModeReducerDescriptorPath =
+        this.tokenMiserHookBridge.codeModeReducerDescriptorPath;
       this.tokenMiserStateDir = tokenMiserStateDir;
       this.tokenMiserPluginManager = new TokenMiserPluginManager({
         stateDir: tokenMiserStateDir,
@@ -12302,10 +12390,6 @@ export class DesktopBackendRegistry {
       // constructed for any live Codex client, so passing it unconditionally
       // advertised three retrieval tools into every turn of an operator who
       // never enabled the feature.
-      // Gated on the setting, not merely on the store existing: the store is
-      // constructed for any live Codex client, so passing it unconditionally
-      // advertised three retrieval tools into every turn of an operator who
-      // never enabled the feature.
       ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore } : {}),
     });
     const pdfMcpRegistration =
@@ -12334,9 +12418,14 @@ export class DesktopBackendRegistry {
         ? await this.readConfiguredCodexMcpServerNames(cwd)
         : undefined,
     );
-    const codexMcpConfig = mergeCodexThreadConfigs(
+    const codexThreadConfig = mergeCodexThreadConfigs(
       pdfMcpConfig,
       connectionMcpConfig,
+      tokenMiserEnabled && this.tokenMiserCodeModeReducerDescriptorPath
+        ? buildCodexTokenMiserConfig(
+            this.tokenMiserCodeModeReducerDescriptorPath,
+          )
+        : undefined,
     );
     const acpMcpRegistration = mcpConnectionRegistrations.length > 0
       ? {
@@ -12393,7 +12482,7 @@ export class DesktopBackendRegistry {
                   defaultModeRequestUserInput:
                     this.resolveCodexDefaultModeRequestUserInputFn(),
                   threadSource: "user" as CodexThreadSource,
-                  ...(codexMcpConfig ? { config: codexMcpConfig } : {}),
+                  ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
                 }
               : {}),
             dynamicTools,
@@ -12709,6 +12798,19 @@ export class DesktopBackendRegistry {
         ? buildCodexPdfMcpConfig(pdfMcpRegistration)
         : buildCodexPdfMcpDisabledConfig()
       : undefined;
+    const tokenMiserEnabled =
+      sourceOverlay?.tokenMiserEnabled ?? this.resolveTokenMiserEnabledFn();
+    if (tokenMiserEnabled) {
+      await this.prepareTokenMiserRuntime();
+    }
+    const codexThreadConfig = mergeCodexThreadConfigs(
+      pdfMcpConfig,
+      tokenMiserEnabled && this.tokenMiserCodeModeReducerDescriptorPath
+        ? buildCodexTokenMiserConfig(
+            this.tokenMiserCodeModeReducerDescriptorPath,
+          )
+        : undefined,
+    );
 
     let result: { threadId: string };
     let forkedCodexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
@@ -12754,7 +12856,7 @@ export class DesktopBackendRegistry {
         approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
         sandbox: request.sandbox ?? modeSettings.sandbox,
         codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
-        ...(pdfMcpConfig ? { config: pdfMcpConfig } : {}),
+        ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
       });
       pdfMcpRegistration?.bindThread(result.threadId);
     } catch (error) {
@@ -12812,6 +12914,13 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         executionMode,
       });
+      if (sourceOverlay?.tokenMiserEnabled !== undefined) {
+        await this.overlayStore.setThreadTokenMiser({
+          backend,
+          threadId: result.threadId,
+          enabled: sourceOverlay.tokenMiserEnabled,
+        });
+      }
       await this.overlayStore.setThreadPrAutoDispatchEnabled({
         backend,
         threadId: result.threadId,
@@ -13450,11 +13559,6 @@ export class DesktopBackendRegistry {
         throw new Error("Desktop backend registry closed before turn start");
       }
     }
-    // Existing threads reach the gate through here, not through startThread.
-    // Awaited so the hook has a bridge before this turn's first tool call.
-    if (params.backend === "codex" && this.resolveTokenMiserEnabledFn()) {
-      await this.prepareTokenMiserRuntime();
-    }
     const migrationResult = await this.applyThreadModelMigration({
       backend: params.backend,
       threadId: params.threadId,
@@ -13604,7 +13708,8 @@ export class DesktopBackendRegistry {
     let turnParams!: ModelSettings;
     let cwd: string | undefined;
     let activeTurnMode: ThreadExecutionMode | undefined;
-    let codexMcpConfig: CodexThreadStartParams["config"] | undefined;
+    let codexThreadConfig: CodexThreadStartParams["config"] | undefined;
+    let tokenMiserEnabledForThread = false;
     let pdfMcpAvailable = false;
     try {
       if (params.backend === "codex") {
@@ -13614,6 +13719,17 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: params.threadId,
       });
+      if (params.backend === "codex") {
+        tokenMiserEnabledForThread =
+          overlay?.tokenMiserEnabled ?? this.resolveTokenMiserEnabledFn();
+        // Existing threads reach the gate through here, not through
+        // startThread. Await the bridge before this turn's first code-mode or
+        // direct tool result, including a per-thread opt-in while the global
+        // setting is off.
+        if (tokenMiserEnabledForThread) {
+          await this.prepareTokenMiserRuntime();
+        }
+      }
       cwd =
         params.backend === "codex"
           ? await this.resolveThreadEnvironmentCwd(
@@ -13629,7 +13745,7 @@ export class DesktopBackendRegistry {
           ? await this.registerPdfMcpClient({ threadId: params.threadId })
           : undefined;
         pdfMcpAvailable = registration !== undefined;
-        codexMcpConfig = registration
+        codexThreadConfig = registration
           ? buildCodexPdfMcpConfig(registration)
           : buildCodexPdfMcpDisabledConfig();
       }
@@ -13638,14 +13754,23 @@ export class DesktopBackendRegistry {
           overlay.mcpConnectionIds,
           params.threadId,
         );
-        codexMcpConfig = mergeCodexThreadConfigs(
-          codexMcpConfig,
+        codexThreadConfig = mergeCodexThreadConfigs(
+          codexThreadConfig,
           buildCodexConnectionMcpConfig(
             registrations,
             await this.readConfiguredCodexMcpServerNames(cwd),
           ),
         );
       }
+      codexThreadConfig = mergeCodexThreadConfigs(
+        codexThreadConfig,
+        tokenMiserEnabledForThread
+          && this.tokenMiserCodeModeReducerDescriptorPath
+          ? buildCodexTokenMiserConfig(
+              this.tokenMiserCodeModeReducerDescriptorPath,
+            )
+          : undefined,
+      );
       const preparedPdfInput = await preparePdfTurnInput({
         handling: this.resolvePdfTurnInputHandling({
           backend: params.backend,
@@ -13765,7 +13890,7 @@ export class DesktopBackendRegistry {
               ...(overlay?.codexEnvironmentRuntime
                 ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
                 : {}),
-              ...(codexMcpConfig ? { config: codexMcpConfig } : {}),
+              ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
               defaultModeRequestUserInput:
                 this.resolveCodexDefaultModeRequestUserInputFn(),
           });
@@ -14238,6 +14363,7 @@ export class DesktopBackendRegistry {
     let overlay: ThreadOverlayState | undefined;
     let cwd: string | undefined;
     let codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
+    let tokenMiserConfig: CodexThreadStartParams["config"] | undefined;
     try {
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
@@ -14249,6 +14375,16 @@ export class DesktopBackendRegistry {
           })
         : undefined;
       if (params.backend === "codex") {
+        const tokenMiserEnabled =
+          overlay?.tokenMiserEnabled ?? this.resolveTokenMiserEnabledFn();
+        if (tokenMiserEnabled) {
+          await this.prepareTokenMiserRuntime();
+          tokenMiserConfig = this.tokenMiserCodeModeReducerDescriptorPath
+            ? buildCodexTokenMiserConfig(
+                this.tokenMiserCodeModeReducerDescriptorPath,
+              )
+            : undefined;
+        }
         codexEnvironmentRuntime = overlay?.codexEnvironmentRuntime;
         const threadCwd = await this.resolveThreadEnvironmentCwd(
           params.backend,
@@ -14332,6 +14468,7 @@ export class DesktopBackendRegistry {
           ...(codexEnvironmentRuntime
             ? { codexEnvironmentRuntime }
             : {}),
+          ...(tokenMiserConfig ? { config: tokenMiserConfig } : {}),
         });
       };
 
@@ -14348,6 +14485,7 @@ export class DesktopBackendRegistry {
             parentBackend: params.backend,
             parentThreadId: params.threadId,
             target: params.target,
+            ...(tokenMiserConfig ? { tokenMiserConfig } : {}),
           })
         : params.backend === "codex"
           ? await this.withCodexThreadClient(params.threadId, startWithClient)
@@ -14457,6 +14595,7 @@ export class DesktopBackendRegistry {
     parentBackend: AppServerBackendKind;
     parentThreadId: string;
     target: StartReviewRequest["target"];
+    tokenMiserConfig?: CodexThreadStartParams["config"];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     // Only a same-provider review can inherit the parent's live session state;
     // another provider's agent runtime and execution mode do not transfer.
@@ -14502,6 +14641,9 @@ export class DesktopBackendRegistry {
       : params.overlay?.executionMode ?? "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const client = this.getClient("codex", executionMode);
+    const tokenMiserDynamicTools = params.tokenMiserConfig
+      ? buildCodexTokenMiserDynamicToolSpecs(this.tokenMiserStore)
+      : [];
     const thread = await client.startThread({
       ...(params.cwd ? { cwd: params.cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
@@ -14516,6 +14658,10 @@ export class DesktopBackendRegistry {
       ...params.modelSettings,
       ...(params.codexEnvironmentRuntime
         ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
+        : {}),
+      ...(params.tokenMiserConfig ? { config: params.tokenMiserConfig } : {}),
+      ...(tokenMiserDynamicTools.length > 0
+        ? { dynamicTools: tokenMiserDynamicTools }
         : {}),
     });
     this.reservedCodexStartThreadIds.add(thread.threadId);
@@ -26151,6 +26297,11 @@ export class DesktopBackendRegistry {
       // treating it as a duplicate is what makes a thread stop counting.
       if (cumulativeInputTokens * 2 < priorCursor) {
         this.liveTokenMiserRequestCursor.set(cursorKey, cumulativeInputTokens);
+        // A Codex app-server restart can reset cumulative usage without
+        // recreating this registry. Rotate only this thread's epoch so stored
+        // gates accept the new lower sequence while other live threads retain
+        // their own monotonic request histories.
+        this.tokenMiserRequestEpochByCursor.set(cursorKey, randomUUID());
         this.logTokenMiserReplaySkip("session-reset", threadId);
         return;
       }
@@ -26164,6 +26315,9 @@ export class DesktopBackendRegistry {
         this.tokenMiserStore!.recordParentModelRequest({
           cumulativeInputTokens,
           objectId,
+          requestEpoch:
+            this.tokenMiserRequestEpochByCursor.get(cursorKey)
+            ?? this.tokenMiserRequestEpoch,
         })
       ),
     );

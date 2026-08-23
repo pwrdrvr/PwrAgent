@@ -1,6 +1,22 @@
 export const TOKEN_MISER_DEFAULT_THRESHOLD_CHARACTERS = 5_000;
-export const TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS = 40_000;
 export const TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN = 4;
+export const TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS = 10_000;
+export const TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES = 64 * 1024;
+export const TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS =
+  TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS
+  * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN;
+const TOKEN_MISER_CODE_MODE_PAYLOAD_KEYS = new Set([
+  "version",
+  "thread_id",
+  "turn_id",
+  "call_id",
+  "cell_id",
+  "script",
+  "script_status",
+  "max_output_tokens",
+  "content_items",
+]);
+const TOKEN_MISER_CODE_MODE_TEXT_ITEM_KEYS = new Set(["type", "text"]);
 
 export type TokenMiserPostToolUsePayload = {
   session_id: string;
@@ -47,6 +63,7 @@ export type TokenMiserObjectMetadata = {
   cachedBaselineTokens?: number;
   cachedRevealedTokens?: number;
   replayTrackingStoppedAt?: number;
+  parentRequestEpoch?: string;
   summary: TokenMiserSummary;
   helperUsage?: TokenMiserHelperUsage;
   /**
@@ -66,8 +83,35 @@ export type TokenMiserHookOutput = {
   stopReason: string;
   hookSpecificOutput: {
     hookEventName: "PostToolUse";
-    additionalContext: string;
+    additionalContext?: string;
   };
+};
+
+export type TokenMiserCodeModeTextContentItem = {
+  type: "input_text";
+  text: string;
+};
+
+/**
+ * Version 1 of the script-to-model reduction request emitted by the
+ * PwrAgent Codex fork. Non-text content is deliberately outside this host
+ * implementation: images, audio, and encrypted content must reach Codex's
+ * fail-open path unchanged rather than being flattened or silently lost.
+ */
+export type TokenMiserCodeModeOutputPayload = {
+  version: 1;
+  thread_id: string;
+  turn_id: string;
+  call_id: string;
+  cell_id: string;
+  script?: string;
+  script_status: string;
+  max_output_tokens: number;
+  content_items: TokenMiserCodeModeTextContentItem[];
+};
+
+export type TokenMiserCodeModeReductionOutput = {
+  replacement: TokenMiserCodeModeTextContentItem[] | null;
 };
 
 export function estimateTokenCount(characters: number): number {
@@ -109,6 +153,55 @@ export function isTokenMiserPostToolUsePayload(
     && record.tool_use_id.length > 0
     && Object.prototype.hasOwnProperty.call(record, "tool_response")
   );
+}
+
+export function isTokenMiserCodeModeOutputPayload(
+  value: unknown,
+): value is TokenMiserCodeModeOutputPayload {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    hasOnlyKeys(record, TOKEN_MISER_CODE_MODE_PAYLOAD_KEYS)
+    && record.version === 1
+    && isNonEmptyString(record.thread_id)
+    && isNonEmptyString(record.turn_id)
+    && isNonEmptyString(record.call_id)
+    && isNonEmptyString(record.cell_id)
+    && (record.script === undefined || typeof record.script === "string")
+    && isNonEmptyString(record.script_status)
+    && Number.isSafeInteger(record.max_output_tokens)
+    && (record.max_output_tokens as number) > 0
+    && Array.isArray(record.content_items)
+    && record.content_items.length > 0
+    && record.content_items.every(isCodeModeTextContentItem)
+  );
+}
+
+function isCodeModeTextContentItem(
+  value: unknown,
+): value is TokenMiserCodeModeTextContentItem {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    hasOnlyKeys(record, TOKEN_MISER_CODE_MODE_TEXT_ITEM_KEYS)
+    && record.type === "input_text"
+    && typeof record.text === "string"
+  );
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function hasOnlyKeys(
+  record: Record<string, unknown>,
+  allowedKeys: ReadonlySet<string>,
+): boolean {
+  return Object.keys(record).every((key) => allowedKeys.has(key));
 }
 
 /**

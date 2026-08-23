@@ -8547,6 +8547,7 @@ export class CodexAppServerClient {
     fastMode?: boolean;
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadStartParams["config"];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     await this.ensureInitialized();
 
@@ -8563,6 +8564,7 @@ export class CodexAppServerClient {
             reasoningEffort: params.reasoningEffort,
             fastMode: params.fastMode,
             codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+            config: params.config,
             bundledToolsDirectory: this.options.bundledToolsDirectory,
           },
           this.getProtocolCompatibility(),

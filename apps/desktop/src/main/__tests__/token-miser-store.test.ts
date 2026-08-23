@@ -36,6 +36,43 @@ describe("TokenMiserStore", () => {
       .toBeGreaterThan(0);
   });
 
+  it("publishes staged output only after commit and removes rejected output", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-token-miser-"));
+    temporaryDirectories.push(root);
+    const onMetadataUpdated = vi.fn();
+    const store = new TokenMiserStore(root, { onMetadataUpdated });
+    const params = {
+      threadId: "thread-owner",
+      turnId: "turn-1",
+      toolUseId: "tool-1",
+      toolName: "Code Mode",
+      output: "large output",
+      replacementCharacters: 100,
+      summary: {
+        summary: "Large output.",
+        usefulDetails: [],
+        suggestedNextStep: "Read it if needed.",
+      },
+    };
+    const rejected = await store.stage(params);
+
+    await rejected.persist();
+    expect(await store.listMetadata()).toEqual([rejected.metadata]);
+    expect(onMetadataUpdated).not.toHaveBeenCalled();
+    await rejected.discard();
+    expect(await store.listMetadata()).toEqual([]);
+
+    const accepted = await store.stage(params);
+    await accepted.persist();
+    await accepted.commit();
+    expect(await store.listMetadata()).toEqual([accepted.metadata]);
+    expect(onMetadataUpdated).toHaveBeenCalledOnce();
+    expect(onMetadataUpdated).toHaveBeenCalledWith(
+      accepted.metadata,
+      "stored",
+    );
+  });
+
   it("stores output, restricts reads to the owning thread, and accounts retrieval", async () => {
     const store = await createStore();
     const metadata = await store.store({
@@ -103,6 +140,26 @@ describe("TokenMiserStore", () => {
     });
   });
 
+  it("honors a provider-supplied model-visible token ceiling", async () => {
+    const store = await createStore();
+    const metadata = await store.store({
+      threadId: "thread-owner",
+      turnId: "turn-1",
+      toolUseId: "code-mode-call-1",
+      toolName: "Code mode",
+      output: "x".repeat(24_000),
+      baselineParentTokenCap: 2_000,
+      replacementCharacters: 400,
+      summary: {
+        summary: "Large code-mode output.",
+        usefulDetails: [],
+        suggestedNextStep: "Read a targeted range.",
+      },
+    });
+
+    expect(metadata.baselineParentTokens).toBe(2_000);
+  });
+
   // The registry owns the request boundary now, holding one cursor per thread
   // so every gate is offered the same events. This per-gate mark stays as a
   // backstop, and the two can never disagree: the thread cursor is seeded from
@@ -144,6 +201,40 @@ describe("TokenMiserStore", () => {
     })).toBeDefined();
     expect(await store.readMetadata(metadata.objectId)).toMatchObject({
       parentRequestsObservedAfterGate: 1,
+    });
+  });
+
+  it("re-anchors a persisted request watermark for a new app-server epoch", async () => {
+    const store = await createStore();
+    const metadata = await store.store({
+      threadId: "thread-owner",
+      turnId: "turn-1",
+      toolUseId: "tool-1",
+      toolName: "Bash",
+      output: "x".repeat(24_000),
+      replacementCharacters: 400,
+      summary: {
+        summary: "Large output.",
+        usefulDetails: [],
+        suggestedNextStep: "None.",
+      },
+    });
+
+    await store.recordParentModelRequest({
+      cumulativeInputTokens: 20_000,
+      objectId: metadata.objectId,
+      requestEpoch: "process-a",
+    });
+    await expect(store.recordParentModelRequest({
+      cumulativeInputTokens: 500,
+      objectId: metadata.objectId,
+      requestEpoch: "process-b",
+    })).resolves.toBeDefined();
+
+    expect(await store.readMetadata(metadata.objectId)).toMatchObject({
+      lastParentCumulativeInputTokens: 500,
+      parentRequestEpoch: "process-b",
+      parentRequestsObservedAfterGate: 2,
     });
   });
 
