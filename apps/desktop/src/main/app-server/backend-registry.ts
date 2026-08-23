@@ -13910,8 +13910,10 @@ export class DesktopBackendRegistry {
       ...(params.cwd ? { cwd: params.cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
       // Keep review children durable so their inspection-only transcript can
-      // use thread/read with includeTurns, and mark them as subagents so Codex
-      // and PwrAgent both exclude them from ordinary navigation.
+      // use thread/read with includeTurns, and mark them as subagents so
+      // PwrAgent excludes them from ordinary navigation. This classification
+      // does not claim Codex-native ThreadSpawn parentage, which Codex reserves
+      // for workers created by spawn_agent.
       ephemeral: false,
       threadSource: "subagent" as CodexThreadSource,
       sandbox: modeSettings.sandbox,
@@ -29079,8 +29081,10 @@ export class DesktopBackendRegistry {
       approvalPolicy: modeSettings.approvalPolicy,
       dynamicTools,
       // Keep monitor children durable so their inspection-only transcript can
-      // use thread/read with includeTurns, and mark them as subagents so Codex
-      // and PwrAgent both exclude them from ordinary navigation.
+      // use thread/read with includeTurns, and mark them as subagents so
+      // PwrAgent excludes them from ordinary navigation. This classification
+      // does not claim Codex-native ThreadSpawn parentage, which Codex reserves
+      // for workers created by spawn_agent.
       ephemeral: false,
       model: params.preferredModel,
       reasoningEffort: params.preferredReasoningEffort,
