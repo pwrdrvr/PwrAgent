@@ -729,9 +729,19 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     const backendState = this.getBackend(params.backend);
     const firstSnapshot = !backendState?.lastSnapshotHash;
     const persistReconciliation = params.partial !== true;
+    const managedSubAgentThreadKeys = this.listManagedSubAgentThreadKeys();
+    // Parent overlays are the durable source of truth for PwrAgent-managed
+    // workers. Filter by that relationship as well as provider metadata so
+    // children created by older builds cannot leak into local or federated
+    // navigation after managed transcripts became durable.
+    const threads = params.threads.filter(
+      (thread) => !managedSubAgentThreadKeys.has(
+        buildThreadIdentityKey(thread.source, thread.id),
+      ),
+    );
 
     if (persistReconciliation && firstSnapshot) {
-      for (const thread of params.threads) {
+      for (const thread of threads) {
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);
         const current = this.getThread(threadKey);
         const applyAcpExecutionModeSnapshot =
@@ -784,7 +794,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       }
     }
 
-    for (const thread of persistReconciliation ? params.threads : []) {
+    for (const thread of persistReconciliation ? threads : []) {
       if (!isAcpBackendId(thread.source) || !thread.executionMode) {
         continue;
       }
@@ -809,7 +819,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     // Agent names originate from the thread title when a thread is promoted
     // or created as an Agent. Keep that invariant across older builds that
     // renamed only the provider thread and left the overlay name stale.
-    for (const thread of persistReconciliation ? params.threads : []) {
+    for (const thread of persistReconciliation ? threads : []) {
       const threadTitle = thread.title.trim();
       if (!threadTitle) {
         continue;
@@ -829,7 +839,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     }
 
     const overlayByThreadKey = Object.fromEntries(
-      params.threads.map((thread) => {
+      threads.map((thread) => {
         const threadKey = buildThreadIdentityKey(thread.source, thread.id);
         const overlay = this.getThread(threadKey);
         const queue = params.queuedExecutionModesByThreadKey?.[threadKey];
@@ -877,7 +887,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       messagingBindingsByThreadKey: params.messagingBindingsByThreadKey,
       overlayByThreadKey,
       previousKnownThreadKeys: backendState?.knownThreadKeys ?? [],
-      threads: params.threads,
+      threads,
       unchanged: false,
       workspaceRoots: params.workspaceRoots,
     });
@@ -905,7 +915,7 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
 
     if (persistReconciliation) {
       this.putBackend(params.backend, {
-        knownThreadKeys: params.threads.map((thread) =>
+        knownThreadKeys: threads.map((thread) =>
           buildThreadIdentityKey(thread.source, thread.id),
         ),
         lastSnapshotHash: nextHash,
@@ -5963,6 +5973,37 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     return pending
       ? { ...overlay, prAutoDispatchPending: pending.pending }
       : overlay;
+  }
+
+  private listManagedSubAgentThreadKeys(): Set<string> {
+    const rows = this.stateDb.raw
+      .prepare(
+        `SELECT payload FROM threads
+         WHERE payload LIKE '%"monitorThreadId"%'`,
+      )
+      .all() as Array<{ payload: string }>;
+    const threadKeys = new Set<string>();
+    for (const row of rows) {
+      try {
+        const overlay = normalizeThreadOverlayState(
+          JSON.parse(row.payload) as ThreadOverlayState,
+        );
+        for (const subAgent of overlay.subAgents ?? []) {
+          const threadId = subAgent.monitorThreadId?.trim();
+          const backend = subAgent.backend ?? overlay.backend;
+          if (
+            !threadId
+            || (backend === overlay.backend && threadId === overlay.threadId)
+          ) {
+            continue;
+          }
+          threadKeys.add(buildThreadIdentityKey(backend, threadId));
+        }
+      } catch {
+        // A malformed unrelated overlay must not block navigation.
+      }
+    }
+    return threadKeys;
   }
 
   /**

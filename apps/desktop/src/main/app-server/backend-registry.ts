@@ -13909,10 +13909,11 @@ export class DesktopBackendRegistry {
     const thread = await client.startThread({
       ...(params.cwd ? { cwd: params.cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
-      // App-server threads are excluded from the default interactive thread
-      // listing by source kind. Keep review children durable so their
-      // inspection-only transcript can use thread/read with includeTurns.
+      // Keep review children durable so their inspection-only transcript can
+      // use thread/read with includeTurns, and mark them as subagents so Codex
+      // and PwrAgent both exclude them from ordinary navigation.
       ephemeral: false,
+      threadSource: "subagent" as CodexThreadSource,
       sandbox: modeSettings.sandbox,
       ...params.modelSettings,
       ...(params.codexEnvironmentRuntime
@@ -29077,13 +29078,14 @@ export class DesktopBackendRegistry {
       ...(cwd ? { cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
       dynamicTools,
-      // App-server threads are excluded from the default interactive thread
-      // listing by source kind. Keep monitor children durable so their
-      // inspection-only transcript can use thread/read with includeTurns.
+      // Keep monitor children durable so their inspection-only transcript can
+      // use thread/read with includeTurns, and mark them as subagents so Codex
+      // and PwrAgent both exclude them from ordinary navigation.
       ephemeral: false,
       model: params.preferredModel,
       reasoningEffort: params.preferredReasoningEffort,
       sandbox: modeSettings.sandbox,
+      threadSource: "subagent" as CodexThreadSource,
       ...(sourceOverlay?.codexEnvironmentRuntime
         ? { codexEnvironmentRuntime: sourceOverlay.codexEnvironmentRuntime }
         : {}),

@@ -136,4 +136,54 @@ describe("SqliteOverlayStore partial navigation snapshots", () => {
       threadId: olderThread.id,
     })).resolves.toBeDefined();
   });
+
+  it("keeps durable managed sub-agent workers out of navigation", async () => {
+    const parentThread = buildThread({
+      id: "thread-parent",
+      path: "/repo/parent",
+      updatedAt: 2_000,
+    });
+    const monitorThread = buildThread({
+      id: "thread-monitor",
+      path: "/repo/monitor",
+      updatedAt: 3_000,
+    });
+    await store.upsertThreadSubAgent({
+      backend: "codex",
+      threadId: parentThread.id,
+      subAgent: {
+        backend: "codex",
+        createdAt: 1_500,
+        monitorId: "monitor-1",
+        monitorThreadId: monitorThread.id,
+        status: "success",
+        task: "Watch a release workflow.",
+        updatedAt: 2_500,
+      },
+    });
+
+    const full = await store.reconcileNavigationSnapshot({
+      backend: "all",
+      fetchedAt: 3_100,
+      threads: [monitorThread, parentThread],
+    });
+
+    expect(full.threads.map((thread) => thread.id)).toEqual([parentThread.id]);
+    expect(full.directories.map((directory) => directory.path)).toEqual([
+      "/repo/parent",
+    ]);
+    await expect(store.getThreadOverlayState({
+      backend: "codex",
+      threadId: monitorThread.id,
+    })).resolves.toBeUndefined();
+
+    const partial = await store.reconcileNavigationSnapshot({
+      backend: "all",
+      fetchedAt: 3_200,
+      partial: true,
+      threads: [monitorThread],
+    });
+    expect(partial.threads).toEqual([]);
+    expect(partial.directories).toEqual([]);
+  });
 });
