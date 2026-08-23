@@ -203,6 +203,8 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       retrievedTokens: 0,
       estimatedParentTokensSaved: 38_600,
       cachedReplayCount: 47,
+      cachedBaselineTokens: 1_850_000,
+      cachedRevealedTokens: 50_000,
       estimatedCachedReplayTokensSaved: 1_800_000,
       savings: {
         currency: "USD",
@@ -231,10 +233,16 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     );
     expect(screen.getByText("1 · Without the gate")).toBeInTheDocument();
     expect(screen.getByText("$0.68")).toBeInTheDocument();
+    expect(
+      screen.getByText(/40k uncached \+ 1,850k cached · gated tool output/),
+    ).toBeInTheDocument();
     expect(screen.getByText("2 · Gate compute")).toBeInTheDocument();
     expect(screen.getByText("$0.05")).toBeInTheDocument();
     expect(screen.getByText("3 · Revealed to parent")).toBeInTheDocument();
     expect(screen.getByText("$0.28")).toBeInTheDocument();
+    expect(
+      screen.getByText(/1.4k uncached \+ 50k cached · summaries and retrievals/),
+    ).toBeInTheDocument();
     expect(
       screen.getByText(/Directly observed · 47 payload replays across 4 gates, each counted at a request boundary/),
     ).toBeInTheDocument();
@@ -272,6 +280,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(
       screen.getByText(/Partly reconstructed · 5 of 8 payload replays inferred from later tool calls · 1 gate is not priced yet/),
     ).toBeInTheDocument();
+    expect(screen.getAllByText(/All gates ·/)).toHaveLength(2);
   });
 
   it("shows Token Miser savings beside gross tool-output exposure", async () => {
@@ -314,7 +323,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       name: /Savings/,
       selected: true,
     });
-    expect(savings).toHaveTextContent("18k avoided");
+    expect(savings).toHaveTextContent("52.6k avoided");
     // Without a priced gate the lens states what it has — tokens — and says
     // why the dollars are missing, rather than showing a partial equation.
     expect(
@@ -336,6 +345,9 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     // The per-call gate box belongs to the incidents lens, beside the raw
     // output it replaced.
     fireEvent.click(screen.getByRole("tab", { name: /Incidents/ }));
+    expect(
+      screen.getByText(/kept 52.6k out of the parent's context/),
+    ).toBeInTheDocument();
     expect(screen.getByText("Gated by Token Miser")).toBeInTheDocument();
     expect(screen.getByText("6k baseline → 225 summary")).toBeInTheDocument();
     expect(screen.getByText(/5.8k estimated parent-context footprint avoided/))

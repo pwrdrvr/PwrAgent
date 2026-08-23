@@ -201,6 +201,10 @@ export function ToolOutputIncidentExplorerWindow() {
   const activeTokenMiser = tokenMiser && tokenMiser.interceptionCount > 0
     ? tokenMiser
     : undefined;
+  const totalEstimatedParentTokensSaved = activeTokenMiser
+    ? activeTokenMiser.estimatedParentTokensSaved
+      + (activeTokenMiser.estimatedCachedReplayTokensSaved ?? 0)
+    : 0;
   const tokenMiserEnabled =
     settings.snapshot?.general.tokenMiserEnabled.value ?? false;
   const tokenMiserComparison = useMemo(
@@ -511,7 +515,7 @@ export function ToolOutputIncidentExplorerWindow() {
             <span>
               {activeTokenMiser
                 ? formatCompactTokens(
-                    activeTokenMiser.estimatedParentTokensSaved,
+                    totalEstimatedParentTokensSaved,
                   ) + " avoided"
                 : "nothing gated"}
             </span>
@@ -629,7 +633,7 @@ export function ToolOutputIncidentExplorerWindow() {
             {activeTokenMiser
               ? describeTokenMiserReach({
                   gatedCount: activeTokenMiser.interceptionCount,
-                  savedTokens: activeTokenMiser.estimatedParentTokensSaved,
+                  savedTokens: totalEstimatedParentTokensSaved,
                   toolCallCount: allInvocations.length,
                 })
               : "Token Miser is on, but nothing in this thread was gated."}
@@ -1013,6 +1017,16 @@ function TokenMiserSavingsLens(props: {
   const savings = tokenMiser.savings;
   const cachedReplayTokens = tokenMiser.estimatedCachedReplayTokensSaved ?? 0;
   const cachedReplayCount = tokenMiser.cachedReplayCount ?? 0;
+  const cachedRevealedTokens = tokenMiser.cachedRevealedTokens ?? 0;
+  const cachedBaselineTokens = tokenMiser.cachedBaselineTokens
+    ?? cachedRevealedTokens + cachedReplayTokens;
+  const revealedTokens =
+    (tokenMiser.replacementTokens ?? 0)
+    + (tokenMiser.retrievedTokens ?? 0);
+  const partialPricingPrefix = savings
+    && savings.pricedGateCount < savings.gateCount
+    ? "All gates · "
+    : "";
   return (
     <div className="incident-explorer__savings">
       <div className="incident-explorer__savings-hero">
@@ -1076,8 +1090,12 @@ function TokenMiserSavingsLens(props: {
               <dd>
                 {formatMicrosCurrency(savings.withoutGateCostMicros, savings.currency)}
                 <span>
-                  {formatCompactTokens(props.comparison.withoutTokenMiserTokens)}{" "}
-                  of tool output at{" "}
+                  {partialPricingPrefix}
+                  {formatCompactTokens(tokenMiser.baselineParentTokens)} uncached
+                  {cachedBaselineTokens > 0
+                    ? ` + ${formatCompactTokens(cachedBaselineTokens)} cached`
+                    : ""}
+                  {" · gated tool output at "}
                   {savings.parentModel ?? "the parent model"} rates
                 </span>
               </dd>
@@ -1097,11 +1115,12 @@ function TokenMiserSavingsLens(props: {
               <dd>
                 {formatMicrosCurrency(savings.revealedCostMicros, savings.currency)}
                 <span>
-                  {formatCompactTokens(
-                    (tokenMiser.replacementTokens ?? 0)
-                    + (tokenMiser.retrievedTokens ?? 0),
-                  )}{" "}
-                  of summaries and retrievals
+                  {partialPricingPrefix}
+                  {formatCompactTokens(revealedTokens)} uncached
+                  {cachedRevealedTokens > 0
+                    ? ` + ${formatCompactTokens(cachedRevealedTokens)} cached`
+                    : ""}
+                  {" · summaries and retrievals"}
                 </span>
               </dd>
             </div>
@@ -1110,11 +1129,11 @@ function TokenMiserSavingsLens(props: {
           <dl className="incident-explorer__savings-terms">
             <div>
               <dt>Without the gate</dt>
-              <dd>{formatCompactTokens(props.comparison.withoutTokenMiserTokens)}</dd>
+              <dd>{formatCompactTokens(tokenMiser.baselineParentTokens)}</dd>
             </div>
             <div>
               <dt>Actual parent context</dt>
-              <dd>{formatCompactTokens(props.comparison.actualParentTokens)}</dd>
+              <dd>{formatCompactTokens(revealedTokens)}</dd>
             </div>
             <div>
               <dt>Gate compute</dt>

@@ -1,7 +1,7 @@
 # Token Miser implementation plan
 
-Status: PwrAgent implementation complete; awaiting integrated Codex fork build
-and live reducer-v2 trial
+Status: PwrAgent and Codex fork integration complete; live reducer-v2
+acceptance, retrieval, replay-accounting, and off/on trials passed
 
 ## Decisions
 
@@ -16,6 +16,10 @@ and live reducer-v2 trial
 - Expose search, bounded read, and deliberate full-read dynamic tools.
 - Fail open when interception, storage, or summarization is unavailable.
 - Report estimated parent-context savings separately from net helper cost.
+- Use Codex reducer protocol v2 for Code Mode output. Use `PostToolUse` only
+  when Codex supplies the exact direct-call source and acceptance-v2 markers.
+- Publish retrieval metadata, cards, and savings only after Codex acknowledges
+  that it selected the replacement for model visibility.
 
 ## Milestones
 
@@ -29,16 +33,18 @@ and live reducer-v2 trial
 6. Add the Usage & Pricing switch, hook readiness state, and savings summary.
 7. Add unit, protocol, security, failure, and SQLite write-budget coverage.
 
-## Open implementation questions
+## Resolved implementation questions
 
-- Confirm whether `PostToolUse.tool_response` is uncapped for every supported
-  MCP result. If not, combine the hook response with protocol-observed output
-  only where Codex exposes the complete result without reading owned storage.
-- Confirm the app-server hook inventory fields needed to prove exact-definition
-  trust from PwrAgent.
-- Decide whether the packaged hook launcher should be a small native helper or
-  the Electron executable in Node mode on each supported operating system.
-- Measure Luna medium latency and choose the fail-open timeout from live data.
+- The integrated Codex fork supplies uncapped direct-hook input and reduces
+  Code Mode output at the model-visibility seam. PwrAgent never reads
+  Codex-owned storage.
+- `server/capabilities/read` negotiates reducer protocol v2, thread-resume
+  overrides, dynamic-tool replacement, nested-call source markers, and exact
+  acceptance callback fields.
+- The packaged hook launcher uses the Electron executable in Node mode and an
+  instance-specific authenticated bridge descriptor on POSIX and Windows.
+- The gate has bounded summarizer, reducer, and acceptance windows and fails
+  open without publishing false savings when the replacement is not accepted.
 
 ## Progress
 
@@ -61,14 +67,26 @@ and live reducer-v2 trial
   output outside all retrieval and accounting views, and publishes a gate only
   after Codex explicitly acknowledges the exact replacement it accepted.
 - 2026-08-23: Added exact reducer capability negotiation through
-  `server/capabilities/read`. Unsupported Codex executables fail open and keep
-  legacy direct-tool `PostToolUse` coverage without receiving fork-only config.
+  `server/capabilities/read`. Unsupported Codex executables fail open, are
+  reported unavailable, and do not receive fork-only config. Direct-tool
+  interception requires the fork's explicit source and acceptance-v2 markers.
 - 2026-08-23: Prevented nested Code Mode calls from also running the legacy
   gate, applied reducer config to new, forked, resumed, and review threads, and
   added stale staged-output pruning plus disconnect, timeout, and shutdown
   cleanup coverage.
-- 2026-08-23: The remaining dependency is one signed pwrdrvr/codex integration
-  branch and installable build containing reducer protocol v2, the nested-call
-  source marker, uncapped direct-hook input, and downstream version stamping.
-  The live trial must prove exactly one gate, no raw sentinel in parent context,
-  acceptance-driven live cards, retrieval accounting, and fail-open behavior.
+- 2026-08-23: Validated the signed pwrdrvr/codex PR #8 artifact at exact head
+  `517b781d`: all CI and signing-contract checks passed; `codex`,
+  `codex-app-server`, and `codex-code-mode-host` are ARM64 executables reporting
+  `0.146.0-pwragent.dev.4`; the live capability probe reported reducer v2 and
+  dynamic-tool resume support.
+- 2026-08-23: Completed the live trial on thread
+  `01a03004-e501-73d0-ae72-2b130a3603b9`. One Code Mode gate compressed 35,314
+  characters, produced no duplicate nested-shell gate, and kept the complete
+  4,096-character random sentinel out of the parent rollout while retaining it
+  in the PwrAgent-owned raw object. A bounded search retrieved only the marker;
+  live Pricing, Sub-agents, and Explorer accounting updated immediately.
+- 2026-08-23: Verified cached replay accounting through six observed payload
+  replays and corrected Explorer's aggregate display to include both initial
+  and cached avoidance. The same loaded thread removed retrieval tools when
+  Token Miser was turned off and restored bounded retrieval when turned on
+  again, without restarting Codex or PwrAgent.
