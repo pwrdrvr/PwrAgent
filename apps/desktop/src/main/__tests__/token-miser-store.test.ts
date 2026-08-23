@@ -37,8 +37,11 @@ describe("TokenMiserStore", () => {
   });
 
   it("publishes staged output only after commit and removes rejected output", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-token-miser-"));
-    temporaryDirectories.push(root);
+    const parent = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-token-miser-"),
+    );
+    temporaryDirectories.push(parent);
+    const root = path.join(parent, "objects");
     const onMetadataUpdated = vi.fn();
     const store = new TokenMiserStore(root, { onMetadataUpdated });
     const params = {
@@ -56,15 +59,60 @@ describe("TokenMiserStore", () => {
     };
     const rejected = await store.stage(params);
 
+    await expect(fs.stat(root)).rejects.toMatchObject({ code: "ENOENT" });
     await rejected.persist();
-    expect(await store.listMetadata()).toEqual([rejected.metadata]);
+    expect((await fs.readdir(root)).sort()).toEqual([
+      `${rejected.metadata.objectId}.txt`,
+    ]);
+    expect(await store.listMetadata()).toEqual([]);
+    expect(await store.readMetadata(rejected.metadata.objectId))
+      .toBeUndefined();
+    expect(await store.readAll({
+      objectId: rejected.metadata.objectId,
+      threadId: params.threadId,
+    })).toBeUndefined();
+    expect(await store.readLines({
+      objectId: rejected.metadata.objectId,
+      threadId: params.threadId,
+    })).toBeUndefined();
+    expect(await store.search({
+      objectId: rejected.metadata.objectId,
+      threadId: params.threadId,
+      query: "large",
+    })).toBeUndefined();
+    expect(await store.summarizeUsage()).toMatchObject({
+      interceptionCount: 0,
+      estimatedParentTokensSaved: 0,
+    });
+    expect(await store.summarizeThreadUsage(params.threadId)).toMatchObject({
+      interceptionCount: 0,
+      interceptions: [],
+    });
+    const reopenedStore = new TokenMiserStore(root);
+    expect(await reopenedStore.listMetadata()).toEqual([]);
+    expect(await reopenedStore.readAll({
+      objectId: rejected.metadata.objectId,
+      threadId: params.threadId,
+    })).toBeUndefined();
     expect(onMetadataUpdated).not.toHaveBeenCalled();
-    await rejected.discard();
+    await Promise.all([
+      rejected.discard(),
+      rejected.discard(),
+      rejected.persist(),
+    ]);
+    expect(await fs.readdir(root)).toEqual([]);
     expect(await store.listMetadata()).toEqual([]);
 
     const accepted = await store.stage(params);
-    await accepted.persist();
-    await accepted.commit();
+    await Promise.all([
+      accepted.commit(),
+      accepted.commit(),
+      accepted.persist(),
+    ]);
+    expect((await fs.readdir(root)).sort()).toEqual([
+      `${accepted.metadata.objectId}.json`,
+      `${accepted.metadata.objectId}.txt`,
+    ]);
     expect(await store.listMetadata()).toEqual([accepted.metadata]);
     expect(onMetadataUpdated).toHaveBeenCalledOnce();
     expect(onMetadataUpdated).toHaveBeenCalledWith(

@@ -132,7 +132,6 @@ export class TokenMiserStore {
   }
 
   async stage(params: TokenMiserStoreParams): Promise<TokenMiserStagedObject> {
-    await this.ensureRoot();
     const objectId = params.objectId ?? randomUUID();
     if (!isSafeObjectId(objectId)) {
       throw new Error("Invalid Token Miser object id.");
@@ -176,7 +175,6 @@ export class TokenMiserStore {
         ? { parentServiceTier: params.parentServiceTier }
         : {}),
     };
-    await writePrivateFileAtomic(this.outputPath(objectId), params.output);
     let persisted = false;
     let committed = false;
     let discarded = false;
@@ -187,10 +185,11 @@ export class TokenMiserStore {
     };
     const persist = async (): Promise<void> => {
       await serialize(async () => {
-        if (persisted || discarded) {
+        if (persisted || committed || discarded) {
           return;
         }
-        await this.writeMetadata(metadata);
+        await this.ensureRoot();
+        await writePrivateFileAtomic(this.outputPath(objectId), params.output);
         persisted = true;
       });
     };
@@ -198,13 +197,21 @@ export class TokenMiserStore {
       metadata,
       persist,
       commit: async () => {
-        await persist();
         await serialize(async () => {
           if (committed || discarded) {
             return;
           }
-          await this.options.onMetadataUpdated?.(metadata, "stored");
+          if (!persisted) {
+            await this.ensureRoot();
+            await writePrivateFileAtomic(
+              this.outputPath(objectId),
+              params.output,
+            );
+            persisted = true;
+          }
+          await this.writeMetadata(metadata);
           committed = true;
+          await this.options.onMetadataUpdated?.(metadata, "stored");
         });
       },
       discard: async () => {
@@ -212,8 +219,9 @@ export class TokenMiserStore {
           if (committed || discarded) {
             return;
           }
-          discarded = true;
           await this.remove(objectId);
+          persisted = false;
+          discarded = true;
         });
       },
     };
