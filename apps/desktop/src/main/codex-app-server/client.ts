@@ -287,6 +287,12 @@ export class CodexBootstrapDeferredError extends Error {
 
 type InitializeResult = Partial<CodexInitializeResponse>;
 
+export type CodexServerCapabilities = {
+  codeModeOutputReducer?: {
+    protocolVersion?: number;
+  };
+};
+
 type RawCodexThreadSummary = Omit<
   AppServerThreadSummary,
   "source" | "linkedDirectories"
@@ -7239,6 +7245,27 @@ export class CodexAppServerClient {
   async getInitializeResult(): Promise<InitializeResult> {
     await this.ensureInitialized();
     return this.initializeResult ?? {};
+  }
+
+  async readServerCapabilities(): Promise<CodexServerCapabilities> {
+    await this.ensureInitialized();
+    const result = asRecord(
+      await this.connection.request(
+        "server/capabilities/read",
+        {},
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      ),
+    );
+    const outputReducer = asRecord(result?.codeModeOutputReducer);
+    const protocolVersion = outputReducer?.protocolVersion;
+
+    return typeof protocolVersion === "number"
+      ? {
+          codeModeOutputReducer: {
+            protocolVersion,
+          },
+        }
+      : {};
   }
 
   async readCodexHome(): Promise<string> {

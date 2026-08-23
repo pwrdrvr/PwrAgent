@@ -1647,6 +1647,7 @@ class MockBackendClient {
   listThreadsCallCount = 0;
   listNativeSubAgentThreadsCallCount = 0;
   listModelsCallCount = 0;
+  readServerCapabilitiesCallCount = 0;
   steerTurnCallCount = 0;
   setThreadPermissionsCallCount = 0;
   lastListModelsDiagnostics?: {
@@ -1689,6 +1690,12 @@ class MockBackendClient {
         methods?: string[];
       };
       initializeError?: Error;
+      serverCapabilities?: {
+        codeModeOutputReducer?: {
+          protocolVersion?: number;
+        };
+      };
+      serverCapabilitiesError?: Error;
       threads?: AppServerThreadSummary[];
       nativeSubAgentThreads?: AppServerThreadSummary[];
       replay?: AppServerThreadReplay;
@@ -1748,6 +1755,18 @@ class MockBackendClient {
     }
 
     return this.options.initializeResult ?? {};
+  }
+
+  async readServerCapabilities() {
+    this.readServerCapabilitiesCallCount += 1;
+    if (this.options.serverCapabilitiesError) {
+      throw this.options.serverCapabilitiesError;
+    }
+    return this.options.serverCapabilities ?? {
+      codeModeOutputReducer: {
+        protocolVersion: 2,
+      },
+    };
   }
 
   async readCodexHome(): Promise<string> {
@@ -3541,6 +3560,87 @@ describe("DesktopBackendRegistry", () => {
           },
         },
       });
+      expect(codexClient.readServerCapabilitiesCallCount).toBe(1);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("keeps stock Codex thread creation on the legacy Token Miser hook path", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    Object.defineProperty(codexClient, "readServerCapabilities", {
+      configurable: true,
+      value: undefined,
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const internals = registry as unknown as {
+      prepareTokenMiserRuntime: (options?: { prune?: boolean }) => Promise<void>;
+      resolveTokenMiserEnabledFn: () => boolean;
+      tokenMiserCodeModeReducerDescriptorPath?: string;
+    };
+    internals.tokenMiserCodeModeReducerDescriptorPath = path.join(
+      "/tmp",
+      "token-miser-stock-codex",
+      "code-mode-reducer.test.json",
+    );
+    internals.resolveTokenMiserEnabledFn = () => true;
+    const prepare = vi.spyOn(internals, "prepareTokenMiserRuntime");
+
+    try {
+      await expect(registry.startThread({
+        backend: "codex",
+        cwd: process.cwd(),
+      })).resolves.toMatchObject({ backend: "codex" });
+
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(codexClient.lastStartThreadParams?.config).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("fails open and caches a missing reducer capability on resumed turns", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilitiesError: new Error("Method not found"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const internals = registry as unknown as {
+      prepareTokenMiserRuntime: (options?: { prune?: boolean }) => Promise<void>;
+      resolveTokenMiserEnabledFn: () => boolean;
+      tokenMiserCodeModeReducerDescriptorPath?: string;
+    };
+    internals.tokenMiserCodeModeReducerDescriptorPath = path.join(
+      "/tmp",
+      "token-miser-stock-resume",
+      "code-mode-reducer.test.json",
+    );
+    internals.resolveTokenMiserEnabledFn = () => true;
+    const prepare = vi.spyOn(internals, "prepareTokenMiserRuntime");
+
+    try {
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-stock-1",
+        input: [{ type: "text", text: "continue" }],
+      });
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-stock-2",
+        input: [{ type: "text", text: "continue too" }],
+      });
+
+      expect(prepare).toHaveBeenCalledTimes(2);
+      expect(codexClient.startTurnCalls).toHaveLength(2);
+      expect(codexClient.startTurnCalls[0]?.config).toBeUndefined();
+      expect(codexClient.startTurnCalls[1]?.config).toBeUndefined();
+      expect(codexClient.readServerCapabilitiesCallCount).toBe(1);
     } finally {
       await registry.close();
     }
@@ -3587,6 +3687,46 @@ describe("DesktopBackendRegistry", () => {
           },
         },
       });
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("does not pass reducer config to native review for another protocol version", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: {
+        codeModeOutputReducer: {
+          protocolVersion: 1,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const internals = registry as unknown as {
+      prepareTokenMiserRuntime: (options?: { prune?: boolean }) => Promise<void>;
+      resolveTokenMiserEnabledFn: () => boolean;
+      tokenMiserCodeModeReducerDescriptorPath?: string;
+    };
+    internals.tokenMiserCodeModeReducerDescriptorPath = path.join(
+      "/tmp",
+      "token-miser-old-reducer",
+      "code-mode-reducer.test.json",
+    );
+    internals.resolveTokenMiserEnabledFn = () => true;
+    const prepare = vi.spyOn(internals, "prepareTokenMiserRuntime");
+
+    try {
+      await expect(registry.startReview({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "custom", instructions: "Review the current change." },
+      })).resolves.toMatchObject({ threadId: "thread-1" });
+
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(codexClient.lastStartReviewParams?.config).toBeUndefined();
     } finally {
       await registry.close();
     }
@@ -3644,6 +3784,57 @@ describe("DesktopBackendRegistry", () => {
           },
         },
       });
+      expectPwragentDynamicTools(
+        codexClient.lastStartThreadParams?.dynamicTools,
+        [
+          "search_token_miser_output",
+          "read_token_miser_output",
+          "read_all_token_miser_output",
+        ],
+      );
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("keeps managed review retrieval tools when reducer capability is absent", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: {},
+      startThreadResult: { threadId: "managed-review-child" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      resolveManagedReviewEnabled: () => true,
+    });
+    const tokenMiserStateDir = path.join(
+      "/tmp",
+      "token-miser-managed-review-without-reducer",
+    );
+    const internals = registry as unknown as {
+      prepareTokenMiserRuntime: (options?: { prune?: boolean }) => Promise<void>;
+      resolveTokenMiserEnabledFn: () => boolean;
+      tokenMiserCodeModeReducerDescriptorPath?: string;
+      tokenMiserStore?: TokenMiserStore;
+    };
+    internals.tokenMiserCodeModeReducerDescriptorPath = path.join(
+      tokenMiserStateDir,
+      "code-mode-reducer.test.json",
+    );
+    internals.tokenMiserStore = new TokenMiserStore(
+      path.join(tokenMiserStateDir, "objects"),
+    );
+    internals.resolveTokenMiserEnabledFn = () => true;
+
+    try {
+      await registry.startReview({
+        backend: "codex",
+        threadId: "thread-1",
+        target: { type: "custom", instructions: "Review the current change." },
+      });
+
+      expect(codexClient.lastStartThreadParams?.config).toBeUndefined();
       expectPwragentDynamicTools(
         codexClient.lastStartThreadParams?.dynamicTools,
         [

@@ -151,6 +151,11 @@ class MockTransport implements JsonRpcTransport {
     },
   };
   static configReadError: { code?: number; message: string } | undefined;
+  static serverCapabilitiesResult: unknown = {
+    codeModeOutputReducer: {
+      protocolVersion: 2,
+    },
+  };
   static threadMcpServerStatusResult: unknown = {
     data: [],
     nextCursor: null,
@@ -646,6 +651,17 @@ class MockTransport implements JsonRpcTransport {
             ]
           }
         })
+      );
+      return;
+    }
+
+    if (payload.method === "server/capabilities/read") {
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result: MockTransport.serverCapabilitiesResult,
+        }),
       );
       return;
     }
@@ -1229,6 +1245,11 @@ describe("CodexAppServerClient", () => {
       },
     };
     MockTransport.configReadError = undefined;
+    MockTransport.serverCapabilitiesResult = {
+      codeModeOutputReducer: {
+        protocolVersion: 2,
+      },
+    };
     MockTransport.mcpServerStatusError = undefined;
     MockTransport.mcpServerStatusThreadError = undefined;
     MockTransport.threadMcpServerStatusResult = {
@@ -1285,6 +1306,34 @@ describe("CodexAppServerClient", () => {
     expect(args).toContain(
       'shell_environment_policy.set.PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin"',
     );
+  });
+
+  it("reads the code-mode output reducer capability from the server", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+
+    await expect(client.readServerCapabilities()).resolves.toEqual({
+      codeModeOutputReducer: {
+        protocolVersion: 2,
+      },
+    });
+
+    MockTransport.serverCapabilitiesResult = {
+      codeModeOutputReducer: {
+        protocolVersion: "2",
+      },
+    };
+    await expect(client.readServerCapabilities()).resolves.toEqual({});
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as { method?: string; params?: unknown },
+    );
+    expect(requests).toContainEqual(expect.objectContaining({
+      method: "server/capabilities/read",
+      params: {},
+    }));
+
+    await client.close();
   });
 
   it("reads only effective MCP server names for connection setup", async () => {

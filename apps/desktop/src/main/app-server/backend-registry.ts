@@ -347,6 +347,7 @@ import {
 import {
   CodexAppServerClient,
   DEFAULT_CODEX_THREAD_TITLE_MODEL,
+  type CodexServerCapabilities,
 } from "../codex-app-server/client";
 import {
   isCodexInvalidResponseMessageIdError,
@@ -649,6 +650,7 @@ function assistantOutputForTurn(
 type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
+  readServerCapabilities?(): Promise<CodexServerCapabilities>;
   readCodexHome?(): Promise<string>;
   readConfiguredMcpServerNames?(params?: {
     cwd?: string;
@@ -7698,6 +7700,10 @@ export class DesktopBackendRegistry {
   private readonly tokenMiserStore?: TokenMiserStore;
   private readonly tokenMiserHookBridge?: TokenMiserHookBridge;
   private tokenMiserCodeModeReducerDescriptorPath?: string;
+  private readonly tokenMiserCodeModeReducerSupport = new WeakMap<
+    BackendClient,
+    Promise<boolean>
+  >();
   private readonly tokenMiserPluginManager?: TokenMiserPluginManager;
   private tokenMiserStateDir?: string;
   private readonly resolveTokenMiserCodexRuntimeFn?: () => Promise<{
@@ -12372,6 +12378,9 @@ export class DesktopBackendRegistry {
       executionMode: effectiveExecutionMode,
       runtime: acpRuntimeWithModel,
     });
+    const client = backend === "codex"
+      ? this.getClient(backend, effectiveExecutionMode)
+      : undefined;
     const tokenMiserEnabled = backend === "codex"
       && this.resolveTokenMiserEnabledFn();
     if (tokenMiserEnabled) {
@@ -12418,14 +12427,16 @@ export class DesktopBackendRegistry {
         ? await this.readConfiguredCodexMcpServerNames(cwd)
         : undefined,
     );
+    const tokenMiserConfig = client
+      ? await this.buildSupportedCodexTokenMiserConfig({
+          client,
+          enabled: tokenMiserEnabled,
+        })
+      : undefined;
     const codexThreadConfig = mergeCodexThreadConfigs(
       pdfMcpConfig,
       connectionMcpConfig,
-      tokenMiserEnabled && this.tokenMiserCodeModeReducerDescriptorPath
-        ? buildCodexTokenMiserConfig(
-            this.tokenMiserCodeModeReducerDescriptorPath,
-          )
-        : undefined,
+      tokenMiserConfig,
     );
     const acpMcpRegistration = mcpConnectionRegistrations.length > 0
       ? {
@@ -12470,7 +12481,9 @@ export class DesktopBackendRegistry {
             reasoningEffort: modelSettings.reasoningEffort,
             mcpRegistration: acpMcpRegistration,
           })
-        : await this.getClient(backend, effectiveExecutionMode).startThread({
+        : await (
+            client ?? this.getClient(backend, effectiveExecutionMode)
+          ).startThread({
             ...request,
             ...modelSettings,
             cwd,
@@ -12803,13 +12816,13 @@ export class DesktopBackendRegistry {
     if (tokenMiserEnabled) {
       await this.prepareTokenMiserRuntime();
     }
+    const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
+      client,
+      enabled: tokenMiserEnabled,
+    });
     const codexThreadConfig = mergeCodexThreadConfigs(
       pdfMcpConfig,
-      tokenMiserEnabled && this.tokenMiserCodeModeReducerDescriptorPath
-        ? buildCodexTokenMiserConfig(
-            this.tokenMiserCodeModeReducerDescriptorPath,
-          )
-        : undefined,
+      tokenMiserConfig,
     );
 
     let result: { threadId: string };
@@ -13762,15 +13775,6 @@ export class DesktopBackendRegistry {
           ),
         );
       }
-      codexThreadConfig = mergeCodexThreadConfigs(
-        codexThreadConfig,
-        tokenMiserEnabledForThread
-          && this.tokenMiserCodeModeReducerDescriptorPath
-          ? buildCodexTokenMiserConfig(
-              this.tokenMiserCodeModeReducerDescriptorPath,
-            )
-          : undefined,
-      );
       const preparedPdfInput = await preparePdfTurnInput({
         handling: this.resolvePdfTurnInputHandling({
           backend: params.backend,
@@ -13879,6 +13883,15 @@ export class DesktopBackendRegistry {
           }
           const effectiveMode = params.executionMode ?? mode;
           const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
+          const tokenMiserConfig =
+            await this.buildSupportedCodexTokenMiserConfig({
+              client,
+              enabled: tokenMiserEnabledForThread,
+            });
+          const supportedCodexThreadConfig = mergeCodexThreadConfigs(
+            codexThreadConfig,
+            tokenMiserConfig,
+          );
           const started = await client.startTurn({
               threadId: params.threadId,
               input,
@@ -13890,7 +13903,9 @@ export class DesktopBackendRegistry {
               ...(overlay?.codexEnvironmentRuntime
                 ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
                 : {}),
-              ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
+              ...(supportedCodexThreadConfig
+                ? { config: supportedCodexThreadConfig }
+                : {}),
               defaultModeRequestUserInput:
                 this.resolveCodexDefaultModeRequestUserInputFn(),
           });
@@ -14363,7 +14378,7 @@ export class DesktopBackendRegistry {
     let overlay: ThreadOverlayState | undefined;
     let cwd: string | undefined;
     let codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
-    let tokenMiserConfig: CodexThreadStartParams["config"] | undefined;
+    let tokenMiserEnabled = false;
     try {
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
@@ -14374,17 +14389,15 @@ export class DesktopBackendRegistry {
             threadId: params.threadId,
           })
         : undefined;
-      if (params.backend === "codex") {
-        const tokenMiserEnabled =
-          overlay?.tokenMiserEnabled ?? this.resolveTokenMiserEnabledFn();
+      if (reviewBackend === "codex") {
+        tokenMiserEnabled =
+          (params.backend === "codex" ? overlay?.tokenMiserEnabled : undefined)
+          ?? this.resolveTokenMiserEnabledFn();
         if (tokenMiserEnabled) {
           await this.prepareTokenMiserRuntime();
-          tokenMiserConfig = this.tokenMiserCodeModeReducerDescriptorPath
-            ? buildCodexTokenMiserConfig(
-                this.tokenMiserCodeModeReducerDescriptorPath,
-              )
-            : undefined;
         }
+      }
+      if (params.backend === "codex") {
         codexEnvironmentRuntime = overlay?.codexEnvironmentRuntime;
         const threadCwd = await this.resolveThreadEnvironmentCwd(
           params.backend,
@@ -14459,6 +14472,11 @@ export class DesktopBackendRegistry {
         if (!client.startReview) {
           throw new Error("Selected backend does not support review/start");
         }
+        const tokenMiserConfig =
+          await this.buildSupportedCodexTokenMiserConfig({
+            client,
+            enabled: tokenMiserEnabled,
+          });
         return await client.startReview({
           threadId: params.threadId,
           target: params.target,
@@ -14485,7 +14503,7 @@ export class DesktopBackendRegistry {
             parentBackend: params.backend,
             parentThreadId: params.threadId,
             target: params.target,
-            ...(tokenMiserConfig ? { tokenMiserConfig } : {}),
+            tokenMiserEnabled,
           })
         : params.backend === "codex"
           ? await this.withCodexThreadClient(params.threadId, startWithClient)
@@ -14595,7 +14613,7 @@ export class DesktopBackendRegistry {
     parentBackend: AppServerBackendKind;
     parentThreadId: string;
     target: StartReviewRequest["target"];
-    tokenMiserConfig?: CodexThreadStartParams["config"];
+    tokenMiserEnabled: boolean;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     // Only a same-provider review can inherit the parent's live session state;
     // another provider's agent runtime and execution mode do not transfer.
@@ -14641,7 +14659,11 @@ export class DesktopBackendRegistry {
       : params.overlay?.executionMode ?? "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const client = this.getClient("codex", executionMode);
-    const tokenMiserDynamicTools = params.tokenMiserConfig
+    const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
+      client,
+      enabled: params.tokenMiserEnabled,
+    });
+    const tokenMiserDynamicTools = params.tokenMiserEnabled
       ? buildCodexTokenMiserDynamicToolSpecs(this.tokenMiserStore)
       : [];
     const thread = await client.startThread({
@@ -14659,7 +14681,7 @@ export class DesktopBackendRegistry {
       ...(params.codexEnvironmentRuntime
         ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
         : {}),
-      ...(params.tokenMiserConfig ? { config: params.tokenMiserConfig } : {}),
+      ...(tokenMiserConfig ? { config: tokenMiserConfig } : {}),
       ...(tokenMiserDynamicTools.length > 0
         ? { dynamicTools: tokenMiserDynamicTools }
         : {}),
@@ -19438,6 +19460,65 @@ export class DesktopBackendRegistry {
       status: "unavailable",
       reason: `${params.backend ?? backend?.kind ?? "backend"}_structured_generation_unavailable`,
     };
+  }
+
+  /** Probe once per client; reducer support is immutable for one app-server. */
+  private async supportsTokenMiserCodeModeReducer(
+    client: BackendClient,
+  ): Promise<boolean> {
+    const cached = this.tokenMiserCodeModeReducerSupport.get(client);
+    if (cached) {
+      return await cached;
+    }
+
+    const probe = (async () => {
+      if (!client.readServerCapabilities) {
+        return false;
+      }
+      try {
+        const capabilities = await client.readServerCapabilities();
+        return capabilities.codeModeOutputReducer?.protocolVersion === 2;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const normalized = message.toLowerCase();
+        if (
+          normalized.includes("method not found")
+          || normalized.includes("unknown method")
+          || normalized.includes(
+            "unknown variant `server/capabilities/read`",
+          )
+        ) {
+          backendRegistryLog.debug(
+            "Codex code-mode output reducer capability is unavailable",
+            { reason: message },
+          );
+        } else {
+          backendRegistryLog.warn(
+            "Codex code-mode output reducer capability probe failed open",
+            { error: message },
+          );
+        }
+        return false;
+      }
+    })();
+    this.tokenMiserCodeModeReducerSupport.set(client, probe);
+    return await probe;
+  }
+
+  private async buildSupportedCodexTokenMiserConfig(params: {
+    client: BackendClient;
+    enabled: boolean;
+  }): Promise<CodexThreadStartParams["config"] | undefined> {
+    if (
+      !params.enabled
+      || !this.tokenMiserCodeModeReducerDescriptorPath
+      || !(await this.supportsTokenMiserCodeModeReducer(params.client))
+    ) {
+      return undefined;
+    }
+    return buildCodexTokenMiserConfig(
+      this.tokenMiserCodeModeReducerDescriptorPath,
+    );
   }
 
   /**
