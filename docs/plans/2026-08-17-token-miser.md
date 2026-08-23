@@ -1,6 +1,7 @@
 # Token Miser implementation plan
 
-Status: Implemented; awaiting operator hook approval and live trial
+Status: PwrAgent implementation complete; awaiting integrated Codex fork build
+and live reducer-v2 trial
 
 ## Decisions
 
@@ -55,3 +56,19 @@ Status: Implemented; awaiting operator hook approval and live trial
 - 2026-08-17: Added and validated the isolated `pwragent-token-miser` plugin
   source. Codex installation remains separate from exact-hook approval;
   operators must review the installed hook with `/hooks`.
+- 2026-08-23: Added the Codex Code Mode output-reducer v2 bridge. PwrAgent now
+  advertises a process-specific authenticated descriptor, stages the original
+  output outside all retrieval and accounting views, and publishes a gate only
+  after Codex explicitly acknowledges the exact replacement it accepted.
+- 2026-08-23: Added exact reducer capability negotiation through
+  `server/capabilities/read`. Unsupported Codex executables fail open and keep
+  legacy direct-tool `PostToolUse` coverage without receiving fork-only config.
+- 2026-08-23: Prevented nested Code Mode calls from also running the legacy
+  gate, applied reducer config to new, forked, resumed, and review threads, and
+  added stale staged-output pruning plus disconnect, timeout, and shutdown
+  cleanup coverage.
+- 2026-08-23: The remaining dependency is one signed pwrdrvr/codex integration
+  branch and installable build containing reducer protocol v2, the nested-call
+  source marker, uncapped direct-hook input, and downstream version stamping.
+  The live trial must prove exactly one gate, no raw sentinel in parent context,
+  acceptance-driven live cards, retrieval accounting, and fail-open behavior.
