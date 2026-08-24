@@ -1,4 +1,12 @@
 import { EventEmitter } from "node:events";
+import {
+  chmodSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { compareCodexCliVersions } from "@pwrdrvr/codex-discovery";
@@ -55,6 +63,19 @@ class MockCodexChildProcess extends EventEmitter {
   }
 }
 
+function createBundledToolsDirectory(): string {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-bundled-tools-"));
+  const executable = path.join(
+    directory,
+    process.platform === "win32" ? "rg.exe" : "rg",
+  );
+  writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+  if (process.platform !== "win32") {
+    chmodSync(executable, 0o755);
+  }
+  return directory;
+}
+
 beforeEach(() => {
   resolveCodexCommandMock.mockClear();
   spawnMock.mockReset();
@@ -72,6 +93,51 @@ describe("stdio transport Codex CLI resolution", () => {
 });
 
 describe("StdioJsonRpcTransport", () => {
+  it("prepends PwrAgent's bundled ripgrep for an external Codex runtime and its shell policy", async () => {
+    const child = new MockCodexChildProcess();
+    const bundledToolsDirectory = createBundledToolsDirectory();
+    const externalRuntimeDirectory = path.join(os.tmpdir(), "custom-codex-runtime");
+    const originalPath = [externalRuntimeDirectory, "/usr/bin"].join(path.delimiter);
+    const resolveArgs = vi.fn((env: NodeJS.ProcessEnv) => [
+      "-c",
+      `shell_environment_policy.set.PATH=${JSON.stringify(env.PATH)}`,
+    ]);
+    spawnMock.mockReturnValue(child);
+    try {
+      const transport = new StdioJsonRpcTransport({
+        command: "codex",
+        bundledToolsDirectory,
+        env: { PATH: originalPath },
+        resolveArgs,
+        resolveCommand: async () => ({
+          command: path.join(externalRuntimeDirectory, "codex"),
+          source: "path",
+          version: "0.144.0",
+        }),
+      });
+
+      await transport.connect();
+
+      const expectedPath = [bundledToolsDirectory, originalPath].join(path.delimiter);
+      expect(resolveArgs).toHaveBeenCalledWith({ PATH: expectedPath });
+      expect(spawnMock).toHaveBeenCalledWith(
+        path.join(externalRuntimeDirectory, "codex"),
+        [
+          "app-server",
+          "-c",
+          `shell_environment_policy.set.PATH=${JSON.stringify(expectedPath)}`,
+        ],
+        expect.objectContaining({
+          env: expect.objectContaining({ PATH: expectedPath }),
+        }),
+      );
+
+      await transport.close();
+    } finally {
+      rmSync(bundledToolsDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("does not pass PwrAgent's renderer URL to the Codex app server", async () => {
     const child = new MockCodexChildProcess();
     spawnMock.mockReturnValue(child);

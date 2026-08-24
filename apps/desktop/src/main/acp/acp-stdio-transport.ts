@@ -15,6 +15,7 @@ import {
   type JsonRpcTransport,
 } from "@pwrdrvr/agent-transport";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env.js";
+import { prependBundledToolsToPath } from "../bundled-tools.js";
 import { getMainLogger } from "../log.js";
 import {
   terminateOwnedProcessTree,
@@ -46,6 +47,8 @@ export type AcpStdioJsonRpcTransportOptions = {
   observer?: JsonRpcObserver;
   spawn?: AcpStdioSpawn;
   platform?: NodeJS.Platform;
+  /** Test seam for the packaged or development bundled-tools directory. */
+  bundledToolsDirectory?: string;
 };
 
 function appendExecutableSearchPaths(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -94,6 +97,7 @@ export class AcpStdioJsonRpcTransport implements AcpJsonRpcTransport {
       launchDescriptor: options.launchDescriptor,
       spawn: options.spawn,
       platform: options.platform,
+      bundledToolsDirectory: options.bundledToolsDirectory,
     });
     this.connection = new JsonRpcConnection(
       this.lineTransport,
@@ -189,6 +193,7 @@ class AcpLineStdioTransport implements JsonRpcTransport {
       launchDescriptor: AcpLaunchDescriptor;
       spawn?: AcpStdioSpawn;
       platform?: NodeJS.Platform;
+      bundledToolsDirectory?: string;
     },
   ) {}
 
@@ -211,10 +216,18 @@ class AcpLineStdioTransport implements JsonRpcTransport {
     this.stderrPreview = "";
 
     const descriptor = normalizeAcpLaunchDescriptor(this.options.launchDescriptor);
-    const env = buildPwrAgentChildProcessEnv(
-      appendExecutableSearchPaths(
-        buildPwrAgentChildProcessEnv(process.env, descriptor.env),
+    const env = prependBundledToolsToPath(
+      buildPwrAgentChildProcessEnv(
+        appendExecutableSearchPaths(
+          buildPwrAgentChildProcessEnv(process.env, descriptor.env),
+        ),
       ),
+      {
+        ...(this.options.bundledToolsDirectory
+          ? { directory: this.options.bundledToolsDirectory }
+          : {}),
+        ...(this.options.platform ? { platform: this.options.platform } : {}),
+      },
     );
     const invocation = createCommandInvocation({
       command: descriptor.command,

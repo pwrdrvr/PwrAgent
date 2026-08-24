@@ -1,4 +1,12 @@
 import { EventEmitter } from "node:events";
+import {
+  chmodSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough, Writable } from "node:stream";
 import type { AcpBackendId } from "@pwragent/shared";
 import { describe, expect, it, vi } from "vitest";
@@ -43,7 +51,55 @@ function createDescriptor(overrides: Partial<AcpLaunchDescriptor> = {}): AcpLaun
   };
 }
 
+function createBundledToolsDirectory(): string {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "pwragent-bundled-tools-"));
+  const executable = path.join(
+    directory,
+    process.platform === "win32" ? "rg.exe" : "rg",
+  );
+  writeFileSync(executable, "#!/bin/sh\nexit 0\n");
+  if (process.platform !== "win32") {
+    chmodSync(executable, 0o755);
+  }
+  return directory;
+}
+
 describe("AcpStdioJsonRpcTransport", () => {
+  it("prepends PwrAgent's bundled ripgrep for external ACP runtimes", async () => {
+    const child = new MockAcpChildProcess();
+    const spawnCalls: Array<Parameters<AcpStdioSpawn>> = [];
+    const bundledToolsDirectory = createBundledToolsDirectory();
+    const externalRuntimeDirectory = path.join(os.tmpdir(), "custom-acp-runtime");
+    const originalPath = [externalRuntimeDirectory, "/usr/bin"].join(path.delimiter);
+    const spawn: AcpStdioSpawn = (command, args, options) => {
+      spawnCalls.push([command, args, options]);
+      return child;
+    };
+    try {
+      const transport = new AcpStdioJsonRpcTransport({
+        bundledToolsDirectory,
+        launchDescriptor: createDescriptor({
+          command: path.join(externalRuntimeDirectory, "agent"),
+          distributionKind: "local",
+          env: { PATH: originalPath },
+        }),
+        spawn,
+      });
+
+      await transport.connect();
+
+      expect(spawnCalls[0]?.[0]).toBe(path.join(externalRuntimeDirectory, "agent"));
+      expect(String(spawnCalls[0]?.[2].env?.PATH).split(path.delimiter)[0]).toBe(
+        bundledToolsDirectory,
+      );
+      expect(String(spawnCalls[0]?.[2].env?.PATH)).toContain(originalPath);
+
+      await transport.close();
+    } finally {
+      rmSync(bundledToolsDirectory, { recursive: true, force: true });
+    }
+  });
+
   it("launches the descriptor command directly and writes newline JSON-RPC", async () => {
     const child = new MockAcpChildProcess();
     const spawnCalls: Array<Parameters<AcpStdioSpawn>> = [];
