@@ -93,6 +93,10 @@ function tooltipViewportTop(): number {
 
 type TooltipState = {
   content: ReactNode;
+  horizontalBounds?: {
+    left: number;
+    right: number;
+  };
   targetTop: number;
   targetBottom: number;
   targetCenter: number;
@@ -139,6 +143,13 @@ type DelayedTooltipContent = ReactNode | (() => ReactNode);
 export function useViewportTooltip(options: {
   /** CSS class applied to the rendered tooltip element. */
   className: string;
+  /**
+   * Optional horizontal boundaries for a tooltip that must remain within a
+   * local surface as well as escaping that surface's clipping ancestor.
+   */
+  getHorizontalBounds?: (
+    target: HTMLElement,
+  ) => { left: number; right: number } | undefined;
 }): {
   /**
    * DOM id stamped on the rendered tooltip. Point the trigger at it with
@@ -169,6 +180,7 @@ export function useViewportTooltip(options: {
   visible: boolean;
   tooltipNode: ReactNode;
 } {
+  const { className, getHorizontalBounds } = options;
   const tooltipRef = useRef<HTMLDivElement>(null);
   const targetRef = useRef<HTMLElement | null>(null);
   const targetRectRef = useRef<TooltipTargetRect | null>(null);
@@ -225,9 +237,20 @@ export function useViewportTooltip(options: {
       return;
     }
     const rect = tooltipElement.getBoundingClientRect();
+    const horizontalLeft = Math.max(
+      VIEWPORT_PADDING,
+      state.horizontalBounds?.left ?? VIEWPORT_PADDING,
+    );
+    const horizontalRight = Math.max(
+      horizontalLeft,
+      Math.min(
+        window.innerWidth - VIEWPORT_PADDING,
+        state.horizontalBounds?.right ?? window.innerWidth - VIEWPORT_PADDING,
+      ),
+    );
     const left = Math.min(
-      window.innerWidth - rect.width - VIEWPORT_PADDING,
-      Math.max(VIEWPORT_PADDING, state.targetCenter - rect.width / 2),
+      Math.max(horizontalLeft, horizontalRight - rect.width),
+      Math.max(horizontalLeft, state.targetCenter - rect.width / 2),
     );
     const viewportTop = tooltipViewportTop();
     const viewportBottom = window.innerHeight - VIEWPORT_PADDING;
@@ -273,13 +296,15 @@ export function useViewportTooltip(options: {
       setState(undefined);
       return;
     }
+    const horizontalBounds = getHorizontalBounds?.(target);
     setState({
       content,
+      horizontalBounds,
       targetTop: rect.top,
       targetBottom: rect.bottom,
       targetCenter: rect.left + rect.width / 2,
     });
-  }, [clearHoverDelay, rememberTarget]);
+  }, [clearHoverDelay, getHorizontalBounds, rememberTarget]);
 
   const showAfterDelay = useCallback(
     (target: HTMLElement, content: DelayedTooltipContent): void => {
@@ -389,7 +414,7 @@ export function useViewportTooltip(options: {
             ref={tooltipRef}
             role="tooltip"
             id={tooltipId}
-            className={options.className}
+            className={className}
             style={{
               position: "fixed",
               left: state.left,

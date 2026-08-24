@@ -875,10 +875,10 @@ describe("Composer", () => {
       addReference.compareDocumentPosition(threadOptions) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(threadOptions).toHaveAttribute(
-      "data-tooltip",
-      "Thread options",
-    );
+    fireEvent.mouseEnter(threadOptions);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Thread options");
+    expect(threadOptions).toHaveAttribute("aria-describedby");
+    fireEvent.mouseLeave(threadOptions);
 
     fireEvent.click(threadOptions);
     const agentThread = screen.getByRole("menuitemcheckbox", {

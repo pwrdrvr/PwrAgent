@@ -1657,6 +1657,24 @@ function ComposerThreadOptionsMenu(props: {
   const menuWidthLimitRef = useRef<number | undefined>(undefined);
   const naturalMenuWidthRef = useRef(0);
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
+  const getTooltipHorizontalBounds = useCallback((target: HTMLElement) => {
+    const composerSetup = target.closest<HTMLElement>(".composer__setup");
+    if (!composerSetup) {
+      return undefined;
+    }
+    const { left, right } = composerSetup.getBoundingClientRect();
+    return { left, right };
+  }, []);
+  const {
+    tooltipId,
+    show: showTooltip,
+    hide: hideTooltip,
+    visible: tooltipVisible,
+    tooltipNode,
+  } = useViewportTooltip({
+    className: "viewport-tooltip",
+    getHorizontalBounds: getTooltipHorizontalBounds,
+  });
   const agentThreadChangeDisabled =
     props.disabled ||
     props.existingCodexThread ||
@@ -1729,16 +1747,31 @@ function ComposerThreadOptionsMenu(props: {
     <div className="composer-thread-options" ref={ref}>
       <button
         aria-controls={open ? menuId : undefined}
+        aria-describedby={tooltipVisible ? tooltipId : undefined}
         aria-expanded={open}
         aria-haspopup="menu"
         aria-label="Thread options"
-        className={`composer__toggle tooltip-target${
+        className={`composer__toggle${
           props.agentThread ? " is-active" : ""
         }`}
-        data-tooltip={open ? undefined : "Thread options"}
         disabled={props.disabled}
         type="button"
-        onClick={() => setOpen((current) => !current)}
+        onBlur={hideTooltip}
+        onClick={() => {
+          hideTooltip();
+          setOpen((current) => !current);
+        }}
+        onFocus={(event) => {
+          if (!open) {
+            showTooltip(event.currentTarget, "Thread options");
+          }
+        }}
+        onMouseEnter={(event) => {
+          if (!open) {
+            showTooltip(event.currentTarget, "Thread options");
+          }
+        }}
+        onMouseLeave={hideTooltip}
       >
         <MoreVerticalIcon size={15} aria-hidden="true" />
       </button>
@@ -1813,6 +1846,7 @@ function ComposerThreadOptionsMenu(props: {
           ) : null}
         </div>
       ) : null}
+      {tooltipNode}
     </div>
   );
 }
