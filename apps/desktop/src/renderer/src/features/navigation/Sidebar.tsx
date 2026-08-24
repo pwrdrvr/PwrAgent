@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
@@ -2081,7 +2082,10 @@ export function Sidebar(props: SidebarProps) {
         </div>
       </section>
 
-      {contextMenu ? (
+      {/* These menus must leave the sidebar's DOM subtree. The sidebar has
+          containment and `overflow: hidden`, both of which otherwise clip a
+          fixed-position menu at the rail edge. */}
+      {contextMenu ? createPortal(
         <div
           ref={contextMenuRef}
           className="thread-context-menu"
@@ -2592,7 +2596,8 @@ export function Sidebar(props: SidebarProps) {
               </div>
             </>
           )}
-        </div>
+        </div>,
+        document.body,
       ) : null}
 
       {pendingDetachPullRequest ? (
@@ -2607,7 +2612,7 @@ export function Sidebar(props: SidebarProps) {
         />
       ) : null}
 
-      {directoryTargetMenu && federationThreadTargets.length > 0 ? (
+      {directoryTargetMenu && federationThreadTargets.length > 0 ? createPortal(
         <div
           ref={directoryTargetMenuRef}
           className="new-thread-menu__card new-thread-menu__card--anchored"
@@ -2631,10 +2636,11 @@ export function Sidebar(props: SidebarProps) {
               void props.onCreateThreadOnFederationTarget?.(instanceId);
             }}
           />
-        </div>
+        </div>,
+        document.body,
       ) : null}
 
-      {directoryContextMenu ? (
+      {directoryContextMenu ? createPortal(
         <div
           ref={directoryContextMenuRef}
           className="thread-context-menu"
@@ -2749,7 +2755,8 @@ export function Sidebar(props: SidebarProps) {
               </button>
             </div>
           ) : null}
-        </div>
+        </div>,
+        document.body,
       ) : null}
 
       {renameThread ? (
