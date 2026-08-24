@@ -803,6 +803,12 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
    * rewrite a launchpad the operator has already configured.
    */
   prAutoDispatchEnabled?: boolean;
+  /**
+   * Token Miser choice for the thread created from this launchpad. Absent
+   * follows the profile setting; true/false creates an explicit thread
+   * override before the first turn starts.
+   */
+  tokenMiserEnabled?: boolean;
   workMode: LaunchpadWorkMode;
   branchName?: string;
   /** Instance that owns the thread this viewer-side launchpad will create. */

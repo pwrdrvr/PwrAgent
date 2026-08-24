@@ -12292,6 +12292,7 @@ export class DesktopBackendRegistry {
     parentThreadBackend?: AppServerBackendKind;
     parentThreadInstanceId?: string;
     prAutoDispatchEnabled?: boolean;
+    tokenMiserEnabled?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
@@ -12308,6 +12309,7 @@ export class DesktopBackendRegistry {
       parentThreadBackend,
       parentThreadInstanceId,
       prAutoDispatchEnabled,
+      tokenMiserEnabled: tokenMiserOverride,
       mcpConnectionIds,
       ...request
     } = params;
@@ -12427,7 +12429,7 @@ export class DesktopBackendRegistry {
       ? this.getClient(backend, effectiveExecutionMode)
       : undefined;
     const tokenMiserEnabled = backend === "codex"
-      && this.resolveTokenMiserEnabledFn();
+      && (tokenMiserOverride ?? this.resolveTokenMiserEnabledFn());
     if (tokenMiserEnabled) {
       await this.prepareTokenMiserRuntime();
     }
@@ -12603,6 +12605,9 @@ export class DesktopBackendRegistry {
           ).map(normalizeLinkedDirectoryKind),
         ),
         gitBranch,
+        ...(tokenMiserOverride !== undefined
+          ? { tokenMiserEnabled: tokenMiserOverride }
+          : {}),
       },
     );
     if (effectiveWorkMode === "worktree") {
@@ -12620,6 +12625,13 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         executionMode: effectiveExecutionMode,
       });
+      if (tokenMiserOverride !== undefined) {
+        await this.overlayStore.setThreadTokenMiser?.({
+          backend,
+          threadId: result.threadId,
+          enabled: tokenMiserOverride,
+        });
+      }
       if (
         pdfMcpRegistration &&
         typeof this.overlayStore.setThreadMessagingPdfToolCatalogVersion === "function"
@@ -19004,6 +19016,7 @@ export class DesktopBackendRegistry {
       mcpConnectionIds: launchpad.mcpConnectionIds,
       prAutoDispatchEnabled:
         launchpad.prAutoDispatchEnabled ?? this.resolveDefaultPrAutoDispatchEnabledFn(),
+      tokenMiserEnabled: launchpad.tokenMiserEnabled,
       acpRuntime: launchpad.acpRuntime,
       codexEnvironmentRuntime,
       directoryKey: launchpad.directoryKey,

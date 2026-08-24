@@ -4153,7 +4153,69 @@ describe("DesktopBackendRegistry", () => {
     } finally {
       await registry.close();
     }
-  });it("returns ACP provider commands from session metadata", async () => {
+  });
+
+  it("applies a launchpad Token Miser opt-out before the first turn", async () => {
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: {
+        codeModeOutputReducer: {
+          dynamicToolsResumeField: "dynamicTools",
+          protocolVersion: 2,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      createScratchProjectDirectory: async () =>
+        "/tmp/pwragent-token-miser-launchpad",
+    });
+    const internals = registry as unknown as {
+      prepareTokenMiserRuntime: (options?: { prune?: boolean }) => Promise<void>;
+      resolveTokenMiserEnabledFn: () => boolean;
+    };
+    internals.resolveTokenMiserEnabledFn = () => true;
+    const prepare = vi.spyOn(internals, "prepareTokenMiserRuntime");
+
+    try {
+      const created = await registry.ensureDirectoryLaunchpad({
+        directoryKey: "workspace:/tmp/pwragent-token-miser-launchpad",
+        directoryKind: "workspace",
+        directoryLabel: "Workspaces",
+      });
+      const updated = await registry.updateDirectoryLaunchpad({
+        directoryKey: created.launchpad.directoryKey,
+        patch: { tokenMiserEnabled: false },
+      });
+      expect(updated.launchpad.tokenMiserEnabled).toBe(false);
+
+      const materialized = await registry.materializeDirectoryLaunchpad({
+        directoryKey: updated.launchpad.directoryKey,
+        launchpad: updated.launchpad,
+      });
+
+      expect(prepare).not.toHaveBeenCalled();
+      expect(codexClient.lastStartThreadParams?.config).toBeUndefined();
+      const dynamicToolNames = pwragentDynamicTools(
+        codexClient.lastStartThreadParams?.dynamicTools,
+      ).map((tool) => tool.name);
+      expect(dynamicToolNames).not.toContain("search_token_miser_output");
+      expect(dynamicToolNames).not.toContain("read_token_miser_output");
+      expect(dynamicToolNames).not.toContain("read_all_token_miser_output");
+      expect(
+        (await overlayStore.getThreadOverlayState({
+          backend: materialized.backend,
+          threadId: materialized.threadId,
+        }))?.tokenMiserEnabled,
+      ).toBe(false);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("returns ACP provider commands from session metadata", async () => {
     const session: AcpSessionMetadata = {
       backendId: "acp:kimi",
       sessionId: "kimi-session-1",

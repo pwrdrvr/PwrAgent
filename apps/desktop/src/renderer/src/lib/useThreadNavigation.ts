@@ -2781,6 +2781,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
     reasoningEffort: params.launchpad.reasoningEffort,
     serviceTier: params.launchpad.serviceTier,
     fastMode: params.launchpad.fastMode,
+    tokenMiserEnabled: params.launchpad.tokenMiserEnabled,
     ...(params.launchpad.agent
       ? {
           agent: {

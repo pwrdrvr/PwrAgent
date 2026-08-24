@@ -1119,6 +1119,7 @@ export type ThreadViewProps = {
         | "reasoningEffort"
         | "serviceTier"
         | "fastMode"
+        | "tokenMiserEnabled"
         | "workMode"
         | "branchName"
         | "directoryLabel"

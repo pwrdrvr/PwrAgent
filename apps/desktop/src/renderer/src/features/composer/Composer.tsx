@@ -306,6 +306,7 @@ type ComposerProps = {
         | "serviceTier"
         | "fastMode"
         | "acpRuntime"
+        | "tokenMiserEnabled"
         | "workMode"
         | "branchName"
         | "codexEnvironmentId"
@@ -8600,9 +8601,24 @@ export function Composer(props: ComposerProps) {
     }
   };
 
-  // Per-thread Token Miser override. Written to the thread's overlay row and
-  // read back through the navigation summary, so every window agrees.
+  // Per-thread Token Miser override. A launchpad persists the choice before
+  // materialization; an existing thread writes it to the thread overlay.
   const changeTokenMiser = async (enabled: boolean): Promise<void> => {
+    const launchpad = props.launchpad;
+    if (launchpad && props.onUpdateLaunchpad) {
+      setAgentThreadSaving(true);
+      setAgentThreadError(undefined);
+      try {
+        await props.onUpdateLaunchpad(launchpad.directoryKey, {
+          tokenMiserEnabled: enabled,
+        });
+      } catch (error) {
+        setAgentThreadError(error instanceof Error ? error.message : String(error));
+      } finally {
+        setAgentThreadSaving(false);
+      }
+      return;
+    }
     const thread = props.thread;
     if (!thread || !props.desktopApi?.setThreadTokenMiser) {
       return;
@@ -11800,12 +11816,16 @@ export function Composer(props: ComposerProps) {
                 ? () => props.onShowMcpInventory?.("toolsAndAuthOnly")
                 : undefined
             }
-            {...(props.thread?.source === "codex" && props.desktopApi?.setThreadTokenMiser
+            {...((props.launchpad?.backend === "codex" && props.onUpdateLaunchpad)
+              || (props.thread?.source === "codex" && props.desktopApi?.setThreadTokenMiser)
               ? {
-                  tokenMiser: props.thread.tokenMiserEnabled
+                  tokenMiser: props.launchpad?.tokenMiserEnabled
+                    ?? props.thread?.tokenMiserEnabled
                     ?? props.tokenMiserEnabled
                     ?? false,
-                  tokenMiserOverridden: props.thread.tokenMiserEnabled !== undefined,
+                  tokenMiserOverridden:
+                    (props.launchpad?.tokenMiserEnabled
+                      ?? props.thread?.tokenMiserEnabled) !== undefined,
                   onTokenMiserChange: (enabled: boolean) => {
                     void changeTokenMiser(enabled);
                   },

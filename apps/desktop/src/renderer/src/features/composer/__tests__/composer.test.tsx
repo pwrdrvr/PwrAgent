@@ -1044,6 +1044,48 @@ describe("Composer", () => {
     expect(onRefreshNavigation).toHaveBeenCalled();
   });
 
+  it("sets a Token Miser override before creating a Codex thread", async () => {
+    const onUpdateLaunchpad = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        backends={[backendSummary("codex")]}
+        disabled={false}
+        launchpad={{
+          directoryKey: "directory:/repo",
+          directoryKind: "directory",
+          directoryLabel: "Repo",
+          directoryPath: "/repo",
+          backend: "codex",
+          executionMode: "default",
+          prompt: "",
+          workMode: "local",
+          createdAt: 1,
+          updatedAt: 1,
+        }}
+        onUpdateLaunchpad={onUpdateLaunchpad}
+        skills={[]}
+        tokenMiserEnabled
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    const tokenMiser = screen.getByRole("menuitemcheckbox", {
+      name: /Token Miser/,
+    });
+    expect(tokenMiser).toHaveAttribute("aria-checked", "true");
+    expect(tokenMiser).not.toHaveTextContent("this thread");
+
+    await act(async () => {
+      fireEvent.click(tokenMiser);
+      await Promise.resolve();
+    });
+
+    expect(onUpdateLaunchpad).toHaveBeenCalledWith("directory:/repo", {
+      tokenMiserEnabled: false,
+    });
+  });
+
   it("shows a per-thread Token Miser override as such", () => {
     render(
       <Composer
