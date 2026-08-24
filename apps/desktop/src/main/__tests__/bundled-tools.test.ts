@@ -13,7 +13,10 @@ import {
   resolveBundledToolsDirectory,
 } from "../bundled-tools";
 
-function writeRipgrep(directory: string, executable = "rg"): void {
+function writeRipgrep(
+  directory: string,
+  executable = process.platform === "win32" ? "rg.exe" : "rg",
+): void {
   mkdirSync(directory, { recursive: true });
   const executablePath = path.join(directory, executable);
   writeFileSync(executablePath, "#!/bin/sh\nexit 0\n");
