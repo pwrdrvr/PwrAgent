@@ -1,9 +1,19 @@
-import type { ThreadSpendAlert } from "@pwragent/shared";
+import type {
+  AppServerBackendKind,
+  FederationInstanceId,
+  ThreadSpendAlert,
+} from "@pwragent/shared";
 import type { ResolvedThreadLink } from "../../lib/thread-links";
 import type { AppNoticeToastNotice } from "./AppNoticeToast";
+import {
+  buildThreadCostNoticeMetadata,
+  scopeThreadCostNoticeId,
+} from "./thread-cost-notice";
 
 export function buildSpendAlertNotice(params: {
   alert: ThreadSpendAlert;
+  backend: AppServerBackendKind;
+  instanceId?: FederationInstanceId;
   threadLink?: ResolvedThreadLink;
 }): AppNoticeToastNotice {
   const alert = params.alert;
@@ -11,8 +21,17 @@ export function buildSpendAlertNotice(params: {
   const threshold = formatUsdMicros(alert.thresholdMicros);
   const activeTurn = alert.kind === "active-turn-spend";
   return {
+    ...buildThreadCostNoticeMetadata({
+      backend: params.backend,
+      ...(params.instanceId ? { instanceId: params.instanceId } : {}),
+      kind: alert.kind,
+      threadId: alert.threadId,
+    }),
     autoDismiss: false,
-    id: alert.alertId,
+    id: scopeThreadCostNoticeId({
+      id: alert.alertId,
+      ...(params.instanceId ? { instanceId: params.instanceId } : {}),
+    }),
     message: activeTurn
       ? `This active turn has reached ${spend} in estimated list-price spend, crossing the configured ${threshold} threshold.`
       : `This thread has reached ${spend} in estimated list-price spend, crossing the configured ${threshold} threshold.`,

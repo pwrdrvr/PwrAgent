@@ -201,12 +201,34 @@ describe("buildToolAccountingNotice", () => {
     });
 
     expect(notice.id).toBe("tool-accounting:codex:thread-1");
+    expect(notice.coalescing).toEqual({
+      key: "thread-cost:local:codex:thread-1",
+      priority: 0,
+    });
+    expect(notice.dismissGroup).toEqual({
+      key: "thread-cost",
+      label: "cost notices",
+    });
     expect(notice.message).toContain("3 tool calls flagged across 2 turns");
     expect(notice.actions?.map((action) => action.label)).not.toContain(
       "Dismiss",
     );
     notice.onDismiss?.();
     expect(onDismiss).toHaveBeenCalledOnce();
+  });
+
+  it("qualifies a remote viewer notice id by owning instance", () => {
+    const notice = buildToolAccountingNotice({
+      instanceId: "peer-a",
+      onDismiss: vi.fn(),
+      onExamine: vi.fn(),
+      showCost: false,
+      summary: summaryFor(),
+    });
+
+    expect(notice.id).toBe(
+      "thread-cost-notice:remote:peer-a:tool-accounting:codex:thread-1",
+    );
   });
 
   it("offers a mute for a warning but not for a cap hit", () => {

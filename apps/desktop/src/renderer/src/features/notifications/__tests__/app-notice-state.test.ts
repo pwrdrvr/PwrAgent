@@ -4,6 +4,7 @@ import {
   INITIAL_APP_NOTICE_STATE,
   type AppNoticeState,
 } from "../app-notice-state";
+import type { AppNoticeToastNotice } from "../AppNoticeToast";
 
 describe("appNoticeReducer", () => {
   it("keeps failed turns in arrival order instead of overwriting them", () => {
@@ -259,4 +260,148 @@ describe("appNoticeReducer", () => {
 
     expect(state.durable.map((notice) => notice.id)).toEqual(["second"]);
   });
+
+  it("keeps only the highest-priority cost notice for each thread", () => {
+    let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, {
+      type: "show",
+      notice: costNotice({
+        id: "tool-accounting:codex:thread-a",
+        priority: 0,
+        threadKey: "local:codex:thread-a",
+        title: "Tool output hit the cap",
+      }),
+    });
+    state = appNoticeReducer(state, {
+      type: "show",
+      notice: costNotice({
+        id: "spend-alert:active-turn:codex:thread-a:turn-1:5000000",
+        priority: 1,
+        threadKey: "local:codex:thread-a",
+        title: "Active turn spend threshold reached",
+      }),
+    });
+    state = appNoticeReducer(state, {
+      type: "show",
+      notice: costNotice({
+        id: "spend-alert:thread:codex:thread-a:25000000",
+        priority: 2,
+        threadKey: "local:codex:thread-a",
+        title: "Thread spend threshold reached",
+      }),
+    });
+
+    expect(state.durable).toEqual([
+      expect.objectContaining({
+        id: "spend-alert:thread:codex:thread-a:25000000",
+      }),
+    ]);
+  });
+
+  it("does not let a late lower-priority event replace a worse cost notice", () => {
+    let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, {
+      type: "show",
+      notice: costNotice({
+        id: "thread-cost-notice:remote:remote-a:spend-alert:thread:codex:thread-a:25000000",
+        priority: 2,
+        threadKey: "remote-a:codex:thread-a",
+        title: "Thread spend threshold reached",
+      }),
+    });
+    state = appNoticeReducer(state, {
+      type: "show",
+      notice: costNotice({
+        id: "thread-cost-notice:remote:remote-a:tool-accounting:codex:thread-a",
+        priority: 0,
+        threadKey: "remote-a:codex:thread-a",
+        title: "Tool output hit the cap",
+      }),
+    });
+
+    expect(state.durable.map((notice) => notice.title)).toEqual([
+      "Thread spend threshold reached",
+    ]);
+  });
+
+  it("replaces an earlier active-turn cost notice from the same thread", () => {
+    let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, {
+      type: "show",
+      notice: costNotice({
+        id: "thread-cost-notice:remote:remote-a:spend-alert:active-turn:codex:thread-a:turn-1:5000000",
+        priority: 1,
+        threadKey: "remote-a:codex:thread-a",
+        title: "First active turn",
+      }),
+    });
+    state = appNoticeReducer(state, {
+      type: "show",
+      notice: costNotice({
+        id: "thread-cost-notice:remote:remote-a:spend-alert:active-turn:codex:thread-a:turn-2:5000000",
+        priority: 1,
+        threadKey: "remote-a:codex:thread-a",
+        title: "Second active turn",
+      }),
+    });
+
+    expect(state.durable.map((notice) => notice.title)).toEqual([
+      "Second active turn",
+    ]);
+  });
+
+  it("coalesces a remote viewer per owning instance without merging peers", () => {
+    let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, {
+      type: "show",
+      notice: costNotice({
+        id: "thread-cost-notice:remote:remote-a:tool-accounting:codex:thread-a",
+        priority: 0,
+        threadKey: "remote-a:codex:thread-a",
+        title: "Remote A tool output",
+      }),
+    });
+    state = appNoticeReducer(state, {
+      type: "show",
+      notice: costNotice({
+        id: "thread-cost-notice:remote:remote-a:spend-alert:active-turn:codex:thread-a:turn-1:5000000",
+        priority: 1,
+        threadKey: "remote-a:codex:thread-a",
+        title: "Remote A turn spend",
+      }),
+    });
+    state = appNoticeReducer(state, {
+      type: "show",
+      notice: costNotice({
+        id: "thread-cost-notice:remote:remote-b:tool-accounting:codex:thread-a",
+        priority: 0,
+        threadKey: "remote-b:codex:thread-a",
+        title: "Remote B tool output",
+      }),
+    });
+
+    expect(state.durable.map((notice) => notice.title)).toEqual([
+      "Remote A turn spend",
+      "Remote B tool output",
+    ]);
+    expect(new Set(state.durable.map((notice) => notice.id))).toHaveLength(2);
+  });
 });
+
+function costNotice(params: {
+  id: string;
+  priority: number;
+  threadKey: string;
+  title: string;
+}): AppNoticeToastNotice {
+  return {
+    autoDismiss: false,
+    coalescing: {
+      key: `thread-cost:${params.threadKey}`,
+      priority: params.priority,
+    },
+    dismissGroup: {
+      key: "thread-cost",
+      label: "cost notices",
+    },
+    id: params.id,
+    message: params.title,
+    title: params.title,
+  } as AppNoticeToastNotice;
+}
