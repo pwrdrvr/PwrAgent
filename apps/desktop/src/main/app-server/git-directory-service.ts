@@ -16,6 +16,7 @@ import type {
 } from "@pwragent/shared";
 import { DESKTOP_WORKTREE_STORAGE_DEFAULT } from "@pwragent/shared";
 import { userHomeWorktreesRoot } from "../settings/desktop-config";
+import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import { runGitCommand } from "./git-executable";
 
 type GitCommandRunner = (
@@ -767,6 +768,11 @@ export class GitDirectoryService {
   private readonly statusCache = new Map<string, CachedDirectoryStatus>();
   private readonly branchInventoryCache = new Map<string, CachedBranchInventory>();
   private readonly commonGitDirByCwd = new Map<string, string>();
+  // Git worktree commands update the shared common Git directory. Git for
+  // Windows can observe half-initialized worktree metadata when two launchpads
+  // mutate that directory at once, so a repository owns its whole launchpad
+  // worktree transaction. Different repositories still proceed in parallel.
+  private readonly worktreeMutationLocks = new PerKeyAsyncLock();
   private readonly cacheTtlMs: number;
   private readonly statusConcurrency: number;
   private readonly statusMaxUnread: number;
@@ -1169,7 +1175,25 @@ export class GitDirectoryService {
         worktreeBranchMode?: "attached" | "detached";
       },
   ): Promise<PreparedLaunchpadWorkspace> {
-    const prepared = await this.prepareLaunchpadWorkspaceInternal(launchpad);
+    const prepare = async (): Promise<PreparedLaunchpadWorkspace> =>
+      await this.prepareLaunchpadWorkspaceInternal(launchpad);
+    const directoryPath = launchpad.directoryPath?.trim();
+    const sourceRoot =
+      launchpad.directoryKind !== "workspace" &&
+      launchpad.workMode === "worktree" &&
+      directoryPath
+        ? await readGitRoot(directoryPath, this.runGitCommand, this.gitEnv)
+        : undefined;
+    const prepared = sourceRoot
+      ? await this.worktreeMutationLocks.run(
+          await readGitCommonDir({
+            repoRoot: sourceRoot,
+            runGit: this.runGitCommand,
+            env: this.gitEnv,
+          }),
+          prepare,
+        )
+      : await prepare();
     // Forward-slash the returned identifier fields (no-op on POSIX). The
     // `rollback` closure captured the native worktree path internally, so
     // it keeps operating on the real fs path regardless of this rewrite.

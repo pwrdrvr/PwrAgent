@@ -875,10 +875,10 @@ describe("Composer", () => {
       addReference.compareDocumentPosition(threadOptions) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(threadOptions).toHaveAttribute(
-      "data-tooltip",
-      "Thread options",
-    );
+    fireEvent.mouseEnter(threadOptions);
+    expect(screen.getByRole("tooltip")).toHaveTextContent("Thread options");
+    expect(threadOptions).toHaveAttribute("aria-describedby");
+    fireEvent.mouseLeave(threadOptions);
 
     fireEvent.click(threadOptions);
     const agentThread = screen.getByRole("menuitemcheckbox", {
@@ -899,6 +899,63 @@ describe("Composer", () => {
     expect(onUpdateLaunchpad).toHaveBeenCalledWith("directory:/repo", {
       agent: DEFAULT_DESKTOP_AGENT_THREAD,
     });
+  });
+
+  it("keeps a wrapped thread options menu inside the composer settings row", () => {
+    const rect = (left: number, right: number): DOMRect => ({
+      bottom: 800,
+      height: 400,
+      left,
+      right,
+      top: 400,
+      width: right - left,
+      x: left,
+      y: 400,
+      toJSON: () => ({}),
+    });
+    const bounds = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function getBoundingClientRect(this: HTMLElement) {
+        if (this.classList.contains("composer__setup")) {
+          return rect(408, 708);
+        }
+        if (this.classList.contains("composer-thread-options__menu")) {
+          // The final control wrapped to the row's left edge, so its normal
+          // right-anchored popover would extend beneath the sidebar.
+          return rect(200, 404);
+        }
+        return rect(0, 0);
+      });
+
+    try {
+      render(
+        <Composer
+          backends={[backendSummary("codex")]}
+          disabled={false}
+          launchpad={{
+            directoryKey: "directory:/repo",
+            directoryKind: "directory",
+            directoryLabel: "Repo",
+            directoryPath: "/repo",
+            backend: "codex",
+            executionMode: "default",
+            prompt: "",
+            workMode: "local",
+            createdAt: 1,
+            updatedAt: 1,
+          }}
+          skills={[]}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+
+      expect(screen.getByRole("menu")).toHaveStyle({
+        transform: "translateX(208px)",
+      });
+    } finally {
+      bounds.mockRestore();
+    }
   });
 
   it("explains that an existing Codex thread cannot be converted into an Agent", () => {

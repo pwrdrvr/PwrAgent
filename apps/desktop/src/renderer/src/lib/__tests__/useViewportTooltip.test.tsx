@@ -64,6 +64,34 @@ function DelayedTooltipFixture() {
   );
 }
 
+function HorizontallyBoundedTooltipFixture() {
+  const tooltip = useViewportTooltip({
+    className: "viewport-tooltip",
+    getHorizontalBounds: (target) => {
+      const bounds = target.closest<HTMLElement>("[data-tooltip-bounds]");
+      if (!bounds) {
+        return undefined;
+      }
+      const { left, right } = bounds.getBoundingClientRect();
+      return { left, right };
+    },
+  });
+
+  return (
+    <div data-tooltip-bounds>
+      <button
+        type="button"
+        onMouseEnter={(event) =>
+          tooltip.show(event.currentTarget, "Thread options")
+        }
+      >
+        Thread options
+      </button>
+      {tooltip.tooltipNode}
+    </div>
+  );
+}
+
 function AnchorLifecycleFixture(props: {
   anchorKey?: string;
   anchorLabel?: string;
@@ -181,6 +209,33 @@ describe("useViewportTooltip", () => {
     act(() => vi.advanceTimersByTime(TOOLTIP_HOVER_DELAY_MS));
 
     expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+  });
+
+  it("keeps a portal tooltip within a local horizontal boundary", async () => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(
+      function getBoundingClientRect(this: HTMLElement) {
+        if (this.hasAttribute("data-tooltip-bounds")) {
+          return rectangle({ left: 408, right: 708, top: 400, height: 400 });
+        }
+        if (this.getAttribute("role") === "tooltip") {
+          return rectangle({ width: 100, height: 40 });
+        }
+        if (this.tagName === "BUTTON") {
+          return rectangle({ left: 408, top: 600, width: 28, height: 26 });
+        }
+        return rectangle({});
+      },
+    );
+    vi.stubGlobal("innerWidth", 1200);
+    vi.stubGlobal("innerHeight", 800);
+
+    render(<HorizontallyBoundedTooltipFixture />);
+
+    fireEvent.mouseEnter(screen.getByRole("button"));
+
+    await waitFor(() => {
+      expect(screen.getByRole("tooltip")).toHaveStyle({ left: "408px" });
+    });
   });
 
   it("closes a tooltip when a refresh removes its anchor", async () => {
