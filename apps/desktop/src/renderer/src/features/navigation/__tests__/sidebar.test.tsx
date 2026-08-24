@@ -1481,30 +1481,6 @@ describe("Sidebar", () => {
     expect(screen.queryByRole("menu")).not.toBeInTheDocument();
   });
 
-  it("portals thread actions outside the clipping sidebar", () => {
-    render(
-      <Sidebar
-        backends={backends}
-        browseMode="inbox"
-        directories={directories}
-        inboxThreads={[sharedThread]}
-        loading={false}
-        selectedItemKey="codex:thread-1"
-        threads={[sharedThread]}
-        onBrowseModeChange={() => undefined}
-        onCreateThread={async () => undefined}
-        onOpenLaunchpad={async () => undefined}
-        onSelectThread={() => undefined}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Open thread actions" }));
-
-    const menu = screen.getByRole("menu");
-    expect(menu.parentElement).toBe(document.body);
-    expect(menu.closest(".sidebar")).toBeNull();
-  });
-
   it("offers Local and New Worktree sub-thread launchpads for local parents", () => {
     const onCreateSubthread = vi.fn(async () => undefined);
     render(

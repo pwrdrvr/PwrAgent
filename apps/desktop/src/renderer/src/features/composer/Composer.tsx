@@ -1649,12 +1649,81 @@ function ComposerThreadOptionsMenu(props: {
   onShowMcpInventory?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  const [menuShift, setMenuShift] = useState(0);
+  const [menuWidthLimit, setMenuWidthLimit] = useState<number>();
   const menuId = useId();
+  const menuRef = useRef<HTMLDivElement>(null);
+  const menuShiftRef = useRef(0);
+  const menuWidthLimitRef = useRef<number | undefined>(undefined);
+  const naturalMenuWidthRef = useRef(0);
   const ref = useDismissableMenu<HTMLDivElement>(open, () => setOpen(false));
   const agentThreadChangeDisabled =
     props.disabled ||
     props.existingCodexThread ||
     !props.onAgentThreadChange;
+
+  // The menu usually opens left from the final settings control. When that
+  // control wraps onto a new row, though, opening left would put the panel
+  // underneath the thread sidebar. Keep it inside the settings row instead.
+  useLayoutEffect(() => {
+    if (!open) {
+      menuShiftRef.current = 0;
+      menuWidthLimitRef.current = undefined;
+      naturalMenuWidthRef.current = 0;
+      setMenuShift(0);
+      setMenuWidthLimit(undefined);
+      return;
+    }
+    const clamp = (): void => {
+      const menu = menuRef.current;
+      if (!menu) {
+        return;
+      }
+      const gutter = 12;
+      const rect = menu.getBoundingClientRect();
+      const composerSetup = menu.closest<HTMLElement>(".composer__setup");
+      const composerBounds = composerSetup?.getBoundingClientRect();
+      const leftBoundary = Math.max(gutter, composerBounds?.left ?? gutter);
+      const rightBoundary = Math.max(
+        leftBoundary,
+        Math.min(
+          window.innerWidth - gutter,
+          composerBounds?.right ?? window.innerWidth - gutter,
+        ),
+      );
+      const availableWidth = Math.max(0, rightBoundary - leftBoundary);
+      naturalMenuWidthRef.current = Math.max(
+        naturalMenuWidthRef.current,
+        rect.width,
+      );
+      const targetWidth = Math.min(
+        naturalMenuWidthRef.current,
+        availableWidth,
+      );
+      const nextWidthLimit =
+        targetWidth < naturalMenuWidthRef.current ? targetWidth : undefined;
+      const unshiftedRight = rect.right - menuShiftRef.current;
+      const unshiftedLeft = unshiftedRight - targetWidth;
+      const maxLeft = rightBoundary - targetWidth;
+      const targetLeft = Math.min(
+        Math.max(unshiftedLeft, leftBoundary),
+        maxLeft,
+      );
+      const nextShift = targetLeft - unshiftedLeft;
+
+      if (menuWidthLimitRef.current !== nextWidthLimit) {
+        menuWidthLimitRef.current = nextWidthLimit;
+        setMenuWidthLimit(nextWidthLimit);
+      }
+      if (menuShiftRef.current !== nextShift) {
+        menuShiftRef.current = nextShift;
+        setMenuShift(nextShift);
+      }
+    };
+    clamp();
+    window.addEventListener("resize", clamp);
+    return () => window.removeEventListener("resize", clamp);
+  }, [open]);
 
   return (
     <div className="composer-thread-options" ref={ref}>
@@ -1678,7 +1747,23 @@ function ComposerThreadOptionsMenu(props: {
           aria-label="Thread options"
           className="composer-dropdown__menu composer-thread-options__menu"
           id={menuId}
+          ref={menuRef}
           role="menu"
+          style={
+            menuShift || menuWidthLimit !== undefined
+              ? {
+                  ...(menuShift
+                    ? { transform: `translateX(${menuShift}px)` }
+                    : {}),
+                  ...(menuWidthLimit !== undefined
+                    ? {
+                        maxWidth: `${menuWidthLimit}px`,
+                        minWidth: `${menuWidthLimit}px`,
+                      }
+                    : {}),
+                }
+              : undefined
+          }
         >
           <div
             className="composer-thread-options__item tooltip-target"
