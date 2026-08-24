@@ -585,6 +585,29 @@ function getHtmlInlineMark(tagName: string): { type: string } | undefined {
   return undefined;
 }
 
+function mergeHtmlInlineMarks(
+  inheritedMarks: { type: string }[],
+  mark: { type: string } | undefined,
+): { type: string }[] {
+  if (!mark || inheritedMarks.some((inheritedMark) => inheritedMark.type === mark.type)) {
+    return inheritedMarks;
+  }
+
+  // ProseMirror's inline code mark excludes every other mark. Transcript
+  // clipboard HTML can legitimately nest it inside <strong>, for example for
+  // Markdown like **10 `Promise.all` cells**. Keep the code mark and split the
+  // surrounding emphasis around it instead of constructing an invalid mark set
+  // that aborts the whole paste.
+  if (mark.type === "code") {
+    return [mark];
+  }
+  if (inheritedMarks.some((inheritedMark) => inheritedMark.type === "code")) {
+    return inheritedMarks;
+  }
+
+  return [...inheritedMarks, mark];
+}
+
 function parseHtmlInlineContent(
   node: Node,
   inheritedMarks: { type: string }[] = [],
@@ -612,7 +635,7 @@ function parseHtmlInlineContent(
   }
 
   const mark = getHtmlInlineMark(node.tagName.toLowerCase());
-  const nextMarks = mark ? [...inheritedMarks, mark] : inheritedMarks;
+  const nextMarks = mergeHtmlInlineMarks(inheritedMarks, mark);
   return Array.from(node.childNodes).flatMap((child) =>
     parseHtmlInlineContent(child, nextMarks),
   );
