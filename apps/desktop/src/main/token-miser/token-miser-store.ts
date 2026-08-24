@@ -5,6 +5,7 @@ import {
   TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS,
   estimateTokenCount,
   type TokenMiserHelperUsage,
+  type TokenMiserGroupMemberSummary,
   type TokenMiserObjectMetadata,
   type TokenMiserSummary,
 } from "./token-miser-types.js";
@@ -13,6 +14,9 @@ const METADATA_SUFFIX = ".json";
 const OUTPUT_SUFFIX = ".txt";
 const MAX_SEARCH_RESULTS = 100;
 const MAX_READ_LINES = 2_000;
+const MAX_GROUP_BATCH_OPERATIONS = 16;
+const DEFAULT_GROUP_BATCH_OUTPUT_CHARACTERS = 20_000;
+const MAX_GROUP_BATCH_OUTPUT_CHARACTERS = 40_000;
 // Reducer acknowledgements expire after 60 seconds. A longer grace protects a
 // fresh pending output owned by another PwrAgent process sharing the profile,
 // while still reclaiming raw files left by a crash before acceptance.
@@ -34,6 +38,41 @@ export type TokenMiserReadResult = {
   endLine: number;
   totalLines: number;
   text: string;
+};
+
+export type TokenMiserGroupStoredMember = {
+  objectId: string;
+  toolCallId: string;
+  toolName: string;
+  output: string;
+};
+
+export type TokenMiserGroupStoredOutput = {
+  version: 1;
+  groupId: string;
+  members: TokenMiserGroupStoredMember[];
+};
+
+export type TokenMiserGroupBatchOperation = {
+  objectId: string;
+  mode: "full" | "search" | "head" | "tail";
+  query?: string;
+  maxMatches?: number;
+  lines?: number;
+};
+
+export type TokenMiserGroupBatchResult = {
+  groupId: string;
+  results: Array<{
+    objectId: string;
+    mode: TokenMiserGroupBatchOperation["mode"];
+    text?: string;
+    totalCharacters?: number;
+    totalLines?: number;
+    truncated?: boolean;
+    error?: "member_not_found" | "query_required";
+  }>;
+  truncated: boolean;
 };
 
 export type TokenMiserUsageSummary = {
@@ -96,6 +135,8 @@ export type TokenMiserStoreParams = {
   toolUseId: string;
   toolName: string;
   output: string;
+  /** Characters that could have entered the parent before preservation encoding. */
+  baselineCharacters?: number;
   /**
    * Optional provider-enforced ceiling for the original model-visible result.
    * Code mode supplies its resolved `max_output_tokens`; direct hook results
@@ -104,6 +145,8 @@ export type TokenMiserStoreParams = {
   baselineParentTokenCap?: number;
   replacementCharacters: number;
   summary: TokenMiserSummary;
+  groupId?: string;
+  groupMembers?: TokenMiserGroupMemberSummary[];
   helperUsage?: TokenMiserHelperUsage;
   parentCumulativeInputTokens?: number;
   parentModel?: string;
@@ -140,7 +183,7 @@ export class TokenMiserStore {
     if (!isSafeObjectId(objectId)) {
       throw new Error("Invalid Token Miser object id.");
     }
-    const originalCharacters = params.output.length;
+    const originalCharacters = params.baselineCharacters ?? params.output.length;
     const metadata: TokenMiserObjectMetadata = {
       version: 1,
       objectId,
@@ -173,6 +216,8 @@ export class TokenMiserStore {
           }
         : {}),
       summary: params.summary,
+      ...(params.groupId ? { groupId: params.groupId } : {}),
+      ...(params.groupMembers ? { groupMembers: params.groupMembers } : {}),
       ...(params.helperUsage ? { helperUsage: params.helperUsage } : {}),
       ...(params.parentModel ? { parentModel: params.parentModel } : {}),
       ...(params.parentServiceTier
@@ -256,7 +301,7 @@ export class TokenMiserStore {
     endLine?: number;
   }): Promise<TokenMiserReadResult | undefined> {
     const stored = await this.readAuthorizedObject(params.objectId, params.threadId);
-    if (!stored) {
+    if (!stored || stored.metadata.groupId) {
       return undefined;
     }
     const lines = splitLines(stored.output);
@@ -284,7 +329,7 @@ export class TokenMiserStore {
     threadId: string;
   }): Promise<TokenMiserReadResult | undefined> {
     const stored = await this.readAuthorizedObject(params.objectId, params.threadId);
-    if (!stored) {
+    if (!stored || stored.metadata.groupId) {
       return undefined;
     }
     const lines = splitLines(stored.output);
@@ -306,7 +351,7 @@ export class TokenMiserStore {
     maxResults?: number;
   }): Promise<{ objectId: string; totalLines: number; matches: TokenMiserSearchMatch[] } | undefined> {
     const stored = await this.readAuthorizedObject(params.objectId, params.threadId);
-    if (!stored) {
+    if (!stored || stored.metadata.groupId) {
       return undefined;
     }
     // Locale-independent: toLocaleLowerCase maps I to a dotless i under tr/az,
@@ -331,6 +376,51 @@ export class TokenMiserStore {
       matches,
     };
     await this.recordRetrieval(params.objectId, JSON.stringify(result).length);
+    return result;
+  }
+
+  async readGroupBatch(params: {
+    groupId: string;
+    threadId: string;
+    operations: TokenMiserGroupBatchOperation[];
+    maxOutputChars?: number;
+  }): Promise<TokenMiserGroupBatchResult | undefined> {
+    const metadata = (await this.listMetadata()).find((entry) =>
+      entry.threadId === params.threadId && entry.groupId === params.groupId
+    );
+    if (!metadata || !metadata.groupMembers?.length) {
+      return undefined;
+    }
+    const stored = await this.readAuthorizedObject(
+      metadata.objectId,
+      params.threadId,
+    );
+    if (!stored) {
+      return undefined;
+    }
+    const group = parseGroupStoredOutput(stored.output, params.groupId);
+    if (!group) {
+      return undefined;
+    }
+    const operations = params.operations.slice(0, MAX_GROUP_BATCH_OPERATIONS);
+    const members = new Map(group.members.map((member) => [member.objectId, member]));
+    const results = operations.map((operation) =>
+      readGroupMember(members.get(operation.objectId), operation)
+    );
+    const maxOutputChars = clampInteger(
+      params.maxOutputChars ?? DEFAULT_GROUP_BATCH_OUTPUT_CHARACTERS,
+      5_000,
+      MAX_GROUP_BATCH_OUTPUT_CHARACTERS,
+    );
+    const result = boundGroupBatchResult({
+      groupId: params.groupId,
+      results,
+      truncated: params.operations.length > operations.length,
+    }, maxOutputChars);
+    await this.recordRetrieval(
+      metadata.objectId,
+      JSON.stringify(result, null, 2).length,
+    );
     return result;
   }
 
@@ -665,6 +755,108 @@ function summarizeMetadata(
     estimatedCachedReplayTokensSaved:
       cachedBaselineTokens - cachedRevealedTokens,
   };
+}
+
+function parseGroupStoredOutput(
+  value: string,
+  groupId: string,
+): TokenMiserGroupStoredOutput | undefined {
+  try {
+    const parsed = JSON.parse(value) as Partial<TokenMiserGroupStoredOutput>;
+    if (
+      parsed.version !== 1
+      || parsed.groupId !== groupId
+      || !Array.isArray(parsed.members)
+      || !parsed.members.every((member) =>
+        member
+        && typeof member.objectId === "string"
+        && typeof member.toolCallId === "string"
+        && typeof member.toolName === "string"
+        && typeof member.output === "string"
+      )
+    ) {
+      return undefined;
+    }
+    return parsed as TokenMiserGroupStoredOutput;
+  } catch {
+    return undefined;
+  }
+}
+
+function readGroupMember(
+  member: TokenMiserGroupStoredMember | undefined,
+  operation: TokenMiserGroupBatchOperation,
+): TokenMiserGroupBatchResult["results"][number] {
+  if (!member) {
+    return {
+      objectId: operation.objectId,
+      mode: operation.mode,
+      error: "member_not_found",
+    };
+  }
+  const lines = splitLines(member.output);
+  let text: string;
+  if (operation.mode === "search") {
+    const query = operation.query?.trim().toLowerCase();
+    if (!query) {
+      return {
+        objectId: operation.objectId,
+        mode: operation.mode,
+        error: "query_required",
+      };
+    }
+    const maxMatches = clampInteger(operation.maxMatches ?? 20, 1, 100);
+    const matches: string[] = [];
+    for (let index = 0; index < lines.length && matches.length < maxMatches; index += 1) {
+      if (lines[index]!.toLowerCase().includes(query)) {
+        matches.push(`${index + 1}: ${lines[index]}`);
+      }
+    }
+    text = matches.join("\n");
+  } else if (operation.mode === "head") {
+    const count = clampInteger(operation.lines ?? 100, 1, 500);
+    text = lines.slice(0, count).join("\n");
+  } else if (operation.mode === "tail") {
+    const count = clampInteger(operation.lines ?? 100, 1, 500);
+    text = lines.slice(Math.max(0, lines.length - count)).join("\n");
+  } else {
+    text = member.output;
+  }
+  return {
+    objectId: operation.objectId,
+    mode: operation.mode,
+    text,
+    totalCharacters: member.output.length,
+    totalLines: lines.length,
+  };
+}
+
+function boundGroupBatchResult(
+  result: TokenMiserGroupBatchResult,
+  maxOutputChars: number,
+): TokenMiserGroupBatchResult {
+  let serializedLength = JSON.stringify(result, null, 2).length;
+  if (serializedLength <= maxOutputChars) {
+    return result;
+  }
+  result.truncated = true;
+  for (let index = result.results.length - 1; index >= 0; index -= 1) {
+    const entry = result.results[index]!;
+    if (!entry.text) {
+      continue;
+    }
+    const overflow = serializedLength - maxOutputChars;
+    const retainedLength = Math.max(0, entry.text.length - overflow - 32);
+    entry.text = entry.mode === "tail"
+      ? entry.text.slice(-retainedLength)
+      : entry.text.slice(0, retainedLength);
+    entry.truncated = true;
+    serializedLength = JSON.stringify(result, null, 2).length;
+    if (serializedLength <= maxOutputChars) {
+      break;
+    }
+  }
+  return result;
 }
 
 function isSafeObjectId(value: string): boolean {

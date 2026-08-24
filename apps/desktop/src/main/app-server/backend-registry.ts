@@ -7731,6 +7731,8 @@ export class DesktopBackendRegistry {
     Promise<CodexServerCapabilities | undefined>
   >();
   private tokenMiserReducerCapabilityState?: "supported" | "unsupported";
+  private tokenMiserCodeModeContinuationGuidanceVersion?: number;
+  private tokenMiserCodeModeGroupingVersion?: number;
   private tokenMiserRuntimePreparationFailure?: string;
   private readonly tokenMiserPluginManager?: TokenMiserPluginManager;
   private tokenMiserStateDir?: string;
@@ -8124,6 +8126,10 @@ export class DesktopBackendRegistry {
           )?.cumulativeInputTokens,
         resolveParentModel: (threadId) =>
           this.resolveTokenMiserParentModel(threadId),
+        codeModeContinuationGuidanceVersion: () =>
+          this.tokenMiserCodeModeContinuationGuidanceVersion,
+        codeModeGroupingVersion: () =>
+          this.tokenMiserCodeModeGroupingVersion,
         generateSummary: async (params) => {
           if (!this.codexClient.generateStructuredObject) {
             return {
@@ -8135,7 +8141,12 @@ export class DesktopBackendRegistry {
             ...params,
             isMatch: (record) =>
               typeof record.summary === "string"
-              && Array.isArray(record.usefulDetails),
+              && Array.isArray(record.usefulDetails)
+              && (
+                !Array.isArray(params.schema.required)
+                || !params.schema.required.includes("members")
+                || Array.isArray(record.members)
+              ),
           });
         },
       });
@@ -19548,6 +19559,8 @@ export class DesktopBackendRegistry {
     const probe = (async () => {
       if (!client.readServerCapabilities) {
         this.tokenMiserReducerCapabilityState = "unsupported";
+        this.tokenMiserCodeModeContinuationGuidanceVersion = undefined;
+        this.tokenMiserCodeModeGroupingVersion = undefined;
         await this.recordTokenMiserActivation({
           reason: "Codex runtime lacks Token Miser output reducer v2.",
           state: "unavailable",
@@ -19558,6 +19571,19 @@ export class DesktopBackendRegistry {
         const capabilities = await client.readServerCapabilities();
         const supported =
           capabilities.codeModeOutputReducer?.protocolVersion === 2;
+        this.tokenMiserCodeModeContinuationGuidanceVersion =
+          supported
+            ? capabilities.codeModeOutputReducer?.continuationGuidanceVersion
+            : undefined;
+        const grouping = capabilities.codeModeOutputReducer?.postToolUseGrouping;
+        this.tokenMiserCodeModeGroupingVersion =
+          supported
+          && grouping?.version === 1
+          && grouping.versionField === "token_miser_grouping_version"
+          && grouping.cellIdField === "code_mode_cell_id"
+          && grouping.toolCallIdField === "code_mode_tool_call_id"
+            ? 1
+            : undefined;
         this.tokenMiserReducerCapabilityState = supported
           ? "supported"
           : "unsupported";
@@ -19593,6 +19619,8 @@ export class DesktopBackendRegistry {
           );
         }
         this.tokenMiserReducerCapabilityState = "unsupported";
+        this.tokenMiserCodeModeContinuationGuidanceVersion = undefined;
+        this.tokenMiserCodeModeGroupingVersion = undefined;
         await this.recordTokenMiserActivation({
           reason:
             this.tokenMiserRuntimePreparationFailure

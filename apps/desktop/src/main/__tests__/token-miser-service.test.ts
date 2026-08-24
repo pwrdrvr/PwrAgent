@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  CODE_MODE_CONTINUATION_GUIDANCE_V1,
   TokenMiserService,
   type TokenMiserStructuredGenerationResult,
 } from "../token-miser/token-miser-service";
@@ -157,6 +158,7 @@ describe("TokenMiserService", () => {
     "search_token_miser_output",
     "read_token_miser_output",
     "read_all_token_miser_output",
+    "read_token_miser_output_batch",
   ])("does not re-gate a direct %s retrieval", async (tool) => {
     const store = await createStore();
     const generateSummary = vi.fn(async () => ({
@@ -353,6 +355,119 @@ describe("TokenMiserService code-mode reduction", () => {
     expect(onInterceptionStored).toHaveBeenCalledWith(metadata);
   });
 
+  it("joins parallel nested outputs into one retrievable group gate", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({
+      status: "ok" as const,
+      object: {
+        summary: "Two independent repository probes completed.",
+        usefulDetails: ["Both probes returned source matches."],
+        members: [
+          { toolCallId: "nested-1", summary: "Found alpha matches." },
+          { toolCallId: "nested-2", summary: "Found beta matches." },
+        ],
+      },
+      helperThreadId: "helper-group",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium",
+      tokenUsage: { inputTokens: 500, outputTokens: 50 },
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 10,
+      codeModeContinuationGuidanceVersion: () => 1,
+      codeModeGroupingVersion: () => 1,
+    });
+    await service.captureNestedPostToolUse({
+      ...payload("alpha\nneedle-alpha\nomega"),
+      is_code_mode_nested: true,
+      token_miser_grouping_version: 1,
+      code_mode_cell_id: "cell-1",
+      code_mode_tool_call_id: "nested-1",
+      tool_name: "Bash",
+    });
+    await service.captureNestedPostToolUse({
+      ...payload("beta\nneedle-beta\ngamma"),
+      is_code_mode_nested: true,
+      token_miser_grouping_version: 1,
+      code_mode_cell_id: "cell-1",
+      code_mode_tool_call_id: "nested-2",
+      tool_name: "Read",
+    });
+
+    const prepared = await service.prepareCodeModeOutput(codeModePayload([{
+      type: "input_text",
+      text: "combined outer output that crosses the configured threshold",
+    }]));
+    await prepared?.staged.commit();
+
+    expect(generateSummary).toHaveBeenCalledOnce();
+    expect(generateSummary).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringMatching(
+        /Group ID: cell-1[\s\S]*nested-1[\s\S]*needle-alpha[\s\S]*nested-2[\s\S]*needle-beta/,
+      ),
+      schema: expect.objectContaining({
+        required: ["summary", "usefulDetails", "members"],
+      }),
+    }));
+    const replacementText = prepared!.response.replacement[0]!.text;
+    const replacement = JSON.parse(replacementText) as {
+      kind: string;
+      groupId: string;
+      members: Array<{ objectId: string; toolName: string; summary: string }>;
+      retrieval: { tool: string; policy: string };
+    };
+    expect(replacement).toMatchObject({
+      kind: "token_miser_group_summary",
+      groupId: "cell-1",
+      members: [
+        { toolName: "Bash", summary: "Found alpha matches." },
+        { toolName: "Read", summary: "Found beta matches." },
+      ],
+      retrieval: {
+        tool: "pwragent.read_token_miser_output_batch",
+        policy: expect.stringContaining("Summaries usually suffice"),
+      },
+    });
+    const [metadata] = await store.listMetadata();
+    expect(metadata).toMatchObject({
+      groupId: "cell-1",
+      originalCharacters: 59,
+      groupMembers: replacement.members,
+    });
+    expect(metadata!.replacementCharacters).toBeGreaterThanOrEqual(
+      replacementText.length + CODE_MODE_CONTINUATION_GUIDANCE_V1.length,
+    );
+    const batch = await store.readGroupBatch({
+      groupId: "cell-1",
+      threadId: "thread-1",
+      operations: [
+        {
+          objectId: replacement.members[1]!.objectId,
+          mode: "search",
+          query: "needle",
+        },
+        {
+          objectId: replacement.members[0]!.objectId,
+          mode: "head",
+          lines: 1,
+        },
+      ],
+      maxOutputChars: 5_000,
+    });
+    expect(batch).toMatchObject({
+      groupId: "cell-1",
+      results: [
+        { objectId: replacement.members[1]!.objectId, text: "2: needle-beta" },
+        { objectId: replacement.members[0]!.objectId, text: "alpha" },
+      ],
+    });
+    expect((await store.readMetadata(metadata!.objectId))!.retrievedCharacters)
+      .toBeGreaterThan(0);
+  });
+
   it("uses the resolved code-mode budget as the original parent-token cap", async () => {
     const store = await createStore();
     const service = new TokenMiserService({
@@ -394,6 +509,11 @@ describe("TokenMiserService code-mode reduction", () => {
       tool: "read_all_token_miser_output",
       script:
         "const result = await tools.pwragent({ tool: 'read_all_token_miser_output', objectId: 'object-1' }); text(result);",
+    },
+    {
+      tool: "read_token_miser_output_batch",
+      script:
+        "const result = await tools.pwragent__read_token_miser_output_batch({ groupId: 'cell-1', operations: [] }); text(result);",
     },
   ])("does not re-gate a Code Mode $tool retrieval", async ({ script }) => {
     const store = await createStore();

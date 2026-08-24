@@ -7,6 +7,7 @@ import {
   serializeToolResponse,
   type TokenMiserCodeModeOutputPayload,
   type TokenMiserCodeModeReductionOutput,
+  type TokenMiserGroupMemberSummary,
   type TokenMiserHelperUsage,
   type TokenMiserHookOutput,
   type TokenMiserObjectMetadata,
@@ -15,6 +16,7 @@ import {
 } from "./token-miser-types.js";
 import {
   TokenMiserStore,
+  type TokenMiserGroupStoredOutput,
   type TokenMiserStagedObject,
 } from "./token-miser-store.js";
 
@@ -38,6 +40,29 @@ const TOKEN_MISER_SUMMARY_SCHEMA = {
   },
 } as const;
 
+const TOKEN_MISER_GROUP_SUMMARY_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  required: ["summary", "usefulDetails", "members"],
+  properties: {
+    summary: TOKEN_MISER_SUMMARY_SCHEMA.properties.summary,
+    usefulDetails: TOKEN_MISER_SUMMARY_SCHEMA.properties.usefulDetails,
+    members: {
+      type: "array",
+      maxItems: 16,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["toolCallId", "summary"],
+        properties: {
+          toolCallId: { type: "string", minLength: 1, maxLength: 500 },
+          summary: { type: "string", minLength: 1, maxLength: 1_500 },
+        },
+      },
+    },
+  },
+} as const;
+
 const TOKEN_MISER_SYSTEM_PROMPT = [
   "You are Token Miser, a factual summarizer for completed coding-tool output.",
   "Summarize only what is present. Preserve exact filenames, identifiers, errors, counts, and commands that materially describe the result.",
@@ -49,7 +74,12 @@ const TOKEN_MISER_RETRIEVAL_TOOL_NAMES = [
   "search_token_miser_output",
   "read_token_miser_output",
   "read_all_token_miser_output",
+  "read_token_miser_output_batch",
 ] as const;
+
+const MAX_CAPTURED_GROUP_MEMBERS = 16;
+const MAX_CAPTURED_GROUP_CHARACTERS = 1_000_000;
+const CAPTURED_GROUP_TTL_MS = 2 * 60_000;
 
 // Pinned to pwrdrvr/codex reducer protocol v2. Codex inserts these two items
 // around every host replacement after this service responds. Include them in
@@ -61,6 +91,27 @@ const CODE_MODE_REPLACEMENT_FENCE_HEADER = [
   "<untrusted_reduced_output>",
 ].join("");
 const CODE_MODE_REPLACEMENT_FENCE_FOOTER = "</untrusted_reduced_output>";
+export const CODE_MODE_CONTINUATION_GUIDANCE_V1 = [
+  "Codex guidance: output reduction occurs only after the cell completes and does not change ",
+  "nested tool results inside JavaScript. Keep broad, independent Code Mode operations batched ",
+  "with `Promise.all`, inspect or transform their results in the cell, and emit one compact ",
+  "combined result. Use reduced summaries to triage; retrieve only the selected results that ",
+  "need deeper inspection, preferably together in a later batch.",
+].join("");
+
+type CapturedGroupMember = {
+  toolCallId: string;
+  toolName: string;
+  toolInput: string;
+  output: string;
+};
+
+type CapturedGroup = {
+  members: Map<string, CapturedGroupMember>;
+  characters: number;
+  overflowed: boolean;
+  timer: NodeJS.Timeout;
+};
 
 export type TokenMiserStructuredGenerationResult =
   | ({ status: "ok"; object: unknown } & TokenMiserHelperUsage)
@@ -111,16 +162,70 @@ export type TokenMiserServiceOptions = {
   ) => Promise<{ model?: string; serviceTier?: string } | undefined>;
   thresholdCharacters?: number;
   summaryTimeoutMs?: number;
+  codeModeContinuationGuidanceVersion?: () => number | undefined;
+  codeModeGroupingVersion?: () => number | undefined;
 };
 
 export class TokenMiserService {
   private readonly thresholdCharacters: number;
   private readonly summaryTimeoutMs: number;
+  private readonly capturedGroups = new Map<string, CapturedGroup>();
 
   constructor(private readonly options: TokenMiserServiceOptions) {
     this.thresholdCharacters =
       options.thresholdCharacters ?? TOKEN_MISER_DEFAULT_THRESHOLD_CHARACTERS;
     this.summaryTimeoutMs = options.summaryTimeoutMs ?? 45_000;
+  }
+
+  async captureNestedPostToolUse(
+    payload: TokenMiserPostToolUsePayload,
+  ): Promise<void> {
+    if (
+      payload.is_code_mode_nested !== true
+      || payload.token_miser_grouping_version !== 1
+      || this.options.codeModeGroupingVersion?.() !== 1
+      || !payload.code_mode_cell_id
+      || !payload.code_mode_tool_call_id
+      || !await this.isEnabledForThread(payload.session_id)
+      || isDirectTokenMiserRetrievalInvocation(payload)
+    ) {
+      return;
+    }
+    const output = serializeToolResponse(payload.tool_response);
+    const toolInput = serializeToolResponse(payload.tool_input);
+    const key = capturedGroupKey(
+      payload.session_id,
+      payload.turn_id,
+      payload.code_mode_cell_id,
+    );
+    let group = this.capturedGroups.get(key);
+    if (!group) {
+      const timer = setTimeout(() => {
+        this.capturedGroups.delete(key);
+      }, CAPTURED_GROUP_TTL_MS);
+      timer.unref?.();
+      group = { members: new Map(), characters: 0, overflowed: false, timer };
+      this.capturedGroups.set(key, group);
+    }
+    const previous = group.members.get(payload.code_mode_tool_call_id);
+    const nextCharacters = group.characters
+      - ((previous?.output.length ?? 0) + (previous?.toolInput.length ?? 0))
+      + output.length
+      + toolInput.length;
+    if (
+      (!previous && group.members.size >= MAX_CAPTURED_GROUP_MEMBERS)
+      || nextCharacters > MAX_CAPTURED_GROUP_CHARACTERS
+    ) {
+      group.overflowed = true;
+      return;
+    }
+    group.members.set(payload.code_mode_tool_call_id, {
+      toolCallId: payload.code_mode_tool_call_id,
+      toolName: payload.tool_name,
+      toolInput,
+      output,
+    });
+    group.characters = nextCharacters;
   }
 
   /** Prepare a direct-hook replacement; only the bridge's v2 ack may commit it. */
@@ -184,6 +289,7 @@ export class TokenMiserService {
     payload: TokenMiserCodeModeOutputPayload,
     options: { signal?: AbortSignal } = {},
   ): Promise<TokenMiserPreparedCodeModeReduction | undefined> {
+    const capturedGroup = this.takeCapturedGroup(payload);
     if (!await this.isEnabledForThread(payload.thread_id)) {
       return undefined;
     }
@@ -193,6 +299,18 @@ export class TokenMiserService {
     const output = payload.content_items.map((item) => item.text).join("");
     if (output.length <= this.thresholdCharacters) {
       return undefined;
+    }
+
+    if (capturedGroup?.members.size && !capturedGroup.overflowed) {
+      const grouped = await this.prepareGroupedCodeModeOutput(
+        payload,
+        output,
+        capturedGroup,
+        options,
+      );
+      if (grouped) {
+        return grouped;
+      }
     }
 
     const prepared = await this.summarizeAndStage({
@@ -210,7 +328,7 @@ export class TokenMiserService {
         + CODE_MODE_REPLACEMENT_FENCE_FOOTER.length,
         payload.max_output_tokens
         * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
-      ),
+      ) + this.codeModeContinuationGuidanceCharacters(),
     });
     if (!prepared) {
       return undefined;
@@ -229,6 +347,153 @@ export class TokenMiserService {
     return {
       response,
       staged: prepared.staged,
+    };
+  }
+
+  private takeCapturedGroup(
+    payload: TokenMiserCodeModeOutputPayload,
+  ): CapturedGroup | undefined {
+    const key = capturedGroupKey(
+      payload.thread_id,
+      payload.turn_id,
+      payload.cell_id,
+    );
+    const group = this.capturedGroups.get(key);
+    if (group) {
+      clearTimeout(group.timer);
+      this.capturedGroups.delete(key);
+    }
+    return group;
+  }
+
+  private codeModeContinuationGuidanceCharacters(): number {
+    return this.options.codeModeContinuationGuidanceVersion?.() === 1
+      ? CODE_MODE_CONTINUATION_GUIDANCE_V1.length
+      : 0;
+  }
+
+  private async prepareGroupedCodeModeOutput(
+    payload: TokenMiserCodeModeOutputPayload,
+    outerOutput: string,
+    group: CapturedGroup,
+    options: { signal?: AbortSignal },
+  ): Promise<TokenMiserPreparedCodeModeReduction | undefined> {
+    const members = [...group.members.values()];
+    const generated = await this.options.generateSummary({
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium",
+      system: TOKEN_MISER_SYSTEM_PROMPT,
+      prompt: buildGroupedCodeModeSummaryPrompt(payload, members),
+      schema: TOKEN_MISER_GROUP_SUMMARY_SCHEMA,
+      timeoutMs: this.summaryTimeoutMs,
+    });
+    if (options.signal?.aborted || generated.status !== "ok") {
+      return undefined;
+    }
+    const parsed = parseGroupSummary(generated.object, members);
+    if (!parsed) {
+      return undefined;
+    }
+    const groupMembers: TokenMiserGroupMemberSummary[] = members.map((member) => ({
+      objectId: randomUUID(),
+      toolCallId: member.toolCallId,
+      toolName: member.toolName,
+      summary: parsed.members.get(member.toolCallId) ?? "Completed tool result.",
+    }));
+    const replacement = JSON.stringify({
+      kind: "token_miser_group_summary",
+      groupId: payload.cell_id,
+      summary: parsed.summary.summary,
+      members: groupMembers.map((member) => ({
+        objectId: member.objectId,
+        toolName: member.toolName,
+        summary: member.summary,
+      })),
+      retrieval: {
+        tool: "pwragent.read_token_miser_output_batch",
+        policy:
+          "Broad parallel probes are expected. Summaries usually suffice; deeper output remains available for selected members in one bounded batch.",
+      },
+    }, null, 2);
+    const storedOutput: TokenMiserGroupStoredOutput = {
+      version: 1,
+      groupId: payload.cell_id,
+      members: members.map((member, index) => ({
+        objectId: groupMembers[index]!.objectId,
+        toolCallId: member.toolCallId,
+        toolName: member.toolName,
+        output: member.output,
+      })),
+    };
+    const parentModel = await this.options.resolveParentModel?.(
+      payload.thread_id,
+    ).catch(() => undefined);
+    if (options.signal?.aborted) {
+      return undefined;
+    }
+    const staged = await this.options.store.stage({
+      threadId: payload.thread_id,
+      turnId: payload.turn_id,
+      toolUseId: payload.call_id,
+      toolName: "Code Mode",
+      output: JSON.stringify(storedOutput),
+      baselineCharacters: outerOutput.length,
+      baselineParentTokenCap: payload.max_output_tokens,
+      replacementCharacters: Math.min(
+        replacement.length
+        + CODE_MODE_REPLACEMENT_FENCE_HEADER.length
+        + CODE_MODE_REPLACEMENT_FENCE_FOOTER.length,
+        payload.max_output_tokens
+        * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+      ) + this.codeModeContinuationGuidanceCharacters(),
+      summary: parsed.summary,
+      groupId: payload.cell_id,
+      groupMembers,
+      helperUsage: {
+        helperThreadId: generated.helperThreadId,
+        helperTurnId: generated.helperTurnId,
+        model: generated.model,
+        reasoningEffort: generated.reasoningEffort,
+        serviceTier: generated.serviceTier,
+        tokenUsage: generated.tokenUsage,
+      },
+      parentCumulativeInputTokens:
+        this.options.getParentCumulativeInputTokens?.(payload.thread_id),
+      ...(parentModel?.model ? { parentModel: parentModel.model } : {}),
+      ...(parentModel?.serviceTier
+        ? { parentServiceTier: parentModel.serviceTier }
+        : {}),
+    });
+    const serviceStaged = this.withStoredNotification(staged);
+    const response = {
+      replacement: [{ type: "input_text" as const, text: replacement }],
+      response_id: staged.metadata.objectId,
+    };
+    if (
+      Buffer.byteLength(`${JSON.stringify(response)}\n`)
+      > TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES
+    ) {
+      await staged.discard();
+      return undefined;
+    }
+    return { response, staged: serviceStaged };
+  }
+
+  private withStoredNotification(
+    staged: TokenMiserStagedObject,
+  ): TokenMiserStagedObject {
+    let notification: Promise<void> | undefined;
+    return {
+      metadata: staged.metadata,
+      persist: () => staged.persist(),
+      discard: () => staged.discard(),
+      commit: async () => {
+        await staged.commit();
+        notification ??= Promise.resolve(
+          this.options.onInterceptionStored?.(staged.metadata),
+        );
+        await notification;
+      },
     };
   }
 
@@ -323,19 +588,7 @@ export class TokenMiserService {
       await staged.discard();
       return undefined;
     }
-    let notification: Promise<void> | undefined;
-    const serviceStaged: TokenMiserStagedObject = {
-      metadata: staged.metadata,
-      persist: () => staged.persist(),
-      discard: () => staged.discard(),
-      commit: async () => {
-        await staged.commit();
-        notification ??= Promise.resolve(
-          this.options.onInterceptionStored?.(staged.metadata),
-        );
-        await notification;
-      },
-    };
+    const serviceStaged = this.withStoredNotification(staged);
     return { replacement, staged: serviceStaged };
   }
 }
@@ -369,6 +622,30 @@ function buildCodeModeSummaryPrompt(
     "",
     "Script output:",
     output,
+  ].join("\n");
+}
+
+function buildGroupedCodeModeSummaryPrompt(
+  payload: TokenMiserCodeModeOutputPayload,
+  members: CapturedGroupMember[],
+): string {
+  return [
+    "Summarize this completed parallel Code Mode cell as one group.",
+    `Group ID: ${payload.cell_id}`,
+    `Script status: ${payload.script_status}`,
+    `Script: ${payload.script ?? "Not available"}`,
+    "Return one factual group summary and one factual summary for every toolCallId.",
+    "Broad parallel probes are expected. Do not recommend serial follow-up operations.",
+    ...members.flatMap((member, index) => [
+      "",
+      `Member ${index + 1}`,
+      `toolCallId: ${member.toolCallId}`,
+      `toolName: ${member.toolName}`,
+      `toolInput: ${member.toolInput}`,
+      `outputCharacters: ${member.output.length}`,
+      "output:",
+      member.output,
+    ]),
   ].join("\n");
 }
 
@@ -423,6 +700,52 @@ function parseSummary(value: unknown): TokenMiserSummary | undefined {
       ? { suggestedNextStep: record.suggestedNextStep.trim() }
       : {}),
   };
+}
+
+function parseGroupSummary(
+  value: unknown,
+  capturedMembers: CapturedGroupMember[],
+): {
+  summary: TokenMiserSummary;
+  members: Map<string, string>;
+} | undefined {
+  const summary = parseSummary(value);
+  if (!summary || !value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (!Array.isArray(record.members)) {
+    return undefined;
+  }
+  const allowedIds = new Set(capturedMembers.map((member) => member.toolCallId));
+  const members = new Map<string, string>();
+  for (const entry of record.members) {
+    if (!entry || typeof entry !== "object") {
+      return undefined;
+    }
+    const member = entry as Record<string, unknown>;
+    if (
+      typeof member.toolCallId !== "string"
+      || !allowedIds.has(member.toolCallId)
+      || typeof member.summary !== "string"
+      || !member.summary.trim()
+    ) {
+      return undefined;
+    }
+    members.set(member.toolCallId, member.summary.trim());
+  }
+  if (members.size !== capturedMembers.length) {
+    return undefined;
+  }
+  return { summary, members };
+}
+
+function capturedGroupKey(
+  threadId: string,
+  turnId: string,
+  cellId: string,
+): string {
+  return JSON.stringify([threadId, turnId, cellId]);
 }
 
 function isDirectTokenMiserRetrievalInvocation(

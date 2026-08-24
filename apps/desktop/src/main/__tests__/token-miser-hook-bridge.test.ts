@@ -101,9 +101,13 @@ describe("TokenMiserHookBridge", () => {
       path.join(os.tmpdir(), "pwragent-token-miser-direct-marker-"),
     );
     const preparePostToolUse = vi.fn();
+    const captureNestedPostToolUse = vi.fn(async () => {});
     const bridge = new TokenMiserHookBridge({
       stateDir,
-      service: { preparePostToolUse } as unknown as TokenMiserService,
+      service: {
+        captureNestedPostToolUse,
+        preparePostToolUse,
+      } as unknown as TokenMiserService,
     });
     cleanups.push(async () => {
       await bridge.close();
@@ -114,9 +118,37 @@ describe("TokenMiserHookBridge", () => {
     const nested = await postDirectHook(descriptor, {
       ...payload(),
       is_code_mode_nested: true,
+      token_miser_grouping_version: 1,
+      code_mode_cell_id: "cell-1",
+      code_mode_tool_call_id: "nested-1",
     });
     expect(nested.status).toBe(200);
     expect(await nested.json()).toEqual({ hookOutput: null });
+    expect(captureNestedPostToolUse).toHaveBeenCalledOnce();
+    expect(captureNestedPostToolUse).toHaveBeenCalledWith(expect.objectContaining({
+      code_mode_cell_id: "cell-1",
+      code_mode_tool_call_id: "nested-1",
+      token_miser_grouping_version: 1,
+    }));
+
+    captureNestedPostToolUse.mockRejectedValueOnce(new Error("capture failed"));
+    const failedCapture = await postDirectHook(descriptor, {
+      ...payload(),
+      is_code_mode_nested: true,
+      token_miser_grouping_version: 1,
+      code_mode_cell_id: "cell-1",
+      code_mode_tool_call_id: "nested-2",
+    });
+    expect(failedCapture.status).toBe(200);
+    expect(await failedCapture.json()).toEqual({ hookOutput: null });
+
+    const incompleteGrouping = await postDirectHook(descriptor, {
+      ...payload(),
+      is_code_mode_nested: true,
+      token_miser_grouping_version: 1,
+      code_mode_cell_id: "cell-1",
+    });
+    expect(incompleteGrouping.status).toBe(400);
 
     const unmarked = payload() as Partial<ReturnType<typeof payload>>;
     delete unmarked.is_code_mode_nested;

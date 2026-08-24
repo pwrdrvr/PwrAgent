@@ -47,6 +47,12 @@ export type TokenMiserPostToolUsePayload = {
   is_code_mode_nested: boolean;
   /** Present only when the fork will acknowledge a selected replacement. */
   token_miser_acceptance_version: 2;
+  /** Present on Codex builds that can join nested calls to an outer cell. */
+  token_miser_grouping_version?: 1;
+  /** Stable group key shared with the outer reducer request's `cell_id`. */
+  code_mode_cell_id?: string;
+  /** Runtime-local member identity within `code_mode_cell_id`. */
+  code_mode_tool_call_id?: string;
   tool_input?: unknown;
   tool_response: unknown;
 };
@@ -59,6 +65,13 @@ export type TokenMiserSummary = {
    * summaries are deliberately factual and omit continuation guidance.
    */
   suggestedNextStep?: string;
+};
+
+export type TokenMiserGroupMemberSummary = {
+  objectId: string;
+  toolCallId: string;
+  toolName: string;
+  summary: string;
 };
 
 export type TokenMiserHelperUsage = {
@@ -92,6 +105,9 @@ export type TokenMiserObjectMetadata = {
   replayTrackingStoppedAt?: number;
   parentRequestEpoch?: string;
   summary: TokenMiserSummary;
+  /** Code Mode cell identity for a grouped parallel reduction. */
+  groupId?: string;
+  groupMembers?: TokenMiserGroupMemberSummary[];
   helperUsage?: TokenMiserHelperUsage;
   /**
    * The model whose context this gate protected, captured at creation.
@@ -211,6 +227,26 @@ export function isTokenMiserPostToolUsePayload(
     && record.tool_use_id.length > 0
     && typeof record.is_code_mode_nested === "boolean"
     && record.token_miser_acceptance_version === 2
+    && (
+      record.token_miser_grouping_version === undefined
+      || record.token_miser_grouping_version === 1
+    )
+    && (
+      record.code_mode_cell_id === undefined
+      || isNonEmptyString(record.code_mode_cell_id)
+    )
+    && (
+      record.code_mode_tool_call_id === undefined
+      || isNonEmptyString(record.code_mode_tool_call_id)
+    )
+    && (
+      record.is_code_mode_nested === false
+      || record.token_miser_grouping_version !== 1
+      || (
+        isNonEmptyString(record.code_mode_cell_id)
+        && isNonEmptyString(record.code_mode_tool_call_id)
+      )
+    )
     && Object.prototype.hasOwnProperty.call(record, "tool_response")
   );
 }

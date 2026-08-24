@@ -289,7 +289,14 @@ type InitializeResult = Partial<CodexInitializeResponse>;
 
 export type CodexServerCapabilities = {
   codeModeOutputReducer?: {
+    continuationGuidanceVersion?: number;
     dynamicToolsResumeField?: "dynamicTools";
+    postToolUseGrouping?: {
+      versionField: string;
+      version: number;
+      cellIdField: string;
+      toolCallIdField: string;
+    };
     protocolVersion?: number;
   };
 };
@@ -7267,6 +7274,9 @@ export class CodexAppServerClient {
     );
     const outputReducer = asRecord(result?.codeModeOutputReducer);
     const protocolVersion = outputReducer?.protocolVersion;
+    const continuationGuidanceVersion =
+      outputReducer?.continuationGuidanceVersion;
+    const grouping = asRecord(outputReducer?.postToolUseGrouping);
     const dynamicToolsResumeField =
       outputReducer?.dynamicToolsResumeField === "dynamicTools"
         ? "dynamicTools"
@@ -7275,8 +7285,24 @@ export class CodexAppServerClient {
     return typeof protocolVersion === "number"
       ? {
           codeModeOutputReducer: {
+            ...(typeof continuationGuidanceVersion === "number"
+              ? { continuationGuidanceVersion }
+              : {}),
             ...(dynamicToolsResumeField
               ? { dynamicToolsResumeField }
+              : {}),
+            ...(typeof grouping?.versionField === "string"
+              && typeof grouping.version === "number"
+              && typeof grouping.cellIdField === "string"
+              && typeof grouping.toolCallIdField === "string"
+              ? {
+                  postToolUseGrouping: {
+                    versionField: grouping.versionField,
+                    version: grouping.version,
+                    cellIdField: grouping.cellIdField,
+                    toolCallIdField: grouping.toolCallIdField,
+                  },
+                }
               : {}),
             protocolVersion,
           },

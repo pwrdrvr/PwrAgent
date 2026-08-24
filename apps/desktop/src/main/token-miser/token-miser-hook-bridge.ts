@@ -247,6 +247,8 @@ export class TokenMiserHookBridge {
         return;
       }
       if (payload.is_code_mode_nested !== false) {
+        await this.options.service.captureNestedPostToolUse(payload)
+          .catch(() => undefined);
         sendJson(response, 200, { hookOutput: null });
         return;
       }

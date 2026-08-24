@@ -1311,7 +1311,14 @@ describe("CodexAppServerClient", () => {
   it("reads the code-mode output reducer capability from the server", async () => {
     MockTransport.serverCapabilitiesResult = {
       codeModeOutputReducer: {
+        continuationGuidanceVersion: 1,
         dynamicToolsResumeField: "dynamicTools",
+        postToolUseGrouping: {
+          versionField: "token_miser_grouping_version",
+          version: 1,
+          cellIdField: "code_mode_cell_id",
+          toolCallIdField: "code_mode_tool_call_id",
+        },
         protocolVersion: 2,
       },
     };
@@ -1320,7 +1327,14 @@ describe("CodexAppServerClient", () => {
 
     await expect(client.readServerCapabilities()).resolves.toEqual({
       codeModeOutputReducer: {
+        continuationGuidanceVersion: 1,
         dynamicToolsResumeField: "dynamicTools",
+        postToolUseGrouping: {
+          versionField: "token_miser_grouping_version",
+          version: 1,
+          cellIdField: "code_mode_cell_id",
+          toolCallIdField: "code_mode_tool_call_id",
+        },
         protocolVersion: 2,
       },
     });
