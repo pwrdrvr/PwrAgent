@@ -44,3 +44,22 @@ export function buildThreadCostNoticeMetadata(params: {
     dismissGroup: THREAD_COST_DISMISS_GROUP,
   };
 }
+
+/**
+ * Notice-stack navigation and dismissal use `id` as the UI identity. Keep the
+ * local id unchanged for compatibility, but qualify a peer-owned notice so
+ * equal backend/thread ids on separate instances remain independently usable.
+ */
+export function scopeThreadCostNoticeId(params: {
+  id: string;
+  instanceId?: string;
+}): string {
+  return params.instanceId
+    ? [
+        "thread-cost-notice",
+        "remote",
+        encodeURIComponent(params.instanceId),
+        params.id,
+      ].join(":")
+    : params.id;
+}

@@ -54,6 +54,7 @@ describe("spend alert notice", () => {
         key: "thread-cost:remote:peer-a:codex:thread-1",
         priority: 2,
       },
+      id: "thread-cost-notice:remote:peer-a:spend-alert:thread:codex:thread-1:25000000",
       message: expect.stringContaining("$31.00"),
       title: "Thread spend threshold reached",
     });

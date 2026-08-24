@@ -217,6 +217,20 @@ describe("buildToolAccountingNotice", () => {
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 
+  it("qualifies a remote viewer notice id by owning instance", () => {
+    const notice = buildToolAccountingNotice({
+      instanceId: "peer-a",
+      onDismiss: vi.fn(),
+      onExamine: vi.fn(),
+      showCost: false,
+      summary: summaryFor(),
+    });
+
+    expect(notice.id).toBe(
+      "thread-cost-notice:remote:peer-a:tool-accounting:codex:thread-1",
+    );
+  });
+
   it("offers a mute for a warning but not for a cap hit", () => {
     const warning = buildToolAccountingNotice({
       onDismiss: vi.fn(),

@@ -129,6 +129,7 @@ import {
   buildToolAccountingNotice,
 } from "./features/notifications/tool-accounting-notice";
 import { buildSpendAlertNotice } from "./features/notifications/spend-alert-notice";
+import { scopeThreadCostNoticeId } from "./features/notifications/thread-cost-notice";
 import {
   buildThreadIncidentSummary,
   threadIncidentNoticeId,
@@ -836,9 +837,12 @@ function DesktopAppShell(props: {
            incident. The fold still summarizes the whole thread once a new
            alert makes it worth showing. */
         if (!params.triggeredAlerts?.length) return;
-        const noticeId = threadIncidentNoticeId({
-          backend: event.backend,
-          threadId: params.threadId,
+        const noticeId = scopeThreadCostNoticeId({
+          id: threadIncidentNoticeId({
+            backend: event.backend,
+            threadId: params.threadId,
+          }),
+          ...(instanceId ? { instanceId } : {}),
         });
         /* Persisted disposition wins over anything this session inferred: it
            may predate this renderer entirely. Only for a local thread, though:
@@ -909,14 +913,19 @@ function DesktopAppShell(props: {
             ...(patch.mutedSeverity ? { mutedSeverity: patch.mutedSeverity } : {}),
           };
           toolIncidentStateRef.current.set(noticeId, next);
-          void desktopApi?.setThreadToolIncidentNotice?.({
-            backend: event.backend,
-            ...(summary.firstWarningAt !== undefined
-              ? { firstWarningAt: summary.firstWarningAt }
-              : {}),
-            ...patch,
-            threadId: params.threadId,
-          }).catch(() => undefined);
+          /* A remote dismissal belongs to this viewer session. The peer does
+             not own that preference, and an unscoped write here could mutate
+             a local thread that happens to share its backend/thread id. */
+          if (!event.federationTarget) {
+            void desktopApi?.setThreadToolIncidentNotice?.({
+              backend: event.backend,
+              ...(summary.firstWarningAt !== undefined
+                ? { firstWarningAt: summary.firstWarningAt }
+                : {}),
+              ...patch,
+              threadId: params.threadId,
+            }).catch(() => undefined);
+          }
         };
         const dismiss = (): void => {
           persistIncident({ dismissedSeverity: summary.severity });

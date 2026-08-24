@@ -301,7 +301,7 @@ describe("appNoticeReducer", () => {
     let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, {
       type: "show",
       notice: costNotice({
-        id: "spend-alert:thread:codex:thread-a:25000000",
+        id: "thread-cost-notice:remote:remote-a:spend-alert:thread:codex:thread-a:25000000",
         priority: 2,
         threadKey: "remote-a:codex:thread-a",
         title: "Thread spend threshold reached",
@@ -310,7 +310,7 @@ describe("appNoticeReducer", () => {
     state = appNoticeReducer(state, {
       type: "show",
       notice: costNotice({
-        id: "tool-accounting:codex:thread-a",
+        id: "thread-cost-notice:remote:remote-a:tool-accounting:codex:thread-a",
         priority: 0,
         threadKey: "remote-a:codex:thread-a",
         title: "Tool output hit the cap",
@@ -326,7 +326,7 @@ describe("appNoticeReducer", () => {
     let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, {
       type: "show",
       notice: costNotice({
-        id: "spend-alert:active-turn:codex:thread-a:turn-1:5000000",
+        id: "thread-cost-notice:remote:remote-a:spend-alert:active-turn:codex:thread-a:turn-1:5000000",
         priority: 1,
         threadKey: "remote-a:codex:thread-a",
         title: "First active turn",
@@ -335,7 +335,7 @@ describe("appNoticeReducer", () => {
     state = appNoticeReducer(state, {
       type: "show",
       notice: costNotice({
-        id: "spend-alert:active-turn:codex:thread-a:turn-2:5000000",
+        id: "thread-cost-notice:remote:remote-a:spend-alert:active-turn:codex:thread-a:turn-2:5000000",
         priority: 1,
         threadKey: "remote-a:codex:thread-a",
         title: "Second active turn",
@@ -351,7 +351,7 @@ describe("appNoticeReducer", () => {
     let state = appNoticeReducer(INITIAL_APP_NOTICE_STATE, {
       type: "show",
       notice: costNotice({
-        id: "tool-accounting:codex:thread-a",
+        id: "thread-cost-notice:remote:remote-a:tool-accounting:codex:thread-a",
         priority: 0,
         threadKey: "remote-a:codex:thread-a",
         title: "Remote A tool output",
@@ -360,7 +360,7 @@ describe("appNoticeReducer", () => {
     state = appNoticeReducer(state, {
       type: "show",
       notice: costNotice({
-        id: "spend-alert:active-turn:codex:thread-a:turn-1:5000000",
+        id: "thread-cost-notice:remote:remote-a:spend-alert:active-turn:codex:thread-a:turn-1:5000000",
         priority: 1,
         threadKey: "remote-a:codex:thread-a",
         title: "Remote A turn spend",
@@ -369,7 +369,7 @@ describe("appNoticeReducer", () => {
     state = appNoticeReducer(state, {
       type: "show",
       notice: costNotice({
-        id: "tool-accounting:codex:thread-a",
+        id: "thread-cost-notice:remote:remote-b:tool-accounting:codex:thread-a",
         priority: 0,
         threadKey: "remote-b:codex:thread-a",
         title: "Remote B tool output",
@@ -380,6 +380,7 @@ describe("appNoticeReducer", () => {
       "Remote A turn spend",
       "Remote B tool output",
     ]);
+    expect(new Set(state.durable.map((notice) => notice.id))).toHaveLength(2);
   });
 });
 

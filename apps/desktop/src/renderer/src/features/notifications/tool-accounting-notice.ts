@@ -6,7 +6,10 @@ import {
   formatIncidentMicros,
   threadIncidentNoticeId,
 } from "./thread-incident-summary";
-import { buildThreadCostNoticeMetadata } from "./thread-cost-notice";
+import {
+  buildThreadCostNoticeMetadata,
+  scopeThreadCostNoticeId,
+} from "./thread-cost-notice";
 
 export function buildToolAccountingNotice(params: {
   instanceId?: string;
@@ -45,7 +48,10 @@ export function buildToolAccountingNotice(params: {
     ],
     autoDismiss: false,
     copyText: describeToolAccountingIncident({ showCost: true, summary }),
-    id: threadIncidentNoticeId(summary),
+    id: scopeThreadCostNoticeId({
+      id: threadIncidentNoticeId(summary),
+      ...(params.instanceId ? { instanceId: params.instanceId } : {}),
+    }),
     message: describeToolAccountingIncident({
       showCost: params.showCost,
       summary,
