@@ -1059,7 +1059,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByRole("heading", { level: 3, name: "Pricing" })).toBeInTheDocument();
     expect(screen.getByText("Pricing summary")).toBeInTheDocument();
     expect(screen.getByText("1 row")).toBeInTheDocument();
-    expect(screen.getByText("Token volume")).toBeInTheDocument();
+    expect(screen.getByText("Parent model token volume")).toBeInTheDocument();
     expect(screen.getByText("$0.010")).toBeInTheDocument();
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
     expect(screen.getByText("gpt-5.5 · high · Fast")).toBeInTheDocument();
@@ -1072,6 +1072,78 @@ describe("ThreadContextPanel", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("$0.010 list price this turn")).toBeInTheDocument();
     expect(screen.getByText("Running total: $0.010 list price")).toBeInTheDocument();
+  });
+
+  it("keeps helper tokens out of the parent model summary", () => {
+    const parentLine: ThreadUsageLineRecord = {
+      backend: "codex",
+      cachedInputCostMicros: 45_000,
+      cachedInputTokens: 90_000,
+      createdAt: 1_800_000_000_000,
+      currency: "USD",
+      inputTokens: 100_000,
+      model: "gpt-5.6-sol",
+      outputCostMicros: 30_000,
+      outputTokens: 1_000,
+      priceStatus: "priced",
+      provider: "openai",
+      reasoningOutputTokens: 250,
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      threadId: "thread-1",
+      totalCostMicros: 125_000,
+      totalTokens: 101_000,
+      turnId: "turn-1",
+      uncachedInputCostMicros: 50_000,
+      uncachedInputTokens: 10_000,
+      usageLineId: "turn-line-1",
+    };
+    const gateLine = buildMonitorLine({
+      inputTokens: 5_000,
+      model: "gpt-5.6-luna",
+      outputTokens: 400,
+      reasoningOutputTokens: 50,
+      sourceItemId: "system:token-miser:gate-1",
+      totalCostMicros: 2_000,
+      totalTokens: 5_400,
+      uncachedInputTokens: 5_000,
+      usageLineId: "gate-line-1",
+    });
+    const namingLine = buildMonitorLine({
+      inputTokens: 2_000,
+      model: "gpt-5.6-luna",
+      outputTokens: 20,
+      sourceItemId: "thread-naming-1",
+      totalCostMicros: 1_000,
+      totalTokens: 2_020,
+      uncachedInputTokens: 2_000,
+      usageLineId: "naming-line-1",
+    });
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [gateLine, namingLine, parentLine],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const summaryCard = screen.getByText("Pricing summary").closest(
+      ".pricing-summary-card",
+    );
+    expect(summaryCard).not.toBeNull();
+    const summary = within(summaryCard as HTMLElement);
+    expect(summary.getByText("$0.13")).toBeInTheDocument();
+    expect(summary.getByText("3 rows")).toBeInTheDocument();
+    expect(summary.getByText("Parent model token volume")).toBeInTheDocument();
+    expect(summary.getByText("10k")).toBeInTheDocument();
+    expect(summary.getByText("90k")).toBeInTheDocument();
+    expect(summary.getByText("1k")).toBeInTheDocument();
+    expect(summary.getByText("250")).toBeInTheDocument();
+    expect(summary.queryByText("17k")).not.toBeInTheDocument();
   });
 
   it("pages enormous pricing histories instead of rendering every row at once", () => {
@@ -1301,9 +1373,9 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("$56.98 · 1,424 Codex Credits estimated")).toBeInTheDocument();
     expect(screen.queryByText("$21.44 · 1,423 Codex Credits")).not.toBeInTheDocument();
     expect(document.body).toHaveTextContent("Uncached input2.8M");
-    expect(document.body).toHaveTextContent("Cached input70.6M");
-    expect(document.body).toHaveTextContent("Output222.8k");
-    expect(document.body).toHaveTextContent("Reasoning37.1k");
+    expect(document.body).toHaveTextContent("Cached input70.5M");
+    expect(document.body).toHaveTextContent("Output221.7k");
+    expect(document.body).toHaveTextContent("Reasoning37k");
     expect(screen.getByText("Historical usage estimate")).toBeInTheDocument();
     expect(
       screen.getByText("$56.23 estimated list price · 1,406 Codex Credits estimated"),

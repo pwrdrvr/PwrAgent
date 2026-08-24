@@ -99,6 +99,14 @@ export function PricingPanel(props: PricingPanelProps) {
   const displaySummaries = addEstimatedLinesToSummaries(summaries, estimatedLines);
   const summary =
     aggregateSummaries(displaySummaries) ?? aggregateUsageLines(allDisplayLines);
+  // The headline is the all-in bill, including naming, reviews, monitors and
+  // Token Miser. Token volume is a context question, though: only the parent
+  // thread's turn rows enter its model context. Helper usage already has its
+  // own cards below, and mixing it here made the summary disagree with both
+  // the turn card and Codex's context-window meter.
+  const parentModelSummary = aggregateUsageLines(
+    allDisplayLines.filter(isMainThreadUsageLine),
+  );
   const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
   // Totals run over every line, nested gates included: a gate's helper cost is
   // still part of the running total of every turn after it.
@@ -325,27 +333,33 @@ export function PricingPanel(props: PricingPanelProps) {
               {summary.unpricedUsageLineCount.toLocaleString()} unpriced ·{" "}
               {formatTimestamp(summary.updatedAt)}
             </div>
-            <div className="rail-summary-card__section">
-              <span className="rail-summary-card__section-title">Token volume</span>
-              <RailSummaryRow
-                label="Uncached input"
-                value={formatCompactCount(summary.uncachedInputTokens)}
-              />
-              <RailSummaryRow
-                label="Cached input"
-                value={formatCompactCount(summary.cachedInputTokens)}
-              />
-              <RailSummaryRow
-                label="Output"
-                value={formatCompactCount(summary.outputTokens)}
-              />
-              {summary.reasoningOutputTokens > 0 ? (
+            {parentModelSummary ? (
+              <div className="rail-summary-card__section">
+                <span className="rail-summary-card__section-title">
+                  Parent model token volume
+                </span>
                 <RailSummaryRow
-                  label="Reasoning"
-                  value={formatCompactCount(summary.reasoningOutputTokens)}
+                  label="Uncached input"
+                  value={formatCompactCount(parentModelSummary.uncachedInputTokens)}
                 />
-              ) : null}
-            </div>
+                <RailSummaryRow
+                  label="Cached input"
+                  value={formatCompactCount(parentModelSummary.cachedInputTokens)}
+                />
+                <RailSummaryRow
+                  label="Output"
+                  value={formatCompactCount(parentModelSummary.outputTokens)}
+                />
+                {parentModelSummary.reasoningOutputTokens > 0 ? (
+                  <RailSummaryRow
+                    label="Reasoning"
+                    value={formatCompactCount(
+                      parentModelSummary.reasoningOutputTokens,
+                    )}
+                  />
+                ) : null}
+              </div>
+            ) : null}
             {displaySummaries.length > 1 ? (
               <div className="rail-summary-card__section">
                 <span className="rail-summary-card__section-title">By provider</span>
