@@ -30,7 +30,6 @@ describe("TokenMiserService", () => {
       object: {
         summary: "The command printed many numbered records.",
         usefulDetails: ["The final record is 4000."],
-        suggestedNextStep: "Search for the specific record needed.",
       },
       helperThreadId: "helper-thread-1",
       helperTurnId: "helper-turn-1",
@@ -53,16 +52,26 @@ describe("TokenMiserService", () => {
     const result = prepared?.hookOutput;
 
     expect(result?.continue).toBe(false);
-    expect(result?.stopReason).toContain("Token Miser intercepted");
+    expect(result?.stopReason).toContain("Token Miser reduced a completed");
+    expect(result?.stopReason).toContain("Summary: The command printed");
+    expect(result?.stopReason).toContain("Output reference:");
+    expect(result?.stopReason).toContain("Full output is available on request.");
+    expect(result?.stopReason).not.toMatch(/suggested next step/i);
+    expect(result?.stopReason).not.toContain("pwragent.");
     expect(result?.hookSpecificOutput).toEqual({
       hookEventName: "PostToolUse",
       response_id: expect.any(String),
     });
-    expect(result?.stopReason).toContain("pwragent.read_token_miser_output");
     expect(generateSummary).toHaveBeenCalledWith(
       expect.objectContaining({
         model: "gpt-5.6-luna",
         reasoningEffort: "medium",
+        system: expect.stringContaining(
+          "Do not recommend actions, searches, reads, refinements, or next steps.",
+        ),
+        schema: expect.objectContaining({
+          required: ["summary", "usefulDetails"],
+        }),
       }),
     );
     expect(await store.listMetadata()).toEqual([]);
@@ -142,6 +151,52 @@ describe("TokenMiserService", () => {
     })).toBeUndefined();
     expect(generateSummary).not.toHaveBeenCalled();
     expect(await store.listMetadata()).toEqual([]);
+  });
+
+  it.each([
+    "search_token_miser_output",
+    "read_token_miser_output",
+    "read_all_token_miser_output",
+  ])("does not re-gate a direct %s retrieval", async (tool) => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({
+      status: "failed" as const,
+      reason: "must not run",
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 1,
+    });
+
+    expect(await service.preparePostToolUse({
+      ...payload("preserved output"),
+      tool_name: "pwragent",
+      tool_input: { tool, objectId: "object-1" },
+    })).toBeUndefined();
+    expect(generateSummary).not.toHaveBeenCalled();
+    expect(await store.listMetadata()).toEqual([]);
+  });
+
+  it("does not mistake a direct source search for Token Miser retrieval", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({
+      status: "ok" as const,
+      object: { summary: "Source references were listed.", usefulDetails: [] },
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 1,
+    });
+
+    expect(await service.preparePostToolUse({
+      ...payload("large source-search output"),
+      tool_input: { command: "rg read_all_token_miser_output apps/desktop" },
+    })).toBeDefined();
+    expect(generateSummary).toHaveBeenCalledOnce();
   });
 
   it("fails open without both direct-result protocol markers", async () => {
@@ -245,7 +300,6 @@ describe("TokenMiserService code-mode reduction", () => {
       object: {
         summary: "The script listed many repository files.",
         usefulDetails: ["apps/desktop/src/main/index.ts was present."],
-        suggestedNextStep: "Search the stored output for the target package.",
       },
       helperThreadId: "helper-thread-code-mode",
       helperTurnId: "helper-turn-code-mode",
@@ -271,7 +325,7 @@ describe("TokenMiserService code-mode reduction", () => {
     expect(result).toEqual({
       replacement: [{
         type: "input_text",
-        text: expect.stringContaining("Token Miser intercepted"),
+        text: expect.stringContaining("Token Miser reduced a completed"),
       }],
       response_id: expect.any(String),
     });
@@ -323,6 +377,69 @@ describe("TokenMiserService code-mode reduction", () => {
     const [metadata] = await store.listMetadata();
     expect(metadata!.baselineParentTokens).toBe(25);
     expect(metadata!.replacementCharacters).toBeLessThanOrEqual(100);
+  });
+
+  it.each([
+    {
+      tool: "search_token_miser_output",
+      script:
+        "const result = await tools.pwragent__search_token_miser_output({ objectId: 'object-1', query: 'needle' }); text(result);",
+    },
+    {
+      tool: "read_token_miser_output",
+      script:
+        "const result = await tools.pwragent.read_token_miser_output({ objectId: 'object-1' }); text(result);",
+    },
+    {
+      tool: "read_all_token_miser_output",
+      script:
+        "const result = await tools.pwragent({ tool: 'read_all_token_miser_output', objectId: 'object-1' }); text(result);",
+    },
+  ])("does not re-gate a Code Mode $tool retrieval", async ({ script }) => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({
+      status: "failed" as const,
+      reason: "must not run",
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 1,
+    });
+
+    expect(await service.prepareCodeModeOutput({
+      ...codeModePayload([{
+        type: "input_text",
+        text: "deliberately retrieved output",
+      }]),
+      script,
+    })).toBeUndefined();
+    expect(generateSummary).not.toHaveBeenCalled();
+    expect(await store.listMetadata()).toEqual([]);
+  });
+
+  it("does not mistake a Code Mode source search for Token Miser retrieval", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({
+      status: "ok" as const,
+      object: { summary: "Source references were listed.", usefulDetails: [] },
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 1,
+    });
+
+    expect(await service.prepareCodeModeOutput({
+      ...codeModePayload([{
+        type: "input_text",
+        text: "large source-search output",
+      }]),
+      script: "text(await tools.exec_command({ cmd: 'rg read_all_token_miser_output apps/desktop' }))",
+    })).toBeDefined();
+    expect(generateSummary).toHaveBeenCalledOnce();
   });
 
   it("fails open for disabled, small, and failed-summary code-mode output", async () => {

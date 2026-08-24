@@ -1274,10 +1274,12 @@ function TokenMiserGateList(props: { entries: TokenMiserGateEntry[] }) {
                             ))}
                           </ul>
                         ) : null}
-                        <p className="incident-explorer__gate-next">
-                          <b>Suggested next step</b>{" "}
-                          {entry.interception.summary.suggestedNextStep}
-                        </p>
+                        {entry.interception.summary.suggestedNextStep ? (
+                          <p className="incident-explorer__gate-next">
+                            <b>Legacy suggested next step</b>{" "}
+                            {entry.interception.summary.suggestedNextStep}
+                          </p>
+                        ) : null}
                       </>
                     ) : (
                       <p className="incident-explorer__gate-summary">

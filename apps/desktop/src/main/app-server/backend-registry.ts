@@ -8135,8 +8135,7 @@ export class DesktopBackendRegistry {
             ...params,
             isMatch: (record) =>
               typeof record.summary === "string"
-              && Array.isArray(record.usefulDetails)
-              && typeof record.suggestedNextStep === "string",
+              && Array.isArray(record.usefulDetails),
           });
         },
       });

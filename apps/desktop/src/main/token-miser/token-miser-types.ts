@@ -54,7 +54,11 @@ export type TokenMiserPostToolUsePayload = {
 export type TokenMiserSummary = {
   summary: string;
   usefulDetails: string[];
-  suggestedNextStep: string;
+  /**
+   * Legacy helper guidance retained for stored-object compatibility. New
+   * summaries are deliberately factual and omit continuation guidance.
+   */
+  suggestedNextStep?: string;
 };
 
 export type TokenMiserHelperUsage = {

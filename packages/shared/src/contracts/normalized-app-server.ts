@@ -1145,7 +1145,7 @@ export type ThreadTokenMiserInterceptionAccounting = {
   summary?: {
     summary: string;
     usefulDetails: string[];
-    suggestedNextStep: string;
+    suggestedNextStep?: string;
   };
 };
 

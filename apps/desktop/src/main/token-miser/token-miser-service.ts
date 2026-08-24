@@ -21,7 +21,7 @@ import {
 const TOKEN_MISER_SUMMARY_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["summary", "usefulDetails", "suggestedNextStep"],
+  required: ["summary", "usefulDetails"],
   properties: {
     summary: {
       type: "string",
@@ -35,21 +35,21 @@ const TOKEN_MISER_SUMMARY_SCHEMA = {
       items: { type: "string", maxLength: 750 },
       description: "Specific filenames, errors, counts, identifiers, or findings worth retaining.",
     },
-    suggestedNextStep: {
-      type: "string",
-      minLength: 1,
-      maxLength: 1_500,
-      description: "How the parent should narrow the next lookup, or say no lookup is needed.",
-    },
   },
 } as const;
 
 const TOKEN_MISER_SYSTEM_PROMPT = [
-  "You are Token Miser, the first gate on tool output entering a parent coding agent's context.",
-  "The complete output is preserved outside the parent context and can be searched or read later.",
-  "Summarize only what is present. Preserve exact filenames, identifiers, errors, counts, and commands that help the parent decide what to inspect next.",
-  "Do not repeat long passages. Do not give general advice. Keep the complete response under 450 words.",
+  "You are Token Miser, a factual summarizer for completed coding-tool output.",
+  "Summarize only what is present. Preserve exact filenames, identifiers, errors, counts, and commands that materially describe the result.",
+  "Do not recommend actions, searches, reads, refinements, or next steps.",
+  "Do not repeat long passages or give general advice. Keep the complete response under 450 words.",
 ].join("\n");
+
+const TOKEN_MISER_RETRIEVAL_TOOL_NAMES = [
+  "search_token_miser_output",
+  "read_token_miser_output",
+  "read_all_token_miser_output",
+] as const;
 
 // Pinned to pwrdrvr/codex reducer protocol v2. Codex inserts these two items
 // around every host replacement after this service responds. Include them in
@@ -144,6 +144,9 @@ export class TokenMiserService {
     if (!await this.isEnabledForThread(payload.session_id)) {
       return undefined;
     }
+    if (isDirectTokenMiserRetrievalInvocation(payload)) {
+      return undefined;
+    }
     const output = serializeToolResponse(payload.tool_response);
     if (output.length <= this.thresholdCharacters) {
       return undefined;
@@ -182,6 +185,9 @@ export class TokenMiserService {
     options: { signal?: AbortSignal } = {},
   ): Promise<TokenMiserPreparedCodeModeReduction | undefined> {
     if (!await this.isEnabledForThread(payload.thread_id)) {
+      return undefined;
+    }
+    if (isCodeModeTokenMiserRetrievalInvocation(payload.script ?? "")) {
       return undefined;
     }
     const output = payload.content_items.map((item) => item.text).join("");
@@ -375,18 +381,17 @@ function buildReplacement(params: {
   const estimatedTokens = estimateTokenCount(params.outputCharacters);
   const details = params.summary.usefulDetails.length > 0
     ? params.summary.usefulDetails.map((detail) => `- ${detail}`).join("\n")
-    : "- No additional details were retained by the summary gate.";
+    : "- No additional facts were retained.";
   return [
-    `Token Miser intercepted a large ${params.toolName} result (${params.outputCharacters.toLocaleString()} characters, about ${estimatedTokens.toLocaleString()} tokens before the model-visible cap).`,
+    `Token Miser reduced a completed ${params.toolName} result (${params.outputCharacters.toLocaleString()} characters, about ${estimatedTokens.toLocaleString()} tokens before the model-visible cap).`,
     "",
-    params.summary.summary,
+    `Summary: ${params.summary.summary}`,
     "",
-    "Useful details:",
+    "Facts:",
     details,
     "",
-    `Suggested next step: ${params.summary.suggestedNextStep}`,
-    "",
-    `The exact model-facing tool result is preserved as Token Miser output ${params.objectId}. Use pwragent.search_token_miser_output or pwragent.read_token_miser_output for selected lines. Use pwragent.read_all_token_miser_output only when the complete result is necessary.`,
+    `Output reference: ${params.objectId}`,
+    "Full output is available on request.",
   ].join("\n");
 }
 
@@ -398,10 +403,12 @@ function parseSummary(value: unknown): TokenMiserSummary | undefined {
   if (
     typeof record.summary !== "string"
     || !record.summary.trim()
-    || typeof record.suggestedNextStep !== "string"
-    || !record.suggestedNextStep.trim()
     || !Array.isArray(record.usefulDetails)
     || !record.usefulDetails.every((entry) => typeof entry === "string")
+    || (
+      record.suggestedNextStep !== undefined
+      && typeof record.suggestedNextStep !== "string"
+    )
   ) {
     return undefined;
   }
@@ -411,6 +418,45 @@ function parseSummary(value: unknown): TokenMiserSummary | undefined {
       .map((entry) => entry.trim())
       .filter(Boolean)
       .slice(0, 8),
-    suggestedNextStep: record.suggestedNextStep.trim(),
+    ...(typeof record.suggestedNextStep === "string"
+      && record.suggestedNextStep.trim()
+      ? { suggestedNextStep: record.suggestedNextStep.trim() }
+      : {}),
   };
+}
+
+function isDirectTokenMiserRetrievalInvocation(
+  payload: TokenMiserPostToolUsePayload,
+): boolean {
+  if (isTokenMiserRetrievalToolName(payload.tool_name)) {
+    return true;
+  }
+  if (!payload.tool_input || typeof payload.tool_input !== "object") {
+    return false;
+  }
+  const input = payload.tool_input as Record<string, unknown>;
+  return [input.tool, input.name, input.operation].some((value) =>
+    typeof value === "string" && isTokenMiserRetrievalToolName(value)
+  );
+}
+
+function isCodeModeTokenMiserRetrievalInvocation(script: string): boolean {
+  return TOKEN_MISER_RETRIEVAL_TOOL_NAMES.some((name) => {
+    const directMethod = new RegExp(
+      `\\btools\\s*\\.\\s*(?:pwragent__|pwragent\\s*\\.\\s*)${name}\\s*\\(`,
+    );
+    const namespaceDispatcher = new RegExp(
+      `\\btools\\s*\\.\\s*pwragent\\s*\\(\\s*\\{[\\s\\S]{0,500}?\\btool\\s*:\\s*["']${name}["']`,
+    );
+    return directMethod.test(script) || namespaceDispatcher.test(script);
+  });
+}
+
+function isTokenMiserRetrievalToolName(value: string): boolean {
+  return TOKEN_MISER_RETRIEVAL_TOOL_NAMES.some((name) =>
+    value === name
+    || value.endsWith(`.${name}`)
+    || value.endsWith(`__${name}`)
+    || value.endsWith(`/${name}`)
+  );
 }
