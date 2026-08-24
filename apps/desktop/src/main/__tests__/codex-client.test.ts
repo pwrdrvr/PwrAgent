@@ -1507,6 +1507,13 @@ describe("CodexAppServerClient", () => {
         updatedAt: 1_777_500_200,
         cwd: "/repo/app",
       },
+      {
+        id: "thread-managed-monitor",
+        preview: "You are a lightweight PwrAgent monitor subagent",
+        threadSource: "subagent",
+        updatedAt: 1_777_500_300,
+        cwd: "/repo/app",
+      },
     ]);
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const client = new CodexAppServerClient({

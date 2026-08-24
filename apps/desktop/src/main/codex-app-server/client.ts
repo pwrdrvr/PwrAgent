@@ -1714,10 +1714,12 @@ function isKnownCompanionAppCodexThread(thread: RawCodexThreadSummary): boolean 
 }
 
 function isVisibleCodexThreadSource(thread: RawCodexThreadSummary): boolean {
-  const sourceKind = thread.codexThreadSourceKind?.trim();
+  const sourceKind = thread.codexThreadSourceKind?.trim().toLowerCase();
   // Native Codex subagents appear on their originating thread as activity and
-  // have an inspection-only transcript. They are not durable navigation threads.
-  return !sourceKind?.startsWith("subAgent");
+  // PwrAgent-managed workers have an inspection-only transcript. Neither is a
+  // durable navigation thread. Codex source-kind variants use camelCase while
+  // the durable ThreadSource marker is the lowercase string "subagent".
+  return !sourceKind?.startsWith("subagent");
 }
 
 function filterVisibleCodexThreads(

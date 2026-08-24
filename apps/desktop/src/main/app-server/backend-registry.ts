@@ -13909,10 +13909,13 @@ export class DesktopBackendRegistry {
     const thread = await client.startThread({
       ...(params.cwd ? { cwd: params.cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
-      // App-server threads are excluded from the default interactive thread
-      // listing by source kind. Keep review children durable so their
-      // inspection-only transcript can use thread/read with includeTurns.
+      // Keep review children durable so their inspection-only transcript can
+      // use thread/read with includeTurns, and mark them as subagents so
+      // PwrAgent excludes them from ordinary navigation. This classification
+      // does not claim Codex-native ThreadSpawn parentage, which Codex reserves
+      // for workers created by spawn_agent.
       ephemeral: false,
+      threadSource: "subagent" as CodexThreadSource,
       sandbox: modeSettings.sandbox,
       ...params.modelSettings,
       ...(params.codexEnvironmentRuntime
@@ -29077,13 +29080,16 @@ export class DesktopBackendRegistry {
       ...(cwd ? { cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
       dynamicTools,
-      // App-server threads are excluded from the default interactive thread
-      // listing by source kind. Keep monitor children durable so their
-      // inspection-only transcript can use thread/read with includeTurns.
+      // Keep monitor children durable so their inspection-only transcript can
+      // use thread/read with includeTurns, and mark them as subagents so
+      // PwrAgent excludes them from ordinary navigation. This classification
+      // does not claim Codex-native ThreadSpawn parentage, which Codex reserves
+      // for workers created by spawn_agent.
       ephemeral: false,
       model: params.preferredModel,
       reasoningEffort: params.preferredReasoningEffort,
       sandbox: modeSettings.sandbox,
+      threadSource: "subagent" as CodexThreadSource,
       ...(sourceOverlay?.codexEnvironmentRuntime
         ? { codexEnvironmentRuntime: sourceOverlay.codexEnvironmentRuntime }
         : {}),

@@ -20706,6 +20706,7 @@ command = "pnpm dev"
       reasoningEffort: "high",
       sandbox: "danger-full-access",
       serviceTier: "priority",
+      threadSource: "subagent",
     });
     expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "managed-review-child",
@@ -35678,7 +35679,7 @@ script = "printf setup"
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
     });
-    expect(codexClient.lastStartThreadParams?.threadSource).toBeUndefined();
+    expect(codexClient.lastStartThreadParams?.threadSource).toBe("subagent");
     expect(pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools)
       .map((tool) => tool.name)).toEqual(["inject_progress", "complete_monitoring"]);
     expect(codexClient.startTurnCallCount).toBe(1);
@@ -35918,7 +35919,7 @@ script = "printf setup"
       ephemeral: false,
       model: "gpt-5.6-luna",
     });
-    expect(codexClient.lastStartThreadParams?.threadSource).toBeUndefined();
+    expect(codexClient.lastStartThreadParams?.threadSource).toBe("subagent");
     expect(codexClient.startTurnCallCount).toBe(1);
 
     await registry.close();
@@ -35995,7 +35996,7 @@ script = "printf setup"
       ephemeral: false,
       sandbox: "danger-full-access",
     });
-    expect(codexClient.lastStartThreadParams?.threadSource).toBeUndefined();
+    expect(codexClient.lastStartThreadParams?.threadSource).toBe("subagent");
     expect(codexClient.lastStartTurnParams).toMatchObject({
       approvalPolicy: "never",
       codexEnvironmentRuntime,
