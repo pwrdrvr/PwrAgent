@@ -201,6 +201,14 @@ describe("buildToolAccountingNotice", () => {
     });
 
     expect(notice.id).toBe("tool-accounting:codex:thread-1");
+    expect(notice.coalescing).toEqual({
+      key: "thread-cost:local:codex:thread-1",
+      priority: 0,
+    });
+    expect(notice.dismissGroup).toEqual({
+      key: "thread-cost",
+      label: "cost notices",
+    });
     expect(notice.message).toContain("3 tool calls flagged across 2 turns");
     expect(notice.actions?.map((action) => action.label)).not.toContain(
       "Dismiss",

@@ -127,7 +127,19 @@ function upsertNotice(
   notices: readonly AppNoticeToastNotice[],
   notice: AppNoticeToastNotice,
 ): AppNoticeToastNotice[] {
-  const index = notices.findIndex((entry) => entry.id === notice.id);
+  const index = notice.coalescing
+    ? notices.findIndex(
+        (entry) => entry.coalescing?.key === notice.coalescing?.key,
+      )
+    : notices.findIndex((entry) => entry.id === notice.id);
+  const current = notices[index];
+  if (
+    current?.coalescing
+    && notice.coalescing
+    && current.coalescing.priority > notice.coalescing.priority
+  ) {
+    return [...notices];
+  }
   return index >= 0
     ? notices.map((entry, entryIndex) =>
         entryIndex === index ? notice : entry

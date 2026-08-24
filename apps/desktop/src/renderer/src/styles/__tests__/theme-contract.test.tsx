@@ -501,6 +501,10 @@ describe("Tangerine Terminal theme contract", () => {
   });
 
   it("lets long durable toast actions wrap without compressing labels", () => {
+    const durableToastRule = extractRuleBody(
+      css,
+      '.app-notice-toast[data-navigable="true"]',
+    );
     const footerRule = extractRuleBody(
       css,
       ".app-notice-toast__footer",
@@ -513,13 +517,22 @@ describe("Tangerine Terminal theme contract", () => {
       css,
       ".app-notice-toast__footer .app-notice-toast__custom-actions .button",
     );
+    const navigationRule = extractRuleBody(
+      css,
+      ".app-notice-toast__navigation",
+    );
 
+    expect(durableToastRule).toContain(
+      "height: min(208px, calc(100vh - 32px));",
+    );
     expect(footerRule).toContain(
       "grid-template-columns: auto minmax(0, 1fr) auto;",
     );
     expect(customActionsRule).toContain("min-width: 0;");
     expect(customActionsRule).toContain("flex-wrap: wrap;");
+    expect(customActionsRule).toContain("grid-column: 2;");
     expect(actionButtonRule).toContain("white-space: nowrap;");
+    expect(navigationRule).toContain("grid-column: 3;");
   });
 
   it("lets transcript scroll restoration own scroll anchoring", () => {

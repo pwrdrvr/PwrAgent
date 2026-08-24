@@ -6,8 +6,10 @@ import {
   formatIncidentMicros,
   threadIncidentNoticeId,
 } from "./thread-incident-summary";
+import { buildThreadCostNoticeMetadata } from "./thread-cost-notice";
 
 export function buildToolAccountingNotice(params: {
+  instanceId?: string;
   onExamine: () => void;
   onDismiss: () => void;
   onMute?: () => void;
@@ -18,6 +20,12 @@ export function buildToolAccountingNotice(params: {
   const summary = params.summary;
   const critical = summary.severity === "critical";
   return {
+    ...buildThreadCostNoticeMetadata({
+      backend: summary.backend,
+      ...(params.instanceId ? { instanceId: params.instanceId } : {}),
+      kind: "tool-output",
+      threadId: summary.threadId,
+    }),
     actions: [
       {
         label: `Examine ${summary.flaggedInvocationCount.toLocaleString()} case${summary.flaggedInvocationCount === 1 ? "" : "s"}`,

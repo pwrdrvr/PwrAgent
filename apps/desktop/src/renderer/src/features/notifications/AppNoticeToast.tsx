@@ -19,6 +19,16 @@ export type AppNoticeToastNotice = {
     tone?: "primary" | "secondary";
   }[];
   autoDismiss?: boolean;
+  /** Retain only the highest-priority durable notice in this logical slot. */
+  coalescing?: {
+    key: string;
+    priority: number;
+  };
+  /** Offers one action that dismisses every durable notice in this group. */
+  dismissGroup?: {
+    key: string;
+    label: string;
+  };
   id: string;
   title: string;
   message: string;
@@ -41,6 +51,10 @@ export function AppNoticeToast(props: {
   navigation?: {
     current: number;
     total: number;
+    dismissAll?: {
+      label: string;
+      onDismiss: () => void;
+    };
     onPrevious?: () => void;
     onNext?: () => void;
   };
@@ -100,6 +114,8 @@ export function AppNoticeToast(props: {
       .filter(Boolean)
       .join("\n");
   const customActions = props.notice.actions ?? [];
+  const hasFooterActions = customActions.length > 0
+    || props.navigation?.dismissAll !== undefined;
   const statusDotClass =
     props.notice.status?.state === "progress"
       ? "status-dot status-dot--warning status-dot--blink"
@@ -110,6 +126,7 @@ export function AppNoticeToast(props: {
   return (
     <aside
       className="app-notice-toast"
+      data-navigable={props.navigation ? "true" : undefined}
       data-tone={props.notice.tone ?? "neutral"}
       role="status"
       aria-live="polite"
@@ -190,7 +207,7 @@ export function AppNoticeToast(props: {
           <span className="app-notice-toast__position">
             {props.navigation.current} of {props.navigation.total}
           </span>
-          {customActions.length > 0 ? (
+          {hasFooterActions ? (
             <div className="app-notice-toast__custom-actions">
               {customActions.map((action) => (
                 <button
@@ -202,6 +219,17 @@ export function AppNoticeToast(props: {
                   {action.label}
                 </button>
               ))}
+              {props.navigation.dismissAll ? (
+                <button
+                  className="button button--secondary app-notice-toast__dismiss-all"
+                  type="button"
+                  aria-label={`Dismiss all ${props.navigation.dismissAll.label}`}
+                  title={`Dismiss all ${props.navigation.dismissAll.label}`}
+                  onClick={props.navigation.dismissAll.onDismiss}
+                >
+                  Dismiss all
+                </button>
+              ) : null}
             </div>
           ) : null}
           <nav

@@ -22,6 +22,12 @@ export function AppNoticeStack(props: {
     durableNotices.findIndex((notice) => notice.id === activeId),
   );
   const activeNotice = durableNotices[activeIndex];
+  const activeDismissGroup = activeNotice?.dismissGroup;
+  const groupedNotices = activeDismissGroup
+    ? durableNotices.filter(
+        (notice) => notice.dismissGroup?.key === activeDismissGroup.key,
+      )
+    : [];
 
   useEffect(() => {
     if (durableNotices.length === 0) {
@@ -67,6 +73,22 @@ export function AppNoticeStack(props: {
           ? {
               current: activeIndex + 1,
               total: durableNotices.length,
+              ...(activeDismissGroup && groupedNotices.length > 1
+                ? {
+                    dismissAll: {
+                      label: activeDismissGroup.label,
+                      onDismiss: () => {
+                        for (const notice of groupedNotices) {
+                          if (notice.onDismiss) {
+                            notice.onDismiss();
+                          } else {
+                            props.onDismissDurable(notice.id);
+                          }
+                        }
+                      },
+                    },
+                  }
+                : {}),
               onPrevious: activeIndex > 0
                 ? () => selectIndex(activeIndex - 1)
                 : undefined,

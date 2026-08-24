@@ -804,6 +804,8 @@ function DesktopAppShell(props: {
               type: "show",
               notice: buildSpendAlertNotice({
                 alert,
+                backend: event.backend,
+                ...(instanceId ? { instanceId } : {}),
                 ...(threadLink ? { threadLink } : {}),
               }),
             });
@@ -971,6 +973,7 @@ function DesktopAppShell(props: {
         dispatchAppNotice({
           type: "show",
           notice: buildToolAccountingNotice({
+            ...(instanceId ? { instanceId } : {}),
             onDismiss: dismiss,
             onExamine: examine,
             onMute: mute,
@@ -1227,6 +1230,7 @@ function DesktopAppShell(props: {
         type: "show",
         notice: buildSpendAlertNotice({
           alert,
+          backend: thread.source,
           threadLink: {
             backend: thread.source,
             inThreadList: true,

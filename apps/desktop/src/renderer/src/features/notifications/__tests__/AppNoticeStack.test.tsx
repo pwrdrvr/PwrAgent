@@ -55,4 +55,56 @@ describe("AppNoticeStack", () => {
     expect(screen.getByRole("button", { name: "Next notice" }))
       .toBeDisabled();
   });
+
+  it("dismisses every notice in the active notice group", async () => {
+    const costGroup = {
+      key: "thread-cost",
+      label: "cost notices",
+    };
+    const initial = [
+      {
+        autoDismiss: false,
+        dismissGroup: costGroup,
+        id: "cost-a",
+        message: "One",
+        title: "Cost A",
+      },
+      {
+        autoDismiss: false,
+        dismissGroup: costGroup,
+        id: "cost-b",
+        message: "Two",
+        title: "Cost B",
+      },
+      {
+        autoDismiss: false,
+        id: "failure",
+        message: "Three",
+        title: "Turn failed",
+      },
+    ] as AppNoticeToastNotice[];
+
+    function Harness() {
+      const [notices, setNotices] = useState(initial);
+      return (
+        <AppNoticeStack
+          durableNotices={notices}
+          onDismissDurable={(id) => {
+            setNotices((current) => current.filter((notice) => notice.id !== id));
+          }}
+        />
+      );
+    }
+
+    render(<Harness />);
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Dismiss all cost notices",
+    }));
+
+    expect(await screen.findByText("Turn failed")).toBeInTheDocument();
+    expect(screen.getByText("1 of 1")).toBeInTheDocument();
+    expect(screen.queryByText("Cost A")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cost B")).not.toBeInTheDocument();
+  });
 });
