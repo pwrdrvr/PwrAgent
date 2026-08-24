@@ -29,6 +29,7 @@ apps/desktop/dist/
 # pnpm deploy stage (release.mjs materializes a flat node_modules tree here)
 apps/desktop/release-stage/
 apps/desktop/build/bundled-agents/grok/
+apps/desktop/build/bundled-tools/ripgrep/
 apps/desktop/build/native/
 
 # Release-time secrets — must never land in the repo
