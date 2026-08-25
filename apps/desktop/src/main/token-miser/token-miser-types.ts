@@ -66,6 +66,10 @@ export type TokenMiserPostToolUsePayload = {
   is_code_mode_nested: boolean;
   /** Present only when the fork will acknowledge a selected replacement. */
   token_miser_acceptance_version: 1;
+  /** Advertises the opt-in exact-output field without changing tool_response. */
+  token_miser_exact_tool_response_version?: 1;
+  /** Full stable hook response used only by the capability-gated Token Miser hook. */
+  token_miser_exact_tool_response?: unknown;
   /** Present on Codex builds that can join nested calls to an outer cell. */
   token_miser_grouping_version?: 1;
   /** Stable group key shared with the outer reducer request's `cell_id`. */
@@ -295,6 +299,11 @@ export function isTokenMiserPostToolUsePayload(
     && record.tool_use_id.length > 0
     && typeof record.is_code_mode_nested === "boolean"
     && record.token_miser_acceptance_version === 1
+    && record.token_miser_exact_tool_response_version === 1
+    && Object.prototype.hasOwnProperty.call(
+      record,
+      "token_miser_exact_tool_response",
+    )
     && (
       record.token_miser_grouping_version === undefined
       || record.token_miser_grouping_version === 1

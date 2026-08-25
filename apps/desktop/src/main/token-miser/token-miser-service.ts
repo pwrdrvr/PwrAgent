@@ -183,6 +183,7 @@ export type TokenMiserServiceOptions = {
   summaryTimeoutMs?: number;
   codeModeContinuationGuidanceVersion?: () => number | undefined;
   codeModeGroupingVersion?: () => number | undefined;
+  postToolUseExactOutputVersion?: () => number | undefined;
 };
 
 export class TokenMiserService {
@@ -203,6 +204,7 @@ export class TokenMiserService {
       payload.is_code_mode_nested !== true
       || payload.token_miser_grouping_version !== 1
       || this.options.codeModeGroupingVersion?.() !== 1
+      || !this.supportsExactPostToolUseOutput(payload)
       || !payload.code_mode_cell_id
       || !payload.code_mode_tool_call_id
       || !await this.isEnabledForThread(payload.session_id)
@@ -210,7 +212,9 @@ export class TokenMiserService {
     ) {
       return;
     }
-    const output = serializeToolResponse(payload.tool_response);
+    const output = serializeToolResponse(
+      payload.token_miser_exact_tool_response,
+    );
     const toolInput = serializeToolResponse(payload.tool_input);
     const key = capturedGroupKey(
       payload.session_id,
@@ -259,6 +263,7 @@ export class TokenMiserService {
     if (
       payload.is_code_mode_nested !== false
       || payload.token_miser_acceptance_version !== 1
+      || !this.supportsExactPostToolUseOutput(payload)
     ) {
       return undefined;
     }
@@ -270,12 +275,16 @@ export class TokenMiserService {
     }
     if (isDirectTokenMiserRetrievalInvocation(payload)) {
       await this.options.store.confirmModelVisibleRetrievals({
-        output: serializeToolResponse(payload.tool_response),
+        output: serializeToolResponse(
+          payload.token_miser_exact_tool_response,
+        ),
         threadId: payload.session_id,
       });
       return undefined;
     }
-    const output = serializeToolResponse(payload.tool_response);
+    const output = serializeToolResponse(
+      payload.token_miser_exact_tool_response,
+    );
     if (output.length <= this.thresholdCharacters) {
       return undefined;
     }
@@ -668,6 +677,22 @@ export class TokenMiserService {
         await notification;
       },
     };
+  }
+
+  private supportsExactPostToolUseOutput(
+    payload: TokenMiserPostToolUsePayload,
+  ): boolean {
+    return (
+      payload.token_miser_exact_tool_response_version === 1
+      && Object.prototype.hasOwnProperty.call(
+        payload,
+        "token_miser_exact_tool_response",
+      )
+      && (
+        !this.options.postToolUseExactOutputVersion
+        || this.options.postToolUseExactOutputVersion() === 1
+      )
+    );
   }
 
   private async isEnabledForThread(threadId: string): Promise<boolean> {

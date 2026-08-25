@@ -7786,6 +7786,7 @@ export class DesktopBackendRegistry {
   private tokenMiserReducerCapabilityState?: "supported" | "unsupported";
   private tokenMiserCodeModeContinuationGuidanceVersion?: number;
   private tokenMiserCodeModeGroupingVersion?: number;
+  private tokenMiserPostToolUseExactOutputVersion?: number;
   private tokenMiserRuntimePreparationFailure?: string;
   private readonly tokenMiserPluginManager?: TokenMiserPluginManager;
   private tokenMiserStateDir?: string;
@@ -8197,6 +8198,8 @@ export class DesktopBackendRegistry {
           this.tokenMiserCodeModeContinuationGuidanceVersion,
         codeModeGroupingVersion: () =>
           this.tokenMiserCodeModeGroupingVersion,
+        postToolUseExactOutputVersion: () =>
+          this.tokenMiserPostToolUseExactOutputVersion,
         generateSummary: async (params) => {
           if (!this.codexClient.generateStructuredObject) {
             return {
@@ -19630,6 +19633,7 @@ export class DesktopBackendRegistry {
         this.tokenMiserReducerCapabilityState = "unsupported";
         this.tokenMiserCodeModeContinuationGuidanceVersion = undefined;
         this.tokenMiserCodeModeGroupingVersion = undefined;
+        this.tokenMiserPostToolUseExactOutputVersion = undefined;
         await this.recordTokenMiserActivation({
           reason: "Codex runtime lacks Token Miser output reducer v1.",
           state: "unavailable",
@@ -19651,6 +19655,16 @@ export class DesktopBackendRegistry {
           && grouping.versionField === "token_miser_grouping_version"
           && grouping.cellIdField === "code_mode_cell_id"
           && grouping.toolCallIdField === "code_mode_tool_call_id"
+            ? 1
+            : undefined;
+        const exactOutput =
+          capabilities.codeModeOutputReducer?.postToolUseExactOutput;
+        this.tokenMiserPostToolUseExactOutputVersion =
+          supported
+          && exactOutput?.version === 1
+          && exactOutput.versionField
+            === "token_miser_exact_tool_response_version"
+          && exactOutput.responseField === "token_miser_exact_tool_response"
             ? 1
             : undefined;
         this.tokenMiserReducerCapabilityState = supported
@@ -19690,6 +19704,7 @@ export class DesktopBackendRegistry {
         this.tokenMiserReducerCapabilityState = "unsupported";
         this.tokenMiserCodeModeContinuationGuidanceVersion = undefined;
         this.tokenMiserCodeModeGroupingVersion = undefined;
+        this.tokenMiserPostToolUseExactOutputVersion = undefined;
         await this.recordTokenMiserActivation({
           reason:
             this.tokenMiserRuntimePreparationFailure

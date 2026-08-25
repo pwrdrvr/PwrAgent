@@ -305,6 +305,11 @@ export type CodexServerCapabilities = {
       cellIdField: string;
       toolCallIdField: string;
     };
+    postToolUseExactOutput?: {
+      version: 1;
+      versionField: "token_miser_exact_tool_response_version";
+      responseField: "token_miser_exact_tool_response";
+    };
     protocolVersion?: number;
     reducerRequestField?: "parent_intent";
   };
@@ -7291,6 +7296,7 @@ export class CodexAppServerClient {
       && outputReducer.reducerRequestField === "parent_intent"
       && outputReducer.postToolUseField === "parent_intent";
     const grouping = asRecord(outputReducer?.postToolUseGrouping);
+    const exactOutput = asRecord(outputReducer?.postToolUseExactOutput);
     const dynamicToolsResumeField =
       outputReducer?.dynamicToolsResumeField === "dynamicTools"
         ? "dynamicTools"
@@ -7335,6 +7341,21 @@ export class CodexAppServerClient {
                     version: grouping.version,
                     cellIdField: grouping.cellIdField,
                     toolCallIdField: grouping.toolCallIdField,
+                  },
+                }
+              : {}),
+            ...(exactOutput?.version === 1
+              && exactOutput.versionField
+                === "token_miser_exact_tool_response_version"
+              && exactOutput.responseField
+                === "token_miser_exact_tool_response"
+              ? {
+                  postToolUseExactOutput: {
+                    version: 1 as const,
+                    versionField:
+                      "token_miser_exact_tool_response_version" as const,
+                    responseField:
+                      "token_miser_exact_tool_response" as const,
                   },
                 }
               : {}),

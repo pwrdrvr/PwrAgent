@@ -291,8 +291,47 @@ describe("TokenMiserService", () => {
         sourceMarkerOnly as TokenMiserPostToolUsePayload,
       ),
     ).toBeUndefined();
+    const legacyResponseOnly = payload("large legacy hook output") as Partial<
+      TokenMiserPostToolUsePayload
+    >;
+    delete legacyResponseOnly.token_miser_exact_tool_response;
+    delete legacyResponseOnly.token_miser_exact_tool_response_version;
+    expect(
+      await service.preparePostToolUse(
+        legacyResponseOnly as TokenMiserPostToolUsePayload,
+      ),
+    ).toBeUndefined();
     expect(generateSummary).not.toHaveBeenCalled();
     expect(await store.listMetadata()).toEqual([]);
+  });
+
+  it("uses only the capability-advertised exact response for direct gating", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({
+      status: "ok" as const,
+      object: {
+        disposition: "summarize" as const,
+        summary: "The exact output contained the requested result.",
+        usefulDetails: [],
+      },
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      postToolUseExactOutputVersion: () => 1,
+      generateSummary,
+      thresholdCharacters: 100,
+    });
+    const request = payload("legacy truncated output");
+    request.token_miser_exact_tool_response = "exact output\n".repeat(100);
+
+    expect(await service.preparePostToolUse(request)).toBeDefined();
+    expect(generateSummary).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringContaining("exact output"),
+    }));
+    expect(generateSummary).not.toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringContaining("legacy truncated output"),
+    }));
   });
 });
 
@@ -703,6 +742,7 @@ describe("TokenMiserService code-mode reduction", () => {
         tool_name: "exec_command",
         tool_input: { cmd: toolCallId },
         tool_response: toolResponse,
+        token_miser_exact_tool_response: toolResponse,
       });
     }
 
@@ -997,8 +1037,10 @@ function payload(output: string): TokenMiserPostToolUsePayload {
     tool_use_id: "tool-1",
     is_code_mode_nested: false,
     token_miser_acceptance_version: 1,
+    token_miser_exact_tool_response_version: 1,
     tool_input: { command: "seq 1 4000" },
     tool_response: output,
+    token_miser_exact_tool_response: output,
   };
 }
 

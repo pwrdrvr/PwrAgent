@@ -1695,6 +1695,11 @@ class MockBackendClient {
       serverCapabilities?: {
         codeModeOutputReducer?: {
           dynamicToolsResumeField?: "dynamicTools";
+          postToolUseExactOutput?: {
+            version: 1;
+            versionField: "token_miser_exact_tool_response_version";
+            responseField: "token_miser_exact_tool_response";
+          };
           protocolVersion?: number;
         };
       };

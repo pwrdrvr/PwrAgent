@@ -159,6 +159,15 @@ describe("TokenMiserHookBridge", () => {
     delete unversioned.token_miser_acceptance_version;
     const missingAcceptance = await postDirectHook(descriptor, unversioned);
     expect(missingAcceptance.status).toBe(400);
+
+    const legacyResponseOnly = payload() as Partial<ReturnType<typeof payload>>;
+    delete legacyResponseOnly.token_miser_exact_tool_response_version;
+    delete legacyResponseOnly.token_miser_exact_tool_response;
+    const missingExactOutput = await postDirectHook(
+      descriptor,
+      legacyResponseOnly,
+    );
+    expect(missingExactOutput.status).toBe(400);
     expect(preparePostToolUse).not.toHaveBeenCalled();
   });
 
@@ -766,8 +775,10 @@ function payload() {
     tool_use_id: "tool-1",
     is_code_mode_nested: false,
     token_miser_acceptance_version: 1,
+    token_miser_exact_tool_response_version: 1,
     parent_intent: "Inspect the exact command output.",
     tool_response: "large output",
+    token_miser_exact_tool_response: "large output",
   };
 }
 

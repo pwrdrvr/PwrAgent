@@ -1327,6 +1327,11 @@ describe("CodexAppServerClient", () => {
           cellIdField: "code_mode_cell_id",
           toolCallIdField: "code_mode_tool_call_id",
         },
+        postToolUseExactOutput: {
+          version: 1,
+          versionField: "token_miser_exact_tool_response_version",
+          responseField: "token_miser_exact_tool_response",
+        },
         protocolVersion: 1,
         reducerRequestField: "parent_intent",
       },
@@ -1351,6 +1356,11 @@ describe("CodexAppServerClient", () => {
           version: 1,
           cellIdField: "code_mode_cell_id",
           toolCallIdField: "code_mode_tool_call_id",
+        },
+        postToolUseExactOutput: {
+          version: 1,
+          versionField: "token_miser_exact_tool_response_version",
+          responseField: "token_miser_exact_tool_response",
         },
         protocolVersion: 1,
         reducerRequestField: "parent_intent",
