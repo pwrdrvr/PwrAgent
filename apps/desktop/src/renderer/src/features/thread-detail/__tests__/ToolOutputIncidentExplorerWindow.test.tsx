@@ -142,7 +142,7 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(screen.queryByText(/gated \d+ of \d+ flagged/)).not.toBeInTheDocument();
   });
 
-  it("shows ungated Code Mode calls as a separate explorable population", async () => {
+  it("makes ungated Code Mode calls a filter in the shared results list", async () => {
     const response = buildResponse();
     const observations = Array.from({ length: 2 }, (_, index) => ({
       observationId: `direct-${index}`,
@@ -192,8 +192,15 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(await screen.findByText(/2 Code Mode calls/)).toBeInTheDocument();
     expect(screen.getByText(/2 direct command cells · 0 reducer decisions/))
       .toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Ungated Code Mode results" }))
-      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^All\s*2$/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Direct\s*2$/ })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Ungated Code Mode results" }))
+      .not.toBeInTheDocument();
+    expect(screen.getAllByRole("button", {
+      name: /Code Mode4,00[01] charactersdirect/,
+    })).toHaveLength(2);
+
+    fireEvent.click(screen.getByRole("button", { name: /^Direct\s*2$/ }));
     expect(screen.getAllByRole("button", {
       name: /Code Mode4,00[01] charactersdirect/,
     })).toHaveLength(2);

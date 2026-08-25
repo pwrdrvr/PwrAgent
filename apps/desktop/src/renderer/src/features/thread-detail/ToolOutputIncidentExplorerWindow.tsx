@@ -1104,10 +1104,9 @@ function TokenMiserSavingsLens(props: {
           tokenMiser={tokenMiser}
         />
         <p className="incident-explorer__savings-empty">
-          No reducer decision was recorded. Direct Code Mode results remain
-          listed separately when observation was available at run time.
+          No reducer decision was recorded.
         </p>
-        <TokenMiserDirectList tokenMiser={tokenMiser} />
+        <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} />
       </div>
     );
   }
@@ -1298,8 +1297,7 @@ function TokenMiserSavingsLens(props: {
       <TokenMiserCodeModeStats
         tokenMiser={tokenMiser}
       />
-      <TokenMiserGateList entries={props.gates} />
-      <TokenMiserDirectList tokenMiser={tokenMiser} />
+      <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} />
     </div>
   );
 }
@@ -1439,63 +1437,10 @@ function TokenMiserCodeModeStats(props: {
   );
 }
 
-function TokenMiserDirectList(props: {
-  tokenMiser: NonNullable<ThreadToolAccounting["tokenMiser"]>;
-}) {
-  const [expanded, setExpanded] = useState<string>();
-  const direct = props.tokenMiser.codeMode?.observations.filter(
-    (entry) => entry.disposition === "direct",
-  ) ?? [];
-  if (direct.length === 0) return null;
-  return (
-    <section className="incident-explorer__gates" aria-label="Ungated Code Mode results">
-      <div className="incident-explorer__gates-head">
-        <p className="incident-explorer__eyebrow">Ungated/direct results</p>
-      </div>
-      <ul className="incident-explorer__gate-list">
-        {direct.map((entry) => (
-          <li className="incident-explorer__gate" data-outcome="direct" key={entry.observationId}>
-            <span aria-hidden="true" className="incident-explorer__edge-stripe" />
-            <button
-              aria-expanded={expanded === entry.observationId}
-              className="incident-explorer__gate-row"
-              onClick={() => setExpanded(
-                expanded === entry.observationId
-                  ? undefined
-                  : entry.observationId,
-              )}
-              type="button"
-            >
-              <span className="incident-explorer__gate-identity">
-                <code>Code Mode</code>
-                <span>{entry.outputCharacters.toLocaleString()} characters</span>
-              </span>
-              <span className="incident-explorer__gate-verdict">direct</span>
-            </button>
-            {expanded === entry.observationId ? (
-              <div className="incident-explorer__gate-detail">
-                <p>
-                  No reducer replacement was selected; the ordinary result
-                  reached the parent directly.
-                </p>
-                {entry.script ? <pre><code>{entry.script}</code></pre> : null}
-                {entry.outputPreview ? (
-                  <pre><code>
-                    {entry.outputPreview}
-                    {entry.outputPreviewTruncated ? "\n… preview truncated" : ""}
-                  </code></pre>
-                ) : null}
-              </div>
-            ) : null}
-          </li>
-        ))}
-      </ul>
-    </section>
-  );
-}
+type TokenMiserResultFilter = "all" | TokenMiserGateOutcome | "direct";
 
-const GATE_FILTERS: Array<{
-  key: "all" | TokenMiserGateOutcome;
+const RESULT_FILTERS: Array<{
+  key: TokenMiserResultFilter;
   label: string;
 }> = [
   { key: "all", label: "All" },
@@ -1503,36 +1448,47 @@ const GATE_FILTERS: Array<{
   { key: "miss", label: "Misses" },
   { key: "big-miss", label: "Big misses" },
   { key: "pass-through", label: "Pass-throughs" },
+  { key: "direct", label: "Direct" },
 ];
 
 /**
- * Every gate, filterable by outcome, with the summary the parent actually got.
+ * Every observed result in one filterable list.
  *
- * The summary is the gate's product — without it the screen can only say how
- * many tokens were traded, never what was traded for. Seeing it is also the
- * only way to judge a "win": a gate that saved 9k tokens and threw away the one
- * line that mattered is not a win, and no token count will say so.
+ * Gated entries carry the summary the parent actually got; direct entries carry
+ * the ordinary result preview. Keeping both populations behind one filter makes
+ * "All" truthful and avoids spending a second section on a single outcome.
  */
-function TokenMiserGateList(props: { entries: TokenMiserGateEntry[] }) {
-  const [filter, setFilter] = useState<"all" | TokenMiserGateOutcome>("all");
+function TokenMiserResultList(props: {
+  entries: TokenMiserGateEntry[];
+  tokenMiser: NonNullable<ThreadToolAccounting["tokenMiser"]>;
+}) {
+  const [filter, setFilter] = useState<TokenMiserResultFilter>("all");
   const [expanded, setExpanded] = useState<string>();
+  const direct = props.tokenMiser.codeMode?.observations.filter(
+    (entry) => entry.disposition === "direct",
+  ) ?? [];
   const counts = props.entries.reduce(
     (totals, entry) => ({ ...totals, [entry.outcome]: totals[entry.outcome] + 1 }),
     { "big-miss": 0, miss: 0, "pass-through": 0, win: 0 } as Record<TokenMiserGateOutcome, number>,
   );
-  const visible = filter === "all"
+  const visibleGates = filter === "all"
     ? props.entries
-    : props.entries.filter((entry) => entry.outcome === filter);
+    : filter === "direct"
+      ? []
+      : props.entries.filter((entry) => entry.outcome === filter);
+  const visibleDirect = filter === "all" || filter === "direct" ? direct : [];
 
   return (
-    <section className="incident-explorer__gates" aria-label="Token Miser decisions">
+    <section className="incident-explorer__gates" aria-label="Tool output results">
       <div className="incident-explorer__gates-head">
-        <p className="incident-explorer__eyebrow">Token Miser decisions</p>
-        <div className="incident-explorer__gate-filters" role="group" aria-label="Filter decisions by outcome">
-          {GATE_FILTERS.map((option) => {
+        <p className="incident-explorer__eyebrow">Tool output results</p>
+        <div className="incident-explorer__gate-filters" role="group" aria-label="Filter tool output results by outcome">
+          {RESULT_FILTERS.map((option) => {
             const count = option.key === "all"
-              ? props.entries.length
-              : counts[option.key];
+              ? props.entries.length + direct.length
+              : option.key === "direct"
+                ? direct.length
+                : counts[option.key];
             return (
               <button
                 aria-pressed={filter === option.key}
@@ -1550,13 +1506,13 @@ function TokenMiserGateList(props: { entries: TokenMiserGateEntry[] }) {
         </div>
       </div>
 
-      {visible.length === 0 ? (
+      {visibleGates.length === 0 && visibleDirect.length === 0 ? (
         <p className="incident-explorer__edges-empty">
-          No decisions in this group.
+          No results in this group.
         </p>
       ) : (
         <ul className="incident-explorer__gate-list">
-          {visible.map((entry) => {
+          {visibleGates.map((entry) => {
             const isOpen = expanded === entry.interception.objectId;
             const saved = entry.interception.estimatedParentTokensSaved;
             return (
@@ -1616,6 +1572,46 @@ function TokenMiserGateList(props: { entries: TokenMiserGateEntry[] }) {
                         No summary was recorded for this gate.
                       </p>
                     )}
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+          {visibleDirect.map((entry) => {
+            const expandedKey = `direct:${entry.observationId}`;
+            const isOpen = expanded === expandedKey;
+            return (
+              <li
+                className="incident-explorer__gate"
+                data-outcome="direct"
+                key={expandedKey}
+              >
+                <span aria-hidden="true" className="incident-explorer__edge-stripe" />
+                <button
+                  aria-expanded={isOpen}
+                  className="incident-explorer__gate-row"
+                  onClick={() => setExpanded(isOpen ? undefined : expandedKey)}
+                  type="button"
+                >
+                  <span className="incident-explorer__gate-identity">
+                    <code>Code Mode</code>
+                    <span>{entry.outputCharacters.toLocaleString()} characters</span>
+                  </span>
+                  <span className="incident-explorer__gate-verdict">direct</span>
+                </button>
+                {isOpen ? (
+                  <div className="incident-explorer__gate-detail">
+                    <p>
+                      No reducer replacement was selected; the ordinary result
+                      reached the parent directly.
+                    </p>
+                    {entry.script ? <pre><code>{entry.script}</code></pre> : null}
+                    {entry.outputPreview ? (
+                      <pre><code>
+                        {entry.outputPreview}
+                        {entry.outputPreviewTruncated ? "\n… preview truncated" : ""}
+                      </code></pre>
+                    ) : null}
                   </div>
                 ) : null}
               </li>
