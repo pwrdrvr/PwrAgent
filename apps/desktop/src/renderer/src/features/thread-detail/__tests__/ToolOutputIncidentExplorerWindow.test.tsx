@@ -241,6 +241,38 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     )).toBeInTheDocument();
   });
 
+  it("warns on a near-limit thread even when no compaction occurred", async () => {
+    const response = buildResponse();
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 1,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementTokens: 400,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 9_600,
+      interceptions: [],
+    };
+    response.pricing = {
+      compactions: [],
+      lines: [{
+        ...buildContextUsageLine(),
+        finalContextTokens: 239_000,
+        peakContextTokens: 240_000,
+      }],
+      summaries: [],
+    } as never;
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Near%20limit";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    expect(await screen.findByText(
+      /0 parent compactions · 0 compaction-attributed cold replay tokens/,
+    )).toBeInTheDocument();
+    expect(screen.getByText(
+      /Peak context 240k \/ 258k \(92\.9%\) · final context 239k \/ 258k \(92\.5%\) · warning: this thread approached the context limit/,
+    )).toBeInTheDocument();
+  });
+
   // The summary is what the parent actually received in place of the payload.
   // Without it the screen can only say how many tokens were traded, never what
   // was traded for — which is the only way to judge whether a "win" was one.

@@ -204,10 +204,10 @@ describe("Token Miser agent tools", () => {
     if (dynamicText?.type !== "inputText") {
       throw new Error("Expected a text dynamic-tool response.");
     }
-    expect(dynamicText.text).toContain("RECOGNIZABLE_REQUESTED_LINE");
-    expect(dynamicText.text).toContain("pwragent_token_miser_retrieval");
     expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters)
       .toBe(0);
+    expect(dynamicText.text).toContain("RECOGNIZABLE_REQUESTED_LINE");
+    expect(dynamicText.text).toContain("pwragent_token_miser_retrieval");
 
     const service = new TokenMiserService({
       store,
