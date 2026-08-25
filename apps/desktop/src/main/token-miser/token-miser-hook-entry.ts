@@ -1,7 +1,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { request } from "node:http";
+import { readTokenMiserHookInput } from "./token-miser-hook-input.js";
 
+const MAX_REQUEST_BYTES = 32 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 55_000;
 const TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV =
@@ -15,7 +17,10 @@ type BridgeDescriptor = {
 
 async function main(): Promise<void> {
   try {
-    const rawHookPayload = await readStdin();
+    const rawHookPayload = await readTokenMiserHookInput(
+      process.stdin,
+      MAX_REQUEST_BYTES,
+    );
     const descriptor = readDescriptor();
     if (!descriptor) {
       return;
@@ -59,17 +64,6 @@ function readDescriptor(): BridgeDescriptor | undefined {
   } catch {
     return undefined;
   }
-}
-
-function readStdin(): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    process.stdin.on("data", (chunk: Buffer | string) => {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-    });
-    process.stdin.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    process.stdin.on("error", reject);
-  });
 }
 
 function postHookPayload(

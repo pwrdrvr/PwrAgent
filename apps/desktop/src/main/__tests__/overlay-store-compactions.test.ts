@@ -156,6 +156,46 @@ describe("SqliteOverlayStore — compaction markers", () => {
     expect(compactions[1]?.coldUsageLineId).toBe("usage-1");
   });
 
+  it("attributes multiple cumulative cold replays from one usage line as deltas", async () => {
+    await store.recordThreadCompaction({ compaction: buildCompaction() });
+    expect(await store.attributeThreadCompactionColdReplay({
+      backend: "codex",
+      costMicros: 500,
+      observedAt: 1400,
+      threadId: "thread-1",
+      uncachedTokens: 100,
+      usageLineId: "usage-1",
+      updatedAt: 1500,
+    })).toBe(true);
+
+    await store.recordThreadCompaction({
+      compaction: buildCompaction({
+        compactionId: "codex:thread-1:item-2",
+        itemId: "item-2",
+        observedAt: 2000,
+      }),
+    });
+    expect(await store.attributeThreadCompactionColdReplay({
+      backend: "codex",
+      costMicros: 1_100,
+      observedAt: 2400,
+      threadId: "thread-1",
+      uncachedTokens: 220,
+      usageLineId: "usage-1",
+      updatedAt: 2500,
+    })).toBe(true);
+
+    const compactions = await store.listThreadCompactions({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(compactions).toHaveLength(2);
+    expect(compactions[0]?.coldUncachedTokens).toBe(100);
+    expect(compactions[0]?.coldCostMicros).toBe(500);
+    expect(compactions[1]?.coldUncachedTokens).toBe(120);
+    expect(compactions[1]?.coldCostMicros).toBe(600);
+  });
+
   // A cold replay observed before any compaction is prompt-cache expiry or a
   // long gap, not a compaction cost — it must not claim a later marker.
   it("does not attribute a cold replay that precedes the compaction", async () => {

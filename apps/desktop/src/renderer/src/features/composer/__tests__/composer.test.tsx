@@ -1114,6 +1114,80 @@ describe("Composer", () => {
     expect(tokenMiser).toHaveTextContent("this thread");
   });
 
+  it("clears a per-thread Token Miser override back to the global setting", async () => {
+    const setThreadTokenMiser = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      tokenMiserEnabled: undefined,
+    }));
+    const onRefreshNavigation = vi.fn(async () => undefined);
+
+    render(
+      <Composer
+        desktopApi={{ setThreadTokenMiser }}
+        disabled={false}
+        onRefreshNavigation={onRefreshNavigation}
+        skills={[]}
+        tokenMiserEnabled
+        thread={{
+          id: "thread-1",
+          title: "Existing Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          tokenMiserEnabled: false,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("menuitem", { name: "Use global Token Miser setting" }));
+      await Promise.resolve();
+    });
+
+    expect(setThreadTokenMiser).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      enabled: null,
+    });
+    expect(onRefreshNavigation).toHaveBeenCalled();
+  });
+
+  it("does not expose the local Token Miser override for a remote Codex thread", () => {
+    render(
+      <Composer
+        desktopApi={{ setThreadTokenMiser: vi.fn() }}
+        disabled={false}
+        skills={[]}
+        tokenMiserEnabled
+        thread={{
+          id: "thread-remote",
+          title: "Remote Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          federation: {
+            instanceLabel: "Remote instance",
+            ref: {
+              backend: "codex",
+              target: {
+                scope: "remote",
+                instanceId: "remote-instance",
+              },
+              threadId: "thread-remote",
+            },
+          },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    expect(screen.queryByRole("menuitemcheckbox", { name: /Token Miser/ })).toBeNull();
+  });
+
   it("marks an existing non-Codex thread as an Agent from the composer menu", async () => {
     const setThreadAgent = vi.fn(async () => ({
       backend: "acp:gemini" as const,

@@ -1894,9 +1894,11 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
    * compaction-caused cold replay from one caused by prompt-cache expiry or a
    * long gap between turns — the fold classifies both identically.
    *
-   * The `NOT EXISTS` guard makes the write idempotent: usage lines are
-   * re-emitted with the same cumulative tally, and without it a re-emission
-   * would walk backwards and credit an older, unrelated compaction.
+   * Usage rows carry cumulative cold-replay totals. A long turn can compact
+   * more than once while keeping the same usage-line identity, so each newer
+   * marker receives only the delta since the preceding marker attributed to
+   * that line. Limiting the candidate to markers newer than that attribution
+   * keeps re-emitted rows idempotent without suppressing later compactions.
    */
   attributeThreadCompactionColdReplaySync(params: {
     backend: AppServerBackendKind;
@@ -1909,36 +1911,40 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
   }): boolean {
     const result = this.stateDb.raw
       .prepare(
-        `UPDATE thread_compactions
-         SET cold_usage_line_id = ?,
-             cold_uncached_tokens = ?,
-             cold_cost_micros = ?,
-             updated_at = ?
-         WHERE compaction_id = (
+        `WITH prior AS (
+           SELECT
+             COALESCE(SUM(cold_uncached_tokens), 0) AS uncached_tokens,
+             COALESCE(SUM(cold_cost_micros), 0) AS cost_micros,
+             COALESCE(MAX(observed_at), -1) AS observed_at
+           FROM thread_compactions
+           WHERE backend = ? AND thread_id = ? AND cold_usage_line_id = ?
+         ), candidate AS (
            SELECT compaction_id FROM thread_compactions
            WHERE backend = ? AND thread_id = ?
              AND cold_usage_line_id IS NULL
              AND observed_at <= ?
+             AND observed_at > (SELECT observed_at FROM prior)
            ORDER BY observed_at DESC
            LIMIT 1
          )
-         AND NOT EXISTS (
-           SELECT 1 FROM thread_compactions existing
-           WHERE existing.backend = ? AND existing.thread_id = ?
-             AND existing.cold_usage_line_id = ?
-         )`,
+         UPDATE thread_compactions
+         SET cold_usage_line_id = ?,
+             cold_uncached_tokens = MAX(0, ? - (SELECT uncached_tokens FROM prior)),
+             cold_cost_micros = MAX(0, ? - (SELECT cost_micros FROM prior)),
+             updated_at = ?
+         WHERE compaction_id = (SELECT compaction_id FROM candidate)`,
       )
       .run(
+        params.backend,
+        params.threadId,
+        params.usageLineId,
+        params.backend,
+        params.threadId,
+        params.observedAt,
         params.usageLineId,
         params.uncachedTokens,
         params.costMicros,
         params.updatedAt,
-        params.backend,
-        params.threadId,
-        params.observedAt,
-        params.backend,
-        params.threadId,
-        params.usageLineId,
       );
     return result.changes > 0;
   }

@@ -3506,6 +3506,24 @@ export type ObservedContextReplayCursor = {
   lastContextTokens?: number;
 };
 
+export function buildThreadCompactionIdentity(params: {
+  backend: AppServerBackendKind;
+  cumulativeInputTokens?: number;
+  itemId?: string;
+  threadId: string;
+  turnId?: string;
+}): string {
+  if (params.itemId) {
+    return [params.backend, params.threadId, params.itemId].join(":");
+  }
+  return [
+    params.backend,
+    params.threadId,
+    params.turnId ?? "unknown",
+    `request-${params.cumulativeInputTokens ?? "unobserved"}`,
+  ].join(":");
+}
+
 // Pure core of the context-replay accumulator: fold one token-usage update into
 // a running per-turn tally, given the per-thread cursor. A replay is counted
 // only when the cumulative input grows past the cursor, the growing request
@@ -26800,9 +26818,15 @@ export class DesktopBackendRegistry {
       : undefined;
     const observedAt = Date.now();
     const turnId = this.findActiveTurnIdForThread(event.backend, threadId);
-    const compactionId = itemId
-      ? [event.backend, threadId, itemId].join(":")
-      : [event.backend, threadId, turnId ?? "unknown", observedAt].join(":");
+    const compactionId = buildThreadCompactionIdentity({
+      backend: event.backend,
+      cumulativeInputTokens: this.liveThreadReplayInputCursor.get(
+        [event.backend, threadId].join(":"),
+      )?.cumulativeInputTokens,
+      itemId,
+      threadId,
+      turnId,
+    });
     try {
       await this.overlayStore.recordThreadCompaction?.({
         compaction: {

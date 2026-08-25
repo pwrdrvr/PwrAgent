@@ -1657,7 +1657,7 @@ function ComposerThreadOptionsMenu(props: {
    */
   tokenMiser?: boolean;
   tokenMiserOverridden?: boolean;
-  onTokenMiserChange?: (enabled: boolean) => void;
+  onTokenMiserChange?: (enabled: boolean | null) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [menuShift, setMenuShift] = useState(0);
@@ -1840,44 +1840,62 @@ function ComposerThreadOptionsMenu(props: {
             </button>
           </div>
           {props.tokenMiser !== undefined && props.onTokenMiserChange ? (
-            <div
-              className="composer-thread-options__item tooltip-target"
-              data-tooltip={
-                "Summarize large tool results with a helper model before they "
-                + "enter this thread's context. Saves context and replay cost; "
-                + "each gated result adds a helper round trip to the turn."
-                + (props.tokenMiserOverridden
-                  ? " This thread overrides the global setting."
-                  : "")
-              }
-            >
-              <button
-                aria-checked={props.tokenMiser}
-                className="composer-dropdown__option composer-thread-options__option"
-                disabled={props.disabled}
-                role="menuitemcheckbox"
-                type="button"
-                onClick={() => {
-                  setOpen(false);
-                  props.onTokenMiserChange?.(!props.tokenMiser);
-                }}
+            <>
+              <div
+                className="composer-thread-options__item tooltip-target"
+                data-tooltip={
+                  "Summarize large tool results with a helper model before they "
+                  + "enter this thread's context. Saves context and replay cost; "
+                  + "each gated result adds a helper round trip to the turn."
+                  + (props.tokenMiserOverridden
+                    ? " This thread overrides the global setting."
+                    : "")
+                }
               >
-                <span className="composer-thread-options__label">
-                  Token Miser
-                  {props.tokenMiserOverridden ? (
-                    <span className="composer-thread-options__note"> · this thread</span>
-                  ) : null}
-                </span>
-                <span
-                  aria-hidden="true"
-                  className={`composer-thread-options__toggle${
-                    props.tokenMiser ? " is-checked" : ""
-                  }`}
+                <button
+                  aria-checked={props.tokenMiser}
+                  className="composer-dropdown__option composer-thread-options__option"
+                  disabled={props.disabled}
+                  role="menuitemcheckbox"
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    props.onTokenMiserChange?.(!props.tokenMiser);
+                  }}
                 >
-                  <span className="composer-thread-options__toggle-thumb" />
-                </span>
-              </button>
-            </div>
+                  <span className="composer-thread-options__label">
+                    Token Miser
+                    {props.tokenMiserOverridden ? (
+                      <span className="composer-thread-options__note"> · this thread</span>
+                    ) : null}
+                  </span>
+                  <span
+                    aria-hidden="true"
+                    className={`composer-thread-options__toggle${
+                      props.tokenMiser ? " is-checked" : ""
+                    }`}
+                  >
+                    <span className="composer-thread-options__toggle-thumb" />
+                  </span>
+                </button>
+              </div>
+              {props.tokenMiserOverridden ? (
+                <button
+                  className="composer-dropdown__option composer-thread-options__option"
+                  disabled={props.disabled}
+                  role="menuitem"
+                  type="button"
+                  onClick={() => {
+                    setOpen(false);
+                    props.onTokenMiserChange?.(null);
+                  }}
+                >
+                  <span className="composer-thread-options__label">
+                    Use global Token Miser setting
+                  </span>
+                </button>
+              ) : null}
+            </>
           ) : null}
           {props.onShowMcpInventory ? (
             <>
@@ -8603,14 +8621,14 @@ export function Composer(props: ComposerProps) {
 
   // Per-thread Token Miser override. A launchpad persists the choice before
   // materialization; an existing thread writes it to the thread overlay.
-  const changeTokenMiser = async (enabled: boolean): Promise<void> => {
+  const changeTokenMiser = async (enabled: boolean | null): Promise<void> => {
     const launchpad = props.launchpad;
     if (launchpad && props.onUpdateLaunchpad) {
       setAgentThreadSaving(true);
       setAgentThreadError(undefined);
       try {
         await props.onUpdateLaunchpad(launchpad.directoryKey, {
-          tokenMiserEnabled: enabled,
+          tokenMiserEnabled: enabled ?? undefined,
         });
       } catch (error) {
         setAgentThreadError(error instanceof Error ? error.message : String(error));
@@ -11817,7 +11835,9 @@ export function Composer(props: ComposerProps) {
                 : undefined
             }
             {...((props.launchpad?.backend === "codex" && props.onUpdateLaunchpad)
-              || (props.thread?.source === "codex" && props.desktopApi?.setThreadTokenMiser)
+              || (props.thread?.source === "codex"
+                && props.thread.federation?.ref.target.scope !== "remote"
+                && props.desktopApi?.setThreadTokenMiser)
               ? {
                   tokenMiser: props.launchpad?.tokenMiserEnabled
                     ?? props.thread?.tokenMiserEnabled
@@ -11826,7 +11846,7 @@ export function Composer(props: ComposerProps) {
                   tokenMiserOverridden:
                     (props.launchpad?.tokenMiserEnabled
                       ?? props.thread?.tokenMiserEnabled) !== undefined,
-                  onTokenMiserChange: (enabled: boolean) => {
+                  onTokenMiserChange: (enabled: boolean | null) => {
                     void changeTokenMiser(enabled);
                   },
                 }
