@@ -50,7 +50,7 @@ export type TokenMiserBridgeDescriptor = {
 };
 
 export type TokenMiserCodeModeReducerDescriptor = {
-  version: 2;
+  version: 1;
   url: string;
   acceptance_url: string;
   token: string;
@@ -154,7 +154,7 @@ export class TokenMiserHookBridge {
       token,
     } satisfies TokenMiserBridgeDescriptor;
     const codeModeDescriptor = {
-      version: 2,
+      version: 1,
       url: `http://127.0.0.1:${address.port}/v1/reduce-code-mode-output`,
       acceptance_url:
         `http://127.0.0.1:${address.port}/v1/accept-code-mode-output`,

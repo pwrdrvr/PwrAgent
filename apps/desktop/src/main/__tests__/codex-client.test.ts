@@ -153,7 +153,7 @@ class MockTransport implements JsonRpcTransport {
   static configReadError: { code?: number; message: string } | undefined;
   static serverCapabilitiesResult: unknown = {
     codeModeOutputReducer: {
-      protocolVersion: 2,
+      protocolVersion: 1,
     },
   };
   static threadMcpServerStatusResult: unknown = {
@@ -1247,7 +1247,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.configReadError = undefined;
     MockTransport.serverCapabilitiesResult = {
       codeModeOutputReducer: {
-        protocolVersion: 2,
+        protocolVersion: 1,
       },
     };
     MockTransport.mcpServerStatusError = undefined;
@@ -1327,7 +1327,7 @@ describe("CodexAppServerClient", () => {
           cellIdField: "code_mode_cell_id",
           toolCallIdField: "code_mode_tool_call_id",
         },
-        protocolVersion: 2,
+        protocolVersion: 1,
         reducerRequestField: "parent_intent",
       },
     };
@@ -1352,7 +1352,7 @@ describe("CodexAppServerClient", () => {
           cellIdField: "code_mode_cell_id",
           toolCallIdField: "code_mode_tool_call_id",
         },
-        protocolVersion: 2,
+        protocolVersion: 1,
         reducerRequestField: "parent_intent",
       },
     });
@@ -1369,13 +1369,13 @@ describe("CodexAppServerClient", () => {
         dynamicToolsResumeField: "tools",
         intentContextVersion: 1,
         postToolUseField: "wrong_field",
-        protocolVersion: 2,
+        protocolVersion: 1,
         reducerRequestField: "parent_intent",
       },
     };
     await expect(client.readServerCapabilities()).resolves.toEqual({
       codeModeOutputReducer: {
-        protocolVersion: 2,
+        protocolVersion: 1,
       },
     });
 

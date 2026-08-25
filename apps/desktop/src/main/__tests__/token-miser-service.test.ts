@@ -996,7 +996,7 @@ function payload(output: string): TokenMiserPostToolUsePayload {
     tool_name: "Bash",
     tool_use_id: "tool-1",
     is_code_mode_nested: false,
-    token_miser_acceptance_version: 2,
+    token_miser_acceptance_version: 1,
     tool_input: { command: "seq 1 4000" },
     tool_response: output,
   };
@@ -1006,7 +1006,7 @@ function codeModePayload(
   contentItems: TokenMiserCodeModeOutputPayload["content_items"],
 ): TokenMiserCodeModeOutputPayload {
   return {
-    version: 2,
+    version: 1,
     thread_id: "thread-1",
     turn_id: "turn-1",
     call_id: "call-1",

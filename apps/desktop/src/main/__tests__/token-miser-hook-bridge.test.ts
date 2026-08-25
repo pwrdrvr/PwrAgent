@@ -260,7 +260,7 @@ describe("TokenMiserHookBridge", () => {
       token: string;
     };
     expect(descriptor).toMatchObject({
-      version: 2,
+      version: 1,
       url: expect.stringMatching(/\/v1\/reduce-code-mode-output$/),
       acceptance_url: expect.stringMatching(/\/v1\/accept-code-mode-output$/),
     });
@@ -765,7 +765,7 @@ function payload() {
     tool_name: "Bash",
     tool_use_id: "tool-1",
     is_code_mode_nested: false,
-    token_miser_acceptance_version: 2,
+    token_miser_acceptance_version: 1,
     parent_intent: "Inspect the exact command output.",
     tool_response: "large output",
   };
@@ -773,7 +773,7 @@ function payload() {
 
 function codeModePayload() {
   return {
-    version: 2,
+    version: 1,
     thread_id: "thread-1",
     turn_id: "turn-1",
     call_id: "call-1",
@@ -788,7 +788,7 @@ function codeModePayload() {
 
 function acceptancePayload(responseId: string) {
   return {
-    version: 2,
+    version: 1,
     response_id: responseId,
     thread_id: "thread-1",
     turn_id: "turn-1",
@@ -799,7 +799,7 @@ function acceptancePayload(responseId: string) {
 
 function directAcceptancePayload(responseId: string) {
   return {
-    version: 2,
+    version: 1,
     response_id: responseId,
     session_id: "thread-1",
     turn_id: "turn-1",

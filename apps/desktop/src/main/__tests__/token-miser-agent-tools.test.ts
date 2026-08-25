@@ -221,7 +221,7 @@ describe("Token Miser agent tools", () => {
     const retrievalScript =
       `const r = await tools.pwragent__read_token_miser_output({ objectId: "${metadata.objectId}", startLine: 1, endLine: 3 }); for (const c of (r?.content ?? [])) if (c.type === "text") text(c.text);`;
     expect(await service.prepareCodeModeOutput({
-      version: 2,
+      version: 1,
       thread_id: "thread-1",
       turn_id: "turn-2",
       call_id: "call-code-mode-empty",
@@ -258,7 +258,7 @@ describe("Token Miser agent tools", () => {
     }
     const emitted = deliveredText.text;
     expect(await service.prepareCodeModeOutput({
-      version: 2,
+      version: 1,
       thread_id: "thread-1",
       turn_id: "turn-2",
       call_id: "call-code-mode",

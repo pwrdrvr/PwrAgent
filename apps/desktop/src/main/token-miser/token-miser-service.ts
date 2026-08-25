@@ -94,7 +94,7 @@ const MAX_CAPTURED_GROUP_MEMBERS = 16;
 const MAX_CAPTURED_GROUP_CHARACTERS = 1_000_000;
 const CAPTURED_GROUP_TTL_MS = 2 * 60_000;
 
-// Pinned to pwrdrvr/codex reducer protocol v2. Codex inserts these two items
+// Pinned to pwrdrvr/codex reducer protocol v1. Codex inserts these two items
 // around every host replacement after this service responds. Include them in
 // replacement accounting even though they do not cross the HTTP boundary.
 const CODE_MODE_REPLACEMENT_FENCE_HEADER = [
@@ -247,7 +247,7 @@ export class TokenMiserService {
     group.characters = nextCharacters;
   }
 
-  /** Prepare a direct-hook replacement; only the bridge's v2 ack may commit it. */
+  /** Prepare a direct-hook replacement; only the bridge's ack may commit it. */
   async preparePostToolUse(
     payload: TokenMiserPostToolUsePayload,
     options: { signal?: AbortSignal } = {},
@@ -258,7 +258,7 @@ export class TokenMiserService {
     // trustworthy enough to publish savings for it.
     if (
       payload.is_code_mode_nested !== false
-      || payload.token_miser_acceptance_version !== 2
+      || payload.token_miser_acceptance_version !== 1
     ) {
       return undefined;
     }

@@ -1767,7 +1767,7 @@ class MockBackendClient {
     }
     return this.options.serverCapabilities ?? {
       codeModeOutputReducer: {
-        protocolVersion: 2,
+        protocolVersion: 1,
       },
     };
   }
@@ -3729,18 +3729,18 @@ describe("DesktopBackendRegistry", () => {
       serverCapabilities: {
         codeModeOutputReducer: {
           dynamicToolsResumeField: "dynamicTools",
-          protocolVersion: 2,
+          protocolVersion: 1,
         },
       },
     })).resolves.toMatchObject({ state: "active" });
     await expect(readActivation({
       serverCapabilities: {
         codeModeOutputReducer: {
-          protocolVersion: 1,
+          protocolVersion: 2,
         },
       },
     })).resolves.toMatchObject({
-      reason: "Codex runtime lacks Token Miser output reducer v2.",
+      reason: "Codex runtime lacks Token Miser output reducer v1.",
       state: "unavailable",
     });
     await expect(readActivation({
@@ -3748,7 +3748,7 @@ describe("DesktopBackendRegistry", () => {
       serverCapabilities: {
         codeModeOutputReducer: {
           dynamicToolsResumeField: "dynamicTools",
-          protocolVersion: 2,
+          protocolVersion: 1,
         },
       },
     })).resolves.toMatchObject({
@@ -3763,7 +3763,7 @@ describe("DesktopBackendRegistry", () => {
       serverCapabilities: {
         codeModeOutputReducer: {
           dynamicToolsResumeField: "dynamicTools",
-          protocolVersion: 2,
+          protocolVersion: 1,
         },
       },
     });
@@ -3829,7 +3829,7 @@ describe("DesktopBackendRegistry", () => {
       threads: [],
       serverCapabilities: {
         codeModeOutputReducer: {
-          protocolVersion: 1,
+          protocolVersion: 2,
         },
       },
     });
@@ -3870,7 +3870,7 @@ describe("DesktopBackendRegistry", () => {
       serverCapabilities: {
         codeModeOutputReducer: {
           dynamicToolsResumeField: "dynamicTools",
-          protocolVersion: 2,
+          protocolVersion: 1,
         },
       },
     });
@@ -3915,7 +3915,7 @@ describe("DesktopBackendRegistry", () => {
       serverCapabilities: {
         codeModeOutputReducer: {
           dynamicToolsResumeField: "dynamicTools",
-          protocolVersion: 2,
+          protocolVersion: 1,
         },
       },
       startThreadResult: { threadId: "managed-review-child" },
@@ -4162,7 +4162,7 @@ describe("DesktopBackendRegistry", () => {
       serverCapabilities: {
         codeModeOutputReducer: {
           dynamicToolsResumeField: "dynamicTools",
-          protocolVersion: 2,
+          protocolVersion: 1,
         },
       },
     });
@@ -10253,7 +10253,7 @@ script = "echo setup"
       },
       serverCapabilities: {
         codeModeOutputReducer: {
-          protocolVersion: 2,
+          protocolVersion: 1,
         },
       },
     });
@@ -10284,7 +10284,7 @@ script = "echo setup"
       serverCapabilities: {
         codeModeOutputReducer: {
           dynamicToolsResumeField: "dynamicTools",
-          protocolVersion: 2,
+          protocolVersion: 1,
         },
       },
     });

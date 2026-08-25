@@ -65,7 +65,7 @@ export type TokenMiserPostToolUsePayload = {
    */
   is_code_mode_nested: boolean;
   /** Present only when the fork will acknowledge a selected replacement. */
-  token_miser_acceptance_version: 2;
+  token_miser_acceptance_version: 1;
   /** Present on Codex builds that can join nested calls to an outer cell. */
   token_miser_grouping_version?: 1;
   /** Stable group key shared with the outer reducer request's `cell_id`. */
@@ -201,13 +201,13 @@ export type TokenMiserCodeModeObservation = {
 };
 
 /**
- * Version 2 of the script-to-model reduction request emitted by the
+ * Version 1 of the script-to-model reduction request emitted by the
  * PwrAgent Codex fork. Non-text content is deliberately outside this host
  * implementation: images, audio, and encrypted content must reach Codex's
  * fail-open path unchanged rather than being flattened or silently lost.
  */
 export type TokenMiserCodeModeOutputPayload = {
-  version: 2;
+  version: 1;
   thread_id: string;
   turn_id: string;
   call_id: string;
@@ -215,7 +215,7 @@ export type TokenMiserCodeModeOutputPayload = {
   script?: string;
   /** Most recent model-visible assistant narration before this cell. */
   parent_intent?: string;
-  /** Codex-owned continuation state that every v2 response must echo exactly. */
+  /** Codex-owned continuation state that every response must echo exactly. */
   actionable_state?: TokenMiserCodeModeActionableState;
   script_status: string;
   max_output_tokens: number;
@@ -231,11 +231,11 @@ export type TokenMiserCodeModeReductionOutput = {
 };
 
 /**
- * Codex sends this only after it has parsed and selected a v2 replacement.
+ * Codex sends this only after it has parsed and selected a replacement.
  * PwrAgent does not publish a gate or its savings before this acknowledgement.
  */
 export type TokenMiserCodeModeAcceptancePayload = {
-  version: 2;
+  version: 1;
   response_id: string;
   thread_id: string;
   turn_id: string;
@@ -249,7 +249,7 @@ export type TokenMiserCodeModeAcceptancePayload = {
  * this acknowledgement.
  */
 export type TokenMiserPostToolUseAcceptancePayload = {
-  version: 2;
+  version: 1;
   response_id: string;
   session_id: string;
   turn_id: string;
@@ -294,7 +294,7 @@ export function isTokenMiserPostToolUsePayload(
     && typeof record.tool_use_id === "string"
     && record.tool_use_id.length > 0
     && typeof record.is_code_mode_nested === "boolean"
-    && record.token_miser_acceptance_version === 2
+    && record.token_miser_acceptance_version === 1
     && (
       record.token_miser_grouping_version === undefined
       || record.token_miser_grouping_version === 1
@@ -394,7 +394,7 @@ export function isTokenMiserCodeModeOutputPayload(
   const record = value as Record<string, unknown>;
   return (
     hasOnlyKeys(record, TOKEN_MISER_CODE_MODE_PAYLOAD_KEYS)
-    && record.version === 2
+    && record.version === 1
     && isNonEmptyString(record.thread_id)
     && isNonEmptyString(record.turn_id)
     && isNonEmptyString(record.call_id)
@@ -429,7 +429,7 @@ export function isTokenMiserCodeModeAcceptancePayload(
   const record = value as Record<string, unknown>;
   return (
     hasOnlyKeys(record, TOKEN_MISER_CODE_MODE_ACCEPTANCE_KEYS)
-    && record.version === 2
+    && record.version === 1
     && isNonEmptyString(record.response_id)
     && isNonEmptyString(record.thread_id)
     && isNonEmptyString(record.turn_id)
@@ -447,7 +447,7 @@ export function isTokenMiserPostToolUseAcceptancePayload(
   const record = value as Record<string, unknown>;
   return (
     hasOnlyKeys(record, TOKEN_MISER_POST_TOOL_USE_ACCEPTANCE_KEYS)
-    && record.version === 2
+    && record.version === 1
     && isNonEmptyString(record.response_id)
     && isNonEmptyString(record.session_id)
     && isNonEmptyString(record.turn_id)

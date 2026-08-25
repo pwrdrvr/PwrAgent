@@ -19631,7 +19631,7 @@ export class DesktopBackendRegistry {
         this.tokenMiserCodeModeContinuationGuidanceVersion = undefined;
         this.tokenMiserCodeModeGroupingVersion = undefined;
         await this.recordTokenMiserActivation({
-          reason: "Codex runtime lacks Token Miser output reducer v2.",
+          reason: "Codex runtime lacks Token Miser output reducer v1.",
           state: "unavailable",
         });
         return undefined;
@@ -19639,7 +19639,7 @@ export class DesktopBackendRegistry {
       try {
         const capabilities = await client.readServerCapabilities();
         const supported =
-          capabilities.codeModeOutputReducer?.protocolVersion === 2;
+          capabilities.codeModeOutputReducer?.protocolVersion === 1;
         this.tokenMiserCodeModeContinuationGuidanceVersion =
           supported
             ? capabilities.codeModeOutputReducer?.continuationGuidanceVersion
@@ -19662,7 +19662,7 @@ export class DesktopBackendRegistry {
             : {
                 reason:
                   this.tokenMiserRuntimePreparationFailure
-                  ?? "Codex runtime lacks Token Miser output reducer v2.",
+                  ?? "Codex runtime lacks Token Miser output reducer v1.",
                 state: "unavailable",
               },
         );
@@ -19693,7 +19693,7 @@ export class DesktopBackendRegistry {
         await this.recordTokenMiserActivation({
           reason:
             this.tokenMiserRuntimePreparationFailure
-            ?? "Codex runtime lacks Token Miser output reducer v2.",
+            ?? "Codex runtime lacks Token Miser output reducer v1.",
           state: "unavailable",
         });
         return undefined;
@@ -19707,7 +19707,7 @@ export class DesktopBackendRegistry {
     client: BackendClient,
   ): Promise<boolean> {
     const capabilities = await this.readTokenMiserServerCapabilities(client);
-    return capabilities?.codeModeOutputReducer?.protocolVersion === 2;
+    return capabilities?.codeModeOutputReducer?.protocolVersion === 1;
   }
 
   private async supportsTokenMiserDynamicToolsResume(
@@ -19715,7 +19715,7 @@ export class DesktopBackendRegistry {
   ): Promise<boolean> {
     const capabilities = await this.readTokenMiserServerCapabilities(client);
     return (
-      capabilities?.codeModeOutputReducer?.protocolVersion === 2
+      capabilities?.codeModeOutputReducer?.protocolVersion === 1
       && capabilities.codeModeOutputReducer.dynamicToolsResumeField
         === "dynamicTools"
     );
@@ -19808,7 +19808,7 @@ export class DesktopBackendRegistry {
           ? { state: "active" }
           : {
               reason: this.tokenMiserReducerCapabilityState === "unsupported"
-                ? "Codex runtime lacks Token Miser output reducer v2."
+                ? "Codex runtime lacks Token Miser output reducer v1."
                 : "Waiting for Codex to report Token Miser output reducer support.",
               state: "unavailable",
             },
