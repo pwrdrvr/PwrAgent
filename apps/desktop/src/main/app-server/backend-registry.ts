@@ -4244,6 +4244,9 @@ function buildTokenMiserSubAgentAccounting(params: {
     - cachedRevealedCost.cachedInputCostMicros;
   return {
     currency: "USD",
+    ...(params.entry.disposition
+      ? { disposition: params.entry.disposition }
+      : {}),
     originalModel,
     ...(originalServiceTier ? { originalServiceTier } : {}),
     baselineParentTokens: params.entry.baselineParentTokens,

@@ -633,6 +633,7 @@ export function ToolOutputIncidentExplorerWindow() {
             {activeTokenMiser
               ? describeTokenMiserReach({
                   gatedCount: activeTokenMiser.interceptionCount,
+                  passThroughCount: activeTokenMiser.passThroughCount ?? 0,
                   savedTokens: totalEstimatedParentTokensSaved,
                   toolCallCount: allInvocations.length,
                 })
@@ -925,11 +926,17 @@ export function ToolOutputIncidentExplorerWindow() {
  */
 function describeTokenMiserReach(params: {
   gatedCount: number;
+  passThroughCount: number;
   savedTokens: number;
   toolCallCount: number;
 }): string {
   const kept =
     `kept ${formatCompactTokens(params.savedTokens)} out of the parent's context.`;
+  if (params.passThroughCount > 0) {
+    return `Token Miser made ${params.gatedCount.toLocaleString()} `
+      + `${params.gatedCount === 1 ? "decision" : "decisions"}, passed `
+      + `${params.passThroughCount.toLocaleString()} through, and ${kept}`;
+  }
   if (params.toolCallCount < params.gatedCount || params.toolCallCount === 0) {
     return `Token Miser gated ${params.gatedCount.toLocaleString()} `
       + `${params.gatedCount === 1 ? "call" : "calls"} and ${kept}`;
@@ -1206,10 +1213,10 @@ function TokenMiserGateList(props: { entries: TokenMiserGateEntry[] }) {
     : props.entries.filter((entry) => entry.outcome === filter);
 
   return (
-    <section className="incident-explorer__gates" aria-label="Gated calls">
+    <section className="incident-explorer__gates" aria-label="Token Miser decisions">
       <div className="incident-explorer__gates-head">
-        <p className="incident-explorer__eyebrow">Gated calls</p>
-        <div className="incident-explorer__gate-filters" role="group" aria-label="Filter gates by outcome">
+        <p className="incident-explorer__eyebrow">Token Miser decisions</p>
+        <div className="incident-explorer__gate-filters" role="group" aria-label="Filter decisions by outcome">
           {GATE_FILTERS.map((option) => {
             const count = option.key === "all"
               ? props.entries.length
@@ -1233,7 +1240,7 @@ function TokenMiserGateList(props: { entries: TokenMiserGateEntry[] }) {
 
       {visible.length === 0 ? (
         <p className="incident-explorer__edges-empty">
-          No gated calls in this group.
+          No decisions in this group.
         </p>
       ) : (
         <ul className="incident-explorer__gate-list">

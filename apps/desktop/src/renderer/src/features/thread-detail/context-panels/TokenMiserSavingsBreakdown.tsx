@@ -5,6 +5,7 @@ export function TokenMiserSavingsBreakdown(props: {
   accounting: NonNullable<ThreadSubAgentSummary["tokenMiserAccounting"]>;
 }) {
   const accounting = props.accounting;
+  const passedThrough = accounting.disposition === "passed_through";
   const savingsLabel = accounting.savingsMicros >= 0 ? "Savings" : "Net overhead";
   const cachedReplayCount = accounting.cachedReplayCount ?? 0;
   const cachedBaselineTokens = accounting.cachedBaselineTokens ?? 0;
@@ -17,7 +18,7 @@ export function TokenMiserSavingsBreakdown(props: {
       className="rail-card__token-miser-savings"
     >
       <div>
-        <dt>1 · Without gate</dt>
+        <dt>{passedThrough ? "1 · Ordinary result" : "1 · Without gate"}</dt>
         <dd>
           <strong>
             {formatTokenUsageMicrosAsUsd(
@@ -35,7 +36,7 @@ export function TokenMiserSavingsBreakdown(props: {
         </dd>
       </div>
       <div>
-        <dt>2 · Gate model</dt>
+        <dt>{passedThrough ? "2 · Evaluation model" : "2 · Gate model"}</dt>
         <dd>
           <strong>{formatTokenUsageMicrosAsUsd(accounting.gateCostMicros)}</strong>
           <span>
@@ -44,7 +45,7 @@ export function TokenMiserSavingsBreakdown(props: {
         </dd>
       </div>
       <div>
-        <dt>3 · Revealed to parent</dt>
+        <dt>{passedThrough ? "3 · Passed to parent" : "3 · Revealed to parent"}</dt>
         <dd>
           <strong>
             {formatTokenUsageMicrosAsUsd(

@@ -275,6 +275,7 @@ export type ThreadSubAgentStatus =
 
 export type TokenMiserSubAgentAccounting = {
   currency: "USD";
+  disposition?: "summarized" | "passed_through";
   originalModel: string;
   originalServiceTier?: string;
   baselineParentTokens: number;

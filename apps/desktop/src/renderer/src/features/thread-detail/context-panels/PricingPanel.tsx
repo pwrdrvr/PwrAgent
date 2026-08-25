@@ -555,12 +555,16 @@ function TokenMiserTurnGroup(props: {
 }) {
   const [expanded, setExpanded] = useState(false);
   const [showSmall, setShowSmall] = useState(false);
-  const entries = props.gates.map((line) => ({
-    accounting: line.sourceItemId
-      ? props.subAgentsById.get(line.sourceItemId)?.tokenMiserAccounting
-      : undefined,
-    line,
-  }));
+  const entries = props.gates.map((line) => {
+    const subAgent = line.sourceItemId
+      ? props.subAgentsById.get(line.sourceItemId)
+      : undefined;
+    return {
+      accounting: subAgent?.tokenMiserAccounting,
+      line,
+      subAgent,
+    };
+  });
   const priced = entries.filter((entry) => entry.accounting !== undefined);
   const savingsMicros = priced.reduce(
     (total, entry) => total + (entry.accounting?.savingsMicros ?? 0),
@@ -585,8 +589,15 @@ function TokenMiserTurnGroup(props: {
   );
   const unpricedCount = entries.length - priced.length;
   const count = props.gates.length;
+  const passThroughCount = entries.filter(
+    (entry) => entry.accounting?.disposition === "passed_through"
+      || entry.subAgent?.task.startsWith("Evaluate "),
+  ).length;
+  const countLabel = passThroughCount > 0
+    ? count === 1 ? "decision" : "decisions"
+    : count === 1 ? "gate" : "gates";
   const verdict = priced.length === 0
-    ? `${formatTokenUsageMicrosAsUsd(gateCostMicros)} summarizing · savings not priced yet`
+    ? `${formatTokenUsageMicrosAsUsd(gateCostMicros)} evaluating · savings not priced yet`
     : savingsMicros >= 0
       ? `${formatTokenUsageMicrosAsUsd(savingsMicros)} saved`
       : `${formatTokenUsageMicrosAsUsd(Math.abs(savingsMicros))} net overhead`;
@@ -602,7 +613,7 @@ function TokenMiserTurnGroup(props: {
         <span aria-hidden="true" className="pricing-token-miser__chevron">›</span>
         <span className="pricing-token-miser__label">Token Miser</span>
         <span className="pricing-token-miser__count">
-          {count.toLocaleString()} {count === 1 ? "gate" : "gates"}
+          {count.toLocaleString()} {countLabel}
         </span>
         <span className="pricing-token-miser__verdict" data-negative={savingsMicros < 0}>
           {verdict}

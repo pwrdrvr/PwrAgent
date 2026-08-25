@@ -181,6 +181,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
         reason: "system_token_miser_pass_through",
       },
       tokenMiserAccounting: {
+        disposition: "passed_through",
         baselineParentTokens: 6_000,
         revealedParentTokens: 6_000,
       },
