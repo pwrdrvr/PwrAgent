@@ -172,10 +172,11 @@ export function buildTokenMiserRoughEdges(
       edges.push({
         detail:
           `The agent read ${formatCompactTokens(entry.retrievedTokens)} of the `
-          + `${formatCompactTokens(entry.baselineParentTokens)} baseline back, so most of the payload reached the parent anyway.`,
+          + `${formatCompactTokens(entry.baselineParentTokens)} baseline back. The gate still saved `
+          + `${formatCompactTokens(entry.estimatedParentTokensSaved)}, but most of the payload reached the parent anyway.`,
         key: entry.objectId,
         kind: "leak",
-        label: "Retrieval defeated it",
+        label: "Most output retrieved",
         title: command,
         value: `${formatCompactTokens(entry.estimatedParentTokensSaved)} net`,
       });

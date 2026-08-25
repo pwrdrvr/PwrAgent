@@ -757,6 +757,8 @@ describe("buildTokenMiserRoughEdges", () => {
     });
     expect(edges).toHaveLength(1);
     expect(edges[0]?.kind).toBe("leak");
+    expect(edges[0]?.label).toBe("Most output retrieved");
+    expect(edges[0]?.detail).toContain("The gate still saved 3.7k");
   });
 
   // Grouping keys on the resolved command, so the fixture has to supply the
