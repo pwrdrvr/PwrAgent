@@ -250,7 +250,7 @@ export function isTokenMiserPostToolUsePayload(
       record.parent_intent === undefined
       || (
         typeof record.parent_intent === "string"
-        && [...record.parent_intent].length <= 4_000
+        && hasAtMostUnicodeScalars(record.parent_intent, 4_000)
       )
     )
     && (
@@ -284,7 +284,7 @@ export function isTokenMiserCodeModeOutputPayload(
       record.parent_intent === undefined
       || (
         typeof record.parent_intent === "string"
-        && [...record.parent_intent].length <= 4_000
+        && hasAtMostUnicodeScalars(record.parent_intent, 4_000)
       )
     )
     && isNonEmptyString(record.script_status)
@@ -347,6 +347,17 @@ function isCodeModeTextContentItem(
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function hasAtMostUnicodeScalars(value: string, maximum: number): boolean {
+  let count = 0;
+  for (const _character of value) {
+    count += 1;
+    if (count > maximum) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function hasOnlyKeys(

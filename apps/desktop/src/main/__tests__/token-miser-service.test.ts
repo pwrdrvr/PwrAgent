@@ -150,6 +150,12 @@ describe("TokenMiserService", () => {
       objectId: metadata!.objectId,
       threadId: "thread-1",
     })).toBeUndefined();
+    expect(await store.summarizeThreadUsage("thread-1")).toMatchObject({
+      interceptionCount: 1,
+      passThroughCount: 1,
+      estimatedParentTokensSaved: 0,
+      replacementTokens: 6,
+    });
     expect(onInterceptionStored).toHaveBeenCalledWith(metadata);
   });
 

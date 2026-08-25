@@ -711,6 +711,7 @@ function buildSummaryPrompt(
     `Tool: ${payload.tool_name}`,
     `Visible parent intent before the call: ${payload.parent_intent ?? "Not available"}`,
     `Tool input: ${serializeToolResponse(payload.tool_input)}`,
+    "Ordinary model-visible output cap: 10000 estimated tokens",
     `Output characters: ${output.length}`,
     "",
     "Tool output:",
@@ -747,6 +748,7 @@ function buildGroupedCodeModeSummaryPrompt(
     `Visible parent intent before the cell: ${payload.parent_intent ?? "Not available"}`,
     `Script status: ${payload.script_status}`,
     `Script: ${payload.script ?? "Not available"}`,
+    `Model-visible output budget: ${payload.max_output_tokens} tokens`,
     "Return one factual group summary and one factual summary for every toolCallId.",
     "Broad parallel probes are expected. Do not recommend serial follow-up operations.",
     ...members.flatMap((member, index) => [
