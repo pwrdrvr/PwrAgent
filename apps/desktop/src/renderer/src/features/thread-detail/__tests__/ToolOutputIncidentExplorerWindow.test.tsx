@@ -53,6 +53,33 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     await waitFor(() => expect(copyText).toHaveBeenCalledWith("thread-1"));
   });
 
+  it("names the active savings lens in the breadcrumb", async () => {
+    const response = buildResponse();
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 1,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementTokens: 300,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 9_700,
+      interceptions: [],
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash =
+      "#tool-output-incidents/codex/thread-1/Noisy%20work/PwrAgent";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    await screen.findByRole("tab", { name: /Savings/, selected: true });
+    expect(screen.getByLabelText(
+      "PwrAgent > Noisy work > Token Miser Savings",
+    )).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: /Incidents/ }));
+    expect(screen.getByLabelText(
+      "PwrAgent > Noisy work > Tool Output Incidents",
+    )).toBeInTheDocument();
+  });
+
   it("shows Codex output whose normalized detail id extends the invocation item id", async () => {
     installApi({ readThread: async () => buildResponse() });
     window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";

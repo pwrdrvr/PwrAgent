@@ -26699,6 +26699,11 @@ export class DesktopBackendRegistry {
     if (!updated.some(Boolean)) {
       return;
     }
+    await this.publishLiveTokenMiserReplayEntries(
+      updated.filter(
+        (entry): entry is TokenMiserObjectMetadata => entry !== undefined,
+      ),
+    );
     await this.emitThreadToolAccountingUpdated({
       backend: "codex",
       threadId,
@@ -27159,6 +27164,63 @@ export class DesktopBackendRegistry {
     await this.emitThreadPricingUpdated({
       backend: "codex",
       threadId: entry.threadId,
+    });
+  }
+
+  /**
+   * Refresh every live gate card once after a parent request advances replay
+   * accounting. The store updates N objects for one request boundary; doing a
+   * full pricing read and renderer publish from each metadata callback would
+   * turn that into N reads and 2N notifications. Active v2 entries already
+   * carry their parent model and helper usage, so rebuild them together from
+   * the in-memory usage lines and emit one sub-agent snapshot.
+   */
+  private async publishLiveTokenMiserReplayEntries(
+    entries: readonly TokenMiserObjectMetadata[],
+  ): Promise<void> {
+    const first = entries[0];
+    if (this.closed || !first) {
+      return;
+    }
+    const threadId = first.threadId;
+    const liveSubAgents = this.liveTokenMiserSubAgents.get(threadId)
+      ?? new Map<string, ThreadSubAgentSummary>();
+    const liveUsageLines = this.liveTokenMiserUsageLines.get(threadId)
+      ?? new Map<string, ThreadUsageLineRecord>();
+    for (const entry of entries) {
+      if (entry.threadId !== threadId) {
+        continue;
+      }
+      const artifact = this.buildTokenMiserLedgerArtifact({
+        entry,
+        pricingLines: [...liveUsageLines.values()],
+      });
+      liveSubAgents.set(artifact.subAgent.monitorId, artifact.subAgent);
+      if (artifact.gateUsageLine) {
+        liveUsageLines.set(
+          artifact.gateUsageLine.usageLineId,
+          artifact.gateUsageLine,
+        );
+      }
+    }
+    this.liveTokenMiserSubAgents.set(threadId, liveSubAgents);
+    this.liveTokenMiserUsageLines.set(threadId, liveUsageLines);
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId,
+    });
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId,
+          subAgents: this.mergeLiveTokenMiserSubAgents(
+            threadId,
+            overlay?.subAgents,
+          ),
+        },
+      },
     });
   }
 

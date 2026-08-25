@@ -445,6 +445,10 @@ export function ToolOutputIncidentExplorerWindow() {
     }
   };
 
+  const breadcrumbCurrent = showSavingsLens && lens === "savings"
+    ? "Token Miser Savings"
+    : "Tool Output Incidents";
+
   return (
     <div className="incident-explorer">
       <header className="activity-titlebar">
@@ -455,7 +459,7 @@ export function ToolOutputIncidentExplorerWindow() {
           aria-label={[
             route.projectLabel,
             route.title,
-            "Tool Output Incidents",
+            breadcrumbCurrent,
           ].filter(Boolean).join(" > ")}
           className="activity-titlebar__breadcrumb"
         >
@@ -487,7 +491,7 @@ export function ToolOutputIncidentExplorerWindow() {
             }}
           />
           <span aria-hidden="true" className="activity-titlebar__separator">›</span>
-          <span className="activity-titlebar__current">Tool Output Incidents</span>
+          <span className="activity-titlebar__current">{breadcrumbCurrent}</span>
         </div>
         <span className="chip chip--backend">
           {formatBackendLabel(route.backend)}

@@ -4,6 +4,7 @@ import path from "node:path";
 import type {
   AgentEvent,
   NavigationSnapshot,
+  ThreadSubAgentSummary,
   ThreadToolInvocationRecord,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
@@ -12,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DesktopBackendRegistry } from "../app-server/backend-registry";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
+import { TokenMiserStore } from "../token-miser/token-miser-store";
 
 describe("DesktopBackendRegistry Token Miser ledger", () => {
   let directory: string;
@@ -451,6 +453,96 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
         line.sourceItemId === "system:token-miser:gate-live"
       ),
     ).toHaveLength(1);
+  });
+
+  it("republishes live gate-card savings when cached replays accrue", async () => {
+    const objectId = "11111111-1111-4111-8111-111111111111";
+    const tokenMiserStore = new TokenMiserStore(
+      path.join(directory, "token-miser-objects"),
+    );
+    const entry = await tokenMiserStore.store({
+      baselineCharacters: 24_000,
+      helperUsage: metadata("gate-live", "helper-live").helperUsage,
+      objectId,
+      output: "x".repeat(24_000),
+      parentCumulativeInputTokens: 1_000,
+      parentModel: "gpt-5.6-terra",
+      parentServiceTier: "standard",
+      replacementCharacters: 900,
+      summary: {
+        summary: "The command returned a large result.",
+        usefulDetails: [],
+      },
+      threadId: "thread-parent",
+      toolName: "commandExecution",
+      toolUseId: "tool-live",
+      turnId: "turn-parent",
+    });
+    const internals = registry as unknown as {
+      publishLiveTokenMiserLedgerEntry(
+        metadata: TokenMiserObjectMetadata,
+      ): Promise<void>;
+      rememberActiveTokenMiserReplayEntry(
+        metadata: TokenMiserObjectMetadata,
+      ): void;
+      tokenMiserStore?: TokenMiserStore;
+    };
+    internals.tokenMiserStore = tokenMiserStore;
+    internals.rememberActiveTokenMiserReplayEntry(entry);
+
+    const events: AgentEvent[] = [];
+    registry.onEvent((event) => {
+      events.push(event);
+    });
+    const readAccounting = (event: AgentEvent | undefined) => {
+      const params = event?.notification.params as
+        | { subAgents?: ThreadSubAgentSummary[] }
+        | undefined;
+      return params?.subAgents?.[0]?.tokenMiserAccounting;
+    };
+    await internals.publishLiveTokenMiserLedgerEntry(entry);
+    const initialAccounting = readAccounting(events.find(
+      (event) => event.notification.method === "thread/subAgents/updated",
+    ));
+    expect(initialAccounting?.cachedReplayCount).toBe(0);
+    events.length = 0;
+
+    for (const inputTokens of [2_000, 3_000, 4_000]) {
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "thread/tokenUsage/updated",
+          params: {
+            threadId: "thread-parent",
+            turnId: "turn-parent",
+            tokenUsage: {
+              last: {
+                inputTokens,
+                cachedInputTokens: inputTokens - 100,
+                outputTokens: 0,
+                reasoningOutputTokens: 0,
+                totalTokens: inputTokens,
+              },
+              total: {
+                inputTokens,
+                cachedInputTokens: inputTokens - 100,
+                outputTokens: 0,
+                reasoningOutputTokens: 0,
+                totalTokens: inputTokens,
+              },
+            },
+          },
+        },
+      });
+    }
+
+    const replayEvents = events.filter(
+      (event) => event.notification.method === "thread/subAgents/updated",
+    );
+    const replayAccounting = readAccounting(replayEvents.at(-1));
+    expect(replayAccounting?.cachedReplayCount).toBe(1);
+    expect(replayAccounting?.savingsMicros)
+      .toBeGreaterThan(initialAccounting?.savingsMicros ?? 0);
   });
 });
 
