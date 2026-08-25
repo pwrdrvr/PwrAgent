@@ -240,6 +240,33 @@ describe("SqliteOverlayStore thread usage pricing ledger", () => {
     expect(pricing.summaries[0]).not.toHaveProperty("observedColdReplayCount");
   });
 
+  it("persists final and peak context in the existing turn usage update", async () => {
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        finalContextTokens: 243_864,
+        modelContextWindow: 258_400,
+        peakContextTokens: 243_864,
+      }),
+    });
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        finalContextTokens: 131_443,
+        modelContextWindow: 258_400,
+        peakContextTokens: 131_443,
+      }),
+    });
+
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(pricing.lines[0]).toMatchObject({
+      finalContextTokens: 131_443,
+      modelContextWindow: 258_400,
+      peakContextTokens: 243_864,
+    });
+  });
+
   it("preserves a persisted observed tally when the same line re-upserts without one", async () => {
     await store.upsertThreadUsageLine({
       line: buildUsageLine({

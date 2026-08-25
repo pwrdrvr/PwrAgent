@@ -101,6 +101,48 @@ describe("SubAgentsPanel", () => {
     expect(savings).toHaveTextContent("$0.021");
   });
 
+  it("identifies a policy pass-through that did not invoke Luna", () => {
+    render(
+      <SubAgentsPanel
+        thread={{
+          ...thread,
+          subAgents: [{
+            monitorId: "system:token-miser:policy-1",
+            task: "Evaluate Code Mode output",
+            status: "success",
+            createdAt: 1_800_000_000_000,
+            updatedAt: 1_800_000_000_100,
+            backend: "codex",
+            agentName: "Token Miser",
+            tokenMiserAccounting: {
+              currency: "USD",
+              decisionSource: "policy",
+              disposition: "passed_through",
+              originalModel: "gpt-5.6-sol",
+              baselineParentTokens: 1_000,
+              baselineParentCostMicros: 2_500,
+              cachedReplayCount: 0,
+              cachedBaselineTokens: 0,
+              cachedBaselineCostMicros: 0,
+              gateModel: "policy",
+              gateTotalTokens: 0,
+              gateCostMicros: 0,
+              revealedParentTokens: 1_000,
+              revealedParentCostMicros: 2_500,
+              cachedRevealedTokens: 0,
+              cachedRevealedCostMicros: 0,
+              savingsMicros: 0,
+            },
+          }],
+        }}
+      />,
+    );
+
+    const savings = screen.getByLabelText("Token Miser savings");
+    expect(within(savings).getByText("2 · Policy evaluation")).toBeInTheDocument();
+    expect(savings).toHaveTextContent("No helper model invoked");
+  });
+
   it("stops a running sub-agent and refreshes navigation", async () => {
     const stopSubAgent = vi.fn(async () => ({
       backend: "codex" as const,

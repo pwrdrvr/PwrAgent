@@ -3504,7 +3504,7 @@ describe("DesktopBackendRegistry", () => {
                 "token-miser-test",
                 "code-mode-reducer.test.json",
               ),
-              min_trigger_bytes: 5_000,
+              min_trigger_bytes: 0,
               timeout_ms: 55_000,
             },
           },
@@ -22718,6 +22718,57 @@ command = "pnpm dev"
       uncachedInputTokens: 800,
     });
     expect(pricing.lines[0]?.cumulativeTotalCostMicros).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("folds final and peak protocol context observations into the existing usage row", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/read"] },
+    });
+    const overlayStore = createOverlayStoreMock();
+    const registry = new DesktopBackendRegistry({ codexClient, overlayStore });
+
+    for (const [lastTotalTokens, cumulativeTotalTokens] of [
+      [243_864, 243_864],
+      [131_443, 375_307],
+    ]) {
+      await codexClient.emit({
+        method: "thread/tokenUsage/updated",
+        params: {
+          threadId: "thread-context",
+          turnId: "turn-context",
+          tokenUsage: {
+            model_context_window: 258_400,
+            last: {
+              inputTokens: lastTotalTokens,
+              cachedInputTokens: Math.max(0, lastTotalTokens - 1_000),
+              outputTokens: 0,
+              reasoningOutputTokens: 0,
+              totalTokens: lastTotalTokens,
+            },
+            total: {
+              inputTokens: cumulativeTotalTokens,
+              cachedInputTokens: Math.max(0, cumulativeTotalTokens - 2_000),
+              outputTokens: 0,
+              reasoningOutputTokens: 0,
+              totalTokens: cumulativeTotalTokens,
+            },
+          },
+        },
+      });
+    }
+
+    const pricing = await overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-context",
+    });
+    expect(pricing.lines).toHaveLength(1);
+    expect(pricing.lines[0]).toMatchObject({
+      finalContextTokens: 131_443,
+      modelContextWindow: 258_400,
+      peakContextTokens: 243_864,
+    });
 
     await registry.close();
   });

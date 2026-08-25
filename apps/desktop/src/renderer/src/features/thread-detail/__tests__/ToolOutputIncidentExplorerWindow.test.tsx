@@ -141,6 +141,15 @@ describe("ToolOutputIncidentExplorerWindow", () => {
       interceptions: [],
       codeMode: {
         callCount: 2,
+        commandCellCount: 2,
+        directCommandCellCount: 2,
+        dispatchClusterCount: 2,
+        multiInvocationClusterCount: 0,
+        largestDispatchCluster: 1,
+        nestedCommandInvocationCount: 2,
+        patchCellCount: 0,
+        otherCellCount: 0,
+        pollingCellCount: 0,
         directCount: 2,
         summarizedCount: 0,
         passThroughCount: 0,
@@ -154,13 +163,82 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     render(<ToolOutputIncidentExplorerWindow />);
 
     expect(await screen.findByText(/2 Code Mode calls/)).toBeInTheDocument();
-    expect(screen.getByText(/2 ungated\/direct · 0 summarized/))
+    expect(screen.getByText(/2 direct command cells · 0 reducer decisions/))
       .toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Ungated Code Mode results" }))
       .toBeInTheDocument();
     expect(screen.getAllByRole("button", {
       name: /Code Mode4,00[01] charactersdirect/,
     })).toHaveLength(2);
+  });
+
+  it("keeps Code Mode calls, command cells, decisions, and dispatches distinct", async () => {
+    const response = buildResponse();
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 31,
+      passThroughCount: 7,
+      policyPassThroughCount: 5,
+      helperPassThroughCount: 2,
+      helperDecisionCount: 26,
+      originalCharacters: 100_000,
+      baselineParentTokens: 25_000,
+      replacementTokens: 3_000,
+      retrievedTokens: 1_643,
+      estimatedParentTokensSaved: 20_357,
+      interceptions: [],
+      codeMode: {
+        callCount: 143,
+        commandCellCount: 121,
+        directCommandCellCount: 90,
+        dispatchClusterCount: 121,
+        multiInvocationClusterCount: 1,
+        largestDispatchCluster: 2,
+        nestedCommandInvocationCount: 122,
+        patchCellCount: 4,
+        otherCellCount: 17,
+        pollingCellCount: 3,
+        directCount: 90,
+        summarizedCount: 24,
+        passThroughCount: 7,
+        retrievalCount: 1,
+        capturedNestedInvocationCount: 130,
+        observations: [],
+      },
+    };
+    response.pricing = {
+      compactions: [{
+        backend: "codex",
+        threadId: "thread-1",
+        compactionId: "compaction-1",
+        observedAt: 1_800_000_000_000,
+        updatedAt: 1_800_000_000_100,
+        coldUsageLineId: "usage-cold-1",
+        coldUncachedTokens: 50_000,
+        coldCostMicros: 250_000,
+      }],
+      lines: [buildContextUsageLine()],
+      summaries: [],
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    expect(await screen.findByText(
+      /143 Code Mode calls · 121 command-bearing cells · 122 nested command invocations · 1\.01 per command cell/,
+    )).toBeInTheDocument();
+    expect(screen.getByText(
+      /90 direct command cells · 31 reducer decisions/,
+    )).toBeInTheDocument();
+    expect(screen.getByText(
+      /31 decisions · 26 Luna evaluations · 5 policy pass-throughs · 2 helper pass-throughs/,
+    )).toBeInTheDocument();
+    expect(screen.queryByText(/3\.94 per/)).not.toBeInTheDocument();
+    expect(screen.getByText(
+      /1 parent compactions · 50k compaction-attributed cold replay tokens · \$0\.25/,
+    )).toBeInTheDocument();
+    expect(screen.getByText(
+      /Peak context 244k \/ 258k \(94\.4%\) · final context 131k \/ 258k \(50\.9%\)/,
+    )).toBeInTheDocument();
   });
 
   // The summary is what the parent actually received in place of the payload.
@@ -322,10 +400,11 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     render(<ToolOutputIncidentExplorerWindow />);
 
     await screen.findByRole("tab", { name: /Savings/, selected: true });
-    expect(screen.getByText("Net saved on this thread")).toBeInTheDocument();
+    expect(screen.getByText("Estimated same-trajectory savings"))
+      .toBeInTheDocument();
     expect(screen.getByText("$0.35")).toBeInTheDocument();
-    expect(screen.getByText(/This thread cost/)).toHaveTextContent(
-      "This thread cost $0.36 · about $0.71 without Token Miser",
+    expect(screen.getByText(/Observed thread cost/)).toHaveTextContent(
+      "Observed thread cost $0.36 · estimated same-trajectory cost without filtering $0.71",
     );
     expect(screen.getByText("1 · Without the gate")).toBeInTheDocument();
     expect(screen.getByText("$0.68")).toBeInTheDocument();
@@ -503,6 +582,23 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     )).toBeInTheDocument();
     expect(screen.queryByText(/replayed on the \d+ later round trips in this turn/))
       .not.toBeInTheDocument();
+  });
+
+  it("does not present nested tool position as parent replay billing", async () => {
+    const response = buildResponse();
+    response.toolAccounting!.invocations[0]!.outputChars = 60_465;
+    response.toolAccounting!.invocations[0]!.estimatedOutputTokens = 15_117;
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    expect(await screen.findByText(
+      /Raw emitted: 60,465 characters\. Estimated parent-visible payload after the standard cap: up to 40,000 characters/,
+    )).toBeInTheDocument();
+    expect(screen.getByText(
+      /later recorded tool invocations\. This is not parent-request replay or billing evidence/,
+    )).toBeInTheDocument();
+    expect(screen.queryByText(/replayed on the/)).not.toBeInTheDocument();
   });
 
   it("shows historical output using the analyzer's normalized detail identity", async () => {
@@ -841,6 +937,34 @@ function installApi(api: Record<string, unknown>): void {
     configurable: true,
     value: api,
   });
+}
+
+function buildContextUsageLine() {
+  return {
+    backend: "codex",
+    cachedInputCostMicros: 0,
+    cachedInputTokens: 100_000,
+    createdAt: 1_800_000_000_000,
+    currency: "USD",
+    finalContextTokens: 131_443,
+    inputTokens: 131_000,
+    modelContextWindow: 258_400,
+    outputCostMicros: 0,
+    outputTokens: 443,
+    peakContextTokens: 243_864,
+    priceStatus: "priced" as const,
+    provider: "openai",
+    reasoningOutputTokens: 0,
+    scope: "turn" as const,
+    source: "live" as const,
+    status: "finalized" as const,
+    threadId: "thread-1",
+    totalCostMicros: 0,
+    totalTokens: 131_443,
+    uncachedInputCostMicros: 0,
+    uncachedInputTokens: 31_000,
+    usageLineId: "usage-context-1",
+  };
 }
 
 function buildResponse(

@@ -104,6 +104,7 @@ const CODE_MODE_REPLACEMENT_FENCE_HEADER = [
   "<untrusted_reduced_output>",
 ].join("");
 const CODE_MODE_REPLACEMENT_FENCE_FOOTER = "</untrusted_reduced_output>";
+const CODE_MODE_ACTIONABLE_STATE_TAG = "codex_actionable_state";
 export const CODE_MODE_CONTINUATION_GUIDANCE_V1 = [
   "Codex guidance: output reduction occurs only after the cell completes and does not change ",
   "nested tool results inside JavaScript. Keep broad, independent Code Mode operations batched ",
@@ -268,6 +269,10 @@ export class TokenMiserService {
       return undefined;
     }
     if (isDirectTokenMiserRetrievalInvocation(payload)) {
+      await this.options.store.confirmModelVisibleRetrievals({
+        output: serializeToolResponse(payload.tool_response),
+        threadId: payload.session_id,
+      });
       return undefined;
     }
     const output = serializeToolResponse(payload.tool_response);
@@ -335,6 +340,9 @@ export class TokenMiserService {
     const retrieval = isCodeModeTokenMiserRetrievalInvocation(
       payload.script ?? "",
     );
+    const nestedKinds = [...(capturedGroup?.members.values() ?? [])].map(
+      classifyCapturedGroupMember,
+    );
     const recordObservation = () => this.options.store.recordCodeModeObservation({
       threadId: payload.thread_id,
       turnId: payload.turn_id,
@@ -348,12 +356,51 @@ export class TokenMiserService {
       ...(payload.script ? { script: payload.script } : {}),
       retrieval,
       capturedNestedInvocationCount: capturedGroup?.members.size ?? 0,
+      capturedCommandInvocationCount: nestedKinds.filter(
+        (kind) => kind === "command",
+      ).length,
+      capturedPollingInvocationCount: nestedKinds.filter(
+        (kind) => kind === "polling",
+      ).length,
+      capturedPatchInvocationCount: nestedKinds.filter(
+        (kind) => kind === "patch",
+      ).length,
+      capturedOtherInvocationCount: nestedKinds.filter(
+        (kind) => kind === "other",
+      ).length,
     });
     if (retrieval) {
+      await this.options.store.confirmModelVisibleRetrievals({
+        output,
+        threadId: payload.thread_id,
+      });
       await recordObservation();
       return undefined;
     }
     if (output.length <= this.thresholdCharacters) {
+      await recordObservation();
+      return undefined;
+    }
+    const actionableNonterminalMember = [...(
+      capturedGroup?.members.values() ?? []
+    )].find(hasActionableNonterminalState);
+    if (actionableNonterminalMember) {
+      await this.recordPassThroughDecision({
+        threadId: payload.thread_id,
+        turnId: payload.turn_id,
+        toolUseId: payload.call_id,
+        toolName: "Code Mode",
+        output,
+        signal: options.signal,
+        baselineParentTokenCap: payload.max_output_tokens,
+        summary: {
+          summary:
+            "Passed through because the result contains a live process or session handle needed for a follow-up operation.",
+          usefulDetails: [
+            `Protected actionable state from ${actionableNonterminalMember.toolName} (${actionableNonterminalMember.toolCallId}).`,
+          ],
+        },
+      });
       await recordObservation();
       return undefined;
     }
@@ -409,7 +456,8 @@ export class TokenMiserService {
         + CODE_MODE_REPLACEMENT_FENCE_FOOTER.length,
         payload.max_output_tokens
         * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
-      ) + this.codeModeContinuationGuidanceCharacters(),
+      ) + this.codeModeContinuationGuidanceCharacters()
+        + this.codeModeActionableStateCharacters(payload),
     });
     if (!prepared) {
       await recordObservation();
@@ -422,6 +470,9 @@ export class TokenMiserService {
     const response = {
       replacement: [{ type: "input_text" as const, text: prepared.replacement }],
       response_id: prepared.staged.metadata.objectId,
+      ...(payload.actionable_state
+        ? { actionable_state: payload.actionable_state }
+        : {}),
     };
     if (
       Buffer.byteLength(`${JSON.stringify(response)}\n`)
@@ -458,6 +509,19 @@ export class TokenMiserService {
     return this.options.codeModeContinuationGuidanceVersion?.() === 1
       ? CODE_MODE_CONTINUATION_GUIDANCE_V1.length
       : 0;
+  }
+
+  private codeModeActionableStateCharacters(
+    payload: TokenMiserCodeModeOutputPayload,
+  ): number {
+    if (!payload.actionable_state) {
+      return 0;
+    }
+    return (
+      `<${CODE_MODE_ACTIONABLE_STATE_TAG}>`.length
+      + JSON.stringify(payload.actionable_state).length
+      + `</${CODE_MODE_ACTIONABLE_STATE_TAG}>`.length
+    );
   }
 
   private async prepareGroupedCodeModeOutput(
@@ -549,7 +613,8 @@ export class TokenMiserService {
         + CODE_MODE_REPLACEMENT_FENCE_FOOTER.length,
         payload.max_output_tokens
         * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
-      ) + this.codeModeContinuationGuidanceCharacters(),
+      ) + this.codeModeContinuationGuidanceCharacters()
+        + this.codeModeActionableStateCharacters(payload),
       summary: parsed.summary,
       disposition: "summarized",
       groupId: payload.cell_id,
@@ -573,6 +638,9 @@ export class TokenMiserService {
     const response = {
       replacement: [{ type: "input_text" as const, text: replacement }],
       response_id: staged.metadata.objectId,
+      ...(payload.actionable_state
+        ? { actionable_state: payload.actionable_state }
+        : {}),
     };
     if (
       Buffer.byteLength(`${JSON.stringify(response)}\n`)
@@ -766,6 +834,24 @@ export class TokenMiserService {
     });
     await this.withStoredNotification(staged).commit();
   }
+}
+
+function hasActionableNonterminalState(member: CapturedGroupMember): boolean {
+  const output = member.output;
+  const hasSessionOrProcessHandle = /(?:session|process)[_\s-]*id\b/i.test(output);
+  const hasChunkHandle = /chunk[_\s-]*id\b/i.test(output);
+  const hasRunningState = /\b(?:in[_\s-]*progress|running|still running|yielded)\b/i
+    .test(output);
+  const hasTerminalState = /(?:exit[_\s-]*code\s*[":=]+\s*-?\d+|script completed|\bcompleted\b)/i
+    .test(output);
+  return (
+    hasSessionOrProcessHandle
+    && !hasTerminalState
+  ) || (
+    hasChunkHandle
+    && hasRunningState
+    && !hasTerminalState
+  );
 }
 
 const INSTRUCTION_FILE_PATTERN = /(?:^|[/\\])(?:AGENTS|CLAUDE|SKILL)\.md\b|(?:^|[/\\])UI-THEME\.md\b|(?:^|[/\\])[^\s"']*style-guide\.md\b/i;
@@ -988,6 +1074,41 @@ function capturedGroupKey(
   cellId: string,
 ): string {
   return JSON.stringify([threadId, turnId, cellId]);
+}
+
+function classifyCapturedGroupMember(
+  member: CapturedGroupMember,
+): "command" | "other" | "patch" | "polling" {
+  const name = member.toolName.toLowerCase();
+  const input = member.toolInput.toLowerCase();
+  if (
+    name.includes("write_stdin")
+    || name.includes("wait")
+    || name.includes("poll")
+    || (
+      (input.includes('"session_id"') || input.includes('"cell_id"'))
+      && !input.includes('"cmd"')
+    )
+  ) {
+    return "polling";
+  }
+  if (
+    name.includes("apply_patch")
+    || name.includes("patch")
+  ) {
+    return "patch";
+  }
+  if (
+    name.includes("bash")
+    || name.includes("command")
+    || name.includes("exec")
+    || name.includes("read")
+    || name.includes("search")
+    || name.includes("shell")
+  ) {
+    return "command";
+  }
+  return "other";
 }
 
 function isDirectTokenMiserRetrievalInvocation(

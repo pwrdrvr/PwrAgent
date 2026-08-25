@@ -7,6 +7,7 @@ import type {
   AppServerThreadActivityDetail,
   ThreadToolAccounting,
   ThreadToolAnalysisCoverage,
+  ThreadCompactionRecord,
   ThreadTokenMiserSavings,
   ThreadToolInvocationRecord,
 } from "@pwragent/shared";
@@ -55,6 +56,7 @@ import {
 } from "./tool-output-incident-insights";
 
 const HISTORY_PAGE_LIMIT = 100;
+const DEFAULT_MODEL_VISIBLE_TOOL_OUTPUT_CAP_CHARACTERS = 40_000;
 
 export function ToolOutputIncidentExplorerWindow() {
   const desktopApi = useDesktopApi();
@@ -273,6 +275,10 @@ export function ToolOutputIncidentExplorerWindow() {
     [allInvocations, largeOutputThresholdChars, turnScope, usageLines],
   );
   const currency = usageLines?.[0]?.currency;
+  const contextWindowSummary = useMemo(
+    () => buildContextWindowSummary(usageLines ?? []),
+    [usageLines],
+  );
   const composition = useMemo(() => buildCategoryComposition(flagged), [flagged]);
   /* Which refined categories the active legend entry stands for. "Other" is a
      real set, not a leftover, so selecting it filters to its members. */
@@ -546,6 +552,8 @@ export function ToolOutputIncidentExplorerWindow() {
       {lens === "savings" ? (
         <TokenMiserSavingsLens
           comparison={tokenMiserComparison}
+          compactions={latest?.pricing?.compactions ?? []}
+          contextWindow={contextWindowSummary}
           {...(currency ? { currency } : {})}
           gateCostMicros={tokenMiserGateCostMicros}
           gateTokens={tokenMiserGateTokens}
@@ -652,7 +660,7 @@ export function ToolOutputIncidentExplorerWindow() {
                   savedTokens: totalEstimatedParentTokensSaved,
                   toolCallCount: allInvocations.length,
                 })
-              : "Token Miser is on, but nothing in this thread was gated."}
+              : "No historical Token Miser observations were recorded for this thread."}
           </span>
           <span className="incident-explorer__token-miser-spacer" />
           <button
@@ -843,12 +851,20 @@ export function ToolOutputIncidentExplorerWindow() {
                         </p>
                       </>
                     ) : (
-                      <p className="incident-explorer__caption">
-                        {selected.outputChars.toLocaleString()} raw chars emitted ·{" "}
-                        {laterTripsInTurn > 0
-                          ? `replayed on the ${laterTripsInTurn.toLocaleString()} later round ${laterTripsInTurn === 1 ? "trip" : "trips"} in this turn`
-                          : "no later round trips in this turn replayed it"}
-                      </p>
+                      <>
+                        <p className="incident-explorer__caption">
+                          Raw emitted: {selected.outputChars.toLocaleString()} characters.
+                          {" Estimated parent-visible payload after the standard cap: up to "}
+                          {Math.min(
+                            selected.outputChars,
+                            DEFAULT_MODEL_VISIBLE_TOOL_OUTPUT_CAP_CHARACTERS,
+                          ).toLocaleString()} characters, before the outer status envelope.
+                        </p>
+                        <p className="incident-explorer__caption">
+                          {laterTripsInTurn.toLocaleString()} later recorded tool invocations.
+                          {" This is not parent-request replay or billing evidence."}
+                        </p>
+                      </>
                     )}
                   <p className="incident-explorer__reason">
                     {selected.noisyReason ?? "large output"}
@@ -1056,6 +1072,8 @@ function SavingsConfidence(props: { savings: ThreadTokenMiserSavings }) {
 
 function TokenMiserSavingsLens(props: {
   comparison?: TokenMiserContextComparison;
+  compactions: readonly ThreadCompactionRecord[];
+  contextWindow?: TokenMiserContextWindowSummary;
   currency?: string;
   gateCostMicros: number;
   gateTokens: number;
@@ -1069,8 +1087,8 @@ function TokenMiserSavingsLens(props: {
     return (
       <div className="incident-explorer__savings">
         <p className="incident-explorer__savings-empty">
-          Token Miser is on, but nothing in this thread was gated. Large tool
-          output is intercepted once a call clears the size threshold.
+          No Token Miser observations were recorded for this thread. Current
+          profile activation does not establish its historical turn setting.
         </p>
       </div>
     );
@@ -1079,11 +1097,11 @@ function TokenMiserSavingsLens(props: {
     return (
       <div className="incident-explorer__savings">
         <TokenMiserCodeModeStats
-          invocations={props.invocations}
           tokenMiser={tokenMiser}
         />
         <p className="incident-explorer__savings-empty">
-          No Code Mode result crossed Token Miser&apos;s evaluation threshold.
+          No reducer decision was recorded. Direct Code Mode results remain
+          listed separately when observation was available at run time.
         </p>
         <TokenMiserDirectList tokenMiser={tokenMiser} />
       </div>
@@ -1128,8 +1146,8 @@ function TokenMiserSavingsLens(props: {
             <>
               <p className="incident-explorer__eyebrow">
                 {savings.savingsMicros >= 0
-                  ? "Net saved on this thread"
-                  : "Net overhead on this thread"}
+                  ? "Estimated same-trajectory savings"
+                  : "Estimated same-trajectory overhead"}
               </p>
               <p className="incident-explorer__savings-figure">
                 <strong>
@@ -1141,18 +1159,17 @@ function TokenMiserSavingsLens(props: {
               </p>
               {props.threadCostMicros > 0 ? (
                 <p className="incident-explorer__savings-compare">
-                  This thread cost{" "}
+                  Observed thread cost{" "}
                   <b>
                     {formatMicrosCurrency(props.threadCostMicros, savings.currency)}
                   </b>
-                  {" · about "}
+                  {" · estimated same-trajectory cost without filtering "}
                   <b>
                     {formatMicrosCurrency(
                       props.threadCostMicros + savings.savingsMicros,
                       savings.currency,
                     )}
                   </b>
-                  {" without Token Miser"}
                 </p>
               ) : null}
               <SavingsConfidence savings={savings} />
@@ -1262,9 +1279,19 @@ function TokenMiserSavingsLens(props: {
           ? `${formatCompactTokens(tokenMiser.retrievedTokens)} read back later`
           : "nothing read back later"}
       </p>
+      <p className="incident-explorer__savings-caption">
+        {tokenMiser.interceptionCount.toLocaleString()} decisions
+        {" · "}{(tokenMiser.helperDecisionCount ?? 0).toLocaleString()} Luna evaluations
+        {" · "}{(tokenMiser.policyPassThroughCount ?? 0).toLocaleString()} policy pass-throughs
+        {" · "}{(tokenMiser.helperPassThroughCount ?? 0).toLocaleString()} helper pass-throughs
+      </p>
+      <TokenMiserCompactionStats
+        compactions={props.compactions}
+        contextWindow={props.contextWindow}
+        currency={props.currency}
+      />
 
       <TokenMiserCodeModeStats
-        invocations={props.invocations}
         tokenMiser={tokenMiser}
       />
       <TokenMiserGateList entries={props.gates} />
@@ -1273,17 +1300,109 @@ function TokenMiserSavingsLens(props: {
   );
 }
 
+function TokenMiserCompactionStats(props: {
+  compactions: readonly ThreadCompactionRecord[];
+  contextWindow?: TokenMiserContextWindowSummary;
+  currency?: string;
+}) {
+  const coldReplayTokens = props.compactions.reduce(
+    (total, entry) => total + (entry.coldUncachedTokens ?? 0),
+    0,
+  );
+  const coldReplayCostMicros = props.compactions.reduce(
+    (total, entry) => total + (entry.coldCostMicros ?? 0),
+    0,
+  );
+  return (
+    <section className="incident-explorer__gates" aria-label="Context boundaries">
+      <div className="incident-explorer__gates-head">
+        <p className="incident-explorer__eyebrow">Context boundaries</p>
+      </div>
+      <p className="incident-explorer__savings-caption">
+        {props.compactions.length.toLocaleString()} parent compactions
+        {" · "}{formatCompactTokens(coldReplayTokens)} compaction-attributed cold replay tokens
+        {" · "}{coldReplayCostMicros > 0
+          ? formatMicrosCurrency(coldReplayCostMicros, props.currency ?? "USD")
+          : "no attributed cold-replay cost"}
+      </p>
+      <p className="incident-explorer__savings-caption">
+        Token Miser replay savings stop at each recorded compaction boundary.
+      </p>
+      {props.contextWindow ? (
+        <p className="incident-explorer__savings-caption">
+          Peak context {formatContextWindowPoint(
+            props.contextWindow.peakTokens,
+            props.contextWindow.peakModelContextWindow,
+          )}
+          {" · "}final context {formatContextWindowPoint(
+            props.contextWindow.finalTokens,
+            props.contextWindow.finalModelContextWindow,
+          )}
+          {props.contextWindow.peakTokens
+            / props.contextWindow.peakModelContextWindow >= 0.85
+            ? " · warning: this thread approached the context limit"
+            : ""}
+        </p>
+      ) : (
+        <p className="incident-explorer__savings-caption">
+          Peak and final context were not observed by this PwrAgent version.
+        </p>
+      )}
+    </section>
+  );
+}
+
+type TokenMiserContextWindowSummary = {
+  finalModelContextWindow: number;
+  finalTokens: number;
+  peakModelContextWindow: number;
+  peakTokens: number;
+};
+
+function buildContextWindowSummary(
+  lines: NonNullable<AppServerReadThreadResponse["pricing"]>["lines"],
+): TokenMiserContextWindowSummary | undefined {
+  const observed = lines.filter((line) =>
+    line.scope === "turn"
+    && typeof line.finalContextTokens === "number"
+    && typeof line.peakContextTokens === "number"
+    && typeof line.modelContextWindow === "number"
+    && line.modelContextWindow > 0
+  );
+  if (observed.length === 0) {
+    return undefined;
+  }
+  const latest = [...observed].sort(
+    (left, right) =>
+      (right.completedAt ?? right.createdAt)
+      - (left.completedAt ?? left.createdAt),
+  )[0]!;
+  const peak = [...observed].sort(
+    (left, right) =>
+      right.peakContextTokens! / right.modelContextWindow!
+      - left.peakContextTokens! / left.modelContextWindow!,
+  )[0]!;
+  return {
+    finalModelContextWindow: latest.modelContextWindow!,
+    finalTokens: latest.finalContextTokens!,
+    peakModelContextWindow: peak.modelContextWindow!,
+    peakTokens: peak.peakContextTokens!,
+  };
+}
+
+function formatContextWindowPoint(tokens: number, window: number): string {
+  return `${formatCompactTokens(tokens)} / ${formatCompactTokens(window)} (${(
+    tokens / window * 100
+  ).toFixed(1)}%)`;
+}
+
 function TokenMiserCodeModeStats(props: {
-  invocations: ThreadToolInvocationRecord[];
   tokenMiser: NonNullable<ThreadToolAccounting["tokenMiser"]>;
 }) {
   const codeMode = props.tokenMiser.codeMode;
   if (!codeMode || codeMode.callCount === 0) return null;
-  const clusters = buildDispatchClusters(props.invocations);
-  const multiClusters = clusters.filter((size) => size > 1);
-  const pollingInvocations = props.invocations.filter(
-    (invocation) => invocation.category === "polling",
-  ).length;
+  const commandCells = codeMode.commandCellCount ?? 0;
+  const nestedCommands = codeMode.nestedCommandInvocationCount ?? 0;
   return (
     <section className="incident-explorer__gates" aria-label="Code Mode behavior">
       <div className="incident-explorer__gates-head">
@@ -1291,20 +1410,26 @@ function TokenMiserCodeModeStats(props: {
       </div>
       <p className="incident-explorer__savings-caption">
         {codeMode.callCount.toLocaleString()} Code Mode calls
-        {" · "}{props.invocations.length.toLocaleString()} recorded tool invocations
-        {" · "}{(props.invocations.length / codeMode.callCount).toFixed(2)} per call
-        {" · "}{clusters.length.toLocaleString()} dispatch clusters
-        {" · "}{multiClusters.length.toLocaleString()} multi-invocation
-        {multiClusters.length > 0
-          ? ` (largest ${Math.max(...multiClusters).toLocaleString()})`
+        {" · "}{commandCells.toLocaleString()} command-bearing cells
+        {" · "}{nestedCommands.toLocaleString()} nested command invocations
+        {" · "}{commandCells > 0
+          ? (nestedCommands / commandCells).toFixed(2)
+          : "0.00"} per command cell
+        {" · "}{(codeMode.dispatchClusterCount ?? 0).toLocaleString()} dispatch clusters
+        {" · "}{(codeMode.multiInvocationClusterCount ?? 0).toLocaleString()} multi-invocation
+        {(codeMode.multiInvocationClusterCount ?? 0) > 0
+          ? ` (largest ${(codeMode.largestDispatchCluster ?? 0).toLocaleString()})`
           : ""}
       </p>
       <p className="incident-explorer__savings-caption">
-        {codeMode.directCount.toLocaleString()} ungated/direct
+        {(codeMode.directCommandCellCount ?? 0).toLocaleString()} direct command cells
+        {" · "}{props.tokenMiser.interceptionCount.toLocaleString()} reducer decisions
         {" · "}{codeMode.summarizedCount.toLocaleString()} summarized
         {" · "}{codeMode.passThroughCount.toLocaleString()} explicit pass-through
+        {" · "}{(codeMode.patchCellCount ?? 0).toLocaleString()} patch cells
+        {" · "}{(codeMode.otherCellCount ?? 0).toLocaleString()} other cells
         {" · "}{codeMode.retrievalCount.toLocaleString()} retrieval cells
-        {" · "}{pollingInvocations.toLocaleString()} polling invocations
+        {" · "}{(codeMode.pollingCellCount ?? 0).toLocaleString()} polling cells
       </p>
     </section>
   );
@@ -1363,28 +1488,6 @@ function TokenMiserDirectList(props: {
       </ul>
     </section>
   );
-}
-
-function buildDispatchClusters(
-  invocations: ThreadToolInvocationRecord[],
-): number[] {
-  const ordered = [...invocations].sort((left, right) =>
-    (left.startedAt ?? left.observedAt) - (right.startedAt ?? right.observedAt)
-  );
-  const clusters: number[] = [];
-  let clusterEnd = Number.NEGATIVE_INFINITY;
-  for (const invocation of ordered) {
-    const start = invocation.startedAt ?? invocation.observedAt;
-    const end = invocation.completedAt ?? start;
-    if (clusters.length === 0 || start > clusterEnd) {
-      clusters.push(1);
-      clusterEnd = end;
-      continue;
-    }
-    clusters[clusters.length - 1] = clusters.at(-1)! + 1;
-    clusterEnd = Math.max(clusterEnd, end);
-  }
-  return clusters;
 }
 
 const GATE_FILTERS: Array<{

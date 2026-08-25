@@ -48,6 +48,15 @@ describe("TokenMiserStore", () => {
       interceptionCount: 0,
       codeMode: {
         callCount: 2,
+        commandCellCount: 1,
+        directCommandCellCount: 1,
+        dispatchClusterCount: 1,
+        multiInvocationClusterCount: 0,
+        largestDispatchCluster: 1,
+        nestedCommandInvocationCount: 1,
+        patchCellCount: 0,
+        otherCellCount: 0,
+        pollingCellCount: 0,
         directCount: 1,
         summarizedCount: 0,
         passThroughCount: 0,
@@ -75,8 +84,19 @@ describe("TokenMiserStore", () => {
     // The reason lets the registry skip a full ledger republish for writes that
     // only advance replay counters.
     expect(onMetadataUpdated).toHaveBeenLastCalledWith(metadata, "stored");
-    await store.readAll({
+    const result = await store.readAll({
       objectId: metadata.objectId,
+      threadId: "thread-owner",
+    });
+    const delivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId,
+      threadId: "thread-owner",
+      visibleText: result!.text,
+    });
+
+    expect(onMetadataUpdated).toHaveBeenCalledTimes(1);
+    await store.confirmModelVisibleRetrievals({
+      output: delivery!.text,
       threadId: "thread-owner",
     });
 
@@ -215,6 +235,24 @@ describe("TokenMiserStore", () => {
       endLine: 3,
       totalLines: 4,
       text: "needle one\nomega",
+    });
+    const searchDelivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId,
+      threadId: "thread-owner",
+      visibleText: JSON.stringify(search),
+    });
+    await store.confirmModelVisibleRetrievals({
+      output: searchDelivery!.text,
+      threadId: "thread-owner",
+    });
+    const readDelivery = await store.prepareRetrievalDelivery({
+      objectId: metadata.objectId,
+      threadId: "thread-owner",
+      visibleText: read!.text,
+    });
+    await store.confirmModelVisibleRetrievals({
+      output: readDelivery!.text,
+      threadId: "thread-owner",
     });
     expect(
       (await store.readMetadata(metadata.objectId))?.retrievedCharacters,

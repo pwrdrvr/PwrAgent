@@ -6,6 +6,7 @@ export function TokenMiserSavingsBreakdown(props: {
 }) {
   const accounting = props.accounting;
   const passedThrough = accounting.disposition === "passed_through";
+  const policyDecision = accounting.decisionSource === "policy";
   const savingsLabel = accounting.savingsMicros >= 0 ? "Savings" : "Net overhead";
   const cachedReplayCount = accounting.cachedReplayCount ?? 0;
   const cachedBaselineTokens = accounting.cachedBaselineTokens ?? 0;
@@ -36,11 +37,19 @@ export function TokenMiserSavingsBreakdown(props: {
         </dd>
       </div>
       <div>
-        <dt>{passedThrough ? "2 · Evaluation model" : "2 · Gate model"}</dt>
+        <dt>
+          {policyDecision
+            ? "2 · Policy evaluation"
+            : passedThrough
+              ? "2 · Evaluation model"
+              : "2 · Gate model"}
+        </dt>
         <dd>
           <strong>{formatTokenUsageMicrosAsUsd(accounting.gateCostMicros)}</strong>
           <span>
-            {accounting.gateTotalTokens.toLocaleString()} total · {accounting.gateModel}
+            {policyDecision
+              ? "No helper model invoked"
+              : `${accounting.gateTotalTokens.toLocaleString()} total · ${accounting.gateModel}`}
           </span>
         </dd>
       </div>

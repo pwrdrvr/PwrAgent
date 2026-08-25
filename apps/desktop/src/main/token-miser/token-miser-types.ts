@@ -13,11 +13,29 @@ const TOKEN_MISER_CODE_MODE_PAYLOAD_KEYS = new Set([
   "cell_id",
   "script",
   "parent_intent",
+  "actionable_state",
   "script_status",
   "max_output_tokens",
   "content_items",
 ]);
 const TOKEN_MISER_CODE_MODE_TEXT_ITEM_KEYS = new Set(["type", "text"]);
+const TOKEN_MISER_ACTIONABLE_STATE_KEYS = new Set(["version", "entries"]);
+const TOKEN_MISER_ACTIONABLE_STATE_ENTRY_KEYS = new Set([
+  "session_id",
+  "process_id",
+  "chunk_id",
+  "state",
+  "exit_code",
+  "required_follow_up",
+]);
+const TOKEN_MISER_REQUIRED_FOLLOW_UP_KEYS = new Set([
+  "operation",
+  "arguments",
+]);
+const TOKEN_MISER_WRITE_STDIN_ARGUMENT_KEYS = new Set([
+  "session_id",
+  "chars",
+]);
 const TOKEN_MISER_CODE_MODE_ACCEPTANCE_KEYS = new Set([
   "version",
   "response_id",
@@ -142,6 +160,24 @@ export type TokenMiserCodeModeTextContentItem = {
   text: string;
 };
 
+export type TokenMiserCodeModeActionableState = {
+  version: 1;
+  entries: Array<{
+    session_id: number;
+    process_id: number;
+    chunk_id: string;
+    state: "running" | "completed";
+    exit_code: number | null;
+    required_follow_up: {
+      operation: "write_stdin";
+      arguments: {
+        session_id: number;
+        chars: string;
+      };
+    } | null;
+  }>;
+};
+
 export type TokenMiserCodeModeObservation = {
   version: 1;
   observationId: string;
@@ -158,6 +194,10 @@ export type TokenMiserCodeModeObservation = {
   script?: string;
   retrieval: boolean;
   capturedNestedInvocationCount: number;
+  capturedCommandInvocationCount?: number;
+  capturedPollingInvocationCount?: number;
+  capturedPatchInvocationCount?: number;
+  capturedOtherInvocationCount?: number;
 };
 
 /**
@@ -175,6 +215,8 @@ export type TokenMiserCodeModeOutputPayload = {
   script?: string;
   /** Most recent model-visible assistant narration before this cell. */
   parent_intent?: string;
+  /** Codex-owned continuation state that every v2 response must echo exactly. */
+  actionable_state?: TokenMiserCodeModeActionableState;
   script_status: string;
   max_output_tokens: number;
   content_items: TokenMiserCodeModeTextContentItem[];
@@ -183,6 +225,7 @@ export type TokenMiserCodeModeOutputPayload = {
 export type TokenMiserCodeModeReductionOutput = {
   replacement: TokenMiserCodeModeTextContentItem[];
   response_id: string;
+  actionable_state?: TokenMiserCodeModeActionableState;
 } | {
   replacement: null;
 };
@@ -283,6 +326,65 @@ export function isTokenMiserPostToolUsePayload(
   );
 }
 
+function isCodeModeActionableState(
+  value: unknown,
+): value is TokenMiserCodeModeActionableState {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return hasOnlyKeys(record, TOKEN_MISER_ACTIONABLE_STATE_KEYS)
+    && record.version === 1
+    && Array.isArray(record.entries)
+    && record.entries.length > 0
+    && record.entries.length <= 64
+    && record.entries.every(isCodeModeActionableStateEntry);
+}
+
+function isCodeModeActionableStateEntry(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return hasOnlyKeys(record, TOKEN_MISER_ACTIONABLE_STATE_ENTRY_KEYS)
+    && isInt32(record.session_id)
+    && isInt32(record.process_id)
+    && isNonEmptyString(record.chunk_id)
+    && record.chunk_id.length <= 1_000
+    && (record.state === "running" || record.state === "completed")
+    && (record.exit_code === null || isInt32(record.exit_code))
+    && (
+      record.required_follow_up === null
+      || isCodeModeRequiredFollowUp(record.required_follow_up)
+    );
+}
+
+function isCodeModeRequiredFollowUp(value: unknown): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    !hasOnlyKeys(record, TOKEN_MISER_REQUIRED_FOLLOW_UP_KEYS)
+    || record.operation !== "write_stdin"
+    || !record.arguments
+    || typeof record.arguments !== "object"
+  ) {
+    return false;
+  }
+  const args = record.arguments as Record<string, unknown>;
+  return hasOnlyKeys(args, TOKEN_MISER_WRITE_STDIN_ARGUMENT_KEYS)
+    && isInt32(args.session_id)
+    && typeof args.chars === "string"
+    && args.chars.length <= 10_000;
+}
+
+function isInt32(value: unknown): value is number {
+  return Number.isInteger(value)
+    && (value as number) >= -2_147_483_648
+    && (value as number) <= 2_147_483_647;
+}
+
 export function isTokenMiserCodeModeOutputPayload(
   value: unknown,
 ): value is TokenMiserCodeModeOutputPayload {
@@ -304,6 +406,10 @@ export function isTokenMiserCodeModeOutputPayload(
         typeof record.parent_intent === "string"
         && hasAtMostUnicodeScalars(record.parent_intent, 4_000)
       )
+    )
+    && (
+      record.actionable_state === undefined
+      || isCodeModeActionableState(record.actionable_state)
     )
     && isNonEmptyString(record.script_status)
     && Number.isSafeInteger(record.max_output_tokens)

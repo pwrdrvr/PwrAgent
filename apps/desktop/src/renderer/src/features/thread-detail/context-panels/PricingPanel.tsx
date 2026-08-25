@@ -589,6 +589,12 @@ function TokenMiserTurnGroup(props: {
   );
   const unpricedCount = entries.length - priced.length;
   const count = props.gates.length;
+  const helperDecisionCount = entries.filter(
+    (entry) => entry.accounting?.decisionSource !== "policy",
+  ).length;
+  const policyDecisionCount = entries.filter(
+    (entry) => entry.accounting?.decisionSource === "policy",
+  ).length;
   const passThroughCount = entries.filter(
     (entry) => entry.accounting?.disposition === "passed_through"
       || entry.subAgent?.task.startsWith("Evaluate "),
@@ -614,6 +620,9 @@ function TokenMiserTurnGroup(props: {
         <span className="pricing-token-miser__label">Token Miser</span>
         <span className="pricing-token-miser__count">
           {count.toLocaleString()} {countLabel}
+          {policyDecisionCount > 0
+            ? ` · ${helperDecisionCount.toLocaleString()} helper · ${policyDecisionCount.toLocaleString()} policy`
+            : ""}
         </span>
         <span className="pricing-token-miser__verdict" data-negative={savingsMicros < 0}>
           {verdict}

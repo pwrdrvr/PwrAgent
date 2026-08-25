@@ -197,6 +197,45 @@ VALUES ('codex', 'thread-1', 'turn-1', 1000, '{"kind":"messaging"}');
     }
   });
 
+  it("runs both v54 and v55 migrations when upgrading a v53 database", () => {
+    const root = createTempRoot();
+    const dbPath = path.join(root, "state.db");
+    StateDb.open(dbPath).close();
+    const raw = new Database(dbPath);
+    raw.exec("DROP TABLE thread_compactions");
+    raw.exec("ALTER TABLE thread_usage_turns DROP COLUMN final_context_tokens");
+    raw.exec("ALTER TABLE thread_usage_turns DROP COLUMN peak_context_tokens");
+    raw.exec("ALTER TABLE thread_usage_turns DROP COLUMN model_context_window");
+    raw.pragma("user_version = 53");
+    raw.close();
+
+    const stateDb = StateDb.open(dbPath);
+    try {
+      expect(stateDb.raw.pragma("user_version", { simple: true })).toBe(
+        CURRENT_STATE_DB_USER_VERSION,
+      );
+      expect(
+        stateDb.raw
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'thread_compactions'",
+          )
+          .get(),
+      ).toEqual({ name: "thread_compactions" });
+      const usageColumns = stateDb.raw
+        .prepare("PRAGMA table_info(thread_usage_turns)")
+        .all() as Array<{ name: string }>;
+      expect(usageColumns.map((column) => column.name)).toEqual(
+        expect.arrayContaining([
+          "final_context_tokens",
+          "peak_context_tokens",
+          "model_context_window",
+        ]),
+      );
+    } finally {
+      stateDb.close();
+    }
+  });
+
   it("does not copy legacy default settings into a new named profile", () => {
     const root = createTempRoot();
     const pwragentHome = path.join(root, "pwragent");

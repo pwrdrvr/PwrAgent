@@ -1311,6 +1311,12 @@ describe("CodexAppServerClient", () => {
   it("reads the code-mode output reducer capability from the server", async () => {
     MockTransport.serverCapabilitiesResult = {
       codeModeOutputReducer: {
+        actionableState: {
+          version: 1,
+          reducerRequestField: "actionable_state",
+          reducerResponseField: "actionable_state",
+          modelOutputTag: "codex_actionable_state",
+        },
         continuationGuidanceVersion: 1,
         dynamicToolsResumeField: "dynamicTools",
         intentContextVersion: 1,
@@ -1330,6 +1336,12 @@ describe("CodexAppServerClient", () => {
 
     await expect(client.readServerCapabilities()).resolves.toEqual({
       codeModeOutputReducer: {
+        actionableState: {
+          version: 1,
+          reducerRequestField: "actionable_state",
+          reducerResponseField: "actionable_state",
+          modelOutputTag: "codex_actionable_state",
+        },
         continuationGuidanceVersion: 1,
         dynamicToolsResumeField: "dynamicTools",
         intentContextVersion: 1,

@@ -289,6 +289,12 @@ type InitializeResult = Partial<CodexInitializeResponse>;
 
 export type CodexServerCapabilities = {
   codeModeOutputReducer?: {
+    actionableState?: {
+      version: 1;
+      reducerRequestField: "actionable_state";
+      reducerResponseField: "actionable_state";
+      modelOutputTag: "codex_actionable_state";
+    };
     continuationGuidanceVersion?: number;
     dynamicToolsResumeField?: "dynamicTools";
     intentContextVersion?: 1;
@@ -7276,6 +7282,7 @@ export class CodexAppServerClient {
       ),
     );
     const outputReducer = asRecord(result?.codeModeOutputReducer);
+    const actionableState = asRecord(outputReducer?.actionableState);
     const protocolVersion = outputReducer?.protocolVersion;
     const continuationGuidanceVersion =
       outputReducer?.continuationGuidanceVersion;
@@ -7292,6 +7299,19 @@ export class CodexAppServerClient {
     return typeof protocolVersion === "number"
       ? {
           codeModeOutputReducer: {
+            ...(actionableState?.version === 1
+              && actionableState.reducerRequestField === "actionable_state"
+              && actionableState.reducerResponseField === "actionable_state"
+              && actionableState.modelOutputTag === "codex_actionable_state"
+              ? {
+                  actionableState: {
+                    version: 1 as const,
+                    reducerRequestField: "actionable_state" as const,
+                    reducerResponseField: "actionable_state" as const,
+                    modelOutputTag: "codex_actionable_state" as const,
+                  },
+                }
+              : {}),
             ...(typeof continuationGuidanceVersion === "number"
               ? { continuationGuidanceVersion }
               : {}),

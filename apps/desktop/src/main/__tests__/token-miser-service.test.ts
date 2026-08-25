@@ -606,7 +606,7 @@ describe("TokenMiserService code-mode reduction", () => {
       ],
     });
     expect((await store.readMetadata(metadata!.objectId))!.retrievedCharacters)
-      .toBeGreaterThan(0);
+      .toBe(0);
   });
 
   it("passes a coherent parallel group through without running a second generic evaluation", async () => {
@@ -661,6 +661,79 @@ describe("TokenMiserService code-mode reduction", () => {
     expect(metadata?.groupMembers).toBeUndefined();
   });
 
+  it("passes through parallel nonterminal results so their polling handles remain visible", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({
+      status: "failed" as const,
+      reason: "must not evaluate actionable session state",
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 10,
+      codeModeGroupingVersion: () => 1,
+    });
+    for (const [toolCallId, toolResponse] of [
+      [
+        "typecheck-call",
+        {
+          status: "running",
+          session_id: 101,
+          chunk_id: "typecheck-1",
+          output: "Typecheck is still running.",
+        },
+      ],
+      [
+        "eslint-call",
+        {
+          status: "running",
+          session_id: 102,
+          chunk_id: "eslint-1",
+          output: "ESLint is still running.",
+        },
+      ],
+    ] as const) {
+      await service.captureNestedPostToolUse({
+        ...payload("unused"),
+        is_code_mode_nested: true,
+        token_miser_grouping_version: 1,
+        code_mode_cell_id: "cell-1",
+        code_mode_tool_call_id: toolCallId,
+        tool_name: "exec_command",
+        tool_input: { cmd: toolCallId },
+        tool_response: toolResponse,
+      });
+    }
+
+    expect(await service.prepareCodeModeOutput(codeModePayload([{
+      type: "input_text",
+      text: [
+        "Both commands are running.",
+        "typecheck session_id=101 chunk_id=typecheck-1",
+        "eslint session_id=102 chunk_id=eslint-1",
+      ].join("\n"),
+    }]))).toBeUndefined();
+    expect(generateSummary).not.toHaveBeenCalled();
+    const [metadata] = await store.listMetadata();
+    expect(metadata).toMatchObject({
+      disposition: "passed_through",
+      toolName: "Code Mode",
+      summary: {
+        summary: expect.stringContaining("live process or session handle"),
+      },
+    });
+    expect(metadata?.helperUsage).toBeUndefined();
+    expect(await store.summarizeThreadUsage("thread-1")).toMatchObject({
+      codeMode: {
+        callCount: 1,
+        commandCellCount: 1,
+        nestedCommandInvocationCount: 2,
+        multiInvocationClusterCount: 1,
+      },
+    });
+  });
+
   it("uses the resolved code-mode budget as the original parent-token cap", async () => {
     const store = await createStore();
     const service = new TokenMiserService({
@@ -686,6 +759,44 @@ describe("TokenMiserService code-mode reduction", () => {
     const [metadata] = await store.listMetadata();
     expect(metadata!.baselineParentTokens).toBe(25);
     expect(metadata!.replacementCharacters).toBeLessThanOrEqual(100);
+  });
+
+  it("echoes Codex actionable state exactly and accounts for its model-visible envelope", async () => {
+    const store = await createStore();
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary: async () => ({
+        status: "ok",
+        object: {
+          disposition: "summarize",
+          summary: "Two validations are still running.",
+          usefulDetails: [],
+        },
+      }),
+      thresholdCharacters: 1,
+      codeModeContinuationGuidanceVersion: () => 1,
+    });
+    const actionableState = codeModeActionableState();
+
+    const response = await prepareAndCommit(service, {
+      ...codeModePayload([{
+        type: "input_text",
+        text: "Long validation output that the reducer may summarize.",
+      }]),
+      actionable_state: actionableState,
+    });
+
+    expect(response).toMatchObject({
+      actionable_state: actionableState,
+      response_id: expect.any(String),
+    });
+    const [metadata] = await store.listMetadata();
+    const authoritativeEnvelope =
+      `<codex_actionable_state>${JSON.stringify(actionableState)}</codex_actionable_state>`;
+    expect(metadata!.replacementCharacters).toBeGreaterThanOrEqual(
+      authoritativeEnvelope.length + CODE_MODE_CONTINUATION_GUIDANCE_V1.length,
+    );
   });
 
   it.each([
@@ -904,6 +1015,23 @@ function codeModePayload(
     script_status: "Script completed",
     max_output_tokens: 10_000,
     content_items: contentItems,
+  };
+}
+
+function codeModeActionableState() {
+  return {
+    version: 1 as const,
+    entries: [{
+      session_id: 101,
+      process_id: 101,
+      chunk_id: "typecheck-1",
+      state: "running" as const,
+      exit_code: null,
+      required_follow_up: {
+        operation: "write_stdin" as const,
+        arguments: { session_id: 101, chars: "" },
+      },
+    }],
   };
 }
 

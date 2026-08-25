@@ -442,7 +442,6 @@ import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manag
 import {
   TOKEN_MISER_ACTIVATION_FILENAME,
   TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES,
-  TOKEN_MISER_DEFAULT_THRESHOLD_CHARACTERS,
   TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS,
   type TokenMiserActivationStatus,
 } from "../token-miser/token-miser-types";
@@ -3478,6 +3477,12 @@ export type ObservedContextReplayTally = {
   hotReplayCount: number;
 };
 
+type LiveThreadContextWindowObservation = {
+  finalContextTokens: number;
+  modelContextWindow: number;
+  peakContextTokens: number;
+};
+
 // Below this per-request input size, the request is the new prompt/tool payload
 // rather than a full context replay — do not count it. Mirrors the renderer's
 // former MIN_CONTEXT_REPLAY_INPUT_TOKENS floor.
@@ -4248,6 +4253,7 @@ function buildTokenMiserSubAgentAccounting(params: {
     - cachedRevealedCost.cachedInputCostMicros;
   return {
     currency: "USD",
+    decisionSource: policyPassThrough ? "policy" : "helper",
     ...(params.entry.disposition
       ? { disposition: params.entry.disposition }
       : {}),
@@ -4457,6 +4463,13 @@ function readUsageBoolean(value: unknown, keys: string[]): boolean | undefined {
   return typeof nested === "boolean" ? nested : undefined;
 }
 
+function readUsageNumber(value: unknown, keys: string[]): number | undefined {
+  const nested = findNestedUsageValue(value, keys);
+  return typeof nested === "number" && Number.isFinite(nested)
+    ? nested
+    : undefined;
+}
+
 function readTaskMonitorUsageModel(params: {
   notificationModel?: unknown;
   tokenUsage: unknown;
@@ -4549,6 +4562,7 @@ function buildLiveThreadUsageLine(params: {
   createdAt?: number;
   fastMode?: boolean;
   model?: string;
+  contextWindow?: LiveThreadContextWindowObservation;
   observedReplays?: ObservedContextReplayTally;
   reasoningEffort?: string;
   serviceTier?: string;
@@ -4613,6 +4627,13 @@ function buildLiveThreadUsageLine(params: {
         }
       : {}),
     ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
+    ...(params.contextWindow
+      ? {
+          finalContextTokens: params.contextWindow.finalContextTokens,
+          modelContextWindow: params.contextWindow.modelContextWindow,
+          peakContextTokens: params.contextWindow.peakContextTokens,
+        }
+      : {}),
     inputTokens,
     ...(params.model ? { model: params.model } : {}),
     ...(params.observedReplays
@@ -6702,7 +6723,10 @@ function buildCodexTokenMiserConfig(
           descriptor_path: reducerDescriptorPath,
           max_request_bytes: 32 * 1024 * 1024,
           max_response_bytes: TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES,
-          min_trigger_bytes: TOKEN_MISER_DEFAULT_THRESHOLD_CHARACTERS,
+          // Observe every Code Mode result so the Explorer can distinguish
+          // direct cells, retrievals, and reducer decisions. The local service
+          // still applies the 5k-character evaluation threshold before Luna.
+          min_trigger_bytes: 0,
           // The Luna request has a 45-second application timeout. Leave enough
           // room for serialization and the loopback response while staying
           // below the existing 60-second PostToolUse hook budget.
@@ -7421,6 +7445,10 @@ export class DesktopBackendRegistry {
   private readonly liveThreadReplayObservations = new Map<
     string,
     ObservedContextReplayTally
+  >();
+  private readonly liveThreadContextWindowObservations = new Map<
+    string,
+    LiveThreadContextWindowObservation
   >();
   // Per-thread replay cursor (key: backend:threadId): the high-water mark of
   // cumulative `total.inputTokens` (detects a genuinely new model request, so
@@ -22461,6 +22489,45 @@ export class DesktopBackendRegistry {
     return tally;
   }
 
+  private observeLiveThreadContextWindow(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    tokenUsage: unknown;
+    turnId?: string;
+  }): LiveThreadContextWindowObservation | undefined {
+    if (!params.turnId) {
+      return undefined;
+    }
+    const latest = readTaskMonitorTokenUsageRecords(
+      params.tokenUsage,
+    )?.latestUsage;
+    const finalContextTokens = latest?.totalTokens;
+    const modelContextWindow = readUsageNumber(
+      params.tokenUsage,
+      ["modelContextWindow", "model_context_window"],
+    );
+    if (
+      typeof finalContextTokens !== "number"
+      || finalContextTokens < 0
+      || typeof modelContextWindow !== "number"
+      || modelContextWindow <= 0
+    ) {
+      return undefined;
+    }
+    const key = [params.backend, params.threadId, params.turnId].join(":");
+    const prior = this.liveThreadContextWindowObservations.get(key);
+    const observation = {
+      finalContextTokens,
+      modelContextWindow,
+      peakContextTokens: Math.max(
+        finalContextTokens,
+        prior?.peakContextTokens ?? 0,
+      ),
+    };
+    this.liveThreadContextWindowObservations.set(key, observation);
+    return observation;
+  }
+
   // Dev-only diagnostic: one line per genuinely new model request explaining how
   // it was classified (hot/cold/not-counted) and the numbers behind the
   // decision — the observed `last.input`/`cached`, the prior-context snapshot,
@@ -22548,6 +22615,9 @@ export class DesktopBackendRegistry {
       return;
     }
     this.liveThreadReplayObservations.delete(
+      [event.backend, threadId, turnId].join(":"),
+    );
+    this.liveThreadContextWindowObservations.delete(
       [event.backend, threadId, turnId].join(":"),
     );
   }
@@ -22649,6 +22719,7 @@ export class DesktopBackendRegistry {
     await work.precedingDerivation;
     let derivedUsage: DerivedLiveThreadTokenUsage | undefined;
     let observedReplays: ObservedContextReplayTally | undefined;
+    let contextWindow: LiveThreadContextWindowObservation | undefined;
     try {
       if (
         event.backend === "codex"
@@ -22690,6 +22761,12 @@ export class DesktopBackendRegistry {
         turnId: notification.params.turnId ?? undefined,
       });
       observedReplays = this.observeLiveThreadContextReplay({
+        backend: event.backend,
+        threadId,
+        tokenUsage,
+        turnId: notification.params.turnId ?? undefined,
+      });
+      contextWindow = this.observeLiveThreadContextWindow({
         backend: event.backend,
         threadId,
         tokenUsage,
@@ -22739,6 +22816,7 @@ export class DesktopBackendRegistry {
       cumulativeTokenUsage: derivedUsage.cumulativeTokenUsage,
       ...usageTiming,
       fastMode,
+      contextWindow,
       model,
       observedReplays,
       reasoningEffort,
@@ -26883,6 +26961,15 @@ export class DesktopBackendRegistry {
       gateCount: entries.length,
       passThroughCount: entries.filter(
         (entry) => entry.disposition === "passed_through",
+      ).length,
+      policyPassThroughCount: entries.filter(
+        (entry) => entry.disposition === "passed_through" && !entry.helperUsage,
+      ).length,
+      helperPassThroughCount: entries.filter(
+        (entry) => entry.disposition === "passed_through" && Boolean(entry.helperUsage),
+      ).length,
+      helperDecisionCount: entries.filter(
+        (entry) => Boolean(entry.helperUsage),
       ).length,
       ...(gateModel ? { gateModel } : {}),
       ...(parentModel ? { parentModel } : {}),

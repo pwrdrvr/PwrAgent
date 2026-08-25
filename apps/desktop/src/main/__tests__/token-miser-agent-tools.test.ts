@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { AgentToolRouter } from "../agent-tools/agent-tool-router";
 import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
+import { TokenMiserService } from "../token-miser/token-miser-service";
 import { TokenMiserStore } from "../token-miser/token-miser-store";
 
 const temporaryDirectories: string[] = [];
@@ -141,15 +142,9 @@ describe("Token Miser agent tools", () => {
       throw new Error("Expected grouped retrieval text.");
     }
     expect(batchContent.text.length).toBeLessThanOrEqual(5_000);
-    expect(JSON.parse(batchContent.text)).toMatchObject({
-      groupId: "cell-1",
-      truncated: true,
-      results: [
-        { mode: "tail", text: "gamma" },
-        { mode: "search", text: "2: needle one" },
-        { mode: "full", truncated: true },
-      ],
-    });
+    expect(batchContent.text).toContain("gamma");
+    expect(batchContent.text).toContain("2: needle one");
+    expect(batchContent.text).toContain("retrieval truncated");
     expect(await store.readAll({
       objectId: grouped.objectId,
       threadId: "thread-1",
@@ -167,6 +162,118 @@ describe("Token Miser agent tools", () => {
       },
     });
     expect(denied.success).toBe(false);
+  });
+
+  it("counts a retrieval only after recognizable content reaches the Code Mode result", async () => {
+    const store = await createStore();
+    const metadata = await store.store({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      toolUseId: "tool-1",
+      toolName: "Code Mode",
+      output: [
+        "line one",
+        "RECOGNIZABLE_REQUESTED_LINE",
+        "line three",
+      ].join("\n"),
+      replacementCharacters: 100,
+      summary: {
+        summary: "Three lines were preserved.",
+        usefulDetails: [],
+      },
+    });
+    const router = new AgentToolRouter(buildTokenMiserToolDefinitions(store));
+    const response = await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-2",
+        callId: "call-read",
+        namespace: "pwragent",
+        tool: "read_token_miser_output",
+        arguments: {
+          objectId: metadata.objectId,
+          startLine: 1,
+          endLine: 3,
+        },
+      },
+    });
+    expect(response.success).toBe(true);
+    const dynamicText = response.contentItems?.[0];
+    expect(dynamicText?.type).toBe("inputText");
+    if (dynamicText?.type !== "inputText") {
+      throw new Error("Expected a text dynamic-tool response.");
+    }
+    expect(dynamicText.text).toContain("RECOGNIZABLE_REQUESTED_LINE");
+    expect(dynamicText.text).toContain("pwragent_token_miser_retrieval");
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters)
+      .toBe(0);
+
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary: async () => ({
+        status: "failed",
+        reason: "retrieval cells must bypass the reducer",
+      }),
+      thresholdCharacters: 1,
+    });
+    const retrievalScript =
+      `const r = await tools.pwragent__read_token_miser_output({ objectId: "${metadata.objectId}", startLine: 1, endLine: 3 }); for (const c of (r?.content ?? [])) if (c.type === "text") text(c.text);`;
+    expect(await service.prepareCodeModeOutput({
+      version: 2,
+      thread_id: "thread-1",
+      turn_id: "turn-2",
+      call_id: "call-code-mode-empty",
+      cell_id: "cell-retrieval-empty",
+      script_status: "completed",
+      max_output_tokens: 10_000,
+      script: retrievalScript,
+      content_items: [{
+        type: "input_text",
+        text: "Script completed\nWall time 0.1 seconds\nOutput:\n",
+      }],
+    })).toBeUndefined();
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters)
+      .toBe(0);
+
+    const deliveredResponse = await router.handleDynamicToolCall({
+      backend: "codex",
+      call: {
+        threadId: "thread-1",
+        turnId: "turn-2",
+        callId: "call-read-delivered",
+        namespace: "pwragent",
+        tool: "read_token_miser_output",
+        arguments: {
+          objectId: metadata.objectId,
+          startLine: 1,
+          endLine: 3,
+        },
+      },
+    });
+    const deliveredText = deliveredResponse.contentItems?.[0];
+    if (deliveredText?.type !== "inputText") {
+      throw new Error("Expected a delivered text dynamic-tool response.");
+    }
+    const emitted = deliveredText.text;
+    expect(await service.prepareCodeModeOutput({
+      version: 2,
+      thread_id: "thread-1",
+      turn_id: "turn-2",
+      call_id: "call-code-mode",
+      cell_id: "cell-retrieval",
+      script_status: "completed",
+      max_output_tokens: 10_000,
+      script:
+        `const r = await tools.pwragent__read_token_miser_output({ objectId: "${metadata.objectId}", startLine: 1, endLine: 3 }); text(r);`,
+      content_items: [{ type: "input_text", text: emitted }],
+    })).toBeUndefined();
+    expect((await store.readMetadata(metadata.objectId))?.retrievedCharacters)
+      .toBeGreaterThanOrEqual("RECOGNIZABLE_REQUESTED_LINE".length);
+    expect(await store.summarizeThreadUsage("thread-1")).toMatchObject({
+      codeMode: { retrievalCount: 2 },
+    });
   });
 });
 

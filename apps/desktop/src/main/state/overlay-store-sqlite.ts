@@ -1343,6 +1343,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             observed_cold_replay_uncached_tokens,
             observed_hot_replay_cached_tokens,
             observed_hot_replay_count,
+            final_context_tokens,
+            peak_context_tokens,
+            model_context_window,
             updated_at
           ) VALUES (
             @usageTurnId,
@@ -1364,6 +1367,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             @observedColdReplayUncachedTokens,
             @observedHotReplayCachedTokens,
             @observedHotReplayCount,
+            @finalContextTokens,
+            @peakContextTokens,
+            @modelContextWindow,
             @updatedAt
           )
           ON CONFLICT(usage_turn_id) DO UPDATE SET
@@ -1401,6 +1407,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             observed_cold_replay_uncached_tokens = COALESCE(excluded.observed_cold_replay_uncached_tokens, thread_usage_turns.observed_cold_replay_uncached_tokens),
             observed_hot_replay_cached_tokens = COALESCE(excluded.observed_hot_replay_cached_tokens, thread_usage_turns.observed_hot_replay_cached_tokens),
             observed_hot_replay_count = COALESCE(excluded.observed_hot_replay_count, thread_usage_turns.observed_hot_replay_count),
+            final_context_tokens = COALESCE(excluded.final_context_tokens, thread_usage_turns.final_context_tokens),
+            peak_context_tokens = CASE
+              WHEN excluded.peak_context_tokens IS NULL THEN thread_usage_turns.peak_context_tokens
+              WHEN thread_usage_turns.peak_context_tokens IS NULL THEN excluded.peak_context_tokens
+              ELSE MAX(thread_usage_turns.peak_context_tokens, excluded.peak_context_tokens)
+            END,
+            model_context_window = COALESCE(excluded.model_context_window, thread_usage_turns.model_context_window),
             updated_at = excluded.updated_at`,
         )
         .run(toThreadUsageLineRowParams(line));
@@ -2454,7 +2467,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
                 observed_cold_replay_count,
                 observed_cold_replay_uncached_tokens,
                 observed_hot_replay_cached_tokens,
-                observed_hot_replay_count
+                observed_hot_replay_count,
+                final_context_tokens,
+                peak_context_tokens,
+                model_context_window
            FROM thread_usage_turns
           WHERE backend = ?
             AND thread_id = ?
@@ -2465,7 +2481,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
                 observed_cold_replay_count,
                 observed_cold_replay_uncached_tokens,
                 observed_hot_replay_cached_tokens,
-                observed_hot_replay_count
+                observed_hot_replay_count,
+                final_context_tokens,
+                peak_context_tokens,
+                model_context_window
            FROM thread_usage_turns
           WHERE backend = ?
             AND parent_thread_id = ?
@@ -2479,6 +2498,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       observed_cold_replay_uncached_tokens: number | null;
       observed_hot_replay_cached_tokens: number | null;
       observed_hot_replay_count: number | null;
+      final_context_tokens: number | null;
+      peak_context_tokens: number | null;
+      model_context_window: number | null;
     }>;
     if (turnRows.length === 0) {
       return;
@@ -2509,6 +2531,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       }
       if (turn.observed_hot_replay_count !== null) {
         line.observedHotReplayCount = turn.observed_hot_replay_count;
+      }
+      if (turn.final_context_tokens !== null) {
+        line.finalContextTokens = turn.final_context_tokens;
+      }
+      if (turn.peak_context_tokens !== null) {
+        line.peakContextTokens = turn.peak_context_tokens;
+      }
+      if (turn.model_context_window !== null) {
+        line.modelContextWindow = turn.model_context_window;
       }
     }
   }
@@ -7129,6 +7160,7 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
     cumulativeUncachedInputTokens: line.cumulativeUncachedInputTokens ?? null,
     currency: line.currency,
     fastMode: typeof line.fastMode === "boolean" ? (line.fastMode ? 1 : 0) : null,
+    finalContextTokens: line.finalContextTokens ?? null,
     turnUsageAttributed:
       typeof line.turnUsageAttributed === "boolean"
         ? line.turnUsageAttributed
@@ -7137,12 +7169,14 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
         : null,
     inputTokens: line.inputTokens,
     model: line.model ?? null,
+    modelContextWindow: line.modelContextWindow ?? null,
     observedColdReplayCount: line.observedColdReplayCount ?? null,
     observedColdReplayUncachedTokens: line.observedColdReplayUncachedTokens ?? null,
     observedHotReplayCachedTokens: line.observedHotReplayCachedTokens ?? null,
     observedHotReplayCount: line.observedHotReplayCount ?? null,
     outputCostMicros: line.outputCostMicros,
     outputTokens: line.outputTokens,
+    peakContextTokens: line.peakContextTokens ?? null,
     parentThreadId: line.parentThreadId ?? null,
     priceStatus: line.priceStatus,
     priceUnavailableReason: line.priceUnavailableReason ?? null,

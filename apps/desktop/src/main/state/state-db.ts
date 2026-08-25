@@ -14,7 +14,7 @@ import {
   isSqliteWriteMetricsEnabled,
 } from "./sqlite-write-metrics.js";
 
-export const CURRENT_STATE_DB_USER_VERSION = 54;
+export const CURRENT_STATE_DB_USER_VERSION = 55;
 export const STATE_DB_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const STATE_DB_JOURNAL_SIZE_LIMIT_BYTES = 16 * 1024 * 1024;
 
@@ -795,6 +795,9 @@ CREATE TABLE IF NOT EXISTS thread_usage_turns (
   observed_cold_replay_uncached_tokens INTEGER,
   observed_hot_replay_cached_tokens    INTEGER,
   observed_hot_replay_count    INTEGER,
+  final_context_tokens         INTEGER,
+  peak_context_tokens          INTEGER,
+  model_context_window         INTEGER,
   updated_at          INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_thread_usage_turns_thread
@@ -1583,6 +1586,12 @@ export class StateDb {
           // Additive table, no data migration; the same DDL also lives in
           // `ensureCurrentSchema` so re-instantiated dbs converge.
           db.exec(THREAD_COMPACTION_SCHEMA);
+          db.pragma("user_version = 54");
+        })();
+      }
+      if ((db.pragma("user_version", { simple: true }) as number) < 55) {
+        db.transaction(() => {
+          ensureThreadUsageTurnContextColumns(db);
           db.pragma(`user_version = ${CURRENT_STATE_DB_USER_VERSION}`);
         })();
       }
@@ -2564,6 +2573,32 @@ function ensureThreadUsageTurnObservedReplayColumns(db: BetterSqlite3.Database):
     {
       name: "observed_hot_replay_count",
       sql: "ALTER TABLE thread_usage_turns ADD COLUMN observed_hot_replay_count INTEGER",
+    },
+  ];
+  for (const column of columns) {
+    if (!tableColumnExists(db, "thread_usage_turns", column.name)) {
+      db.exec(column.sql);
+    }
+  }
+}
+
+function ensureThreadUsageTurnContextColumns(db: BetterSqlite3.Database): void {
+  if (!tableExists(db, "thread_usage_turns")) {
+    db.exec(THREAD_USAGE_PRICING_SCHEMA);
+    return;
+  }
+  const columns: Array<{ name: string; sql: string }> = [
+    {
+      name: "final_context_tokens",
+      sql: "ALTER TABLE thread_usage_turns ADD COLUMN final_context_tokens INTEGER",
+    },
+    {
+      name: "peak_context_tokens",
+      sql: "ALTER TABLE thread_usage_turns ADD COLUMN peak_context_tokens INTEGER",
+    },
+    {
+      name: "model_context_window",
+      sql: "ALTER TABLE thread_usage_turns ADD COLUMN model_context_window INTEGER",
     },
   ];
   for (const column of columns) {

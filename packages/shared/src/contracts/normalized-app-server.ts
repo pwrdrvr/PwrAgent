@@ -1089,6 +1089,9 @@ export type ThreadTokenMiserSavings = {
   gateCount: number;
   /** Decisions that deliberately returned the ordinary original result. */
   passThroughCount?: number;
+  policyPassThroughCount?: number;
+  helperPassThroughCount?: number;
+  helperDecisionCount?: number;
   /** 1 — the gated payloads at parent rates, uncached once plus later replays. */
   withoutGateCostMicros: number;
   /** 2 — what the helper actually charged. */
@@ -1112,6 +1115,9 @@ export type ThreadTokenMiserAccounting = {
   savings?: ThreadTokenMiserSavings;
   interceptionCount: number;
   passThroughCount?: number;
+  policyPassThroughCount?: number;
+  helperPassThroughCount?: number;
+  helperDecisionCount?: number;
   originalCharacters: number;
   baselineParentTokens: number;
   replacementTokens: number;
@@ -1139,11 +1145,24 @@ export type ThreadTokenMiserCodeModeObservation = {
   script?: string;
   retrieval: boolean;
   capturedNestedInvocationCount: number;
+  capturedCommandInvocationCount?: number;
+  capturedPollingInvocationCount?: number;
+  capturedPatchInvocationCount?: number;
+  capturedOtherInvocationCount?: number;
   disposition: "direct" | "summarized" | "passed_through" | "retrieval";
 };
 
 export type ThreadTokenMiserCodeModeAccounting = {
   callCount: number;
+  commandCellCount: number;
+  directCommandCellCount: number;
+  dispatchClusterCount: number;
+  multiInvocationClusterCount: number;
+  largestDispatchCluster: number;
+  nestedCommandInvocationCount: number;
+  patchCellCount: number;
+  otherCellCount: number;
+  pollingCellCount: number;
   directCount: number;
   summarizedCount: number;
   passThroughCount: number;

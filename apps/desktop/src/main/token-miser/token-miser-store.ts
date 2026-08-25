@@ -19,6 +19,7 @@ const MAX_READ_LINES = 2_000;
 const MAX_GROUP_BATCH_OPERATIONS = 16;
 const DEFAULT_GROUP_BATCH_OUTPUT_CHARACTERS = 20_000;
 const MAX_GROUP_BATCH_OUTPUT_CHARACTERS = 40_000;
+const RETRIEVAL_DELIVERY_TTL_MS = 2 * 60_000;
 // Reducer acknowledgements expire after 60 seconds. A longer grace protects a
 // fresh pending output owned by another PwrAgent process sharing the profile,
 // while still reclaiming raw files left by a crash before acceptance.
@@ -64,6 +65,7 @@ export type TokenMiserGroupBatchOperation = {
 };
 
 export type TokenMiserGroupBatchResult = {
+  sourceObjectId: string;
   groupId: string;
   results: Array<{
     objectId: string;
@@ -77,9 +79,25 @@ export type TokenMiserGroupBatchResult = {
   truncated: boolean;
 };
 
+export type TokenMiserRetrievalDelivery = {
+  deliveryId: string;
+  text: string;
+};
+
+type PendingRetrievalDelivery = {
+  createdAt: number;
+  objectId: string;
+  threadId: string;
+  visibleText: string;
+  wrappedText: string;
+};
+
 export type TokenMiserUsageSummary = {
   interceptionCount: number;
   passThroughCount: number;
+  policyPassThroughCount: number;
+  helperPassThroughCount: number;
+  helperDecisionCount: number;
   originalCharacters: number;
   baselineParentTokens: number;
   replacementTokens: number;
@@ -116,6 +134,15 @@ export type TokenMiserThreadUsageSummary = TokenMiserUsageSummary & {
   }>;
   codeMode: {
     callCount: number;
+    commandCellCount: number;
+    directCommandCellCount: number;
+    dispatchClusterCount: number;
+    multiInvocationClusterCount: number;
+    largestDispatchCluster: number;
+    nestedCommandInvocationCount: number;
+    patchCellCount: number;
+    otherCellCount: number;
+    pollingCellCount: number;
     directCount: number;
     summarizedCount: number;
     passThroughCount: number;
@@ -188,6 +215,8 @@ export type TokenMiserStagedObject = {
 
 export class TokenMiserStore {
   private readonly updateLocks = new Map<string, Promise<void>>();
+  private readonly pendingRetrievalDeliveries =
+    new Map<string, PendingRetrievalDelivery>();
 
   constructor(
     private readonly rootDir: string,
@@ -343,7 +372,6 @@ export class TokenMiserStore {
       totalLines: lines.length,
       text,
     };
-    await this.recordRetrieval(params.objectId, JSON.stringify(result).length);
     return result;
   }
 
@@ -363,7 +391,6 @@ export class TokenMiserStore {
       totalLines: lines.length,
       text: stored.output,
     };
-    await this.recordRetrieval(params.objectId, JSON.stringify(result).length);
     return result;
   }
 
@@ -398,7 +425,6 @@ export class TokenMiserStore {
       totalLines: lines.length,
       matches,
     };
-    await this.recordRetrieval(params.objectId, JSON.stringify(result).length);
     return result;
   }
 
@@ -436,15 +462,71 @@ export class TokenMiserStore {
       MAX_GROUP_BATCH_OUTPUT_CHARACTERS,
     );
     const result = boundGroupBatchResult({
+      sourceObjectId: metadata.objectId,
       groupId: params.groupId,
       results,
       truncated: params.operations.length > operations.length,
     }, maxOutputChars);
-    await this.recordRetrieval(
-      metadata.objectId,
-      JSON.stringify(result, null, 2).length,
-    );
     return result;
+  }
+
+  async prepareRetrievalDelivery(params: {
+    objectId: string;
+    threadId: string;
+    visibleText: string;
+  }): Promise<TokenMiserRetrievalDelivery | undefined> {
+    const metadata = await this.readMetadata(params.objectId);
+    if (
+      !metadata
+      || metadata.threadId !== params.threadId
+      || metadata.disposition === "passed_through"
+    ) {
+      return undefined;
+    }
+    const now = Date.now();
+    for (const [deliveryId, pending] of this.pendingRetrievalDeliveries) {
+      if (now - pending.createdAt > RETRIEVAL_DELIVERY_TTL_MS) {
+        this.pendingRetrievalDeliveries.delete(deliveryId);
+      }
+    }
+    const deliveryId = randomUUID();
+    const begin = `<pwragent_token_miser_retrieval id="${deliveryId}">`;
+    const end = `</pwragent_token_miser_retrieval id="${deliveryId}">`;
+    const wrappedText = `${begin}\n${params.visibleText}\n${end}`;
+    this.pendingRetrievalDeliveries.set(deliveryId, {
+      createdAt: now,
+      objectId: params.objectId,
+      threadId: params.threadId,
+      visibleText: params.visibleText,
+      wrappedText,
+    });
+    return { deliveryId, text: wrappedText };
+  }
+
+  async confirmModelVisibleRetrievals(params: {
+    output: string;
+    threadId: string;
+  }): Promise<number> {
+    const candidates = [...this.pendingRetrievalDeliveries.entries()].filter(
+      ([, pending]) => pending.threadId === params.threadId,
+    );
+    let confirmedCharacters = 0;
+    for (const [deliveryId, pending] of candidates) {
+      if (!params.output.includes(pending.wrappedText)) {
+        continue;
+      }
+      this.pendingRetrievalDeliveries.delete(deliveryId);
+      await this.recordRetrieval(
+        pending.objectId,
+        pending.visibleText.length,
+      );
+      confirmedCharacters += pending.visibleText.length;
+    }
+    return confirmedCharacters;
+  }
+
+  abandonRetrievalDelivery(deliveryId: string): void {
+    this.pendingRetrievalDeliveries.delete(deliveryId);
   }
 
   async listMetadata(): Promise<TokenMiserObjectMetadata[]> {
@@ -491,6 +573,18 @@ export class TokenMiserStore {
       ...(params.script ? { script: params.script.slice(-4_000) } : {}),
       retrieval: params.retrieval,
       capturedNestedInvocationCount: params.capturedNestedInvocationCount,
+      ...(params.capturedCommandInvocationCount === undefined
+        ? {}
+        : { capturedCommandInvocationCount: params.capturedCommandInvocationCount }),
+      ...(params.capturedPollingInvocationCount === undefined
+        ? {}
+        : { capturedPollingInvocationCount: params.capturedPollingInvocationCount }),
+      ...(params.capturedPatchInvocationCount === undefined
+        ? {}
+        : { capturedPatchInvocationCount: params.capturedPatchInvocationCount }),
+      ...(params.capturedOtherInvocationCount === undefined
+        ? {}
+        : { capturedOtherInvocationCount: params.capturedOtherInvocationCount }),
     };
     await fs.mkdir(this.observationRoot(), { recursive: true, mode: 0o700 });
     await writePrivateFileAtomic(
@@ -560,6 +654,15 @@ export class TokenMiserStore {
           ?? "direct" as const;
       return { ...observation, disposition };
     });
+    const commandCount = (entry: TokenMiserCodeModeObservation) =>
+      entry.capturedCommandInvocationCount
+      ?? (entry.retrieval ? 0 : entry.capturedNestedInvocationCount);
+    const commandCells = codeModeObservations.filter(
+      (entry) => commandCount(entry) > 0,
+    );
+    const dispatchClusterSizes = commandCells.map(
+      commandCount,
+    );
     return {
       ...summarizeMetadata(metadata),
       interceptions: metadata.map((entry) => {
@@ -597,6 +700,34 @@ export class TokenMiserStore {
       }),
       codeMode: {
         callCount: codeModeObservations.length,
+        commandCellCount: commandCells.length,
+        directCommandCellCount: commandCells.filter(
+          (entry) => entry.disposition === "direct",
+        ).length,
+        dispatchClusterCount: dispatchClusterSizes.length,
+        multiInvocationClusterCount: dispatchClusterSizes.filter(
+          (size) => size > 1,
+        ).length,
+        largestDispatchCluster: dispatchClusterSizes.length > 0
+          ? Math.max(...dispatchClusterSizes)
+          : 0,
+        nestedCommandInvocationCount: dispatchClusterSizes.reduce(
+          (total, size) => total + size,
+          0,
+        ),
+        patchCellCount: codeModeObservations.filter(
+          (entry) => (entry.capturedPatchInvocationCount ?? 0) > 0,
+        ).length,
+        otherCellCount: codeModeObservations.filter(
+          (entry) => !entry.retrieval
+            && (
+              entry.capturedNestedInvocationCount === 0
+              || (entry.capturedOtherInvocationCount ?? 0) > 0
+            ),
+        ).length,
+        pollingCellCount: codeModeObservations.filter(
+          (entry) => (entry.capturedPollingInvocationCount ?? 0) > 0,
+        ).length,
         directCount: codeModeObservations.filter(
           (entry) => entry.disposition === "direct",
         ).length,
@@ -907,6 +1038,15 @@ function summarizeMetadata(
     interceptionCount: metadata.length,
     passThroughCount: metadata.filter(
       (entry) => entry.disposition === "passed_through",
+    ).length,
+    policyPassThroughCount: metadata.filter(
+      (entry) => entry.disposition === "passed_through" && !entry.helperUsage,
+    ).length,
+    helperPassThroughCount: metadata.filter(
+      (entry) => entry.disposition === "passed_through" && Boolean(entry.helperUsage),
+    ).length,
+    helperDecisionCount: metadata.filter(
+      (entry) => Boolean(entry.helperUsage),
     ).length,
     originalCharacters: metadata.reduce(
       (total, entry) => total + entry.originalCharacters,

@@ -519,7 +519,35 @@ describe("TokenMiserHookBridge", () => {
     });
     expect(oversizedIntent.status).toBe(200);
     expect(await oversizedIntent.json()).toEqual({ replacement: null });
-    expect(prepareCodeModeOutput).not.toHaveBeenCalled();
+    const actionableState = {
+      version: 1,
+      entries: [{
+        session_id: 101,
+        process_id: 101,
+        chunk_id: "typecheck-1",
+        state: "running",
+        exit_code: null,
+        required_follow_up: {
+          operation: "write_stdin",
+          arguments: { session_id: 101, chars: "" },
+        },
+      }],
+    };
+    const actionable = await fetch(descriptor.url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${descriptor.token}` },
+      body: JSON.stringify({
+        ...codeModePayload(),
+        actionable_state: actionableState,
+      }),
+    });
+    expect(actionable.status).toBe(200);
+    expect(await actionable.json()).toEqual({ replacement: null });
+    expect(prepareCodeModeOutput).toHaveBeenCalledOnce();
+    expect(prepareCodeModeOutput).toHaveBeenCalledWith(
+      expect.objectContaining({ actionable_state: actionableState }),
+      { signal: expect.any(AbortSignal) },
+    );
   });
 
   it("keeps all same-profile descriptors owned by their bridge instance", async () => {

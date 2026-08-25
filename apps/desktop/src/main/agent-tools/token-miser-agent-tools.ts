@@ -18,7 +18,7 @@ export function buildTokenMiserToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "search_token_miser_output",
       description:
-        "Search one Token Miser-preserved tool result by literal text. Returns matching line numbers and bounded line contents. The output must belong to the invoking thread.",
+        "Search one Token Miser-preserved tool result by literal text. Code Mode receives the bounded result as a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The output must belong to the invoking thread.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -39,14 +39,26 @@ export function buildTokenMiserToolDefinitions(
           query,
           maxResults: readNumber(args.maxResults),
         });
-        return result ? agentToolSuccess(result) : notFound();
+        return result
+          ? await retrievalSuccess({
+              store,
+              context,
+              objectId,
+              structuredContent: {
+                objectId: result.objectId,
+                totalLines: result.totalLines,
+                matchCount: result.matches.length,
+              },
+              visibleText: JSON.stringify(result, null, 2),
+            })
+          : notFound();
       },
     },
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "read_token_miser_output",
       description:
-        "Read a bounded inclusive line range from one Token Miser-preserved tool result. The output must belong to the invoking thread.",
+        "Read a bounded inclusive line range from one Token Miser-preserved tool result. Code Mode receives the requested text as a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The output must belong to the invoking thread.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -66,14 +78,27 @@ export function buildTokenMiserToolDefinitions(
           startLine: readNumber(args.startLine),
           endLine: readNumber(args.endLine),
         });
-        return result ? agentToolSuccess(result) : notFound();
+        return result
+          ? await retrievalSuccess({
+              store,
+              context,
+              objectId,
+              structuredContent: {
+                objectId: result.objectId,
+                startLine: result.startLine,
+                endLine: result.endLine,
+                totalLines: result.totalLines,
+              },
+              visibleText: result.text,
+            })
+          : notFound();
       },
     },
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "read_token_miser_output_batch",
       description:
-        "Retrieve selected members from one grouped Token Miser Code Mode result in a single bounded call. Operations run in request order and may read a full member, search it, or return its head or tail. The group must belong to the invoking thread.",
+        "Retrieve selected members from one grouped Token Miser Code Mode result in a single bounded call. Operations run in request order and may read a full member, search it, or return its head or tail. Code Mode receives one plain string and should emit it directly. The group must belong to the invoking thread.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -115,14 +140,28 @@ export function buildTokenMiserToolDefinitions(
           operations,
           maxOutputChars: readNumber(args.maxOutputChars),
         });
-        return result ? agentToolSuccess(result) : notFound();
+        return result
+          ? await retrievalSuccess({
+              store,
+              context,
+              objectId: result.sourceObjectId,
+              maxResponseCharacters: readNumber(args.maxOutputChars),
+              structuredContent: {
+                sourceObjectId: result.sourceObjectId,
+                groupId: result.groupId,
+                resultCount: result.results.length,
+                truncated: result.truncated,
+              },
+              visibleText: JSON.stringify(result, null, 2),
+            })
+          : notFound();
       },
     },
     {
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "read_all_token_miser_output",
       description:
-        "Deliberately retrieve an entire Token Miser-preserved tool result. This can erase the context savings; prefer search or bounded reads first. The output must belong to the invoking thread.",
+        "Deliberately retrieve an entire Token Miser-preserved tool result as plain text in Code Mode or a text content block over MCP. This can erase the context savings; prefer search or bounded reads first. The output must belong to the invoking thread.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -138,10 +177,71 @@ export function buildTokenMiserToolDefinitions(
           objectId,
           threadId: context.threadId,
         });
-        return result ? agentToolSuccess(result) : notFound();
+        return result
+          ? await retrievalSuccess({
+              store,
+              context,
+              objectId,
+              structuredContent: {
+                objectId: result.objectId,
+                startLine: result.startLine,
+                endLine: result.endLine,
+                totalLines: result.totalLines,
+              },
+              visibleText: result.text,
+            })
+          : notFound();
       },
     },
   ];
+}
+
+async function retrievalSuccess(params: {
+  store: TokenMiserStore;
+  context: { threadId: string };
+  objectId: string;
+  maxResponseCharacters?: number;
+  structuredContent: Record<string, unknown>;
+  visibleText: string;
+}) {
+  let visibleText = params.visibleText;
+  while (true) {
+    const delivery = await params.store.prepareRetrievalDelivery({
+      objectId: params.objectId,
+      threadId: params.context.threadId,
+      visibleText,
+    });
+    if (!delivery) {
+      return notFound();
+    }
+    const payload = {
+      content: [{ type: "text", text: delivery.text }],
+      structuredContent: params.structuredContent,
+    };
+    if (
+      !params.maxResponseCharacters
+      || delivery.text.length <= params.maxResponseCharacters
+    ) {
+      return agentToolSuccess(payload, {
+        contentItems: [{ type: "inputText", text: delivery.text }],
+        mcpContentItems: [{ type: "text", text: delivery.text }],
+      });
+    }
+    params.store.abandonRetrievalDelivery(delivery.deliveryId);
+    const nextLength = Math.max(
+      0,
+      visibleText.length
+      - (delivery.text.length - params.maxResponseCharacters)
+      - 64,
+    );
+    if (nextLength >= visibleText.length) {
+      return agentToolFailure({
+        code: "output_budget_exceeded",
+        message: "The bounded Token Miser retrieval could not fit its response budget.",
+      });
+    }
+    visibleText = `${visibleText.slice(0, nextLength)}\n… retrieval truncated`;
+  }
 }
 
 function readString(value: unknown): string | undefined {
