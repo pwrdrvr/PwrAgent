@@ -144,6 +144,9 @@ export function buildTokenMiserRoughEdges(
   // finding about the repetition rather than N unrelated gates.
   const gatesByCommand = new Map<string, number>();
   for (const entry of interceptions) {
+    if (entry.disposition === "passed_through") {
+      continue;
+    }
     const key = groupingKey(entry.toolUseId);
     if (key === undefined) {
       continue;
@@ -155,6 +158,9 @@ export function buildTokenMiserRoughEdges(
   const reportedRepeats = new Set<string>();
   for (const entry of interceptions) {
     const command = describe(entry.toolUseId, entry.toolName);
+    if (entry.disposition === "passed_through") {
+      continue;
+    }
     if (entry.estimatedParentTokensSaved <= 0) {
       edges.push({
         detail:
@@ -229,7 +235,11 @@ export function buildTokenMiserRoughEdges(
  * so the operator can move between all / wins / misses instead of seeing only
  * the failures and inferring the rest.
  */
-export type TokenMiserGateOutcome = "win" | "miss" | "big-miss";
+export type TokenMiserGateOutcome =
+  | "win"
+  | "miss"
+  | "big-miss"
+  | "pass-through";
 
 export type TokenMiserGateEntry = {
   command: string;
@@ -267,7 +277,9 @@ export function buildTokenMiserGateEntries(
       ?? edgesByKey.get(`repeat:${command}`)
       ?? edgesByKey.get(`truncated:${interception.objectId}`);
     const outcome: TokenMiserGateOutcome =
-      interception.estimatedParentTokensSaved <= 0
+      interception.disposition === "passed_through"
+        ? "pass-through"
+        : interception.estimatedParentTokensSaved <= 0
         ? "big-miss"
         : edge
           ? "miss"

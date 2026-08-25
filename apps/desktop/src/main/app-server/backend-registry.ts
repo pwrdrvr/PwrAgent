@@ -8140,7 +8140,9 @@ export class DesktopBackendRegistry {
           return await this.codexClient.generateStructuredObject({
             ...params,
             isMatch: (record) =>
-              typeof record.summary === "string"
+              (record.disposition === "pass_through"
+                || record.disposition === "summarize")
+              && typeof record.summary === "string"
               && Array.isArray(record.usefulDetails)
               && (
                 !Array.isArray(params.schema.required)
@@ -26858,6 +26860,9 @@ export class DesktopBackendRegistry {
       directlyObservedReplayCount,
       gateCostMicros,
       gateCount: entries.length,
+      passThroughCount: entries.filter(
+        (entry) => entry.disposition === "passed_through",
+      ).length,
       ...(gateModel ? { gateModel } : {}),
       ...(parentModel ? { parentModel } : {}),
       pricedGateCount,
@@ -26923,7 +26928,9 @@ export class DesktopBackendRegistry {
       ...(gateUsageLine ? { gateUsageLine } : {}),
       subAgent: {
         monitorId,
-        task: `Gate ${entry.toolName} output`,
+        task: entry.disposition === "passed_through"
+          ? `Evaluate ${entry.toolName} output`
+          : `Gate ${entry.toolName} output`,
         status: "success",
         createdAt: entry.createdAt,
         updatedAt: entry.createdAt,
@@ -26944,14 +26951,18 @@ export class DesktopBackendRegistry {
         ...(entry.helperUsage?.helperTurnId
           ? { monitorTurnId: entry.helperUsage.helperTurnId }
           : {}),
-        lastMessage:
-          `Compressed ${entry.originalCharacters.toLocaleString()} characters `
-          + `from ${entry.toolName} before they entered the parent context.`,
+        lastMessage: entry.disposition === "passed_through"
+          ? `Passed ${entry.originalCharacters.toLocaleString()} characters `
+            + `from ${entry.toolName} through unchanged after evaluation.`
+          : `Compressed ${entry.originalCharacters.toLocaleString()} characters `
+            + `from ${entry.toolName} before they entered the parent context.`,
         outcome: "success",
         completedAt: entry.createdAt,
         completionSource: {
           type: "pwragent_fallback",
-          reason: "system_token_miser_gate",
+          reason: entry.disposition === "passed_through"
+            ? "system_token_miser_pass_through"
+            : "system_token_miser_gate",
           recoveryAttempted: false,
           terminalStatus: "completed",
         },

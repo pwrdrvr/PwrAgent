@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildCategoryComposition,
   buildTokenMiserContextComparison,
+  buildTokenMiserGateEntries,
   buildTokenMiserRoughEdges,
   buildTurnCostStrip,
   capMeterWidth,
@@ -738,6 +739,35 @@ describe("buildTokenMiserRoughEdges", () => {
     expect(edges).toHaveLength(1);
     expect(edges[0]?.kind).toBe("cost");
     expect(edges[0]?.label).toBe("Cost more than it saved");
+  });
+
+  it("classifies a deliberate pass-through separately from a failed gate", () => {
+    const passThrough = gate({
+      disposition: "passed_through",
+      baselineParentTokens: 2_500,
+      replacementTokens: 2_500,
+      estimatedParentTokensSaved: 0,
+    });
+    expect(buildTokenMiserRoughEdges([], {
+      interceptionCount: 1,
+      passThroughCount: 1,
+      originalCharacters: 10_000,
+      baselineParentTokens: 2_500,
+      replacementTokens: 2_500,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+      interceptions: [passThrough],
+    })).toEqual([]);
+    expect(buildTokenMiserGateEntries([], {
+      interceptionCount: 1,
+      passThroughCount: 1,
+      originalCharacters: 10_000,
+      baselineParentTokens: 2_500,
+      replacementTokens: 2_500,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+      interceptions: [passThrough],
+    })[0]?.outcome).toBe("pass-through");
   });
 
   // Retrieval is the gate's escape hatch, so a gate that hands most of the

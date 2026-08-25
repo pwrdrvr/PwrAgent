@@ -154,6 +154,42 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     expect(upsertUsageLines).toHaveBeenCalledTimes(1);
   });
 
+  it("labels a deliberate pass-through as an evaluation with no claimed token savings", async () => {
+    const persist = (
+      registry as unknown as {
+        persistTokenMiserLedgerEntries(
+          metadata: readonly TokenMiserObjectMetadata[],
+        ): Promise<void>;
+      }
+    ).persistTokenMiserLedgerEntries.bind(registry);
+    await persist([{
+      ...metadata("gate-1", "helper-1"),
+      disposition: "passed_through",
+      replacementCharacters: 24_000,
+      parentModel: "gpt-5.6-sol",
+    }]);
+
+    const overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(overlay?.subAgents?.[0]).toMatchObject({
+      task: "Evaluate commandExecution output",
+      lastMessage:
+        "Passed 24,000 characters from commandExecution through unchanged after evaluation.",
+      completionSource: {
+        reason: "system_token_miser_pass_through",
+      },
+      tokenMiserAccounting: {
+        baselineParentTokens: 6_000,
+        revealedParentTokens: 6_000,
+      },
+    });
+    expect(
+      overlay?.subAgents?.[0]?.tokenMiserAccounting?.savingsMicros,
+    ).toBeLessThan(0);
+  });
+
   // A native review runs on the parent thread with no usage line of its own,
   // and its hook fires under an inner turn id that no line will ever carry.
   // The model stamped at creation is the only rate source such a gate has.

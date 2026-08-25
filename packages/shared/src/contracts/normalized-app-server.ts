@@ -1087,6 +1087,8 @@ export type ThreadTokenMiserSavings = {
   /** Gates whose dollar terms are complete; the rest contribute tokens only. */
   pricedGateCount: number;
   gateCount: number;
+  /** Decisions that deliberately returned the ordinary original result. */
+  passThroughCount?: number;
   /** 1 — the gated payloads at parent rates, uncached once plus later replays. */
   withoutGateCostMicros: number;
   /** 2 — what the helper actually charged. */
@@ -1109,6 +1111,7 @@ export type ThreadTokenMiserSavings = {
 export type ThreadTokenMiserAccounting = {
   savings?: ThreadTokenMiserSavings;
   interceptionCount: number;
+  passThroughCount?: number;
   originalCharacters: number;
   baselineParentTokens: number;
   replacementTokens: number;
@@ -1137,6 +1140,7 @@ export type ThreadTokenMiserInterceptionAccounting = {
   cachedRevealedTokens?: number;
   estimatedCachedReplayTokensSaved?: number;
   replayTrackingVersion?: 2;
+  disposition?: "summarized" | "passed_through";
   /**
    * What the parent actually received in place of the payload. This is the
    * gate's real product — carrying it here is what lets the Explorer show the

@@ -509,6 +509,16 @@ describe("TokenMiserHookBridge", () => {
     });
     expect(futureShape.status).toBe(200);
     expect(await futureShape.json()).toEqual({ replacement: null });
+    const oversizedIntent = await fetch(descriptor.url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${descriptor.token}` },
+      body: JSON.stringify({
+        ...codeModePayload(),
+        parent_intent: "x".repeat(4_001),
+      }),
+    });
+    expect(oversizedIntent.status).toBe(200);
+    expect(await oversizedIntent.json()).toEqual({ replacement: null });
     expect(prepareCodeModeOutput).not.toHaveBeenCalled();
   });
 
@@ -728,6 +738,7 @@ function payload() {
     tool_use_id: "tool-1",
     is_code_mode_nested: false,
     token_miser_acceptance_version: 2,
+    parent_intent: "Inspect the exact command output.",
     tool_response: "large output",
   };
 }
@@ -740,6 +751,7 @@ function codeModePayload() {
     call_id: "call-1",
     cell_id: "cell-1",
     script: "text(await tools.exec_command({ cmd: 'rg --files' }))",
+    parent_intent: "Find the relevant repository files.",
     script_status: "Script completed",
     max_output_tokens: 10_000,
     content_items: [{ type: "input_text", text: "large script output" }],

@@ -29,6 +29,7 @@ describe("TokenMiserService", () => {
     const generateSummary = vi.fn(async () => ({
       status: "ok" as const,
       object: {
+        disposition: "summarize",
         summary: "The command printed many numbered records.",
         usefulDetails: ["The final record is 4000."],
       },
@@ -71,7 +72,7 @@ describe("TokenMiserService", () => {
           "Do not recommend actions, searches, reads, refinements, or next steps.",
         ),
         schema: expect.objectContaining({
-          required: ["summary", "usefulDetails"],
+          required: ["disposition", "summary", "usefulDetails"],
         }),
       }),
     );
@@ -99,6 +100,57 @@ describe("TokenMiserService", () => {
     expect(onInterceptionStored).toHaveBeenCalledWith(metadata);
     expect(result?.stopReason).toContain(metadata!.objectId);
     expect(result?.hookSpecificOutput.response_id).toBe(metadata!.objectId);
+  });
+
+  it("passes a deliberate exact read through unchanged and records only its evaluation cost", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({
+      status: "ok" as const,
+      object: {
+        disposition: "pass_through",
+        summary: "A focused read returned the requested instruction file.",
+        usefulDetails: ["The output is coherent and directly matches the stated intent."],
+      },
+      helperThreadId: "helper-pass-through",
+      helperTurnId: "helper-turn-pass-through",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium",
+      tokenUsage: { inputTokens: 1_000, outputTokens: 40 },
+    }));
+    const onInterceptionStored = vi.fn();
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      onInterceptionStored,
+      thresholdCharacters: 9,
+    });
+
+    const request = {
+      ...payload("exact instruction text"),
+      parent_intent: "I need to read the desktop AGENTS.md before editing.",
+      tool_input: { command: "sed -n '1,220p' apps/desktop/AGENTS.md" },
+    };
+    expect(await service.preparePostToolUse(request)).toBeUndefined();
+
+    expect(generateSummary).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringMatching(
+        /Visible parent intent before the call: I need to read the desktop AGENTS\.md before editing\.[\s\S]*sed -n/,
+      ),
+    }));
+    const [metadata] = await store.listMetadata();
+    expect(metadata).toMatchObject({
+      disposition: "passed_through",
+      originalCharacters: 22,
+      baselineParentTokens: 6,
+      replacementCharacters: 22,
+      retrievedCharacters: 0,
+    });
+    expect(await store.readAll({
+      objectId: metadata!.objectId,
+      threadId: "thread-1",
+    })).toBeUndefined();
+    expect(onInterceptionStored).toHaveBeenCalledWith(metadata);
   });
 
   it("fails open for disabled, small, and failed-summary output", async () => {
@@ -185,7 +237,11 @@ describe("TokenMiserService", () => {
     const store = await createStore();
     const generateSummary = vi.fn(async () => ({
       status: "ok" as const,
-      object: { summary: "Source references were listed.", usefulDetails: [] },
+      object: {
+        disposition: "summarize",
+        summary: "Source references were listed.",
+        usefulDetails: [],
+      },
     }));
     const service = new TokenMiserService({
       store,
@@ -245,6 +301,7 @@ describe("TokenMiserService per-thread override", () => {
     model: "gpt-5.6-luna",
     reasoningEffort: "medium" as const,
     object: {
+      disposition: "summarize",
       summary: "Large output.",
       usefulDetails: [],
       suggestedNextStep: "None.",
@@ -300,6 +357,7 @@ describe("TokenMiserService code-mode reduction", () => {
     const generateSummary = vi.fn(async () => ({
       status: "ok" as const,
       object: {
+        disposition: "summarize",
         summary: "The script listed many repository files.",
         usefulDetails: ["apps/desktop/src/main/index.ts was present."],
       },
@@ -355,11 +413,55 @@ describe("TokenMiserService code-mode reduction", () => {
     expect(onInterceptionStored).toHaveBeenCalledWith(metadata);
   });
 
+  it("returns no reducer replacement when a focused Code Mode result should pass through", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({
+      status: "ok" as const,
+      object: {
+        disposition: "pass_through",
+        summary: "The requested source file was read successfully.",
+        usefulDetails: [],
+      },
+      helperThreadId: "helper-code-pass-through",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium",
+      tokenUsage: { inputTokens: 500, outputTokens: 20 },
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 9,
+    });
+    const request = {
+      ...codeModePayload([{
+        type: "input_text" as const,
+        text: "requested source content",
+      }]),
+      parent_intent: "Read the exact source before changing it.",
+      script: "text(await tools.exec_command({ cmd: \"sed -n '1,220p' source.ts\" }))",
+    };
+
+    expect(await service.prepareCodeModeOutput(request)).toBeUndefined();
+    expect(generateSummary).toHaveBeenCalledWith(expect.objectContaining({
+      prompt: expect.stringMatching(
+        /Visible parent intent before the cell: Read the exact source before changing it\.[\s\S]*source\.ts/,
+      ),
+    }));
+    const [metadata] = await store.listMetadata();
+    expect(metadata).toMatchObject({
+      disposition: "passed_through",
+      baselineParentTokens: 6,
+      replacementCharacters: 24,
+    });
+  });
+
   it("joins parallel nested outputs into one retrievable group gate", async () => {
     const store = await createStore();
     const generateSummary = vi.fn(async () => ({
       status: "ok" as const,
       object: {
+        disposition: "summarize",
         summary: "Two independent repository probes completed.",
         usefulDetails: ["Both probes returned source matches."],
         members: [
@@ -409,7 +511,7 @@ describe("TokenMiserService code-mode reduction", () => {
         /Group ID: cell-1[\s\S]*nested-1[\s\S]*needle-alpha[\s\S]*nested-2[\s\S]*needle-beta/,
       ),
       schema: expect.objectContaining({
-        required: ["summary", "usefulDetails", "members"],
+        required: ["disposition", "summary", "usefulDetails"],
       }),
     }));
     const replacementText = prepared!.response.replacement[0]!.text;
@@ -468,6 +570,58 @@ describe("TokenMiserService code-mode reduction", () => {
       .toBeGreaterThan(0);
   });
 
+  it("passes a coherent parallel group through without running a second generic evaluation", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({
+      status: "ok" as const,
+      object: {
+        disposition: "pass_through",
+        summary: "Both requested focused reads completed.",
+        usefulDetails: [],
+      },
+      helperThreadId: "helper-group-pass-through",
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium",
+      tokenUsage: { inputTokens: 500, outputTokens: 40 },
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 10,
+      codeModeGroupingVersion: () => 1,
+    });
+    for (const [toolCallId, output] of [
+      ["nested-1", "focused alpha content"],
+      ["nested-2", "focused beta content"],
+    ]) {
+      await service.captureNestedPostToolUse({
+        ...payload(output),
+        is_code_mode_nested: true,
+        token_miser_grouping_version: 1,
+        code_mode_cell_id: "cell-1",
+        code_mode_tool_call_id: toolCallId,
+      });
+    }
+
+    expect(await service.prepareCodeModeOutput({
+      ...codeModePayload([{
+        type: "input_text",
+        text: "combined focused result above threshold",
+      }]),
+      parent_intent: "Read both exact files in parallel.",
+    })).toBeUndefined();
+    expect(generateSummary).toHaveBeenCalledOnce();
+    const [metadata] = await store.listMetadata();
+    expect(metadata).toMatchObject({
+      disposition: "passed_through",
+      baselineParentTokens: 10,
+      replacementCharacters: 39,
+    });
+    expect(metadata?.groupId).toBeUndefined();
+    expect(metadata?.groupMembers).toBeUndefined();
+  });
+
   it("uses the resolved code-mode budget as the original parent-token cap", async () => {
     const store = await createStore();
     const service = new TokenMiserService({
@@ -476,6 +630,7 @@ describe("TokenMiserService code-mode reduction", () => {
       generateSummary: async () => ({
         status: "ok",
         object: {
+          disposition: "summarize",
           summary: "A long script result.",
           usefulDetails: [],
           suggestedNextStep: "Read a narrow range if needed.",
@@ -543,7 +698,11 @@ describe("TokenMiserService code-mode reduction", () => {
     const store = await createStore();
     const generateSummary = vi.fn(async () => ({
       status: "ok" as const,
-      object: { summary: "Source references were listed.", usefulDetails: [] },
+      object: {
+        disposition: "summarize",
+        summary: "Source references were listed.",
+        usefulDetails: [],
+      },
     }));
     const service = new TokenMiserService({
       store,
@@ -633,6 +792,7 @@ describe("TokenMiserService code-mode reduction", () => {
     resolveGeneration({
       status: "ok",
       object: {
+        disposition: "summarize",
         summary: "This arrived too late.",
         usefulDetails: [],
         suggestedNextStep: "None.",
@@ -651,6 +811,7 @@ describe("TokenMiserService code-mode reduction", () => {
       generateSummary: async () => ({
         status: "ok",
         object: {
+          disposition: "summarize",
           summary: "😀".repeat(20_000),
           usefulDetails: [],
           suggestedNextStep: "Read a narrow range if needed.",

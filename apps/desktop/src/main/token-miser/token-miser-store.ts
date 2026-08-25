@@ -77,6 +77,7 @@ export type TokenMiserGroupBatchResult = {
 
 export type TokenMiserUsageSummary = {
   interceptionCount: number;
+  passThroughCount: number;
   originalCharacters: number;
   baselineParentTokens: number;
   replacementTokens: number;
@@ -105,6 +106,7 @@ export type TokenMiserThreadUsageSummary = TokenMiserUsageSummary & {
     cachedRevealedTokens: number;
     estimatedCachedReplayTokensSaved: number;
     replayTrackingVersion?: 2;
+    disposition?: "summarized" | "passed_through";
     summary?: TokenMiserSummary;
   }>;
 };
@@ -145,6 +147,7 @@ export type TokenMiserStoreParams = {
   baselineParentTokenCap?: number;
   replacementCharacters: number;
   summary: TokenMiserSummary;
+  disposition?: "summarized" | "passed_through";
   groupId?: string;
   groupMembers?: TokenMiserGroupMemberSummary[];
   helperUsage?: TokenMiserHelperUsage;
@@ -216,6 +219,7 @@ export class TokenMiserStore {
           }
         : {}),
       summary: params.summary,
+      ...(params.disposition ? { disposition: params.disposition } : {}),
       ...(params.groupId ? { groupId: params.groupId } : {}),
       ...(params.groupMembers ? { groupMembers: params.groupMembers } : {}),
       ...(params.helperUsage ? { helperUsage: params.helperUsage } : {}),
@@ -485,6 +489,7 @@ export class TokenMiserStore {
           ...(entry.replayTrackingVersion
             ? { replayTrackingVersion: entry.replayTrackingVersion }
             : {}),
+          ...(entry.disposition ? { disposition: entry.disposition } : {}),
           ...(entry.summary ? { summary: entry.summary } : {}),
         };
       }),
@@ -527,7 +532,11 @@ export class TokenMiserStore {
     threadId: string,
   ): Promise<TokenMiserStoredObject | undefined> {
     const metadata = await this.readMetadata(objectId);
-    if (!metadata || metadata.threadId !== threadId) {
+    if (
+      !metadata
+      || metadata.threadId !== threadId
+      || metadata.disposition === "passed_through"
+    ) {
       return undefined;
     }
     const output = await fs.readFile(this.outputPath(objectId), "utf8").catch(
@@ -737,6 +746,9 @@ function summarizeMetadata(
   );
   return {
     interceptionCount: metadata.length,
+    passThroughCount: metadata.filter(
+      (entry) => entry.disposition === "passed_through",
+    ).length,
     originalCharacters: metadata.reduce(
       (total, entry) => total + entry.originalCharacters,
       0,

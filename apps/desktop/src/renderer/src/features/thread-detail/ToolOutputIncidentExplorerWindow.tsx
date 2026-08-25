@@ -975,6 +975,10 @@ function SavingsConfidence(props: { savings: ThreadTokenMiserSavings }) {
   const reconstructed = reconstructedReplayCount > 0;
   const unpriced = props.savings.gateCount - props.savings.pricedGateCount;
   const gates = props.savings.gateCount;
+  const passThroughs = props.savings.passThroughCount ?? 0;
+  const decisionLabel = passThroughs > 0
+    ? `${gates.toLocaleString()} decisions (${passThroughs.toLocaleString()} pass-through)`
+    : `${gates.toLocaleString()} ${gates === 1 ? "gate" : "gates"}`;
   return (
     <p
       className="incident-explorer__confidence"
@@ -985,8 +989,8 @@ function SavingsConfidence(props: { savings: ThreadTokenMiserSavings }) {
         ? `Partly reconstructed · ${reconstructedReplayCount.toLocaleString()} of `
           + `${total.toLocaleString()} payload replays inferred from later tool calls`
         : `Directly observed · ${total.toLocaleString()} payload `
-          + `${total === 1 ? "replay" : "replays"} across ${gates.toLocaleString()} `
-          + `${gates === 1 ? "gate" : "gates"}, each counted at a request boundary`}
+          + `${total === 1 ? "replay" : "replays"} across ${decisionLabel}, `
+          + "each counted at a request boundary"}
       {unpriced > 0
         ? ` · ${unpriced.toLocaleString()} ${unpriced === 1 ? "gate is" : "gates are"} not priced yet`
         : ""}
@@ -1120,7 +1124,9 @@ function TokenMiserSavingsLens(props: {
                   {cachedRevealedTokens > 0
                     ? ` + ${formatCompactTokens(cachedRevealedTokens)} cached`
                     : ""}
-                  {" · summaries and retrievals"}
+                  {tokenMiser.passThroughCount
+                    ? " · summaries, retrievals, and deliberate pass-throughs"
+                    : " · summaries and retrievals"}
                 </span>
               </dd>
             </div>
@@ -1155,8 +1161,9 @@ function TokenMiserSavingsLens(props: {
       </div>
 
       <p className="incident-explorer__savings-caption">
-        {tokenMiser.interceptionCount.toLocaleString()} gated{" "}
-        {tokenMiser.interceptionCount === 1 ? "call" : "calls"} ·{" "}
+        {tokenMiser.passThroughCount
+          ? `${(tokenMiser.interceptionCount - tokenMiser.passThroughCount).toLocaleString()} summarized · ${tokenMiser.passThroughCount.toLocaleString()} passed through`
+          : `${tokenMiser.interceptionCount.toLocaleString()} gated ${tokenMiser.interceptionCount === 1 ? "call" : "calls"}`} ·{" "}
         {formatCompactTokens(tokenMiser.replacementTokens)} of summaries ·{" "}
         {tokenMiser.retrievedTokens > 0
           ? `${formatCompactTokens(tokenMiser.retrievedTokens)} read back later`
@@ -1176,6 +1183,7 @@ const GATE_FILTERS: Array<{
   { key: "win", label: "Wins" },
   { key: "miss", label: "Misses" },
   { key: "big-miss", label: "Big misses" },
+  { key: "pass-through", label: "Pass-throughs" },
 ];
 
 /**
@@ -1191,7 +1199,7 @@ function TokenMiserGateList(props: { entries: TokenMiserGateEntry[] }) {
   const [expanded, setExpanded] = useState<string>();
   const counts = props.entries.reduce(
     (totals, entry) => ({ ...totals, [entry.outcome]: totals[entry.outcome] + 1 }),
-    { "big-miss": 0, miss: 0, win: 0 } as Record<TokenMiserGateOutcome, number>,
+    { "big-miss": 0, miss: 0, "pass-through": 0, win: 0 } as Record<TokenMiserGateOutcome, number>,
   );
   const visible = filter === "all"
     ? props.entries
@@ -1250,13 +1258,16 @@ function TokenMiserGateList(props: { entries: TokenMiserGateEntry[] }) {
                     <span>
                       {entry.edge
                         ? entry.edge.label
+                        : entry.interception.disposition === "passed_through"
+                          ? `${formatCompactTokens(entry.interception.baselineParentTokens)} passed through unchanged`
                         : `${formatCompactTokens(entry.interception.baselineParentTokens)} → `
                           + `${formatCompactTokens(entry.interception.replacementTokens)} summary`}
                     </span>
                   </span>
                   <span className="incident-explorer__gate-verdict">
-                    {saved >= 0 ? "+" : "−"}
-                    {formatCompactTokens(Math.abs(saved))}
+                    {entry.interception.disposition === "passed_through"
+                      ? "unchanged"
+                      : `${saved >= 0 ? "+" : "−"}${formatCompactTokens(Math.abs(saved))}`}
                   </span>
                 </button>
                 {isOpen ? (

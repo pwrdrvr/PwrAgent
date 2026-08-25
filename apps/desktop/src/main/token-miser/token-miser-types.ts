@@ -12,6 +12,7 @@ const TOKEN_MISER_CODE_MODE_PAYLOAD_KEYS = new Set([
   "call_id",
   "cell_id",
   "script",
+  "parent_intent",
   "script_status",
   "max_output_tokens",
   "content_items",
@@ -53,6 +54,8 @@ export type TokenMiserPostToolUsePayload = {
   code_mode_cell_id?: string;
   /** Runtime-local member identity within `code_mode_cell_id`. */
   code_mode_tool_call_id?: string;
+  /** Most recent model-visible assistant narration before this call. */
+  parent_intent?: string;
   tool_input?: unknown;
   tool_response: unknown;
 };
@@ -105,6 +108,8 @@ export type TokenMiserObjectMetadata = {
   replayTrackingStoppedAt?: number;
   parentRequestEpoch?: string;
   summary: TokenMiserSummary;
+  /** Whether the parent received a summary or the ordinary original result. */
+  disposition?: "summarized" | "passed_through";
   /** Code Mode cell identity for a grouped parallel reduction. */
   groupId?: string;
   groupMembers?: TokenMiserGroupMemberSummary[];
@@ -150,6 +155,8 @@ export type TokenMiserCodeModeOutputPayload = {
   call_id: string;
   cell_id: string;
   script?: string;
+  /** Most recent model-visible assistant narration before this cell. */
+  parent_intent?: string;
   script_status: string;
   max_output_tokens: number;
   content_items: TokenMiserCodeModeTextContentItem[];
@@ -240,6 +247,13 @@ export function isTokenMiserPostToolUsePayload(
       || isNonEmptyString(record.code_mode_tool_call_id)
     )
     && (
+      record.parent_intent === undefined
+      || (
+        typeof record.parent_intent === "string"
+        && [...record.parent_intent].length <= 4_000
+      )
+    )
+    && (
       record.is_code_mode_nested === false
       || record.token_miser_grouping_version !== 1
       || (
@@ -266,6 +280,13 @@ export function isTokenMiserCodeModeOutputPayload(
     && isNonEmptyString(record.call_id)
     && isNonEmptyString(record.cell_id)
     && (record.script === undefined || typeof record.script === "string")
+    && (
+      record.parent_intent === undefined
+      || (
+        typeof record.parent_intent === "string"
+        && [...record.parent_intent].length <= 4_000
+      )
+    )
     && isNonEmptyString(record.script_status)
     && Number.isSafeInteger(record.max_output_tokens)
     && (record.max_output_tokens as number) > 0

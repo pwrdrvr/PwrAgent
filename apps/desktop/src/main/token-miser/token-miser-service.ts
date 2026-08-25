@@ -23,8 +23,14 @@ import {
 const TOKEN_MISER_SUMMARY_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["summary", "usefulDetails"],
+  required: ["disposition", "summary", "usefulDetails"],
   properties: {
+    disposition: {
+      type: "string",
+      enum: ["pass_through", "summarize"],
+      description:
+        "Whether the ordinary original result should reach the parent unchanged or be replaced by the factual summary.",
+    },
     summary: {
       type: "string",
       minLength: 1,
@@ -43,8 +49,9 @@ const TOKEN_MISER_SUMMARY_SCHEMA = {
 const TOKEN_MISER_GROUP_SUMMARY_SCHEMA = {
   type: "object",
   additionalProperties: false,
-  required: ["summary", "usefulDetails", "members"],
+  required: ["disposition", "summary", "usefulDetails"],
   properties: {
+    disposition: TOKEN_MISER_SUMMARY_SCHEMA.properties.disposition,
     summary: TOKEN_MISER_SUMMARY_SCHEMA.properties.summary,
     usefulDetails: TOKEN_MISER_SUMMARY_SCHEMA.properties.usefulDetails,
     members: {
@@ -64,7 +71,13 @@ const TOKEN_MISER_GROUP_SUMMARY_SCHEMA = {
 } as const;
 
 const TOKEN_MISER_SYSTEM_PROMPT = [
-  "You are Token Miser, a factual summarizer for completed coding-tool output.",
+  "You are Token Miser, the first gate on completed coding-tool output before it enters a parent coding agent's context.",
+  "Choose pass_through when the visible parent intent and tool/script input show a deliberate, well-targeted request for exact content and the result is coherent, relevant, and likely to be consumed substantially as-is.",
+  "Examples that often deserve pass_through are a bounded read of a requested source or instruction file, a concise exact query result, or a focused diagnostic whose details are all material.",
+  "Choose summarize for broad or exploratory searches, repetitive matches, verbose logs, test/build output, noisy failures, accidental directory-wide reads, or results that missed the stated intent.",
+  "When intent is absent or the choice is uncertain, choose summarize.",
+  "The host returns the original bytes itself for pass_through. Never copy or reconstruct the full output in your response.",
+  "For pass_through, keep the audit summary under 50 words and omit usefulDetails unless one short fact explains the decision.",
   "Summarize only what is present. Preserve exact filenames, identifiers, errors, counts, and commands that materially describe the result.",
   "Do not recommend actions, searches, reads, refinements, or next steps.",
   "Do not repeat long passages or give general advice. Keep the complete response under 450 words.",
@@ -111,6 +124,11 @@ type CapturedGroup = {
   characters: number;
   overflowed: boolean;
   timer: NodeJS.Timeout;
+};
+
+type TokenMiserDecision = {
+  disposition: "pass_through" | "summarize";
+  summary: TokenMiserSummary;
 };
 
 export type TokenMiserStructuredGenerationResult =
@@ -269,6 +287,9 @@ export class TokenMiserService {
     if (!prepared) {
       return undefined;
     }
+    if (prepared.disposition === "passed_through") {
+      return undefined;
+    }
 
     return {
       hookOutput: {
@@ -308,6 +329,9 @@ export class TokenMiserService {
         capturedGroup,
         options,
       );
+      if (grouped === "passed_through") {
+        return undefined;
+      }
       if (grouped) {
         return grouped;
       }
@@ -331,6 +355,9 @@ export class TokenMiserService {
       ) + this.codeModeContinuationGuidanceCharacters(),
     });
     if (!prepared) {
+      return undefined;
+    }
+    if (prepared.disposition === "passed_through") {
       return undefined;
     }
     const response = {
@@ -377,7 +404,9 @@ export class TokenMiserService {
     outerOutput: string,
     group: CapturedGroup,
     options: { signal?: AbortSignal },
-  ): Promise<TokenMiserPreparedCodeModeReduction | undefined> {
+  ): Promise<
+    TokenMiserPreparedCodeModeReduction | "passed_through" | undefined
+  > {
     const members = [...group.members.values()];
     const generated = await this.options.generateSummary({
       model: "gpt-5.6-luna",
@@ -393,6 +422,20 @@ export class TokenMiserService {
     const parsed = parseGroupSummary(generated.object, members);
     if (!parsed) {
       return undefined;
+    }
+    if (parsed.disposition === "pass_through") {
+      await this.recordPassThroughDecision({
+        threadId: payload.thread_id,
+        turnId: payload.turn_id,
+        toolUseId: payload.call_id,
+        toolName: "Code Mode",
+        output: outerOutput,
+        signal: options.signal,
+        baselineParentTokenCap: payload.max_output_tokens,
+        summary: parsed.summary,
+        generated,
+      });
+      return "passed_through";
     }
     const groupMembers: TokenMiserGroupMemberSummary[] = members.map((member) => ({
       objectId: randomUUID(),
@@ -447,6 +490,7 @@ export class TokenMiserService {
         * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
       ) + this.codeModeContinuationGuidanceCharacters(),
       summary: parsed.summary,
+      disposition: "summarized",
       groupId: payload.cell_id,
       groupMembers,
       helperUsage: {
@@ -515,8 +559,11 @@ export class TokenMiserService {
     baselineParentTokenCap?: number;
     replacementCharacters?: (replacement: string) => number;
   }): Promise<{
+    disposition: "summarized";
     replacement: string;
     staged: TokenMiserStagedObject;
+  } | {
+    disposition: "passed_through";
   } | undefined> {
     if (params.signal?.aborted) {
       return undefined;
@@ -538,9 +585,18 @@ export class TokenMiserService {
     if (generated.status !== "ok") {
       return undefined;
     }
-    const summary = parseSummary(generated.object);
-    if (!summary) {
+    const decision = parseDecision(generated.object);
+    if (!decision) {
       return undefined;
+    }
+
+    if (decision.disposition === "pass_through") {
+      await this.recordPassThroughDecision({
+        ...params,
+        generated,
+        summary: decision.summary,
+      });
+      return { disposition: "passed_through" };
     }
 
     const objectId = randomUUID();
@@ -548,7 +604,7 @@ export class TokenMiserService {
       objectId,
       toolName: params.toolName,
       outputCharacters: params.output.length,
-      summary,
+      summary: decision.summary,
     });
     const parentModel = await this.options.resolveParentModel?.(
       params.threadId,
@@ -565,7 +621,8 @@ export class TokenMiserService {
       output: params.output,
       replacementCharacters:
         params.replacementCharacters?.(replacement) ?? replacement.length,
-      summary,
+      summary: decision.summary,
+      disposition: "summarized",
       helperUsage: {
         helperThreadId: generated.helperThreadId,
         helperTurnId: generated.helperTurnId,
@@ -589,7 +646,60 @@ export class TokenMiserService {
       return undefined;
     }
     const serviceStaged = this.withStoredNotification(staged);
-    return { replacement, staged: serviceStaged };
+    return { disposition: "summarized", replacement, staged: serviceStaged };
+  }
+
+  private async recordPassThroughDecision(params: {
+    threadId: string;
+    turnId: string;
+    toolUseId: string;
+    toolName: string;
+    output: string;
+    signal?: AbortSignal;
+    baselineParentTokenCap?: number;
+    summary: TokenMiserSummary;
+    generated: Extract<TokenMiserStructuredGenerationResult, { status: "ok" }>;
+  }): Promise<void> {
+    const parentModel = await this.options.resolveParentModel?.(
+      params.threadId,
+    ).catch(() => undefined);
+    const visibleCharacters = Math.min(
+      params.output.length,
+      (params.baselineParentTokenCap ?? 10_000)
+      * TOKEN_MISER_ESTIMATED_CHARACTERS_PER_TOKEN,
+    );
+    const staged = await this.options.store.stage({
+      threadId: params.threadId,
+      turnId: params.turnId,
+      toolUseId: params.toolUseId,
+      toolName: params.toolName,
+      // A pass-through has no preserved object. Keep an empty private payload
+      // beside its accounting record so retrieval can never expose a second
+      // copy of content the parent already received.
+      output: "",
+      baselineCharacters: params.output.length,
+      ...(params.baselineParentTokenCap !== undefined
+        ? { baselineParentTokenCap: params.baselineParentTokenCap }
+        : {}),
+      replacementCharacters: visibleCharacters,
+      summary: params.summary,
+      disposition: "passed_through",
+      helperUsage: {
+        helperThreadId: params.generated.helperThreadId,
+        helperTurnId: params.generated.helperTurnId,
+        model: params.generated.model,
+        reasoningEffort: params.generated.reasoningEffort,
+        serviceTier: params.generated.serviceTier,
+        tokenUsage: params.generated.tokenUsage,
+      },
+      parentCumulativeInputTokens:
+        this.options.getParentCumulativeInputTokens?.(params.threadId),
+      ...(parentModel?.model ? { parentModel: parentModel.model } : {}),
+      ...(parentModel?.serviceTier
+        ? { parentServiceTier: parentModel.serviceTier }
+        : {}),
+    });
+    await this.withStoredNotification(staged).commit();
   }
 }
 
@@ -599,6 +709,7 @@ function buildSummaryPrompt(
 ): string {
   return [
     `Tool: ${payload.tool_name}`,
+    `Visible parent intent before the call: ${payload.parent_intent ?? "Not available"}`,
     `Tool input: ${serializeToolResponse(payload.tool_input)}`,
     `Output characters: ${output.length}`,
     "",
@@ -615,6 +726,7 @@ function buildCodeModeSummaryPrompt(
     "Tool: Code Mode",
     `Call ID: ${payload.call_id}`,
     `Cell ID: ${payload.cell_id}`,
+    `Visible parent intent before the cell: ${payload.parent_intent ?? "Not available"}`,
     `Script status: ${payload.script_status}`,
     `Script: ${payload.script ?? "Not available"}`,
     `Model-visible output budget: ${payload.max_output_tokens} tokens`,
@@ -632,6 +744,7 @@ function buildGroupedCodeModeSummaryPrompt(
   return [
     "Summarize this completed parallel Code Mode cell as one group.",
     `Group ID: ${payload.cell_id}`,
+    `Visible parent intent before the cell: ${payload.parent_intent ?? "Not available"}`,
     `Script status: ${payload.script_status}`,
     `Script: ${payload.script ?? "Not available"}`,
     "Return one factual group summary and one factual summary for every toolCallId.",
@@ -702,18 +815,38 @@ function parseSummary(value: unknown): TokenMiserSummary | undefined {
   };
 }
 
-function parseGroupSummary(
-  value: unknown,
-  capturedMembers: CapturedGroupMember[],
-): {
-  summary: TokenMiserSummary;
-  members: Map<string, string>;
-} | undefined {
+function parseDecision(value: unknown): TokenMiserDecision | undefined {
   const summary = parseSummary(value);
   if (!summary || !value || typeof value !== "object") {
     return undefined;
   }
+  const disposition = (value as Record<string, unknown>).disposition;
+  if (disposition !== "pass_through" && disposition !== "summarize") {
+    return undefined;
+  }
+  return { disposition, summary };
+}
+
+function parseGroupSummary(
+  value: unknown,
+  capturedMembers: CapturedGroupMember[],
+): {
+  disposition: TokenMiserDecision["disposition"];
+  summary: TokenMiserSummary;
+  members: Map<string, string>;
+} | undefined {
+  const decision = parseDecision(value);
+  if (!decision || !value || typeof value !== "object") {
+    return undefined;
+  }
   const record = value as Record<string, unknown>;
+  if (decision.disposition === "pass_through") {
+    return {
+      disposition: decision.disposition,
+      summary: decision.summary,
+      members: new Map(),
+    };
+  }
   if (!Array.isArray(record.members)) {
     return undefined;
   }
@@ -737,7 +870,7 @@ function parseGroupSummary(
   if (members.size !== capturedMembers.length) {
     return undefined;
   }
-  return { summary, members };
+  return { disposition: decision.disposition, summary: decision.summary, members };
 }
 
 function capturedGroupKey(
