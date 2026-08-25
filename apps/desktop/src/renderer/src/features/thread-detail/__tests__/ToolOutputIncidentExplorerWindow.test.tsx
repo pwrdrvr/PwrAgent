@@ -178,6 +178,54 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(screen.queryByRole("button", { name: /win-1/ })).not.toBeInTheDocument();
   });
 
+  it("separates summary and pass-through tokens in the savings caption", async () => {
+    const response = buildResponse();
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 2,
+      passThroughCount: 1,
+      originalCharacters: 51_000,
+      baselineParentTokens: 12_715,
+      replacementTokens: 3_107,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 9_608,
+      interceptions: [
+        {
+          objectId: "summary-1",
+          turnId: "turn-1",
+          toolUseId: "item-summary",
+          toolName: "Code Mode",
+          createdAt: 1_800_000_000_000,
+          originalCharacters: 40_000,
+          baselineParentTokens: 10_000,
+          replacementTokens: 392,
+          retrievedTokens: 0,
+          estimatedParentTokensSaved: 9_608,
+          disposition: "summarized",
+        },
+        {
+          objectId: "pass-through-1",
+          turnId: "turn-1",
+          toolUseId: "item-pass-through",
+          toolName: "Code Mode",
+          createdAt: 1_800_000_000_100,
+          originalCharacters: 10_858,
+          baselineParentTokens: 2_715,
+          replacementTokens: 2_715,
+          retrievedTokens: 0,
+          estimatedParentTokensSaved: 0,
+          disposition: "passed_through",
+        },
+      ],
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Adaptive%20proof";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    expect(await screen.findByText(
+      /1 summarized · 1 passed through · 392 summary tokens · 2.7k pass-through tokens · nothing read back later/,
+    )).toBeInTheDocument();
+  });
+
   it("shows the priced savings equation and how much of it was observed", async () => {
     const response = buildResponse();
     response.pricing = {

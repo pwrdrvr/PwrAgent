@@ -1034,6 +1034,24 @@ function TokenMiserSavingsLens(props: {
   const revealedTokens =
     (tokenMiser.replacementTokens ?? 0)
     + (tokenMiser.retrievedTokens ?? 0);
+  const hasCompleteDispositionBreakdown =
+    tokenMiser.interceptions?.length === tokenMiser.interceptionCount;
+  const summarizedReplacementTokens = hasCompleteDispositionBreakdown
+    ? tokenMiser.interceptions?.reduce(
+        (total, interception) => interception.disposition === "passed_through"
+          ? total
+          : total + interception.replacementTokens,
+        0,
+      ) ?? 0
+    : 0;
+  const passedThroughReplacementTokens = hasCompleteDispositionBreakdown
+    ? tokenMiser.interceptions?.reduce(
+        (total, interception) => interception.disposition === "passed_through"
+          ? total + interception.replacementTokens
+          : total,
+        0,
+      ) ?? 0
+    : 0;
   const partialPricingPrefix = savings
     && savings.pricedGateCount < savings.gateCount
     ? "All gates · "
@@ -1171,7 +1189,11 @@ function TokenMiserSavingsLens(props: {
         {tokenMiser.passThroughCount
           ? `${(tokenMiser.interceptionCount - tokenMiser.passThroughCount).toLocaleString()} summarized · ${tokenMiser.passThroughCount.toLocaleString()} passed through`
           : `${tokenMiser.interceptionCount.toLocaleString()} gated ${tokenMiser.interceptionCount === 1 ? "call" : "calls"}`} ·{" "}
-        {formatCompactTokens(tokenMiser.replacementTokens)} of summaries ·{" "}
+        {tokenMiser.passThroughCount
+          ? hasCompleteDispositionBreakdown
+            ? `${formatCompactTokens(summarizedReplacementTokens)} summary tokens · ${formatCompactTokens(passedThroughReplacementTokens)} pass-through tokens`
+            : `${formatCompactTokens(tokenMiser.replacementTokens)} revealed before retrieval`
+          : `${formatCompactTokens(tokenMiser.replacementTokens)} of summaries`} ·{" "}
         {tokenMiser.retrievedTokens > 0
           ? `${formatCompactTokens(tokenMiser.retrievedTokens)} read back later`
           : "nothing read back later"}
