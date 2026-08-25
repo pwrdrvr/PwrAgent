@@ -18,6 +18,45 @@ afterEach(async () => {
 });
 
 describe("TokenMiserPluginManager", () => {
+  it("serializes concurrent plugin source refreshes for Windows-safe replacement", async () => {
+    const stateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-token-miser-source-race-"),
+    );
+    temporaryDirectories.push(stateDir);
+    const realRename = fs.rename.bind(fs);
+    const activeTargets = new Set<string>();
+    vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+      const target = String(newPath);
+      if (activeTargets.has(target)) {
+        throw Object.assign(new Error("concurrent Windows replacement"), {
+          code: "EPERM",
+        });
+      }
+      activeTargets.add(target);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      try {
+        await realRename(oldPath, newPath);
+      } finally {
+        activeTargets.delete(target);
+      }
+    });
+    const manager = new TokenMiserPluginManager({
+      stateDir,
+      profileName: "dev",
+      executablePath: "C:\\PwrAgent\\PwrAgent.exe",
+      hookEntryPath: "C:\\PwrAgent\\token-miser-hook.js",
+      platform: "win32",
+    });
+
+    const [first, second] = await Promise.all([
+      manager.ensurePluginSource(),
+      manager.ensurePluginSource(),
+    ]);
+
+    expect(second).toEqual(first);
+    expect(activeTargets.size).toBe(0);
+  });
+
   it("writes an isolated local marketplace plugin with a stable PostToolUse hook", async () => {
     const stateDir = await fs.mkdtemp(
       path.join(os.tmpdir(), "pwragent-token-miser-plugin-"),

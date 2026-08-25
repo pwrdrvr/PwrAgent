@@ -52,8 +52,35 @@ export class TokenMiserPluginManager {
 
   private readonly installedRuntimeKeys = new Set<string>();
   private readonly installationPromises = new Map<string, Promise<void>>();
+  private pluginSourcePromise:
+    | Promise<{
+        marketplacePath: string;
+        marketplaceRoot: string;
+        pluginPath: string;
+      }>
+    | undefined;
 
   async ensurePluginSource(): Promise<{
+    marketplacePath: string;
+    marketplaceRoot: string;
+    pluginPath: string;
+  }> {
+    const pending = this.pluginSourcePromise;
+    if (pending) {
+      return pending;
+    }
+    const installation = this.writePluginSource();
+    this.pluginSourcePromise = installation;
+    try {
+      return await installation;
+    } finally {
+      if (this.pluginSourcePromise === installation) {
+        this.pluginSourcePromise = undefined;
+      }
+    }
+  }
+
+  private async writePluginSource(): Promise<{
     marketplacePath: string;
     marketplaceRoot: string;
     pluginPath: string;

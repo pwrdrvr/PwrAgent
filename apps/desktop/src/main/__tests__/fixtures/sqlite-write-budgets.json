@@ -165,7 +165,7 @@
     "note": "two compaction markers plus one cold-replay usage line whose attribution rides the pricing-ledger transaction",
     "observedWalBytes": 90640,
     "rowsChanged": 5,
-    "statements": 6
+    "statements": 5
   },
   "thread-pricing-lazy-repair": {
     "commits": 1,
