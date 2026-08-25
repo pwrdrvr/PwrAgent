@@ -47,6 +47,7 @@ import {
   formatTurnWhen,
   invocationStatusTone,
   isOverOutputCap,
+  matchTokenMiserInvocations,
   refineToolCategory,
   repeatCountFor,
   sortIncidentCases,
@@ -198,7 +199,10 @@ export function ToolOutputIncidentExplorerWindow() {
   );
   const usageLines = latest?.pricing?.lines;
   const tokenMiser = accounting?.tokenMiser;
-  const activeTokenMiser = tokenMiser && tokenMiser.interceptionCount > 0
+  const activeTokenMiser = tokenMiser && (
+    tokenMiser.interceptionCount > 0
+    || (tokenMiser.codeMode?.callCount ?? 0) > 0
+  )
     ? tokenMiser
     : undefined;
   const totalEstimatedParentTokensSaved = activeTokenMiser
@@ -231,7 +235,10 @@ export function ToolOutputIncidentExplorerWindow() {
   const lensLatched = useRef(false);
   if (!lensLatched.current && accounting) {
     lensLatched.current = true;
-    if ((accounting.tokenMiser?.interceptionCount ?? 0) > 0) {
+    if (
+      (accounting.tokenMiser?.interceptionCount ?? 0) > 0
+      || (accounting.tokenMiser?.codeMode?.callCount ?? 0) > 0
+    ) {
       setLens("savings");
     }
   }
@@ -306,10 +313,10 @@ export function ToolOutputIncidentExplorerWindow() {
   const selected = invocations.find((invocation) => invocation.invocationId === selectedId)
     ?? invocations[0];
   const selectedTokenMiser = selected
-    ? tokenMiser?.interceptions?.find((interception) =>
-        interception.toolUseId === selected.itemId
-        || selected.invocationId.endsWith(`:${interception.toolUseId}`)
-      )
+    ? matchTokenMiserInvocations(
+        allInvocations,
+        tokenMiser?.interceptions ?? [],
+      ).get(selected.invocationId)
     : undefined;
 
   useEffect(() => {
@@ -543,6 +550,7 @@ export function ToolOutputIncidentExplorerWindow() {
           gateCostMicros={tokenMiserGateCostMicros}
           gateTokens={tokenMiserGateTokens}
           gates={gateEntries}
+          invocations={allInvocations}
           threadCostMicros={threadCostMicros}
           tokenMiser={activeTokenMiser}
         />
@@ -634,6 +642,13 @@ export function ToolOutputIncidentExplorerWindow() {
               ? describeTokenMiserReach({
                   gatedCount: activeTokenMiser.interceptionCount,
                   passThroughCount: activeTokenMiser.passThroughCount ?? 0,
+                  ...(activeTokenMiser.codeMode
+                    ? {
+                        codeModeCallCount: activeTokenMiser.codeMode.callCount,
+                        directCount: activeTokenMiser.codeMode.directCount,
+                        retrievalCount: activeTokenMiser.codeMode.retrievalCount,
+                      }
+                    : {}),
                   savedTokens: totalEstimatedParentTokensSaved,
                   toolCallCount: allInvocations.length,
                 })
@@ -788,7 +803,7 @@ export function ToolOutputIncidentExplorerWindow() {
                   ) : null}
                   <Fact label="observed" value={formatTimestamp(selected.observedAt)} />
                   <Fact
-                    label="output"
+                    label="telemetry"
                     tone={selected.outputState === "available" ? undefined : "warning"}
                     value={describeAvailability(selected)}
                   />
@@ -808,12 +823,33 @@ export function ToolOutputIncidentExplorerWindow() {
                       style={{ width: `${capMeterWidth(selected.outputChars) * 100}%` }}
                     />
                   </span>
-                  <p className="incident-explorer__caption">
-                    {selected.outputChars.toLocaleString()} raw chars emitted ·{" "}
-                    {laterTripsInTurn > 0
-                      ? `replayed on the ${laterTripsInTurn.toLocaleString()} later round ${laterTripsInTurn === 1 ? "trip" : "trips"} in this turn`
-                      : "no later round trips in this turn replayed it"}
-                  </p>
+                  {selectedTokenMiser
+                    && selectedTokenMiser.disposition !== "passed_through" ? (
+                      <>
+                        <p className="incident-explorer__caption">
+                          Emitted {selected.outputChars.toLocaleString()} raw characters;
+                          {" Token Miser revealed "}
+                          {(selectedTokenMiser.replacementCharacters
+                            ?? selectedTokenMiser.replacementTokens * 4)
+                            .toLocaleString()} characters.
+                        </p>
+                        <p className="incident-explorer__caption">
+                          Raw output would otherwise have replayed across{" "}
+                          {(selectedTokenMiser.cachedReplayCount ?? 0).toLocaleString()}
+                          {" later parent "}
+                          {(selectedTokenMiser.cachedReplayCount ?? 0) === 1
+                            ? "request."
+                            : "requests."}
+                        </p>
+                      </>
+                    ) : (
+                      <p className="incident-explorer__caption">
+                        {selected.outputChars.toLocaleString()} raw chars emitted ·{" "}
+                        {laterTripsInTurn > 0
+                          ? `replayed on the ${laterTripsInTurn.toLocaleString()} later round ${laterTripsInTurn === 1 ? "trip" : "trips"} in this turn`
+                          : "no later round trips in this turn replayed it"}
+                      </p>
+                    )}
                   <p className="incident-explorer__reason">
                     {selected.noisyReason ?? "large output"}
                   </p>
@@ -925,13 +961,26 @@ export function ToolOutputIncidentExplorerWindow() {
  * ratio that cannot be true.
  */
 function describeTokenMiserReach(params: {
+  codeModeCallCount?: number;
+  directCount?: number;
   gatedCount: number;
   passThroughCount: number;
+  retrievalCount?: number;
   savedTokens: number;
   toolCallCount: number;
 }): string {
   const kept =
     `kept ${formatCompactTokens(params.savedTokens)} out of the parent's context.`;
+  if (params.codeModeCallCount !== undefined) {
+    const summarized = params.gatedCount - params.passThroughCount;
+    return `Token Miser observed ${params.codeModeCallCount.toLocaleString()} Code Mode `
+      + `${params.codeModeCallCount === 1 ? "result" : "results"}: `
+      + `${summarized.toLocaleString()} summarized, `
+      + `${params.passThroughCount.toLocaleString()} passed through, `
+      + `${(params.directCount ?? 0).toLocaleString()} stayed direct, and `
+      + `${(params.retrievalCount ?? 0).toLocaleString()} `
+      + `${(params.retrievalCount ?? 0) === 1 ? "retrieval" : "retrievals"} ran. It ${kept}`;
+  }
   if (params.passThroughCount > 0) {
     return `Token Miser made ${params.gatedCount.toLocaleString()} `
       + `${params.gatedCount === 1 ? "decision" : "decisions"}, passed `
@@ -1011,17 +1060,32 @@ function TokenMiserSavingsLens(props: {
   gateCostMicros: number;
   gateTokens: number;
   gates: TokenMiserGateEntry[];
+  invocations: ThreadToolInvocationRecord[];
   threadCostMicros: number;
   tokenMiser?: ThreadToolAccounting["tokenMiser"];
 }) {
   const tokenMiser = props.tokenMiser;
-  if (!tokenMiser || !props.comparison) {
+  if (!tokenMiser) {
     return (
       <div className="incident-explorer__savings">
         <p className="incident-explorer__savings-empty">
           Token Miser is on, but nothing in this thread was gated. Large tool
           output is intercepted once a call clears the size threshold.
         </p>
+      </div>
+    );
+  }
+  if (!props.comparison) {
+    return (
+      <div className="incident-explorer__savings">
+        <TokenMiserCodeModeStats
+          invocations={props.invocations}
+          tokenMiser={tokenMiser}
+        />
+        <p className="incident-explorer__savings-empty">
+          No Code Mode result crossed Token Miser&apos;s evaluation threshold.
+        </p>
+        <TokenMiserDirectList tokenMiser={tokenMiser} />
       </div>
     );
   }
@@ -1199,9 +1263,128 @@ function TokenMiserSavingsLens(props: {
           : "nothing read back later"}
       </p>
 
+      <TokenMiserCodeModeStats
+        invocations={props.invocations}
+        tokenMiser={tokenMiser}
+      />
       <TokenMiserGateList entries={props.gates} />
+      <TokenMiserDirectList tokenMiser={tokenMiser} />
     </div>
   );
+}
+
+function TokenMiserCodeModeStats(props: {
+  invocations: ThreadToolInvocationRecord[];
+  tokenMiser: NonNullable<ThreadToolAccounting["tokenMiser"]>;
+}) {
+  const codeMode = props.tokenMiser.codeMode;
+  if (!codeMode || codeMode.callCount === 0) return null;
+  const clusters = buildDispatchClusters(props.invocations);
+  const multiClusters = clusters.filter((size) => size > 1);
+  const pollingInvocations = props.invocations.filter(
+    (invocation) => invocation.category === "polling",
+  ).length;
+  return (
+    <section className="incident-explorer__gates" aria-label="Code Mode behavior">
+      <div className="incident-explorer__gates-head">
+        <p className="incident-explorer__eyebrow">Code Mode behavior</p>
+      </div>
+      <p className="incident-explorer__savings-caption">
+        {codeMode.callCount.toLocaleString()} Code Mode calls
+        {" · "}{props.invocations.length.toLocaleString()} recorded tool invocations
+        {" · "}{(props.invocations.length / codeMode.callCount).toFixed(2)} per call
+        {" · "}{clusters.length.toLocaleString()} dispatch clusters
+        {" · "}{multiClusters.length.toLocaleString()} multi-invocation
+        {multiClusters.length > 0
+          ? ` (largest ${Math.max(...multiClusters).toLocaleString()})`
+          : ""}
+      </p>
+      <p className="incident-explorer__savings-caption">
+        {codeMode.directCount.toLocaleString()} ungated/direct
+        {" · "}{codeMode.summarizedCount.toLocaleString()} summarized
+        {" · "}{codeMode.passThroughCount.toLocaleString()} explicit pass-through
+        {" · "}{codeMode.retrievalCount.toLocaleString()} retrieval cells
+        {" · "}{pollingInvocations.toLocaleString()} polling invocations
+      </p>
+    </section>
+  );
+}
+
+function TokenMiserDirectList(props: {
+  tokenMiser: NonNullable<ThreadToolAccounting["tokenMiser"]>;
+}) {
+  const [expanded, setExpanded] = useState<string>();
+  const direct = props.tokenMiser.codeMode?.observations.filter(
+    (entry) => entry.disposition === "direct",
+  ) ?? [];
+  if (direct.length === 0) return null;
+  return (
+    <section className="incident-explorer__gates" aria-label="Ungated Code Mode results">
+      <div className="incident-explorer__gates-head">
+        <p className="incident-explorer__eyebrow">Ungated/direct results</p>
+      </div>
+      <ul className="incident-explorer__gate-list">
+        {direct.map((entry) => (
+          <li className="incident-explorer__gate" data-outcome="direct" key={entry.observationId}>
+            <span aria-hidden="true" className="incident-explorer__edge-stripe" />
+            <button
+              aria-expanded={expanded === entry.observationId}
+              className="incident-explorer__gate-row"
+              onClick={() => setExpanded(
+                expanded === entry.observationId
+                  ? undefined
+                  : entry.observationId,
+              )}
+              type="button"
+            >
+              <span className="incident-explorer__gate-identity">
+                <code>Code Mode</code>
+                <span>{entry.outputCharacters.toLocaleString()} characters</span>
+              </span>
+              <span className="incident-explorer__gate-verdict">direct</span>
+            </button>
+            {expanded === entry.observationId ? (
+              <div className="incident-explorer__gate-detail">
+                <p>
+                  No reducer replacement was selected; the ordinary result
+                  reached the parent directly.
+                </p>
+                {entry.script ? <pre><code>{entry.script}</code></pre> : null}
+                {entry.outputPreview ? (
+                  <pre><code>
+                    {entry.outputPreview}
+                    {entry.outputPreviewTruncated ? "\n… preview truncated" : ""}
+                  </code></pre>
+                ) : null}
+              </div>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function buildDispatchClusters(
+  invocations: ThreadToolInvocationRecord[],
+): number[] {
+  const ordered = [...invocations].sort((left, right) =>
+    (left.startedAt ?? left.observedAt) - (right.startedAt ?? right.observedAt)
+  );
+  const clusters: number[] = [];
+  let clusterEnd = Number.NEGATIVE_INFINITY;
+  for (const invocation of ordered) {
+    const start = invocation.startedAt ?? invocation.observedAt;
+    const end = invocation.completedAt ?? start;
+    if (clusters.length === 0 || start > clusterEnd) {
+      clusters.push(1);
+      clusterEnd = end;
+      continue;
+    }
+    clusters[clusters.length - 1] = clusters.at(-1)! + 1;
+    clusterEnd = Math.max(clusterEnd, end);
+  }
+  return clusters;
 }
 
 const GATE_FILTERS: Array<{
@@ -1638,8 +1821,16 @@ function scaleWidth(value: number, max: number, floor = 2): number {
 }
 
 function describeAvailability(invocation: ThreadToolInvocationRecord): string {
-  return invocation.outputState
-    ?? (invocation.outputTruncated ? "truncated" : "unavailable");
+  if (invocation.outputTruncated || invocation.outputState === "truncated") {
+    return "truncated size recorded";
+  }
+  if (invocation.outputState === "available") {
+    return "size recorded";
+  }
+  if (invocation.outputState === "compacted") {
+    return "compacted size recorded";
+  }
+  return "size unavailable";
 }
 
 /**

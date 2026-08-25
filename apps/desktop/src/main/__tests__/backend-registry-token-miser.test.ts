@@ -191,6 +191,49 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     ).toBeLessThan(0);
   });
 
+  it("prices a deterministic pass-through without inventing a Luna charge", async () => {
+    const persist = (
+      registry as unknown as {
+        persistTokenMiserLedgerEntries(
+          metadata: readonly TokenMiserObjectMetadata[],
+        ): Promise<void>;
+      }
+    ).persistTokenMiserLedgerEntries.bind(registry);
+    const { helperUsage: _helperUsage, ...policyEntry } = metadata(
+      "gate-1",
+      "unused-helper",
+    );
+    await persist([{
+      ...policyEntry,
+      disposition: "passed_through",
+      replacementCharacters: 24_000,
+      parentModel: "gpt-5.6-sol",
+    }]);
+
+    const overlay = await store.getThreadOverlayState({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(overlay?.subAgents?.[0]).toMatchObject({
+      task: "Pass through commandExecution output by policy",
+      lastMessage:
+        "Passed 24,000 characters from commandExecution through unchanged by deterministic policy.",
+      tokenMiserAccounting: {
+        gateModel: "policy",
+        gateTotalTokens: 0,
+        gateCostMicros: 0,
+        revealedParentTokens: 6_000,
+        savingsMicros: 0,
+      },
+    });
+    const pricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(pricing.lines.filter((line) => line.scope === "monitor"))
+      .toHaveLength(0);
+  });
+
   // A native review runs on the parent thread with no usage line of its own,
   // and its hook fires under an inner turn id that no line will ever carry.
   // The model stamped at creation is the only rate source such a gate has.

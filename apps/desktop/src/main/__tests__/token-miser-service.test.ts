@@ -102,7 +102,7 @@ describe("TokenMiserService", () => {
     expect(result?.hookSpecificOutput.response_id).toBe(metadata!.objectId);
   });
 
-  it("passes a deliberate exact read through unchanged and records only its evaluation cost", async () => {
+  it("passes an exact instruction read through without paying for evaluation", async () => {
     const store = await createStore();
     const generateSummary = vi.fn(async () => ({
       status: "ok" as const,
@@ -133,11 +133,7 @@ describe("TokenMiserService", () => {
     };
     expect(await service.preparePostToolUse(request)).toBeUndefined();
 
-    expect(generateSummary).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: expect.stringMatching(
-        /Visible parent intent before the call: I need to read the desktop AGENTS\.md before editing\.[\s\S]*sed -n/,
-      ),
-    }));
+    expect(generateSummary).not.toHaveBeenCalled();
     const [metadata] = await store.listMetadata();
     expect(metadata).toMatchObject({
       disposition: "passed_through",
@@ -146,6 +142,7 @@ describe("TokenMiserService", () => {
       replacementCharacters: 22,
       retrievedCharacters: 0,
     });
+    expect(metadata?.helperUsage).toBeUndefined();
     expect(await store.readAll({
       objectId: metadata!.objectId,
       threadId: "thread-1",
@@ -419,7 +416,7 @@ describe("TokenMiserService code-mode reduction", () => {
     expect(onInterceptionStored).toHaveBeenCalledWith(metadata);
   });
 
-  it("returns no reducer replacement when a focused Code Mode result should pass through", async () => {
+  it("passes a bounded exact source read through without evaluation", async () => {
     const store = await createStore();
     const generateSummary = vi.fn(async () => ({
       status: "ok" as const,
@@ -449,17 +446,53 @@ describe("TokenMiserService code-mode reduction", () => {
     };
 
     expect(await service.prepareCodeModeOutput(request)).toBeUndefined();
-    expect(generateSummary).toHaveBeenCalledWith(expect.objectContaining({
-      prompt: expect.stringMatching(
-        /Visible parent intent before the cell: Read the exact source before changing it\.[\s\S]*source\.ts/,
-      ),
-    }));
+    expect(generateSummary).not.toHaveBeenCalled();
     const [metadata] = await store.listMetadata();
     expect(metadata).toMatchObject({
       disposition: "passed_through",
       baselineParentTokens: 6,
       replacementCharacters: 24,
     });
+    expect(metadata?.helperUsage).toBeUndefined();
+  });
+
+  it("exempts a mandatory Code Mode instruction read deterministically", async () => {
+    const store = await createStore();
+    const generateSummary = vi.fn(async () => ({
+      status: "failed" as const,
+      reason: "must not run",
+    }));
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      generateSummary,
+      thresholdCharacters: 9,
+    });
+    const request = {
+      ...codeModePayload([{
+        type: "input_text" as const,
+        text: "mandatory instruction contents",
+      }]),
+      script:
+        "const result = await tools.exec_command({ cmd: \"sed -n '1,240p' apps/desktop/AGENTS.md\" }); text(result.output);",
+    };
+
+    expect(await service.prepareCodeModeOutput(request)).toBeUndefined();
+    expect(generateSummary).not.toHaveBeenCalled();
+    const [metadata] = await store.listMetadata();
+    expect(metadata).toMatchObject({
+      disposition: "passed_through",
+      summary: {
+        summary: "A deliberate exact instruction-file read passed through unchanged by policy.",
+      },
+    });
+    expect(metadata?.helperUsage).toBeUndefined();
+    expect((await store.summarizeThreadUsage("thread-1")).codeMode)
+      .toMatchObject({
+        callCount: 1,
+        passThroughCount: 1,
+        directCount: 0,
+      });
   });
 
   it("joins parallel nested outputs into one retrievable group gate", async () => {

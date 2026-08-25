@@ -58,7 +58,7 @@ describe("buildTokenMiserContextComparison", () => {
   it("compares actual parent tool context with the no-gate counterfactual", () => {
     const gated = invocation({ outputChars: 24_000 });
     gated.itemId = "tool-1";
-    const quiet = invocation({ outputChars: 400 });
+    const quiet = invocation({ invocationId: "invocation-quiet", outputChars: 400 });
     quiet.itemId = "tool-2";
 
     expect(buildTokenMiserContextComparison([gated, quiet], {
@@ -768,6 +768,34 @@ describe("buildTokenMiserRoughEdges", () => {
       estimatedParentTokensSaved: 0,
       interceptions: [passThrough],
     })[0]?.outcome).toBe("pass-through");
+  });
+
+  it("correlates an outer Code Mode gate with its single nested invocation", () => {
+    const nested = invocation({
+      invocationId: "codex:thread-1:exec-nested",
+      itemId: "exec-nested",
+      normalizedCommand: "rg -n -C 8 'cancel' apps/desktop/src",
+      outputChars: 35_122,
+      turnId: "turn-1",
+    });
+    const outer = gate({
+      toolUseId: "call-outer-code-mode",
+      toolName: "Code Mode",
+      originalCharacters: 35_122,
+      baselineParentTokens: 8_781,
+      replacementTokens: 312,
+      estimatedParentTokensSaved: 8_469,
+    });
+
+    expect(buildTokenMiserGateEntries([nested], {
+      interceptionCount: 1,
+      originalCharacters: 35_122,
+      baselineParentTokens: 8_781,
+      replacementTokens: 312,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 8_469,
+      interceptions: [outer],
+    })[0]?.command).toBe("rg -n -C 8 'cancel' apps/desktop/src");
   });
 
   // Retrieval is the gate's escape hatch, so a gate that hands most of the

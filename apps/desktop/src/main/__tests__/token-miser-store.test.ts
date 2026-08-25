@@ -15,6 +15,56 @@ afterEach(async () => {
 });
 
 describe("TokenMiserStore", () => {
+  it("counts every Code Mode reducer request separately from gate decisions", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-token-miser-"));
+    temporaryDirectories.push(root);
+    const onCodeModeObservationUpdated = vi.fn();
+    const store = new TokenMiserStore(root, { onCodeModeObservationUpdated });
+    await store.recordCodeModeObservation({
+      threadId: "thread-owner",
+      turnId: "turn-1",
+      callId: "call-direct",
+      cellId: "cell-direct",
+      outputCharacters: 4_900,
+      maxOutputTokens: 10_000,
+      scriptStatus: "completed",
+      script: "text(await exec())",
+      retrieval: false,
+      capturedNestedInvocationCount: 1,
+    });
+    await store.recordCodeModeObservation({
+      threadId: "thread-owner",
+      turnId: "turn-1",
+      callId: "call-retrieval",
+      cellId: "cell-retrieval",
+      outputCharacters: 2_000,
+      maxOutputTokens: 10_000,
+      scriptStatus: "completed",
+      retrieval: true,
+      capturedNestedInvocationCount: 1,
+    });
+
+    expect(await store.summarizeThreadUsage("thread-owner")).toMatchObject({
+      interceptionCount: 0,
+      codeMode: {
+        callCount: 2,
+        directCount: 1,
+        summarizedCount: 0,
+        passThroughCount: 0,
+        retrievalCount: 1,
+        capturedNestedInvocationCount: 2,
+      },
+    });
+    expect(onCodeModeObservationUpdated).toHaveBeenCalledTimes(2);
+    expect((await store.listCodeModeObservations("thread-owner")))
+      .toHaveLength(2);
+    await store.prune({
+      maxAgeMs: Number.MAX_SAFE_INTEGER,
+      maxBytes: 0,
+    });
+    expect(await store.listCodeModeObservations("thread-owner")).toEqual([]);
+  });
+
   it("reports new and retrieved metadata for turn-batched accounting", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-token-miser-"));
     temporaryDirectories.push(root);

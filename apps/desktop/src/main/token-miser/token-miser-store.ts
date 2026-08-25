@@ -1,10 +1,11 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import {
   TOKEN_MISER_MODEL_VISIBLE_CAP_CHARACTERS,
   estimateTokenCount,
   type TokenMiserHelperUsage,
+  type TokenMiserCodeModeObservation,
   type TokenMiserGroupMemberSummary,
   type TokenMiserObjectMetadata,
   type TokenMiserSummary,
@@ -12,6 +13,7 @@ import {
 
 const METADATA_SUFFIX = ".json";
 const OUTPUT_SUFFIX = ".txt";
+const OBSERVATION_DIRECTORY = "code-mode-observations";
 const MAX_SEARCH_RESULTS = 100;
 const MAX_READ_LINES = 2_000;
 const MAX_GROUP_BATCH_OPERATIONS = 16;
@@ -98,7 +100,9 @@ export type TokenMiserThreadUsageSummary = TokenMiserUsageSummary & {
     createdAt: number;
     originalCharacters: number;
     baselineParentTokens: number;
+    replacementCharacters: number;
     replacementTokens: number;
+    retrievedCharacters: number;
     retrievedTokens: number;
     estimatedParentTokensSaved: number;
     cachedReplayCount: number;
@@ -107,8 +111,20 @@ export type TokenMiserThreadUsageSummary = TokenMiserUsageSummary & {
     estimatedCachedReplayTokensSaved: number;
     replayTrackingVersion?: 2;
     disposition?: "summarized" | "passed_through";
+    groupMembers?: TokenMiserGroupMemberSummary[];
     summary?: TokenMiserSummary;
   }>;
+  codeMode: {
+    callCount: number;
+    directCount: number;
+    summarizedCount: number;
+    passThroughCount: number;
+    retrievalCount: number;
+    capturedNestedInvocationCount: number;
+    observations: Array<TokenMiserCodeModeObservation & {
+      disposition: "direct" | "summarized" | "passed_through" | "retrieval";
+    }>;
+  };
 };
 
 /**
@@ -127,6 +143,9 @@ export type TokenMiserStoreOptions = {
   onMetadataUpdated?: (
     metadata: TokenMiserObjectMetadata,
     reason: TokenMiserMetadataUpdateReason,
+  ) => void | Promise<void>;
+  onCodeModeObservationUpdated?: (
+    observation: TokenMiserCodeModeObservation,
   ) => void | Promise<void>;
 };
 
@@ -445,6 +464,75 @@ export class TokenMiserStore {
       .sort((left, right) => right.createdAt - left.createdAt);
   }
 
+  async recordCodeModeObservation(params: Omit<
+    TokenMiserCodeModeObservation,
+    "version" | "observationId" | "createdAt"
+  > & { createdAt?: number }): Promise<TokenMiserCodeModeObservation> {
+    const observationId = createHash("sha256")
+      .update(JSON.stringify([params.threadId, params.turnId, params.callId]))
+      .digest("hex");
+    const observation: TokenMiserCodeModeObservation = {
+      version: 1,
+      observationId,
+      threadId: params.threadId,
+      turnId: params.turnId,
+      callId: params.callId,
+      cellId: params.cellId,
+      createdAt: params.createdAt ?? Date.now(),
+      outputCharacters: params.outputCharacters,
+      ...(params.outputPreview
+        ? { outputPreview: params.outputPreview.slice(0, 5_000) }
+        : {}),
+      ...(params.outputPreviewTruncated
+        ? { outputPreviewTruncated: true }
+        : {}),
+      maxOutputTokens: params.maxOutputTokens,
+      scriptStatus: params.scriptStatus,
+      ...(params.script ? { script: params.script.slice(-4_000) } : {}),
+      retrieval: params.retrieval,
+      capturedNestedInvocationCount: params.capturedNestedInvocationCount,
+    };
+    await fs.mkdir(this.observationRoot(), { recursive: true, mode: 0o700 });
+    await writePrivateFileAtomic(
+      this.observationPath(observationId),
+      `${JSON.stringify(observation)}\n`,
+    );
+    await this.options.onCodeModeObservationUpdated?.(observation);
+    return observation;
+  }
+
+  async listCodeModeObservations(
+    threadId?: string,
+  ): Promise<TokenMiserCodeModeObservation[]> {
+    const entries = await fs.readdir(this.observationRoot()).catch(
+      (error: unknown) => {
+        if (isMissingFileError(error)) return [];
+        throw error;
+      },
+    );
+    const observations = await Promise.all(entries
+      .filter((entry) => entry.endsWith(METADATA_SUFFIX))
+      .map(async (entry) => {
+        try {
+          const raw = await fs.readFile(
+            path.join(this.observationRoot(), entry),
+            "utf8",
+          );
+          const value = JSON.parse(raw) as TokenMiserCodeModeObservation;
+          return value?.version === 1
+            && value.observationId === entry.slice(0, -METADATA_SUFFIX.length)
+            ? value
+            : undefined;
+        } catch {
+          return undefined;
+        }
+      }));
+    return observations
+      .filter((entry): entry is TokenMiserCodeModeObservation => Boolean(entry))
+      .filter((entry) => !threadId || entry.threadId === threadId)
+      .sort((left, right) => left.createdAt - right.createdAt);
+  }
+
   async summarizeUsage(params?: {
     threadId?: string;
   }): Promise<TokenMiserUsageSummary> {
@@ -461,6 +549,17 @@ export class TokenMiserStore {
     const metadata = (await this.listMetadata()).filter(
       (entry) => entry.threadId === threadId,
     );
+    const observations = await this.listCodeModeObservations(threadId);
+    const metadataByToolUseId = new Map(
+      metadata.map((entry) => [entry.toolUseId, entry]),
+    );
+    const codeModeObservations = observations.map((observation) => {
+      const disposition = observation.retrieval
+        ? "retrieval" as const
+        : metadataByToolUseId.get(observation.callId)?.disposition
+          ?? "direct" as const;
+      return { ...observation, disposition };
+    });
     return {
       ...summarizeMetadata(metadata),
       interceptions: metadata.map((entry) => {
@@ -476,7 +575,9 @@ export class TokenMiserStore {
           createdAt: entry.createdAt,
           originalCharacters: entry.originalCharacters,
           baselineParentTokens: entry.baselineParentTokens,
+          replacementCharacters: entry.replacementCharacters,
           replacementTokens,
+          retrievedCharacters: entry.retrievedCharacters,
           retrievedTokens,
           estimatedParentTokensSaved:
             entry.baselineParentTokens - replacementTokens - retrievedTokens,
@@ -490,9 +591,30 @@ export class TokenMiserStore {
             ? { replayTrackingVersion: entry.replayTrackingVersion }
             : {}),
           ...(entry.disposition ? { disposition: entry.disposition } : {}),
+          ...(entry.groupMembers ? { groupMembers: entry.groupMembers } : {}),
           ...(entry.summary ? { summary: entry.summary } : {}),
         };
       }),
+      codeMode: {
+        callCount: codeModeObservations.length,
+        directCount: codeModeObservations.filter(
+          (entry) => entry.disposition === "direct",
+        ).length,
+        summarizedCount: codeModeObservations.filter(
+          (entry) => entry.disposition === "summarized",
+        ).length,
+        passThroughCount: codeModeObservations.filter(
+          (entry) => entry.disposition === "passed_through",
+        ).length,
+        retrievalCount: codeModeObservations.filter(
+          (entry) => entry.disposition === "retrieval",
+        ).length,
+        capturedNestedInvocationCount: codeModeObservations.reduce(
+          (total, entry) => total + entry.capturedNestedInvocationCount,
+          0,
+        ),
+        observations: codeModeObservations,
+      },
     };
   }
 
@@ -503,6 +625,20 @@ export class TokenMiserStore {
   }): Promise<void> {
     const now = params.now ?? Date.now();
     const metadata = await this.listMetadata();
+    const observations = await this.listCodeModeObservations();
+    const retainedObservations: Array<{
+      observation: TokenMiserCodeModeObservation;
+      bytes: number;
+    }> = [];
+    for (const observation of observations) {
+      const observationPath = this.observationPath(observation.observationId);
+      const stats = await fs.stat(observationPath).catch(() => undefined);
+      if (!stats || now - observation.createdAt > params.maxAgeMs) {
+        await fs.rm(observationPath, { force: true });
+        continue;
+      }
+      retainedObservations.push({ observation, bytes: stats.size });
+    }
     await this.pruneStalePendingOutputs(
       new Set(metadata.map((entry) => entry.objectId)),
       now,
@@ -517,12 +653,27 @@ export class TokenMiserStore {
       }
       retained.push({ metadata: entry, bytes: stats.size });
     }
-    let totalBytes = retained.reduce((total, entry) => total + entry.bytes, 0);
-    for (const entry of retained.reverse()) {
+    const candidates = [
+      ...retained.map((entry) => ({
+        bytes: entry.bytes,
+        createdAt: entry.metadata.createdAt,
+        remove: () => this.remove(entry.metadata.objectId),
+      })),
+      ...retainedObservations.map((entry) => ({
+        bytes: entry.bytes,
+        createdAt: entry.observation.createdAt,
+        remove: () => fs.rm(
+          this.observationPath(entry.observation.observationId),
+          { force: true },
+        ),
+      })),
+    ].sort((left, right) => left.createdAt - right.createdAt);
+    let totalBytes = candidates.reduce((total, entry) => total + entry.bytes, 0);
+    for (const entry of candidates) {
       if (totalBytes <= params.maxBytes) {
         break;
       }
-      await this.remove(entry.metadata.objectId);
+      await entry.remove();
       totalBytes -= entry.bytes;
     }
   }
@@ -712,6 +863,14 @@ export class TokenMiserStore {
 
   private outputPath(objectId: string): string {
     return path.join(this.rootDir, `${objectId}${OUTPUT_SUFFIX}`);
+  }
+
+  private observationRoot(): string {
+    return path.join(this.rootDir, OBSERVATION_DIRECTORY);
+  }
+
+  private observationPath(observationId: string): string {
+    return path.join(this.observationRoot(), `${observationId}${METADATA_SUFFIX}`);
   }
 }
 

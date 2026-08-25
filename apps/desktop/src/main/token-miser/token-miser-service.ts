@@ -274,6 +274,23 @@ export class TokenMiserService {
     if (output.length <= this.thresholdCharacters) {
       return undefined;
     }
+    const deterministicPassThrough = classifyDeterministicPassThrough({
+      parentIntent: payload.parent_intent,
+      request: serializeToolResponse(payload.tool_input),
+      outputCharacters: output.length,
+    });
+    if (deterministicPassThrough) {
+      await this.recordPassThroughDecision({
+        threadId: payload.session_id,
+        turnId: payload.turn_id,
+        toolUseId: payload.tool_use_id,
+        toolName: payload.tool_name,
+        output,
+        signal: options.signal,
+        summary: deterministicPassThrough,
+      });
+      return undefined;
+    }
 
     const prepared = await this.summarizeAndStage({
       threadId: payload.session_id,
@@ -314,11 +331,49 @@ export class TokenMiserService {
     if (!await this.isEnabledForThread(payload.thread_id)) {
       return undefined;
     }
-    if (isCodeModeTokenMiserRetrievalInvocation(payload.script ?? "")) {
+    const output = payload.content_items.map((item) => item.text).join("");
+    const retrieval = isCodeModeTokenMiserRetrievalInvocation(
+      payload.script ?? "",
+    );
+    const recordObservation = () => this.options.store.recordCodeModeObservation({
+      threadId: payload.thread_id,
+      turnId: payload.turn_id,
+      callId: payload.call_id,
+      cellId: payload.cell_id,
+      outputCharacters: output.length,
+      outputPreview: output.slice(0, 5_000),
+      outputPreviewTruncated: output.length > 5_000,
+      maxOutputTokens: payload.max_output_tokens,
+      scriptStatus: payload.script_status,
+      ...(payload.script ? { script: payload.script } : {}),
+      retrieval,
+      capturedNestedInvocationCount: capturedGroup?.members.size ?? 0,
+    });
+    if (retrieval) {
+      await recordObservation();
       return undefined;
     }
-    const output = payload.content_items.map((item) => item.text).join("");
     if (output.length <= this.thresholdCharacters) {
+      await recordObservation();
+      return undefined;
+    }
+    const deterministicPassThrough = classifyDeterministicPassThrough({
+      parentIntent: payload.parent_intent,
+      request: payload.script ?? "",
+      outputCharacters: output.length,
+    });
+    if (deterministicPassThrough) {
+      await this.recordPassThroughDecision({
+        threadId: payload.thread_id,
+        turnId: payload.turn_id,
+        toolUseId: payload.call_id,
+        toolName: "Code Mode",
+        output,
+        signal: options.signal,
+        baselineParentTokenCap: payload.max_output_tokens,
+        summary: deterministicPassThrough,
+      });
+      await recordObservation();
       return undefined;
     }
 
@@ -330,9 +385,11 @@ export class TokenMiserService {
         options,
       );
       if (grouped === "passed_through") {
+        await recordObservation();
         return undefined;
       }
       if (grouped) {
+        await recordObservation();
         return grouped;
       }
     }
@@ -355,9 +412,11 @@ export class TokenMiserService {
       ) + this.codeModeContinuationGuidanceCharacters(),
     });
     if (!prepared) {
+      await recordObservation();
       return undefined;
     }
     if (prepared.disposition === "passed_through") {
+      await recordObservation();
       return undefined;
     }
     const response = {
@@ -369,8 +428,10 @@ export class TokenMiserService {
       > TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES
     ) {
       await prepared.staged.discard();
+      await recordObservation();
       return undefined;
     }
+    await recordObservation();
     return {
       response,
       staged: prepared.staged,
@@ -658,7 +719,7 @@ export class TokenMiserService {
     signal?: AbortSignal;
     baselineParentTokenCap?: number;
     summary: TokenMiserSummary;
-    generated: Extract<TokenMiserStructuredGenerationResult, { status: "ok" }>;
+    generated?: Extract<TokenMiserStructuredGenerationResult, { status: "ok" }>;
   }): Promise<void> {
     const parentModel = await this.options.resolveParentModel?.(
       params.threadId,
@@ -684,14 +745,18 @@ export class TokenMiserService {
       replacementCharacters: visibleCharacters,
       summary: params.summary,
       disposition: "passed_through",
-      helperUsage: {
-        helperThreadId: params.generated.helperThreadId,
-        helperTurnId: params.generated.helperTurnId,
-        model: params.generated.model,
-        reasoningEffort: params.generated.reasoningEffort,
-        serviceTier: params.generated.serviceTier,
-        tokenUsage: params.generated.tokenUsage,
-      },
+      ...(params.generated
+        ? {
+            helperUsage: {
+              helperThreadId: params.generated.helperThreadId,
+              helperTurnId: params.generated.helperTurnId,
+              model: params.generated.model,
+              reasoningEffort: params.generated.reasoningEffort,
+              serviceTier: params.generated.serviceTier,
+              tokenUsage: params.generated.tokenUsage,
+            },
+          }
+        : {}),
       parentCumulativeInputTokens:
         this.options.getParentCumulativeInputTokens?.(params.threadId),
       ...(parentModel?.model ? { parentModel: parentModel.model } : {}),
@@ -701,6 +766,48 @@ export class TokenMiserService {
     });
     await this.withStoredNotification(staged).commit();
   }
+}
+
+const INSTRUCTION_FILE_PATTERN = /(?:^|[/\\])(?:AGENTS|CLAUDE|SKILL)\.md\b|(?:^|[/\\])UI-THEME\.md\b|(?:^|[/\\])[^\s"']*style-guide\.md\b/i;
+const SOURCE_FILE_PATTERN = /(?:^|[\s"'=:])[^\s"']+\.(?:c|cc|cpp|css|go|h|hpp|html|java|js|jsx|json|md|mjs|py|rb|rs|swift|toml|ts|tsx|yaml|yml)\b/i;
+const EXACT_READ_PATTERN = /\b(?:cat|head|tail|sed|readFile|read_text_file|read_file)\b/i;
+const BROAD_DISCOVERY_PATTERN = /\b(?:find|grep|rg|search)\b/i;
+const READ_INTENT_PATTERN = /\b(?:read|inspect|review|load|follow)\b[\s\S]{0,120}\b(?:instruction|guidance|guide|AGENTS|CLAUDE|SKILL|theme)\b|\b(?:instruction|guidance|guide|AGENTS|CLAUDE|SKILL|theme)\b[\s\S]{0,120}\b(?:read|inspect|review|load|follow)\b/i;
+const EXACT_SOURCE_INTENT_PATTERN = /\b(?:read|inspect|review|open|examine|look at)\b[\s\S]{0,160}\b(?:exact|source|file|range|implementation|code)\b|\b(?:exact|source|file|range|implementation|code)\b[\s\S]{0,160}\b(?:read|inspect|review|open|examine|look at)\b/i;
+const TARGETED_SOURCE_PASS_THROUGH_MAX_CHARACTERS = 20_000;
+
+function classifyDeterministicPassThrough(params: {
+  parentIntent?: string;
+  request: string;
+  outputCharacters: number;
+}): TokenMiserSummary | undefined {
+  if (
+    !EXACT_READ_PATTERN.test(params.request)
+    || BROAD_DISCOVERY_PATTERN.test(params.request)
+  ) {
+    return undefined;
+  }
+  if (
+    INSTRUCTION_FILE_PATTERN.test(params.request)
+    && (!params.parentIntent || READ_INTENT_PATTERN.test(params.parentIntent))
+  ) {
+    return {
+      summary: "A deliberate exact instruction-file read passed through unchanged by policy.",
+      usefulDetails: [],
+    };
+  }
+  if (
+    params.parentIntent
+    && params.outputCharacters <= TARGETED_SOURCE_PASS_THROUGH_MAX_CHARACTERS
+    && EXACT_SOURCE_INTENT_PATTERN.test(params.parentIntent)
+    && SOURCE_FILE_PATTERN.test(params.request)
+  ) {
+    return {
+      summary: "A bounded exact source read passed through unchanged by policy.",
+      usefulDetails: [],
+    };
+  }
+  return undefined;
 }
 
 function buildSummaryPrompt(

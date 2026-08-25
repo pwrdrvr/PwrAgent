@@ -142,6 +142,24 @@ export type TokenMiserCodeModeTextContentItem = {
   text: string;
 };
 
+export type TokenMiserCodeModeObservation = {
+  version: 1;
+  observationId: string;
+  threadId: string;
+  turnId: string;
+  callId: string;
+  cellId: string;
+  createdAt: number;
+  outputCharacters: number;
+  outputPreview?: string;
+  outputPreviewTruncated?: boolean;
+  maxOutputTokens: number;
+  scriptStatus: string;
+  script?: string;
+  retrieval: boolean;
+  capturedNestedInvocationCount: number;
+};
+
 /**
  * Version 2 of the script-to-model reduction request emitted by the
  * PwrAgent Codex fork. Non-text content is deliberately outside this host

@@ -1122,6 +1122,34 @@ export type ThreadTokenMiserAccounting = {
   cachedRevealedTokens?: number;
   estimatedCachedReplayTokensSaved?: number;
   interceptions?: ThreadTokenMiserInterceptionAccounting[];
+  codeMode?: ThreadTokenMiserCodeModeAccounting;
+};
+
+export type ThreadTokenMiserCodeModeObservation = {
+  observationId: string;
+  turnId: string;
+  callId: string;
+  cellId: string;
+  createdAt: number;
+  outputCharacters: number;
+  outputPreview?: string;
+  outputPreviewTruncated?: boolean;
+  maxOutputTokens: number;
+  scriptStatus: string;
+  script?: string;
+  retrieval: boolean;
+  capturedNestedInvocationCount: number;
+  disposition: "direct" | "summarized" | "passed_through" | "retrieval";
+};
+
+export type ThreadTokenMiserCodeModeAccounting = {
+  callCount: number;
+  directCount: number;
+  summarizedCount: number;
+  passThroughCount: number;
+  retrievalCount: number;
+  capturedNestedInvocationCount: number;
+  observations: ThreadTokenMiserCodeModeObservation[];
 };
 
 export type ThreadTokenMiserInterceptionAccounting = {
@@ -1132,7 +1160,11 @@ export type ThreadTokenMiserInterceptionAccounting = {
   createdAt: number;
   originalCharacters: number;
   baselineParentTokens: number;
+  /** Exact replacement size delivered to Codex before token estimation. */
+  replacementCharacters?: number;
   replacementTokens: number;
+  /** Exact later retrieval size delivered to the parent. */
+  retrievedCharacters?: number;
   retrievedTokens: number;
   estimatedParentTokensSaved: number;
   cachedReplayCount?: number;
@@ -1141,6 +1173,13 @@ export type ThreadTokenMiserInterceptionAccounting = {
   estimatedCachedReplayTokensSaved?: number;
   replayTrackingVersion?: 2;
   disposition?: "summarized" | "passed_through";
+  /** Nested Code Mode calls represented by this outer reducer decision. */
+  groupMembers?: Array<{
+    objectId: string;
+    toolCallId: string;
+    toolName: string;
+    summary: string;
+  }>;
   /**
    * What the parent actually received in place of the payload. This is the
    * gate's real product — carrying it here is what lets the Explorer show the

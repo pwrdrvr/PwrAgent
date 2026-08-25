@@ -115,6 +115,54 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(screen.queryByText(/gated \d+ of \d+ flagged/)).not.toBeInTheDocument();
   });
 
+  it("shows ungated Code Mode calls as a separate explorable population", async () => {
+    const response = buildResponse();
+    const observations = Array.from({ length: 2 }, (_, index) => ({
+      observationId: `direct-${index}`,
+      turnId: "turn-1",
+      callId: `call-${index}`,
+      cellId: `cell-${index}`,
+      createdAt: 1_800_000_000_000 + index,
+      outputCharacters: 4_000 + index,
+      maxOutputTokens: 10_000,
+      scriptStatus: "completed",
+      script: `text(result${index}.output)`,
+      retrieval: false,
+      capturedNestedInvocationCount: 1,
+      disposition: "direct" as const,
+    }));
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 0,
+      originalCharacters: 0,
+      baselineParentTokens: 0,
+      replacementTokens: 0,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+      interceptions: [],
+      codeMode: {
+        callCount: 2,
+        directCount: 2,
+        summarizedCount: 0,
+        passThroughCount: 0,
+        retrievalCount: 0,
+        capturedNestedInvocationCount: 2,
+        observations,
+      },
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    expect(await screen.findByText(/2 Code Mode calls/)).toBeInTheDocument();
+    expect(screen.getByText(/2 ungated\/direct · 0 summarized/))
+      .toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Ungated Code Mode results" }))
+      .toBeInTheDocument();
+    expect(screen.getAllByRole("button", {
+      name: /Code Mode4,00[01] charactersdirect/,
+    })).toHaveLength(2);
+  });
+
   // The summary is what the parent actually received in place of the payload.
   // Without it the screen can only say how many tokens were traded, never what
   // was traded for — which is the only way to judge whether a "win" was one.
@@ -400,6 +448,61 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(screen.getByText("6k baseline → 225 summary")).toBeInTheDocument();
     expect(screen.getByText(/5.8k estimated parent-context footprint avoided/))
       .toBeInTheDocument();
+  });
+
+  it("labels a summarized nested invocation with actual and counterfactual replay", async () => {
+    const response = buildResponse();
+    const invocation = response.toolAccounting!.invocations[0]!;
+    invocation.itemId = "exec-nested";
+    invocation.invocationId = "codex:thread-1:exec-nested";
+    invocation.outputChars = 35_122;
+    invocation.estimatedOutputTokens = 8_781;
+    invocation.normalizedCommand = "rg -n -C 8 'cancel' apps/desktop/src";
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 1,
+      originalCharacters: 35_122,
+      baselineParentTokens: 8_781,
+      replacementTokens: 312,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 8_469,
+      cachedReplayCount: 31,
+      cachedBaselineTokens: 272_211,
+      cachedRevealedTokens: 9_672,
+      estimatedCachedReplayTokensSaved: 262_539,
+      interceptions: [{
+        objectId: "gate-outer",
+        turnId: "turn-1",
+        toolUseId: "call-outer-code-mode",
+        toolName: "Code Mode",
+        createdAt: invocation.observedAt + 1,
+        originalCharacters: 35_122,
+        baselineParentTokens: 8_781,
+        replacementCharacters: 1_246,
+        replacementTokens: 312,
+        retrievedCharacters: 0,
+        retrievedTokens: 0,
+        estimatedParentTokensSaved: 8_469,
+        cachedReplayCount: 31,
+        cachedBaselineTokens: 272_211,
+        cachedRevealedTokens: 9_672,
+        estimatedCachedReplayTokensSaved: 262_539,
+        disposition: "summarized",
+      }],
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    fireEvent.click(await screen.findByRole("tab", { name: /Incidents/ }));
+    expect(screen.getByText("Gated by Token Miser")).toBeInTheDocument();
+    expect(screen.getByText(
+      "Emitted 35,122 raw characters; Token Miser revealed 1,246 characters.",
+    )).toBeInTheDocument();
+    expect(screen.getByText(
+      "Raw output would otherwise have replayed across 31 later parent requests.",
+    )).toBeInTheDocument();
+    expect(screen.queryByText(/replayed on the \d+ later round trips in this turn/))
+      .not.toBeInTheDocument();
   });
 
   it("shows historical output using the analyzer's normalized detail identity", async () => {

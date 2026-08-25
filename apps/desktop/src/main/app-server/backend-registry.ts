@@ -4180,12 +4180,16 @@ function buildTokenMiserSubAgentAccounting(params: {
   const originalModel = params.parentUsageLine?.model ?? params.entry.parentModel;
   const originalServiceTier =
     params.parentUsageLine?.serviceTier ?? params.entry.parentServiceTier;
-  const gateModel = params.gateUsageLine?.model;
+  const policyPassThrough =
+    params.entry.disposition === "passed_through"
+    && !params.entry.helperUsage;
+  const gateModel = params.gateUsageLine?.model
+    ?? (policyPassThrough ? "policy" : undefined);
   if (
     !originalModel
     || !gateModel
-    || params.gateUsageLine?.priceStatus !== "priced"
-    || params.gateUsageLine.currency !== "USD"
+    || (!policyPassThrough && params.gateUsageLine?.priceStatus !== "priced")
+    || (!policyPassThrough && params.gateUsageLine?.currency !== "USD")
   ) {
     return undefined;
   }
@@ -4235,7 +4239,7 @@ function buildTokenMiserSubAgentAccounting(params: {
   ) {
     return undefined;
   }
-  const gateCostMicros = params.gateUsageLine.totalCostMicros;
+  const gateCostMicros = params.gateUsageLine?.totalCostMicros ?? 0;
   const savingsMicros =
     baselineCost.uncachedInputCostMicros
     + cachedBaselineCost.cachedInputCostMicros
@@ -4255,7 +4259,7 @@ function buildTokenMiserSubAgentAccounting(params: {
     cachedBaselineTokens,
     cachedBaselineCostMicros: cachedBaselineCost.cachedInputCostMicros,
     gateModel,
-    gateTotalTokens: params.gateUsageLine.totalTokens,
+    gateTotalTokens: params.gateUsageLine?.totalTokens ?? 0,
     gateCostMicros,
     revealedParentTokens,
     revealedParentCostMicros: revealedCost.uncachedInputCostMicros,
@@ -8108,6 +8112,20 @@ export class DesktopBackendRegistry {
                 threadId: metadata.threadId,
               });
             }
+          },
+          onCodeModeObservationUpdated: (observation) => {
+            // Persist the observation before Codex receives its result, but do
+            // not make the reducer response wait for a full accounting read
+            // and renderer notification. Those are observational UI work.
+            void this.emitThreadToolAccountingUpdated({
+              backend: "codex",
+              threadId: observation.threadId,
+            }).catch((error) => {
+              backendRegistryLog.warn("live Code Mode accounting publish failed", {
+                error: error instanceof Error ? error.message : String(error),
+                threadId: observation.threadId,
+              });
+            });
           },
         },
       );
@@ -26927,12 +26945,17 @@ export class DesktopBackendRegistry {
       }),
       parentUsageLine,
     });
+    const policyPassThrough =
+      entry.disposition === "passed_through"
+      && !entry.helperUsage;
     return {
       ...(gateUsageLine ? { gateUsageLine } : {}),
       subAgent: {
         monitorId,
-        task: entry.disposition === "passed_through"
-          ? `Evaluate ${entry.toolName} output`
+        task: policyPassThrough
+          ? `Pass through ${entry.toolName} output by policy`
+          : entry.disposition === "passed_through"
+            ? `Evaluate ${entry.toolName} output`
           : `Gate ${entry.toolName} output`,
         status: "success",
         createdAt: entry.createdAt,
@@ -26954,9 +26977,12 @@ export class DesktopBackendRegistry {
         ...(entry.helperUsage?.helperTurnId
           ? { monitorTurnId: entry.helperUsage.helperTurnId }
           : {}),
-        lastMessage: entry.disposition === "passed_through"
+        lastMessage: policyPassThrough
           ? `Passed ${entry.originalCharacters.toLocaleString()} characters `
-            + `from ${entry.toolName} through unchanged after evaluation.`
+            + `from ${entry.toolName} through unchanged by deterministic policy.`
+          : entry.disposition === "passed_through"
+            ? `Passed ${entry.originalCharacters.toLocaleString()} characters `
+              + `from ${entry.toolName} through unchanged after evaluation.`
           : `Compressed ${entry.originalCharacters.toLocaleString()} characters `
             + `from ${entry.toolName} before they entered the parent context.`,
         outcome: "success",

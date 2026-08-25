@@ -66,8 +66,9 @@ export function buildTokenMiserContextComparison(
   if (!tokenMiser || tokenMiser.interceptionCount === 0) {
     return undefined;
   }
-  const interceptedToolUseIds = new Set(
-    (tokenMiser.interceptions ?? []).map((entry) => entry.toolUseId),
+  const matches = matchTokenMiserInvocations(
+    invocations,
+    tokenMiser.interceptions ?? [],
   );
   const modelVisibleTokens = (invocation: ThreadToolInvocationRecord): number =>
     Math.ceil(Math.min(invocation.outputChars, TOOL_OUTPUT_CAP_CHARS) / 4);
@@ -76,12 +77,7 @@ export function buildTokenMiserContextComparison(
     0,
   );
   const accountedGatedTokens = invocations.reduce((total, invocation) => {
-    const isGated = Boolean(
-      (invocation.itemId && interceptedToolUseIds.has(invocation.itemId))
-      || Array.from(interceptedToolUseIds).some((toolUseId) =>
-        invocation.invocationId.endsWith(`:${toolUseId}`),
-      ),
-    );
+    const isGated = matches.has(invocation.invocationId);
     return total + (isGated ? modelVisibleTokens(invocation) : 0);
   }, 0);
   const withoutTokenMiserTokens =
@@ -131,14 +127,33 @@ export function buildTokenMiserRoughEdges(
       invocationByToolUseId.set(invocation.itemId, invocation);
     }
   }
+  const matchedInvocations = matchTokenMiserInvocations(invocations, interceptions);
+  const matchedInvocationByObjectId = new Map<string, ThreadToolInvocationRecord>();
+  for (const invocation of invocations) {
+    const interception = matchedInvocations.get(invocation.invocationId);
+    if (interception && !matchedInvocationByObjectId.has(interception.objectId)) {
+      matchedInvocationByObjectId.set(interception.objectId, invocation);
+    }
+  }
+  const matchedCommand = (toolUseId: string): string | undefined => {
+    const interception = interceptions.find(
+      (entry) => entry.toolUseId === toolUseId,
+    );
+    return interception
+      ? matchedInvocationByObjectId.get(interception.objectId)?.normalizedCommand
+      : undefined;
+  };
   const describe = (toolUseId: string, toolName: string): string =>
-    invocationByToolUseId.get(toolUseId)?.normalizedCommand ?? toolName;
+    invocationByToolUseId.get(toolUseId)?.normalizedCommand
+    ?? matchedCommand(toolUseId)
+    ?? toolName;
 
   // Only a resolved command identifies a payload. Codex names every shell call
   // `commandExecution`, so grouping on the toolName fallback merged unrelated
   // gates into one bogus repeat finding and downgraded each of them to a miss.
   const groupingKey = (toolUseId: string): string | undefined =>
-    invocationByToolUseId.get(toolUseId)?.normalizedCommand;
+    invocationByToolUseId.get(toolUseId)?.normalizedCommand
+    ?? matchedCommand(toolUseId);
 
   // Count gates per command so a payload summarized several times reads as one
   // finding about the repetition rather than N unrelated gates.
@@ -266,9 +281,21 @@ export function buildTokenMiserGateEntries(
       invocationByToolUseId.set(invocation.itemId, invocation);
     }
   }
+  const matchedInvocations = matchTokenMiserInvocations(invocations, interceptions);
+  const matchedByObjectId = new Map<string, ThreadToolInvocationRecord[]>();
+  for (const invocation of invocations) {
+    const interception = matchedInvocations.get(invocation.invocationId);
+    if (!interception) continue;
+    const matched = matchedByObjectId.get(interception.objectId) ?? [];
+    matched.push(invocation);
+    matchedByObjectId.set(interception.objectId, matched);
+  }
   return interceptions.map((interception) => {
+    const nested = matchedByObjectId.get(interception.objectId) ?? [];
     const command =
       invocationByToolUseId.get(interception.toolUseId)?.normalizedCommand
+      ?? (nested.length === 1 ? nested[0]?.normalizedCommand : undefined)
+      ?? (nested.length > 1 ? `${nested.length.toLocaleString()} nested operations` : undefined)
       ?? interception.toolName;
     // Rough edges are keyed by object id, except the repeat finding which is
     // reported once per command; look for both so a repeated gate still shows
@@ -291,6 +318,53 @@ export function buildTokenMiserGateEntries(
       outcome,
     };
   });
+}
+
+/**
+ * Join outer Code Mode reducer decisions to nested invocation telemetry.
+ *
+ * Codex gives the reducer an outer `call_*` id while command accounting uses
+ * the nested `exec-*` id. Grouped cells carry the exact member ids. A legacy
+ * or singleton cell can lack those ids, so use the unique same-turn raw-size
+ * match as a bounded fallback; never guess when more than one candidate fits.
+ */
+export function matchTokenMiserInvocations(
+  invocations: readonly ThreadToolInvocationRecord[],
+  interceptions: readonly ThreadTokenMiserInterceptionAccounting[],
+): Map<string, ThreadTokenMiserInterceptionAccounting> {
+  const matches = new Map<string, ThreadTokenMiserInterceptionAccounting>();
+  const invocationByItemId = new Map(
+    invocations.map((invocation) => [invocation.itemId, invocation]),
+  );
+  const matchedInterceptions = new Set<string>();
+
+  for (const interception of interceptions) {
+    const exactIds = [
+      interception.toolUseId,
+      ...(interception.groupMembers?.map((member) => member.toolCallId) ?? []),
+    ];
+    for (const itemId of exactIds) {
+      const invocation = invocationByItemId.get(itemId)
+        ?? invocations.find((candidate) =>
+          candidate.invocationId.endsWith(`:${itemId}`)
+        );
+      if (!invocation) continue;
+      matches.set(invocation.invocationId, interception);
+      matchedInterceptions.add(interception.objectId);
+    }
+  }
+
+  for (const interception of interceptions) {
+    if (matchedInterceptions.has(interception.objectId)) continue;
+    const candidates = invocations.filter((invocation) =>
+      !matches.has(invocation.invocationId)
+      && (invocation.turnId ?? "") === interception.turnId
+      && invocation.outputChars === interception.originalCharacters
+    );
+    if (candidates.length !== 1) continue;
+    matches.set(candidates[0]!.invocationId, interception);
+  }
+  return matches;
 }
 
 export type TurnCostRow = {
