@@ -1313,6 +1313,8 @@ describe("CodexAppServerClient", () => {
       codeModeOutputReducer: {
         continuationGuidanceVersion: 1,
         dynamicToolsResumeField: "dynamicTools",
+        intentContextVersion: 1,
+        postToolUseField: "parent_intent",
         postToolUseGrouping: {
           versionField: "token_miser_grouping_version",
           version: 1,
@@ -1320,6 +1322,7 @@ describe("CodexAppServerClient", () => {
           toolCallIdField: "code_mode_tool_call_id",
         },
         protocolVersion: 2,
+        reducerRequestField: "parent_intent",
       },
     };
     const { CodexAppServerClient } = await import("../codex-app-server/client");
@@ -1329,6 +1332,8 @@ describe("CodexAppServerClient", () => {
       codeModeOutputReducer: {
         continuationGuidanceVersion: 1,
         dynamicToolsResumeField: "dynamicTools",
+        intentContextVersion: 1,
+        postToolUseField: "parent_intent",
         postToolUseGrouping: {
           versionField: "token_miser_grouping_version",
           version: 1,
@@ -1336,6 +1341,7 @@ describe("CodexAppServerClient", () => {
           toolCallIdField: "code_mode_tool_call_id",
         },
         protocolVersion: 2,
+        reducerRequestField: "parent_intent",
       },
     });
 
@@ -1349,7 +1355,10 @@ describe("CodexAppServerClient", () => {
     MockTransport.serverCapabilitiesResult = {
       codeModeOutputReducer: {
         dynamicToolsResumeField: "tools",
+        intentContextVersion: 1,
+        postToolUseField: "wrong_field",
         protocolVersion: 2,
+        reducerRequestField: "parent_intent",
       },
     };
     await expect(client.readServerCapabilities()).resolves.toEqual({

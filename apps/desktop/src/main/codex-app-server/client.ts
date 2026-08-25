@@ -291,6 +291,8 @@ export type CodexServerCapabilities = {
   codeModeOutputReducer?: {
     continuationGuidanceVersion?: number;
     dynamicToolsResumeField?: "dynamicTools";
+    intentContextVersion?: 1;
+    postToolUseField?: "parent_intent";
     postToolUseGrouping?: {
       versionField: string;
       version: number;
@@ -298,6 +300,7 @@ export type CodexServerCapabilities = {
       toolCallIdField: string;
     };
     protocolVersion?: number;
+    reducerRequestField?: "parent_intent";
   };
 };
 
@@ -7276,6 +7279,10 @@ export class CodexAppServerClient {
     const protocolVersion = outputReducer?.protocolVersion;
     const continuationGuidanceVersion =
       outputReducer?.continuationGuidanceVersion;
+    const hasParentIntentContract =
+      outputReducer?.intentContextVersion === 1
+      && outputReducer.reducerRequestField === "parent_intent"
+      && outputReducer.postToolUseField === "parent_intent";
     const grouping = asRecord(outputReducer?.postToolUseGrouping);
     const dynamicToolsResumeField =
       outputReducer?.dynamicToolsResumeField === "dynamicTools"
@@ -7290,6 +7297,13 @@ export class CodexAppServerClient {
               : {}),
             ...(dynamicToolsResumeField
               ? { dynamicToolsResumeField }
+              : {}),
+            ...(hasParentIntentContract
+              ? {
+                  intentContextVersion: 1 as const,
+                  postToolUseField: "parent_intent" as const,
+                  reducerRequestField: "parent_intent" as const,
+                }
               : {}),
             ...(typeof grouping?.versionField === "string"
               && typeof grouping.version === "number"
