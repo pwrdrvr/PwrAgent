@@ -1023,6 +1023,21 @@ function describeTokenMiserOutcome(estimatedTokensSaved: number): string {
     : `${formatCompactTokens(Math.abs(estimatedTokensSaved))} estimated net parent-context token overhead`;
 }
 
+function describeSameTrajectoryCostChange(
+  observedCostMicros: number,
+  savingsMicros: number,
+): string | undefined {
+  if (observedCostMicros <= 0) return undefined;
+  const unfilteredCostMicros = observedCostMicros + savingsMicros;
+  if (unfilteredCostMicros <= 0) return undefined;
+  const percent = Math.abs(savingsMicros) / unfilteredCostMicros * 100;
+  if (savingsMicros === 0) {
+    return `${percent.toFixed(1)}% change from estimated unfiltered cost`;
+  }
+  return `${percent.toFixed(1)}% ${savingsMicros > 0 ? "less" : "more"} `
+    + "than estimated unfiltered cost";
+}
+
 /**
  * What gating bought, and where it did not.
  *
@@ -1141,6 +1156,12 @@ function TokenMiserSavingsLens(props: {
     && savings.pricedGateCount < savings.gateCount
     ? "All gates · "
     : "";
+  const sameTrajectoryCostChange = savings
+    ? describeSameTrajectoryCostChange(
+        props.threadCostMicros,
+        savings.savingsMicros,
+      )
+    : undefined;
   return (
     <div className="incident-explorer__savings">
       <div className="incident-explorer__savings-hero">
@@ -1159,6 +1180,9 @@ function TokenMiserSavingsLens(props: {
                     savings.currency,
                   )}
                 </strong>
+                {sameTrajectoryCostChange ? (
+                  <span>{sameTrajectoryCostChange}</span>
+                ) : null}
               </p>
               {props.threadCostMicros > 0 ? (
                 <p className="incident-explorer__savings-compare">

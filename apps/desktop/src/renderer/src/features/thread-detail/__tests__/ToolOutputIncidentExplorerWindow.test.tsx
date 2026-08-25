@@ -469,6 +469,8 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(screen.getByText("Estimated same-trajectory savings"))
       .toBeInTheDocument();
     expect(screen.getByText("$0.35")).toBeInTheDocument();
+    expect(screen.getByText("49.3% less than estimated unfiltered cost"))
+      .toBeInTheDocument();
     expect(screen.getByText(/Observed thread cost/)).toHaveTextContent(
       "Observed thread cost $0.36 · estimated same-trajectory cost without filtering $0.71",
     );
@@ -487,6 +489,54 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     expect(
       screen.getByText(/Directly observed · 47 payload replays across 4 gates, each counted at a request boundary/),
     ).toBeInTheDocument();
+  });
+
+  it("shows same-trajectory overhead as a percentage of unfiltered cost", async () => {
+    const response = buildResponse();
+    response.pricing = {
+      lines: [],
+      summaries: [{
+        backend: "codex",
+        currency: "USD",
+        serviceTier: "standard",
+        threadId: "thread-1",
+        totalCostMicros: 800_000,
+        totalTokens: 500_000,
+        usageLineCount: 4,
+        pricedUsageLineCount: 4,
+        unpricedUsageLineCount: 0,
+        updatedAt: 1_800_000_000_000,
+      }] as never,
+    } as never;
+    response.toolAccounting!.tokenMiser = {
+      interceptionCount: 1,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementTokens: 1_000,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 9_000,
+      savings: {
+        currency: "USD",
+        pricedGateCount: 1,
+        gateCount: 1,
+        withoutGateCostMicros: 300_000,
+        gateCostMicros: 100_000,
+        revealedCostMicros: 400_000,
+        savingsMicros: -200_000,
+        directlyObservedReplayCount: 0,
+        reconstructedReplayCount: 0,
+        gateModel: "gpt-5.6-luna",
+        parentModel: "gpt-5.6-terra",
+      },
+      interceptions: [],
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    await screen.findByText("Estimated same-trajectory overhead");
+    expect(screen.getByText("33.3% more than estimated unfiltered cost"))
+      .toBeInTheDocument();
   });
 
   // Reconstructed replays are inferred from later tool calls and cannot see
