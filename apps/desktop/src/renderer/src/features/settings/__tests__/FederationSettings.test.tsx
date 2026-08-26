@@ -901,6 +901,13 @@ describe("FederationSettings", () => {
     expect(screen.getByLabelText("Listen port")).toBeEnabled();
     expect(screen.getByLabelText("Public URL")).toBeEnabled();
     expect(screen.getByLabelText("Gateway endpoints")).toBeDisabled();
+    expect(screen.getByLabelText("Advertised endpoints")).toHaveAttribute(
+      "placeholder",
+      "ws://gateway.tailnet.ts.net:47830",
+    );
+    expect(screen.getByText(
+      /Existing clients keep their current list/,
+    )).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Generate invite" }),
     ).toBeEnabled();
@@ -939,6 +946,13 @@ describe("FederationSettings", () => {
     expect(screen.getByLabelText("Listen port")).toBeDisabled();
     expect(screen.getByLabelText("Public URL")).toBeDisabled();
     expect(screen.getByLabelText("Gateway endpoints")).toBeEnabled();
+    expect(screen.getByLabelText("Gateway endpoints")).toHaveAttribute(
+      "placeholder",
+      "ws://gateway.tailnet.ts.net:47830",
+    );
+    expect(screen.getByText(
+      /Add or reorder them after enrollment without re-inviting/,
+    )).toBeInTheDocument();
     // Only the listening side issues invites.
     expect(
       screen.getByRole("button", { name: "Generate invite" }),
