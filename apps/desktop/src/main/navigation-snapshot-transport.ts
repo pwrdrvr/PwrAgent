@@ -11,6 +11,7 @@ import type {
 import {
   buildNavigationSnapshotTransportScopeKey,
   buildThreadIdentityKey,
+  federatedThreadIdentityKey,
   normalizeThreadIdentityKey,
 } from "@pwragent/shared";
 
@@ -42,7 +43,9 @@ function positiveIntegerOrDefault(
 }
 
 function threadKey(thread: NavigationThreadSummary): string {
-  return buildThreadIdentityKey(thread.source, thread.id);
+  return thread.federation?.ref
+    ? federatedThreadIdentityKey(thread.federation.ref)
+    : buildThreadIdentityKey(thread.source, thread.id);
 }
 
 function selectionHasKey(selected: ReadonlySet<string>, key: string): boolean {

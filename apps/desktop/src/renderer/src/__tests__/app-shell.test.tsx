@@ -378,6 +378,7 @@ describe("App", () => {
 
   it("starts a new thread on a selected federation machine and profile", async () => {
     const federationListeners = new Set<(event: AgentEvent) => void>();
+    const threadViewImported = createDeferred<void>();
     const remoteTarget = { scope: "remote" as const, instanceId: "studio-work" };
     const remoteWorkspace = {
       key: "workspace:new-thread",
@@ -480,6 +481,11 @@ describe("App", () => {
         },
         onWindowFocus: () => () => undefined,
         readFederationHealth,
+        recordStartupProfileEvent: (event: string) => {
+          if (event === "thread-view-import:end") {
+            threadViewImported.resolve(undefined);
+          }
+        },
       },
     });
 
@@ -509,6 +515,13 @@ describe("App", () => {
       federationTarget: remoteTarget,
       preferredBackend: undefined,
     }));
+    // The menu intentionally fire-and-forgets its async target callback, and
+    // thread detail is loaded after two animation frames. The bridge call can
+    // therefore finish before the composer module is ready on a loaded CI
+    // runner. Synchronize on the app's startup-profile readiness event rather
+    // than extending the query timeout.
+    await threadViewImported.promise;
+    await flushReactUpdates();
     expect(await screen.findByRole("textbox", { name: "New thread" }))
       .toBeInTheDocument();
 

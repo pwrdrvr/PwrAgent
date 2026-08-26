@@ -686,7 +686,9 @@ function attachRemoteThreadsToLocalDirectories(
     Array<{ threadKey: string; inInbox: boolean }>
   >();
   for (const thread of remoteThreads) {
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const threadKey = thread.federation?.ref
+      ? federatedThreadIdentityKey(thread.federation.ref)
+      : buildThreadIdentityKey(thread.source, thread.id);
     let homeIndex = findRemoteHomeDirectoryIndex(
       mergedDirectories,
       thread,
@@ -2341,7 +2343,7 @@ class DesktopAppServerService {
         // window path is untouched — owner semantics are correct there.
         const localRankByKey = new Map(
           pins.map((pin) => [
-            buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId),
+            federatedThreadIdentityKey(pin.ref),
             pin.localPinnedRank,
           ]),
         );
@@ -2350,7 +2352,9 @@ class DesktopAppServerService {
           threads: resolution.threads.map(
             ({ pinnedRank: _pinnedRank, ...thread }) => {
               const localRank = localRankByKey.get(
-                buildThreadIdentityKey(thread.source, thread.id),
+                thread.federation?.ref
+                  ? federatedThreadIdentityKey(thread.federation.ref)
+                  : buildThreadIdentityKey(thread.source, thread.id),
               );
               return localRank ? { ...thread, pinnedRank: localRank } : thread;
             },
@@ -6043,7 +6047,7 @@ class DesktopAppServerService {
         : [];
     const remoteRefsByKey = Object.fromEntries(
       remotePins.map((pin) => [
-        buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId),
+        federatedThreadIdentityKey(pin.ref),
         pin.ref,
       ]),
     );

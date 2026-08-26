@@ -121,6 +121,9 @@ export function ThreadHeader(props: ThreadHeaderProps) {
   // under a resting pointer and releases on unmount.
   const titleHover = useThreadLinkHoverSource({
     backend: props.thread.source,
+    ...(props.thread.federation?.ref.target.scope === "remote"
+      ? { instanceId: props.thread.federation.ref.target.instanceId }
+      : {}),
     threadId: props.thread.id,
   });
   const starMapTooltip = useViewportTooltip({ className: "viewport-tooltip" });

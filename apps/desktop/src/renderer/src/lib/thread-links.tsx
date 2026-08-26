@@ -1,5 +1,6 @@
 import {
   buildThreadIdentityKey,
+  federatedThreadIdentityKey,
   isThreadLinkId,
   parseThreadUrl,
   type AppServerBackendKind,
@@ -59,16 +60,24 @@ export type ThreadLinkContextValue = {
   hoverTarget: ThreadLinkHoverStore;
 };
 
-export type ThreadLinkHoverTarget = Pick<ResolvedThreadLink, "backend" | "threadId">;
+export type ThreadLinkHoverTarget = Pick<
+  ResolvedThreadLink,
+  "backend" | "instanceId" | "threadId"
+>;
 
 /**
  * The key a hovered link is matched against a sidebar card by. Same shape as
- * the row's own identity key (`buildThreadIdentityKey(source, id)`) and as
- * `composerSourceThreadKey`, so a link to a pinned remote thread lights up
- * that row too — the instance is deliberately not part of the match.
+ * the row's own identity key, including its federation owner when remote, so
+ * a link cannot light up a colliding local or sibling-instance row.
  */
 function threadLinkHoverKey(link: ThreadLinkHoverTarget): string {
-  return buildThreadIdentityKey(link.backend, link.threadId);
+  return link.instanceId
+    ? federatedThreadIdentityKey({
+        backend: link.backend,
+        target: { scope: "remote", instanceId: link.instanceId },
+        threadId: link.threadId,
+      })
+    : buildThreadIdentityKey(link.backend, link.threadId);
 }
 
 /**
@@ -316,9 +325,9 @@ export function useLiveThreadLink(link: ResolvedThreadLink): ResolvedThreadLink 
 }
 
 /**
- * Whether a hovered or focused thread link currently points at `threadKey`
- * (a `buildThreadIdentityKey` value). Subscribes per row, so only the rows
- * whose answer flips re-render. Always false outside a `ThreadLinkProvider`.
+ * Whether a hovered or focused thread link currently points at `threadKey`.
+ * Subscribes per row, so only the rows whose answer flips re-render. Always
+ * false outside a `ThreadLinkProvider`.
  */
 export function useThreadLinkHoverTarget(threadKey: string): boolean {
   // The store is a stable per-provider instance, so these deps do not churn
@@ -534,14 +543,16 @@ export function ThreadLinkProvider(props: {
 
     for (const thread of threadsRef.current) {
       const link = threadSummaryLink(thread);
-      byIdentity.set(buildThreadIdentityKey(thread.source, thread.id), link);
       if (link.instanceId) {
         byFederatedIdentity.set(threadLinkKey(link), link);
+      } else {
+        byIdentity.set(buildThreadIdentityKey(thread.source, thread.id), link);
       }
       // Thread ids are backend-generated and effectively unique, so a bare
       // `pwragent://thread/<id>` resolves without a backend hint. If two
       // backends ever collide on an id, the explicit `?backend=` form wins.
-      if (!byThreadId.has(thread.id)) {
+      const existingByThreadId = byThreadId.get(thread.id);
+      if (!existingByThreadId || (!link.instanceId && existingByThreadId.instanceId)) {
         byThreadId.set(thread.id, link);
       }
     }

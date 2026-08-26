@@ -970,6 +970,106 @@ describe("Sidebar", () => {
     expect(onSetSubthreadsCollapsed).toHaveBeenCalledWith(sharedThread, true);
   });
 
+  it("groups same-owner remote sub-threads and submits their drag order", () => {
+    const target = { scope: "remote" as const, instanceId: "remote-owner" };
+    const remoteParent: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "remote-parent",
+      title: "Remote parent",
+      subthreadOrder: ["remote-child-a", "remote-child-b"],
+      federation: {
+        capabilities: ["thread_grouping"],
+        instanceLabel: "Remote owner",
+        ref: {
+          backend: "codex",
+          target,
+          threadId: "remote-parent",
+        },
+      },
+    };
+    const remoteChildA: NavigationThreadSummary = {
+      ...sharedThread,
+      id: "remote-child-a",
+      title: "Remote child A",
+      parentThreadBackend: "codex",
+      parentThreadId: remoteParent.id,
+      federation: {
+        instanceLabel: "Remote owner",
+        ref: {
+          backend: "codex",
+          target,
+          threadId: "remote-child-a",
+        },
+      },
+    };
+    const remoteChildB: NavigationThreadSummary = {
+      ...remoteChildA,
+      id: "remote-child-b",
+      title: "Remote child B",
+      federation: {
+        instanceLabel: "Remote owner",
+        ref: {
+          backend: "codex",
+          target,
+          threadId: "remote-child-b",
+        },
+      },
+    };
+    const onUpdateSubthreadOrder = vi.fn(async () => undefined);
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="recents"
+        directories={[]}
+        inboxThreads={[remoteChildA, remoteChildB, remoteParent]}
+        loading={false}
+        selectedItemKey="remote:remote-owner:codex:remote-parent"
+        threads={[remoteChildA, remoteChildB, remoteParent]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onUpdateSubthreadOrder={onUpdateSubthreadOrder}
+      />,
+    );
+
+    expect(container.querySelector(".subthread-list")).toContainElement(
+      threadCard(screen.getByRole("button", { name: "Remote child A" })),
+    );
+    const source = screen.getByRole("button", { name: "Remote child A" })
+      .closest<HTMLElement>(".thread-row-shell")!;
+    const targetRow = screen.getByRole("button", { name: "Remote child B" })
+      .closest<HTMLElement>(".thread-row-shell")!;
+    vi.spyOn(targetRow, "getBoundingClientRect").mockReturnValue({
+      bottom: 100,
+      height: 100,
+      left: 0,
+      right: 300,
+      toJSON: () => ({}),
+      top: 0,
+      width: 300,
+      x: 0,
+      y: 0,
+    });
+    const values = new Map<string, string>();
+    const dataTransfer = {
+      dropEffect: "move",
+      effectAllowed: "move",
+      getData: vi.fn((type: string) => values.get(type) ?? ""),
+      setData: vi.fn((type: string, value: string) => values.set(type, value)),
+      setDragImage: vi.fn(),
+    };
+    fireEvent.dragStart(source, { dataTransfer });
+    fireEvent.dragOver(targetRow, { clientY: 75, dataTransfer });
+    fireEvent.drop(targetRow, { clientY: 75, dataTransfer });
+
+    expect(onUpdateSubthreadOrder).toHaveBeenCalledWith(remoteParent, [
+      "remote-child-a",
+      "remote-child-b",
+    ]);
+  });
+
   it("does not expose sub-thread disclosure controls for an older remote peer", () => {
     const remoteParent: NavigationThreadSummary = {
       ...sharedThread,
@@ -6752,7 +6852,7 @@ describe("Sidebar thread pinning Move items", () => {
         directories={[
           pinnedThreadsDirectory([
             "codex:codex-top",
-            "acp:grok:grok-middle",
+            "remote:peer-laptop:acp:grok:grok-middle",
             "acp:grok:grok-bottom",
           ]),
         ]}
@@ -6786,7 +6886,7 @@ describe("Sidebar thread pinning Move items", () => {
 
     fireEvent.click(moveUp);
     expect(onReorderThreadPins).toHaveBeenCalledWith([
-      "acp:grok:grok-middle",
+      "remote:peer-laptop:acp:grok:grok-middle",
       "codex:codex-top",
       "acp:grok:grok-bottom",
     ]);

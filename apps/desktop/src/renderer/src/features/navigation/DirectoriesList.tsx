@@ -16,7 +16,6 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import {
-  buildThreadIdentityKey,
   comparePinnedDirectories,
   comparePinnedThreads,
   isPinnedDirectory,
@@ -24,7 +23,6 @@ import {
   isSubthreadLaunchpadKey,
   moveDirectoryKey,
   moveThreadKey,
-  parseThreadIdentityKey,
   resolveThreadParentKey,
   sortSubthreadSummaries,
 } from "@pwragent/shared";
@@ -39,7 +37,10 @@ import {
   useDropIndicatorController,
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
-import { threadSupportsFederationCapability } from "../../lib/federated-thread-events";
+import {
+  threadSummaryIdentityKey,
+  threadSupportsFederationCapability,
+} from "../../lib/federated-thread-events";
 import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import {
   beginNativeDragInteraction,
@@ -770,7 +771,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     () =>
       new Map(
         props.threads.map((thread) => [
-          buildThreadIdentityKey(thread.source, thread.id),
+          threadSummaryIdentityKey(thread),
           thread,
         ]),
       ),
@@ -786,7 +787,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
   const pinnedThreadKeys = useMemo(
     () =>
       pinnedThreads.map((thread) =>
-        buildThreadIdentityKey(thread.source, thread.id),
+        threadSummaryIdentityKey(thread),
       ),
     [pinnedThreads],
   );
@@ -932,7 +933,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     thread: NavigationThreadSummary,
     direction: "up" | "down",
   ): void => {
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const threadKey = threadSummaryIdentityKey(thread);
     const directoryPinnedThreadKeys = buildDirectoryPinnedKeys(directory);
     const currentIndex = directoryPinnedThreadKeys.indexOf(threadKey);
     if (currentIndex === -1) return;
@@ -1061,15 +1062,10 @@ export function DirectoriesList(props: DirectoriesListProps) {
         return !parentKey || !directoryThreadKeys.has(parentKey);
       })
       .filter((thread) => !isPinnedThread(thread));
-    const topLevelThreadKey = buildThreadIdentityKey(
-      topLevelThread.source,
-      topLevelThread.id,
-    );
+    const topLevelThreadKey = threadSummaryIdentityKey(topLevelThread);
     if (
       topLevelUnpinnedThreads.findIndex(
-        (thread) =>
-          buildThreadIdentityKey(thread.source, thread.id) ===
-          topLevelThreadKey,
+        (thread) => threadSummaryIdentityKey(thread) === topLevelThreadKey,
       ) >= DIRECTORY_UNPINNED_THREAD_CAP
     ) {
       setUnpinnedExpandedByKey((current) => ({
@@ -1147,7 +1143,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       threadModel.expanded ?? EMPTY_EXPANDED_DIRECTORY_THREAD_MODEL;
     const { childThreadsByParentKey } = expandedThreadModel;
     const renderStaticSubthreads = (parent: NavigationThreadSummary): ReactElement | null => {
-      const parentKey = buildThreadIdentityKey(parent.source, parent.id);
+      const parentKey = threadSummaryIdentityKey(parent);
       const children = sortSubthreadSummaries(parent, childThreadsByParentKey.get(parentKey) ?? []);
       const nativeSubAgentCount = parent.codexNativeSubAgents?.length ?? 0;
       const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
@@ -1162,7 +1158,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       // `draggedSubthreadKey` state for why it stays isolated from the
       // directory / pinned-thread drag.
       const childOrderKeys = children.map((child) =>
-        buildThreadIdentityKey(child.source, child.id),
+        threadSummaryIdentityKey(child),
       );
       const reorderable =
         threadSupportsFederationCapability(parent, "thread_grouping")
@@ -1171,7 +1167,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
       return (
         <div className="subthread-list subthread-list--compact" role="list" aria-label={`Sub-threads of ${parent.title}`}>
           {children.map((child) => {
-            const childKey = buildThreadIdentityKey(child.source, child.id);
+            const childKey = threadSummaryIdentityKey(child);
             const rowDropKey = `subthread:${parentKey}:${childKey}`;
             return (
             <ThreadRow
@@ -1256,7 +1252,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 void props.onUpdateSubthreadOrder?.(
                   parent,
                   nextKeys
-                    .map((key) => parseThreadIdentityKey(key)?.threadId)
+                    .map((key) => threadsByKey.get(key)?.id)
                     .filter((threadId): threadId is string => Boolean(threadId)),
                 );
               }}
@@ -1304,7 +1300,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
     const renderUnpinnedRow = (
       thread: NavigationThreadSummary,
     ): ReactElement => {
-      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const threadKey = threadSummaryIdentityKey(thread);
       const ordinarySubthreadCount =
         childThreadsByParentKey.get(threadKey)?.length ?? 0;
       const subthreadCount = getSubthreadDisclosureCount(
@@ -1734,7 +1730,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 {visibleThreadCount > 0 ? (
                   <div className="sidebar-list sidebar-list--compact directory-row__threads">
                     {directoryPinnedThreads.map((thread) => {
-	                      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+	                      const threadKey = threadSummaryIdentityKey(thread);
                           const ordinarySubthreadCount =
                             childThreadsByParentKey.get(threadKey)?.length ?? 0;
                           const subthreadCount = getSubthreadDisclosureCount(

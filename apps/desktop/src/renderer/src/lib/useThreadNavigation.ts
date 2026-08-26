@@ -935,7 +935,7 @@ function reconcileNavigationSnapshot(
 
   const previousByThreadKey = new Map(
     previous.threads.map((thread) => [
-      buildThreadIdentityKey(thread.source, thread.id),
+      threadSummaryIdentityKey(thread),
       thread,
     ])
   );
@@ -958,7 +958,7 @@ function reconcileNavigationSnapshot(
     directories: sortNavigationDirectories(reconciledDirectories),
     threads: next.threads.map((thread) => {
       const previousThread = previousByThreadKey.get(
-        buildThreadIdentityKey(thread.source, thread.id)
+        threadSummaryIdentityKey(thread)
       );
       return previousThread && threadSummariesEqual(previousThread, thread)
         ? previousThread
@@ -977,7 +977,7 @@ function preserveNavigationPinState(
 
   const currentThreads = new Map(
     current.threads.map((thread) => [
-      buildThreadIdentityKey(thread.source, thread.id),
+      threadSummaryIdentityKey(thread),
       thread,
     ]),
   );
@@ -988,7 +988,7 @@ function preserveNavigationPinState(
     ...next,
     threads: next.threads.map((thread) => {
       const currentThread = currentThreads.get(
-        buildThreadIdentityKey(thread.source, thread.id),
+        threadSummaryIdentityKey(thread),
       );
       if (!currentThread || currentThread.pinnedRank === thread.pinnedRank) {
         return thread;
@@ -1236,6 +1236,7 @@ function updateThreadPinInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     pinnedRank?: string;
   },
@@ -1244,9 +1245,17 @@ function updateThreadPinInSnapshot(
     return snapshot;
   }
 
+  const threadKey = params.federationTarget
+    && isRemoteFederationTarget(params.federationTarget)
+    ? federatedThreadIdentityKey({
+        backend: params.backend,
+        target: params.federationTarget,
+        threadId: params.threadId,
+      })
+    : buildThreadIdentityKey(params.backend, params.threadId);
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    if (thread.source !== params.backend || thread.id !== params.threadId) {
+    if (threadSummaryIdentityKey(thread) !== threadKey) {
       return thread;
     }
     if (thread.pinnedRank === params.pinnedRank) {
@@ -1301,7 +1310,7 @@ function updateThreadPinsInSnapshot(
   const threads = snapshot.threads.map((thread) => {
     const pinnedRank =
       params.pinnedRanksByThreadKey[
-        buildThreadIdentityKey(thread.source, thread.id)
+        threadSummaryIdentityKey(thread)
       ];
     if (!pinnedRank || thread.pinnedRank === pinnedRank) {
       return thread;
@@ -1368,8 +1377,7 @@ function updateThreadParentInSnapshot(
 function ungroupChildThreadsInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
-    backend: AppServerBackendKind;
-    parentThreadId: string;
+    parent: NavigationThreadSummary;
   },
 ): NavigationSnapshot | undefined {
   if (!snapshot) {
@@ -1379,14 +1387,11 @@ function ungroupChildThreadsInSnapshot(
   let changed = false;
   const threadByKey = new Map(
     snapshot.threads.map((thread) => [
-      buildThreadIdentityKey(thread.source, thread.id),
+      threadSummaryIdentityKey(thread),
       thread,
     ]),
   );
-  const parentKey = buildThreadIdentityKey(
-    params.backend,
-    params.parentThreadId,
-  );
+  const parentKey = threadSummaryIdentityKey(params.parent);
   const threads = snapshot.threads.map((thread) => {
     if (resolveThreadParentKey(thread, threadByKey) !== parentKey) {
       return thread;
@@ -1410,11 +1415,11 @@ function collectDescendantThreads(
   const descendants: NavigationThreadSummary[] = [];
   const threadByKey = new Map(
     threads.map((thread) => [
-      buildThreadIdentityKey(thread.source, thread.id),
+      threadSummaryIdentityKey(thread),
       thread,
     ]),
   );
-  const parentKey = buildThreadIdentityKey(parent.source, parent.id);
+  const parentKey = threadSummaryIdentityKey(parent);
   const queue = threads.filter(
     (thread) => resolveThreadParentKey(thread, threadByKey) === parentKey,
   );
@@ -1422,13 +1427,13 @@ function collectDescendantThreads(
 
   while (queue.length > 0) {
     const thread = queue.shift()!;
-    const key = buildThreadIdentityKey(thread.source, thread.id);
+    const key = threadSummaryIdentityKey(thread);
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
     descendants.push(thread);
-    const currentKey = buildThreadIdentityKey(thread.source, thread.id);
+    const currentKey = threadSummaryIdentityKey(thread);
     queue.push(
       ...threads.filter(
         (candidate) =>
@@ -1624,6 +1629,7 @@ function markThreadsSeenInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: Array<{
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     seenUpdatedAt?: number;
   }>,
@@ -1634,14 +1640,20 @@ function markThreadsSeenInSnapshot(
 
   const seenUpdatedAtByThreadKey = new Map(
     params.map((entry) => [
-      buildThreadIdentityKey(entry.backend, entry.threadId),
+      entry.federationTarget && isRemoteFederationTarget(entry.federationTarget)
+        ? federatedThreadIdentityKey({
+            backend: entry.backend,
+            target: entry.federationTarget,
+            threadId: entry.threadId,
+          })
+        : buildThreadIdentityKey(entry.backend, entry.threadId),
       entry.seenUpdatedAt,
     ]),
   );
   const markedThreadKeys = new Set<string>();
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const threadKey = threadSummaryIdentityKey(thread);
     if (!seenUpdatedAtByThreadKey.has(threadKey)) {
       return thread;
     }
@@ -1680,7 +1692,7 @@ function markThreadsSeenInSnapshot(
   const directories = snapshot.directories ?? [];
   const threadInboxByKey = new Map(
     threads.map((thread) => [
-      buildThreadIdentityKey(thread.source, thread.id),
+      threadSummaryIdentityKey(thread),
       thread.inbox.inInbox,
     ])
   );
@@ -1705,6 +1717,7 @@ function markThreadSeenInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     seenUpdatedAt?: number;
   },
@@ -1716,6 +1729,7 @@ function markThreadUnreadInSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     seenUpdatedAt: number;
   },
@@ -1724,10 +1738,17 @@ function markThreadUnreadInSnapshot(
     return snapshot;
   }
 
-  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+  const threadKey = params.federationTarget
+    && isRemoteFederationTarget(params.federationTarget)
+    ? federatedThreadIdentityKey({
+        backend: params.backend,
+        target: params.federationTarget,
+        threadId: params.threadId,
+      })
+    : buildThreadIdentityKey(params.backend, params.threadId);
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
-    if (buildThreadIdentityKey(thread.source, thread.id) !== threadKey) {
+    if (threadSummaryIdentityKey(thread) !== threadKey) {
       return thread;
     }
 
@@ -1749,7 +1770,7 @@ function markThreadUnreadInSnapshot(
 
   const threadInboxByKey = new Map(
     threads.map((thread) => [
-      buildThreadIdentityKey(thread.source, thread.id),
+      threadSummaryIdentityKey(thread),
       thread.inbox.inInbox,
     ]),
   );
@@ -1775,6 +1796,7 @@ function removeThreadFromSnapshot(
   snapshot: NavigationSnapshot | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
   }
 ): NavigationSnapshot | undefined {
@@ -1782,9 +1804,16 @@ function removeThreadFromSnapshot(
     return snapshot;
   }
 
-  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+  const threadKey = params.federationTarget
+    && isRemoteFederationTarget(params.federationTarget)
+    ? federatedThreadIdentityKey({
+        backend: params.backend,
+        target: params.federationTarget,
+        threadId: params.threadId,
+      })
+    : buildThreadIdentityKey(params.backend, params.threadId);
   const threads = snapshot.threads.filter(
-    (thread) => buildThreadIdentityKey(thread.source, thread.id) !== threadKey
+    (thread) => threadSummaryIdentityKey(thread) !== threadKey
   );
   if (threads.length === snapshot.threads.length) {
     return snapshot;
@@ -1792,7 +1821,7 @@ function removeThreadFromSnapshot(
 
   const threadInboxByKey = new Map(
     threads.map((thread) => [
-      buildThreadIdentityKey(thread.source, thread.id),
+      threadSummaryIdentityKey(thread),
       thread.inbox.inInbox,
     ])
   );
@@ -1824,7 +1853,7 @@ function removeThreadKeysFromSnapshot(
   }
 
   const threads = snapshot.threads.filter(
-    (thread) => !threadKeysToRemove.has(buildThreadIdentityKey(thread.source, thread.id))
+    (thread) => !threadKeysToRemove.has(threadSummaryIdentityKey(thread))
   );
   if (threads.length === snapshot.threads.length) {
     return snapshot;
@@ -1832,7 +1861,7 @@ function removeThreadKeysFromSnapshot(
 
   const threadInboxByKey = new Map(
     threads.map((thread) => [
-      buildThreadIdentityKey(thread.source, thread.id),
+      threadSummaryIdentityKey(thread),
       thread.inbox.inInbox,
     ])
   );
@@ -1863,6 +1892,7 @@ function getFallbackSelectionAfterRemoval(
   snapshot: NavigationSnapshot | undefined,
   params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
     optimisticThreadKey?: string;
   }
@@ -2568,7 +2598,7 @@ function projectOptimisticThreadIntoDirectories(
     return directories;
   }
 
-  const threadKey = buildThreadIdentityKey(optimisticThread.source, optimisticThread.id);
+  const threadKey = threadSummaryIdentityKey(optimisticThread);
   let changed = false;
   const nextDirectories = [...directories];
 
@@ -2635,7 +2665,7 @@ function hasSelectionKey(
 
   return (
     response.threads.some(
-      (thread) => buildThreadIdentityKey(thread.source, thread.id) === selectionKey
+      (thread) => threadSummaryIdentityKey(thread) === selectionKey
     ) || selectionKey === optimisticThreadKey
   );
 }
@@ -2649,7 +2679,7 @@ function getFallbackSelectionKey(
   }
 
   if (response.threads[0]) {
-    return buildThreadIdentityKey(response.threads[0].source, response.threads[0].id);
+    return threadSummaryIdentityKey(response.threads[0]);
   }
 
   const firstLaunchpadDirectory = response.directories.find((directory) => directory.launchpad);
@@ -3052,6 +3082,7 @@ export function useThreadNavigation(
   markThreadUnread: (thread: NavigationThreadSummary) => Promise<void>;
   showThread: (params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
   }) => Promise<void>;
   archiveThread: (
@@ -3328,10 +3359,7 @@ export function useThreadNavigation(
       return;
     }
 
-    const retainedThreadKey = buildThreadIdentityKey(
-      retainedThread.source,
-      retainedThread.id
-    );
+    const retainedThreadKey = threadSummaryIdentityKey(retainedThread);
     if (nextSelectionKey === retainedThreadKey) {
       return;
     }
@@ -3340,6 +3368,7 @@ export function useThreadNavigation(
       ...current,
       response: markThreadSeenInSnapshot(current.response, {
         backend: retainedThread.source,
+        federationTarget: retainedThread.federation?.ref.target,
         threadId: retainedThread.id,
         seenUpdatedAt: retainedThread.updatedAt,
       }),
@@ -3521,7 +3550,7 @@ export function useThreadNavigation(
           : filteredResponse;
         const optimisticSelection = preferredOptimisticThread ?? optimisticThreadRef.current;
         const optimisticThreadKey = optimisticSelection
-          ? buildThreadIdentityKey(optimisticSelection.source, optimisticSelection.id)
+          ? threadSummaryIdentityKey(optimisticSelection)
           : undefined;
         const responseWithObservedThreadNames = applyObservedThreadNames(
           response,
@@ -3569,11 +3598,11 @@ export function useThreadNavigation(
         if (
           optimisticThreadKey &&
           response.threads.some(
-            (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
+            (thread) => threadSummaryIdentityKey(thread) === optimisticThreadKey
           )
         ) {
           const hydratedOptimisticThread = response.threads.find(
-            (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
+            (thread) => threadSummaryIdentityKey(thread) === optimisticThreadKey
           );
 
           setOptimisticThread((current) => {
@@ -4332,6 +4361,7 @@ export function useThreadNavigation(
           ...current,
           response: removeThreadFromSnapshot(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId,
           }),
         }));
@@ -4339,21 +4369,23 @@ export function useThreadNavigation(
           current === threadKey
             ? getFallbackSelectionAfterRemoval(state.response, {
                 backend: event.backend,
+                federationTarget: event.federationTarget,
                 threadId,
                 optimisticThreadKey: optimisticThreadRef.current
-                  ? buildThreadIdentityKey(
-                      optimisticThreadRef.current.source,
-                      optimisticThreadRef.current.id
-                    )
+                  ? threadSummaryIdentityKey(optimisticThreadRef.current)
                   : undefined,
               })
             : current
         );
         setRetainedUnreadThread((current) =>
-          current?.source === event.backend && current.id === threadId ? undefined : current
+          current && agentEventMatchesThread(event, current, threadId)
+            ? undefined
+            : current
         );
         setOptimisticThread((current) =>
-          current?.source === event.backend && current.id === threadId ? undefined : current
+          current && agentEventMatchesThread(event, current, threadId)
+            ? undefined
+            : current
         );
         return;
       }
@@ -4618,6 +4650,7 @@ export function useThreadNavigation(
           ...current,
           response: updateThreadPinInSnapshot(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId,
             pinnedRank,
           }),
@@ -4633,6 +4666,7 @@ export function useThreadNavigation(
           ...current,
           response: updateThreadPinInSnapshot(current.response, {
             backend: event.backend,
+            federationTarget: event.federationTarget,
             threadId,
             pinnedRank: undefined,
           }),
@@ -4847,17 +4881,14 @@ export function useThreadNavigation(
       return currentThreads;
     }
 
-    const optimisticThreadKey = buildThreadIdentityKey(
-      optimisticThread.source,
-      optimisticThread.id
-    );
+    const optimisticThreadKey = threadSummaryIdentityKey(optimisticThread);
 
     const hasHydratedThread = currentThreads.some(
-      (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
+      (thread) => threadSummaryIdentityKey(thread) === optimisticThreadKey
     );
     if (hasHydratedThread) {
       return currentThreads.map((thread) =>
-        buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
+        threadSummaryIdentityKey(thread) === optimisticThreadKey
           ? {
               ...mergeHydratedThreadWithOptimisticTitle(thread, optimisticThread),
               optimisticActiveTurn:
@@ -4887,12 +4918,9 @@ export function useThreadNavigation(
         return currentDirectories;
       }
 
-      const optimisticThreadKey = buildThreadIdentityKey(
-        optimisticThread.source,
-        optimisticThread.id
-      );
+      const optimisticThreadKey = threadSummaryIdentityKey(optimisticThread);
       const hasHydratedThread = state.response?.threads.some(
-        (thread) => buildThreadIdentityKey(thread.source, thread.id) === optimisticThreadKey
+        (thread) => threadSummaryIdentityKey(thread) === optimisticThreadKey
       );
 
       return projectOptimisticThreadIntoDirectories(
@@ -4983,8 +5011,7 @@ export function useThreadNavigation(
     () =>
       selectedThreadKey
         ? threads.find(
-            (thread) =>
-              buildThreadIdentityKey(thread.source, thread.id) === selectedThreadKey
+            (thread) => threadSummaryIdentityKey(thread) === selectedThreadKey
           )
         : undefined,
     [selectedThreadKey, threads]
@@ -5057,8 +5084,7 @@ export function useThreadNavigation(
     if (
       !pendingSeenThreadKey ||
       !selectedThread ||
-      pendingSeenThreadKey !==
-        buildThreadIdentityKey(selectedThread.source, selectedThread.id) ||
+      pendingSeenThreadKey !== threadSummaryIdentityKey(selectedThread) ||
       !submitMarkThreadSeen
     ) {
       return;
@@ -5068,10 +5094,7 @@ export function useThreadNavigation(
     const threadToMarkSeen = selectedThread;
 
     async function markSeen(): Promise<void> {
-      const threadKey = buildThreadIdentityKey(
-        threadToMarkSeen.source,
-        threadToMarkSeen.id
-      );
+      const threadKey = threadSummaryIdentityKey(threadToMarkSeen);
       submittedSeenUpdatedAtByThreadKeyRef.current.set(
         threadKey,
         threadToMarkSeen.updatedAt
@@ -5090,13 +5113,13 @@ export function useThreadNavigation(
           const retainedThread = retainedUnreadThreadRef.current;
           if (
             !retainedThread ||
-            buildThreadIdentityKey(retainedThread.source, retainedThread.id) !==
-              threadKey
+            threadSummaryIdentityKey(retainedThread) !== threadKey
           ) {
             setState((current) => ({
               ...current,
               response: markThreadSeenInSnapshot(current.response, {
                 backend: threadToMarkSeen.source,
+                federationTarget: threadToMarkSeen.federation?.ref.target,
                 threadId: threadToMarkSeen.id,
                 seenUpdatedAt: threadToMarkSeen.updatedAt,
               }),
@@ -5153,15 +5176,12 @@ export function useThreadNavigation(
       return;
     }
 
-    const threadKey = buildThreadIdentityKey(
-      selectedThread.source,
-      selectedThread.id
-    );
+    const threadKey = threadSummaryIdentityKey(selectedThread);
     if (!manuallySelectedThreadKeysRef.current.has(threadKey)) {
       return;
     }
     const retainedThreadKey = retainedUnreadThread
-      ? buildThreadIdentityKey(retainedUnreadThread.source, retainedUnreadThread.id)
+      ? threadSummaryIdentityKey(retainedUnreadThread)
       : undefined;
 
     if (
@@ -5191,7 +5211,7 @@ export function useThreadNavigation(
   ]);
 
   const selectThread = useCallback((thread: NavigationThreadSummary): void => {
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const threadKey = threadSummaryIdentityKey(thread);
     manuallySelectedThreadKeysRef.current.add(threadKey);
     releaseRetainedUnreadThread(threadKey);
     refreshThreadDirectoryGitStatuses(threadKey);
@@ -5233,7 +5253,7 @@ export function useThreadNavigation(
           continue;
         }
         unreadThreadsByKey.set(
-          buildThreadIdentityKey(thread.source, thread.id),
+          threadSummaryIdentityKey(thread),
           thread,
         );
       }
@@ -5244,7 +5264,7 @@ export function useThreadNavigation(
 
       for (const thread of unreadThreads) {
         submittedSeenUpdatedAtByThreadKeyRef.current.set(
-          buildThreadIdentityKey(thread.source, thread.id),
+          threadSummaryIdentityKey(thread),
           thread.updatedAt,
         );
       }
@@ -5271,11 +5291,12 @@ export function useThreadNavigation(
 
       const markedThreadKeys = new Set(
         markedThreads.map((thread) =>
-          buildThreadIdentityKey(thread.source, thread.id),
+          threadSummaryIdentityKey(thread),
         ),
       );
       const seenThreads = markedThreads.map((thread) => ({
         backend: thread.source,
+        federationTarget: thread.federation?.ref.target,
         threadId: thread.id,
         seenUpdatedAt: thread.updatedAt,
       }));
@@ -5287,7 +5308,7 @@ export function useThreadNavigation(
         if (
           current
           && markedThreadKeys.has(
-            buildThreadIdentityKey(current.source, current.id),
+            threadSummaryIdentityKey(current),
           )
         ) {
           return undefined;
@@ -5307,7 +5328,7 @@ export function useThreadNavigation(
         return;
       }
 
-      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const threadKey = threadSummaryIdentityKey(thread);
       const seenUpdatedAt = Math.max(0, thread.updatedAt - 1);
       await markThreadSeen({
         backend: thread.source,
@@ -5327,7 +5348,7 @@ export function useThreadNavigation(
         current === threadKey ? undefined : current,
       );
       setRetainedUnreadThread((current) =>
-        current && buildThreadIdentityKey(current.source, current.id) === threadKey
+        current && threadSummaryIdentityKey(current) === threadKey
           ? undefined
           : current,
       );
@@ -5335,6 +5356,7 @@ export function useThreadNavigation(
         ...current,
         response: markThreadUnreadInSnapshot(current.response, {
           backend: thread.source,
+          federationTarget: thread.federation?.ref.target,
           threadId: thread.id,
           seenUpdatedAt,
         }),
@@ -5346,12 +5368,25 @@ export function useThreadNavigation(
   const showThread = useCallback(
     async (params: {
       backend: AppServerBackendKind;
+      federationTarget?: FederationTarget;
       threadId: string;
     }): Promise<void> => {
-      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const threadKey = params.federationTarget
+        && isRemoteFederationTarget(params.federationTarget)
+        ? federatedThreadIdentityKey({
+            backend: params.backend,
+            target: params.federationTarget,
+            threadId: params.threadId,
+          })
+        : buildThreadIdentityKey(params.backend, params.threadId);
       const thread = state.response?.threads.find(
         (candidate) =>
-          candidate.source === params.backend && candidate.id === params.threadId,
+          candidate.source === params.backend
+          && candidate.id === params.threadId
+          && federationTargetsEqual(
+            candidate.federation?.ref.target,
+            params.federationTarget,
+          ),
       );
       if (thread) {
         selectThread(thread);
@@ -5511,7 +5546,7 @@ export function useThreadNavigation(
       const threads = stateRef.current.response?.threads ?? [];
       const threadByKey = new Map(
         threads.map((thread) => [
-          buildThreadIdentityKey(thread.source, thread.id),
+          threadSummaryIdentityKey(thread),
           thread,
         ]),
       );
@@ -5543,11 +5578,18 @@ export function useThreadNavigation(
       }
       const threadByKey = new Map(
         snapshot.threads.map((thread) => [
-          buildThreadIdentityKey(thread.source, thread.id),
+          threadSummaryIdentityKey(thread),
           thread,
         ]),
       );
-      const rootKey = buildThreadIdentityKey(parentBackend, rootThreadId);
+      const rootKey = federationTarget
+        && isRemoteFederationTarget(federationTarget)
+        ? federatedThreadIdentityKey({
+            backend: parentBackend,
+            target: federationTarget,
+            threadId: rootThreadId,
+          })
+        : buildThreadIdentityKey(parentBackend, rootThreadId);
       const root = threadByKey.get(rootKey);
       if (
         federationTarget
@@ -5601,7 +5643,7 @@ export function useThreadNavigation(
             }),
           }));
         } catch {
-          await refresh(buildThreadIdentityKey(parentBackend, rootThreadId));
+          await refresh(rootKey);
         }
       }
 
@@ -6966,7 +7008,9 @@ export function useThreadNavigation(
           console.warn("Could not add the remote thread to this thread list:", error);
         }
       }
-      const nextThreadKey = buildThreadIdentityKey(response.backend, response.threadId);
+      const nextThreadKey = threadSummaryIdentityKey(
+        namedOptimisticMaterializedThread,
+      );
       // Sub-thread launchpads drop the new child directly below their source
       // card. Plain new-thread launchpads have no parent and skip this. Await
       // so the order write commits before the refresh below reads it back.
@@ -7213,16 +7257,16 @@ export function useThreadNavigation(
         return;
       }
 
-      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const threadKey = threadSummaryIdentityKey(thread);
       const optimisticThreadKey = optimisticThread
-        ? buildThreadIdentityKey(optimisticThread.source, optimisticThread.id)
+        ? threadSummaryIdentityKey(optimisticThread)
         : undefined;
       const targetThreads = options?.includeSubthreads
         ? [...collectDescendantThreads(threads, thread).reverse(), thread]
         : [thread];
       const targetThreadKeys = new Set(
         targetThreads.map((target) =>
-          buildThreadIdentityKey(target.source, target.id)
+          threadSummaryIdentityKey(target)
         )
       );
 
@@ -7241,13 +7285,14 @@ export function useThreadNavigation(
           (snapshot, target) =>
             removeThreadFromSnapshot(snapshot, {
               backend: target.source,
+              federationTarget: target.federation?.ref.target
+                ?? readRendererFederationTarget(),
               threadId: target.id,
             }),
           options?.includeSubthreads
             ? current.response
             : ungroupChildThreadsInSnapshot(current.response, {
-                backend: thread.source,
-                parentThreadId: thread.id,
+                parent: thread,
               })
         ),
       }));
@@ -7255,18 +7300,20 @@ export function useThreadNavigation(
         current && targetThreadKeys.has(current)
           ? getFallbackSelectionAfterRemoval(state.response, {
               backend: thread.source,
+              federationTarget: thread.federation?.ref.target
+                ?? readRendererFederationTarget(),
               threadId: thread.id,
               optimisticThreadKey,
             })
           : current
       );
       setRetainedUnreadThread((current) =>
-        current && targetThreadKeys.has(buildThreadIdentityKey(current.source, current.id))
+        current && targetThreadKeys.has(threadSummaryIdentityKey(current))
           ? undefined
           : current
       );
       setOptimisticThread((current) =>
-        current && targetThreadKeys.has(buildThreadIdentityKey(current.source, current.id))
+        current && targetThreadKeys.has(threadSummaryIdentityKey(current))
           ? undefined
           : current
       );
@@ -7333,7 +7380,7 @@ export function useThreadNavigation(
           repositoryPath: directory.path,
           worktreePath,
         });
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        await refresh(threadSummaryIdentityKey(thread));
       } catch (error) {
         setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
       }
@@ -7362,7 +7409,7 @@ export function useThreadNavigation(
           snapshotRef,
           worktreePath,
         });
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        await refresh(threadSummaryIdentityKey(thread));
       } catch (error) {
         setWorktreeArchiveError(error instanceof Error ? error.message : String(error));
       }
@@ -7392,7 +7439,7 @@ export function useThreadNavigation(
             readRendererFederationTarget(),
           threadId: thread.id,
         });
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        await refresh(threadSummaryIdentityKey(thread));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         setWorktreeArchiveError(message);
@@ -7405,7 +7452,7 @@ export function useThreadNavigation(
   const renameThread = useCallback(
     async (thread: NavigationThreadSummary, name: string): Promise<void> => {
       const nextName = name.trim();
-      const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+      const threadKey = threadSummaryIdentityKey(thread);
 
       if (!nextName) {
         setRenameThreadError("Thread name cannot be blank.");
@@ -7554,11 +7601,14 @@ export function useThreadNavigation(
             ),
           )
         : undefined;
+      const federationTarget = thread.federation?.ref.target
+        ?? readRendererFederationTarget();
 
       setState((current) => ({
         ...current,
         response: updateThreadPinInSnapshot(current.response, {
           backend: thread.source,
+          federationTarget,
           threadId: thread.id,
           pinnedRank,
         }),
@@ -7584,6 +7634,7 @@ export function useThreadNavigation(
             ...current,
             response: updateThreadPinInSnapshot(current.response, {
               backend: thread.source,
+              federationTarget,
               threadId: thread.id,
               pinnedRank: result.pinnedRank,
             }),
@@ -7592,8 +7643,7 @@ export function useThreadNavigation(
         }
         const result = await setThreadPinRequest({
           backend: thread.source,
-          federationTarget:
-            thread.federation?.ref.target ?? readRendererFederationTarget(),
+          federationTarget,
           threadId: thread.id,
           pinnedRank,
         });
@@ -7601,12 +7651,13 @@ export function useThreadNavigation(
           ...current,
           response: updateThreadPinInSnapshot(current.response, {
             backend: result.backend,
+            federationTarget,
             threadId: result.threadId,
             pinnedRank: result.pinnedRank,
           }),
         }));
       } catch {
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        await refresh(threadSummaryIdentityKey(thread));
       }
     },
     [
@@ -7693,7 +7744,7 @@ export function useThreadNavigation(
           }),
         }));
       } catch {
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        await refresh(threadSummaryIdentityKey(thread));
       }
     },
     [refresh, setThreadParentRequest],
@@ -7710,7 +7761,7 @@ export function useThreadNavigation(
       }
       const threadByKey = new Map(
         snapshot.threads.map((thread) => [
-          buildThreadIdentityKey(thread.source, thread.id),
+          threadSummaryIdentityKey(thread),
           thread,
         ]),
       );
@@ -7722,7 +7773,7 @@ export function useThreadNavigation(
           continue;
         }
         const childKeys = childKeysByPinnedParent.get(parentKey) ?? [];
-        childKeys.push(buildThreadIdentityKey(thread.source, thread.id));
+        childKeys.push(threadSummaryIdentityKey(thread));
         childKeysByPinnedParent.set(parentKey, childKeys);
       }
       for (const [parentKey, childKeys] of childKeysByPinnedParent) {
@@ -7736,22 +7787,22 @@ export function useThreadNavigation(
           childKeysByPinnedParent.set(
             parentKey,
             sortSubthreadSummaries(parent, selectedChildren).map((thread) =>
-              buildThreadIdentityKey(thread.source, thread.id)
+              threadSummaryIdentityKey(thread)
             ),
           );
         }
       }
       const selectedKeys = new Set(
         threadsToUnlink.map((thread) =>
-          buildThreadIdentityKey(thread.source, thread.id)
+          threadSummaryIdentityKey(thread)
         ),
       );
       const currentPinnedKeys = snapshot.threads
         .filter((thread) => thread.pinnedRank && !selectedKeys.has(
-          buildThreadIdentityKey(thread.source, thread.id),
+          threadSummaryIdentityKey(thread),
         ))
         .sort(comparePinnedThreads)
-        .map((thread) => buildThreadIdentityKey(thread.source, thread.id));
+        .map((thread) => threadSummaryIdentityKey(thread));
       const nextPinnedKeys = currentPinnedKeys.flatMap((threadKey) => [
         ...(childKeysByPinnedParent.get(threadKey) ?? []),
         threadKey,
@@ -7802,7 +7853,7 @@ export function useThreadNavigation(
               readRendererFederationTarget(),
             threadId: thread.id,
           });
-          const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+          const threadKey = threadSummaryIdentityKey(thread);
           const parentKey = resolveThreadParentKey(thread, threadByKey);
           if (parentKey && childKeysByPinnedParent.has(parentKey)) {
             successfullyUnlinkedPinnedKeys.add(threadKey);
@@ -7878,7 +7929,7 @@ export function useThreadNavigation(
           }),
         }));
       } catch {
-        await refresh(buildThreadIdentityKey(parent.source, parent.id));
+        await refresh(threadSummaryIdentityKey(parent));
       }
     },
     [refresh, updateSubthreadOrderRequest],
@@ -7925,7 +7976,7 @@ export function useThreadNavigation(
           }),
         }));
       } catch {
-        await refresh(buildThreadIdentityKey(parent.source, parent.id));
+        await refresh(threadSummaryIdentityKey(parent));
       }
     },
     [refresh, setSubthreadsCollapsedRequest],
@@ -7955,7 +8006,7 @@ export function useThreadNavigation(
           }),
         }));
       } catch {
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        await refresh(threadSummaryIdentityKey(thread));
       }
     },
     [refresh, setThreadAgentRequest],
@@ -8144,10 +8195,10 @@ export function useThreadNavigation(
           threadId: thread.id,
           executionMode,
         });
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        await refresh(threadSummaryIdentityKey(thread));
       } catch (error) {
         setSetThreadExecutionModeError(error instanceof Error ? error.message : String(error));
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        await refresh(threadSummaryIdentityKey(thread));
       } finally {
         setUpdatingThreadExecutionMode(undefined);
       }
@@ -8171,12 +8222,12 @@ export function useThreadNavigation(
             readRendererFederationTarget(),
           threadId: thread.id,
         });
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        await refresh(threadSummaryIdentityKey(thread));
       } catch (error) {
         setSetThreadExecutionModeError(
           error instanceof Error ? error.message : String(error)
         );
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        await refresh(threadSummaryIdentityKey(thread));
       }
     },
     [cancelThreadExecutionModeQueueRequest, refresh]
@@ -8241,7 +8292,7 @@ export function useThreadNavigation(
         setSetThreadModelSettingsError(
           error instanceof Error ? error.message : String(error)
         );
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        await refresh(threadSummaryIdentityKey(thread));
       }
     },
     [refresh, setThreadModelSettings]
@@ -8289,7 +8340,7 @@ export function useThreadNavigation(
         setSetThreadModelSettingsError(
           error instanceof Error ? error.message : String(error),
         );
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        await refresh(threadSummaryIdentityKey(thread));
       }
     },
     [refresh, setThreadPrAutoDispatchRequest],
@@ -8386,12 +8437,12 @@ export function useThreadNavigation(
           threadId: thread.id,
           ...params,
         });
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        await refresh(threadSummaryIdentityKey(thread));
       } catch (error) {
         setSetThreadExecutionModeError(
           error instanceof Error ? error.message : String(error)
         );
-        await refresh(buildThreadIdentityKey(thread.source, thread.id));
+        await refresh(threadSummaryIdentityKey(thread));
       }
     },
     [refresh, setAcpSessionRuntimeOption]

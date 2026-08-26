@@ -86,6 +86,7 @@ import {
   buildFederatedThreadRef,
   buildThreadIdentityKey,
   encodeLegacyThreadIdentityKey,
+  federatedThreadIdentityKey,
   federationEndpointAcceptsCloudflareCredentials,
   isCelestialIconAssignment,
   isCelestialIconId,
@@ -1984,7 +1985,11 @@ export class DesktopFederationRuntime {
       visiblePeer,
     );
     const peerStatus = visiblePeer?.status ?? peer?.status;
+    const stampedThreadKeyBySourceKey = new Map<string, string>();
     const threads = response.threads.map((thread) => {
+      const sourceKey = thread.federation?.ref
+        ? federatedThreadIdentityKey(thread.federation.ref)
+        : buildThreadIdentityKey(thread.source, thread.id);
       const existingOwner = thread.federation?.ref.target;
       const ownerInstanceId = existingOwner
         && isRemoteFederationTarget(existingOwner)
@@ -2005,6 +2010,10 @@ export class DesktopFederationRuntime {
         instanceId: ownerInstanceId,
         threadId: thread.id,
       });
+      stampedThreadKeyBySourceKey.set(
+        sourceKey,
+        federatedThreadIdentityKey(ref),
+      );
       return {
         ...thread,
         federation: {
@@ -2027,6 +2036,15 @@ export class DesktopFederationRuntime {
       federationTarget: target,
       unchanged: false,
       threads,
+      inboxThreadKeys: response.inboxThreadKeys.map(
+        (threadKey) => stampedThreadKeyBySourceKey.get(threadKey) ?? threadKey,
+      ),
+      directories: response.directories.map((directory) => ({
+        ...directory,
+        threadKeys: directory.threadKeys.map(
+          (threadKey) => stampedThreadKeyBySourceKey.get(threadKey) ?? threadKey,
+        ),
+      })),
     };
   }
 

@@ -343,6 +343,30 @@ describe("SidebarSearchPopup", () => {
     expect(onJumpToRemoteThread.mock.calls[0][0].id).toBe("r1");
   });
 
+  it("keeps a remote result when its backend and id collide locally", async () => {
+    jumpSearchRemoteThreads.mockResolvedValue({
+      results: [remoteThread({ threadId: "shared", title: "Remote fix" })],
+    });
+
+    render(
+      <SidebarSearchPopup
+        threads={[localThread({ id: "shared", title: "Local fix" })]}
+        onJumpToThread={vi.fn()}
+        onJumpToRemoteThread={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Jump to thread" }), {
+      target: { value: "fix" },
+    });
+    await settleRemoteSearch();
+
+    expect(screen.getByText("Local fix")).toBeInTheDocument();
+    expect(screen.getByText("Remote fix")).toBeInTheDocument();
+    expect(screen.getByText("Other instances")).toBeInTheDocument();
+  });
+
   it("hides remote hits that are already pinned into the local list", async () => {
     const pinnedLocally = remoteThread({ threadId: "r1", title: "Remote fix" });
     jumpSearchRemoteThreads.mockResolvedValue({ results: [pinnedLocally] });

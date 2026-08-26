@@ -13,13 +13,12 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
-  buildThreadIdentityKey,
-  federatedThreadIdentityKey,
   threadHasExactPrNumberMatch,
   type NavigationThreadSummary,
 } from "@pwragent/shared";
 import { SearchIcon } from "../../icons";
 import { getDesktopApi } from "../../lib/desktop-api";
+import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import {
   FEDERATED_THREAD_SEARCH_LIMIT,
   useFederatedThreadSearch,
@@ -111,11 +110,11 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
   const remoteRows = useMemo(() => {
     const localKeys = new Set(
       props.threads.map((thread) =>
-        buildThreadIdentityKey(thread.source, thread.id),
+        threadSummaryIdentityKey(thread),
       ),
     );
     return remoteResults.filter(
-      (thread) => !localKeys.has(buildThreadIdentityKey(thread.source, thread.id)),
+      (thread) => !localKeys.has(threadSummaryIdentityKey(thread)),
     );
   }, [remoteResults, props.threads]);
 
@@ -238,9 +237,7 @@ export function SidebarSearchPopup(props: SidebarSearchPopupProps): ReactElement
     const prStripResetKey = `${exactPrQuery}|${prs
       .map((pr) => pr.url)
       .join("|")}`;
-    const key = thread.federation
-      ? federatedThreadIdentityKey(thread.federation.ref)
-      : buildThreadIdentityKey(thread.source, thread.id);
+    const key = threadSummaryIdentityKey(thread);
     return (
       <li
         key={key}
