@@ -231,6 +231,64 @@ describe("ComposerTiptapInput", () => {
     expect(container.querySelector("a")).not.toBeInTheDocument();
   });
 
+  it("pastes copied transcript text that nests code inside bold text", async () => {
+    const onChange = vi.fn();
+    const { container } = render(
+      <ComposerTiptapInput
+        editorDocument={{
+          type: "doc",
+          content: [
+            {
+              type: "blockquote",
+              content: [
+                {
+                  type: "paragraph",
+                  content: [{ type: "text", text: "Context:" }],
+                },
+              ],
+            },
+          ],
+        }}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        onChange={onChange}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value="> Context:"
+      />,
+    );
+    const textbox = await screen.findByRole("textbox", { name: "Reply" });
+    setComposerSelection(textbox, "Context:".length);
+
+    fireEvent.paste(textbox, {
+      clipboardData: {
+        files: [],
+        getData: (type: string) => {
+          if (type === "text/html") {
+            return "<p><strong>10 <code>Promise.all</code> cells</strong></p>";
+          }
+          return type === "text/plain" ? "10 Promise.all cells" : "";
+        },
+        items: [],
+        types: ["text/html", "text/plain"],
+      },
+    });
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenLastCalledWith(
+        [
+          "> Context:",
+          "> ",
+          "> **10** `Promise.all` **cells**",
+        ].join("\n"),
+        [],
+        expect.any(Object),
+      );
+    });
+    expect(container.querySelector("code")).toHaveTextContent("Promise.all");
+  });
+
   it("pastes copied handoff markdown as fences and lists without extra blank lines", async () => {
     const { container, onChange } = renderTiptapInput();
     const textbox = await screen.findByRole("textbox", { name: "Reply" });
