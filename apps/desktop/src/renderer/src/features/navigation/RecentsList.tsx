@@ -6,7 +6,6 @@ import type {
 } from "@pwragent/shared";
 import {
   moveThreadKey,
-  parseThreadIdentityKey,
   resolveThreadParentKey,
   sortSubthreadSummaries,
 } from "@pwragent/shared";
@@ -213,8 +212,6 @@ export function RecentsList(props: RecentsListProps) {
                 ) {
                   return;
                 }
-                const draggedId = parseThreadIdentityKey(draggedKey)?.threadId;
-                if (!draggedId) return;
                 const nextKeys = moveThreadKey(
                   childKeys,
                   draggedKey,
@@ -224,7 +221,7 @@ export function RecentsList(props: RecentsListProps) {
                 void props.onUpdateSubthreadOrder?.(
                   parent,
                   nextKeys
-                    .map((threadKey) => parseThreadIdentityKey(threadKey)?.threadId)
+                    .map((threadKey) => threadByKey.get(threadKey)?.id)
                     .filter((threadId): threadId is string => Boolean(threadId)),
                 );
               }}

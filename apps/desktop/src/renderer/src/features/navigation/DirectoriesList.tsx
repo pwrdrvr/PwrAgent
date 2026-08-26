@@ -23,7 +23,6 @@ import {
   isSubthreadLaunchpadKey,
   moveDirectoryKey,
   moveThreadKey,
-  parseThreadIdentityKey,
   resolveThreadParentKey,
   sortSubthreadSummaries,
 } from "@pwragent/shared";
@@ -1253,7 +1252,7 @@ export function DirectoriesList(props: DirectoriesListProps) {
                 void props.onUpdateSubthreadOrder?.(
                   parent,
                   nextKeys
-                    .map((key) => parseThreadIdentityKey(key)?.threadId)
+                    .map((key) => threadsByKey.get(key)?.id)
                     .filter((threadId): threadId is string => Boolean(threadId)),
                 );
               }}

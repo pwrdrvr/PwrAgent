@@ -1258,6 +1258,105 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("releases retained remote unread state without clearing a local collision", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const markThreadSeen = vi.fn(
+      async (
+        request: Parameters<NonNullable<DesktopApi["markThreadSeen"]>>[0],
+      ) => ({
+        backend: request.backend ?? "codex",
+        threadId: request.threadId,
+        seenAt: Date.now(),
+        seenUpdatedAt: request.seenUpdatedAt,
+      }),
+    );
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["remote:remote-instance:codex:shared-thread"],
+      threads: [
+        {
+          id: "shared-thread",
+          title: "Local collision",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          updatedAt: 1_500,
+        },
+        {
+          id: "shared-thread",
+          title: "Remote unread collision",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          federation: {
+            instanceLabel: "Remote Mac",
+            ref: {
+              backend: "codex" as const,
+              target: federationTarget,
+              threadId: "shared-thread",
+            },
+          },
+          inbox: {
+            inInbox: true,
+            reason: "updated-since-seen" as const,
+            lastSeenUpdatedAt: 1_000,
+          },
+          updatedAt: 2_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      markThreadSeen,
+      onAgentEvent: () => () => undefined,
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(2);
+    });
+    act(() => {
+      result.current.selectThread(
+        result.current.threads.find((thread) => thread.federation)!,
+      );
+    });
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledWith({
+        backend: "codex",
+        federationTarget,
+        threadId: "shared-thread",
+        seenUpdatedAt: 2_000,
+      });
+    });
+    expect(result.current.threads.find((thread) => thread.federation)?.inbox.inInbox)
+      .toBe(true);
+
+    act(() => {
+      result.current.selectThread(
+        result.current.threads.find((thread) => !thread.federation)!,
+      );
+    });
+    await waitFor(() => {
+      expect(result.current.threads.find(
+        (thread) => thread.federation,
+      )?.inbox.inInbox).toBe(false);
+    });
+    expect(result.current.threads.find((thread) => !thread.federation)?.inbox.inInbox)
+      .toBe(false);
+    expect(result.current.snapshot?.inboxThreadKeys).toEqual([]);
+  });
+
   it("marks a remote read thread unread until the user returns to it", async () => {
     const federationTarget = {
       scope: "remote" as const,
@@ -1347,7 +1446,7 @@ describe("useThreadNavigation", () => {
       lastSeenUpdatedAt: 1_999,
     });
     expect(result.current.snapshot?.inboxThreadKeys).toEqual([
-      "codex:thread-read",
+      "remote:remote-instance:codex:thread-read",
     ]);
 
     act(() => {
@@ -2913,6 +3012,91 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("keeps a colliding local row visible while suppressing a remote archive", async () => {
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "remote-instance",
+    };
+    const remoteKey = "remote:remote-instance:codex:shared-thread";
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:shared-thread", remoteKey],
+      threads: [
+        {
+          id: "shared-thread",
+          title: "Local collision",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+        },
+        {
+          id: "shared-thread",
+          title: "Remote collision",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          federation: {
+            instanceLabel: "Remote Mac",
+            ref: {
+              backend: "codex" as const,
+              target: federationTarget,
+              threadId: "shared-thread",
+            },
+          },
+        },
+      ],
+      directories: [{
+        key: "directory:/repo",
+        kind: "directory" as const,
+        label: "Repo",
+        path: "/repo",
+        threadKeys: ["codex:shared-thread", remoteKey],
+        needsAttentionCount: 2,
+      }],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const archiveThread = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "shared-thread",
+      archivedAt: 2_000,
+      cleanup: [],
+    }));
+    const desktopApi: DesktopApi = {
+      archiveThread,
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+      removeRemoteThreadPin: vi.fn(async () => ({ removed: true })),
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads).toHaveLength(2);
+    });
+    const remoteThread = result.current.threads.find(
+      (thread) => thread.federation,
+    )!;
+    await act(async () => {
+      await result.current.archiveThread(remoteThread);
+    });
+
+    expect(result.current.threads.map((thread) => thread.title)).toEqual([
+      "Local collision",
+    ]);
+    expect(result.current.snapshot?.inboxThreadKeys).toEqual([
+      "codex:shared-thread",
+    ]);
+    expect(result.current.directories[0]?.threadKeys).toEqual([
+      "codex:shared-thread",
+    ]);
+  });
+
   it("pins a main-window remote row through the viewer-owned local pin API", async () => {
     const federationTarget = {
       scope: "remote" as const,
@@ -2929,6 +3113,14 @@ describe("useThreadNavigation", () => {
       unchanged: false,
       inboxThreadKeys: [],
       threads: [
+        {
+          id: "thread-remote",
+          title: "Local collision",
+          titleSource: "explicit" as const,
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
         {
           id: "thread-remote",
           title: "Remote thread",
@@ -2966,10 +3158,13 @@ describe("useThreadNavigation", () => {
     const { result } = renderHook(() => useThreadNavigation(desktopApi));
 
     await waitFor(() => {
-      expect(result.current.threads[0]?.id).toBe("thread-remote");
+      expect(result.current.threads).toHaveLength(2);
     });
+    const remoteThread = result.current.threads.find(
+      (thread) => thread.federation,
+    )!;
     await act(async () => {
-      await result.current.setThreadPin(result.current.threads[0]!, true);
+      await result.current.setThreadPin(remoteThread, true);
     });
 
     // Main window, remote row: the rank is VIEWER-owned — the owner-routing
@@ -2979,7 +3174,10 @@ describe("useThreadNavigation", () => {
       pinnedRank: expect.any(String),
     });
     expect(setThreadPin).not.toHaveBeenCalled();
-    expect(result.current.threads[0]?.pinnedRank).toBe("1024");
+    expect(result.current.threads.find((thread) => !thread.federation)?.pinnedRank)
+      .toBeUndefined();
+    expect(result.current.threads.find((thread) => thread.federation)?.pinnedRank)
+      .toBe("1024");
   });
 
   it("pins through the owner in a remote-viewer window", async () => {
@@ -4213,7 +4411,7 @@ describe("useThreadNavigation", () => {
         "codex:thread-before",
         "codex:thread-child-a",
         "codex:thread-child-b",
-        "codex:thread-parent",
+        "remote:parent-owner:codex:thread-parent",
       ],
     });
   });
@@ -4300,7 +4498,10 @@ describe("useThreadNavigation", () => {
     );
     expect(reorderThreadPins).toHaveBeenCalledWith({
       federationTarget: undefined,
-      threadKeys: ["codex:thread-child", "codex:thread-parent"],
+      threadKeys: [
+        "remote:child-owner:codex:thread-child",
+        "codex:thread-parent",
+      ],
     });
   });
 

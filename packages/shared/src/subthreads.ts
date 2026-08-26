@@ -8,6 +8,7 @@ type SubthreadParent = Pick<NavigationThreadSummary, "subthreadOrder">;
 type SubthreadChild = Pick<NavigationThreadSummary, "id" | "createdAt">;
 type ParentLinkedThread = Pick<
   NavigationThreadSummary,
+  | "federation"
   | "id"
   | "parentThreadBackend"
   | "parentThreadId"
@@ -32,13 +33,16 @@ export function resolveThreadParentKey<T extends ParentLinkedThread>(
   }
 
   const parentBackend = thread.parentThreadBackend ?? thread.source;
-  if (thread.parentThreadInstanceId) {
+  const parentTarget = thread.parentThreadInstanceId
+    ? {
+        scope: "remote" as const,
+        instanceId: thread.parentThreadInstanceId,
+      }
+    : thread.federation?.ref.target;
+  if (parentTarget) {
     const federatedKey = federatedThreadIdentityKey({
       backend: parentBackend,
-      target: {
-        scope: "remote",
-        instanceId: thread.parentThreadInstanceId,
-      },
+      target: parentTarget,
       threadId: parentThreadId,
     });
     if (threadsByKey.has(federatedKey)) {

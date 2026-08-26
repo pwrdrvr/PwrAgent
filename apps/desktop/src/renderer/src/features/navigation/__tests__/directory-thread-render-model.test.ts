@@ -1,8 +1,68 @@
 import { describe, expect, it } from "vitest";
+import {
+  buildFederatedThreadRef,
+  federatedThreadIdentityKey,
+  type NavigationThreadSummary,
+} from "@pwragent/shared";
 import { buildDirectoryThreadRenderModel } from "../directory-thread-render-model";
 import { buildLargeDirectoryFixture } from "./fixtures/directory-performance";
 
 describe("large directory thread render model", () => {
+  it("groups same-owner remote children under their scoped parent", () => {
+    const parentRef = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "remote-owner",
+      threadId: "parent",
+    });
+    const childRef = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "remote-owner",
+      threadId: "child",
+    });
+    const parent = {
+      id: "parent",
+      title: "Remote parent",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      federation: { ref: parentRef, instanceLabel: "Remote owner" },
+    } as NavigationThreadSummary;
+    const child = {
+      id: "child",
+      title: "Remote child",
+      titleSource: "explicit",
+      source: "codex",
+      linkedDirectories: [],
+      inbox: { inInbox: false },
+      parentThreadBackend: "codex",
+      parentThreadId: "parent",
+      federation: { ref: childRef, instanceLabel: "Remote owner" },
+    } as NavigationThreadSummary;
+    const parentKey = federatedThreadIdentityKey(parentRef);
+    const childKey = federatedThreadIdentityKey(childRef);
+    const model = buildDirectoryThreadRenderModel({
+      directory: {
+        key: "directory:/remote/repo",
+        kind: "directory",
+        label: "Remote repo",
+        path: "/remote/repo",
+        threadKeys: [parentKey, childKey],
+        needsAttentionCount: 0,
+      },
+      expanded: true,
+      threadsByKey: new Map([
+        [parentKey, parent],
+        [childKey, child],
+      ]),
+    });
+
+    expect(model.expanded?.childThreadsByParentKey.get(parentKey)).toEqual([
+      child,
+    ]);
+    expect(model.expanded?.selectionOrder).toEqual([parentKey, childKey]);
+  });
+
   it("does not prepare hidden thread structure for collapsed project folders", () => {
     const fixture = buildLargeDirectoryFixture({
       directoryCount: 12,

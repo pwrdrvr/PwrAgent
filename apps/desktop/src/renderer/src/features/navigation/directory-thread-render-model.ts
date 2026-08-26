@@ -3,12 +3,12 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import {
-  buildThreadIdentityKey,
   comparePinnedThreads,
   isPinnedThread,
   resolveThreadParentKey,
   sortSubthreadSummaries,
 } from "@pwragent/shared";
+import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import {
   isThreadActive,
   isThreadAwaitingReview,
@@ -118,7 +118,7 @@ export function buildDirectoryThreadRenderModel(params: {
     : overflowUnpinnedThreads.length;
   const selectedUnpinnedInOverflow = overflowUnpinnedThreads.some(
     (thread) =>
-      buildThreadIdentityKey(thread.source, thread.id) ===
+      threadSummaryIdentityKey(thread) ===
       params.selectedItemKey,
   );
   const unpinnedExpanded =
@@ -131,7 +131,7 @@ export function buildDirectoryThreadRenderModel(params: {
       ];
   const renderedParentKeys = new Set(
     [...directoryPinnedThreads, ...visibleUnpinnedThreads].map((thread) =>
-      buildThreadIdentityKey(thread.source, thread.id),
+      threadSummaryIdentityKey(thread),
     ),
   );
   const childThreadsByParentKey = new Map<
@@ -149,7 +149,7 @@ export function buildDirectoryThreadRenderModel(params: {
     ...directoryPinnedThreads,
     ...visibleUnpinnedThreads,
   ].flatMap((thread) => {
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const threadKey = threadSummaryIdentityKey(thread);
     const children = sortSubthreadSummaries(
       thread,
       childThreadsByParentKey.get(threadKey) ?? [],
@@ -159,7 +159,7 @@ export function buildDirectoryThreadRenderModel(params: {
       ...(thread.subthreadsCollapsed
         ? []
         : children.map((child) =>
-            buildThreadIdentityKey(child.source, child.id),
+            threadSummaryIdentityKey(child),
           )),
     ];
   });

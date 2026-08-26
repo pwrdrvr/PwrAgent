@@ -2792,6 +2792,90 @@ describe("app server ipc", () => {
     expect(row?.pinnedRank).toBe("3072");
   });
 
+  it("keeps viewer pin ranks separate across colliding remote owners", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const { buildFederatedThreadRef } = await import("@pwragent/shared");
+    const firstRef = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-first",
+      threadId: "shared-thread",
+    });
+    const secondRef = buildFederatedThreadRef({
+      backend: "codex",
+      instanceId: "peer-second",
+      threadId: "shared-thread",
+    });
+    listRemoteThreadPins.mockResolvedValueOnce([
+      {
+        ref: firstRef,
+        addedAt: 1_000,
+        instanceLabel: "First",
+        localPinnedRank: "1024",
+      },
+      {
+        ref: secondRef,
+        addedAt: 2_000,
+        instanceLabel: "Second",
+        localPinnedRank: "2048",
+      },
+    ]);
+    federationMock.remoteThreadSummaries.resolvePinnedThreads.mockResolvedValueOnce({
+      threads: [
+        {
+          source: "codex" as const,
+          id: "shared-thread",
+          title: "First owner",
+          titleSource: "derived" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          federation: {
+            ref: firstRef,
+            instanceLabel: "First",
+            peerStatus: "connected" as const,
+            capabilities: [],
+          },
+        },
+        {
+          source: "codex" as const,
+          id: "shared-thread",
+          title: "Second owner",
+          titleSource: "derived" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          federation: {
+            ref: secondRef,
+            instanceLabel: "Second",
+            peerStatus: "connected" as const,
+            capabilities: [],
+          },
+        },
+      ],
+      refreshed: [],
+      archived: [],
+    });
+
+    registerAppServerIpcHandlers();
+    const response = (await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+      {},
+      {} satisfies GetNavigationSnapshotRequest,
+    )) as {
+      threads: Array<{
+        federation?: { ref: { target: { instanceId?: string } } };
+        pinnedRank?: string;
+      }>;
+    };
+
+    expect(response.threads
+      .filter((thread) => thread.federation)
+      .map((thread) => ({
+        instanceId: thread.federation?.ref.target.instanceId,
+        pinnedRank: thread.pinnedRank,
+      }))).toEqual([
+      { instanceId: "peer-first", pinnedRank: "1024" },
+      { instanceId: "peer-second", pinnedRank: "2048" },
+    ]);
+  });
+
   it("routes pin reorders per key: viewer rank for remote pins, overlay for local", async () => {
     const { NAVIGATION_REORDER_THREAD_PINS_CHANNEL } = await import(
       "../../shared/ipc"

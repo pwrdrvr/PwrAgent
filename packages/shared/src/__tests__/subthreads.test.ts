@@ -12,6 +12,7 @@ import { federatedThreadIdentityKey } from "../contracts/federation";
 
 type ParentLinkedThread = Pick<
   NavigationThreadSummary,
+  | "federation"
   | "id"
   | "parentThreadBackend"
   | "parentThreadId"
@@ -38,6 +39,32 @@ describe("resolveThreadParentKey", () => {
       parentThreadBackend: "codex",
       parentThreadId: "parent",
       parentThreadInstanceId: "remote-owner",
+    }, parents)).toBe(remoteParentKey);
+  });
+
+  it("inherits the remote owner when a same-owner link omits the instance", () => {
+    const remoteParentKey = federatedThreadIdentityKey({
+      backend: "codex",
+      target: { scope: "remote", instanceId: "remote-owner" },
+      threadId: "parent",
+    });
+    const parents = new Map<string, ParentLinkedThread>([
+      [remoteParentKey, { id: "parent", source: "codex" }],
+    ]);
+
+    expect(resolveThreadParentKey({
+      id: "child",
+      source: "codex",
+      parentThreadBackend: "codex",
+      parentThreadId: "parent",
+      federation: {
+        ref: {
+          backend: "codex",
+          target: { scope: "remote", instanceId: "remote-owner" },
+          threadId: "child",
+        },
+        instanceLabel: "Remote owner",
+      },
     }, parents)).toBe(remoteParentKey);
   });
 });
