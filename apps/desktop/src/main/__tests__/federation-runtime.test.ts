@@ -387,7 +387,9 @@ describe("DesktopFederationRuntime", () => {
       },
     });
     expect(snapshot.inboxThreadKeys).toEqual([]);
-    expect(snapshot.directories[0]?.threadKeys).toEqual(["codex:thread-1"]);
+    expect(snapshot.directories[0]?.threadKeys).toEqual([
+      "remote:client_one:codex:thread-1",
+    ]);
     expect(snapshot.threads[0]?.gitWorkingState).toEqual(gitWorkingState);
     expect(snapshot.threads[0]?.federation?.capabilities).toContain("remote_pty");
     expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(
@@ -487,7 +489,9 @@ describe("DesktopFederationRuntime", () => {
     expect(changed.threads.map((thread) => thread.title)).toEqual([
       "Remote one updated",
     ]);
-    expect(changed.inboxThreadKeys).toEqual(["codex:thread-1"]);
+    expect(changed.inboxThreadKeys).toEqual([
+      "remote:client_one:codex:thread-1",
+    ]);
     expect(unchanged.threads.map((thread) => thread.title)).toEqual([
       "Remote one updated",
     ]);
