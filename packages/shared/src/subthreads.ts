@@ -2,12 +2,17 @@ import {
   buildThreadIdentityKey,
   type NavigationThreadSummary,
 } from "./contracts/navigation";
+import { federatedThreadIdentityKey } from "./contracts/federation";
 
 type SubthreadParent = Pick<NavigationThreadSummary, "subthreadOrder">;
 type SubthreadChild = Pick<NavigationThreadSummary, "id" | "createdAt">;
 type ParentLinkedThread = Pick<
   NavigationThreadSummary,
-  "id" | "parentThreadBackend" | "parentThreadId" | "source"
+  | "id"
+  | "parentThreadBackend"
+  | "parentThreadId"
+  | "parentThreadInstanceId"
+  | "source"
 >;
 
 /**
@@ -26,10 +31,22 @@ export function resolveThreadParentKey<T extends ParentLinkedThread>(
     return undefined;
   }
 
-  const explicitKey = buildThreadIdentityKey(
-    thread.parentThreadBackend ?? thread.source,
-    parentThreadId,
-  );
+  const parentBackend = thread.parentThreadBackend ?? thread.source;
+  if (thread.parentThreadInstanceId) {
+    const federatedKey = federatedThreadIdentityKey({
+      backend: parentBackend,
+      target: {
+        scope: "remote",
+        instanceId: thread.parentThreadInstanceId,
+      },
+      threadId: parentThreadId,
+    });
+    if (threadsByKey.has(federatedKey)) {
+      return federatedKey;
+    }
+  }
+
+  const explicitKey = buildThreadIdentityKey(parentBackend, parentThreadId);
   if (threadsByKey.has(explicitKey) || thread.parentThreadBackend) {
     return explicitKey;
   }

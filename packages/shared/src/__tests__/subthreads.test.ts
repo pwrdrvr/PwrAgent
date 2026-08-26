@@ -1,8 +1,46 @@
 import { describe, expect, it } from "vitest";
 import {
   insertSubthreadIdAfter,
+  resolveThreadParentKey,
   sortSubthreadSummaries,
 } from "../subthreads";
+import type { NavigationThreadSummary } from "../contracts/navigation";
+import {
+  buildThreadIdentityKey,
+} from "../contracts/navigation";
+import { federatedThreadIdentityKey } from "../contracts/federation";
+
+type ParentLinkedThread = Pick<
+  NavigationThreadSummary,
+  | "id"
+  | "parentThreadBackend"
+  | "parentThreadId"
+  | "parentThreadInstanceId"
+  | "source"
+>;
+
+describe("resolveThreadParentKey", () => {
+  it("uses the remote owner identity when a local thread id collides", () => {
+    const localParentKey = buildThreadIdentityKey("codex", "parent");
+    const remoteParentKey = federatedThreadIdentityKey({
+      backend: "codex",
+      target: { scope: "remote", instanceId: "remote-owner" },
+      threadId: "parent",
+    });
+    const parents = new Map<string, ParentLinkedThread>([
+      [localParentKey, { id: "parent", source: "codex" }],
+      [remoteParentKey, { id: "parent", source: "codex" }],
+    ]);
+
+    expect(resolveThreadParentKey({
+      id: "child",
+      source: "codex",
+      parentThreadBackend: "codex",
+      parentThreadId: "parent",
+      parentThreadInstanceId: "remote-owner",
+    }, parents)).toBe(remoteParentKey);
+  });
+});
 
 describe("sortSubthreadSummaries", () => {
   it("orders explicitly-ranked children by subthreadOrder", () => {
