@@ -53,12 +53,13 @@ import type {
   CodexMcpServerSummary,
   LinkedDirectorySummary,
 } from "@pwragent/shared";
-import { getMainLogger } from "../log";
-import { isPwrSnapSignedMediaUrl } from "../pwrsnap-media-url";
+import { prependBundledToolsToPath } from "../bundled-tools";
 import {
   buildPwrAgentChildProcessEnv,
   ELECTRON_RENDERER_URL_ENV,
 } from "../child-process-env";
+import { getMainLogger } from "../log";
+import { isPwrSnapSignedMediaUrl } from "../pwrsnap-media-url";
 import type {
   ClientRequest as CodexClientRequest,
   InitializeParams as CodexInitializeParams,
@@ -246,6 +247,7 @@ type CodexClientOptions = {
   resolveArgs?: (env: NodeJS.ProcessEnv) => Promise<string[]> | string[];
   resolveCommand?: StdioJsonRpcTransportOptions["resolveCommand"];
   resolveEnv?: () => Promise<NodeJS.ProcessEnv>;
+  bundledToolsDirectory?: StdioJsonRpcTransportOptions["bundledToolsDirectory"];
   directoryResolver?: (
     projectKey?: string
   ) => Promise<LinkedDirectorySummary[]>;
@@ -6200,6 +6202,7 @@ function buildThreadStartPayload(params: {
   defaultModeRequestUserInput?: boolean;
   dynamicTools?: CodexDynamicToolSpec[];
   threadSource?: CodexThreadStartParams["threadSource"];
+  bundledToolsDirectory?: string;
 }, compatibility: CodexProtocolCompatibility): CodexThreadStartPayload {
   const base: CodexThreadStartPayload = {
     experimentalRawEvents: false,
@@ -6253,6 +6256,7 @@ function buildThreadStartPayload(params: {
       params.defaultModeRequestUserInput,
     ),
     params.codexEnvironmentRuntime,
+    params.bundledToolsDirectory,
   );
   if (config) {
     base.config = config;
@@ -6283,13 +6287,18 @@ function buildThreadStartPayload(params: {
 function mergeCodexShellEnvironmentPolicyConfig(
   config: CodexThreadStartParams["config"] | undefined,
   runtime: CodexThreadEnvironmentRuntime | undefined,
+  bundledToolsDirectory?: string,
 ): CodexThreadStartParams["config"] | undefined {
   const sanitizedConfig = sanitizeCodexShellEnvironmentPolicyConfig(config);
   if (runtime?.executionTarget !== "local" || !runtime.shellEnvironment) {
     return sanitizedConfig;
   }
+  const hydratedEnvironment = prependBundledToolsToPath(
+    buildPwrAgentChildProcessEnv(runtime.shellEnvironment),
+    bundledToolsDirectory ? { directory: bundledToolsDirectory } : {},
+  );
   const shellEnvironment = Object.fromEntries(
-    Object.entries(buildPwrAgentChildProcessEnv(runtime.shellEnvironment)).filter(
+    Object.entries(hydratedEnvironment).filter(
       (entry): entry is [string, string] =>
         typeof entry[0] === "string" &&
         entry[0].length > 0 &&
@@ -6376,6 +6385,7 @@ function buildThreadForkPayload(params: {
   fastMode?: boolean;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   config?: CodexThreadForkParams["config"];
+  bundledToolsDirectory?: string;
 }, compatibility: CodexProtocolCompatibility): CodexThreadForkPayload {
   const base: CodexThreadForkPayload = {
     threadId: params.threadId,
@@ -6419,6 +6429,7 @@ function buildThreadForkPayload(params: {
   const config = mergeCodexShellEnvironmentPolicyConfig(
     mergeCodexFastModeConfig(params.config, params.fastMode),
     params.codexEnvironmentRuntime,
+    params.bundledToolsDirectory,
   );
   if (config) {
     base.config = config;
@@ -6439,6 +6450,7 @@ function buildThreadResumePayloads(params: {
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
   config?: CodexThreadResumeParams["config"];
   defaultModeRequestUserInput?: boolean;
+  bundledToolsDirectory?: string;
 }, compatibility: CodexProtocolCompatibility): CodexThreadResumePayload[] {
   const base: CodexThreadResumePayload = {
     threadId: params.threadId,
@@ -6478,6 +6490,7 @@ function buildThreadResumePayloads(params: {
       params.defaultModeRequestUserInput,
     ),
     params.codexEnvironmentRuntime,
+    params.bundledToolsDirectory,
   );
   if (config) {
     base.config = config;
@@ -6983,6 +6996,7 @@ export class CodexAppServerClient {
         resolveArgs: options.resolveArgs,
         resolveCommand: options.resolveCommand,
         resolveEnv: options.resolveEnv,
+        bundledToolsDirectory: options.bundledToolsDirectory,
       }),
       options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
       createCodexObserverWithConfigReadRedaction(options.connectionObserver),
@@ -8045,7 +8059,13 @@ export class CodexAppServerClient {
       client: this.connection,
       methods: ["thread/start"],
       payloads: [
-        buildThreadStartPayload(params, this.getProtocolCompatibility()),
+        buildThreadStartPayload(
+          {
+            ...params,
+            bundledToolsDirectory: this.options.bundledToolsDirectory,
+          },
+          this.getProtocolCompatibility(),
+        ),
       ],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
@@ -8081,7 +8101,13 @@ export class CodexAppServerClient {
       client: this.connection,
       methods: ["thread/fork"],
       payloads: [
-        buildThreadForkPayload(params, this.getProtocolCompatibility()),
+        buildThreadForkPayload(
+          {
+            ...params,
+            bundledToolsDirectory: this.options.bundledToolsDirectory,
+          },
+          this.getProtocolCompatibility(),
+        ),
       ],
       timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
     });
@@ -8144,6 +8170,7 @@ export class CodexAppServerClient {
             codexEnvironmentRuntime: params.codexEnvironmentRuntime,
             config: params.config,
             defaultModeRequestUserInput: params.defaultModeRequestUserInput,
+            bundledToolsDirectory: this.options.bundledToolsDirectory,
           },
           this.getProtocolCompatibility(),
         ),
@@ -8530,6 +8557,7 @@ export class CodexAppServerClient {
             reasoningEffort: params.reasoningEffort,
             fastMode: params.fastMode,
             codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+            bundledToolsDirectory: this.options.bundledToolsDirectory,
           },
           this.getProtocolCompatibility(),
         ),
