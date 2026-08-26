@@ -1738,6 +1738,31 @@ describe("DesktopSettingsService", () => {
     );
   });
 
+  it("sets the selected Codex auth profile on integrated terminal shells", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const codexRoot = path.join(root, "codex");
+    fs.writeFileSync(
+      configPath,
+      ["[models.codex]", 'profile = "work"'].join("\n"),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: { CODEX_HOME: codexRoot } as NodeJS.ProcessEnv,
+      secretStore: new MemoryDesktopSecretStore(),
+      resolveCodexShellEnv: () => ({
+        CODEX_HOME: path.join(root, "login-shell-default"),
+        PATH: "/opt/homebrew/bin:/usr/bin",
+      }),
+    });
+
+    await expect(service.resolveTerminalSpawnEnvAsync()).resolves.toMatchObject({
+      CODEX_HOME: path.join(codexRoot, "profiles", "work"),
+      PATH: "/opt/homebrew/bin:/usr/bin",
+    });
+  });
+
   it("keeps CODEX_HOME fixed to the startup Codex auth profile", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
