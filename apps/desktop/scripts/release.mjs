@@ -516,6 +516,33 @@ function assertRequiredGrokBundle() {
   console.log(`  verified bundled Grok runtime: ${bundledExecutable}`);
 }
 
+function ripgrepBundlePlatform() {
+  if (win) return "windows-x86_64";
+  if (linux) {
+    return currentLinuxBuilderArch() === "arm64"
+      ? "linux-aarch64"
+      : "linux-x86_64";
+  }
+  return "macos-universal";
+}
+
+function assertRequiredRipgrepBundle() {
+  const executable = process.platform === "win32" ? "rg.exe" : "rg";
+  const bundledExecutable = join(
+    stageDir,
+    "build",
+    "bundled-tools",
+    "ripgrep",
+    executable,
+  );
+  if (!existsSync(bundledExecutable)) {
+    throw new Error(
+      `The staged ripgrep executable is missing at ${bundledExecutable}`,
+    );
+  }
+  console.log(`  verified staged ripgrep: ${bundledExecutable}`);
+}
+
 // Windows PowerShell 5.1 inherits this process's PSModulePath, and the hosted
 // runner's value is PowerShell 7-oriented. Autoloading Windows PowerShell's own
 // Microsoft.PowerShell.Security then fails ("the module could not be loaded"),
@@ -588,6 +615,49 @@ function verifyPackagedGrok(resourcesDirectory) {
           "$signature = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_EXECUTABLE",
           "if ($signature.Status -ne 'Valid') { throw \"Bundled Grok Authenticode signature is $($signature.Status): $($signature.StatusMessage)\" }",
           "if ($signature.SignerCertificate.Subject -notmatch '(^|,\\s*)CN=PwrDrvr LLC(,|$)') { throw \"Bundled Grok signer is not PwrDrvr LLC: $($signature.SignerCertificate.Subject)\" }",
+        ].join("; "),
+      ],
+      { env: { PWRAGENT_VERIFY_EXECUTABLE: bundledExecutable } },
+    );
+  }
+  return bundledExecutable;
+}
+
+function verifyPackagedRipgrep(resourcesDirectory) {
+  const executable = process.platform === "win32" ? "rg.exe" : "rg";
+  const bundledExecutable = join(resourcesDirectory, "tools", executable);
+  if (!existsSync(bundledExecutable)) {
+    throw new Error(`Packaged ripgrep is missing at ${bundledExecutable}`);
+  }
+  runChecked(bundledExecutable, ["--version"], {
+    cwd: dirname(bundledExecutable),
+  });
+  if (process.platform === "darwin") {
+    const codesignArgs = [
+      "--verify",
+      "--strict",
+      "--verbose=2",
+    ];
+    if (!dryrun) {
+      codesignArgs.push(
+        "--test-requirement",
+        '=anchor apple generic and certificate leaf[subject.OU] = "T44CNHC4UH"',
+      );
+    }
+    codesignArgs.push(bundledExecutable);
+    runChecked("codesign", codesignArgs);
+  } else if (process.platform === "win32" && requireSigning) {
+    runChecked(
+      windowsPowerShellCommand(),
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        [
+          ...WINDOWS_SIGNATURE_PRELUDE,
+          "$signature = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_EXECUTABLE",
+          "if ($signature.Status -ne 'Valid') { throw \"Bundled ripgrep Authenticode signature is $($signature.Status): $($signature.StatusMessage)\" }",
+          "if ($signature.SignerCertificate.Subject -notmatch '(^|,\\s*)CN=PwrDrvr LLC(,|$)') { throw \"Bundled ripgrep signer is not PwrDrvr LLC: $($signature.SignerCertificate.Subject)\" }",
         ].join("; "),
       ],
       { env: { PWRAGENT_VERIFY_EXECUTABLE: bundledExecutable } },
@@ -739,6 +809,13 @@ function maybePrepareCodesignKeychain() {
 
 if (!signStageOnly) {
   // 2. Build (electron-vite -> apps/desktop/out/).
+  step("stage pinned ripgrep");
+  runChecked(process.execPath, [
+    join(desktopRoot, "scripts", "stage-ripgrep-bundle.mjs"),
+    "--platform",
+    ripgrepBundlePlatform(),
+  ]);
+
   step("license notices check");
   runChecked("pnpm", ["licenses:check"], { cwd: repoRoot });
 
@@ -812,6 +889,7 @@ if (!signStageOnly) {
     copyFileSync(join(repoRoot, file), join(stageDir, file));
   }
   assertRequiredGrokBundle();
+  assertRequiredRipgrepBundle();
 
   if (prepareOnly) {
     step("prepared release-stage");
@@ -823,6 +901,7 @@ if (!signStageOnly) {
     throw new Error(`release-stage is missing at ${stageDir}`);
   }
   assertRequiredGrokBundle();
+  assertRequiredRipgrepBundle();
 }
 
 // 5. electron-builder.
@@ -895,6 +974,9 @@ const dist = join(stageDir, "dist");
 if (win) {
   const builtApp = findWindowsUnpackedDir(dist);
 
+  step("verify packaged ripgrep");
+  verifyPackagedRipgrep(join(builtApp, "resources"));
+
   step("verify packaged Grok runtime");
   verifyPackagedGrok(join(builtApp, "resources"));
 
@@ -916,6 +998,9 @@ if (win) {
 
 if (linux) {
   const builtApp = findLinuxUnpackedDir(dist);
+
+  step("verify packaged ripgrep");
+  verifyPackagedRipgrep(join(builtApp, "resources"));
 
   step("verify packaged Grok runtime");
   verifyPackagedGrok(join(builtApp, "resources"));
@@ -1024,6 +1109,16 @@ if (bundledGrokExecutable) {
     "arm64",
   ]);
 }
+
+const bundledRipgrepExecutable = verifyPackagedRipgrep(
+  join(builtApp, "Contents", "Resources"),
+);
+runChecked("lipo", [
+  bundledRipgrepExecutable,
+  "-verify_arch",
+  "x86_64",
+  "arm64",
+]);
 
 step("verify packaged asar contents");
 runChecked("node", [join(desktopRoot, "scripts", "verify-asar-contents.mjs"), builtApp]);

@@ -21,6 +21,21 @@ const codexClientLogDebug = vi.hoisted(() => vi.fn());
 const codexClientLogInfo = vi.hoisted(() => vi.fn());
 const codexClientLogWarn = vi.hoisted(() => vi.fn());
 
+async function createBundledToolsDirectory(): Promise<string> {
+  const directory = await fs.mkdtemp(
+    path.join(os.tmpdir(), "pwragent-codex-bundled-tools-"),
+  );
+  const executable = path.join(
+    directory,
+    process.platform === "win32" ? "rg.exe" : "rg",
+  );
+  await fs.writeFile(executable, "#!/bin/sh\nexit 0\n");
+  if (process.platform !== "win32") {
+    await fs.chmod(executable, 0o755);
+  }
+  return directory;
+}
+
 vi.mock("../log", () => ({
   getMainLogger: vi.fn(() => ({
     debug: codexClientLogDebug,
@@ -7408,6 +7423,77 @@ describe("CodexAppServerClient", () => {
     ).toBeUndefined();
 
     await client.close();
+  });
+
+  it("preserves bundled tools in a hydrated Codex thread/start PATH", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const bundledToolsDirectory = await createBundledToolsDirectory();
+    const capturedPath = "/Users/fixture-user/.nvm/versions/node/v26.0.0/bin:/usr/bin";
+    const client = new CodexAppServerClient({
+      bundledToolsDirectory,
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    try {
+      await client.startThread({
+        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
+        codexEnvironmentRuntime: {
+          environmentId: "env",
+          environmentName: "Env",
+          executionTarget: "local",
+          shellEnvironment: { PATH: capturedPath },
+        },
+      });
+
+      const startPayload = MockTransport.instances.at(-1)?.sentMessages
+        .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+        .find((payload) => payload.method === "thread/start");
+      expect(startPayload?.params).toMatchObject({
+        config: {
+          "shell_environment_policy.set.PATH":
+            `${bundledToolsDirectory}${path.delimiter}${capturedPath}`,
+        },
+      });
+    } finally {
+      await client.close();
+      await fs.rm(bundledToolsDirectory, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves bundled tools in a hydrated Codex thread/resume PATH", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const bundledToolsDirectory = await createBundledToolsDirectory();
+    const capturedPath = "/Users/fixture-user/project/.venv/bin:/usr/bin";
+    const client = new CodexAppServerClient({
+      bundledToolsDirectory,
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+    try {
+      await client.startTurn({
+        threadId: "thread-2",
+        input: [{ type: "text", text: "Continue" }],
+        codexEnvironmentRuntime: {
+          environmentId: "env",
+          environmentName: "Env",
+          executionTarget: "local",
+          shellEnvironment: { PATH: capturedPath },
+        },
+      });
+
+      const resumePayload = MockTransport.instances.at(-1)?.sentMessages
+        .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+        .find((payload) => payload.method === "thread/resume");
+      expect(resumePayload?.params).toMatchObject({
+        config: {
+          "shell_environment_policy.set.PATH":
+            `${bundledToolsDirectory}${path.delimiter}${capturedPath}`,
+        },
+      });
+    } finally {
+      await client.close();
+      await fs.rm(bundledToolsDirectory, { recursive: true, force: true });
+    }
   });
 
   it("enables default-mode request_user_input in Codex thread/start config", async () => {

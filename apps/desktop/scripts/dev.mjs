@@ -17,6 +17,7 @@ export const ELECTRON_DEV_ENV_KEYS = [
 
 const TERMINAL_SHUTDOWN_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
 export const DEV_SETUP_SCRIPTS = [
+  ["./scripts/stage-ripgrep-bundle.mjs", "--platform", "current"],
   "./scripts/ensure-electron-runtime.mjs",
   "./scripts/rebuild-native-for-electron.mjs"
 ];
@@ -53,7 +54,8 @@ function run(command, args, env) {
 
 export function runDevSetup(node, env, runCommand = run) {
   for (const script of DEV_SETUP_SCRIPTS) {
-    const status = runCommand(node, [script], env);
+    const args = Array.isArray(script) ? script : [script];
+    const status = runCommand(node, args, env);
     if (status !== 0) return status;
   }
   return 0;

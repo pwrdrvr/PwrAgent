@@ -81,6 +81,8 @@ extraResources:
     to: pwrsnap-app-icon.png
   - from: build/bundled-agents
     to: agents
+  - from: build/bundled-tools/ripgrep
+    to: tools
 
 # Electron fuses — ASAR integrity is NOT on by default in electron-builder.
 # Enable it explicitly so the runtime aborts if the .asar is tampered with.

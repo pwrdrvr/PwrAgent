@@ -8,6 +8,7 @@ import {
   type JsonRpcTransport,
 } from "@pwrdrvr/agent-transport";
 import { getMainLogger } from "../log";
+import { prependBundledToolsToPath } from "../bundled-tools";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
 import { terminateOwnedProcessTree } from "../process-tree";
 import {
@@ -43,6 +44,8 @@ export type StdioJsonRpcTransportOptions = {
   platform?: NodeJS.Platform;
   /** Test seam for the Windows shim-sibling lookup. */
   commandExists?: (candidate: string) => boolean;
+  /** Test seam for the packaged or development bundled-tools directory. */
+  bundledToolsDirectory?: string;
 };
 
 export { compareCodexCliVersions };
@@ -117,7 +120,15 @@ export class StdioJsonRpcTransport implements JsonRpcTransport {
       ? await this.options.resolveEnv()
       : this.options.env ?? process.env;
     this.assertCurrentGeneration(generation);
-    const env = buildPwrAgentChildProcessEnv(resolvedEnv);
+    const env = prependBundledToolsToPath(
+      buildPwrAgentChildProcessEnv(resolvedEnv),
+      {
+        ...(this.options.bundledToolsDirectory
+          ? { directory: this.options.bundledToolsDirectory }
+          : {}),
+        ...(this.options.platform ? { platform: this.options.platform } : {}),
+      },
+    );
     const args = this.options.resolveArgs
       ? await this.options.resolveArgs(env)
       : this.options.args ?? [];

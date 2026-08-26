@@ -54,7 +54,11 @@ describe("dev launch wrapper", () => {
 
     expect(status).toBe(0);
     expect(calls).toEqual(
-      DEV_SETUP_SCRIPTS.map((script) => ["node", [script], env])
+      DEV_SETUP_SCRIPTS.map((script) => [
+        "node",
+        Array.isArray(script) ? script : [script],
+        env,
+      ])
     );
   });
 
@@ -63,12 +67,16 @@ describe("dev launch wrapper", () => {
     const calls = [];
 
     const status = runDevSetup("node", {}, (_command, args) => {
-      calls.push(args[0]);
+      calls.push(args);
       return statuses.shift();
     });
 
     expect(status).toBe(1);
-    expect(calls).toEqual(DEV_SETUP_SCRIPTS);
+    expect(calls).toEqual(
+      DEV_SETUP_SCRIPTS.slice(0, 2).map((script) =>
+        Array.isArray(script) ? script : [script]
+      ),
+    );
   });
 
   it("scrubs inherited Electron and module-resolution variables", () => {
