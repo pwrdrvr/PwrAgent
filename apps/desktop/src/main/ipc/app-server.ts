@@ -1089,6 +1089,50 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
   } else {
     delete normalized.headRefName;
   }
+  const linkedDirectoryPaths = normalizePrLookupDirectoryPaths(
+    pr.linkedDirectoryPaths ?? [],
+  );
+  if (linkedDirectoryPaths.length > 0) {
+    normalized.linkedDirectoryPaths = linkedDirectoryPaths;
+  } else {
+    delete normalized.linkedDirectoryPaths;
+  }
+  return normalized;
+}
+
+function mergeLinkedDirectoryPaths(
+  left: string[] | undefined,
+  right: string[] | undefined,
+): string[] | undefined {
+  const merged = normalizePrLookupDirectoryPaths([
+    ...(left ?? []),
+    ...(right ?? []),
+  ]);
+  return merged.length > 0 ? merged : undefined;
+}
+
+function associatePrsWithLinkedDirectories(
+  prs: PrSummary[],
+  directoryPaths: string[],
+): PrSummary[] {
+  const linkedDirectoryPaths = normalizePrLookupDirectoryPaths(directoryPaths);
+  return prs.map((pr) => {
+    if (!pr.headSha?.trim()) {
+      return pr;
+    }
+    return normalizePrSummary({
+      ...pr,
+      linkedDirectoryPaths: mergeLinkedDirectoryPaths(
+        pr.linkedDirectoryPaths,
+        linkedDirectoryPaths,
+      ),
+    });
+  });
+}
+
+function stripPrLinkedDirectoryPaths(pr: PrSummary): PrSummary {
+  const normalized = normalizePrSummary(pr);
+  delete normalized.linkedDirectoryPaths;
   return normalized;
 }
 
@@ -1184,10 +1228,10 @@ function filterDetachedPullRequests(
  * Whether two PR lists are the same for snapshot purposes.
  *
  * This decides whether a navigation snapshot is republished, so a field that
- * clients RENDER but this function ignores becomes a silent staleness bug: the
- * value moves, the snapshot is judged unchanged, and no window ever hears about
- * it. Add every displayed field here. Exported for the test that pins exactly
- * that.
+ * clients render or the main process reads for behavior but this function
+ * ignores becomes a silent staleness bug: the value moves, the snapshot is
+ * judged unchanged, and no window ever hears about it. Add every such field
+ * here. Exported for the test that pins exactly that.
  */
 export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean {
   if (left.length !== right.length) {
@@ -1212,6 +1256,8 @@ export function prSummariesEqual(left: PrSummary[], right: PrSummary[]): boolean
       candidate.baseRefName === pr.baseRefName &&
       candidate.headRefName === pr.headRefName &&
       candidate.headSha === pr.headSha &&
+      JSON.stringify(candidate.linkedDirectoryPaths ?? [])
+        === JSON.stringify(pr.linkedDirectoryPaths ?? []) &&
       JSON.stringify(candidate.commitShas ?? []) === JSON.stringify(pr.commitShas ?? []) &&
       // Hover-card fields. They belong here for the same reason as every field
       // above: this comparison decides whether a snapshot is republished, so a
@@ -1249,6 +1295,7 @@ type PrLookupSubscriber = {
   backend: AppServerBackendKind;
   threadId: string;
   requestKey: string;
+  linkedDirectoryPaths: string[];
   previousPrs: PrSummary[];
 };
 
@@ -2728,7 +2775,10 @@ class DesktopAppServerService {
       const prs = attachment.prs.map((candidate) => {
         if (getPrStatusKey(candidate) !== prKey) return candidate;
         changed = true;
-        return pr;
+        return normalizePrSummary({
+          ...pr,
+          linkedDirectoryPaths: candidate.linkedDirectoryPaths,
+        });
       });
       if (changed) {
         this.attachedPrsByThreadKey.set(threadKey, { ...attachment, prs });
@@ -4463,6 +4513,9 @@ class DesktopAppServerService {
       backend: params.backend,
       threadId: params.request.threadId,
       requestKey: params.requestKey,
+      linkedDirectoryPaths: normalizePrLookupDirectoryPaths(
+        params.request.directoryPaths,
+      ),
       previousPrs: params.previousPrs,
     });
     this.prLookupSubscribers.set(lookupKey, subscribers);
@@ -4502,7 +4555,11 @@ class DesktopAppServerService {
               subscriber.previousPrs,
               latestPrs,
             );
-            const nextPrs = this.mergePrHistory(previousPrs, params.prs);
+            const associatedPrs = associatePrsWithLinkedDirectories(
+              params.prs,
+              subscriber.linkedDirectoryPaths,
+            );
+            const nextPrs = this.mergePrHistory(previousPrs, associatedPrs);
             const updated = await overlay.setThreadPullRequests({
               backend: subscriber.backend,
               threadId: subscriber.threadId,
@@ -4569,7 +4626,11 @@ class DesktopAppServerService {
     prs: PrSummary[];
     fetchedAt: number;
   }): Promise<PrSummary[]> {
-    const nextPrs = this.mergePrHistory(params.persistedPrs, params.prs);
+    const associatedPrs = associatePrsWithLinkedDirectories(
+      params.prs,
+      params.request.directoryPaths,
+    );
+    const nextPrs = this.mergePrHistory(params.persistedPrs, associatedPrs);
     if (
       params.persistedRefreshKey === params.requestKey
       && prSummariesEqual(params.persistedPrs, nextPrs)
@@ -4662,7 +4723,7 @@ class DesktopAppServerService {
     const changedPrs: PrSummary[] = [];
     const transitions: PrStatusTransition[] = [];
     const staleKeys: string[] = [];
-    for (const pr of prs.map(normalizePrSummary)) {
+    for (const pr of prs.map(stripPrLinkedDirectoryPaths)) {
       const key = getPrStatusKey(pr);
       const current = this.prStatusRegistry.get(key);
       if (current && current.fetchedAt > fetchedAt) {
@@ -4871,7 +4932,14 @@ class DesktopAppServerService {
   private canonicalizePrs(prs: PrSummary[]): PrSummary[] {
     return prs.map((pr) => {
       const normalized = normalizePrSummary(pr);
-      return this.prStatusRegistry.get(getPrStatusKey(normalized))?.pr ?? normalized;
+      const canonical = this.prStatusRegistry.get(getPrStatusKey(normalized))?.pr;
+      if (!canonical) {
+        return normalized;
+      }
+      return normalizePrSummary({
+        ...canonical,
+        linkedDirectoryPaths: normalized.linkedDirectoryPaths,
+      });
     });
   }
 
@@ -4906,7 +4974,14 @@ class DesktopAppServerService {
         indexes.set(key, merged.length);
         merged.push(pr);
       } else {
-        merged[existingIndex] = pr;
+        const existing = merged[existingIndex];
+        merged[existingIndex] = normalizePrSummary({
+          ...pr,
+          linkedDirectoryPaths: mergeLinkedDirectoryPaths(
+            existing?.linkedDirectoryPaths,
+            pr.linkedDirectoryPaths,
+          ),
+        });
       }
     }
 

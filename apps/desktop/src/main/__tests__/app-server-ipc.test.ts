@@ -4185,6 +4185,50 @@ describe("app server ipc", () => {
     ]);
   });
 
+  it("persists the linked directory that discovered a reviewable PR", async () => {
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "thread-worktree-pr",
+      trigger: "user",
+      branch: "fix/worktree-review",
+      directoryPaths: ["/repo/worktrees/review"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = buildThreadPrRequestKey({
+      backend: request.backend,
+      threadId: request.threadId,
+      branch: request.branch,
+      directoryPaths: request.directoryPaths,
+    });
+    const discoveredPr = githubPr({
+      number: 1849,
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      state: "passing",
+      headSha: "a".repeat(40),
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1849",
+    });
+    getThreadOverlayState.mockResolvedValueOnce(undefined);
+    detectPullRequestsForThread.mockResolvedValueOnce([discoveredPr]);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: request.threadId,
+        prs: [{
+          ...discoveredPr,
+          commitShas: undefined,
+          linkedDirectoryPaths: request.directoryPaths,
+        }],
+        fetchedAt: expect.any(Number),
+        refreshKey: requestKey,
+      });
+    });
+  });
+
   it("logs user-triggered PR refresh decisions and background completion with PR ids", async () => {
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {

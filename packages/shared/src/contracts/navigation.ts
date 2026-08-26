@@ -379,6 +379,13 @@ export type PrSummary = {
   /** Branch containing the PR changes, when the provider returns one. */
   headRefName?: string;
   /**
+   * Linked directory workspaces where this PR was discovered for its thread.
+   * This is thread-local provenance, not provider status. It prevents a PR
+   * found through one linked worktree from constraining actions in another
+   * worktree that shares the same Git object database.
+   */
+  linkedDirectoryPaths?: string[];
+  /**
    * Deprecated compatibility alias for `checkState`. New writers keep this
    * check-only so review/lifecycle/mergeability never collide with checks.
    */

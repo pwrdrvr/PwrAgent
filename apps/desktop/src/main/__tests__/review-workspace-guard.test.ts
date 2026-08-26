@@ -55,6 +55,9 @@ describe("assertReviewWorkspaceMatchesAttachedPullRequest", () => {
 
   it("matches the origin-qualified spelling of an attached PR base", async () => {
     const runGit = vi.fn(async (_cwd: string, args: string[]) => {
+      if (args[0] === "rev-parse" && args[1] === "--symbolic-full-name") {
+        return { stdout: "refs/remotes/origin/pwragent" };
+      }
       if (args[0] === "rev-parse") {
         return { stdout: PR_HEAD };
       }
@@ -74,10 +77,32 @@ describe("assertReviewWorkspaceMatchesAttachedPullRequest", () => {
     );
   });
 
-  it("ignores an attached PR whose head object belongs to another workspace", async () => {
-    const runGit = vi.fn(async () => {
-      throw new Error("unknown revision");
+  it("matches a base branch qualified by a non-origin remote", async () => {
+    const runGit = vi.fn(async (_cwd: string, args: string[]) => {
+      if (args[0] === "rev-parse" && args[1] === "--symbolic-full-name") {
+        return { stdout: "refs/remotes/upstream/pwragent" };
+      }
+      if (args[0] === "rev-parse") {
+        return { stdout: PR_HEAD };
+      }
+      return { stdout: "" };
     });
+
+    await assertReviewWorkspaceMatchesAttachedPullRequest({
+      cwd: "/worktree",
+      prs: [pullRequest()],
+      runGit,
+      target: { type: "baseBranch", branch: "upstream/pwragent" },
+    });
+
+    expect(runGit).toHaveBeenCalledWith(
+      "/worktree",
+      ["merge-base", "--is-ancestor", PR_HEAD, "HEAD"],
+    );
+  });
+
+  it("ignores a PR associated with another linked worktree", async () => {
+    const runGit = vi.fn();
 
     await expect(
       assertReviewWorkspaceMatchesAttachedPullRequest({
@@ -87,7 +112,22 @@ describe("assertReviewWorkspaceMatchesAttachedPullRequest", () => {
         target: { type: "baseBranch", branch: "pwragent" },
       }),
     ).resolves.toBeUndefined();
-    expect(runGit).toHaveBeenCalledTimes(1);
+    expect(runGit).not.toHaveBeenCalled();
+  });
+
+  it("fails closed without running local Git for a remote workspace", async () => {
+    const runGit = vi.fn();
+
+    await expect(
+      assertReviewWorkspaceMatchesAttachedPullRequest({
+        cwd: "/worktree",
+        executionTarget: "remote",
+        prs: [pullRequest({ linkedDirectoryPaths: undefined })],
+        runGit,
+        target: { type: "baseBranch", branch: "pwragent" },
+      }),
+    ).rejects.toThrow("remote workspace cannot be verified from this machine");
+    expect(runGit).not.toHaveBeenCalled();
   });
 
   it("does not constrain non-base review targets", async () => {
@@ -113,6 +153,7 @@ function pullRequest(overrides: Partial<PrSummary> = {}): PrSummary {
     baseRefName: "pwragent",
     headRefName: "agent/pwragent-build-version",
     headSha: PR_HEAD,
+    linkedDirectoryPaths: ["/worktree"],
     state: "passing",
     lifecycleState: "open",
     url: "https://github.com/pwrdrvr/codex/pull/9",

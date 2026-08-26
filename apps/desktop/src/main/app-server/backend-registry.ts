@@ -13634,6 +13634,7 @@ export class DesktopBackendRegistry {
       }
       await assertReviewWorkspaceMatchesAttachedPullRequest({
         cwd,
+        executionTarget: codexEnvironmentRuntime?.executionTarget,
         prs: overlay?.prs,
         target: params.target,
       });
