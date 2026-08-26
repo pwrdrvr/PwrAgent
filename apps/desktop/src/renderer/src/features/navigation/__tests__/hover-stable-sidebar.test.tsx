@@ -117,7 +117,7 @@ function leaveThreadBrowser(): void {
 }
 
 describe("Sidebar hover-stable thread ordering", () => {
-  it("keeps an Inbox click aimed at the row that was under the pointer", () => {
+  it("keeps an Inbox click aimed at a local row when a remote collision appears", () => {
     const onSelectThread = vi.fn<(thread: NavigationThreadSummary) => void>();
     const initial = [alpha, bravo];
     const view = render(renderSidebar({
@@ -150,8 +150,9 @@ describe("Sidebar hover-stable thread ordering", () => {
     expect(threadTitles()).toEqual([
       "Alpha thread",
       "Bravo thread refreshed",
+      "Alpha thread",
     ]);
-    expect(firstRow.querySelector(".thread-row")).toHaveClass(
+    expect(firstRow.querySelector(".thread-row")).not.toHaveClass(
       "is-remote-offline",
     );
     fireEvent.click(within(firstRow).getByRole("button", { name: /^Alpha thread/ }));

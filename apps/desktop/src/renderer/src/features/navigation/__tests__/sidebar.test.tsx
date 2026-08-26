@@ -6752,7 +6752,7 @@ describe("Sidebar thread pinning Move items", () => {
         directories={[
           pinnedThreadsDirectory([
             "codex:codex-top",
-            "acp:grok:grok-middle",
+            "remote:peer-laptop:acp:grok:grok-middle",
             "acp:grok:grok-bottom",
           ]),
         ]}
@@ -6786,7 +6786,7 @@ describe("Sidebar thread pinning Move items", () => {
 
     fireEvent.click(moveUp);
     expect(onReorderThreadPins).toHaveBeenCalledWith([
-      "acp:grok:grok-middle",
+      "remote:peer-laptop:acp:grok:grok-middle",
       "codex:codex-top",
       "acp:grok:grok-bottom",
     ]);

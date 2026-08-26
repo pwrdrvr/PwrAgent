@@ -686,7 +686,9 @@ function attachRemoteThreadsToLocalDirectories(
     Array<{ threadKey: string; inInbox: boolean }>
   >();
   for (const thread of remoteThreads) {
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const threadKey = thread.federation?.ref
+      ? federatedThreadIdentityKey(thread.federation.ref)
+      : buildThreadIdentityKey(thread.source, thread.id);
     let homeIndex = findRemoteHomeDirectoryIndex(
       mergedDirectories,
       thread,
@@ -6043,7 +6045,7 @@ class DesktopAppServerService {
         : [];
     const remoteRefsByKey = Object.fromEntries(
       remotePins.map((pin) => [
-        buildThreadIdentityKey(pin.ref.backend, pin.ref.threadId),
+        federatedThreadIdentityKey(pin.ref),
         pin.ref,
       ]),
     );

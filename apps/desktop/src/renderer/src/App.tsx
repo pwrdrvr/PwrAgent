@@ -13,11 +13,11 @@ import {
 } from "react";
 import {
   buildThreadIdentityKey,
+  federatedThreadIdentityKey,
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
   DESKTOP_TOOL_OUTPUT_ALERT_POLICY_DEFAULT,
   isRemoteFederationTarget,
-  parseThreadIdentityKey,
   resolveNewThreadBackend,
   type AppServerBackendKind,
   type DesktopBootInfo,
@@ -78,7 +78,10 @@ import { useFederationPeerConnectivity } from "./lib/useFederationPeerConnectivi
 import { useFederationHealth } from "./lib/useFederationHealth";
 import { useFederationThreadEventSubscriptions } from "./lib/useFederationThreadEventSubscriptions";
 import { scopeDesktopApiToFederationTarget } from "./lib/federation-desktop-api";
-import { federationTargetsEqual } from "./lib/federated-thread-events";
+import {
+  federationTargetsEqual,
+  threadSummaryIdentityKey,
+} from "./lib/federated-thread-events";
 import { useRuntimeIdentity } from "./lib/runtime-identity";
 import {
   useNavigationHistory,
@@ -1434,6 +1437,7 @@ function DesktopAppShell(props: {
   const openWorkspaceLaunchpad = navigation.openWorkspaceLaunchpad;
   const queueMessageLinkRequest = useCallback((request: {
     backend: AppServerBackendKind;
+    instanceId?: FederationInstanceId;
     messageId?: string;
     threadId: string;
   }): void => {
@@ -1441,7 +1445,16 @@ function DesktopAppShell(props: {
       ? {
           messageId: request.messageId,
           nonce: ++messageLinkNonceRef.current,
-          threadKey: buildThreadIdentityKey(request.backend, request.threadId),
+          threadKey: request.instanceId
+            ? federatedThreadIdentityKey({
+                backend: request.backend,
+                target: {
+                  scope: "remote",
+                  instanceId: request.instanceId,
+                },
+                threadId: request.threadId,
+              })
+            : buildThreadIdentityKey(request.backend, request.threadId),
         }
       : undefined);
   }, []);
@@ -1460,14 +1473,14 @@ function DesktopAppShell(props: {
       if (request.instanceId) {
         const windowTarget = readRendererFederationTarget();
         if (windowTarget?.instanceId !== request.instanceId) {
+          const target = {
+            scope: "remote" as const,
+            instanceId: request.instanceId,
+          };
           // A remote viewer is already scoped to another owner. Keep its
           // cross-instance navigation window-scoped; viewer-owned local pins
           // belong to the unscoped main window only.
           if (windowTarget) {
-            const target = {
-              scope: "remote" as const,
-              instanceId: request.instanceId,
-            };
             void desktopApi?.openFederationWindow?.({
               target,
               initialThread: {
@@ -1484,14 +1497,11 @@ function DesktopAppShell(props: {
             setMainView("thread");
             void showThread({
               backend: request.backend,
+              federationTarget: target,
               threadId: request.threadId,
             });
             return;
           }
-          const target = {
-            scope: "remote" as const,
-            instanceId: request.instanceId,
-          };
           void (async () => {
             try {
               await desktopApi?.addRemoteThreadPin?.({
@@ -1509,6 +1519,7 @@ function DesktopAppShell(props: {
             setMainView("thread");
             await showThread({
               backend: request.backend,
+              federationTarget: target,
               threadId: request.threadId,
             });
           })();
@@ -1517,7 +1528,18 @@ function DesktopAppShell(props: {
       }
       queueMessageLinkRequest(request);
       setMainView("thread");
-      void showThread({ backend: request.backend, threadId: request.threadId });
+      void showThread({
+        backend: request.backend,
+        ...(request.instanceId
+          ? {
+              federationTarget: {
+                scope: "remote" as const,
+                instanceId: request.instanceId,
+              },
+            }
+          : {}),
+        threadId: request.threadId,
+      });
     },
     [desktopApi, queueMessageLinkRequest, showThread],
   );
@@ -1555,12 +1577,14 @@ function DesktopAppShell(props: {
         selectDirectoryLaunchpad(location.directoryKey);
         return;
       }
-      const parts = parseThreadIdentityKey(location.threadKey);
-      if (parts) {
-        void showThread(parts);
+      const thread = navigation.threads.find(
+        (candidate) => threadSummaryIdentityKey(candidate) === location.threadKey,
+      );
+      if (thread) {
+        navigation.selectThread(thread);
       }
     },
-    [selectDirectoryLaunchpad, showThread],
+    [navigation, selectDirectoryLaunchpad],
   );
   // Undefined while the snapshot is empty/loading so a transient blank
   // thread list can't wipe the stacks; otherwise dead threads (archived,
@@ -1570,7 +1594,7 @@ function DesktopAppShell(props: {
       navigation.threads.length > 0
         ? new Set(
             navigation.threads.map((thread) =>
-              buildThreadIdentityKey(thread.source, thread.id),
+              threadSummaryIdentityKey(thread),
             ),
           )
         : undefined,

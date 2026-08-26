@@ -1301,7 +1301,7 @@ function updateThreadPinsInSnapshot(
   const threads = snapshot.threads.map((thread) => {
     const pinnedRank =
       params.pinnedRanksByThreadKey[
-        buildThreadIdentityKey(thread.source, thread.id)
+        threadSummaryIdentityKey(thread)
       ];
     if (!pinnedRank || thread.pinnedRank === pinnedRank) {
       return thread;
@@ -3073,6 +3073,7 @@ export function useThreadNavigation(
   markThreadUnread: (thread: NavigationThreadSummary) => Promise<void>;
   showThread: (params: {
     backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
     threadId: string;
   }) => Promise<void>;
   archiveThread: (
@@ -5355,12 +5356,25 @@ export function useThreadNavigation(
   const showThread = useCallback(
     async (params: {
       backend: AppServerBackendKind;
+      federationTarget?: FederationTarget;
       threadId: string;
     }): Promise<void> => {
-      const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+      const threadKey = params.federationTarget
+        && isRemoteFederationTarget(params.federationTarget)
+        ? federatedThreadIdentityKey({
+            backend: params.backend,
+            target: params.federationTarget,
+            threadId: params.threadId,
+          })
+        : buildThreadIdentityKey(params.backend, params.threadId);
       const thread = state.response?.threads.find(
         (candidate) =>
-          candidate.source === params.backend && candidate.id === params.threadId,
+          candidate.source === params.backend
+          && candidate.id === params.threadId
+          && federationTargetsEqual(
+            candidate.federation?.ref.target,
+            params.federationTarget,
+          ),
       );
       if (thread) {
         selectThread(thread);

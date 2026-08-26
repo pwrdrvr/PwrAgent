@@ -46,7 +46,9 @@ const otherThread = threadSummary({
 const remoteThread = threadSummary({
   federation: {
     ref: {
+      backend: "codex",
       target: { scope: "remote", instanceId: REMOTE_INSTANCE_ID },
+      threadId: TARGET_THREAD_ID,
     },
     instanceLabel: "Peer",
   } as NavigationThreadSummary["federation"],

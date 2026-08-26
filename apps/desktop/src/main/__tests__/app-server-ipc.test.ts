@@ -2231,7 +2231,9 @@ describe("app server ipc", () => {
     const appDirectory = response.directories.find(
       (directory) => directory.key === "directory:/repo/app",
     );
-    expect(appDirectory?.threadKeys).toContain("codex:remote-1");
+    expect(appDirectory?.threadKeys).toContain(
+      "remote:peer-laptop:codex:remote-1",
+    );
     // The unread remote row bumps the group's "N to review" badge past the
     // reconcile-computed local count.
     expect(appDirectory?.needsAttentionCount).toBe(2);
@@ -2332,7 +2334,7 @@ describe("app server ipc", () => {
       kind: "directory",
       label: "grok-build",
       localAvailability: "unconfigured",
-      threadKeys: ["codex:remote-grok-build"],
+      threadKeys: ["remote:peer-laptop:codex:remote-grok-build"],
       needsAttentionCount: 1,
     });
 
@@ -2346,7 +2348,7 @@ describe("app server ipc", () => {
     expect(second.directories).toContainEqual(expect.objectContaining({
       key: "directory:/viewer/repos/grok-build",
       label: "grok-build",
-      threadKeys: ["codex:remote-grok-build"],
+      threadKeys: ["remote:peer-laptop:codex:remote-grok-build"],
     }));
     expect(second.directories).not.toContainEqual(expect.objectContaining({
       localAvailability: "unconfigured",
@@ -2586,10 +2588,10 @@ describe("app server ipc", () => {
       response.directories.map((directory) => [directory.key, directory]),
     );
     expect(byKey.get("directory:/repo/PwrAgent")?.threadKeys).toContain(
-      "codex:remote-multi",
+      "remote:peer-laptop:codex:remote-multi",
     );
     expect(byKey.get("directory:/repo/agent-kit")?.threadKeys).not.toContain(
-      "codex:remote-multi",
+      "remote:peer-laptop:codex:remote-multi",
     );
   });
 
@@ -2692,10 +2694,10 @@ describe("app server ipc", () => {
       response.directories.map((directory) => [directory.key, directory]),
     );
     expect(byKey.get("directory:/repo/PwrAgent")?.threadKeys).toContain(
-      "codex:remote-primary-project",
+      "remote:peer-laptop:codex:remote-primary-project",
     );
     expect(byKey.get("directory:/repo/PwrSuiteLab")?.threadKeys).not.toContain(
-      "codex:remote-primary-project",
+      "remote:peer-laptop:codex:remote-primary-project",
     );
   });
 
@@ -2810,17 +2812,27 @@ describe("app server ipc", () => {
 
     const response = (await handlers.get(NAVIGATION_REORDER_THREAD_PINS_CHANNEL)?.(
       {},
-      { threadKeys: ["codex:remote-pin", "codex:local-pin"] },
+      {
+        threadKeys: [
+          "remote:peer-laptop:codex:remote-pin",
+          "codex:local-pin",
+        ],
+      },
     )) as { pinnedRanks: Record<string, string> };
 
     // The store gets the FULL order plus the remote-key routing map so both
     // kinds interleave in one atomic write.
     expect(reorderThreadPinsStore).toHaveBeenCalledWith({
-      threadKeys: ["codex:remote-pin", "codex:local-pin"],
-      remoteRefsByKey: { "codex:remote-pin": remoteRef },
+      threadKeys: [
+        "remote:peer-laptop:codex:remote-pin",
+        "codex:local-pin",
+      ],
+      remoteRefsByKey: {
+        "remote:peer-laptop:codex:remote-pin": remoteRef,
+      },
     });
     expect(response.pinnedRanks).toEqual({
-      "codex:remote-pin": "1024",
+      "remote:peer-laptop:codex:remote-pin": "1024",
       "codex:local-pin": "2048",
     });
   });

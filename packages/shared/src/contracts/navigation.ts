@@ -1512,9 +1512,10 @@ export type ReorderThreadPinsRequest = {
   federationTarget?: FederationTarget;
   /**
    * Complete pinned order across ALL backends, first item at the top.
-   * Entries are thread identity keys (`buildThreadIdentityKey`), so a Codex
-   * pin and an ACP pin can be interleaved in any order — pin order is global,
-   * not per-backend (mirrors directory pinning).
+   * Entries are local (`buildThreadIdentityKey`) or federated
+   * (`federatedThreadIdentityKey`) thread identity keys, so local and remote
+   * pins can be interleaved without collapsing an owner collision. Pin order
+   * is global, not per-backend (mirrors directory pinning).
    */
   threadKeys: string[];
 };
