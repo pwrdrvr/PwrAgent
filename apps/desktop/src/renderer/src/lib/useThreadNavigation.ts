@@ -871,6 +871,7 @@ function threadSummariesEqual(
     left.reasoningEffort === right.reasoningEffort &&
     left.serviceTier === right.serviceTier &&
     left.fastMode === right.fastMode &&
+    left.tokenMiserEnabled === right.tokenMiserEnabled &&
     left.prAutoDispatchEnabled === right.prAutoDispatchEnabled &&
     JSON.stringify(left.prAutoDispatchPending ?? null) ===
       JSON.stringify(right.prAutoDispatchPending ?? null) &&

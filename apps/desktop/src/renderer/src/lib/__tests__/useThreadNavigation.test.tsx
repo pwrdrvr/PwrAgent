@@ -11674,6 +11674,55 @@ describe("useThreadNavigation", () => {
     ).toBe("discord");
   });
 
+  it("reconciles a Token Miser override when the backend thread timestamp is unchanged", async () => {
+    let navigationCallCount = 0;
+    const getNavigationSnapshot = vi.fn(async () => {
+      navigationCallCount += 1;
+      return {
+        backend: "all" as const,
+        fetchedAt: 1_000 + navigationCallCount,
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [
+          {
+            id: "thread-1",
+            title: "Control thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+            updatedAt: 1_000,
+            ...(navigationCallCount > 1
+              ? { tokenMiserEnabled: false }
+              : {}),
+          },
+        ],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      };
+    });
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+    expect(result.current.selectedThread?.tokenMiserEnabled).toBeUndefined();
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.selectedThread?.tokenMiserEnabled).toBe(false);
+  });
+
   it("reconciles queued turns when the backend thread timestamp is unchanged", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     let navigationCallCount = 0;
