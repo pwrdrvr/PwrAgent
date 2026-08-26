@@ -27170,6 +27170,28 @@ export class DesktopBackendRegistry {
       pricingLines: [...linesById.values()],
       toolInvocations: toolAccounting?.invocations,
     });
+    if (
+      artifact.gateUsageLine
+      && !pricing.lines.some((line) =>
+        line.usageLineId === artifact.gateUsageLine?.usageLineId
+      )
+      && !this.pendingLiveThreadUsageLines.has(
+        artifact.gateUsageLine.usageLineId,
+      )
+    ) {
+      logUnpricedThreadUsageLine(artifact.gateUsageLine);
+      if (typeof this.overlayStore.upsertThreadUsageLines === "function") {
+        this.bufferLiveThreadUsageLine({
+          backend: "codex",
+          line: artifact.gateUsageLine,
+          observationSequence: ++this.liveThreadUsageObservationSequence,
+        });
+      } else if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
+        await this.overlayStore.upsertThreadUsageLine({
+          line: artifact.gateUsageLine,
+        });
+      }
+    }
     const liveSubAgents = this.liveTokenMiserSubAgents.get(entry.threadId)
       ?? new Map<string, ThreadSubAgentSummary>();
     liveSubAgents.set(artifact.subAgent.monitorId, artifact.subAgent);
@@ -27303,6 +27325,10 @@ export class DesktopBackendRegistry {
   private async persistTokenMiserLedgerEntries(
     metadata: readonly TokenMiserObjectMetadata[],
   ): Promise<void> {
+    // Finalized helper usage joins the same one-second bulk-write window as
+    // parent usage. Drain that window before terminal reconciliation so the
+    // stable helper line is found instead of inserted a second time.
+    await this.flushLiveThreadUsageLines();
     const byThread = new Map<string, TokenMiserObjectMetadata[]>();
     for (const entry of metadata) {
       const entries = byThread.get(entry.threadId) ?? [];

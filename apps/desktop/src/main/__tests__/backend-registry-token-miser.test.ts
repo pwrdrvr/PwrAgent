@@ -312,7 +312,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     expect(accounting?.baselineParentCostMicros).toBeGreaterThan(0);
   });
 
-  it("publishes live gate cards and pricing without writing the terminal ledger", async () => {
+  it("persists authoritative live gate usage once before parent completion", async () => {
     await store.upsertThreadUsageLine({
       line: {
         backend: "codex",
@@ -330,7 +330,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
         scope: "turn",
         source: "live",
         sourceItemId: "thread-token-usage",
-        status: "finalized",
+        status: "pending",
         threadId: "thread-parent",
         totalCostMicros: 0,
         totalTokens: 10_100,
@@ -346,18 +346,61 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     registry.onEvent((event) => {
       events.push(event);
     });
-    const publish = (
-      registry as unknown as {
-        publishLiveTokenMiserLedgerEntry(
-          entry: TokenMiserObjectMetadata,
-        ): Promise<void>;
-      }
-    ).publishLiveTokenMiserLedgerEntry.bind(registry);
+    const internals = registry as unknown as {
+      publishLiveTokenMiserLedgerEntry(
+        entry: TokenMiserObjectMetadata,
+      ): Promise<void>;
+      writePendingLiveThreadUsageLines(): Promise<void>;
+    };
+    const publish = internals.publishLiveTokenMiserLedgerEntry.bind(registry);
+    const baseLiveEntry = metadata("gate-live", "helper-live");
+    const liveEntry = {
+      ...baseLiveEntry,
+      helperUsage: {
+        ...baseLiveEntry.helperUsage,
+        tokenUsage: {
+          cachedInputTokens: 500,
+          inputTokens: 2_000,
+          outputTokens: 100,
+          reasoningOutputTokens: 25,
+          totalTokens: 2_100,
+        },
+      },
+    } satisfies TokenMiserObjectMetadata;
 
-    await publish(metadata("gate-live", "helper-live"));
+    await publish(liveEntry);
 
     expect(upsertSubAgents).not.toHaveBeenCalled();
     expect(upsertUsageLines).not.toHaveBeenCalled();
+    await internals.writePendingLiveThreadUsageLines();
+    expect(upsertUsageLines).toHaveBeenCalledTimes(1);
+    const livePricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(
+      livePricing.lines.filter((line) =>
+        line.sourceItemId === "system:token-miser:gate-live"
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        cachedInputTokens: 500,
+        inputTokens: 2_000,
+        outputTokens: 100,
+        parentThreadId: "thread-parent",
+        reasoningOutputTokens: 25,
+        status: "finalized",
+        threadId: "helper-live",
+        totalTokens: 2_100,
+        uncachedInputTokens: 1_500,
+      }),
+    ]);
+    expect(livePricing.summaries).toEqual([
+      expect.objectContaining({
+        threadId: "thread-parent",
+        usageLineCount: 2,
+      }),
+    ]);
     const storedOverlay = await store.getThreadOverlayState({
       backend: "codex",
       threadId: "thread-parent",
@@ -373,7 +416,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
           agentName: "Token Miser",
           monitorId: "system:token-miser:gate-live",
           tokenMiserAccounting: {
-            savingsMicros: 11_030,
+            savingsMicros: 11_090,
           },
         },
       ],
@@ -419,7 +462,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     );
 
     const retrieved = {
-      ...metadata("gate-live", "helper-live"),
+      ...liveEntry,
       retrievedCharacters: 4_000,
     };
     await publish(retrieved);
@@ -431,7 +474,7 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
         {
           tokenMiserAccounting: {
             revealedParentTokens: 1_225,
-            savingsMicros: 9_030,
+            savingsMicros: 9_090,
           },
         },
       ],
@@ -450,6 +493,27 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     };
     expect(
       updatedPricing.pricing.lines.filter((line) =>
+        line.sourceItemId === "system:token-miser:gate-live"
+      ),
+    ).toHaveLength(1);
+
+    const persist = (
+      registry as unknown as {
+        persistTokenMiserLedgerEntries(
+          metadata: readonly TokenMiserObjectMetadata[],
+        ): Promise<void>;
+      }
+    ).persistTokenMiserLedgerEntries.bind(registry);
+    await persist([retrieved]);
+    await persist([retrieved]);
+
+    expect(upsertUsageLines).toHaveBeenCalledTimes(1);
+    const completedPricing = await store.readThreadPricing({
+      backend: "codex",
+      threadId: "thread-parent",
+    });
+    expect(
+      completedPricing.lines.filter((line) =>
         line.sourceItemId === "system:token-miser:gate-live"
       ),
     ).toHaveLength(1);

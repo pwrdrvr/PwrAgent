@@ -77,7 +77,7 @@ describe("sqlite write metrics", () => {
     ).toMatchObject({ commits: 2, rowsChanged: 2, statements: 2 });
   });
 
-  it("persists one turn of Token Miser helpers in two boundary commits", async () => {
+  it("persists live Token Miser helper pricing and batches terminal cards", async () => {
     const threadId = "thread-token-miser";
     const subAgents = Array.from({ length: 9 }, (_, index) => ({
       monitorId: `system:token-miser:gate-${index}`,
@@ -118,18 +118,18 @@ describe("sqlite write metrics", () => {
     }));
 
     const { writes } = await measureSqliteWrites(async () => {
+      await store.upsertThreadUsageLines({ lines });
       await store.upsertThreadSubAgents({
         backend: "codex",
         threadId,
         subAgents,
       });
-      await store.upsertThreadUsageLines({ lines });
     });
 
     expectSqliteWriteBudget({
       note:
-        "nine Token Miser gate helpers from one parent turn, batched into "
-        + "one parent overlay write and one pricing-ledger transaction",
+        "nine finalized Token Miser helper lines persisted during the active "
+        + "turn, plus one batched parent overlay write at completion",
       scenario: "token-miser-turn-ledger",
       writes,
     });

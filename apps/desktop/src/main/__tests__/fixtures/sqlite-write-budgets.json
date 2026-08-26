@@ -190,7 +190,7 @@
   },
   "token-miser-turn-ledger": {
     "commits": 2,
-    "note": "nine Token Miser gate helpers from one parent turn, batched into one parent overlay write and one pricing-ledger transaction",
+    "note": "nine finalized Token Miser helper lines persisted during the active turn, plus one batched parent overlay write at completion",
     "observedWalBytes": 82400,
     "rowsChanged": 20,
     "statements": 20
