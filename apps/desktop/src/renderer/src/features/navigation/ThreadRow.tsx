@@ -12,8 +12,8 @@ import type {
   NavigationThreadSummary,
   PrSummary,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
 import { MoreVerticalIcon, PinIcon, SmileyIcon } from "../../icons";
+import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import {
   formatMessagingPlatformName,
   MESSAGING_PLATFORM_ICONS,
@@ -138,7 +138,7 @@ type ThreadRowProps = {
 };
 
 export function ThreadRow(props: ThreadRowProps) {
-  const threadKey = buildThreadIdentityKey(props.thread.source, props.thread.id);
+  const threadKey = threadSummaryIdentityKey(props.thread);
   const selected = props.selectedThreadKeys
     ? props.selectedThreadKeys.has(threadKey)
     : threadKey === props.selectedThreadKey;

@@ -17,7 +17,6 @@ import type {
   ThreadExecutionMode,
 } from "@pwragent/shared";
 import {
-  buildThreadIdentityKey,
   buildThreadUrl,
   comparePinnedDirectories,
   comparePinnedThreads,
@@ -31,6 +30,7 @@ import {
   readRendererFederationLabel,
   readRendererFederationTarget,
 } from "../../lib/federation-window";
+import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import type { RuntimeIdentity } from "../../../../shared/runtime-identity";
 import { copyText } from "../../lib/copy-text";
 import {
@@ -112,7 +112,7 @@ function hydrateHoverStableSidebarSnapshot(
   );
   const latestThreadsByKey = new Map(
     latest.threads.map((thread) => [
-      buildThreadIdentityKey(thread.source, thread.id),
+      threadSummaryIdentityKey(thread),
       thread,
     ]),
   );
@@ -121,7 +121,7 @@ function hydrateHoverStableSidebarSnapshot(
   );
   const frozenThreadKeys = new Set(
     frozen.threads.map((thread) =>
-      buildThreadIdentityKey(thread.source, thread.id),
+      threadSummaryIdentityKey(thread),
     ),
   );
 
@@ -149,7 +149,7 @@ function hydrateHoverStableSidebarSnapshot(
     threads: [
       ...frozen.threads.map((thread) => {
         const latestThread = latestThreadsByKey.get(
-          buildThreadIdentityKey(thread.source, thread.id),
+          threadSummaryIdentityKey(thread),
         );
         return latestThread
           ? {
@@ -167,7 +167,7 @@ function hydrateHoverStableSidebarSnapshot(
       }),
       ...latest.threads
         .filter((thread) => !frozenThreadKeys.has(
-          buildThreadIdentityKey(thread.source, thread.id),
+          threadSummaryIdentityKey(thread),
         ))
         .map((thread) => ({
           ...thread,
@@ -640,7 +640,7 @@ export function Sidebar(props: SidebarProps) {
   const navigationThreadByKey = useMemo(
     () => new Map(
       navigationThreads.map((thread) => [
-        buildThreadIdentityKey(thread.source, thread.id),
+        threadSummaryIdentityKey(thread),
         thread,
       ]),
     ),
@@ -676,7 +676,7 @@ export function Sidebar(props: SidebarProps) {
   useEffect(() => {
     const availableThreadKeys = new Set(
       navigationThreads.map((thread) =>
-        buildThreadIdentityKey(thread.source, thread.id),
+        threadSummaryIdentityKey(thread),
       ),
     );
     if (!availableThreadKeys.has(selectionAnchorKeyRef.current ?? "")) {
@@ -731,7 +731,7 @@ export function Sidebar(props: SidebarProps) {
     event: ReactMouseEvent<HTMLElement>,
     selectionOrder: string[],
   ): void => {
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const threadKey = threadSummaryIdentityKey(thread);
 
     if (!event.metaKey && !event.shiftKey) {
       selectionAnchorKeyRef.current = threadKey;
@@ -1126,7 +1126,7 @@ export function Sidebar(props: SidebarProps) {
   const resolveContextMenuThreads = (
     thread: NavigationThreadSummary,
   ): NavigationThreadSummary[] => {
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const threadKey = threadSummaryIdentityKey(thread);
     if (!selectedThreadKeys.has(threadKey)) {
       selectionAnchorKeyRef.current = threadKey;
       setSelectedThreadKeys(new Set([threadKey]));
@@ -1135,7 +1135,7 @@ export function Sidebar(props: SidebarProps) {
 
     const selectedThreads = props.threads.filter((candidate) =>
       selectedThreadKeys.has(
-        buildThreadIdentityKey(candidate.source, candidate.id),
+        threadSummaryIdentityKey(candidate),
       ),
     );
 
@@ -1315,7 +1315,7 @@ export function Sidebar(props: SidebarProps) {
     const unreadThreads = props.threads.filter(
       (thread) =>
         directoryThreadKeys.has(
-          buildThreadIdentityKey(thread.source, thread.id),
+          threadSummaryIdentityKey(thread),
         ) && thread.inbox.inInbox,
     );
     setDirectoryContextMenu(undefined);
@@ -1332,7 +1332,7 @@ export function Sidebar(props: SidebarProps) {
       [...props.threads]
         .filter(isPinnedThread)
         .sort(comparePinnedThreads)
-        .map((thread) => buildThreadIdentityKey(thread.source, thread.id)),
+        .map((thread) => threadSummaryIdentityKey(thread)),
     [props.threads],
   );
 
@@ -1356,7 +1356,7 @@ export function Sidebar(props: SidebarProps) {
     direction: "up" | "down",
   ): void => {
     const ordered = pinnedThreadKeysInOrder;
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const threadKey = threadSummaryIdentityKey(thread);
     const currentIndex = ordered.indexOf(threadKey);
     if (currentIndex === -1) return;
     const targetIndex =
@@ -1429,7 +1429,7 @@ export function Sidebar(props: SidebarProps) {
   ): void => {
     setContextMenu(undefined);
     const threadKeys = threads.map((thread) =>
-      buildThreadIdentityKey(thread.source, thread.id),
+      threadSummaryIdentityKey(thread),
     );
     if (props.onReorderThreadPins) {
       const nextKeys = [
@@ -1544,10 +1544,7 @@ export function Sidebar(props: SidebarProps) {
     ? props.threads.filter(
         (thread) =>
           resolveThreadParentKey(thread, navigationThreadByKey)
-          === buildThreadIdentityKey(
-            contextMenu.thread.source,
-            contextMenu.thread.id,
-          ),
+          === threadSummaryIdentityKey(contextMenu.thread),
       ).length
     : 0;
   const contextMenuHasChildThreads = contextMenuChildThreadCount > 0;
@@ -1622,7 +1619,7 @@ export function Sidebar(props: SidebarProps) {
   );
   const contextMenuPinnedThreadIndex = contextMenu
     ? pinnedThreadKeysInOrder.indexOf(
-        buildThreadIdentityKey(contextMenu.thread.source, contextMenu.thread.id),
+        threadSummaryIdentityKey(contextMenu.thread),
       )
     : -1;
   const contextMenuPinnedThreadCount = pinnedThreadKeysInOrder.length;
@@ -1710,7 +1707,7 @@ export function Sidebar(props: SidebarProps) {
   const directoryMenuUnreadThreads = props.threads.filter(
     (thread) =>
       directoryMenuThreadKeys.has(
-        buildThreadIdentityKey(thread.source, thread.id),
+        threadSummaryIdentityKey(thread),
       ) && thread.inbox.inInbox,
   );
   const directoryMenuCanMarkRead = Boolean(

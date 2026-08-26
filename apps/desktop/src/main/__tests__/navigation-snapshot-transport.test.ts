@@ -3,7 +3,10 @@ import type {
   NavigationSnapshot,
   NavigationThreadSummary,
 } from "@pwragent/shared";
-import { buildThreadIdentityKey } from "@pwragent/shared";
+import {
+  applyNavigationSnapshotTransportResponse,
+  buildThreadIdentityKey,
+} from "@pwragent/shared";
 import { NavigationSnapshotTransport } from "../navigation-snapshot-transport";
 
 function buildThread(index: number): NavigationThreadSummary {
@@ -124,6 +127,57 @@ describe("NavigationSnapshotTransport", () => {
       removed.removedThreadKeys,
     );
     expect(removed.inboxThreadKeys).toBeUndefined();
+  });
+
+  it("keeps colliding local and remote identities distinct across a delta", () => {
+    const transport = new NavigationSnapshotTransport();
+    const local = {
+      ...buildThread(1),
+      title: "Local collision",
+    };
+    const full = transport.encode({
+      request: {},
+      snapshot: buildSnapshot([local]),
+    });
+    if (full.kind !== "full") {
+      throw new Error("Expected initial full snapshot");
+    }
+    const remote = {
+      ...buildThread(1),
+      title: "Remote collision",
+      federation: {
+        ref: {
+          backend: "codex" as const,
+          target: {
+            scope: "remote" as const,
+            instanceId: "remote-owner",
+          },
+          threadId: local.id,
+        },
+        instanceLabel: "Remote owner",
+      },
+    };
+    const delta = transport.encode({
+      baseRevision: full.revision,
+      request: {},
+      snapshot: buildSnapshot([local, remote], 2),
+    });
+    if (delta.kind !== "delta") {
+      throw new Error("Expected collision delta");
+    }
+
+    expect(delta.upsertedThreads).toEqual([remote]);
+    const baseline = applyNavigationSnapshotTransportResponse(undefined, full);
+    const applied = applyNavigationSnapshotTransportResponse(baseline, delta);
+    expect(applied?.snapshot.threads.map((thread) => ({
+      instanceId: thread.federation?.ref.target.scope === "remote"
+        ? thread.federation.ref.target.instanceId
+        : undefined,
+      title: thread.title,
+    }))).toEqual([
+      { instanceId: undefined, title: "Local collision" },
+      { instanceId: "remote-owner", title: "Remote collision" },
+    ]);
   });
 
   it("sends a full baseline for a stale revision", () => {

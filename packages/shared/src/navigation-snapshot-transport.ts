@@ -5,12 +5,19 @@ import type {
   NavigationSnapshotTransportResponse,
   NavigationThreadSummary,
 } from "./contracts/navigation";
+import { federatedThreadIdentityKey } from "./contracts/federation";
 import { buildThreadIdentityKey } from "./contracts/navigation";
 
 export type NavigationSnapshotTransportState = {
   revision: string;
   snapshot: NavigationSnapshot;
 };
+
+function threadKey(thread: NavigationThreadSummary): string {
+  return thread.federation?.ref
+    ? federatedThreadIdentityKey(thread.federation.ref)
+    : buildThreadIdentityKey(thread.source, thread.id);
+}
 
 function applyKeyedDelta<T>(params: {
   current: T[];
@@ -63,7 +70,7 @@ function applyDelta(
   }
   const threads = applyKeyedDelta<NavigationThreadSummary>({
     current: previous.snapshot.threads,
-    key: (thread) => buildThreadIdentityKey(thread.source, thread.id),
+    key: threadKey,
     order: delta.threadKeys,
     removedKeys: delta.removedThreadKeys,
     upserted: delta.upsertedThreads,

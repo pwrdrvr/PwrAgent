@@ -3,10 +3,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type {
+  AppServerNotification,
   AppServerBackendKind,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
   AppServerThreadSummary,
+  CancelThreadPrAutoDispatchRequest,
+  CancelThreadPrAutoDispatchResponse,
   CodexEnvironmentOption,
   EnsureDirectoryLaunchpadRequest,
   EnsureDirectoryLaunchpadResponse,
@@ -15,6 +18,7 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   NavigationSnapshot,
+  NavigationThreadSummary,
   SetThreadPinRequest,
   SetThreadPinResponse,
 } from "@pwragent/shared";
@@ -29,6 +33,7 @@ import {
   encodeFederationInvite,
 } from "../../src/main/federation/federation-enrollment";
 import {
+  FEDERATION_BACKEND_EVENT_METHOD,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
   additionalFederationBackendCapabilities,
   registerFederationBackendHandlers,
@@ -54,6 +59,7 @@ export type GatewayThreadSeed = {
   source?: AppServerBackendKind;
   executionMode?: AppServerThreadSummary["executionMode"];
   linkedDirectories?: LinkedDirectorySummary[];
+  prAutoDispatchPending?: NavigationThreadSummary["prAutoDispatchPending"];
   /**
    * Needed to reach a Star Map lane: a thread with no attention category
    * is not on the map at all, and an idle thread with no PR and no
@@ -112,6 +118,11 @@ export type InProcessFederationGateway = {
   };
   /** Current pin rank per thread id (mutated by backend.setThreadPin). */
   pinnedRankByThreadId: Map<string, string | undefined>;
+  /** Deliver an owner-side backend update to every connected viewer. */
+  deliverBackendEvent: (params: {
+    backend: AppServerBackendKind;
+    notification: AppServerNotification;
+  }) => void;
   /** Resolves when a client connection has completed enrollment/auth. */
   waitForConnection: (timeoutMs?: number) => Promise<void>;
   /** Resolves when a connection completes AFTER this call (reconnects). */
@@ -244,6 +255,9 @@ export async function startInProcessFederationGateway(params: {
       updatedAt: thread.updatedAt,
       createdAt: thread.updatedAt,
       ...(thread.threadStatus ? { threadStatus: thread.threadStatus } : {}),
+      ...(thread.prAutoDispatchPending
+        ? { prAutoDispatchPending: thread.prAutoDispatchPending }
+        : {}),
       ...(pinnedRankByThreadId.get(thread.id) !== undefined
         ? { pinnedRank: pinnedRankByThreadId.get(thread.id) }
         : {}),
@@ -423,6 +437,12 @@ export async function startInProcessFederationGateway(params: {
       calls.push({ method: "listScheduledThreadActions", params: {} });
       return { actions: [] };
     },
+    async cancelThreadPrAutoDispatch(
+      request: CancelThreadPrAutoDispatchRequest,
+    ): Promise<CancelThreadPrAutoDispatchResponse> {
+      calls.push({ method: "cancelThreadPrAutoDispatch", params: request });
+      return { ...request, cancelled: true };
+    },
     async ensureDirectoryLaunchpad(
       request: EnsureDirectoryLaunchpadRequest,
     ): Promise<EnsureDirectoryLaunchpadResponse> {
@@ -534,6 +554,7 @@ export async function startInProcessFederationGateway(params: {
   }
 
   let connectionCount = 0;
+  const connectedPeerIds = new Set<string>();
   const connectionWaiters: (() => void)[] = [];
   const buildServer = (port: number) =>
     new FederationGatewayWebSocketServer({
@@ -545,6 +566,7 @@ export async function startInProcessFederationGateway(params: {
       store,
       noiseStatic,
       onConnection: (connection) => {
+        connectedPeerIds.add(connection.peerId);
         router.registerConnection({
           peerId: connection.peerId,
           capabilities: connection.capabilities,
@@ -557,6 +579,7 @@ export async function startInProcessFederationGateway(params: {
         }
       },
       onDisconnect: (connection) => {
+        connectedPeerIds.delete(connection.peerId);
         router.unregisterConnection(connection.peerId);
         ptyService?.notifyPeerDisconnected(connection.peerId);
       },
@@ -623,6 +646,26 @@ export async function startInProcessFederationGateway(params: {
     calls,
     transcriptStats,
     pinnedRankByThreadId,
+    deliverBackendEvent: ({ backend: eventBackend, notification }) => {
+      for (const peerId of connectedPeerIds) {
+        const delivered = router.sendToPeer(peerId, {
+          id: `federation-backend-event:${randomBytes(8).toString("hex")}`,
+          kind: "notification",
+          method: FEDERATION_BACKEND_EVENT_METHOD,
+          params: {
+            backend: eventBackend,
+            notification,
+          },
+          protocolVersion: FEDERATION_PROTOCOL_VERSION,
+          sourceInstanceId: gatewayInstanceId,
+          targetInstanceId: peerId,
+          createdAt: Date.now(),
+        });
+        if (!delivered) {
+          throw new Error(`Failed to deliver backend event to ${peerId}`);
+        }
+      }
+    },
     waitForConnection: async (timeoutMs = 15_000) => {
       await waitForConnectionCount(1, timeoutMs);
     },

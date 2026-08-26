@@ -5,7 +5,6 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import {
-  buildThreadIdentityKey,
   moveThreadKey,
   parseThreadIdentityKey,
   resolveThreadParentKey,
@@ -17,7 +16,10 @@ import {
   useDropIndicatorController,
 } from "./drag-drop";
 import type { ThreadQueuedMessageState } from "../../lib/useThreadQueuedMessageIndicators";
-import { threadSupportsFederationCapability } from "../../lib/federated-thread-events";
+import {
+  threadSummaryIdentityKey,
+  threadSupportsFederationCapability,
+} from "../../lib/federated-thread-events";
 import {
   getSubthreadDisclosureCount,
   isSubthreadSectionCollapsed,
@@ -100,7 +102,7 @@ export function RecentsList(props: RecentsListProps) {
   );
   const threadByKey = new Map(
     props.threads.map((thread) => [
-      buildThreadIdentityKey(thread.source, thread.id),
+      threadSummaryIdentityKey(thread),
       thread,
     ]),
   );
@@ -119,7 +121,7 @@ export function RecentsList(props: RecentsListProps) {
     childrenByParentKey.set(parentKey, children);
   }
   const renderSubthreads = (parent: NavigationThreadSummary) => {
-    const parentKey = buildThreadIdentityKey(parent.source, parent.id);
+    const parentKey = threadSummaryIdentityKey(parent);
     const children = sortSubthreadSummaries(parent, childrenByParentKey.get(parentKey) ?? []);
     const nativeSubAgentCount = parent.codexNativeSubAgents?.length ?? 0;
     const subthreadsCollapsed = isSubthreadSectionCollapsed(parent);
@@ -135,12 +137,12 @@ export function RecentsList(props: RecentsListProps) {
     }
 
     const childKeys = children.map((child) =>
-      buildThreadIdentityKey(child.source, child.id),
+      threadSummaryIdentityKey(child),
     );
     return (
       <div className="subthread-list" role="list" aria-label={`Sub-threads of ${parent.title}`}>
         {children.map((child) => {
-          const childKey = buildThreadIdentityKey(child.source, child.id);
+          const childKey = threadSummaryIdentityKey(child);
           const rowDropKey = `${parentKey}:${childKey}`;
           return (
             <ThreadRow
@@ -255,7 +257,7 @@ export function RecentsList(props: RecentsListProps) {
   // deliberately absent, just like Finder ranges do not reach into a closed
   // disclosure.
   const selectionOrder = topLevelThreads.flatMap((thread) => {
-    const threadKey = buildThreadIdentityKey(thread.source, thread.id);
+    const threadKey = threadSummaryIdentityKey(thread);
     const children = sortSubthreadSummaries(
       thread,
       childrenByParentKey.get(threadKey) ?? [],
@@ -265,13 +267,13 @@ export function RecentsList(props: RecentsListProps) {
       ...(isSubthreadSectionCollapsed(thread)
         ? []
         : children.map((child) =>
-            buildThreadIdentityKey(child.source, child.id),
+            threadSummaryIdentityKey(child),
           )),
     ];
   });
 
   const renderThreadGroup = (thread: NavigationThreadSummary) => {
-    const key = buildThreadIdentityKey(thread.source, thread.id);
+    const key = threadSummaryIdentityKey(thread);
     const children = sortSubthreadSummaries(thread, childrenByParentKey.get(key) ?? []);
     const subthreadCount = getSubthreadDisclosureCount(thread, children.length);
     const subthreadsCollapsed = isSubthreadSectionCollapsed(thread);

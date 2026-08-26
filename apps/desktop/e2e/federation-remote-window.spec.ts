@@ -5,9 +5,12 @@ import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { expect, test, type Page } from "@playwright/test";
+import type { ThreadPrAutoDispatchPending } from "@pwragent/shared";
 import { generateFederationIdentityKeyPair } from "../src/main/federation/federation-identity";
 import { generateFederationNoiseStaticKeyPair } from "../src/main/federation/federation-noise";
 import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
+import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
+import { StateDb } from "../src/main/state/state-db";
 import { launchElectronApp, rightClickThreadRow } from "./fixtures/electron-app";
 import {
   buildFakeAgentConfigToml,
@@ -37,7 +40,10 @@ import {
  * with executable-backed Kimi + Codex fakes (no Codex replay fixture).
  */
 
-async function createLocalControlFixture(): Promise<{
+async function createLocalControlFixture(options?: {
+  threadId?: string;
+  threadTitle?: string;
+}): Promise<{
   cleanup: () => Promise<void>;
   fixturePath: string;
 }> {
@@ -45,6 +51,8 @@ async function createLocalControlFixture(): Promise<{
     path.join(os.tmpdir(), "pwragent-federation-e2e-"),
   );
   const fixturePath = path.join(rootDir, "federation-local.fixture.json");
+  const threadId = options?.threadId ?? "local-thread-1";
+  const threadTitle = options?.threadTitle ?? "Local control thread";
   await writeFile(
     fixturePath,
     JSON.stringify({
@@ -75,8 +83,8 @@ async function createLocalControlFixture(): Promise<{
           method: "thread/list",
           result: [
             {
-              id: "local-thread-1",
-              title: "Local control thread",
+              id: threadId,
+              title: threadTitle,
               titleSource: "explicit",
               source: "codex",
               executionMode: "default",
@@ -268,6 +276,243 @@ async function seedFixtureGitRepo(params: {
 }
 
 test.describe("federation remote window", () => {
+  test("cancels a colliding remote auto-fix without changing the local thread", async () => {
+    test.setTimeout(180_000);
+
+    const threadId = "colliding-thread-id";
+    const now = Date.now();
+    const localPending: ThreadPrAutoDispatchPending = {
+      fingerprint: "local-auto-fix",
+      prKey: "github.com/local/repo#41",
+      prNumber: 41,
+      prTitle: "Keep the local pending repair",
+      prUrl: "https://github.com/local/repo/pull/41",
+      headSha: "local-head",
+      eventKinds: ["ci-failure"],
+      createdAt: now,
+      scheduledAt: now + 120_000,
+    };
+    const remotePending: ThreadPrAutoDispatchPending = {
+      fingerprint: "remote-auto-fix",
+      prKey: "github.com/remote/repo#42",
+      prNumber: 42,
+      prTitle: "Cancel the remote pending repair",
+      prUrl: "https://github.com/remote/repo/pull/42",
+      headSha: "remote-head",
+      eventKinds: ["ci-failure"],
+      createdAt: now,
+      scheduledAt: now + 120_000,
+    };
+    const fixture = await createLocalControlFixture({
+      threadId,
+      threadTitle: "Local colliding thread",
+    });
+    let gateway: InProcessFederationGateway | undefined;
+    let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+
+    try {
+      gateway = await startInProcessFederationGateway({
+        instanceLabel: "Remote collision owner",
+        threads: [{
+          id: threadId,
+          title: "Remote colliding thread",
+          updatedAt: 2_000,
+          prAutoDispatchPending: remotePending,
+        }],
+      });
+      app = await launchElectronApp({
+        fixturePath: fixture.fixturePath,
+        secretStorage: "memory",
+        preLaunchHook: async (homeRoot) => {
+          const statePath = path.join(
+            homeRoot,
+            ".pwragent",
+            "profiles",
+            "default",
+            "state",
+            "state.db",
+          );
+          await mkdir(path.dirname(statePath), { recursive: true });
+          const stateDb = StateDb.open(statePath);
+          try {
+            const store = new SqliteOverlayStore(stateDb);
+            await store.setThreadPrAutoDispatchEnabled({
+              backend: "codex",
+              threadId,
+              enabled: true,
+            });
+            const scheduled = await store.scheduleThreadPrAutoDispatch({
+              backend: "codex",
+              threadId,
+              pending: localPending,
+              prompt: "Repair the local PR",
+              maxAttempts: 2,
+            });
+            if (scheduled.status !== "scheduled") {
+              throw new Error(
+                `Failed to seed local auto-fix: ${scheduled.status}`,
+              );
+            }
+          } finally {
+            stateDb.close();
+          }
+        },
+      });
+      const { window } = app;
+
+      const localRow = window.getByRole("button", {
+        name: "Local colliding thread",
+      });
+      await expect(localRow).toBeVisible({ timeout: 30_000 });
+      await localRow.click();
+      await expect(window.getByText("Local thread is ready.")).toBeVisible();
+      await expect(window.getByText("#41 · CI failed")).toBeVisible();
+
+      await window.getByRole("button", { name: "Open settings" }).click();
+      await window
+        .getByRole("navigation", { name: "Settings sections" })
+        .getByRole("button", { name: "Federation" })
+        .click();
+      await window.getByLabel("Import invite").fill(gateway.invite);
+      await window.getByRole("button", { name: "Import invite" }).click();
+      await gateway.waitForConnection(30_000);
+
+      await window.evaluate(async ({ instanceId, pending, threadId: remoteThreadId }) => {
+        const api = (window as typeof window & {
+          pwragent?: {
+            addRemoteThreadPin?: (request: unknown) => Promise<unknown>;
+          };
+        }).pwragent;
+        if (!api?.addRemoteThreadPin) {
+          throw new Error("addRemoteThreadPin API is unavailable");
+        }
+        await api.addRemoteThreadPin({
+          ref: {
+            backend: "codex",
+            target: { scope: "remote", instanceId },
+            threadId: remoteThreadId,
+          },
+          instanceLabel: "Remote collision owner",
+          summary: {
+            source: "codex",
+            id: remoteThreadId,
+            title: "Remote colliding thread",
+            titleSource: "explicit",
+            linkedDirectories: [],
+            inbox: { inInbox: true },
+            updatedAt: 2_000,
+            prAutoDispatchPending: pending,
+            federation: {
+              ref: {
+                backend: "codex",
+                target: { scope: "remote", instanceId },
+                threadId: remoteThreadId,
+              },
+              instanceLabel: "Remote collision owner",
+              peerStatus: "connected",
+            },
+          },
+        });
+      }, {
+        instanceId: gateway.instanceId,
+        pending: remotePending,
+        threadId,
+      });
+      await window.getByRole("button", { name: /Exit Settings/i }).click();
+      const collidingSnapshotThreads = await window.evaluate(
+        async (collidingThreadId) => {
+          const api = (window as typeof window & {
+            pwragent?: {
+              getNavigationSnapshot?: () => Promise<{
+                threads: Array<{
+                  id: string;
+                  title: string;
+                  federation?: { ref?: { target?: { instanceId?: string } } };
+                }>;
+              }>;
+            };
+          }).pwragent;
+          if (!api?.getNavigationSnapshot) {
+            throw new Error("getNavigationSnapshot API is unavailable");
+          }
+          const snapshot = await api.getNavigationSnapshot();
+          return snapshot.threads
+            .filter((thread) => thread.id === collidingThreadId)
+            .map((thread) => ({
+              instanceId: thread.federation?.ref?.target?.instanceId,
+              title: thread.title,
+            }));
+        },
+        threadId,
+      );
+      expect(collidingSnapshotThreads).toEqual(expect.arrayContaining([
+        { instanceId: undefined, title: "Local colliding thread" },
+        {
+          instanceId: gateway.instanceId,
+          title: "Remote colliding thread",
+        },
+      ]));
+      await expect.poll(async () =>
+        await window.locator(".thread-row__open").evaluateAll((buttons) =>
+          buttons.map((button) => button.getAttribute("aria-label"))
+        )
+      ).toEqual(expect.arrayContaining([
+        "Local colliding thread",
+        "Remote colliding thread",
+      ]));
+
+      const remoteRow = window.getByRole("button", {
+        name: "Remote colliding thread",
+      }).first();
+      await expect(remoteRow).toBeVisible({ timeout: 30_000 });
+      await remoteRow.click();
+      await expect(
+        window.getByText("Remote transcript for Remote colliding thread."),
+      ).toBeVisible({ timeout: 30_000 });
+      await expect(window.getByText("#42 · CI failed")).toBeVisible();
+
+      await window.getByRole("button", { name: "Cancel", exact: true }).click();
+      await expect.poll(() =>
+        gateway!.calls.find((call) =>
+          call.method === "cancelThreadPrAutoDispatch"
+        )
+      ).toMatchObject({
+        method: "cancelThreadPrAutoDispatch",
+        params: {
+          backend: "codex",
+          threadId,
+          fingerprint: remotePending.fingerprint,
+        },
+      });
+
+      gateway.deliverBackendEvent({
+        backend: "codex",
+        notification: {
+          method: "thread/prAutoDispatch/pendingUpdated",
+          params: { threadId, pending: null },
+        },
+      });
+      await expect(window.getByText("#42 · CI failed")).toHaveCount(0);
+
+      await localRow.click();
+      await expect(window.getByText("Local thread is ready.")).toBeVisible();
+      await expect(window.getByText("#41 · CI failed")).toBeVisible();
+      await expect(
+        window.getByRole("button", { name: "Remote colliding thread" }),
+      ).toHaveCount(1);
+      await expect(
+        window.getByRole("button", { name: "Local colliding thread" }),
+      ).toHaveCount(1);
+      await expect(
+        window.locator(".thread-row__open[aria-pressed=\"true\"]"),
+      ).toHaveCount(1);
+    } finally {
+      await app?.close();
+      await gateway?.close();
+      await fixture.cleanup();
+    }
+  });
+
   test("enrolls, browses remote threads, pins on the owner, and hides local-only chrome", async () => {
     test.setTimeout(300_000);
 
