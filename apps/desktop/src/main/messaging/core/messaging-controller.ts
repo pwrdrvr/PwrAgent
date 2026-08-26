@@ -20704,16 +20704,22 @@ function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
     if (!Array.isArray(params.turn?.output)) {
       return undefined;
     }
-    const text = params.turn.output
-      .map((item) =>
+    // A completed turn's output is an ordered list of transcript items, not
+    // one assistant message split into content parts. Earlier entries can be
+    // commentary that already flowed through Working Updates. Joining every
+    // text entry turns that commentary plus the final answer into a second,
+    // slightly different assistant response that escapes content deduplication.
+    for (let index = params.turn.output.length - 1; index >= 0; index -= 1) {
+      const item = params.turn.output[index];
+      const text =
         item && typeof item === "object" && "text" in item
           ? (item as { text?: unknown }).text
-          : undefined,
-      )
-      .filter((value): value is string => typeof value === "string")
-      .join("\n\n")
-      .trim();
-    return text || undefined;
+          : undefined;
+      if (typeof text === "string" && text.trim()) {
+        return text.trim();
+      }
+    }
+    return undefined;
   }
 
   return undefined;
