@@ -20696,27 +20696,38 @@ function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
   }
 
   if (event.notification.method === "turn/completed") {
-    const params = event.notification.params as {
-      turn?: {
-        output?: unknown;
-      };
-    };
-    if (!Array.isArray(params.turn?.output)) {
-      return undefined;
-    }
-    const text = params.turn.output
-      .map((item) =>
-        item && typeof item === "object" && "text" in item
-          ? (item as { text?: unknown }).text
-          : undefined,
-      )
-      .filter((value): value is string => typeof value === "string")
+    const text = assistantOutputTextFragmentsForBackendEvent(event)
       .join("\n\n")
       .trim();
     return text || undefined;
   }
 
   return undefined;
+}
+
+function assistantOutputTextFragmentsForBackendEvent(
+  event: AgentEvent,
+): string[] {
+  if (event.notification.method !== "turn/completed") {
+    return [];
+  }
+  const params = event.notification.params as {
+    turn?: {
+      output?: unknown;
+    };
+  };
+  if (!Array.isArray(params.turn?.output)) {
+    return [];
+  }
+  return params.turn.output
+    .map((item) =>
+      item && typeof item === "object" && "text" in item
+        ? (item as { text?: unknown }).text
+        : undefined,
+    )
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 /**
@@ -20950,9 +20961,20 @@ function assistantMessageDeliveryKeys(
     text,
     identity,
   );
+  // A terminal aggregate can contain earlier commentary followed by a final
+  // assistant item that was already delivered. Include each output fragment's
+  // content key in the same claim so that prior final-item delivery suppresses
+  // the repeated aggregate without changing completion-only aggregation.
+  const contentKeys = [
+    contentKey,
+    ...assistantOutputTextFragmentsForBackendEvent(event).map((fragment) =>
+      assistantMessageContentDeliveryKey(event, binding, fragment, identity)
+    ),
+  ];
+  const uniqueContentKeys = [...new Set(contentKeys)];
   const itemId = identity?.itemId ?? assistantItemIdForBackendEvent(event);
   if (!itemId) {
-    return [contentKey];
+    return uniqueContentKeys;
   }
   // Backend item identity is authoritative and intentionally independent of
   // turn/text: replaying one item with changed metadata must never post it
@@ -20965,7 +20987,7 @@ function assistantMessageDeliveryKeys(
       assistantMessageThreadId(event, identity),
       `item:${itemId}`,
     ].join("\0"),
-    contentKey,
+    ...uniqueContentKeys,
   ];
 }
 
