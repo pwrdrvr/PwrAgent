@@ -25097,11 +25097,16 @@ command = "pnpm dev"
         ? codexClient.lastStartTurnParams.input[0].text
         : "";
     expect(prompt).toContain("Task:\nInvestigate issue XYZ and report back.");
-    expect(prompt).toContain("- Thread ID: ordinary-thread");
-    expect(prompt).toContain("- Turn ID: turn-1");
-    expect(prompt).toContain("- CWD: ");
+    expect(prompt).toContain("Use only this thread's assigned runtime workspace");
+    expect(prompt).toContain("Attaching a PR does not rebind the workspace.");
     expect(prompt).toContain("Additional context from parent:");
     expect(prompt).toContain("Parent already checked the latest CI run.");
+    expect(prompt).not.toContain("Source thread:");
+    expect(prompt).not.toContain("Inherited settings:");
+    expect(prompt).not.toContain("Workspace:");
+    expect(prompt).not.toContain("Parent context reference:");
+    expect(prompt).not.toContain(root);
+    expect(prompt.length).toBeLessThan(1_000);
     const childOverlay = await overlayStore.getThreadOverlayState({
       backend: "codex",
       threadId: "thread-1",
@@ -25482,12 +25487,13 @@ command = "pnpm dev"
     });
     expect(startPrompt).toHaveBeenCalledWith(
       expect.objectContaining({
-        prompt: expect.stringContaining(`- CWD: ${worktreePath}`),
+        prompt: expect.stringContaining(
+          "Use only this thread's assigned runtime workspace",
+        ),
       }),
     );
-    expect(startPrompt.mock.calls[0]?.[0].prompt).not.toContain(
-      `- CWD: ${repoPath}`,
-    );
+    expect(startPrompt.mock.calls[0]?.[0].prompt).not.toContain(worktreePath);
+    expect(startPrompt.mock.calls[0]?.[0].prompt).not.toContain(repoPath);
 
     await registry.close();
   });
@@ -28176,11 +28182,8 @@ script = "printf setup"
         codexClient.lastStartTurnParams?.input[0]?.type === "text"
           ? codexClient.lastStartTurnParams.input[0].text
           : "";
-      expect(prompt).toContain("- Git: git_local");
-      expect(prompt).toContain("- Git repository state: unborn");
-      expect(prompt).toContain(
-        `- New worktree unavailable: ${unpublishedBaseReason}`,
-      );
+      expect(prompt).not.toContain("- Git:");
+      expect(prompt).not.toContain(unpublishedBaseReason);
       const projectLocalStartParams = codexClient.lastStartThreadParams;
 
       const worktreeResponse = await codexClient.emitRequest({
@@ -29821,10 +29824,8 @@ script = "printf setup"
     const prompt =
       (codexClient.lastStartTurnParams?.input[0] as { text?: string } | undefined)
         ?.text ?? "";
-    expect(prompt).toContain("- Git: unavailable");
-    expect(prompt).toContain(
-      "- New worktree unavailable: Git workspace inspection failed: EACCES: cannot inspect child workspace",
-    );
+    expect(prompt).not.toContain("- Git:");
+    expect(prompt).not.toContain("EACCES: cannot inspect child workspace");
 
     await registry.close();
   });

@@ -319,7 +319,33 @@ function normalizePrSummary(pr: PrSummary): PrSummary {
   } else {
     delete normalized.headRefName;
   }
+  const linkedDirectoryPaths = [
+    ...new Set(
+      (pr.linkedDirectoryPaths ?? [])
+        .map((directoryPath) => directoryPath.trim())
+        .filter(Boolean),
+    ),
+  ].sort((left, right) => left.localeCompare(right));
+  if (linkedDirectoryPaths.length > 0) {
+    normalized.linkedDirectoryPaths = linkedDirectoryPaths;
+  } else {
+    delete normalized.linkedDirectoryPaths;
+  }
   return normalized;
+}
+
+function mergeLinkedDirectoryPaths(
+  left: string[] | undefined,
+  right: string[] | undefined,
+): string[] | undefined {
+  const merged = [
+    ...new Set(
+      [...(left ?? []), ...(right ?? [])]
+        .map((directoryPath) => directoryPath.trim())
+        .filter(Boolean),
+    ),
+  ].sort((leftPath, rightPath) => leftPath.localeCompare(rightPath));
+  return merged.length > 0 ? merged : undefined;
 }
 
 function normalizeDetachedPrKeys(keys: string[] | undefined): string[] {
@@ -362,7 +388,15 @@ function mergePrSummariesByStatusKey(
   }
   for (const pr of nextPrs) {
     const normalized = normalizePrSummary(pr);
-    byKey.set(buildPullRequestStatusKey(normalized), normalized);
+    const key = buildPullRequestStatusKey(normalized);
+    const existing = byKey.get(key);
+    byKey.set(key, normalizePrSummary({
+      ...normalized,
+      linkedDirectoryPaths: mergeLinkedDirectoryPaths(
+        existing?.linkedDirectoryPaths,
+        normalized.linkedDirectoryPaths,
+      ),
+    }));
   }
   // Map replacement retains the existing key's position, while a genuinely
   // new attachment is appended. The renderer uses this persisted order for

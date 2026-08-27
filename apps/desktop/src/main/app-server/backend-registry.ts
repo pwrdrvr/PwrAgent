@@ -53,6 +53,7 @@ import {
   formatManagedReviewOutput,
   parseManagedReviewOutput,
 } from "./managed-review";
+import { assertReviewWorkspaceMatchesAttachedPullRequest } from "./review-workspace-guard";
 import { pageNormalizedReplay } from "./thread-replay-pagination";
 import {
   type AcpBackendId,
@@ -6372,14 +6373,6 @@ function federatedThreadInspectionFailure(
 function buildHandoffTaskPrompt(params: {
   task: string;
   context?: string;
-  origin: {
-    sourceBackend: AppServerBackendKind;
-    sourceThreadId: string;
-    sourceTurnId?: string;
-    sourceTitle?: string;
-  };
-  inheritedSettings: HandoffTaskInheritedSettings;
-  workspace: ThreadHandoffOriginWorkspace;
   codexEnvironmentStartupFailure?: CodexEnvironmentStartupFailure;
 }): string {
   const lines = [
@@ -6388,62 +6381,9 @@ function buildHandoffTaskPrompt(params: {
     "Task:",
     params.task,
     "",
-    "Source thread:",
-    `- Backend: ${params.origin.sourceBackend}`,
-    `- Thread ID: ${params.origin.sourceThreadId}`,
-    ...(params.origin.sourceTurnId
-      ? [`- Turn ID: ${params.origin.sourceTurnId}`]
-      : []),
-    ...(params.origin.sourceTitle
-      ? [`- Title: ${params.origin.sourceTitle}`]
-      : []),
-    "",
-    "Inherited settings:",
-    `- Backend: ${params.inheritedSettings.backend}`,
-    ...(params.inheritedSettings.model
-      ? [`- Model: ${params.inheritedSettings.model}`]
-      : []),
-    ...(params.inheritedSettings.reasoningEffort
-      ? [`- Reasoning effort: ${params.inheritedSettings.reasoningEffort}`]
-      : []),
-    ...(params.inheritedSettings.serviceTier
-      ? [`- Service tier: ${params.inheritedSettings.serviceTier}`]
-      : []),
-    ...(params.inheritedSettings.fastMode !== undefined
-      ? [`- Fast mode: ${params.inheritedSettings.fastMode ? "on" : "off"}`]
-      : []),
-    ...(params.inheritedSettings.executionMode
-      ? [`- Permission mode: ${params.inheritedSettings.executionMode}`]
-      : []),
-    ...(params.inheritedSettings.approvalPolicy
-      ? [`- Approval policy: ${params.inheritedSettings.approvalPolicy}`]
-      : []),
-    ...(params.inheritedSettings.sandbox
-      ? [`- Sandbox: ${params.inheritedSettings.sandbox}`]
-      : []),
-    "",
-    "Workspace:",
-    `- Mode: ${params.workspace.mode}`,
-    ...(params.workspace.cwd ? [`- CWD: ${params.workspace.cwd}`] : []),
-    ...(params.workspace.linkedDirectory?.path
-      ? [`- Project path: ${params.workspace.linkedDirectory.path}`]
-      : []),
-    ...(params.workspace.linkedDirectory?.worktreePath
-      ? [`- Worktree path: ${params.workspace.linkedDirectory.worktreePath}`]
-      : []),
-    ...(params.workspace.branch ? [`- Branch: ${params.workspace.branch}`] : []),
-    `- Git: ${params.workspace.git.kind}`,
-    ...((params.workspace.git.kind === "git_local"
-      || params.workspace.git.kind === "git_worktree")
-      && params.workspace.git.repositoryState
-      ? [`- Git repository state: ${params.workspace.git.repositoryState}`]
-      : []),
-    `- New worktree supported: ${
-      params.workspace.git.worktreeCreationAvailable ? "yes" : "no"
-    }`,
-    ...(!params.workspace.git.worktreeCreationAvailable
-      ? [`- New worktree unavailable: ${params.workspace.git.unavailableReason}`]
-      : []),
+    "Workspace ownership:",
+    "Use only this thread's assigned runtime workspace for edits, builds, and Git. If a needed branch is checked out elsewhere, repoint this workspace to its commit (detached is fine); do not operate in the other worktree.",
+    "Before opening or attaching a PR, verify this workspace contains its head. Attaching a PR does not rebind the workspace.",
     ...(params.codexEnvironmentStartupFailure
       ? [
           "",
@@ -6458,9 +6398,6 @@ function buildHandoffTaskPrompt(params: {
           }`,
         ]
       : []),
-    "",
-    "Parent context reference:",
-    "The thread that spawned this handoff is the source thread above. Use that reference if a future tool or UI surface can fetch more context from the parent.",
   ];
   const trimmedContext = params.context?.trim();
   if (trimmedContext) {
@@ -13695,6 +13632,12 @@ export class DesktopBackendRegistry {
             overlay,
           );
       }
+      await assertReviewWorkspaceMatchesAttachedPullRequest({
+        cwd,
+        executionTarget: codexEnvironmentRuntime?.executionTarget,
+        prs: overlay?.prs,
+        target: params.target,
+      });
       // A review on another provider cannot inherit the parent thread's model
       // settings — that model belongs to a different catalog. Fall back to the
       // review backend's own defaults instead of carrying gpt-5.6-sol onto a
@@ -28044,9 +27987,6 @@ export class DesktopBackendRegistry {
     const prompt = buildHandoffTaskPrompt({
       task,
       context: request.args.context,
-      origin,
-      inheritedSettings,
-      workspace,
       codexEnvironmentStartupFailure,
     });
     let turnId: string | undefined;
