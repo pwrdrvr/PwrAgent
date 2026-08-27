@@ -418,6 +418,12 @@ export function useViewportTooltip(options: {
             style={{
               position: "fixed",
               left: state.left,
+              maxWidth: state.horizontalBounds
+                ? Math.max(
+                    0,
+                    state.horizontalBounds.right - state.horizontalBounds.left,
+                  )
+                : undefined,
               top: state.top,
               visibility: state.left === undefined ? "hidden" : undefined,
             }}

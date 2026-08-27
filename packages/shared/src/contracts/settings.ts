@@ -521,11 +521,6 @@ export type DesktopGeneralSettingsSnapshot = {
   hotCpuProfilingCaptureHeapSnapshot: DesktopSettingsValue<boolean>;
   hotCpuProfilingHeapSnapshotLimit: DesktopSettingsValue<number>;
   notificationsEnabled: DesktopSettingsValue<boolean>;
-  /**
-   * Replace oversized Codex tool results with a bounded summary and preserve
-   * the exact model-facing response for deliberate retrieval.
-   */
-  tokenMiserEnabled: DesktopSettingsValue<boolean>;
   toolOutputAlerts: {
     outputCapHitsEnabled: DesktopSettingsValue<boolean>;
     repeatedLargeOutputsEnabled: DesktopSettingsValue<boolean>;
@@ -847,6 +842,13 @@ export type DesktopSettingsSnapshot = {
      */
     threadPricingDisplayCodexCredits?: DesktopSettingsValue<boolean>;
     /**
+     * Replace oversized Codex tool results with a bounded summary and preserve
+     * the exact model-facing response for deliberate retrieval. This is the
+     * outer experiment gate; per-thread controls may only opt out while it is
+     * enabled.
+     */
+    tokenMiserEnabled: DesktopSettingsValue<boolean>;
+    /**
      * Shows the experimental Tool calls tab in the thread context rail.
      * The desktop app may still collect tool metrics while this is disabled;
      * this only gates the operator-facing panel. Replay-risk safety notices
@@ -1098,7 +1100,6 @@ export type DesktopSettingsConfigPatch = {
     hotCpuProfilingCaptureHeapSnapshot?: boolean;
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
-    tokenMiserEnabled?: boolean;
     toolOutputAlerts?: Partial<DesktopToolOutputAlertPolicy>;
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
     appearance?: {
@@ -1123,6 +1124,7 @@ export type DesktopSettingsConfigPatch = {
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
+    tokenMiserEnabled?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     managedReview?: boolean;

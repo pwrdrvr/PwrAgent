@@ -3569,26 +3569,66 @@ describe("DesktopBackendRegistry", () => {
         threadId: "thread-2",
         input: [{ type: "text", text: "again" }],
       });
-      expect(prepare).toHaveBeenCalledTimes(2);
-      expect(codexClient.lastStartTurnParams?.config).toMatchObject({
-        features: {
-          code_mode: {
-            output_reducer: {
-              descriptor_path: expect.stringContaining(
-                "code-mode-reducer.test.json",
-              ),
-            },
-          },
-        },
-      });
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(codexClient.lastStartTurnParams?.config).toBeUndefined();
 
       await registry.startTurn({
         backend: "codex",
         threadId: "thread-3",
         input: [{ type: "text", text: "disabled" }],
       });
-      expect(prepare).toHaveBeenCalledTimes(2);
+      expect(prepare).toHaveBeenCalledTimes(1);
       expect(codexClient.lastStartTurnParams?.config).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("does not let a per-thread override bypass the Token Miser experiment", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: {
+        codeModeOutputReducer: {
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
+          protocolVersion: 1,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const internals = registry as unknown as {
+      resolveTokenMiserEnabledFn: () => boolean;
+      tokenMiserCodeModeReducerDescriptorPath?: string;
+    };
+    internals.resolveTokenMiserEnabledFn = () => false;
+    internals.tokenMiserCodeModeReducerDescriptorPath = path.join(
+      "/tmp",
+      "token-miser-disabled-experiment",
+      "code-mode-reducer.test.json",
+    );
+
+    try {
+      await registry.startThread({
+        backend: "codex",
+        cwd: process.cwd(),
+        tokenMiserEnabled: true,
+      });
+
+      expect(codexClient.lastStartThreadParams?.config).toBeUndefined();
+      expect(
+        pwragentDynamicTools(codexClient.lastStartThreadParams?.dynamicTools)
+          .map((tool) => tool.name),
+      ).not.toContain("search_token_miser_output");
     } finally {
       await registry.close();
     }

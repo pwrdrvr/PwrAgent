@@ -833,20 +833,52 @@ describe("DesktopSettingsService", () => {
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    expect((await service.readSettings()).general.tokenMiserEnabled).toEqual({
+    expect((await service.readSettings()).experimental.tokenMiserEnabled).toEqual({
       value: false,
       source: "default",
     });
     expect(service.resolveTokenMiserEnabled()).toBe(false);
 
     await service.writeConfigPatch({
-      general: { tokenMiserEnabled: true },
+      experimental: { tokenMiserEnabled: true },
     });
 
-    expect(fs.readFileSync(configPath, "utf8")).toContain(
+    expect(fs.readFileSync(configPath, "utf8")).toContain([
+      "[experimental]",
       "token_miser_enabled = true",
-    );
+    ].join("\n"));
     expect(service.resolveTokenMiserEnabled()).toBe(true);
+  });
+
+  it("reads and lazily mirrors the legacy general Token Miser opt-in", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, [
+      "[general]",
+      "token_miser_enabled = true",
+      "untouched = \"keep\"",
+    ].join("\n"));
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).experimental.tokenMiserEnabled).toEqual({
+      value: true,
+      source: "config",
+    });
+
+    await service.writeConfigPatch({
+      experimental: { tokenMiserEnabled: false },
+    });
+
+    const contents = fs.readFileSync(configPath, "utf8");
+    expect(contents).toContain(
+      "# pwragent-legacy-settings key=token_miser_enabled shape=boolean used_through=1.1.0-alpha.1 kept_for_older_clients\ntoken_miser_enabled = false",
+    );
+    expect(contents).toContain("[experimental]\ntoken_miser_enabled = false");
+    expect(contents).toContain("untouched = \"keep\"");
   });
 
   it("persists bounded active-turn and thread spend alerts", async () => {

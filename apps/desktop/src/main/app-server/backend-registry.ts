@@ -8201,8 +8201,8 @@ export class DesktopBackendRegistry {
       const tokenMiserService = new TokenMiserService({
         store: this.tokenMiserStore,
         isEnabled: () => this.resolveTokenMiserEnabledFn(),
-        // A thread can force the gate on or off regardless of the global
-        // setting; the override lives on the thread's overlay row.
+        // A thread can opt out while the experiment is enabled; the global
+        // experimental flag remains the outer gate.
         isEnabledForThread: async (threadId) => {
           const overlay = await this.overlayStore.getThreadOverlayState({
             backend: "codex",
@@ -12531,7 +12531,7 @@ export class DesktopBackendRegistry {
       ? this.getClient(backend, effectiveExecutionMode)
       : undefined;
     const tokenMiserEnabled = backend === "codex"
-      && (tokenMiserOverride ?? this.resolveTokenMiserEnabledFn());
+      && this.resolveTokenMiserEnabledForOverride(tokenMiserOverride);
     if (tokenMiserEnabled) {
       await this.prepareTokenMiserRuntime();
     }
@@ -12970,8 +12970,9 @@ export class DesktopBackendRegistry {
         ? buildCodexPdfMcpConfig(pdfMcpRegistration)
         : buildCodexPdfMcpDisabledConfig()
       : undefined;
-    const tokenMiserEnabled =
-      sourceOverlay?.tokenMiserEnabled ?? this.resolveTokenMiserEnabledFn();
+    const tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
+      sourceOverlay?.tokenMiserEnabled,
+    );
     if (tokenMiserEnabled) {
       await this.prepareTokenMiserRuntime();
     }
@@ -13892,12 +13893,13 @@ export class DesktopBackendRegistry {
         threadId: params.threadId,
       });
       if (params.backend === "codex") {
-        tokenMiserEnabledForThread =
-          overlay?.tokenMiserEnabled ?? this.resolveTokenMiserEnabledFn();
+        tokenMiserEnabledForThread = this.resolveTokenMiserEnabledForOverride(
+          overlay?.tokenMiserEnabled,
+        );
         // Existing threads reach the gate through here, not through
         // startThread. Await the bridge before this turn's first code-mode or
-        // direct tool result, including a per-thread opt-in while the global
-        // setting is off.
+        // direct tool result. A per-thread override can opt out, but cannot
+        // bypass the global experimental gate.
         if (tokenMiserEnabledForThread) {
           await this.prepareTokenMiserRuntime();
         }
@@ -14555,9 +14557,9 @@ export class DesktopBackendRegistry {
           })
         : undefined;
       if (reviewBackend === "codex") {
-        tokenMiserEnabled =
-          (params.backend === "codex" ? overlay?.tokenMiserEnabled : undefined)
-          ?? this.resolveTokenMiserEnabledFn();
+        tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
+          params.backend === "codex" ? overlay?.tokenMiserEnabled : undefined,
+        );
         if (tokenMiserEnabled) {
           await this.prepareTokenMiserRuntime();
         }
@@ -28017,12 +28019,15 @@ export class DesktopBackendRegistry {
     if (backend !== "codex") {
       return false;
     }
+    if (!this.resolveTokenMiserEnabledFn()) {
+      return false;
+    }
     const directOverlay = await this.overlayStore.getThreadOverlayState({
       backend,
       threadId: call.threadId,
     });
     if (directOverlay?.tokenMiserEnabled !== undefined) {
-      return directOverlay.tokenMiserEnabled;
+      return directOverlay.tokenMiserEnabled !== false;
     }
     const review = Array.from(this.activeReviewSubAgents.values()).find(
       (record) =>
@@ -28035,10 +28040,16 @@ export class DesktopBackendRegistry {
         threadId: review.parentThreadId,
       });
       if (parentOverlay?.tokenMiserEnabled !== undefined) {
-        return parentOverlay.tokenMiserEnabled;
+        return parentOverlay.tokenMiserEnabled !== false;
       }
     }
-    return this.resolveTokenMiserEnabledFn();
+    return true;
+  }
+
+  private resolveTokenMiserEnabledForOverride(
+    threadOverride: boolean | undefined,
+  ): boolean {
+    return this.resolveTokenMiserEnabledFn() && threadOverride !== false;
   }
 
   private isLiveDynamicToolCall(

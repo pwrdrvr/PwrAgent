@@ -1652,8 +1652,7 @@ function ComposerThreadOptionsMenu(props: {
   onShowMcpInventory?: () => void;
   /**
    * Effective Token Miser state for this thread — the per-thread override when
-   * one is set, else the global setting. Undefined hides the item (no Codex
-   * thread to scope it to).
+   * one is set, else the enabled experiment. Undefined hides the item.
    */
   tokenMiser?: boolean;
   tokenMiserOverridden?: boolean;
@@ -1686,10 +1685,31 @@ function ComposerThreadOptionsMenu(props: {
     className: "viewport-tooltip",
     getHorizontalBounds: getTooltipHorizontalBounds,
   });
+  const {
+    tooltipId: menuTooltipId,
+    show: showMenuTooltip,
+    showAfterDelay: showMenuTooltipAfterDelay,
+    hide: hideMenuTooltip,
+    visible: menuTooltipVisible,
+    tooltipNode: menuTooltipNode,
+  } = useViewportTooltip({
+    className: "viewport-tooltip",
+    getHorizontalBounds: getTooltipHorizontalBounds,
+  });
   const agentThreadChangeDisabled =
     props.disabled ||
     props.existingCodexThread ||
     !props.onAgentThreadChange;
+  const agentThreadTooltip = props.existingCodexThread
+    ? CODEX_AGENT_THREAD_CREATION_NOTE
+    : AGENT_THREAD_CAPABILITIES;
+  const tokenMiserTooltip =
+    "Summarize large tool results with a helper model before they "
+    + "enter this thread's context. Saves context and replay cost; "
+    + "each gated result adds a helper round trip to the turn."
+    + (props.tokenMiserOverridden
+      ? " This thread overrides the global setting."
+      : "");
 
   // The menu usually opens left from the final settings control. When that
   // control wraps onto a new row, though, opening left would put the panel
@@ -1810,21 +1830,24 @@ function ComposerThreadOptionsMenu(props: {
           }
         >
           <div
-            className="composer-thread-options__item tooltip-target"
-            data-tooltip={
-              props.existingCodexThread
-                ? CODEX_AGENT_THREAD_CREATION_NOTE
-                : AGENT_THREAD_CAPABILITIES
-            }
+            className="composer-thread-options__item"
+            onBlur={hideMenuTooltip}
+            onFocus={(event) => {
+              showMenuTooltip(event.currentTarget, agentThreadTooltip);
+            }}
+            onMouseEnter={(event) => {
+              showMenuTooltipAfterDelay(event.currentTarget, agentThreadTooltip);
+            }}
+            onMouseLeave={hideMenuTooltip}
           >
             <button
               aria-checked={props.agentThread}
+              aria-describedby={menuTooltipVisible ? menuTooltipId : undefined}
               className="composer-dropdown__option composer-thread-options__option"
               disabled={agentThreadChangeDisabled}
               role="menuitemcheckbox"
               type="button"
               onClick={() => {
-                setOpen(false);
                 props.onAgentThreadChange?.(!props.agentThread);
               }}
             >
@@ -1842,24 +1865,29 @@ function ComposerThreadOptionsMenu(props: {
           {props.tokenMiser !== undefined && props.onTokenMiserChange ? (
             <>
               <div
-                className="composer-thread-options__item tooltip-target"
-                data-tooltip={
-                  "Summarize large tool results with a helper model before they "
-                  + "enter this thread's context. Saves context and replay cost; "
-                  + "each gated result adds a helper round trip to the turn."
-                  + (props.tokenMiserOverridden
-                    ? " This thread overrides the global setting."
-                    : "")
-                }
+                className="composer-thread-options__item"
+                onBlur={hideMenuTooltip}
+                onFocus={(event) => {
+                  showMenuTooltip(event.currentTarget, tokenMiserTooltip);
+                }}
+                onMouseEnter={(event) => {
+                  showMenuTooltipAfterDelay(
+                    event.currentTarget,
+                    tokenMiserTooltip,
+                  );
+                }}
+                onMouseLeave={hideMenuTooltip}
               >
                 <button
                   aria-checked={props.tokenMiser}
+                  aria-describedby={
+                    menuTooltipVisible ? menuTooltipId : undefined
+                  }
                   className="composer-dropdown__option composer-thread-options__option"
                   disabled={props.disabled}
                   role="menuitemcheckbox"
                   type="button"
                   onClick={() => {
-                    setOpen(false);
                     props.onTokenMiserChange?.(!props.tokenMiser);
                   }}
                 >
@@ -1886,7 +1914,6 @@ function ComposerThreadOptionsMenu(props: {
                   role="menuitem"
                   type="button"
                   onClick={() => {
-                    setOpen(false);
                     props.onTokenMiserChange?.(null);
                   }}
                 >
@@ -1916,6 +1943,7 @@ function ComposerThreadOptionsMenu(props: {
         </div>
       ) : null}
       {tooltipNode}
+      {menuTooltipNode}
     </div>
   );
 }
@@ -11834,15 +11862,15 @@ export function Composer(props: ComposerProps) {
                 ? () => props.onShowMcpInventory?.("toolsAndAuthOnly")
                 : undefined
             }
-            {...((props.launchpad?.backend === "codex" && props.onUpdateLaunchpad)
-              || (props.thread?.source === "codex"
-                && props.thread.federation?.ref.target.scope !== "remote"
-                && props.desktopApi?.setThreadTokenMiser)
+            {...(props.tokenMiserEnabled === true
+              && ((props.launchpad?.backend === "codex" && props.onUpdateLaunchpad)
+                || (props.thread?.source === "codex"
+                  && props.thread.federation?.ref.target.scope !== "remote"
+                  && props.desktopApi?.setThreadTokenMiser))
               ? {
                   tokenMiser: props.launchpad?.tokenMiserEnabled
                     ?? props.thread?.tokenMiserEnabled
-                    ?? props.tokenMiserEnabled
-                    ?? false,
+                    ?? true,
                   tokenMiserOverridden:
                     (props.launchpad?.tokenMiserEnabled
                       ?? props.thread?.tokenMiserEnabled) !== undefined,

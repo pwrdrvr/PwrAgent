@@ -212,7 +212,7 @@ export function ToolOutputIncidentExplorerWindow() {
       + (activeTokenMiser.estimatedCachedReplayTokensSaved ?? 0)
     : 0;
   const tokenMiserEnabled =
-    settings.snapshot?.general.tokenMiserEnabled.value ?? false;
+    settings.snapshot?.experimental.tokenMiserEnabled.value ?? false;
   const tokenMiserComparison = useMemo(
     () => buildTokenMiserContextComparison(allInvocations, activeTokenMiser),
     [activeTokenMiser, allInvocations],

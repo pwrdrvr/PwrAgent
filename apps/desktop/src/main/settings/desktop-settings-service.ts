@@ -682,10 +682,6 @@ export class DesktopSettingsService {
           config.general?.notificationsEnabled,
           false,
         ),
-        tokenMiserEnabled: this.resolveConfigBoolean(
-          config.general?.tokenMiserEnabled,
-          false,
-        ),
         toolOutputAlerts: {
           outputCapHitsEnabled: this.resolveConfigBoolean(
             config.general?.toolOutputAlerts?.outputCapHitsEnabled,
@@ -790,6 +786,10 @@ export class DesktopSettingsService {
         ),
         threadPricingDisplayCodexCredits: this.resolveConfigBoolean(
           config.experimental?.threadPricingDisplayCodexCredits,
+          false,
+        ),
+        tokenMiserEnabled: this.resolveConfigBoolean(
+          config.experimental?.tokenMiserEnabled,
           false,
         ),
         threadToolAccounting: this.resolveConfigBoolean(
@@ -1379,7 +1379,7 @@ export class DesktopSettingsService {
 
   resolveTokenMiserEnabled(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.general?.tokenMiserEnabled,
+      this.readConfig().config.experimental?.tokenMiserEnabled,
       false,
     ).value;
   }

@@ -101,6 +101,7 @@ export type DesktopSettingsConfig = {
     hotCpuProfilingCaptureHeapSnapshot?: boolean;
     hotCpuProfilingHeapSnapshotLimit?: number;
     notificationsEnabled?: boolean;
+    /** Legacy location used by Token Miser development builds. */
     tokenMiserEnabled?: boolean;
     toolOutputAlerts?: Partial<DesktopToolOutputAlertPolicy>;
     spendAlerts?: Partial<DesktopSpendAlertPolicy>;
@@ -126,6 +127,7 @@ export type DesktopSettingsConfig = {
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
+    tokenMiserEnabled?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     managedReview?: boolean;
@@ -308,6 +310,7 @@ const LEGACY_SETTINGS_MARKER = "pwragent-legacy-settings";
 const LEGACY_CHAT_REPLY_COMPOSER_LAST_VERSION = "1.0.0-alpha.8";
 const LEGACY_BACKGROUND_PR_POLLING_LAST_VERSION = "1.0.0-beta.50";
 const LEGACY_FEDERATION_GATEWAY_URL_LAST_VERSION = "1.0.0-beta.50";
+const LEGACY_TOKEN_MISER_GENERAL_LAST_VERSION = "1.1.0-alpha.1";
 
 export function defaultDesktopConfigDir(
   options?: DesktopConfigPathOptions,
@@ -677,9 +680,6 @@ export function desktopSettingsPatchToEdits(
   if (patch.general?.notificationsEnabled !== undefined) {
     set(["general", "notifications_enabled"], patch.general.notificationsEnabled);
   }
-  if (patch.general?.tokenMiserEnabled !== undefined) {
-    set(["general", "token_miser_enabled"], patch.general.tokenMiserEnabled);
-  }
   if (patch.general?.toolOutputAlerts?.outputCapHitsEnabled !== undefined) {
     set(
       ["general", "tool_output_alerts", "output_cap_hits_enabled"],
@@ -789,6 +789,27 @@ export function desktopSettingsPatchToEdits(
     set(
       ["experimental", "thread_pricing_display_codex_credits"],
       patch.experimental.threadPricingDisplayCodexCredits,
+    );
+  }
+  if (patch.experimental?.tokenMiserEnabled !== undefined) {
+    const legacyValue = readBoolean(
+      currentTables.general?.token_miser_enabled,
+    );
+    if (legacyValue !== undefined) {
+      edits.push({
+        op: "ensureCommentBefore",
+        path: ["general", "token_miser_enabled"],
+        marker: LEGACY_SETTINGS_MARKER,
+        comment: legacyTokenMiserGeneralComment(),
+      });
+      set(
+        ["general", "token_miser_enabled"],
+        patch.experimental.tokenMiserEnabled,
+      );
+    }
+    set(
+      ["experimental", "token_miser_enabled"],
+      patch.experimental.tokenMiserEnabled,
     );
   }
   if (patch.experimental?.threadToolAccounting !== undefined) {
@@ -1707,7 +1728,6 @@ function normalizeDesktopConfig(
         general?.hot_cpu_profiling_heap_snapshot_limit,
       ),
       notificationsEnabled: readBoolean(general?.notifications_enabled),
-      tokenMiserEnabled: readBoolean(general?.token_miser_enabled),
       toolOutputAlerts: {
         outputCapHitsEnabled: readBoolean(
           generalToolOutputAlerts?.output_cap_hits_enabled,
@@ -1781,6 +1801,9 @@ function normalizeDesktopConfig(
       threadPricingDisplayCodexCredits: readBoolean(
         experimental?.thread_pricing_display_codex_credits,
       ),
+      tokenMiserEnabled:
+        readBoolean(experimental?.token_miser_enabled)
+        ?? readBoolean(general?.token_miser_enabled),
       threadToolAccounting: readBoolean(experimental?.thread_tool_accounting),
       codexDefaultModeRequestUserInput: readBoolean(
         experimental?.codex_default_mode_request_user_input,
@@ -2068,7 +2091,6 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
   const attentionPromoteOnTurnEnd = config.general?.attentionPromoteOnTurnEnd;
   const pdfAnalysisEnabled = config.general?.pdfAnalysisEnabled;
   const notificationsEnabled = config.general?.notificationsEnabled;
-  const tokenMiserEnabled = config.general?.tokenMiserEnabled;
   const toolOutputAlerts = config.general?.toolOutputAlerts;
   const toolOutputAlertsDefined =
     toolOutputAlerts && hasDefinedValue(toolOutputAlerts);
@@ -2090,7 +2112,6 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     attentionPromoteOnTurnEnd !== undefined ||
     pdfAnalysisEnabled !== undefined ||
     notificationsEnabled !== undefined ||
-    tokenMiserEnabled !== undefined ||
     toolOutputAlertsDefined ||
     spendAlertsDefined ||
     appearanceDefined ||
@@ -2134,9 +2155,6 @@ function pruneEmptyConfig(config: DesktopSettingsConfig): DesktopSettingsConfig 
     }
     if (notificationsEnabled !== undefined) {
       pruned.general.notificationsEnabled = notificationsEnabled;
-    }
-    if (tokenMiserEnabled !== undefined) {
-      pruned.general.tokenMiserEnabled = tokenMiserEnabled;
     }
     if (toolOutputAlertsDefined) {
       pruned.general.toolOutputAlerts = toolOutputAlerts;
@@ -2915,6 +2933,17 @@ function legacyBackgroundPrPollingComment(): string {
     "key=background_pr_polling",
     "shape=boolean",
     `used_through=${LEGACY_BACKGROUND_PR_POLLING_LAST_VERSION}`,
+    "kept_for_older_clients",
+  ].join(" ");
+}
+
+function legacyTokenMiserGeneralComment(): string {
+  return [
+    "#",
+    LEGACY_SETTINGS_MARKER,
+    "key=token_miser_enabled",
+    "shape=boolean",
+    `used_through=${LEGACY_TOKEN_MISER_GENERAL_LAST_VERSION}`,
     "kept_for_older_clients",
   ].join(" ");
 }

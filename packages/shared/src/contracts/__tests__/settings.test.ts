@@ -66,10 +66,6 @@ describe("desktop settings contracts", () => {
           value: false,
           source: "default",
         },
-        tokenMiserEnabled: {
-          value: false,
-          source: "default",
-        },
         toolOutputAlerts: {
           outputCapHitsEnabled: { value: false, source: "default" },
           repeatedLargeOutputsEnabled: { value: false, source: "default" },
@@ -122,6 +118,10 @@ describe("desktop settings contracts", () => {
           source: "default",
         },
         threadPricingDisplayCodexCredits: {
+          value: false,
+          source: "default",
+        },
+        tokenMiserEnabled: {
           value: false,
           source: "default",
         },

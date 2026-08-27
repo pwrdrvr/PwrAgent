@@ -380,8 +380,7 @@ describe("TokenMiserService per-thread override", () => {
     expect(summary).not.toHaveBeenCalled();
   });
 
-  // And opt in while it is globally off — the override wins both ways.
-  it("lets a thread force the gate on while it is globally off", async () => {
+  it("keeps the global experimental flag as the outer gate", async () => {
     const store = await createStore();
     const service = new TokenMiserService({
       store,
@@ -390,7 +389,8 @@ describe("TokenMiserService per-thread override", () => {
       generateSummary: summary,
       thresholdCharacters: 1,
     });
-    expect(await service.preparePostToolUse(payload("large"))).toBeDefined();
+    expect(await service.preparePostToolUse(payload("large"))).toBeUndefined();
+    expect(summary).not.toHaveBeenCalled();
   });
 
   it("follows the global setting when no override is set", async () => {

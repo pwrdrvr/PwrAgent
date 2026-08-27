@@ -886,8 +886,8 @@ describe("Composer", () => {
     });
     expect(agentThread).toHaveAttribute("aria-checked", "false");
     expect(agentThread).not.toHaveTextContent(AGENT_THREAD_CAPABILITIES);
-    expect(agentThread.parentElement).toHaveAttribute(
-      "data-tooltip",
+    fireEvent.focus(agentThread.parentElement!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
       AGENT_THREAD_CAPABILITIES,
     );
 
@@ -924,6 +924,12 @@ describe("Composer", () => {
           // right-anchored popover would extend beneath the sidebar.
           return rect(200, 404);
         }
+        if (this.classList.contains("composer-thread-options__item")) {
+          return rect(600, 708);
+        }
+        if (this.classList.contains("viewport-tooltip")) {
+          return rect(0, 420);
+        }
         return rect(0, 0);
       });
 
@@ -952,6 +958,13 @@ describe("Composer", () => {
 
       expect(screen.getByRole("menu")).toHaveStyle({
         transform: "translateX(208px)",
+      });
+      fireEvent.focus(screen.getByRole("menuitemcheckbox", {
+        name: /Agent thread/,
+      }));
+      expect(screen.getByRole("tooltip")).toHaveStyle({
+        left: "408px",
+        maxWidth: "300px",
       });
     } finally {
       bounds.mockRestore();
@@ -983,8 +996,8 @@ describe("Composer", () => {
     });
     expect(agentThread).toBeDisabled();
     expect(agentThread).not.toHaveTextContent(CODEX_AGENT_THREAD_CREATION_NOTE);
-    expect(agentThread.parentElement).toHaveAttribute(
-      "data-tooltip",
+    fireEvent.focus(agentThread.parentElement!);
+    expect(screen.getByRole("tooltip")).toHaveTextContent(
       CODEX_AGENT_THREAD_CREATION_NOTE,
     );
 
@@ -1042,6 +1055,43 @@ describe("Composer", () => {
       enabled: false,
     });
     expect(onRefreshNavigation).toHaveBeenCalled();
+    expect(screen.getByRole("menu", { name: "Thread options" }))
+      .toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Thread options" }))
+      .toHaveAttribute("aria-expanded", "true");
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    expect(screen.queryByRole("menu", { name: "Thread options" }))
+      .not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("menu", { name: "Thread options" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("hides Token Miser thread controls while the experiment is off", () => {
+    render(
+      <Composer
+        desktopApi={{ setThreadTokenMiser: vi.fn() }}
+        disabled={false}
+        skills={[]}
+        tokenMiserEnabled={false}
+        thread={{
+          id: "thread-1",
+          title: "Existing Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          tokenMiserEnabled: true,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    expect(screen.queryByRole("menuitemcheckbox", { name: /Token Miser/ }))
+      .not.toBeInTheDocument();
   });
 
   it("sets a Token Miser override before creating a Codex thread", async () => {

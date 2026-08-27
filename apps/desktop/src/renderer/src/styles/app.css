@@ -25941,19 +25941,6 @@ button.pricing-token-miser__folded:focus-visible {
   background: var(--button-text);
 }
 
-.composer-thread-options__item.tooltip-target[data-tooltip]::after {
-  right: 0;
-  bottom: calc(100% + 8px);
-  left: auto;
-  z-index: 31;
-  transform: translateY(4px);
-}
-
-.composer-thread-options__item.tooltip-target[data-tooltip]:hover::after,
-.composer-thread-options__item.tooltip-target[data-tooltip]:focus-within::after {
-  transform: translateY(0);
-}
-
 /* ============================================================
    Composer pickers — shared popover language
 

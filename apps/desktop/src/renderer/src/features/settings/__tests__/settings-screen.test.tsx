@@ -129,10 +129,6 @@ function createSnapshot(
         value: false,
         source: "default",
       },
-      tokenMiserEnabled: {
-        value: false,
-        source: "default",
-      },
       toolOutputAlerts: {
         outputCapHitsEnabled: { value: true, source: "config" },
         repeatedLargeOutputsEnabled: { value: true, source: "config" },
@@ -189,6 +185,10 @@ function createSnapshot(
         source: "default",
       },
       threadPricingDisplayCodexCredits: {
+        value: false,
+        source: "default",
+      },
+      tokenMiserEnabled: {
         value: false,
         source: "default",
       },
@@ -1012,16 +1012,6 @@ describe("SettingsScreen", () => {
     expect(
       screen.getByRole("heading", { name: "Alerts" }),
     ).toBeInTheDocument();
-    const tokenMiserSwitch = screen.getByRole("switch", {
-      name: "Intercept large Codex tool output",
-    });
-    expect(tokenMiserSwitch).toHaveAttribute("aria-checked", "false");
-    fireEvent.click(tokenMiserSwitch);
-    await waitFor(() => {
-      expect(settings.writeConfig).toHaveBeenCalledWith({
-        general: { tokenMiserEnabled: true },
-      });
-    });
     expect(
       screen.getByRole("switch", { name: "Repeated large tool outputs" }),
     ).toHaveAttribute("aria-checked", "true");
@@ -1122,6 +1112,16 @@ describe("SettingsScreen", () => {
     ).not.toBeDisabled();
 
     fireEvent.click(within(sections).getByRole("button", { name: "Experimental" }));
+    const tokenMiserSwitch = screen.getByRole("switch", {
+      name: "Intercept large Codex tool output",
+    });
+    expect(tokenMiserSwitch).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(tokenMiserSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { tokenMiserEnabled: true },
+      });
+    });
     expect(screen.queryByRole("radiogroup", { name: "Chat Reply Composer" })).not.toBeInTheDocument();
     expect(
       screen.queryByRole("switch", {
@@ -2894,7 +2894,7 @@ describe("SettingsScreen", () => {
   // and nothing is gated. Settings has to state the contradiction outright.
   it("warns when Token Miser is enabled but Codex never loaded the gate", async () => {
     const snapshot = createSnapshot();
-    snapshot.general.tokenMiserEnabled = { value: true, source: "config" };
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
     snapshot.runtime.tokenMiser = {
       activation: {
         observedAt: 1_800_000_000_000,
@@ -2913,7 +2913,7 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         desktopApi={{} as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
-        initialSection="pricing"
+        initialSection="experimental"
         settings={settings}
         onClose={() => undefined}
       />,
@@ -2928,7 +2928,7 @@ describe("SettingsScreen", () => {
 
   it("leaves the Token Miser section unflagged when the gate loaded", async () => {
     const snapshot = createSnapshot();
-    snapshot.general.tokenMiserEnabled = { value: true, source: "config" };
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
     snapshot.runtime.tokenMiser = {
       activation: { observedAt: 1_800_000_000_000, state: "active" },
       interceptionCount: 0,
@@ -2943,7 +2943,7 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         desktopApi={{} as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
-        initialSection="pricing"
+        initialSection="experimental"
         settings={settings}
         onClose={() => undefined}
       />,

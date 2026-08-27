@@ -138,8 +138,8 @@ export type TokenMiserServiceOptions = {
   store: TokenMiserStore;
   isEnabled: () => boolean;
   /**
-   * Per-thread override. `true`/`false` force the gate for that thread;
-   * `undefined` defers to `isEnabled`.
+   * Per-thread opt-out. `false` disables the gate for that thread;
+   * `true`/`undefined` follow the outer experiment gate in `isEnabled`.
    */
   isEnabledForThread?: (threadId: string) => Promise<boolean | undefined>;
   generateSummary: (params: {
@@ -250,9 +250,8 @@ export class TokenMiserService {
     ) {
       return undefined;
     }
-    // A per-thread override wins over the global setting in both directions:
-    // a thread can opt out of the helper round trip when latency matters
-    // more than context, or opt in while the feature is globally off.
+    // A thread can opt out of the helper round trip when latency matters more
+    // than context. The global experimental flag remains the outer gate.
     if (!await this.isEnabledForThread(payload.session_id)) {
       return undefined;
     }
@@ -665,10 +664,13 @@ export class TokenMiserService {
   }
 
   private async isEnabledForThread(threadId: string): Promise<boolean> {
+    if (!this.options.isEnabled()) {
+      return false;
+    }
     const threadOverride = await this.options.isEnabledForThread
       ?.(threadId)
       .catch(() => undefined);
-    return threadOverride ?? this.options.isEnabled();
+    return threadOverride !== false;
   }
 
   private async summarizeAndStage(params: {
