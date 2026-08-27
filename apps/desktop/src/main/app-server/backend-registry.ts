@@ -2123,6 +2123,13 @@ export function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
       `shell_environment_policy.set.PATH=${formatTomlString(pathValue)}`,
     );
   }
+  const codexHome = env?.CODEX_HOME?.trim();
+  if (codexHome) {
+    args.push(
+      "-c",
+      `shell_environment_policy.set.CODEX_HOME=${formatTomlString(codexHome)}`,
+    );
+  }
   return args;
 }
 

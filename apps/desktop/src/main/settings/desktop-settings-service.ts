@@ -1849,11 +1849,13 @@ export class DesktopSettingsService {
 
   async resolveTerminalSpawnEnvAsync(): Promise<NodeJS.ProcessEnv> {
     if (this.options.resolveCodexShellEnv) {
-      return buildPwrAgentChildProcessEnv(
-        mergeLoginShellEnvIntoEnv(buildPwrAgentChildProcessEnv(this.env), {
-          resolveShellEnv: this.options.resolveCodexShellEnv,
-          logger: getMainLogger("pwragent:shell-environment"),
-        }),
+      return this.withStartupCodexHome(
+        buildPwrAgentChildProcessEnv(
+          mergeLoginShellEnvIntoEnv(buildPwrAgentChildProcessEnv(this.env), {
+            resolveShellEnv: this.options.resolveCodexShellEnv,
+            logger: getMainLogger("pwragent:shell-environment"),
+          }),
+        ),
       );
     }
 
@@ -1883,6 +1885,9 @@ export class DesktopSettingsService {
         hadHomebrewPrefix: Boolean(shellEnv.HOMEBREW_PREFIX),
       });
       mergePwrAgentChildProcessEnv(targetEnv, shellEnv);
+      if (this.startupCodexHome) {
+        targetEnv.CODEX_HOME = this.startupCodexHome;
+      }
       return targetEnv;
     });
 
@@ -1907,7 +1912,9 @@ export class DesktopSettingsService {
   }
 
   private ensureBaseTerminalSpawnEnv(): NodeJS.ProcessEnv {
-    this.terminalSpawnEnv ??= buildPwrAgentChildProcessEnv(this.env);
+    this.terminalSpawnEnv ??= this.withStartupCodexHome(
+      buildPwrAgentChildProcessEnv(this.env),
+    );
     return this.terminalSpawnEnv;
   }
 

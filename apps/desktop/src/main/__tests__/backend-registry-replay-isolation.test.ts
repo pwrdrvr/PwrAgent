@@ -222,6 +222,12 @@ describe("DesktopBackendRegistry replay isolation", () => {
     await expect(constructorState.codexResolveEnvs[0]?.()).resolves.toMatchObject({
       CODEX_HOME: codexHome,
     });
+    const resolvedArgs = await constructorState.codexResolveArgs[0]?.({
+      CODEX_HOME: codexHome,
+    });
+    expect(resolvedArgs).toContain(
+      `shell_environment_policy.set.CODEX_HOME=${JSON.stringify(codexHome)}`,
+    );
 
     await registry.close();
   });
