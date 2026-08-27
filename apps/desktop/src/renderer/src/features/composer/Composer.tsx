@@ -290,8 +290,10 @@ type ComposerProps = {
   onRefreshNavigation?: () => Promise<void>;
   pastedImageMaxPatches?: number;
   pdfAnalysisEnabled?: boolean;
-  /** Global Token Miser setting, so the thread menu can show the effective state. */
+  /** Token Miser experiment availability gate. */
   tokenMiserEnabled?: boolean;
+  /** Inherited Token Miser state when a thread has no explicit override. */
+  tokenMiserDefaultEnabled?: boolean;
   onUpdateLaunchpad?: (
     directoryKey: string,
     patch: Partial<
@@ -1651,8 +1653,7 @@ function ComposerThreadOptionsMenu(props: {
   onAgentThreadChange?: (agentThread: boolean) => void;
   onShowMcpInventory?: () => void;
   /**
-   * Effective Token Miser state for this thread — the per-thread override when
-   * one is set, else the enabled experiment. Undefined hides the item.
+   * Effective Token Miser state for this thread. Undefined hides the item.
    */
   tokenMiser?: boolean;
   tokenMiserOverridden?: boolean;
@@ -11870,6 +11871,7 @@ export function Composer(props: ComposerProps) {
               ? {
                   tokenMiser: props.launchpad?.tokenMiserEnabled
                     ?? props.thread?.tokenMiserEnabled
+                    ?? props.tokenMiserDefaultEnabled
                     ?? true,
                   tokenMiserOverridden:
                     (props.launchpad?.tokenMiserEnabled

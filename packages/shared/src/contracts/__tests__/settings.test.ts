@@ -125,6 +125,10 @@ describe("desktop settings contracts", () => {
           value: false,
           source: "default",
         },
+        tokenMiserDefaultEnabled: {
+          value: true,
+          source: "default",
+        },
         threadToolAccounting: {
           value: false,
           source: "default",

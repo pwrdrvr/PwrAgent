@@ -792,6 +792,10 @@ export class DesktopSettingsService {
           config.experimental?.tokenMiserEnabled,
           false,
         ),
+        tokenMiserDefaultEnabled: this.resolveConfigBoolean(
+          config.experimental?.tokenMiserDefaultEnabled,
+          true,
+        ),
         threadToolAccounting: this.resolveConfigBoolean(
           config.experimental?.threadToolAccounting,
           false,
@@ -1381,6 +1385,13 @@ export class DesktopSettingsService {
     return this.resolveConfigBoolean(
       this.readConfig().config.experimental?.tokenMiserEnabled,
       false,
+    ).value;
+  }
+
+  resolveTokenMiserDefaultEnabled(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.experimental?.tokenMiserDefaultEnabled,
+      true,
     ).value;
   }
 

@@ -2144,6 +2144,8 @@ function DesktopAppShell(props: {
       settings.snapshot?.imageUploads.pastedImageMaxPatches.value,
     pdfAnalysisEnabled: settings.snapshot?.general.pdfAnalysisEnabled?.value,
     tokenMiserEnabled: settings.snapshot?.experimental.tokenMiserEnabled?.value,
+    tokenMiserDefaultEnabled:
+      settings.snapshot?.experimental.tokenMiserDefaultEnabled?.value,
     platform: desktopApi?.platform,
     ...(navigation.creatingThread?.pendingForkEnvironmentSetup
       ? {

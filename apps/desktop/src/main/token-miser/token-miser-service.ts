@@ -137,9 +137,10 @@ export type TokenMiserPreparedPostToolUseReduction = {
 export type TokenMiserServiceOptions = {
   store: TokenMiserStore;
   isEnabled: () => boolean;
+  isEnabledByDefault?: () => boolean;
   /**
-   * Per-thread opt-out. `false` disables the gate for that thread;
-   * `true`/`undefined` follow the outer experiment gate in `isEnabled`.
+   * Per-thread override. `undefined` inherits `isEnabledByDefault`; neither
+   * value can bypass the outer experiment gate in `isEnabled`.
    */
   isEnabledForThread?: (threadId: string) => Promise<boolean | undefined>;
   generateSummary: (params: {
@@ -670,7 +671,7 @@ export class TokenMiserService {
     const threadOverride = await this.options.isEnabledForThread
       ?.(threadId)
       .catch(() => undefined);
-    return threadOverride !== false;
+    return threadOverride ?? this.options.isEnabledByDefault?.() ?? true;
   }
 
   private async summarizeAndStage(params: {

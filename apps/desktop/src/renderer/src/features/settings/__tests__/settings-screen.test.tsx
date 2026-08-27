@@ -192,6 +192,10 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      tokenMiserDefaultEnabled: {
+        value: true,
+        source: "default",
+      },
       threadToolAccounting: {
         value: false,
         source: "default",
@@ -1113,7 +1117,7 @@ describe("SettingsScreen", () => {
 
     fireEvent.click(within(sections).getByRole("button", { name: "Experimental" }));
     const tokenMiserSwitch = screen.getByRole("switch", {
-      name: "Intercept large Codex tool output",
+      name: "Make Token Miser available",
     });
     expect(tokenMiserSwitch).toHaveAttribute("aria-checked", "false");
     fireEvent.click(tokenMiserSwitch);
@@ -2888,6 +2892,38 @@ describe("SettingsScreen", () => {
       expect(dialog).toHaveTextContent("work is logged in.");
     });
     expect(dialog).not.toHaveTextContent("Codex login exited before emitting a login link");
+  });
+
+  it("lets an available Token Miser experiment default threads on or off", async () => {
+    const snapshot = createSnapshot();
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
+    snapshot.experimental.tokenMiserDefaultEnabled = {
+      value: false,
+      source: "config",
+    };
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        desktopApi={{} as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+        initialSection="experimental"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Opt-in")).toBeInTheDocument();
+    const defaultSwitch = screen.getByRole("switch", {
+      name: "Enable Token Miser on threads by default",
+    });
+    expect(defaultSwitch).toHaveAttribute("aria-checked", "false");
+    expect(defaultSwitch).not.toBeDisabled();
+    fireEvent.click(defaultSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { tokenMiserDefaultEnabled: true },
+      });
+    });
   });
 
   // Token Miser fails open, so an inert gate is invisible: turns keep running

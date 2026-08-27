@@ -551,6 +551,11 @@ function SettingsSectionBody(props: {
             experimental: { tokenMiserEnabled: enabled },
           });
         }}
+        onTokenMiserDefaultEnabledChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { tokenMiserDefaultEnabled: enabled },
+          });
+        }}
         onCodexDefaultModeRequestUserInputChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { codexDefaultModeRequestUserInput: enabled },

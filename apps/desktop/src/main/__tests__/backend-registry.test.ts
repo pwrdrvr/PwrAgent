@@ -3634,6 +3634,51 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("keeps Token Miser available for per-thread opt-in when its default is off", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const internals = registry as unknown as {
+      prepareTokenMiserRuntime: (options?: { prune?: boolean }) => Promise<void>;
+      resolveTokenMiserDefaultEnabledFn: () => boolean;
+      resolveTokenMiserEnabledFn: () => boolean;
+      tokenMiserCodeModeReducerDescriptorPath?: string;
+      tokenMiserStateDir?: string;
+    };
+    internals.tokenMiserStateDir = path.join(
+      "/tmp",
+      "token-miser-opt-in-default",
+    );
+    internals.tokenMiserCodeModeReducerDescriptorPath = path.join(
+      internals.tokenMiserStateDir,
+      "code-mode-reducer.test.json",
+    );
+    internals.resolveTokenMiserEnabledFn = () => true;
+    internals.resolveTokenMiserDefaultEnabledFn = () => false;
+    const prepare = vi.spyOn(internals, "prepareTokenMiserRuntime");
+
+    try {
+      await registry.startThread({
+        backend: "codex",
+        cwd: process.cwd(),
+      });
+      expect(prepare).not.toHaveBeenCalled();
+      expect(codexClient.lastStartThreadParams?.config).toBeUndefined();
+
+      await registry.startThread({
+        backend: "codex",
+        cwd: process.cwd(),
+        tokenMiserEnabled: true,
+      });
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(codexClient.lastStartThreadParams?.config).toBeDefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("configures the code-mode reducer when a Token Miser thread is created", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registry = new DesktopBackendRegistry({

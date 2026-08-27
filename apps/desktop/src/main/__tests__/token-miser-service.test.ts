@@ -393,6 +393,34 @@ describe("TokenMiserService per-thread override", () => {
     expect(summary).not.toHaveBeenCalled();
   });
 
+  it("inherits an off thread default while the experiment remains available", async () => {
+    const store = await createStore();
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      isEnabledByDefault: () => false,
+      isEnabledForThread: async () => undefined,
+      generateSummary: summary,
+      thresholdCharacters: 1,
+    });
+    expect(await service.preparePostToolUse(payload("large"))).toBeUndefined();
+    expect(summary).not.toHaveBeenCalled();
+  });
+
+  it("allows a thread to opt in when the inherited default is off", async () => {
+    const store = await createStore();
+    const service = new TokenMiserService({
+      store,
+      isEnabled: () => true,
+      isEnabledByDefault: () => false,
+      isEnabledForThread: async () => true,
+      generateSummary: summary,
+      thresholdCharacters: 1,
+    });
+    expect(await service.preparePostToolUse(payload("large"))).toBeDefined();
+    expect(summary).toHaveBeenCalledTimes(1);
+  });
+
   it("follows the global setting when no override is set", async () => {
     const store = await createStore();
     const service = new TokenMiserService({

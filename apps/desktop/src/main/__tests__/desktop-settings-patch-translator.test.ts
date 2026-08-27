@@ -188,6 +188,20 @@ describe("desktopSettingsPatchToEdits — general", () => {
     ]);
   });
 
+  it("writes the inherited Token Miser thread default", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        experimental: { tokenMiserDefaultEnabled: false },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["experimental", "token_miser_default_enabled"],
+        value: false,
+      },
+    ]);
+  });
+
   it("preserves and mirrors the legacy general Token Miser key", () => {
     const edits = desktopSettingsPatchToEdits(
       {

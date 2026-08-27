@@ -824,7 +824,7 @@ describe("DesktopSettingsService", () => {
       .toBeUndefined();
   });
 
-  it("defaults Token Miser off and persists the opt-in", async () => {
+  it("defaults Token Miser unavailable with inherited thread use on", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     const service = new DesktopSettingsService({
@@ -838,16 +838,28 @@ describe("DesktopSettingsService", () => {
       source: "default",
     });
     expect(service.resolveTokenMiserEnabled()).toBe(false);
+    expect(
+      (await service.readSettings()).experimental.tokenMiserDefaultEnabled,
+    ).toEqual({
+      value: true,
+      source: "default",
+    });
+    expect(service.resolveTokenMiserDefaultEnabled()).toBe(true);
 
     await service.writeConfigPatch({
-      experimental: { tokenMiserEnabled: true },
+      experimental: {
+        tokenMiserEnabled: true,
+        tokenMiserDefaultEnabled: false,
+      },
     });
 
     expect(fs.readFileSync(configPath, "utf8")).toContain([
       "[experimental]",
       "token_miser_enabled = true",
+      "token_miser_default_enabled = false",
     ].join("\n"));
     expect(service.resolveTokenMiserEnabled()).toBe(true);
+    expect(service.resolveTokenMiserDefaultEnabled()).toBe(false);
   });
 
   it("reads and lazily mirrors the legacy general Token Miser opt-in", async () => {

@@ -7792,6 +7792,7 @@ export class DesktopBackendRegistry {
   private readonly resolveCodexFastAllowedFn: () => boolean;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
+  private readonly resolveTokenMiserDefaultEnabledFn: () => boolean;
   private readonly resolveSpendAlertPolicyFn: () => DesktopSpendAlertPolicy;
   private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
   private spendAlertPolicy = DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
@@ -8037,6 +8038,21 @@ export class DesktopBackendRegistry {
         return false;
       }
     };
+    this.resolveTokenMiserDefaultEnabledFn = () => {
+      try {
+        return (
+          settingsService ?? getDesktopSettingsService()
+        ).resolveTokenMiserDefaultEnabled();
+      } catch (error) {
+        backendRegistryLog.warn(
+          "failed to resolve Token Miser thread default setting",
+          {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+        return true;
+      }
+    };
     this.resolveToolOutputAlertPolicyFn =
       options?.resolveToolOutputAlertPolicy ??
       (() => {
@@ -8201,8 +8217,9 @@ export class DesktopBackendRegistry {
       const tokenMiserService = new TokenMiserService({
         store: this.tokenMiserStore,
         isEnabled: () => this.resolveTokenMiserEnabledFn(),
-        // A thread can opt out while the experiment is enabled; the global
-        // experimental flag remains the outer gate.
+        isEnabledByDefault: () => this.resolveTokenMiserDefaultEnabledFn(),
+        // A thread can override the inherited default while the experiment is
+        // available; the global experimental flag remains the outer gate.
         isEnabledForThread: async (threadId) => {
           const overlay = await this.overlayStore.getThreadOverlayState({
             backend: "codex",
@@ -28027,7 +28044,7 @@ export class DesktopBackendRegistry {
       threadId: call.threadId,
     });
     if (directOverlay?.tokenMiserEnabled !== undefined) {
-      return directOverlay.tokenMiserEnabled !== false;
+      return directOverlay.tokenMiserEnabled;
     }
     const review = Array.from(this.activeReviewSubAgents.values()).find(
       (record) =>
@@ -28040,16 +28057,19 @@ export class DesktopBackendRegistry {
         threadId: review.parentThreadId,
       });
       if (parentOverlay?.tokenMiserEnabled !== undefined) {
-        return parentOverlay.tokenMiserEnabled !== false;
+        return parentOverlay.tokenMiserEnabled;
       }
     }
-    return true;
+    return this.resolveTokenMiserDefaultEnabledFn();
   }
 
   private resolveTokenMiserEnabledForOverride(
     threadOverride: boolean | undefined,
   ): boolean {
-    return this.resolveTokenMiserEnabledFn() && threadOverride !== false;
+    return (
+      this.resolveTokenMiserEnabledFn()
+      && (threadOverride ?? this.resolveTokenMiserDefaultEnabledFn())
+    );
   }
 
   private isLiveDynamicToolCall(

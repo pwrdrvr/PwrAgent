@@ -1039,7 +1039,7 @@ describe("Composer", () => {
     const tokenMiser = screen.getByRole("menuitemcheckbox", {
       name: /Token Miser/,
     });
-    // No override yet: reflects the global setting, and says nothing about
+    // No override yet: reflects the inherited default, and says nothing about
     // "this thread".
     expect(tokenMiser).toHaveAttribute("aria-checked", "true");
     expect(tokenMiser).not.toHaveTextContent("this thread");
@@ -1068,6 +1068,31 @@ describe("Composer", () => {
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole("menu", { name: "Thread options" }))
       .not.toBeInTheDocument();
+  });
+
+  it("shows Token Miser available but off when the inherited default is off", () => {
+    render(
+      <Composer
+        desktopApi={{ setThreadTokenMiser: vi.fn() }}
+        disabled={false}
+        skills={[]}
+        tokenMiserEnabled
+        tokenMiserDefaultEnabled={false}
+        thread={{
+          id: "thread-1",
+          title: "Existing Codex thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Thread options" }));
+    expect(
+      screen.getByRole("menuitemcheckbox", { name: /Token Miser/ }),
+    ).toHaveAttribute("aria-checked", "false");
   });
 
   it("hides Token Miser thread controls while the experiment is off", () => {

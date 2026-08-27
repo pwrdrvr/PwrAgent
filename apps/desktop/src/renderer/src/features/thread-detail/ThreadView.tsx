@@ -926,8 +926,10 @@ export type ThreadViewProps = {
   threadBusy?: boolean;
   pastedImageMaxPatches?: number;
   pdfAnalysisEnabled?: boolean;
-  /** Global Token Miser setting; the composer shows the per-thread override against it. */
+  /** Token Miser experiment availability gate. */
   tokenMiserEnabled?: boolean;
+  /** Inherited Token Miser state when a thread has no explicit override. */
+  tokenMiserDefaultEnabled?: boolean;
   platform?: string;
   selectedDirectory?: NavigationDirectorySummary;
   selectedLaunchpad?: NavigationLaunchpadDraft;
@@ -3317,6 +3319,7 @@ export function ThreadView(props: ThreadViewProps) {
                   pastedImageMaxPatches={props.pastedImageMaxPatches}
                   pdfAnalysisEnabled={props.pdfAnalysisEnabled}
             tokenMiserEnabled={props.tokenMiserEnabled}
+            tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
                   fullAccessRiskWarningDismissed={
                     props.fullAccessRiskWarningDismissed
                   }
@@ -3683,6 +3686,7 @@ export function ThreadView(props: ThreadViewProps) {
             pastedImageMaxPatches={props.pastedImageMaxPatches}
             pdfAnalysisEnabled={props.pdfAnalysisEnabled}
             tokenMiserEnabled={props.tokenMiserEnabled}
+            tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
             removeOptimisticMessage={props.removeOptimisticMessage}
             setExecutionModeError={props.setExecutionModeError}
             threadModelSettingsError={props.setThreadModelSettingsError}

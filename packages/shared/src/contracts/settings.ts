@@ -849,6 +849,11 @@ export type DesktopSettingsSnapshot = {
      */
     tokenMiserEnabled: DesktopSettingsValue<boolean>;
     /**
+     * Inherited Token Miser state for Codex threads without a per-thread
+     * override. This only has an effect while the experiment gate is enabled.
+     */
+    tokenMiserDefaultEnabled?: DesktopSettingsValue<boolean>;
+    /**
      * Shows the experimental Tool calls tab in the thread context rail.
      * The desktop app may still collect tool metrics while this is disabled;
      * this only gates the operator-facing panel. Replay-risk safety notices
@@ -1125,6 +1130,7 @@ export type DesktopSettingsConfigPatch = {
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
     tokenMiserEnabled?: boolean;
+    tokenMiserDefaultEnabled?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     managedReview?: boolean;
