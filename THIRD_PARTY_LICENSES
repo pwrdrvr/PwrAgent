@@ -71,18 +71,18 @@ MIT
 - @floating-ui/utils@0.2.12 | https://github.com/floating-ui/floating-ui
 - @hono/node-server@2.0.10 | https://github.com/honojs/node-server
 - @modelcontextprotocol/sdk@1.30.0 | https://github.com/modelcontextprotocol/typescript-sdk
-- @napi-rs/canvas@1.0.5 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-android-arm64@1.0.5 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-darwin-arm64@1.0.5 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-darwin-x64@1.0.5 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-arm-gnueabihf@1.0.5 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-arm64-gnu@1.0.5 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-arm64-musl@1.0.5 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-riscv64-gnu@1.0.5 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-x64-gnu@1.0.5 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-linux-x64-musl@1.0.5 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-win32-arm64-msvc@1.0.5 | https://github.com/Brooooooklyn/canvas
-- @napi-rs/canvas-win32-x64-msvc@1.0.5 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas@1.0.6 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-android-arm64@1.0.6 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-darwin-arm64@1.0.6 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-darwin-x64@1.0.6 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-arm-gnueabihf@1.0.6 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-arm64-gnu@1.0.6 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-arm64-musl@1.0.6 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-riscv64-gnu@1.0.6 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-x64-gnu@1.0.6 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-linux-x64-musl@1.0.6 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-win32-arm64-msvc@1.0.6 | https://github.com/Brooooooklyn/canvas
+- @napi-rs/canvas-win32-x64-msvc@1.0.6 | https://github.com/Brooooooklyn/canvas
 - @octokit/endpoint@11.0.4 | github:octokit/endpoint.js
 - @octokit/graphql@9.0.4 | github:octokit/graphql.js
 - @octokit/openapi-types@28.0.0 | https://github.com/octokit/openapi-types.ts
@@ -704,24 +704,24 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
-@napi-rs/canvas@1.0.5 (MIT)
+@napi-rs/canvas@1.0.6 (MIT)
 ---------------------------
 
 Applies to:
-- @napi-rs/canvas@1.0.5 (MIT)
-- @napi-rs/canvas-android-arm64@1.0.5 (MIT)
-- @napi-rs/canvas-darwin-arm64@1.0.5 (MIT)
-- @napi-rs/canvas-darwin-x64@1.0.5 (MIT)
-- @napi-rs/canvas-linux-arm-gnueabihf@1.0.5 (MIT)
-- @napi-rs/canvas-linux-arm64-gnu@1.0.5 (MIT)
-- @napi-rs/canvas-linux-arm64-musl@1.0.5 (MIT)
-- @napi-rs/canvas-linux-riscv64-gnu@1.0.5 (MIT)
-- @napi-rs/canvas-linux-x64-gnu@1.0.5 (MIT)
-- @napi-rs/canvas-linux-x64-musl@1.0.5 (MIT)
-- @napi-rs/canvas-win32-arm64-msvc@1.0.5 (MIT)
-- @napi-rs/canvas-win32-x64-msvc@1.0.5 (MIT)
+- @napi-rs/canvas@1.0.6 (MIT)
+- @napi-rs/canvas-android-arm64@1.0.6 (MIT)
+- @napi-rs/canvas-darwin-arm64@1.0.6 (MIT)
+- @napi-rs/canvas-darwin-x64@1.0.6 (MIT)
+- @napi-rs/canvas-linux-arm-gnueabihf@1.0.6 (MIT)
+- @napi-rs/canvas-linux-arm64-gnu@1.0.6 (MIT)
+- @napi-rs/canvas-linux-arm64-musl@1.0.6 (MIT)
+- @napi-rs/canvas-linux-riscv64-gnu@1.0.6 (MIT)
+- @napi-rs/canvas-linux-x64-gnu@1.0.6 (MIT)
+- @napi-rs/canvas-linux-x64-musl@1.0.6 (MIT)
+- @napi-rs/canvas-win32-arm64-msvc@1.0.6 (MIT)
+- @napi-rs/canvas-win32-x64-msvc@1.0.6 (MIT)
 
-Representative file: @napi-rs/canvas@1.0.5/LICENSE
+Representative file: @napi-rs/canvas@1.0.6/LICENSE
 
 MIT License
 
