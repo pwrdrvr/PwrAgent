@@ -16160,6 +16160,51 @@ describe("MessagingController", () => {
     ]);
   });
 
+  it("preserves every text fragment from a completion-only response", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [
+              {
+                type: "text",
+                text: "First final fragment.",
+              },
+              {
+                type: "text",
+                text: "Second final fragment.",
+              },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "message" && intent.role === "assistant",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        parts: [
+          expect.objectContaining({
+            text: "First final fragment.\n\nSecond final fragment.",
+          }),
+        ],
+      }),
+    ]);
+  });
+
   it("posts one assistant message when final image resolution overlaps terminal idle", async () => {
     let releaseImageResolution: (() => void) | undefined;
     let markImageResolutionStarted: (() => void) | undefined;

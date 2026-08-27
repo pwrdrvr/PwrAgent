@@ -20696,33 +20696,38 @@ function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
   }
 
   if (event.notification.method === "turn/completed") {
-    const params = event.notification.params as {
-      turn?: {
-        output?: unknown;
-      };
-    };
-    if (!Array.isArray(params.turn?.output)) {
-      return undefined;
-    }
-    // A completed turn's output is an ordered list of transcript items, not
-    // one assistant message split into content parts. Earlier entries can be
-    // commentary that already flowed through Working Updates. Joining every
-    // text entry turns that commentary plus the final answer into a second,
-    // slightly different assistant response that escapes content deduplication.
-    for (let index = params.turn.output.length - 1; index >= 0; index -= 1) {
-      const item = params.turn.output[index];
-      const text =
-        item && typeof item === "object" && "text" in item
-          ? (item as { text?: unknown }).text
-          : undefined;
-      if (typeof text === "string" && text.trim()) {
-        return text.trim();
-      }
-    }
-    return undefined;
+    const text = assistantOutputTextFragmentsForBackendEvent(event)
+      .join("\n\n")
+      .trim();
+    return text || undefined;
   }
 
   return undefined;
+}
+
+function assistantOutputTextFragmentsForBackendEvent(
+  event: AgentEvent,
+): string[] {
+  if (event.notification.method !== "turn/completed") {
+    return [];
+  }
+  const params = event.notification.params as {
+    turn?: {
+      output?: unknown;
+    };
+  };
+  if (!Array.isArray(params.turn?.output)) {
+    return [];
+  }
+  return params.turn.output
+    .map((item) =>
+      item && typeof item === "object" && "text" in item
+        ? (item as { text?: unknown }).text
+        : undefined,
+    )
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 /**
@@ -20956,9 +20961,20 @@ function assistantMessageDeliveryKeys(
     text,
     identity,
   );
+  // A terminal aggregate can contain earlier commentary followed by a final
+  // assistant item that was already delivered. Include each output fragment's
+  // content key in the same claim so that prior final-item delivery suppresses
+  // the repeated aggregate without changing completion-only aggregation.
+  const contentKeys = [
+    contentKey,
+    ...assistantOutputTextFragmentsForBackendEvent(event).map((fragment) =>
+      assistantMessageContentDeliveryKey(event, binding, fragment, identity)
+    ),
+  ];
+  const uniqueContentKeys = [...new Set(contentKeys)];
   const itemId = identity?.itemId ?? assistantItemIdForBackendEvent(event);
   if (!itemId) {
-    return [contentKey];
+    return uniqueContentKeys;
   }
   // Backend item identity is authoritative and intentionally independent of
   // turn/text: replaying one item with changed metadata must never post it
@@ -20971,7 +20987,7 @@ function assistantMessageDeliveryKeys(
       assistantMessageThreadId(event, identity),
       `item:${itemId}`,
     ].join("\0"),
-    contentKey,
+    ...uniqueContentKeys,
   ];
 }
 
