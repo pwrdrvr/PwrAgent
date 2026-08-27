@@ -4034,8 +4034,8 @@ describe("CodexAppServerClient", () => {
               {
                 type: "mcpToolCall",
                 id: "mcp-direct-image",
-                server: "giphy-dev",
-                tool: "giphy_get_image",
+                server: "image-tools",
+                tool: "fetch_image",
                 status: "completed",
                 result: {
                   content: [
@@ -4079,7 +4079,7 @@ describe("CodexAppServerClient", () => {
             {
               type: "image",
               url: imageUrl,
-              alt: "giphy-dev/giphy_get_image result",
+              alt: "image-tools/fetch_image result",
             },
           ],
         }),
@@ -4094,7 +4094,7 @@ describe("CodexAppServerClient", () => {
         {
           type: "image",
           url: imageUrl,
-          alt: "giphy-dev/giphy_get_image result",
+          alt: "image-tools/fetch_image result",
         },
       ],
     });
@@ -4115,8 +4115,8 @@ describe("CodexAppServerClient", () => {
               {
                 type: "mcpToolCall",
                 id: "mcp-wrapped-image",
-                server: "giphy-dev",
-                tool: "giphy_get_image",
+                server: "image-tools",
+                tool: "fetch_image",
                 status: "completed",
                 result: {
                   content: [
