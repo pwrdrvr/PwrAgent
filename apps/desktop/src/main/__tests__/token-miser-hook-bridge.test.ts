@@ -793,6 +793,7 @@ function codeModePayload() {
     parent_intent: "Find the relevant repository files.",
     script_status: "Script completed",
     max_output_tokens: 10_000,
+    model_visible_overhead_characters: 137,
     content_items: [{ type: "input_text", text: "large script output" }],
   };
 }

@@ -16,6 +16,7 @@ const TOKEN_MISER_CODE_MODE_PAYLOAD_KEYS = new Set([
   "actionable_state",
   "script_status",
   "max_output_tokens",
+  "model_visible_overhead_characters",
   "content_items",
 ]);
 const TOKEN_MISER_CODE_MODE_TEXT_ITEM_KEYS = new Set(["type", "text"]);
@@ -223,6 +224,8 @@ export type TokenMiserCodeModeOutputPayload = {
   actionable_state?: TokenMiserCodeModeActionableState;
   script_status: string;
   max_output_tokens: number;
+  /** Codex-owned framing and trusted guidance appended around the replacement. */
+  model_visible_overhead_characters: number;
   content_items: TokenMiserCodeModeTextContentItem[];
 };
 
@@ -423,6 +426,9 @@ export function isTokenMiserCodeModeOutputPayload(
     && isNonEmptyString(record.script_status)
     && Number.isSafeInteger(record.max_output_tokens)
     && (record.max_output_tokens as number) > 0
+    && Number.isSafeInteger(record.model_visible_overhead_characters)
+    && (record.model_visible_overhead_characters as number) >= 0
+    && (record.model_visible_overhead_characters as number) <= 16_384
     && Array.isArray(record.content_items)
     && record.content_items.length > 0
     && record.content_items.every(isCodeModeTextContentItem)

@@ -6730,6 +6730,27 @@ function isConfigRecord(value: unknown): value is Record<string, unknown> {
  * existing model/config selects it. Direct tool calls continue through the
  * PostToolUse plugin.
  */
+const TOKEN_MISER_CODE_MODE_TOOL_DESCRIPTION_GUIDANCE = [
+  "Run independent operations concurrently with `Promise.all`. ",
+  "Nested tool results remain complete inside the cell; inspect or transform ",
+  "them there and emit the information needed for the next decision.",
+].join("");
+
+function hasTokenMiserModelGuidance(
+  capability: CodexServerCapabilities["codeModeOutputReducer"],
+): boolean {
+  const guidance = capability?.modelGuidance;
+  return (
+    guidance?.version === 1
+    && guidance.toolDescriptionConfigKey
+      === "features.code_mode.output_reducer.tool_description_guidance"
+    && guidance.continuationConfigKey
+      === "features.code_mode.output_reducer.continuation_guidance"
+    && guidance.modelVisibleOverheadRequestField
+      === "model_visible_overhead_characters"
+  );
+}
+
 function buildCodexTokenMiserConfig(
   reducerDescriptorPath: string,
 ): CodexThreadStartParams["config"] {
@@ -6749,6 +6770,8 @@ function buildCodexTokenMiserConfig(
           // room for serialization and the loopback response while staying
           // below the existing 60-second PostToolUse hook budget.
           timeout_ms: 55_000,
+          tool_description_guidance:
+            TOKEN_MISER_CODE_MODE_TOOL_DESCRIPTION_GUIDANCE,
         },
       },
     },
@@ -7784,7 +7807,6 @@ export class DesktopBackendRegistry {
     Promise<CodexServerCapabilities | undefined>
   >();
   private tokenMiserReducerCapabilityState?: "supported" | "unsupported";
-  private tokenMiserCodeModeContinuationGuidanceVersion?: number;
   private tokenMiserCodeModeGroupingVersion?: number;
   private tokenMiserPostToolUseExactOutputVersion?: number;
   private tokenMiserRuntimePreparationFailure?: string;
@@ -8194,8 +8216,6 @@ export class DesktopBackendRegistry {
           )?.cumulativeInputTokens,
         resolveParentModel: (threadId) =>
           this.resolveTokenMiserParentModel(threadId),
-        codeModeContinuationGuidanceVersion: () =>
-          this.tokenMiserCodeModeContinuationGuidanceVersion,
         codeModeGroupingVersion: () =>
           this.tokenMiserCodeModeGroupingVersion,
         postToolUseExactOutputVersion: () =>
@@ -19631,23 +19651,20 @@ export class DesktopBackendRegistry {
     const probe = (async () => {
       if (!client.readServerCapabilities) {
         this.tokenMiserReducerCapabilityState = "unsupported";
-        this.tokenMiserCodeModeContinuationGuidanceVersion = undefined;
         this.tokenMiserCodeModeGroupingVersion = undefined;
         this.tokenMiserPostToolUseExactOutputVersion = undefined;
         await this.recordTokenMiserActivation({
-          reason: "Codex runtime lacks Token Miser output reducer v1.",
+          reason: "Codex runtime lacks Token Miser reducer model-guidance v1.",
           state: "unavailable",
         });
         return undefined;
       }
       try {
         const capabilities = await client.readServerCapabilities();
+        const reducerCapability = capabilities.codeModeOutputReducer;
         const supported =
-          capabilities.codeModeOutputReducer?.protocolVersion === 1;
-        this.tokenMiserCodeModeContinuationGuidanceVersion =
-          supported
-            ? capabilities.codeModeOutputReducer?.continuationGuidanceVersion
-            : undefined;
+          reducerCapability?.protocolVersion === 1
+          && hasTokenMiserModelGuidance(reducerCapability);
         const grouping = capabilities.codeModeOutputReducer?.postToolUseGrouping;
         this.tokenMiserCodeModeGroupingVersion =
           supported
@@ -19676,7 +19693,7 @@ export class DesktopBackendRegistry {
             : {
                 reason:
                   this.tokenMiserRuntimePreparationFailure
-                  ?? "Codex runtime lacks Token Miser output reducer v1.",
+                  ?? "Codex runtime lacks Token Miser reducer model-guidance v1.",
                 state: "unavailable",
               },
         );
@@ -19702,13 +19719,12 @@ export class DesktopBackendRegistry {
           );
         }
         this.tokenMiserReducerCapabilityState = "unsupported";
-        this.tokenMiserCodeModeContinuationGuidanceVersion = undefined;
         this.tokenMiserCodeModeGroupingVersion = undefined;
         this.tokenMiserPostToolUseExactOutputVersion = undefined;
         await this.recordTokenMiserActivation({
           reason:
             this.tokenMiserRuntimePreparationFailure
-            ?? "Codex runtime lacks Token Miser output reducer v1.",
+            ?? "Codex runtime lacks Token Miser reducer model-guidance v1.",
           state: "unavailable",
         });
         return undefined;
@@ -19722,7 +19738,10 @@ export class DesktopBackendRegistry {
     client: BackendClient,
   ): Promise<boolean> {
     const capabilities = await this.readTokenMiserServerCapabilities(client);
-    return capabilities?.codeModeOutputReducer?.protocolVersion === 1;
+    return (
+      capabilities?.codeModeOutputReducer?.protocolVersion === 1
+      && hasTokenMiserModelGuidance(capabilities.codeModeOutputReducer)
+    );
   }
 
   private async supportsTokenMiserDynamicToolsResume(
@@ -19823,7 +19842,7 @@ export class DesktopBackendRegistry {
           ? { state: "active" }
           : {
               reason: this.tokenMiserReducerCapabilityState === "unsupported"
-                ? "Codex runtime lacks Token Miser output reducer v1."
+                ? "Codex runtime lacks Token Miser reducer model-guidance v1."
                 : "Waiting for Codex to report Token Miser output reducer support.",
               state: "unavailable",
             },

@@ -1320,6 +1320,15 @@ describe("CodexAppServerClient", () => {
         continuationGuidanceVersion: 1,
         dynamicToolsResumeField: "dynamicTools",
         intentContextVersion: 1,
+        modelGuidance: {
+          version: 1,
+          toolDescriptionConfigKey:
+            "features.code_mode.output_reducer.tool_description_guidance",
+          continuationConfigKey:
+            "features.code_mode.output_reducer.continuation_guidance",
+          modelVisibleOverheadRequestField:
+            "model_visible_overhead_characters",
+        },
         postToolUseField: "parent_intent",
         postToolUseGrouping: {
           versionField: "token_miser_grouping_version",
@@ -1350,6 +1359,15 @@ describe("CodexAppServerClient", () => {
         continuationGuidanceVersion: 1,
         dynamicToolsResumeField: "dynamicTools",
         intentContextVersion: 1,
+        modelGuidance: {
+          version: 1,
+          toolDescriptionConfigKey:
+            "features.code_mode.output_reducer.tool_description_guidance",
+          continuationConfigKey:
+            "features.code_mode.output_reducer.continuation_guidance",
+          modelVisibleOverheadRequestField:
+            "model_visible_overhead_characters",
+        },
         postToolUseField: "parent_intent",
         postToolUseGrouping: {
           versionField: "token_miser_grouping_version",

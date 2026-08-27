@@ -18,7 +18,19 @@ afterEach(async () => {
 });
 
 describe("Token Miser agent tools", () => {
-  it("advertises search, bounded read, and deliberate full read", async () => {
+  it("describes source access without priming the parent about filtering costs", async () => {
+    const store = await createStore();
+    const descriptions = buildTokenMiserToolDefinitions(store)
+      .map((tool) => tool.description)
+      .join("\n");
+
+    expect(descriptions).not.toMatch(
+      /token miser|reduc\w*|\bbounded\b|\bcompact\b|\bnarrow\b|context savings|erase/i,
+    );
+    expect(descriptions).toContain("complete preserved tool result");
+  });
+
+  it("advertises search, line-range, batch, and complete reads", async () => {
     const store = await createStore();
     const metadata = await store.store({
       threadId: "thread-1",
@@ -228,6 +240,7 @@ describe("Token Miser agent tools", () => {
       cell_id: "cell-retrieval-empty",
       script_status: "completed",
       max_output_tokens: 10_000,
+      model_visible_overhead_characters: 137,
       script: retrievalScript,
       content_items: [{
         type: "input_text",
@@ -265,6 +278,7 @@ describe("Token Miser agent tools", () => {
       cell_id: "cell-retrieval",
       script_status: "completed",
       max_output_tokens: 10_000,
+      model_visible_overhead_characters: 137,
       script:
         `const r = await tools.pwragent__read_token_miser_output({ objectId: "${metadata.objectId}", startLine: 1, endLine: 3 }); text(r);`,
       content_items: [{ type: "input_text", text: emitted }],

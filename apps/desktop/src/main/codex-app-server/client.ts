@@ -298,6 +298,15 @@ export type CodexServerCapabilities = {
     continuationGuidanceVersion?: number;
     dynamicToolsResumeField?: "dynamicTools";
     intentContextVersion?: 1;
+    modelGuidance?: {
+      version: 1;
+      toolDescriptionConfigKey:
+        "features.code_mode.output_reducer.tool_description_guidance";
+      continuationConfigKey:
+        "features.code_mode.output_reducer.continuation_guidance";
+      modelVisibleOverheadRequestField:
+        "model_visible_overhead_characters";
+    };
     postToolUseField?: "parent_intent";
     postToolUseGrouping?: {
       versionField: string;
@@ -7296,6 +7305,7 @@ export class CodexAppServerClient {
       && outputReducer.reducerRequestField === "parent_intent"
       && outputReducer.postToolUseField === "parent_intent";
     const grouping = asRecord(outputReducer?.postToolUseGrouping);
+    const modelGuidance = asRecord(outputReducer?.modelGuidance);
     const exactOutput = asRecord(outputReducer?.postToolUseExactOutput);
     const dynamicToolsResumeField =
       outputReducer?.dynamicToolsResumeField === "dynamicTools"
@@ -7329,6 +7339,25 @@ export class CodexAppServerClient {
                   intentContextVersion: 1 as const,
                   postToolUseField: "parent_intent" as const,
                   reducerRequestField: "parent_intent" as const,
+                }
+              : {}),
+            ...(modelGuidance?.version === 1
+              && modelGuidance.toolDescriptionConfigKey
+                === "features.code_mode.output_reducer.tool_description_guidance"
+              && modelGuidance.continuationConfigKey
+                === "features.code_mode.output_reducer.continuation_guidance"
+              && modelGuidance.modelVisibleOverheadRequestField
+                === "model_visible_overhead_characters"
+              ? {
+                  modelGuidance: {
+                    version: 1 as const,
+                    toolDescriptionConfigKey:
+                      "features.code_mode.output_reducer.tool_description_guidance" as const,
+                    continuationConfigKey:
+                      "features.code_mode.output_reducer.continuation_guidance" as const,
+                    modelVisibleOverheadRequestField:
+                      "model_visible_overhead_characters" as const,
+                  },
                 }
               : {}),
             ...(typeof grouping?.versionField === "string"

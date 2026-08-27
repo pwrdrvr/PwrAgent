@@ -1695,6 +1695,15 @@ class MockBackendClient {
       serverCapabilities?: {
         codeModeOutputReducer?: {
           dynamicToolsResumeField?: "dynamicTools";
+          modelGuidance?: {
+            version: 1;
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance";
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance";
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters";
+          };
           postToolUseExactOutput?: {
             version: 1;
             versionField: "token_miser_exact_tool_response_version";
@@ -1772,6 +1781,15 @@ class MockBackendClient {
     }
     return this.options.serverCapabilities ?? {
       codeModeOutputReducer: {
+        modelGuidance: {
+          version: 1,
+          toolDescriptionConfigKey:
+            "features.code_mode.output_reducer.tool_description_guidance",
+          continuationConfigKey:
+            "features.code_mode.output_reducer.continuation_guidance",
+          modelVisibleOverheadRequestField:
+            "model_visible_overhead_characters",
+        },
         protocolVersion: 1,
       },
     };
@@ -3460,7 +3478,23 @@ describe("DesktopBackendRegistry", () => {
   // until something else started one. Turn start on a Codex thread is where
   // resumed threads reach the gate, so it has to prepare the runtime too.
   it("prepares the Token Miser runtime when a Codex turn starts", async () => {
-    const codexClient = new MockBackendClient({ threads: [] });
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: {
+        codeModeOutputReducer: {
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
+          protocolVersion: 1,
+        },
+      },
+    });
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock({
@@ -3511,10 +3545,23 @@ describe("DesktopBackendRegistry", () => {
               ),
               min_trigger_bytes: 0,
               timeout_ms: 55_000,
+              tool_description_guidance: expect.stringContaining("Promise.all"),
             },
           },
         },
       });
+      const reducerConfig = (
+        codexClient.lastStartTurnParams?.config as {
+          features?: {
+            code_mode?: {
+              output_reducer?: { tool_description_guidance?: string };
+            };
+          };
+        }
+      )?.features?.code_mode?.output_reducer;
+      expect(reducerConfig?.tool_description_guidance).not.toMatch(
+        /reduc\w*|\bcap\b|\blimit\b|\bbounded\b|\bcompact\b|\bnarrow\b/i,
+      );
 
       internals.resolveTokenMiserEnabledFn = () => false;
       await registry.startTurn({
@@ -3680,6 +3727,15 @@ describe("DesktopBackendRegistry", () => {
       serverCapabilities: {
         codeModeOutputReducer?: {
           dynamicToolsResumeField?: "dynamicTools";
+          modelGuidance?: {
+            version: 1;
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance";
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance";
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters";
+          };
           protocolVersion?: number;
         };
       };
@@ -3734,6 +3790,15 @@ describe("DesktopBackendRegistry", () => {
       serverCapabilities: {
         codeModeOutputReducer: {
           dynamicToolsResumeField: "dynamicTools",
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
           protocolVersion: 1,
         },
       },
@@ -3745,7 +3810,7 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     })).resolves.toMatchObject({
-      reason: "Codex runtime lacks Token Miser output reducer v1.",
+      reason: "Codex runtime lacks Token Miser reducer model-guidance v1.",
       state: "unavailable",
     });
     await expect(readActivation({
@@ -3753,6 +3818,15 @@ describe("DesktopBackendRegistry", () => {
       serverCapabilities: {
         codeModeOutputReducer: {
           dynamicToolsResumeField: "dynamicTools",
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
           protocolVersion: 1,
         },
       },
@@ -3768,6 +3842,15 @@ describe("DesktopBackendRegistry", () => {
       serverCapabilities: {
         codeModeOutputReducer: {
           dynamicToolsResumeField: "dynamicTools",
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
           protocolVersion: 1,
         },
       },
@@ -3875,6 +3958,15 @@ describe("DesktopBackendRegistry", () => {
       serverCapabilities: {
         codeModeOutputReducer: {
           dynamicToolsResumeField: "dynamicTools",
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
           protocolVersion: 1,
         },
       },
@@ -3920,6 +4012,15 @@ describe("DesktopBackendRegistry", () => {
       serverCapabilities: {
         codeModeOutputReducer: {
           dynamicToolsResumeField: "dynamicTools",
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
           protocolVersion: 1,
         },
       },

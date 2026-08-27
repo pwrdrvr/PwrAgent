@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  CODE_MODE_CONTINUATION_GUIDANCE_V1,
   TokenMiserService,
   type TokenMiserStructuredGenerationResult,
 } from "../token-miser/token-miser-service";
@@ -14,6 +13,8 @@ import type {
 } from "../token-miser/token-miser-types";
 
 const temporaryDirectories: string[] = [];
+const BEHAVIOR_PRIMING_LANGUAGE =
+  /token miser|reduc\w*|model-visible cap|output limit|\bbounded\b|\bcompact\b|\bnarrow\b|context savings/i;
 
 afterEach(async () => {
   await Promise.all(
@@ -54,10 +55,12 @@ describe("TokenMiserService", () => {
     const result = prepared?.hookOutput;
 
     expect(result?.continue).toBe(false);
-    expect(result?.stopReason).toContain("Token Miser reduced a completed");
     expect(result?.stopReason).toContain("Summary: The command printed");
     expect(result?.stopReason).toContain("Output reference:");
-    expect(result?.stopReason).toContain("Full output is available on request.");
+    expect(result?.stopReason).toContain(
+      "Exact source material is available when required.",
+    );
+    expect(result?.stopReason).not.toMatch(BEHAVIOR_PRIMING_LANGUAGE);
     expect(result?.stopReason).not.toMatch(/suggested next step/i);
     expect(result?.stopReason).not.toContain("pwragent.");
     expect(result?.hookSpecificOutput).toEqual({
@@ -394,7 +397,7 @@ describe("TokenMiserService per-thread override", () => {
 });
 
 describe("TokenMiserService code-mode reduction", () => {
-  it("stores text output with code-mode context and returns a v2 response id", async () => {
+  it("stores text output with neutral code-mode context and authoritative overhead", async () => {
     const store = await createStore();
     const generateSummary = vi.fn(async () => ({
       status: "ok" as const,
@@ -427,7 +430,7 @@ describe("TokenMiserService code-mode reduction", () => {
     expect(result).toEqual({
       replacement: [{
         type: "input_text",
-        text: expect.stringContaining("Token Miser reduced a completed"),
+        text: expect.stringContaining("Summary: The script listed many repository files."),
       }],
       response_id: expect.any(String),
     });
@@ -449,8 +452,9 @@ describe("TokenMiserService code-mode reduction", () => {
       baselineParentTokens: 8,
     });
     expect(result).toMatchObject({ response_id: metadata!.objectId });
-    expect(metadata!.replacementCharacters).toBeGreaterThan(
-      replacementText.length,
+    expect(replacementText).not.toMatch(BEHAVIOR_PRIMING_LANGUAGE);
+    expect(metadata!.replacementCharacters).toBe(
+      replacementText.length + request.model_visible_overhead_characters,
     );
     expect(onInterceptionStored).toHaveBeenCalledWith(metadata);
   });
@@ -557,7 +561,6 @@ describe("TokenMiserService code-mode reduction", () => {
       isEnabled: () => true,
       generateSummary,
       thresholdCharacters: 10,
-      codeModeContinuationGuidanceVersion: () => 1,
       codeModeGroupingVersion: () => 1,
     });
     await service.captureNestedPostToolUse({
@@ -597,28 +600,27 @@ describe("TokenMiserService code-mode reduction", () => {
       kind: string;
       groupId: string;
       members: Array<{ objectId: string; toolName: string; summary: string }>;
-      retrieval: { tool: string; policy: string };
+      sourceMaterial?: string;
     };
     expect(replacement).toMatchObject({
-      kind: "token_miser_group_summary",
+      kind: "tool_output_group_summary",
       groupId: "cell-1",
       members: [
         { toolName: "Bash", summary: "Found alpha matches." },
         { toolName: "Read", summary: "Found beta matches." },
       ],
-      retrieval: {
-        tool: "pwragent.read_token_miser_output_batch",
-        policy: expect.stringContaining("Summaries usually suffice"),
-      },
+      sourceMaterial: "Available by group and member reference when required.",
     });
+    expect(replacementText).not.toMatch(BEHAVIOR_PRIMING_LANGUAGE);
     const [metadata] = await store.listMetadata();
     expect(metadata).toMatchObject({
       groupId: "cell-1",
       originalCharacters: 59,
       groupMembers: replacement.members,
     });
-    expect(metadata!.replacementCharacters).toBeGreaterThanOrEqual(
-      replacementText.length + CODE_MODE_CONTINUATION_GUIDANCE_V1.length,
+    expect(metadata!.replacementCharacters).toBe(
+      replacementText.length
+      + codeModePayload([]).model_visible_overhead_characters,
     );
     const batch = await store.readGroupBatch({
       groupId: "cell-1",
@@ -798,7 +800,12 @@ describe("TokenMiserService code-mode reduction", () => {
 
     const [metadata] = await store.listMetadata();
     expect(metadata!.baselineParentTokens).toBe(25);
-    expect(metadata!.replacementCharacters).toBeLessThanOrEqual(100);
+    expect(metadata!.replacementCharacters).toBeLessThanOrEqual(
+      100 + codeModePayload([]).model_visible_overhead_characters,
+    );
+    expect(metadata!.replacementCharacters).toBeGreaterThan(
+      codeModePayload([]).model_visible_overhead_characters,
+    );
   });
 
   it("echoes Codex actionable state exactly and accounts for its model-visible envelope", async () => {
@@ -815,7 +822,6 @@ describe("TokenMiserService code-mode reduction", () => {
         },
       }),
       thresholdCharacters: 1,
-      codeModeContinuationGuidanceVersion: () => 1,
     });
     const actionableState = codeModeActionableState();
 
@@ -834,8 +840,11 @@ describe("TokenMiserService code-mode reduction", () => {
     const [metadata] = await store.listMetadata();
     const authoritativeEnvelope =
       `<codex_actionable_state>${JSON.stringify(actionableState)}</codex_actionable_state>`;
-    expect(metadata!.replacementCharacters).toBeGreaterThanOrEqual(
-      authoritativeEnvelope.length + CODE_MODE_CONTINUATION_GUIDANCE_V1.length,
+    const replacementText = response!.replacement![0]!.text;
+    expect(metadata!.replacementCharacters).toBe(
+      replacementText.length
+      + codeModePayload([]).model_visible_overhead_characters
+      + authoritativeEnvelope.length,
     );
   });
 
@@ -1046,7 +1055,9 @@ function payload(output: string): TokenMiserPostToolUsePayload {
 
 function codeModePayload(
   contentItems: TokenMiserCodeModeOutputPayload["content_items"],
-): TokenMiserCodeModeOutputPayload {
+): TokenMiserCodeModeOutputPayload & {
+  model_visible_overhead_characters: number;
+} {
   return {
     version: 1,
     thread_id: "thread-1",
@@ -1056,6 +1067,7 @@ function codeModePayload(
     script: "text(await tools.exec_command({ cmd: 'rg --files' }))",
     script_status: "Script completed",
     max_output_tokens: 10_000,
+    model_visible_overhead_characters: 137,
     content_items: contentItems,
   };
 }

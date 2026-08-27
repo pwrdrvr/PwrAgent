@@ -18,7 +18,7 @@ export function buildTokenMiserToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "search_token_miser_output",
       description:
-        "Search one Token Miser-preserved tool result by literal text. Code Mode receives the bounded result as a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The output must belong to the invoking thread.",
+        "Search one preserved tool result by literal text. Code Mode receives a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -58,7 +58,7 @@ export function buildTokenMiserToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "read_token_miser_output",
       description:
-        "Read a bounded inclusive line range from one Token Miser-preserved tool result. Code Mode receives the requested text as a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The output must belong to the invoking thread.",
+        "Read an inclusive line range from one preserved tool result. Code Mode receives the requested text as a plain string and should emit that string directly; MCP clients receive an ordinary text content block. The source must belong to the invoking thread.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -98,7 +98,7 @@ export function buildTokenMiserToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "read_token_miser_output_batch",
       description:
-        "Retrieve selected members from one grouped Token Miser Code Mode result in a single bounded call. Operations run in request order and may read a full member, search it, or return its head or tail. Code Mode receives one plain string and should emit it directly. The group must belong to the invoking thread.",
+        "Read selected members from one grouped Code Mode result in a single call. Operations run in request order and may read a complete member, search it, or return its head or tail. Code Mode receives one plain string and should emit it directly. The group must belong to the invoking thread.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
@@ -161,7 +161,7 @@ export function buildTokenMiserToolDefinitions(
       namespace: PWRAGENT_TOOL_NAMESPACE,
       name: "read_all_token_miser_output",
       description:
-        "Deliberately retrieve an entire Token Miser-preserved tool result as plain text in Code Mode or a text content block over MCP. This can erase the context savings; prefer search or bounded reads first. The output must belong to the invoking thread.",
+        "Read the complete preserved tool result as plain text in Code Mode or a text content block over MCP. The source must belong to the invoking thread.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
