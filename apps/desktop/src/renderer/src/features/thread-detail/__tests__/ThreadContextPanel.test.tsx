@@ -2758,6 +2758,147 @@ describe("ThreadContextPanel", () => {
       .not.toBeInTheDocument();
   });
 
+  it("separates reducer decisions from priced Luna evaluations", () => {
+    const accounting = (disposition: "summarized" | "passed_through") => ({
+      baselineParentCostMicros: 50_000,
+      baselineParentTokens: 10_000,
+      cachedReplayCount: 0,
+      cachedBaselineTokens: 0,
+      cachedBaselineCostMicros: 0,
+      currency: "USD" as const,
+      decisionSource: "helper" as const,
+      disposition,
+      gateCostMicros: 2_000,
+      gateModel: "gpt-5.6-luna",
+      gateTotalTokens: 2_100,
+      originalModel: "gpt-5.6-sol",
+      revealedParentCostMicros: disposition === "passed_through" ? 50_000 : 1_500,
+      revealedParentTokens: disposition === "passed_through" ? 10_000 : 300,
+      savingsMicros: disposition === "passed_through" ? -2_000 : 46_500,
+    });
+    const interception = (
+      objectId: string,
+      disposition: "summarized" | "passed_through",
+      decisionSource: "helper" | "policy",
+    ) => ({
+      objectId,
+      turnId: "turn-1",
+      toolUseId: `tool-${objectId}`,
+      toolName: "Code Mode",
+      createdAt: 1_800_000_010_000,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementCharacters: disposition === "passed_through" ? 40_000 : 1_200,
+      replacementTokens: disposition === "passed_through" ? 10_000 : 300,
+      retrievedCharacters: 0,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: disposition === "passed_through" ? 0 : 9_700,
+      disposition,
+      decisionSource,
+    });
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_010_000,
+            monitorId: "system:token-miser:summary",
+            parentTurnId: "turn-1",
+            status: "success",
+            task: "Gate Code Mode output",
+            tokenMiserAccounting: accounting("summarized"),
+            updatedAt: 1_800_000_010_000,
+          },
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_020_000,
+            monitorId: "system:token-miser:helper-pass",
+            parentTurnId: "turn-1",
+            status: "success",
+            task: "Evaluate Code Mode output",
+            tokenMiserAccounting: accounting("passed_through"),
+            updatedAt: 1_800_000_020_000,
+          },
+        ],
+      },
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            usageLineId: "turn-line-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            scope: "turn",
+            source: "live",
+            status: "finalized",
+            model: "gpt-5.6-sol",
+            inputTokens: 10_000,
+            uncachedInputTokens: 10_000,
+            cachedInputTokens: 0,
+            outputTokens: 100,
+            reasoningOutputTokens: 0,
+            totalTokens: 10_100,
+            priceStatus: "priced",
+            currency: "USD",
+            uncachedInputCostMicros: 50_000,
+            cachedInputCostMicros: 0,
+            outputCostMicros: 3_000,
+            totalCostMicros: 53_000,
+            provider: "openai",
+            createdAt: 1_800_000_000_000,
+          },
+          {
+            ...buildMonitorLine({
+              sourceItemId: "system:token-miser:summary",
+            }),
+            usageLineId: "gate-line-summary",
+          },
+          {
+            ...buildMonitorLine({
+              sourceItemId: "system:token-miser:helper-pass",
+            }),
+            usageLineId: "gate-line-helper-pass",
+          },
+        ],
+        summaries: [],
+      },
+      toolAccounting: {
+        alerts: [],
+        invocations: [],
+        summaries: [],
+        tokenMiser: {
+          interceptionCount: 3,
+          passThroughCount: 2,
+          policyPassThroughCount: 1,
+          helperPassThroughCount: 1,
+          helperDecisionCount: 2,
+          originalCharacters: 120_000,
+          baselineParentTokens: 30_000,
+          replacementTokens: 20_300,
+          retrievedTokens: 0,
+          estimatedParentTokensSaved: 9_700,
+          interceptions: [
+            interception("summary", "summarized", "helper"),
+            interception("helper-pass", "passed_through", "helper"),
+            interception("policy-pass", "passed_through", "policy"),
+          ],
+        },
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const summary = screen.getByRole("button", { name: /Token Miser/ });
+    expect(summary).toHaveTextContent(
+      "3 decisions · 2 Luna evaluations · 2 pass-throughs (1 helper · 1 policy)",
+    );
+    expect(summary).not.toHaveTextContent("2 decisions");
+    fireEvent.click(summary);
+    expect(screen.getAllByLabelText("Token Miser savings")).toHaveLength(2);
+  });
+
   // A group with nothing past the threshold has nothing to hold back, so
   // expanding shows every card outright — never a summary line and no cards.
   it("shows every card when no gate clears the threshold", () => {

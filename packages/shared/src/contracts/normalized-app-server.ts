@@ -1192,6 +1192,8 @@ export type ThreadTokenMiserInterceptionAccounting = {
   estimatedCachedReplayTokensSaved?: number;
   replayTrackingVersion?: 2;
   disposition?: "summarized" | "passed_through";
+  /** Whether Luna evaluated this decision or deterministic policy selected it. */
+  decisionSource?: "helper" | "policy";
   /** Nested Code Mode calls represented by this outer reducer decision. */
   groupMembers?: Array<{
     objectId: string;

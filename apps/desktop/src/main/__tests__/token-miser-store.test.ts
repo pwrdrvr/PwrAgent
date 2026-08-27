@@ -15,6 +15,79 @@ afterEach(async () => {
 });
 
 describe("TokenMiserStore", () => {
+  it("counts all decisions separately from helper evaluations", async () => {
+    const store = await createStore();
+    const helperUsage = (ordinal: number) => ({
+      helperThreadId: `helper-${ordinal}`,
+      helperTurnId: `helper-turn-${ordinal}`,
+      model: "gpt-5.6-luna",
+      reasoningEffort: "medium",
+      tokenUsage: {
+        inputTokens: 2_000,
+        outputTokens: 100,
+        totalTokens: 2_100,
+      },
+    });
+    await store.store({
+      threadId: "thread-owner",
+      turnId: "turn-1",
+      toolUseId: "tool-summary",
+      toolName: "Code Mode",
+      output: "summarized output",
+      replacementCharacters: 100,
+      summary: { summary: "Summary.", usefulDetails: [] },
+      disposition: "summarized",
+      helperUsage: helperUsage(1),
+    });
+    await store.store({
+      threadId: "thread-owner",
+      turnId: "turn-1",
+      toolUseId: "tool-helper-pass",
+      toolName: "Code Mode",
+      output: "helper pass-through output",
+      replacementCharacters: 26,
+      summary: { summary: "Passed through by helper.", usefulDetails: [] },
+      disposition: "passed_through",
+      helperUsage: helperUsage(2),
+    });
+    await store.store({
+      threadId: "thread-owner",
+      turnId: "turn-1",
+      toolUseId: "tool-policy-pass",
+      toolName: "Code Mode",
+      output: "policy pass-through output",
+      replacementCharacters: 26,
+      summary: { summary: "Passed through by policy.", usefulDetails: [] },
+      disposition: "passed_through",
+    });
+
+    const usage = await store.summarizeThreadUsage("thread-owner");
+    expect(usage).toMatchObject({
+      interceptionCount: 3,
+      helperDecisionCount: 2,
+      passThroughCount: 2,
+      helperPassThroughCount: 1,
+      policyPassThroughCount: 1,
+    });
+    expect(usage.interceptions).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        toolUseId: "tool-summary",
+        disposition: "summarized",
+        decisionSource: "helper",
+      }),
+      expect.objectContaining({
+        toolUseId: "tool-helper-pass",
+        disposition: "passed_through",
+        decisionSource: "helper",
+      }),
+      expect.objectContaining({
+        toolUseId: "tool-policy-pass",
+        disposition: "passed_through",
+        decisionSource: "policy",
+      }),
+    ]));
+  });
+
   it("counts every Code Mode reducer request separately from gate decisions", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-token-miser-"));
     temporaryDirectories.push(root);

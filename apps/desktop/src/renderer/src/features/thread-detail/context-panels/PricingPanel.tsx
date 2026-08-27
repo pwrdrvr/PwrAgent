@@ -3,6 +3,8 @@ import type {
   ThreadCompactionRecord,
   ThreadPricingSummary,
   ThreadSubAgentSummary,
+  ThreadTokenMiserAccounting,
+  ThreadTokenMiserInterceptionAccounting,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
@@ -49,6 +51,7 @@ type PricingPanelProps = {
    * Supplies each sub-agent row's name and its live/terminal status.
    */
   subAgents?: ThreadSubAgentSummary[];
+  tokenMiserAccounting?: ThreadTokenMiserAccounting;
   threadReasoningEffort?: string;
 };
 
@@ -152,6 +155,11 @@ export function PricingPanel(props: PricingPanelProps) {
           className="rail-card pricing-usage-row pricing-usage-row--orphan-gates"
         >
           <TokenMiserTurnGroup
+            decisions={tokenMiserDecisionsForGateLines({
+              accounting: props.tokenMiserAccounting,
+              gates: orphanGroup,
+              subAgentsById,
+            })}
             gates={orphanGroup}
             renderGate={(gate) => renderUsageRow(gate, { nested: true })}
             subAgentsById={subAgentsById}
@@ -280,6 +288,10 @@ export function PricingPanel(props: PricingPanelProps) {
         ) : null}
         {nestedGates.length > 0 ? (
           <TokenMiserTurnGroup
+            decisions={tokenMiserDecisionsForTurn(
+              props.tokenMiserAccounting,
+              line.turnId,
+            )}
             gates={nestedGates}
             renderGate={(gate) => renderUsageRow(gate, { nested: true })}
             subAgentsById={subAgentsById}
@@ -540,6 +552,41 @@ function partitionTokenMiserGateLines(
   return { displayLines, gateLinesByTurn, orphanGroupsByAnchor };
 }
 
+function tokenMiserDecisionsForTurn(
+  accounting: ThreadTokenMiserAccounting | undefined,
+  turnId: string | undefined,
+): ThreadTokenMiserInterceptionAccounting[] | undefined {
+  if (!accounting?.interceptions || !turnId) {
+    return undefined;
+  }
+  const decisions = accounting.interceptions.filter((decision) =>
+    decision.turnId === turnId
+  );
+  return decisions.length > 0 ? decisions : undefined;
+}
+
+function tokenMiserDecisionsForGateLines(params: {
+  accounting?: ThreadTokenMiserAccounting;
+  gates: readonly PricingUsageLine[];
+  subAgentsById: Map<string, ThreadSubAgentSummary>;
+}): ThreadTokenMiserInterceptionAccounting[] | undefined {
+  if (!params.accounting?.interceptions) {
+    return undefined;
+  }
+  const turnIds = new Set(
+    params.gates.flatMap((gate) => {
+      const turnId = gate.sourceItemId
+        ? params.subAgentsById.get(gate.sourceItemId)?.parentTurnId
+        : undefined;
+      return turnId ? [turnId] : [];
+    }),
+  );
+  const decisions = params.accounting.interceptions.filter((decision) =>
+    turnIds.has(decision.turnId)
+  );
+  return decisions.length > 0 ? decisions : undefined;
+}
+
 /**
  * The turn's Token Miser story, folded under the turn it belongs to.
  *
@@ -549,6 +596,7 @@ function partitionTokenMiserGateLines(
  * turn with twenty-five gates that each saved half a cent reads as one fact.
  */
 function TokenMiserTurnGroup(props: {
+  decisions?: readonly ThreadTokenMiserInterceptionAccounting[];
   gates: readonly PricingUsageLine[];
   renderGate: (line: PricingUsageLine) => ReactNode;
   subAgentsById: Map<string, ThreadSubAgentSummary>;
@@ -588,18 +636,33 @@ function TokenMiserTurnGroup(props: {
     0,
   );
   const unpricedCount = entries.length - priced.length;
-  const count = props.gates.length;
-  const helperDecisionCount = entries.filter(
-    (entry) => entry.accounting?.decisionSource !== "policy",
-  ).length;
-  const policyDecisionCount = entries.filter(
-    (entry) => entry.accounting?.decisionSource === "policy",
-  ).length;
-  const passThroughCount = entries.filter(
-    (entry) => entry.accounting?.disposition === "passed_through"
-      || entry.subAgent?.task.startsWith("Evaluate "),
-  ).length;
-  const countLabel = passThroughCount > 0
+  const count = props.decisions?.length ?? props.gates.length;
+  const helperDecisionCount = props.decisions
+    ? props.decisions.filter((decision) => decision.decisionSource !== "policy").length
+    : entries.filter((entry) => entry.accounting?.decisionSource !== "policy").length;
+  const policyDecisionCount = props.decisions
+    ? props.decisions.filter((decision) => decision.decisionSource === "policy").length
+    : entries.filter((entry) => entry.accounting?.decisionSource === "policy").length;
+  const helperPassThroughCount = props.decisions
+    ? props.decisions.filter((decision) =>
+        decision.disposition === "passed_through"
+        && decision.decisionSource !== "policy"
+      ).length
+    : entries.filter((entry) =>
+        entry.accounting?.disposition === "passed_through"
+        && entry.accounting?.decisionSource !== "policy"
+      ).length;
+  const policyPassThroughCount = props.decisions
+    ? props.decisions.filter((decision) =>
+        decision.disposition === "passed_through"
+        && decision.decisionSource === "policy"
+      ).length
+    : entries.filter((entry) =>
+        entry.accounting?.disposition === "passed_through"
+        && entry.accounting?.decisionSource === "policy"
+      ).length;
+  const passThroughCount = helperPassThroughCount + policyPassThroughCount;
+  const countLabel = props.decisions || passThroughCount > 0
     ? count === 1 ? "decision" : "decisions"
     : count === 1 ? "gate" : "gates";
   const verdict = priced.length === 0
@@ -620,8 +683,13 @@ function TokenMiserTurnGroup(props: {
         <span className="pricing-token-miser__label">Token Miser</span>
         <span className="pricing-token-miser__count">
           {count.toLocaleString()} {countLabel}
-          {policyDecisionCount > 0
-            ? ` · ${helperDecisionCount.toLocaleString()} helper · ${policyDecisionCount.toLocaleString()} policy`
+          {props.decisions
+            ? ` · ${helperDecisionCount.toLocaleString()} Luna ${helperDecisionCount === 1 ? "evaluation" : "evaluations"}`
+            : policyDecisionCount > 0
+              ? ` · ${helperDecisionCount.toLocaleString()} helper · ${policyDecisionCount.toLocaleString()} policy`
+            : ""}
+          {props.decisions && passThroughCount > 0
+            ? ` · ${passThroughCount.toLocaleString()} ${passThroughCount === 1 ? "pass-through" : "pass-throughs"} (${helperPassThroughCount.toLocaleString()} helper · ${policyPassThroughCount.toLocaleString()} policy)`
             : ""}
         </span>
         <span className="pricing-token-miser__verdict" data-negative={savingsMicros < 0}>

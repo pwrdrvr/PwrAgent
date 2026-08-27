@@ -129,6 +129,7 @@ export type TokenMiserThreadUsageSummary = TokenMiserUsageSummary & {
     estimatedCachedReplayTokensSaved: number;
     replayTrackingVersion?: 2;
     disposition?: "summarized" | "passed_through";
+    decisionSource?: "helper" | "policy";
     groupMembers?: TokenMiserGroupMemberSummary[];
     summary?: TokenMiserSummary;
   }>;
@@ -694,6 +695,11 @@ export class TokenMiserStore {
             ? { replayTrackingVersion: entry.replayTrackingVersion }
             : {}),
           ...(entry.disposition ? { disposition: entry.disposition } : {}),
+          ...(entry.helperUsage
+            ? { decisionSource: "helper" as const }
+            : entry.disposition === "passed_through"
+              ? { decisionSource: "policy" as const }
+              : {}),
           ...(entry.groupMembers ? { groupMembers: entry.groupMembers } : {}),
           ...(entry.summary ? { summary: entry.summary } : {}),
         };

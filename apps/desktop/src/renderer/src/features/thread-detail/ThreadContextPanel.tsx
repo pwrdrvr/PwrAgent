@@ -698,6 +698,7 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             displayOptions={props.pricingDisplayOptions}
             onScrollToTurn={props.onScrollToTurn}
             subAgents={props.thread.subAgents}
+            tokenMiserAccounting={props.toolAccounting?.tokenMiser}
             threadReasoningEffort={props.thread.reasoningEffort}
           />
         );
