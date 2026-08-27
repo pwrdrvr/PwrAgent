@@ -79,6 +79,16 @@ describe("TokenMiserService", () => {
         }),
       }),
     );
+    expect(generateSummary).toHaveBeenCalledWith(expect.objectContaining({
+      system: expect.stringMatching(
+        /sed range read[\s\S]*distinct[\s\S]*source code[\s\S]*pass_through/i,
+      ),
+    }));
+    expect(generateSummary).toHaveBeenCalledWith(expect.objectContaining({
+      system: expect.stringMatching(
+        /sed result[\s\S]*repetitive data[\s\S]*repeated error[\s\S]*summarize/i,
+      ),
+    }));
     expect(await store.listMetadata()).toEqual([]);
     expect(onInterceptionStored).not.toHaveBeenCalled();
     await prepared?.staged.persist();
