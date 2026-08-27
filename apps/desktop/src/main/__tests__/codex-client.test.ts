@@ -4021,6 +4021,166 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("attaches direct MCP image content to the final assistant message", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const imageUrl = "data:image/webp;base64,AQID";
+    MockTransport.readThreadResultByThreadId.set("thread-direct-mcp-image", {
+      thread: {
+        turns: [
+          {
+            id: "turn-direct-mcp-image",
+            startedAt: 1_763_500_150,
+            items: [
+              {
+                type: "mcpToolCall",
+                id: "mcp-direct-image",
+                server: "giphy-dev",
+                tool: "giphy_get_image",
+                status: "completed",
+                result: {
+                  content: [
+                    {
+                      type: "image",
+                      mimeType: "image/webp",
+                      data: "AQID",
+                    },
+                  ],
+                },
+              },
+              {
+                type: "agentMessage",
+                id: "assistant-final",
+                phase: "final_answer",
+                text: "Here is the image.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({ threadId: "thread-direct-mcp-image" });
+    const activity = replay.entries.find((entry) => entry.type === "activity");
+    const finalEntry = replay.entries.find(
+      (entry) => entry.type === "message" && entry.id === "assistant-final",
+    );
+
+    expect(activity).toMatchObject({
+      type: "activity",
+      details: [
+        expect.objectContaining({
+          id: "mcp-direct-image",
+          images: [
+            {
+              type: "image",
+              url: imageUrl,
+              alt: "giphy-dev/giphy_get_image result",
+            },
+          ],
+        }),
+      ],
+    });
+    expect(finalEntry).toMatchObject({
+      type: "message",
+      role: "assistant",
+      text: "Here is the image.",
+      parts: [
+        { type: "text", text: "Here is the image." },
+        {
+          type: "image",
+          url: imageUrl,
+          alt: "giphy-dev/giphy_get_image result",
+        },
+      ],
+    });
+
+    await client.close();
+  });
+
+  it("renders JSON-wrapped MCP image results and attaches them to the final message", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const imageUrl = "data:image/webp;base64,AQID";
+    MockTransport.readThreadResultByThreadId.set("thread-wrapped-mcp-image", {
+      thread: {
+        turns: [
+          {
+            id: "turn-wrapped-mcp-image",
+            startedAt: 1_763_500_150,
+            items: [
+              {
+                type: "mcpToolCall",
+                id: "mcp-wrapped-image",
+                server: "giphy-dev",
+                tool: "giphy_get_image",
+                status: "completed",
+                result: {
+                  content: [
+                    {
+                      type: "text",
+                      text: JSON.stringify({
+                        content: [
+                          {
+                            type: "image",
+                            mimeType: "image/webp",
+                            data: "AQID",
+                          },
+                        ],
+                      }),
+                    },
+                  ],
+                },
+              },
+              {
+                type: "agentMessage",
+                id: "assistant-final",
+                phase: "final_answer",
+                text: "Here is the image.",
+              },
+            ],
+          },
+        ],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({ threadId: "thread-wrapped-mcp-image" });
+    const activity = replay.entries.find((entry) => entry.type === "activity");
+    const finalEntry = replay.entries.find(
+      (entry) => entry.type === "message" && entry.id === "assistant-final",
+    );
+
+    expect(activity).toMatchObject({
+      type: "activity",
+      details: [
+        expect.objectContaining({
+          id: "mcp-wrapped-image",
+          images: [
+            expect.objectContaining({ type: "image", url: imageUrl }),
+          ],
+        }),
+      ],
+    });
+    expect(finalEntry).toMatchObject({
+      type: "message",
+      role: "assistant",
+      parts: [
+        { type: "text", text: "Here is the image." },
+        { type: "image", url: imageUrl },
+      ],
+    });
+
+    await client.close();
+  });
+
   it("attaches loopback image exports from MCP results to the final assistant message", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     const imageUrl =
@@ -5492,6 +5652,17 @@ describe("CodexAppServerClient", () => {
               },
             ],
           }),
+        ],
+      }),
+      expect.objectContaining({
+        type: "message",
+        role: "assistant",
+        parts: [
+          {
+            type: "image",
+            url: "data:image/png;base64,AQID",
+            alt: "node_repl/js result",
+          },
         ],
       }),
     ]);
