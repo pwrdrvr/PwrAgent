@@ -2901,6 +2901,15 @@ describe("SettingsScreen", () => {
       value: false,
       source: "config",
     };
+    snapshot.runtime.tokenMiser = {
+      activation: { observedAt: 1_800_000_000_000, state: "active" },
+      interceptionCount: 0,
+      originalCharacters: 0,
+      baselineParentTokens: 0,
+      replacementTokens: 0,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+    };
     const settings = createSettingsState(snapshot);
 
     render(

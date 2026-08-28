@@ -8131,7 +8131,7 @@ export class DesktopBackendRegistry {
       });
     const watchManagedCodexRuntime =
       options?.watchManagedCodexRuntime
-      ?? (settingsService
+      ?? (typeof settingsService?.watchManagedCodexRuntime === "function"
         ? settingsService.watchManagedCodexRuntime.bind(settingsService)
         : undefined);
     if (watchManagedCodexRuntime) {
