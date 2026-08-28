@@ -513,6 +513,7 @@ import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
 import { buildMinimalGrokHelperSessionPolicy } from "../acp/minimal-helper-session";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
 import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
 import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 import {
@@ -7759,6 +7760,8 @@ export class DesktopBackendRegistry {
   private tokenMiserCodeModeGroupingVersion?: number;
   private tokenMiserPostToolUseExactOutputVersion?: number;
   private tokenMiserRuntimePreparationFailure?: string;
+  private codexRuntimeRestartPending = false;
+  private codexRuntimeRestartPromise?: Promise<boolean>;
   private readonly tokenMiserPluginManager?: TokenMiserPluginManager;
   private tokenMiserStateDir?: string;
   private readonly resolveTokenMiserCodexRuntimeFn?: () => Promise<{
@@ -7841,6 +7844,9 @@ export class DesktopBackendRegistry {
     resolvePdfAnalysisEnabled?: () => boolean;
     resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
     resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
+    watchManagedCodexRuntime?: (
+      listener: (change: ManagedCodexSelectionChange) => void,
+    ) => () => void;
     runtimeInstanceId?: string;
     registrySessionId?: string;
     resolveLiveProfileRuntimeInstanceIds?: () => string[];
@@ -8116,6 +8122,24 @@ export class DesktopBackendRegistry {
         // surfaces as `available: false` with a clean reason.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
+    const watchManagedCodexRuntime =
+      options?.watchManagedCodexRuntime
+      ?? (settingsService
+        ? settingsService.watchManagedCodexRuntime.bind(settingsService)
+        : undefined);
+    if (watchManagedCodexRuntime) {
+      this.unsubscribers.push(
+        watchManagedCodexRuntime((change) => {
+          backendRegistryLog.info("managed Codex selection changed", {
+            enabled: change.enabled,
+            reason: change.reason,
+            version: change.runtime?.metadata.version,
+          });
+          this.codexRuntimeRestartPending = true;
+          void this.maybeRestartCodexForManagedRuntimeChange();
+        }),
+      );
+    }
     if (tokenMiserStateDir) {
       this.tokenMiserStore = new TokenMiserStore(
         path.join(tokenMiserStateDir, "objects"),
@@ -24941,6 +24965,7 @@ export class DesktopBackendRegistry {
     // security cross-check in messaging-controller relies on it).
     logRouting = true,
   ): Promise<T> {
+    await this.maybeRestartCodexForManagedRuntimeChange();
     // Single-client passthrough. The mode passed to the operation is no
     // longer a routing decision — it's documentation for callers that
     // want to forward it to codex's per-turn approvalPolicy/sandboxPolicy
@@ -24973,6 +24998,68 @@ export class DesktopBackendRegistry {
       });
     }
     return await operation(this.codexClient, mode);
+  }
+
+  private hasActiveCodexRuntimeWork(): boolean {
+    if (
+      this.reservedCodexStartThreadIds.size > 0
+      || this.backendActiveCodexThreadIds.size > 0
+      || this.activeCodexTurnModes.size > 0
+    ) {
+      return true;
+    }
+    for (const key of this.activeTurnKeys) {
+      if (key.startsWith("codex:")) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Switch binaries only at an idle Codex boundary. Enabling, disabling, and
+   * installing an update all close the reconnectable client; its next request
+   * resolves the currently selected command from Settings. Active turns keep
+   * their original process until their terminal notification has settled.
+   */
+  private async maybeRestartCodexForManagedRuntimeChange(): Promise<boolean> {
+    if (
+      this.closed
+      || !this.codexRuntimeRestartPending
+      || this.hasActiveCodexRuntimeWork()
+    ) {
+      return false;
+    }
+    if (this.codexRuntimeRestartPromise) {
+      return await this.codexRuntimeRestartPromise;
+    }
+
+    const restart = (async () => {
+      if (this.hasActiveCodexRuntimeWork()) return false;
+      this.codexRuntimeRestartPending = false;
+      await this.codexClient.close();
+      this.tokenMiserServerCapabilities.delete(this.codexClient);
+      this.tokenMiserReducerCapabilityState = undefined;
+      this.tokenMiserCodeModeGroupingVersion = undefined;
+      this.tokenMiserPostToolUseExactOutputVersion = undefined;
+      this.tokenMiserRuntimePreparationFailure = undefined;
+      if (this.resolveTokenMiserEnabledFn()) {
+        void this.prepareTokenMiserRuntime({ prune: true });
+      }
+      return true;
+    })();
+    this.codexRuntimeRestartPromise = restart;
+    try {
+      return await restart;
+    } catch (error) {
+      this.codexRuntimeRestartPending = true;
+      backendRegistryLog.warn("managed Codex restart failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    } finally {
+      if (this.codexRuntimeRestartPromise === restart) {
+        this.codexRuntimeRestartPromise = undefined;
+      }
+    }
   }
 
   private async withActiveCodexThreadClient<T>(
@@ -34525,6 +34612,7 @@ export class DesktopBackendRegistry {
         void this.flushQueuedExecutionModeIfPresent(
           notification.params.threadId,
         );
+        void this.maybeRestartCodexForManagedRuntimeChange();
       } else if (isAcpBackendId(event.backend)) {
         if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
           await this.flushQueuedExecutionModeIfPresent(

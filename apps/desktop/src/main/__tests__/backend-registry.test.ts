@@ -77,6 +77,7 @@ import {
   getCodexFastModeMismatchWarning,
   withTokenMiserBridgeDescriptorEnv,
 } from "../app-server/backend-registry";
+import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
 import type { AcpAvailableCommandsRecord } from "../acp/acp-available-commands-store";
 import {
   CodexEnvironmentCommandError,
@@ -2769,6 +2770,60 @@ describe("DesktopBackendRegistry", () => {
       "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
     );
     expect(withTokenMiserBridgeDescriptorEnv(source, undefined)).toBe(source);
+  });
+
+  it("reconnects idle Codex when managed runtime selection changes", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    let selectionListener:
+      | ((change: ManagedCodexSelectionChange) => void)
+      | undefined;
+    const stopWatching = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      watchManagedCodexRuntime: (listener) => {
+        selectionListener = listener;
+        return stopWatching;
+      },
+    });
+
+    selectionListener?.({ enabled: true, reason: "availability" });
+    await vi.waitFor(() => expect(codexClient.closeCallCount).toBe(1));
+
+    await registry.close();
+    expect(stopWatching).toHaveBeenCalledOnce();
+  });
+
+  it("defers managed Codex reconnect until active turns are idle", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    let selectionListener:
+      | ((change: ManagedCodexSelectionChange) => void)
+      | undefined;
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      watchManagedCodexRuntime: (listener) => {
+        selectionListener = listener;
+        return () => undefined;
+      },
+    });
+    const internals = registry as unknown as {
+      activeTurnKeys: Set<string>;
+      maybeRestartCodexForManagedRuntimeChange(): Promise<boolean>;
+    };
+    internals.activeTurnKeys.add("codex:thread-1:turn-1");
+
+    selectionListener?.({ enabled: true, reason: "availability" });
+    await Promise.resolve();
+    expect(codexClient.closeCallCount).toBe(0);
+
+    internals.activeTurnKeys.delete("codex:thread-1:turn-1");
+    await expect(
+      internals.maybeRestartCodexForManagedRuntimeChange(),
+    ).resolves.toBe(true);
+    expect(codexClient.closeCallCount).toBe(1);
+
+    await registry.close();
   });
 
   it("refreshes only owner-known directory Git state for federation requests", async () => {

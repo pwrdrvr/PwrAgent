@@ -277,6 +277,14 @@ type DesktopSettingsServiceOptions = {
   }) => void;
 };
 
+export const MANAGED_CODEX_UPDATE_POLL_INTERVAL_MS = 60 * 60_000;
+
+export type ManagedCodexSelectionChange = {
+  enabled: boolean;
+  reason: "availability" | "update";
+  runtime?: ManagedCodexRuntime;
+};
+
 type ConfigReadResult = {
   config: DesktopSettingsConfig;
   error?: string;
@@ -434,6 +442,7 @@ export class DesktopSettingsService {
   private codexSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
   private terminalSpawnEnv?: NodeJS.ProcessEnv;
   private terminalSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
+  private managedCodexRuntime?: ManagedCodexRuntime;
 
   constructor(private readonly options: DesktopSettingsServiceOptions) {
     this.env = options.env ?? process.env;
@@ -1535,7 +1544,7 @@ export class DesktopSettingsService {
     // usable managed Codex first, then persist availability. A failed first
     // install leaves the feature off instead of selecting an arbitrary Codex.
     if (enablingTokenMiser && this.options.ensureManagedCodexRuntime) {
-      await this.options.ensureManagedCodexRuntime({ checkMode: "force" });
+      await this.ensureManagedCodexRuntime("force");
     }
     applyDesktopSettingsPatch(this.configPath, patch);
     if (
@@ -1824,7 +1833,7 @@ export class DesktopSettingsService {
 
   async resolveCodexCommand(): Promise<ResolvedCodexCommandCandidate> {
     const config = this.readConfig().config;
-    const managedRuntime = await this.resolveManagedCodexRuntime(config, "ttl");
+    const managedRuntime = await this.ensureManagedCodexRuntimeIfEnabled("ttl");
     if (managedRuntime) {
       return {
         command: managedRuntime.command,
@@ -1835,6 +1844,85 @@ export class DesktopSettingsService {
     return await this.codexDiscoveryCoordinator.resolve(
       this.resolveCodexCommandPreferenceFromConfig(config),
     );
+  }
+
+  /**
+   * Keep managed Codex update traffic strictly inside the global experiment
+   * gate. The hourly wake-up is cheap; the runtime manager owns the 24-hour
+   * network TTL and immutable-release validation.
+   */
+  watchManagedCodexRuntime(
+    listener: (change: ManagedCodexSelectionChange) => void,
+    options: { intervalMs?: number } = {},
+  ): () => void {
+    const intervalMs = options.intervalMs ?? MANAGED_CODEX_UPDATE_POLL_INTERVAL_MS;
+    let enabled = this.resolveTokenMiserEnabled();
+    let timer: NodeJS.Timeout | undefined;
+    let stopped = false;
+
+    const clearTimer = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+    };
+    const checkForUpdate = async () => {
+      if (stopped || !this.resolveTokenMiserEnabled()) return;
+      const previousCommand = this.managedCodexRuntime?.command;
+      try {
+        const runtime = await this.ensureManagedCodexRuntimeIfEnabled("ttl");
+        if (
+          runtime
+          && previousCommand !== undefined
+          && runtime.command !== previousCommand
+        ) {
+          listener({ enabled: true, reason: "update", runtime });
+        }
+      } catch (error) {
+        getMainLogger("pwragent:managed-codex").warn(
+          "managed-codex-background-update-failed",
+          { error: error instanceof Error ? error.message : String(error) },
+        );
+      }
+    };
+    const armTimer = () => {
+      clearTimer();
+      if (!stopped && this.resolveTokenMiserEnabled()) {
+        timer = setInterval(() => {
+          void checkForUpdate();
+        }, intervalMs);
+      }
+    };
+
+    if (enabled) {
+      void checkForUpdate();
+      armTimer();
+    }
+    const unsubscribe = this.onConfigWritten(() => {
+      const nextEnabled = this.resolveTokenMiserEnabled();
+      if (nextEnabled === enabled) return;
+      enabled = nextEnabled;
+      if (enabled) {
+        void checkForUpdate();
+        armTimer();
+      } else {
+        clearTimer();
+        this.managedCodexRuntime = undefined;
+      }
+      listener({
+        enabled,
+        reason: "availability",
+        ...(enabled && this.managedCodexRuntime
+          ? { runtime: this.managedCodexRuntime }
+          : {}),
+      });
+    });
+
+    return () => {
+      stopped = true;
+      clearTimer();
+      unsubscribe();
+    };
   }
 
   resolveProviderModelDefaults() {
@@ -2019,7 +2107,27 @@ export class DesktopSettingsService {
     ) {
       return undefined;
     }
-    return await this.options.ensureManagedCodexRuntime({ checkMode });
+    return await this.ensureManagedCodexRuntime(checkMode);
+  }
+
+  private async ensureManagedCodexRuntimeIfEnabled(
+    checkMode: ManagedCodexCheckMode,
+  ): Promise<ManagedCodexRuntime | undefined> {
+    return await this.resolveManagedCodexRuntime(
+      this.readConfig().config,
+      checkMode,
+    );
+  }
+
+  private async ensureManagedCodexRuntime(
+    checkMode: ManagedCodexCheckMode,
+  ): Promise<ManagedCodexRuntime> {
+    if (!this.options.ensureManagedCodexRuntime) {
+      throw new Error("Managed Codex installation is unavailable.");
+    }
+    const runtime = await this.options.ensureManagedCodexRuntime({ checkMode });
+    this.managedCodexRuntime = runtime;
+    return runtime;
   }
 
   private ensureBaseTerminalSpawnEnv(): NodeJS.ProcessEnv {

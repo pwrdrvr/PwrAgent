@@ -1030,6 +1030,76 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("polls managed Codex only while Token Miser availability is on", async () => {
+    vi.useFakeTimers();
+    try {
+      const configPath = path.join(createTempRoot(), "config.toml");
+      const ensureManaged = vi.fn(async () => ({
+        appServerCommand: "/managed/codex-app-server",
+        codeModeHostCommand: "/managed/codex-code-mode-host",
+        command: "/managed/codex",
+        metadata: {
+          asset: "pwragent-codex-0.200.0-pwragent.1-linux-x86_64.tar.gz",
+          checkedAt: 1,
+          installedAt: 1,
+          repository: "pwrdrvr/codex",
+          schemaVersion: 1 as const,
+          sha256: "a".repeat(64),
+          tag: "pwragent-v0.200.0-pwragent.1",
+          version: "0.200.0-pwragent.1",
+        },
+      }));
+      const service = new DesktopSettingsService({
+        codexDiscoveryCoordinator: {
+          discover: vi.fn(async () => ({ candidates: [] })),
+          invalidate: vi.fn(),
+          resolve: vi.fn(async () => ({
+            command: "/path/codex",
+            source: "path" as const,
+          })),
+        },
+        configPath,
+        ensureManagedCodexRuntime: ensureManaged,
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+      const changes = vi.fn();
+      const stop = service.watchManagedCodexRuntime(changes, {
+        intervalMs: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(ensureManaged).not.toHaveBeenCalled();
+
+      await service.writeConfigPatch({
+        experimental: { tokenMiserEnabled: true },
+      });
+      expect(changes).toHaveBeenCalledWith(expect.objectContaining({
+        enabled: true,
+        reason: "availability",
+      }));
+      ensureManaged.mockClear();
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(ensureManaged).toHaveBeenCalledWith({ checkMode: "ttl" });
+
+      await service.writeConfigPatch({
+        experimental: { tokenMiserEnabled: false },
+      });
+      expect(changes).toHaveBeenCalledWith({
+        enabled: false,
+        reason: "availability",
+      });
+      ensureManaged.mockClear();
+
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(ensureManaged).not.toHaveBeenCalled();
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reads and lazily mirrors the legacy general Token Miser opt-in", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
