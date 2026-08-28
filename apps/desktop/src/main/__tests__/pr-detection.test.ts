@@ -118,7 +118,10 @@ describe("detectPullRequestsForThread", () => {
       directoryPaths: [repo],
     });
 
-    expect(prs).toEqual([expectedPr]);
+    expect(prs).toEqual([{
+      ...expectedPr,
+      linkedDirectoryPaths: [repo],
+    }]);
     expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledOnce();
     expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
       cwd: repo,
@@ -152,7 +155,10 @@ describe("detectPullRequestsForThread", () => {
       directoryPaths: [repo],
     });
 
-    expect(prs).toEqual([expectedPr]);
+    expect(prs).toEqual([{
+      ...expectedPr,
+      linkedDirectoryPaths: [repo],
+    }]);
     expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledOnce();
     expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
       cwd: repo,
@@ -184,7 +190,10 @@ describe("detectPullRequestsForThread", () => {
       directoryPaths: [repo],
     });
 
-    expect(prs).toEqual([expectedPr]);
+    expect(prs).toEqual([{
+      ...expectedPr,
+      linkedDirectoryPaths: [repo],
+    }]);
     expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledOnce();
     expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
       cwd: repo,
@@ -224,7 +233,10 @@ describe("detectPullRequestsForThread", () => {
       directoryPaths: [repo],
     });
 
-    expect(prs).toEqual([expectedPr]);
+    expect(prs).toEqual([{
+      ...expectedPr,
+      linkedDirectoryPaths: [repo],
+    }]);
     expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledOnce();
     expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
       cwd: repo,
@@ -256,7 +268,10 @@ describe("detectPullRequestsForThread", () => {
       directoryPaths: [repo],
     });
 
-    expect(prs).toEqual([expectedPr]);
+    expect(prs).toEqual([{
+      ...expectedPr,
+      linkedDirectoryPaths: [repo],
+    }]);
     expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledOnce();
     expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
       cwd: repo,
@@ -286,12 +301,46 @@ describe("detectPullRequestsForThread", () => {
       directoryPaths: [repo],
     });
 
-    expect(prs).toEqual([expectedPr]);
+    expect(prs).toEqual([{
+      ...expectedPr,
+      linkedDirectoryPaths: [repo],
+    }]);
     expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledOnce();
     expect(fetcher.fetchAllPullRequestsForBranch).toHaveBeenCalledWith({
       cwd: repo,
       branch,
     });
+  });
+
+  it("records only the repository that discovered a PR in a multi-repository lookup", async () => {
+    const branch = "fix/shared-branch-name";
+    const firstRepo = await createRepoWithBranch(branch);
+    const secondRepo = await createRepoWithBranch(branch);
+    await addGitHubRemote(firstRepo);
+    await addGitHubRemote(secondRepo);
+    const expectedPr = {
+      number: 13273,
+      org: "ExampleOrg",
+      repo: "catalog-service",
+      state: "pending" as const,
+      url: "https://github.com/ExampleOrg/catalog-service/pull/13273",
+    };
+    const fetcher = {
+      fetchAllPullRequestsForBranch: vi.fn(async ({ cwd }) =>
+        cwd === firstRepo ? [expectedPr] : [],
+      ),
+    } as unknown as GithubPrFetcher;
+
+    const prs = await detectPullRequestsForThread({
+      fetcher,
+      branch,
+      directoryPaths: [firstRepo, secondRepo],
+    });
+
+    expect(prs).toEqual([{
+      ...expectedPr,
+      linkedDirectoryPaths: [firstRepo],
+    }]);
   });
 
   it("forwards authoritative lookup intent so user refreshes bypass discovery primes", async () => {

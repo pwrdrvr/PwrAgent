@@ -1122,12 +1122,20 @@ function associatePrsWithLinkedDirectories(
     if (!pr.headSha?.trim()) {
       return pr;
     }
+    const discoveredDirectoryPaths = normalizePrLookupDirectoryPaths(
+      pr.linkedDirectoryPaths ?? [],
+    );
+    // Discovery records which checkout returned each PR. A multi-repository
+    // lookup cannot safely use every requested path as a fallback: doing so
+    // makes a PR from one repository appear to constrain all sibling repos.
+    const associatedDirectoryPaths = discoveredDirectoryPaths.length > 0
+      ? discoveredDirectoryPaths
+      : linkedDirectoryPaths.length === 1
+        ? linkedDirectoryPaths
+        : [];
     return normalizePrSummary({
       ...pr,
-      linkedDirectoryPaths: mergeLinkedDirectoryPaths(
-        pr.linkedDirectoryPaths,
-        linkedDirectoryPaths,
-      ),
+      linkedDirectoryPaths: associatedDirectoryPaths,
     });
   });
 }
