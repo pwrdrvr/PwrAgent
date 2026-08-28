@@ -85,10 +85,19 @@ export function ExperimentalSettings(props: {
     DEFAULT_TOKEN_MISER_DEFAULT_ENABLED;
   const tokenMiserUsage = props.snapshot.runtime.tokenMiser;
   const tokenMiserActivation = tokenMiserUsage?.activation;
+  const managedCodex = tokenMiserUsage?.managedCodex;
   // Only a contradiction is worth reporting: switched on, but the Codex side
   // never loaded. Off-and-unavailable is just off.
   const tokenMiserInert =
-    tokenMiserEnabled.value && tokenMiserActivation?.state === "unavailable";
+    tokenMiserEnabled.value
+    && (
+      managedCodex?.state === "unavailable"
+      || tokenMiserActivation?.state === "unavailable"
+    );
+  const tokenMiserStarting =
+    tokenMiserEnabled.value
+    && !tokenMiserInert
+    && tokenMiserActivation?.state !== "active";
   const codexDefaultModeRequestUserInput =
     props.snapshot.experimental.codexDefaultModeRequestUserInput ??
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
@@ -115,19 +124,21 @@ export function ExperimentalSettings(props: {
             ? "Not running"
             : !tokenMiserEnabled.value
               ? "Off"
+              : tokenMiserStarting
+                ? "Starting"
               : tokenMiserDefaultEnabled.value ? "Default on" : "Opt-in"
         }
         chipKind={
-          tokenMiserInert
-            ? "warn"
-            : tokenMiserEnabled.value ? "ok" : "default"
+            tokenMiserInert
+              ? "warn"
+            : tokenMiserEnabled.value && !tokenMiserStarting ? "ok" : "default"
         }
       >
         <div className="settings-fields">
           <SettingsField
             label="Make Token Miser available"
-            sub="Load the Token Miser runtime and expose per-thread controls."
-            help="Off by default. Requires a separately installed Token Miser-compatible Codex; PwrAgent does not download or update that executable. Codex also requires you to approve the exact PwrAgent hook with /hooks before it can run. New or reloaded Codex threads pick up the hook after approval. If the bridge or summarizer is unavailable, the original result passes through unchanged."
+            sub="Download and activate PwrAgent's verified Codex build, then expose per-thread controls."
+            help="Off by default. PwrAgent downloads, verifies, and durably selects its Token Miser-compatible Codex build; no path selection or hook approval is required. Update checks run only while this switch is on, and a new build takes over after active Codex turns finish. If activation or summarization is unavailable, the original result passes through unchanged."
             source={sourceBadge(tokenMiserEnabled)}
             control={
               <SettingsSwitch
@@ -159,9 +170,10 @@ export function ExperimentalSettings(props: {
           {tokenMiserInert ? (
             <SettingsField
               label="Codex could not load the gate"
-              sub={tokenMiserActivation?.reason
-                ?? "Codex plugin activation did not complete."}
-              help="Token Miser fails open, so turns keep running with tool output unchanged — nothing is gated until this clears. PwrAgent retries activation each time a Codex backend starts, so relaunching after fixing the cause is usually enough."
+              sub={managedCodex?.reason
+                ?? tokenMiserActivation?.reason
+                ?? "Managed Codex activation did not complete."}
+              help="Token Miser fails open, so turns keep running with tool output unchanged — nothing is gated until this clears. Toggle availability off and on to retry the verified download and activation."
               control={
                 <span className="settings-field__value settings-field__value--warn">
                   Enabled, not running

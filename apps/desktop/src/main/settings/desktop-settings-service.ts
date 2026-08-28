@@ -564,10 +564,23 @@ export class DesktopSettingsService {
       undefined,
       secretStorage.available,
     );
-    const codexDiscoveryCommand = await this.resolveCodexDiscoveryCommand(
-      config,
-      options.forceCodexDiscovery === true ? "force" : "ttl",
-    );
+    const managedCodexCheckMode =
+      options.forceCodexDiscovery === true ? "force" : "ttl";
+    let managedCodexRuntime: ManagedCodexRuntime | undefined;
+    let managedCodexError: string | undefined;
+    try {
+      managedCodexRuntime = await this.resolveManagedCodexRuntime(
+        config,
+        managedCodexCheckMode,
+      );
+    } catch (error) {
+      // A previously enabled profile must keep Settings available when its
+      // managed binary is missing or an update service is offline. Runtime
+      // launch remains strict and will not fall back to arbitrary Codex.
+      managedCodexError = error instanceof Error ? error.message : String(error);
+    }
+    const codexDiscoveryCommand = managedCodexRuntime?.command
+      ?? this.resolveCodexCommandPreferenceFromConfig(config);
     const codexDiscovery = await this.codexDiscoveryCoordinator.discover(
       codexDiscoveryCommand,
       {
@@ -644,8 +657,43 @@ export class DesktopSettingsService {
       configError: error,
       runtime: {
         tokenMiser: tokenMiserActivation
-          ? { ...tokenMiserUsage, activation: tokenMiserActivation }
-          : tokenMiserUsage,
+          ? {
+              ...tokenMiserUsage,
+              activation: tokenMiserActivation,
+              ...(managedCodexRuntime
+                ? {
+                    managedCodex: {
+                      state: "ready" as const,
+                      version: managedCodexRuntime.metadata.version,
+                    },
+                  }
+                : managedCodexError
+                  ? {
+                      managedCodex: {
+                        state: "unavailable" as const,
+                        reason: managedCodexError,
+                      },
+                    }
+                  : {}),
+            }
+          : {
+              ...tokenMiserUsage,
+              ...(managedCodexRuntime
+                ? {
+                    managedCodex: {
+                      state: "ready" as const,
+                      version: managedCodexRuntime.metadata.version,
+                    },
+                  }
+                : managedCodexError
+                  ? {
+                      managedCodex: {
+                        state: "unavailable" as const,
+                        reason: managedCodexError,
+                      },
+                    }
+                  : {}),
+            },
         messaging: {
           disabled: messagingOverride.disabled,
           overrideActive: messagingOverride.disabled,
@@ -2080,18 +2128,6 @@ export class DesktopSettingsService {
       || config.models?.codex?.path
       || undefined
     );
-  }
-
-  private async resolveCodexDiscoveryCommand(
-    config: DesktopSettingsConfig,
-    checkMode: ManagedCodexCheckMode,
-  ): Promise<string | undefined> {
-    const managedRuntime = await this.resolveManagedCodexRuntime(
-      config,
-      checkMode,
-    );
-    return managedRuntime?.command
-      ?? this.resolveCodexCommandPreferenceFromConfig(config);
   }
 
   private async resolveManagedCodexRuntime(

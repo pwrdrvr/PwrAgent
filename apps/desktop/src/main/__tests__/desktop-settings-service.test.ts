@@ -969,6 +969,48 @@ describe("DesktopSettingsService", () => {
     expect(existsOrEmpty(configPath)).toBe(true);
   });
 
+  it("keeps Settings readable without falling back when managed Codex is unavailable", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    fs.writeFileSync(configPath, [
+      "[experimental]",
+      "token_miser_enabled = true",
+      "",
+    ].join("\n"));
+    const discover = vi.fn(async () => ({ candidates: [] }));
+    const resolve = vi.fn(async () => ({
+      command: "/path/codex",
+      source: "path" as const,
+    }));
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover,
+        invalidate: vi.fn(),
+        resolve,
+      },
+      configPath,
+      ensureManagedCodexRuntime: vi.fn(async () => {
+        throw new Error("Verified managed Codex is temporarily unavailable.");
+      }),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await expect(service.readSettings()).resolves.toMatchObject({
+      runtime: {
+        tokenMiser: {
+          managedCodex: {
+            state: "unavailable",
+            reason: "Verified managed Codex is temporarily unavailable.",
+          },
+        },
+      },
+    });
+    await expect(service.resolveCodexCommand()).rejects.toThrow(
+      "Verified managed Codex is temporarily unavailable",
+    );
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
   it("returns to ordinary Codex discovery without checking managed releases when disabled", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

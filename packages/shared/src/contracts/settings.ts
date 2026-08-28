@@ -763,6 +763,11 @@ export type DesktopSettingsSnapshot = {
   configError?: string;
   runtime: {
     tokenMiser?: {
+      managedCodex?: {
+        state: "ready" | "unavailable";
+        reason?: string;
+        version?: string;
+      };
       /**
        * Whether the Codex-side gate is actually installed. The feature fails
        * open by design, so an activation failure otherwise looks identical to
