@@ -513,6 +513,118 @@ test.describe("federation remote window", () => {
     }
   });
 
+  test("retries an offline mounted thread after the peer reconnects and the row is reselected", async () => {
+    test.setTimeout(180_000);
+
+    const fixture = await createLocalControlFixture();
+    let gateway: InProcessFederationGateway | undefined;
+    let app: Awaited<ReturnType<typeof launchElectronApp>> | undefined;
+
+    try {
+      gateway = await startInProcessFederationGateway({
+        instanceLabel: "Remote reconnect owner",
+        threads: [{
+          id: "remote-reconnect-thread",
+          title: "Remote reconnect thread",
+          updatedAt: 2_000,
+        }],
+      });
+      app = await launchElectronApp({
+        fixturePath: fixture.fixturePath,
+        secretStorage: "memory",
+      });
+      const { window } = app;
+
+      const localRow = window.getByRole("button", {
+        name: "Local control thread",
+      });
+      await expect(localRow).toBeVisible({ timeout: 30_000 });
+      await localRow.click();
+      await expect(window.getByText("Local thread is ready.")).toBeVisible();
+
+      await window.getByRole("button", { name: "Open settings" }).click();
+      await window
+        .getByRole("navigation", { name: "Settings sections" })
+        .getByRole("button", { name: "Federation" })
+        .click();
+      await window.getByLabel("Import invite").fill(gateway.invite);
+      await window.getByRole("button", { name: "Import invite" }).click();
+      await gateway.waitForConnection(30_000);
+
+      await window.evaluate(async ({ instanceId }) => {
+        const api = (window as typeof window & {
+          pwragent?: {
+            addRemoteThreadPin?: (request: unknown) => Promise<unknown>;
+          };
+        }).pwragent;
+        if (!api?.addRemoteThreadPin) {
+          throw new Error("addRemoteThreadPin API is unavailable");
+        }
+        await api.addRemoteThreadPin({
+          ref: {
+            backend: "codex",
+            target: { scope: "remote", instanceId },
+            threadId: "remote-reconnect-thread",
+          },
+          instanceLabel: "Remote reconnect owner",
+          summary: {
+            source: "codex",
+            id: "remote-reconnect-thread",
+            title: "Remote reconnect thread",
+            titleSource: "explicit",
+            linkedDirectories: [],
+            inbox: { inInbox: true },
+            updatedAt: 2_000,
+            federation: {
+              ref: {
+                backend: "codex",
+                target: { scope: "remote", instanceId },
+                threadId: "remote-reconnect-thread",
+              },
+              instanceLabel: "Remote reconnect owner",
+              peerStatus: "connected",
+            },
+          },
+        });
+      }, { instanceId: gateway.instanceId });
+      await window.getByRole("button", { name: /Exit Settings/i }).click();
+
+      const remoteRow = window.getByRole("button", {
+        name: "Remote reconnect thread",
+      });
+      await expect(remoteRow).toBeVisible({ timeout: 30_000 });
+
+      await gateway.stop();
+      await remoteRow.click();
+      await expect(
+        window.locator(".federation-disconnected-banner"),
+      ).toBeVisible({ timeout: 30_000 });
+      await expect(window.locator(".transcript-error")).toContainText(
+        "not connected",
+        { timeout: 30_000 },
+      );
+
+      await localRow.click();
+      await expect(window.getByText("Local thread is ready.")).toBeVisible();
+
+      await gateway.restart();
+      await gateway.waitForNextConnection(90_000);
+      await expect(
+        window.locator(".federation-disconnected-banner"),
+      ).toHaveCount(0, { timeout: 60_000 });
+
+      await remoteRow.click();
+      await expect(
+        window.getByText("Remote transcript for Remote reconnect thread."),
+      ).toBeVisible({ timeout: 30_000 });
+      await expect(window.locator(".transcript-error")).toHaveCount(0);
+    } finally {
+      await app?.close();
+      await gateway?.close();
+      await fixture.cleanup();
+    }
+  });
+
   test("enrolls, browses remote threads, pins on the owner, and hides local-only chrome", async () => {
     test.setTimeout(300_000);
 

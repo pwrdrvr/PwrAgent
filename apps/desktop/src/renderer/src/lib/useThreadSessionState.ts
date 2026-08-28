@@ -4679,6 +4679,11 @@ export function useThreadSessionState(params: {
 
     updateSession(threadKey, (current) => ({
       ...current,
+      // A failed hydration is suppressed while the operator remains on the
+      // same thread/version so a dead backend cannot create a retry loop.
+      // Selecting the thread again is an explicit retry after conditions may
+      // have changed, such as a Federation peer reconnecting.
+      failedHydrationVersion: undefined,
       lastTouchedAt: Date.now(),
     }));
   }, [threadKey, updateSession]);

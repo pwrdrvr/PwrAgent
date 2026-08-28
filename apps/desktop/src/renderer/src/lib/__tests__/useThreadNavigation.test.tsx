@@ -1592,6 +1592,87 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("contains a failed remote seen write and retries it on reselection", async () => {
+    const federationTarget: FederationRemoteTarget = {
+      scope: "remote",
+      instanceId: "remote-owner",
+    };
+    const markThreadSeen = vi
+      .fn<NonNullable<DesktopApi["markThreadSeen"]>>()
+      .mockRejectedValueOnce(new Error("Federation peer is not connected"))
+      .mockResolvedValueOnce({
+        backend: "codex",
+        threadId: "remote-thread",
+        seenAt: 2_000,
+        seenUpdatedAt: 1_000,
+      });
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: ["codex:remote-thread"],
+      threads: [{
+        id: "remote-thread",
+        title: "Remote thread",
+        titleSource: "explicit" as const,
+        summary: "Remote thread summary",
+        source: "codex" as const,
+        linkedDirectories: [],
+        inbox: {
+          inInbox: true,
+          reason: "updated-since-seen" as const,
+          lastSeenUpdatedAt: 900,
+        },
+        updatedAt: 1_000,
+        federation: {
+          ref: {
+            backend: "codex" as const,
+            target: federationTarget,
+            threadId: "remote-thread",
+          },
+          instanceLabel: "Remote owner",
+          peerStatus: "connected" as const,
+        },
+      }],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      markThreadSeen,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("remote-thread");
+    });
+
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledTimes(1);
+    });
+    expect(result.current.threads[0]?.inbox.inInbox).toBe(true);
+
+    act(() => {
+      result.current.selectThread(result.current.threads[0]!);
+    });
+    await waitFor(() => {
+      expect(markThreadSeen).toHaveBeenCalledTimes(2);
+    });
+    expect(markThreadSeen).toHaveBeenLastCalledWith({
+      backend: "codex",
+      federationTarget,
+      threadId: "remote-thread",
+      seenUpdatedAt: 1_000,
+    });
+  });
+
   it("clears a selected-thread unread update when the seen write resolves after selecting away", async () => {
     const listeners = new Set<(event: AgentEvent) => void>();
     const delayedSeen = createDeferred<{
