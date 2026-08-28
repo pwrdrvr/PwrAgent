@@ -55,12 +55,14 @@ surface used by desktop windows and messaging. It includes thread creation,
 fork/review, turn start/steer/interrupt/compact, pending-request submission,
 scheduled-action list/create/update/cancel/send-now, model and execution
 settings, environment actions, environment setup progress, workspace handoff,
-and explicit directory Git-status refreshes. Directory refresh requests carry
-owner-known directory keys rather than viewer-resolved paths; the target
-instance resolves those keys and runs Git locally. Scheduled operations require
-the dedicated `scheduled_actions` capability rather than inheriting broad turn
-control. Capability checks remain attached to every method, so an older or
-restricted peer fails closed instead of silently executing locally.
+and explicit directory Git-status and thread PR refreshes. Directory refresh
+requests carry owner-known directory keys rather than viewer-resolved paths.
+PR refresh requests likewise carry only owner-known backend and thread IDs plus
+refresh intent. The target instance resolves filesystem paths and branches from
+its maintained state, then runs Git or `gh` locally. Scheduled operations
+require the dedicated `scheduled_actions` capability rather than inheriting
+broad turn control. Capability checks remain attached to every method, so an
+older or restricted peer fails closed instead of silently executing locally.
 
 Transcript images stay behind the renderer-safe `pwragent-image://` protocol.
 For a remote thread, the viewer rewrites owner-local image URLs to identify the

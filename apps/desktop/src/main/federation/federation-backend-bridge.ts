@@ -86,7 +86,7 @@ import type {
   QueueThreadExecutionModeResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
-  RefreshThreadPullRequestsRequest,
+  RefreshOwnedThreadPullRequestsRequest,
   RefreshThreadPullRequestsResponse,
   RecordModelSettingsRecentRequest,
   RecordRecentFileReferencesRequest,
@@ -179,16 +179,18 @@ export type FederationStartTurnRequest = StartTurnRequest & {
   messageOrigin?: AppServerThreadMessageOrigin;
 };
 
-export type FederationRefreshThreadPullRequestsRequest = Omit<
-  RefreshThreadPullRequestsRequest,
-  "federationTarget"
->;
+export type FederationRefreshThreadPullRequestsRequest =
+  RefreshOwnedThreadPullRequestsRequest;
 
 function localizeRefreshThreadPullRequestsRequest(
-  request: RefreshThreadPullRequestsRequest,
+  request: RefreshOwnedThreadPullRequestsRequest,
 ): FederationRefreshThreadPullRequestsRequest {
-  const { federationTarget: _federationTarget, ...localRequest } = request;
-  return localRequest;
+  return {
+    backend: request.backend,
+    threadId: request.threadId,
+    ...(request.provider ? { provider: request.provider } : {}),
+    ...(request.trigger ? { trigger: request.trigger } : {}),
+  };
 }
 
 type FederationMaterializeDirectoryLaunchpadRequest =
@@ -1160,7 +1162,7 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.refreshThreadPullRequests(
         localizeRefreshThreadPullRequestsRequest(
-          envelope.params as RefreshThreadPullRequestsRequest,
+          envelope.params as RefreshOwnedThreadPullRequestsRequest,
         ),
       ),
   );

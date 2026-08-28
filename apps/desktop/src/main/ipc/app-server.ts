@@ -80,6 +80,7 @@ import {
   type RefreshDirectoryGitStatusesResponse,
   type RefreshThreadGitWorkingStateRequest,
   type RefreshThreadGitWorkingStateResponse,
+  type RefreshOwnedThreadPullRequestsRequest,
   type RefreshThreadPullRequestsRequest,
   type SetPullRequestPollingFocusRequest,
   type RefreshThreadPullRequestsResponse,
@@ -3593,10 +3594,14 @@ class DesktopAppServerService {
       request.federationTarget
       && isRemoteFederationTarget(request.federationTarget)
     ) {
-      const { federationTarget, ...remoteRequest } = request;
       return await getDesktopFederationRuntime()
-        .remoteBackend(federationTarget)
-        .refreshThreadPullRequests(remoteRequest);
+        .remoteBackend(request.federationTarget)
+        .refreshThreadPullRequests({
+          backend: request.backend,
+          threadId: request.threadId,
+          ...(request.provider ? { provider: request.provider } : {}),
+          ...(request.trigger ? { trigger: request.trigger } : {}),
+        });
     }
     const backend = request.backend ?? "codex";
     const requestKey = getThreadPullRequestsRequestKey(backend, request);
@@ -3626,6 +3631,36 @@ class DesktopAppServerService {
     } finally {
       this.pendingThreadPullRequestRefreshes.delete(requestKey);
     }
+  }
+
+  async refreshOwnedThreadPullRequests(
+    request: RefreshOwnedThreadPullRequestsRequest,
+  ): Promise<RefreshThreadPullRequestsResponse> {
+    const backend = request.backend ?? "codex";
+    const threadKey = buildThreadIdentityKey(backend, request.threadId);
+    const [firstContext, ...remainingContexts] =
+      this.prRefreshContextByThreadKey.get(threadKey) ?? [];
+    if (!firstContext) {
+      throw new Error(
+        `No owner PR refresh context is available for ${threadKey}.`,
+      );
+    }
+    const refreshContext = async (
+      context: ThreadPrRefreshContext,
+    ): Promise<RefreshThreadPullRequestsResponse> => {
+      const { branchScoped: _branchScoped, ...lookupRequest } = context;
+      return await this.refreshThreadPullRequests({
+        ...lookupRequest,
+        ...(request.provider ? { provider: request.provider } : {}),
+        ...(request.trigger ? { trigger: request.trigger } : {}),
+      });
+    };
+
+    let response = await refreshContext(firstContext);
+    for (const context of remainingContexts) {
+      response = await refreshContext(context);
+    }
+    return response;
   }
 
   async checkThreadPullRequestStatusForTool(
@@ -7572,7 +7607,8 @@ export function registerAppServerIpcHandlers(): void {
     async (request) => await appServerService.detachThreadPullRequest(request),
   );
   getDesktopBackendRegistry().setThreadPullRequestRefreshHandler(
-    async (request) => await appServerService.refreshThreadPullRequests(request),
+    async (request) =>
+      await appServerService.refreshOwnedThreadPullRequests(request),
   );
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
     preferenceChanged: async (request) =>

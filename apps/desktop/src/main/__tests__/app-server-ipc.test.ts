@@ -4214,8 +4214,6 @@ describe("app server ipc", () => {
       backend: "codex",
       threadId: "thread-remote",
       trigger: "user",
-      branch: "fix/remote-pr-hover",
-      directoryPaths: ["/remote/repo"],
     });
     expect(response).toEqual({
       backend: "codex",
@@ -4223,6 +4221,50 @@ describe("app server ipc", () => {
       provider: "github.com",
       ghAvailable: true,
       prs: [],
+    });
+  });
+
+  it("resolves federated PR refresh inputs from the owner's thread state", async () => {
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    listThreads.mockResolvedValueOnce([
+      {
+        id: "thread-owner",
+        title: "Owner thread",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [
+          {
+            id: "directory:/owner/repo",
+            kind: "local",
+            label: "repo",
+            path: "/owner/repo",
+          },
+        ],
+        gitBranch: "owner/authoritative-branch",
+        updatedAt: 2_000,
+      },
+    ] as never);
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    detectPullRequestsForThread.mockClear();
+
+    const refreshFromOwnerState =
+      setThreadPullRequestRefreshHandler.mock.calls.at(-1)?.[0];
+    await refreshFromOwnerState({
+      backend: "codex",
+      threadId: "thread-owner",
+      trigger: "user",
+      branch: "viewer/stale-branch",
+      directoryPaths: ["/viewer/unrelated-repo"],
+    });
+
+    await vi.waitFor(() => {
+      expect(detectPullRequestsForThread).toHaveBeenCalledWith({
+        fetcher: expect.any(Object),
+        branch: "owner/authoritative-branch",
+        directoryPaths: ["/owner/repo"],
+        allowPrimedBranchLookup: false,
+      });
     });
   });
 

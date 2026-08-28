@@ -84,7 +84,7 @@ describe("usePullRequestRefresh", () => {
     });
   });
 
-  it("refreshes a remote thread through the caller-provided scoped API", async () => {
+  it("routes a remote hover refresh to the thread owner", async () => {
     const onRefreshNavigation = vi.fn(async () => undefined);
     const refreshThreadPullRequests = vi.fn(async () => buildResponse());
     const desktopApi = {
@@ -124,6 +124,50 @@ describe("usePullRequestRefresh", () => {
     });
     await waitFor(() => {
       expect(onRefreshNavigation).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("clears local polling focus when selection moves to a remote thread", async () => {
+    const refreshThreadPullRequests = vi.fn(async () => buildResponse({ prs: [] }));
+    const setPullRequestPollingFocus = vi.fn(async () => undefined);
+    const desktopApi = {
+      refreshThreadPullRequests,
+      setPullRequestPollingFocus,
+    } satisfies DesktopApi;
+    const { rerender } = renderHook(
+      ({ selectedThread }: { selectedThread: NavigationThreadSummary }) =>
+        usePullRequestRefresh({ desktopApi, selectedThread }),
+      {
+        initialProps: { selectedThread: buildThread({ prs: [] }) },
+      },
+    );
+
+    await waitFor(() => {
+      expect(setPullRequestPollingFocus).toHaveBeenCalledWith({
+        threadKeys: ["codex:thread-1"],
+      });
+    });
+
+    rerender({
+      selectedThread: buildThread({
+        id: "remote-thread",
+        prs: [],
+        federation: {
+          ref: buildFederatedThreadRef({
+            backend: "codex",
+            instanceId: "peer-laptop",
+            threadId: "remote-thread",
+          }),
+          instanceLabel: "Laptop",
+          peerStatus: "connected",
+        },
+      }),
+    });
+
+    await waitFor(() => {
+      expect(setPullRequestPollingFocus).toHaveBeenLastCalledWith({
+        threadKeys: [],
+      });
     });
   });
 

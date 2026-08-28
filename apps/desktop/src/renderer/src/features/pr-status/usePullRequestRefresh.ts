@@ -144,10 +144,14 @@ export function usePullRequestRefresh(params: {
   useEffect(() => {
     const setFocus = desktopApi?.setPullRequestPollingFocus;
     if (!setFocus) return;
-    if (federationWindowInstanceId || selectedIsRemoteFederated) {
-      return;
-    }
-    const threadKeys = selectedThreadKey ? [selectedThreadKey] : [];
+    // Focus is sender-scoped in main. A remote selection must actively clear
+    // this window's prior local key so it stops consuming the fast tier.
+    const threadKeys =
+      federationWindowInstanceId || selectedIsRemoteFederated
+        ? []
+        : selectedThreadKey
+          ? [selectedThreadKey]
+          : [];
     const timeoutId = window.setTimeout(() => {
       void setFocus({ threadKeys }).catch(() => {
         // Logged in main — keep the renderer silent.

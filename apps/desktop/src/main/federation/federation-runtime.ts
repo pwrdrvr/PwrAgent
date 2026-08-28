@@ -5202,7 +5202,7 @@ function localBackendOperations(): FederationBackendOperations {
     async refreshThreadPullRequests(
       request: FederationRefreshThreadPullRequestsRequest,
     ): Promise<RefreshThreadPullRequestsResponse> {
-      return await getDesktopBackendRegistry().refreshThreadPullRequests(request);
+      return await getDesktopBackendRegistry().refreshOwnedThreadPullRequests(request);
     },
     async ensureDirectoryLaunchpad(request: EnsureDirectoryLaunchpadRequest) {
       return await new DesktopMessagingBackendBridge()

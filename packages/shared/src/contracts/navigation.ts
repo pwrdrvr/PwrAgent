@@ -1658,6 +1658,15 @@ export type RefreshThreadPullRequestsRequest = {
   includeStatusFreshness?: boolean;
 };
 
+/**
+ * Federation refresh intent. The owner resolves branch and checkout paths
+ * from its maintained thread state instead of trusting viewer filesystem data.
+ */
+export type RefreshOwnedThreadPullRequestsRequest = Pick<
+  RefreshThreadPullRequestsRequest,
+  "backend" | "provider" | "threadId" | "trigger"
+>;
+
 export type DetachThreadPullRequestRequest = {
   backend?: AppServerBackendKind;
   federationTarget?: FederationTarget;

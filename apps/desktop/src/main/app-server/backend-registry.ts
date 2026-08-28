@@ -202,7 +202,7 @@ import {
   type QueueThreadExecutionModeResponse,
   type RefreshDirectoryGitStatusesRequest,
   type RefreshDirectoryGitStatusesResponse,
-  type RefreshThreadPullRequestsRequest,
+  type RefreshOwnedThreadPullRequestsRequest,
   type RefreshThreadPullRequestsResponse,
   type NavigationDirectoryGitStatusUpdatedNotification,
   type CancelThreadExecutionModeQueueRequest,
@@ -1752,7 +1752,7 @@ type ThreadPullRequestDetachHandler = (
 ) => Promise<DetachThreadPullRequestResponse>;
 
 type ThreadPullRequestRefreshHandler = (
-  request: RefreshThreadPullRequestsRequest,
+  request: RefreshOwnedThreadPullRequestsRequest,
 ) => Promise<RefreshThreadPullRequestsResponse>;
 
 type ThreadPrAutoDispatchHandler = {
@@ -8081,8 +8081,8 @@ export class DesktopBackendRegistry {
    * Refresh PR state through the desktop app-server service. Federation uses
    * this mediator so its backend bridge does not import the IPC module.
    */
-  async refreshThreadPullRequests(
-    request: RefreshThreadPullRequestsRequest,
+  async refreshOwnedThreadPullRequests(
+    request: RefreshOwnedThreadPullRequestsRequest,
   ): Promise<RefreshThreadPullRequestsResponse> {
     const handler = this.threadPullRequestRefreshHandler;
     if (!handler) {

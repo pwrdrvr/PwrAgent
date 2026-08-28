@@ -1991,8 +1991,6 @@ describe("federation backend bridge", () => {
       backend: "codex",
       threadId: "thread-1",
       trigger: "user",
-      branch: "fix/remote-pr-hover",
-      directoryPaths: ["/remote/repo"],
     });
     const refreshPrRequest = sent.at(-1)!;
     expect(refreshPrRequest).toMatchObject({
@@ -2002,8 +2000,6 @@ describe("federation backend bridge", () => {
         backend: "codex",
         threadId: "thread-1",
         trigger: "user",
-        branch: "fix/remote-pr-hover",
-        directoryPaths: ["/remote/repo"],
       },
     });
     rpc.receiveEnvelope({
@@ -2261,8 +2257,6 @@ describe("federation backend bridge", () => {
       backend: "codex",
       threadId: "thread-1",
       trigger: "user",
-      branch: "fix/remote-pr-hover",
-      directoryPaths: ["/remote/repo"],
     });
     expect(replies).toMatchObject([
       {
