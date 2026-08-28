@@ -15,15 +15,22 @@ import {
   isManagedCodexTagEligible,
   managedCodexAssetPlatform,
   MANAGED_CODEX_MINIMUM_SIGNED_TAG,
+  MANAGED_CODEX_PUBLICATION_MARKER_NAME,
   MANAGED_CODEX_RELEASES_FEED_URL,
   MANAGED_CODEX_RELEASES_URL,
+  MANAGED_CODEX_UPDATE_MANIFEST_NAME,
+  MANAGED_CODEX_UPDATE_SIGNATURE_NAME,
   selectManagedCodexRelease,
   selectManagedCodexReleaseFromFeed,
 } from "../codex-managed-runtime";
 
+const verifySigstoreMock = vi.hoisted(() => vi.fn(async () => ({})));
+vi.mock("sigstore", () => ({ verify: verifySigstoreMock }));
+
 const cleanupPaths: string[] = [];
 
 afterEach(async () => {
+  verifySigstoreMock.mockClear();
   await Promise.all(
     cleanupPaths.splice(0).map(async (entry) =>
       await rm(entry, { force: true, recursive: true }),
@@ -38,6 +45,7 @@ describe("managed Codex release selection", () => {
       release("pwragent-v0.200.0-pwragent.1", [
         asset("SHA256SUMS"),
         asset("pwragent-codex-0.200.0-pwragent.1-macos-aarch64.tar.gz"),
+        ...publicationAssets(),
       ]),
     ], "macos-aarch64");
 
@@ -87,12 +95,12 @@ describe("managed Codex release selection", () => {
 
   it("rejects downstream tags before the managed-runtime floor", () => {
     expect(MANAGED_CODEX_MINIMUM_SIGNED_TAG).toBe(
-      "pwragent-v0.146.0-pwragent.1",
+      "pwragent-v0.149.0-pwragent.1",
     );
-    expect(isManagedCodexTagEligible("pwragent-v0.145.0-pwragent.9")).toBe(
+    expect(isManagedCodexTagEligible("pwragent-v0.148.0-pwragent.9")).toBe(
       false,
     );
-    expect(isManagedCodexTagEligible("pwragent-v0.146.0-pwragent.1")).toBe(
+    expect(isManagedCodexTagEligible("pwragent-v0.149.0-pwragent.1")).toBe(
       true,
     );
     expect(isManagedCodexTagEligible("pwragent-v0.200.0-pwragent.1")).toBe(
@@ -145,6 +153,20 @@ describe("ensureManagedCodexRuntime", () => {
       metadata: { checkedAt: 1_000, sha256: digest, tag, version },
     });
     expect(extractArchive).toHaveBeenCalledOnce();
+    expect(verifySigstoreMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+      }),
+      expect.objectContaining({
+        certificateIssuer: "https://token.actions.githubusercontent.com",
+        certificateOIDs: expect.objectContaining({
+          "1.3.6.1.4.1.57264.1.13": "a".repeat(40),
+          "1.3.6.1.4.1.57264.1.20": "push",
+        }),
+        ctLogThreshold: 1,
+        tlogThreshold: 1,
+      }),
+    );
     const callsAfterInstall = fetchMock.mock.calls.length;
 
     const cached = await ensureManagedCodexRuntime({
@@ -166,8 +188,8 @@ describe("ensureManagedCodexRuntime", () => {
 
   it("uses the verified cache when a forced update check is offline", async () => {
     const rootDir = await temporaryRoot();
-    const tag = "pwragent-v0.146.0-pwragent.1";
-    const version = "0.146.0-pwragent.1";
+    const tag = "pwragent-v0.149.0-pwragent.1";
+    const version = "0.149.0-pwragent.1";
     await writeManagedCache(rootDir, { tag, version });
 
     const runtime = await ensureManagedCodexRuntime({
@@ -195,6 +217,43 @@ describe("ensureManagedCodexRuntime", () => {
     })).rejects.toThrow("GitHub release check failed with HTTP 503");
   });
 
+  it("rejects a completion marker with an expanded schema", async () => {
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v0.200.0-pwragent.1";
+    const version = "0.200.0-pwragent.1";
+    const archiveName = `pwragent-codex-${version}-linux-x86_64.tar.gz`;
+    const archive = Buffer.from("marker schema archive");
+    const digest = createHash("sha256").update(archive).digest("hex");
+    const validFetch = releaseFetch({ archive, archiveName, digest, tag });
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      if (String(input).endsWith(`/${MANAGED_CODEX_PUBLICATION_MARKER_NAME}`)) {
+        const publication = publicationFixture({
+          archive,
+          archiveName,
+          digest,
+          tag,
+        });
+        return Response.json({
+          ...JSON.parse(publication.marker),
+          unexpected: true,
+        });
+      }
+      return await validFetch(input);
+    });
+
+    await expect(ensureManagedCodexRuntime({
+      arch: "x64",
+      checkMode: "force",
+      extractArchive: vi.fn(),
+      fetch: fetchMock as typeof globalThis.fetch,
+      platform: "linux",
+      rootDir,
+    })).rejects.toThrow(
+      "managed Codex publication marker has an unsupported schema",
+    );
+    expect(verifySigstoreMock).not.toHaveBeenCalled();
+  });
+
   it("uses the release feed when the unauthenticated API is limited", async () => {
     const rootDir = await temporaryRoot();
     const tag = "pwragent-v0.201.0-pwragent.1";
@@ -204,6 +263,12 @@ describe("ensureManagedCodexRuntime", () => {
     const digest = createHash("sha256").update(archive).digest("hex");
     const fetchMock = vi.fn(async (input: string | URL | Request) => {
       const url = String(input);
+      const publication = publicationFixture({
+        archive,
+        archiveName,
+        digest,
+        tag,
+      });
       if (url === MANAGED_CODEX_RELEASES_URL) {
         return new Response("limited", { status: 403 });
       }
@@ -213,7 +278,16 @@ describe("ensureManagedCodexRuntime", () => {
         );
       }
       if (url.endsWith("/SHA256SUMS")) {
-        return new Response(`${digest}  ${archiveName}\n`);
+        return new Response(publication.checksum);
+      }
+      if (url.endsWith(`/${MANAGED_CODEX_UPDATE_MANIFEST_NAME}`)) {
+        return new Response(publication.manifest);
+      }
+      if (url.endsWith(`/${MANAGED_CODEX_UPDATE_SIGNATURE_NAME}`)) {
+        return new Response(publication.signature);
+      }
+      if (url.endsWith(`/${MANAGED_CODEX_PUBLICATION_MARKER_NAME}`)) {
+        return new Response(publication.marker);
       }
       if (url.endsWith(`/${archiveName}`)) {
         return new Response(archive.toString("utf8"));
@@ -288,6 +362,14 @@ function asset(name: string, digest?: string, size?: number) {
   };
 }
 
+function publicationAssets() {
+  return [
+    asset(MANAGED_CODEX_UPDATE_MANIFEST_NAME),
+    asset(MANAGED_CODEX_UPDATE_SIGNATURE_NAME),
+    asset(MANAGED_CODEX_PUBLICATION_MARKER_NAME),
+  ];
+}
+
 function release(tag: string, assets: ReturnType<typeof asset>[]) {
   return { assets, draft: false, published_at: "2026-08-28", tag_name: tag };
 }
@@ -298,9 +380,11 @@ function releaseFetch(params: {
   digest: string;
   tag: string;
 }) {
+  const publication = publicationFixture(params);
   const payload = [release(params.tag, [
     asset("SHA256SUMS"),
     asset(params.archiveName, params.digest, params.archive.length),
+    ...publicationAssets(),
   ])];
   return vi.fn(async (input: string | URL | Request) => {
     const url = String(input);
@@ -308,13 +392,128 @@ function releaseFetch(params: {
       return Response.json(payload);
     }
     if (url.endsWith("/SHA256SUMS")) {
-      return new Response(`${params.digest}  ${params.archiveName}\n`);
+      return new Response(publication.checksum);
+    }
+    if (url.endsWith(`/${MANAGED_CODEX_UPDATE_MANIFEST_NAME}`)) {
+      return new Response(publication.manifest);
+    }
+    if (url.endsWith(`/${MANAGED_CODEX_UPDATE_SIGNATURE_NAME}`)) {
+      return new Response(publication.signature);
+    }
+    if (url.endsWith(`/${MANAGED_CODEX_PUBLICATION_MARKER_NAME}`)) {
+      return new Response(publication.marker);
     }
     if (url.endsWith(`/${params.archiveName}`)) {
       return new Response(params.archive.toString("utf8"));
     }
     return new Response("missing", { status: 404 });
   });
+}
+
+function publicationFixture(params: {
+  archive: Buffer;
+  archiveName: string;
+  digest: string;
+  tag: string;
+}) {
+  const version = params.tag.slice("pwragent-v".length);
+  const targets = [
+    ["darwin", "arm64", "macos-aarch64", "aarch64-apple-darwin", "tar.gz"],
+    ["darwin", "x64", "macos-x86_64", "x86_64-apple-darwin", "tar.gz"],
+    ["linux", "arm64", "linux-aarch64", "aarch64-unknown-linux-gnu", "tar.gz"],
+    ["linux", "x64", "linux-x86_64", "x86_64-unknown-linux-gnu", "tar.gz"],
+    ["win32", "x64", "windows-x86_64", "x86_64-pc-windows-msvc", "zip"],
+  ] as const;
+  const artifacts = targets.map(
+    ([os, arch, platform, target, archiveType]) => {
+      const file = `pwragent-codex-${version}-${platform}.${archiveType}`;
+      const selected = file === params.archiveName;
+      return {
+        arch,
+        archiveType,
+        file,
+        os,
+        platform,
+        sha256: selected
+          ? params.digest
+          : createHash("sha256").update(file).digest("hex"),
+        size: selected ? params.archive.length : 1,
+        target,
+      };
+    },
+  );
+  const sourceCommit = "a".repeat(40);
+  const manifest = JSON.stringify({
+    schemaVersion: 1,
+    product: "pwragent-codex",
+    version,
+    releaseTag: params.tag,
+    source: {
+      repository: "pwrdrvr/codex",
+      commit: sourceCommit,
+    },
+    capabilities: {
+      codeModeOutputReducer: {
+        protocolVersion: 1,
+        intentContextVersion: 1,
+      },
+      pwrdrvrTokenMiser: {
+        identity: "pwrdrvr.pwragent.token-miser",
+        version: 1,
+      },
+    },
+    artifacts,
+  });
+  const manifestDigest = createHash("sha256").update(manifest).digest("hex");
+  const checksum = `${params.digest}  ${params.archiveName}\n`;
+  const subjects = [
+    ...artifacts.map((artifact) => ({
+      name: artifact.file,
+      digest: { sha256: artifact.sha256 },
+    })),
+    {
+      name: "SHA256SUMS",
+      digest: {
+        sha256: createHash("sha256").update(checksum).digest("hex"),
+      },
+    },
+    {
+      name: MANAGED_CODEX_UPDATE_MANIFEST_NAME,
+      digest: { sha256: manifestDigest },
+    },
+  ];
+  return {
+    checksum,
+    manifest,
+    marker: JSON.stringify({
+      complete: true,
+      manifest: {
+        file: MANAGED_CODEX_UPDATE_MANIFEST_NAME,
+        sha256: manifestDigest,
+        signatureBundle: MANAGED_CODEX_UPDATE_SIGNATURE_NAME,
+        signatureFormat: "sigstore-bundle-v0.3",
+      },
+      product: "pwragent-codex",
+      releaseTag: params.tag,
+      schemaVersion: 1,
+      sourceCommit,
+      version,
+    }),
+    signature: JSON.stringify({
+      mediaType: "application/vnd.dev.sigstore.bundle.v0.3+json",
+      verificationMaterial: {},
+      dsseEnvelope: {
+        payload: Buffer.from(JSON.stringify({
+          _type: "https://in-toto.io/Statement/v1",
+          subject: subjects,
+          predicateType: "https://slsa.dev/provenance/v1",
+          predicate: {},
+        })).toString("base64"),
+        payloadType: "application/vnd.in-toto+json",
+        signatures: [],
+      },
+    }),
+  };
 }
 
 function versionProbe(version: string) {

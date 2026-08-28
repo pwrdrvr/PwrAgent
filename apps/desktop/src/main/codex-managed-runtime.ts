@@ -15,6 +15,7 @@ import {
   realpath,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -22,6 +23,8 @@ import { Readable, Transform } from "node:stream";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
+import { verify as verifySigstore } from "sigstore";
+import type { Bundle as SigstoreBundle } from "sigstore";
 import { getMainLogger } from "./log.js";
 import { verifyMatchingPlatformSignature } from "./managed-runtime-signature.js";
 import { resolvePwragentRoot } from "./profile.js";
@@ -37,8 +40,14 @@ export const MANAGED_CODEX_RELEASES_FEED_URL =
 // The capability probe remains authoritative. This floor only prevents a
 // pre-integration downstream tag from becoming a download candidate.
 export const MANAGED_CODEX_MINIMUM_SIGNED_TAG =
-  "pwragent-v0.146.0-pwragent.1";
+  "pwragent-v0.149.0-pwragent.1";
 export const MANAGED_CODEX_CHECK_TTL_MS = 24 * 60 * 60_000;
+export const MANAGED_CODEX_UPDATE_MANIFEST_NAME =
+  "pwragent-codex-update-v1.json";
+export const MANAGED_CODEX_UPDATE_SIGNATURE_NAME =
+  "pwragent-codex-update-v1.json.sigstore.json";
+export const MANAGED_CODEX_PUBLICATION_MARKER_NAME =
+  "pwragent-codex-publication-complete-v1.json";
 const MANAGED_CODEX_MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const MANAGED_CODEX_FETCH_TIMEOUT_MS = 5 * 60_000;
 const MANAGED_CODEX_METADATA_VERSION = 1;
@@ -67,6 +76,18 @@ export type ManagedCodexRelease = {
     url: string;
   };
   checksum: {
+    name: string;
+    url: string;
+  };
+  completion: {
+    name: string;
+    url: string;
+  };
+  manifest: {
+    name: string;
+    url: string;
+  };
+  signature: {
     name: string;
     url: string;
   };
@@ -104,11 +125,35 @@ type ManagedCodexRuntimeOptions = {
   probeVersion?: (command: string) => Promise<string>;
   requirePlatformSignature?: boolean;
   rootDir?: string;
+  verifySigstoreBundle?: typeof verifyManagedCodexSigstoreBundle;
   verifyPlatformSignature?: (
     command: string,
     applicationCommand: string,
     platform: NodeJS.Platform,
   ) => Promise<void>;
+};
+
+type ManagedCodexManifestArtifact = {
+  arch: string;
+  archiveType: string;
+  file: string;
+  os: string;
+  platform: string;
+  sha256: string;
+  size: number;
+  target: string;
+};
+
+type ManagedCodexUpdateManifest = {
+  artifacts: ManagedCodexManifestArtifact[];
+  sourceCommit: string;
+};
+
+type ManagedCodexSigstoreVerification = {
+  bundlePath: string;
+  expectedSubjects: Record<string, string>;
+  sourceCommit: string;
+  tag: string;
 };
 
 type BundleValidationOptions = {
@@ -130,6 +175,43 @@ type ParsedSemver = {
 const processChecks = new Set<string>();
 const activeChecks = new Map<string, Promise<ManagedCodexRuntime>>();
 const markedRuntimeCommands = new Map<string, string>();
+const MANAGED_CODEX_ARTIFACT_TARGETS = [
+  {
+    arch: "arm64",
+    archiveType: "tar.gz",
+    os: "darwin",
+    platform: "macos-aarch64",
+    target: "aarch64-apple-darwin",
+  },
+  {
+    arch: "x64",
+    archiveType: "tar.gz",
+    os: "darwin",
+    platform: "macos-x86_64",
+    target: "x86_64-apple-darwin",
+  },
+  {
+    arch: "arm64",
+    archiveType: "tar.gz",
+    os: "linux",
+    platform: "linux-aarch64",
+    target: "aarch64-unknown-linux-gnu",
+  },
+  {
+    arch: "x64",
+    archiveType: "tar.gz",
+    os: "linux",
+    platform: "linux-x86_64",
+    target: "x86_64-unknown-linux-gnu",
+  },
+  {
+    arch: "x64",
+    archiveType: "zip",
+    os: "win32",
+    platform: "windows-x86_64",
+    target: "x86_64-pc-windows-msvc",
+  },
+] as const;
 
 /**
  * Resolve a verified PwrAgent Codex distribution, installing or updating it
@@ -279,18 +361,32 @@ export function selectManagedCodexRelease(
     const checksum = normalizedAsset(
       assets.find((asset) => asset.name === "SHA256SUMS"),
     );
+    const completion = normalizedAsset(
+      assets.find((asset) =>
+        asset.name === MANAGED_CODEX_PUBLICATION_MARKER_NAME
+      ),
+    );
+    const manifest = normalizedAsset(
+      assets.find((asset) => asset.name === MANAGED_CODEX_UPDATE_MANIFEST_NAME),
+    );
+    const signature = normalizedAsset(
+      assets.find((asset) => asset.name === MANAGED_CODEX_UPDATE_SIGNATURE_NAME),
+    );
     const archive = normalizedAsset(
       assets.find((asset) =>
         typeof asset.name === "string"
         && asset.name === managedCodexArchiveName(tag, assetPlatform),
       ),
     );
-    if (!checksum || !archive) {
+    if (!checksum || !archive || !completion || !manifest || !signature) {
       continue;
     }
     return {
       archive,
       checksum,
+      completion,
+      manifest,
+      signature,
       ...(typeof release.published_at === "string"
         ? { publishedAt: release.published_at }
         : {}),
@@ -325,6 +421,18 @@ export function selectManagedCodexReleaseFromFeed(
       checksum: {
         name: "SHA256SUMS",
         url: `${releaseBase}/SHA256SUMS`,
+      },
+      completion: {
+        name: MANAGED_CODEX_PUBLICATION_MARKER_NAME,
+        url: `${releaseBase}/${MANAGED_CODEX_PUBLICATION_MARKER_NAME}`,
+      },
+      manifest: {
+        name: MANAGED_CODEX_UPDATE_MANIFEST_NAME,
+        url: `${releaseBase}/${MANAGED_CODEX_UPDATE_MANIFEST_NAME}`,
+      },
+      signature: {
+        name: MANAGED_CODEX_UPDATE_SIGNATURE_NAME,
+        url: `${releaseBase}/${MANAGED_CODEX_UPDATE_SIGNATURE_NAME}`,
       },
       tag,
     };
@@ -458,10 +566,52 @@ async function installRelease(
   try {
     const archivePath = path.join(stagingRoot, release.archive.name);
     const checksumPath = path.join(stagingRoot, release.checksum.name);
+    const completionPath = path.join(stagingRoot, release.completion.name);
+    const manifestPath = path.join(stagingRoot, release.manifest.name);
+    const signaturePath = path.join(stagingRoot, release.signature.name);
+    // The publisher uploads this marker last. Fetch it first so an Atom feed
+    // entry cannot expose a partially uploaded release as installable.
+    await downloadFile(release.completion.url, completionPath, options.fetch);
+    await downloadFile(release.manifest.url, manifestPath, options.fetch);
+    await downloadFile(release.signature.url, signaturePath, options.fetch);
     await downloadFile(release.checksum.url, checksumPath, options.fetch);
     await downloadFile(release.archive.url, archivePath, options.fetch);
+    const completionBytes = await readFile(completionPath);
+    const manifestBytes = await readFile(manifestPath);
+    const publication = parseManagedCodexPublicationMarker(
+      completionBytes,
+      release.tag,
+    );
+    const manifestDigest = sha256Bytes(manifestBytes);
+    if (publication.manifestSha256 !== manifestDigest) {
+      throw new Error(
+        `Managed Codex manifest digest mismatch: expected ${publication.manifestSha256}, got ${manifestDigest}.`,
+      );
+    }
+    const manifest = parseManagedCodexUpdateManifest(
+      manifestBytes,
+      release.tag,
+    );
+    if (publication.sourceCommit !== manifest.sourceCommit) {
+      throw new Error(
+        "Managed Codex publication source commit disagrees with the update manifest.",
+      );
+    }
+    const manifestArtifact = manifest.artifacts.find(
+      (artifact) => artifact.file === release.archive.name,
+    );
+    if (!manifestArtifact) {
+      throw new Error(
+        `Managed Codex manifest does not contain ${release.archive.name}.`,
+      );
+    }
     const checksumText = await readFile(checksumPath, "utf8");
     const expected = expectedChecksum(checksumText, release.archive.name);
+    if (manifestArtifact.sha256 !== expected) {
+      throw new Error(
+        `Managed Codex manifest digest disagrees with SHA256SUMS for ${release.archive.name}.`,
+      );
+    }
     if (release.archive.digest && release.archive.digest !== expected) {
       throw new Error(
         `Release digest disagrees with SHA256SUMS for ${release.archive.name}.`,
@@ -473,6 +623,36 @@ async function installRelease(
         `Checksum mismatch for ${release.archive.name}: expected ${expected}, got ${actual}.`,
       );
     }
+    const archiveEntry = await stat(archivePath);
+    if (archiveEntry.size !== manifestArtifact.size) {
+      throw new Error(
+        `Managed Codex archive size mismatch for ${release.archive.name}: expected ${manifestArtifact.size}, got ${archiveEntry.size}.`,
+      );
+    }
+    if (
+      release.archive.size !== undefined
+      && release.archive.size !== manifestArtifact.size
+    ) {
+      throw new Error(
+        `GitHub release size disagrees with the managed Codex manifest for ${release.archive.name}.`,
+      );
+    }
+    const expectedSubjects = Object.fromEntries([
+      ...manifest.artifacts.map((artifact) => [
+        artifact.file,
+        artifact.sha256,
+      ]),
+      [release.checksum.name, await sha256(checksumPath)],
+      [release.manifest.name, manifestDigest],
+    ]);
+    await (
+      options.verifySigstoreBundle ?? verifyManagedCodexSigstoreBundle
+    )({
+      bundlePath: signaturePath,
+      expectedSubjects,
+      sourceCommit: manifest.sourceCommit,
+      tag: release.tag,
+    });
 
     const extractedRoot = path.join(stagingRoot, "extracted");
     await mkdir(extractedRoot);
@@ -555,6 +735,340 @@ async function activateExtractedVersion(
       }
     }
   }
+}
+
+function parseManagedCodexPublicationMarker(
+  bytes: Buffer,
+  tag: string,
+): { manifestSha256: string; sourceCommit: string } {
+  const marker = parseJsonObject(bytes, "managed Codex publication marker");
+  requireExactKeys(marker, [
+    "complete",
+    "manifest",
+    "product",
+    "releaseTag",
+    "schemaVersion",
+    "sourceCommit",
+    "version",
+  ], "managed Codex publication marker");
+  if (
+    marker.complete !== true
+    || marker.product !== "pwragent-codex"
+    || marker.releaseTag !== tag
+    || marker.schemaVersion !== 1
+    || marker.version !== versionForTag(tag)
+    || typeof marker.sourceCommit !== "string"
+    || !/^[0-9a-f]{40}$/u.test(marker.sourceCommit)
+  ) {
+    throw new Error("Managed Codex publication marker is invalid.");
+  }
+  const manifest = requireJsonObject(
+    marker.manifest,
+    "managed Codex publication manifest reference",
+  );
+  requireExactKeys(manifest, [
+    "file",
+    "sha256",
+    "signatureBundle",
+    "signatureFormat",
+  ], "managed Codex publication manifest reference");
+  if (
+    manifest.file !== MANAGED_CODEX_UPDATE_MANIFEST_NAME
+    || manifest.signatureBundle !== MANAGED_CODEX_UPDATE_SIGNATURE_NAME
+    || manifest.signatureFormat !== "sigstore-bundle-v0.3"
+    || typeof manifest.sha256 !== "string"
+    || !/^[0-9a-f]{64}$/u.test(manifest.sha256)
+  ) {
+    throw new Error(
+      "Managed Codex publication marker has an invalid manifest reference.",
+    );
+  }
+  return {
+    manifestSha256: manifest.sha256,
+    sourceCommit: marker.sourceCommit,
+  };
+}
+
+function parseManagedCodexUpdateManifest(
+  bytes: Buffer,
+  tag: string,
+): ManagedCodexUpdateManifest {
+  const manifest = parseJsonObject(bytes, "managed Codex update manifest");
+  requireExactKeys(manifest, [
+    "artifacts",
+    "capabilities",
+    "product",
+    "releaseTag",
+    "schemaVersion",
+    "source",
+    "version",
+  ], "managed Codex update manifest");
+  if (
+    manifest.product !== "pwragent-codex"
+    || manifest.releaseTag !== tag
+    || manifest.schemaVersion !== 1
+    || manifest.version !== versionForTag(tag)
+  ) {
+    throw new Error("Managed Codex update manifest identity is invalid.");
+  }
+  const source = requireJsonObject(
+    manifest.source,
+    "managed Codex update manifest source",
+  );
+  requireExactKeys(source, ["commit", "repository"], "managed Codex source");
+  if (
+    source.repository !== MANAGED_CODEX_REPOSITORY
+    || typeof source.commit !== "string"
+    || !/^[0-9a-f]{40}$/u.test(source.commit)
+  ) {
+    throw new Error("Managed Codex update manifest source is invalid.");
+  }
+
+  const capabilities = requireJsonObject(
+    manifest.capabilities,
+    "managed Codex update manifest capabilities",
+  );
+  requireExactKeys(capabilities, [
+    "codeModeOutputReducer",
+    "pwrdrvrTokenMiser",
+  ], "managed Codex capabilities");
+  const reducer = requireJsonObject(
+    capabilities.codeModeOutputReducer,
+    "managed Codex output reducer capability",
+  );
+  requireExactKeys(reducer, [
+    "intentContextVersion",
+    "protocolVersion",
+  ], "managed Codex output reducer capability");
+  const tokenMiser = requireJsonObject(
+    capabilities.pwrdrvrTokenMiser,
+    "managed Codex Token Miser capability",
+  );
+  requireExactKeys(tokenMiser, ["identity", "version"],
+    "managed Codex Token Miser capability");
+  if (
+    reducer.protocolVersion !== 1
+    || reducer.intentContextVersion !== 1
+    || tokenMiser.identity !== "pwrdrvr.pwragent.token-miser"
+    || tokenMiser.version !== 1
+  ) {
+    throw new Error("Managed Codex update manifest capabilities are invalid.");
+  }
+
+  if (
+    !Array.isArray(manifest.artifacts)
+    || manifest.artifacts.length !== MANAGED_CODEX_ARTIFACT_TARGETS.length
+  ) {
+    throw new Error(
+      "Managed Codex update manifest must contain exactly five artifacts.",
+    );
+  }
+  const version = versionForTag(tag);
+  const targetsByPlatform = new Map<
+    string,
+    (typeof MANAGED_CODEX_ARTIFACT_TARGETS)[number]
+  >(
+    MANAGED_CODEX_ARTIFACT_TARGETS.map((target) => [target.platform, target]),
+  );
+  const seenPlatforms = new Set<string>();
+  const artifacts = manifest.artifacts.map((value, index) => {
+    const artifact = requireJsonObject(
+      value,
+      `managed Codex artifact ${index + 1}`,
+    );
+    requireExactKeys(artifact, [
+      "arch",
+      "archiveType",
+      "file",
+      "os",
+      "platform",
+      "sha256",
+      "size",
+      "target",
+    ], `managed Codex artifact ${index + 1}`);
+    const target = typeof artifact.platform === "string"
+      ? targetsByPlatform.get(artifact.platform)
+      : undefined;
+    const size = typeof artifact.size === "number"
+      ? artifact.size
+      : Number.NaN;
+    if (
+      !target
+      || seenPlatforms.has(target.platform)
+      || artifact.arch !== target.arch
+      || artifact.archiveType !== target.archiveType
+      || artifact.os !== target.os
+      || artifact.target !== target.target
+      || artifact.file !==
+        `pwragent-codex-${version}-${target.platform}.${target.archiveType}`
+      || typeof artifact.sha256 !== "string"
+      || !/^[0-9a-f]{64}$/u.test(artifact.sha256)
+      || !Number.isSafeInteger(size)
+      || size <= 0
+      || size > MANAGED_CODEX_MAX_ARCHIVE_BYTES
+    ) {
+      throw new Error(
+        `Managed Codex update manifest artifact ${index + 1} is invalid.`,
+      );
+    }
+    seenPlatforms.add(target.platform);
+    return {
+      arch: target.arch,
+      archiveType: target.archiveType,
+      file: artifact.file,
+      os: target.os,
+      platform: target.platform,
+      sha256: artifact.sha256,
+      size,
+      target: target.target,
+    } satisfies ManagedCodexManifestArtifact;
+  });
+  if (seenPlatforms.size !== MANAGED_CODEX_ARTIFACT_TARGETS.length) {
+    throw new Error(
+      "Managed Codex update manifest does not cover every required platform.",
+    );
+  }
+  return { artifacts, sourceCommit: source.commit };
+}
+
+async function verifyManagedCodexSigstoreBundle(
+  params: ManagedCodexSigstoreVerification,
+): Promise<void> {
+  const bundle = parseJsonObject(
+    await readFile(params.bundlePath),
+    "managed Codex Sigstore bundle",
+  );
+  if (
+    bundle.mediaType !== "application/vnd.dev.sigstore.bundle.v0.3+json"
+    || "messageSignature" in bundle
+    || !("dsseEnvelope" in bundle)
+  ) {
+    throw new Error(
+      "Managed Codex signature must be a Sigstore v0.3 DSSE bundle.",
+    );
+  }
+  const workflowIdentity =
+    `https://github.com/${MANAGED_CODEX_REPOSITORY}/.github/workflows/`
+    + `pwragent-release.yml@refs/tags/${params.tag}`;
+  await verifySigstore(bundle as SigstoreBundle, {
+    certificateIdentityURI: `^${escapeRegularExpression(workflowIdentity)}$`,
+    certificateIssuer: "https://token.actions.githubusercontent.com",
+    certificateOIDs: {
+      "1.3.6.1.4.1.57264.1.12":
+        `https://github.com/${MANAGED_CODEX_REPOSITORY}`,
+      "1.3.6.1.4.1.57264.1.13": params.sourceCommit,
+      "1.3.6.1.4.1.57264.1.14": `refs/tags/${params.tag}`,
+      "1.3.6.1.4.1.57264.1.20": "push",
+    },
+    ctLogThreshold: 1,
+    tlogThreshold: 1,
+  });
+
+  const envelope = requireJsonObject(
+    bundle.dsseEnvelope,
+    "managed Codex Sigstore DSSE envelope",
+  );
+  if (
+    envelope.payloadType !== "application/vnd.in-toto+json"
+    || typeof envelope.payload !== "string"
+  ) {
+    throw new Error("Managed Codex Sigstore DSSE envelope is invalid.");
+  }
+  const statement = parseJsonObject(
+    Buffer.from(envelope.payload, "base64"),
+    "managed Codex provenance statement",
+  );
+  requireExactKeys(statement, [
+    "_type",
+    "predicate",
+    "predicateType",
+    "subject",
+  ], "managed Codex provenance statement");
+  if (
+    statement._type !== "https://in-toto.io/Statement/v1"
+    || statement.predicateType !== "https://slsa.dev/provenance/v1"
+  ) {
+    throw new Error("Managed Codex provenance statement type is invalid.");
+  }
+  requireJsonObject(statement.predicate, "managed Codex provenance predicate");
+  const expectedNames = Object.keys(params.expectedSubjects).sort();
+  if (
+    !Array.isArray(statement.subject)
+    || statement.subject.length !== expectedNames.length
+  ) {
+    throw new Error("Managed Codex provenance subjects are incomplete.");
+  }
+  const actualSubjects = new Map<string, string>();
+  for (const value of statement.subject) {
+    const subject = requireJsonObject(value, "managed Codex provenance subject");
+    requireExactKeys(subject, ["digest", "name"],
+      "managed Codex provenance subject");
+    const digest = requireJsonObject(
+      subject.digest,
+      "managed Codex provenance subject digest",
+    );
+    requireExactKeys(digest, ["sha256"],
+      "managed Codex provenance subject digest");
+    if (
+      typeof subject.name !== "string"
+      || path.basename(subject.name) !== subject.name
+      || typeof digest.sha256 !== "string"
+      || !/^[0-9a-f]{64}$/u.test(digest.sha256)
+      || actualSubjects.has(subject.name)
+    ) {
+      throw new Error("Managed Codex provenance subject is invalid.");
+    }
+    actualSubjects.set(subject.name, digest.sha256);
+  }
+  for (const name of expectedNames) {
+    if (actualSubjects.get(name) !== params.expectedSubjects[name]) {
+      throw new Error(`Managed Codex provenance digest mismatch for ${name}.`);
+    }
+  }
+}
+
+function parseJsonObject(bytes: Buffer, label: string): Record<string, unknown> {
+  try {
+    return requireJsonObject(JSON.parse(bytes.toString("utf8")), label);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error(`${label} is not valid JSON.`, { cause: error });
+    }
+    throw error;
+  }
+}
+
+function requireJsonObject(
+  value: unknown,
+  label: string,
+): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON object.`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireExactKeys(
+  value: Record<string, unknown>,
+  keys: string[],
+  label: string,
+): void {
+  const actual = Object.keys(value).sort();
+  const expected = [...keys].sort();
+  if (
+    actual.length !== expected.length
+    || actual.some((key, index) => key !== expected[index])
+  ) {
+    throw new Error(`${label} has an unsupported schema.`);
+  }
+}
+
+function escapeRegularExpression(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}
+
+function sha256Bytes(bytes: Buffer): string {
+  return createHash("sha256").update(bytes).digest("hex");
 }
 
 async function downloadFile(
@@ -952,4 +1466,3 @@ export function managedCodexAssetPlatform(
   }
   return undefined;
 }
-

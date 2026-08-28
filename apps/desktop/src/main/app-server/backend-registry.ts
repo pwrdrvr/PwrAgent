@@ -8057,9 +8057,6 @@ export class DesktopBackendRegistry {
         settingsService.onConfigWritten(() => {
           this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
           this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
-          if (this.resolveTokenMiserEnabledFn()) {
-            void this.prepareTokenMiserRuntime({ prune: true });
-          }
         }),
       );
     }

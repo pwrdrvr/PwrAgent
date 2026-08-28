@@ -94,6 +94,7 @@
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
+    "sigstore": "5.0.0",
     "ws": "8.21.3"
   },
   "devDependencies": {
