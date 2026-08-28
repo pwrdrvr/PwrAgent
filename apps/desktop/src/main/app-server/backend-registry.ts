@@ -7745,6 +7745,8 @@ export class DesktopBackendRegistry {
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
   private readonly resolveTokenMiserDefaultEnabledFn: () => boolean;
+  private readonly resolveManagedTokenMiserActivationRequiredFn: () => boolean;
+  private readonly markManagedCodexRuntimeSwitchCompleteFn: () => void;
   private readonly resolveSpendAlertPolicyFn: () => DesktopSpendAlertPolicy;
   private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
   private spendAlertPolicy = DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
@@ -7847,6 +7849,8 @@ export class DesktopBackendRegistry {
     resolvePdfAnalysisEnabled?: () => boolean;
     resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
     resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
+    resolveManagedTokenMiserActivationRequired?: () => boolean;
+    markManagedCodexRuntimeSwitchComplete?: () => void;
     watchManagedCodexRuntime?: (
       listener: (change: ManagedCodexSelectionChange) => void,
     ) => () => void;
@@ -8013,6 +8017,12 @@ export class DesktopBackendRegistry {
         return true;
       }
     };
+    this.resolveManagedTokenMiserActivationRequiredFn =
+      options?.resolveManagedTokenMiserActivationRequired
+      ?? (() => settingsService?.requiresManagedTokenMiserActivation() ?? false);
+    this.markManagedCodexRuntimeSwitchCompleteFn =
+      options?.markManagedCodexRuntimeSwitchComplete
+      ?? (() => settingsService?.markManagedCodexRuntimeSwitchComplete());
     this.resolveToolOutputAlertPolicyFn =
       options?.resolveToolOutputAlertPolicy ??
       (() => {
@@ -19894,6 +19904,14 @@ export class DesktopBackendRegistry {
       );
       const managedActivation =
         capabilities?.pwrdrvrTokenMiser?.version === 1;
+      if (
+        this.resolveManagedTokenMiserActivationRequiredFn()
+        && !managedActivation
+      ) {
+        throw new Error(
+          "Managed Codex runtime lacks native Token Miser activation capability v1.",
+        );
+      }
       const codexRuntime = managedActivation
         ? undefined
         : await this.resolveTokenMiserCodexRuntimeFn?.();
@@ -25101,8 +25119,9 @@ export class DesktopBackendRegistry {
       this.tokenMiserPostToolUseExactOutputVersion = undefined;
       this.tokenMiserRuntimePreparationFailure = undefined;
       if (this.resolveTokenMiserEnabledFn()) {
-        void this.prepareTokenMiserRuntime({ prune: true });
+        await this.prepareTokenMiserRuntime({ prune: true });
       }
+      this.markManagedCodexRuntimeSwitchCompleteFn();
       return true;
     })();
     this.codexRuntimeRestartPromise = restart;

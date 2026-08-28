@@ -86,6 +86,9 @@ export function ExperimentalSettings(props: {
   const tokenMiserUsage = props.snapshot.runtime.tokenMiser;
   const tokenMiserActivation = tokenMiserUsage?.activation;
   const managedCodex = tokenMiserUsage?.managedCodex;
+  const tokenMiserSwitchPending =
+    tokenMiserEnabled.value
+    && managedCodex?.state === "pending-switch";
   // Only a contradiction is worth reporting: switched on, but the Codex side
   // never loaded. Off-and-unavailable is just off.
   const tokenMiserInert =
@@ -97,7 +100,10 @@ export function ExperimentalSettings(props: {
   const tokenMiserStarting =
     tokenMiserEnabled.value
     && !tokenMiserInert
-    && tokenMiserActivation?.state !== "active";
+    && (
+      tokenMiserSwitchPending
+      || tokenMiserActivation?.state !== "active"
+    );
   const codexDefaultModeRequestUserInput =
     props.snapshot.experimental.codexDefaultModeRequestUserInput ??
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
@@ -124,6 +130,8 @@ export function ExperimentalSettings(props: {
             ? "Not running"
             : !tokenMiserEnabled.value
               ? "Off"
+              : tokenMiserSwitchPending
+                ? "Waiting for idle"
               : tokenMiserStarting
                 ? "Starting"
               : tokenMiserDefaultEnabled.value ? "Default on" : "Opt-in"

@@ -1142,6 +1142,84 @@ describe("DesktopSettingsService", () => {
     }
   });
 
+  it("announces an update installed by another settings read", async () => {
+    vi.useFakeTimers();
+    try {
+      const configPath = path.join(createTempRoot(), "config.toml");
+      fs.writeFileSync(configPath, [
+        "[experimental]",
+        "token_miser_enabled = true",
+        "",
+      ].join("\n"));
+      const runtime = (version: string) => ({
+        appServerCommand: `/managed/${version}/codex-app-server`,
+        codeModeHostCommand: `/managed/${version}/codex-code-mode-host`,
+        command: `/managed/${version}/codex`,
+        metadata: {
+          asset: `pwragent-codex-${version}-linux-x86_64.tar.gz`,
+          checkedAt: 1,
+          installedAt: 1,
+          repository: "pwrdrvr/codex",
+          schemaVersion: 1 as const,
+          sha256: "a".repeat(64),
+          tag: `pwragent-v${version}`,
+          version,
+        },
+      });
+      let selectedRuntime = runtime("0.200.0-pwragent.1");
+      const ensureManaged = vi.fn(async () => selectedRuntime);
+      const service = new DesktopSettingsService({
+        codexDiscoveryCoordinator: {
+          discover: vi.fn(async () => ({ candidates: [] })),
+          invalidate: vi.fn(),
+          resolve: vi.fn(async () => ({
+            command: "/path/codex",
+            source: "path" as const,
+          })),
+        },
+        configPath,
+        ensureManagedCodexRuntime: ensureManaged,
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+      const changes = vi.fn();
+      const stop = service.watchManagedCodexRuntime(changes, {
+        intervalMs: 1_000,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(changes).not.toHaveBeenCalled();
+
+      selectedRuntime = runtime("0.201.0-pwragent.1");
+      await service.readSettings();
+      changes.mockClear();
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(changes).toHaveBeenCalledWith({
+        enabled: true,
+        reason: "update",
+        runtime: selectedRuntime,
+      });
+      await expect(service.readSettings()).resolves.toMatchObject({
+        runtime: {
+          tokenMiser: {
+            managedCodex: { state: "pending-switch" },
+          },
+        },
+      });
+      service.markManagedCodexRuntimeSwitchComplete();
+      await expect(service.readSettings()).resolves.toMatchObject({
+        runtime: {
+          tokenMiser: {
+            managedCodex: { state: "ready" },
+          },
+        },
+      });
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reads and lazily mirrors the legacy general Token Miser opt-in", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

@@ -1402,8 +1402,7 @@ async function hasActiveRuntimeMarker(
     const pid = Number(match[1]);
     if (
       Number.isSafeInteger(pid)
-      && pid !== process.pid
-      && processAlive(pid)
+      && (pid === process.pid || processAlive(pid))
     ) {
       active = true;
       continue;

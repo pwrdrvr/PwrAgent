@@ -443,6 +443,7 @@ export class DesktopSettingsService {
   private terminalSpawnEnv?: NodeJS.ProcessEnv;
   private terminalSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
   private managedCodexRuntime?: ManagedCodexRuntime;
+  private managedCodexRuntimeSwitchPending = false;
 
   constructor(private readonly options: DesktopSettingsServiceOptions) {
     this.env = options.env ?? process.env;
@@ -663,7 +664,9 @@ export class DesktopSettingsService {
               ...(managedCodexRuntime
                 ? {
                     managedCodex: {
-                      state: "ready" as const,
+                      state: this.managedCodexRuntimeSwitchPending
+                        ? "pending-switch" as const
+                        : "ready" as const,
                       version: managedCodexRuntime.metadata.version,
                     },
                   }
@@ -681,7 +684,9 @@ export class DesktopSettingsService {
               ...(managedCodexRuntime
                 ? {
                     managedCodex: {
-                      state: "ready" as const,
+                      state: this.managedCodexRuntimeSwitchPending
+                        ? "pending-switch" as const
+                        : "ready" as const,
                       version: managedCodexRuntime.metadata.version,
                     },
                   }
@@ -1905,6 +1910,7 @@ export class DesktopSettingsService {
   ): () => void {
     const intervalMs = options.intervalMs ?? MANAGED_CODEX_UPDATE_POLL_INTERVAL_MS;
     let enabled = this.resolveTokenMiserEnabled();
+    let lastAnnouncedCommand = this.managedCodexRuntime?.command;
     let timer: NodeJS.Timeout | undefined;
     let stopped = false;
 
@@ -1916,14 +1922,14 @@ export class DesktopSettingsService {
     };
     const checkForUpdate = async () => {
       if (stopped || !this.resolveTokenMiserEnabled()) return;
-      const previousCommand = this.managedCodexRuntime?.command;
       try {
         const runtime = await this.ensureManagedCodexRuntimeIfEnabled("ttl");
-        if (
-          runtime
-          && previousCommand !== undefined
-          && runtime.command !== previousCommand
-        ) {
+        if (!runtime) return;
+        if (lastAnnouncedCommand === undefined) {
+          lastAnnouncedCommand = runtime.command;
+        } else if (runtime.command !== lastAnnouncedCommand) {
+          lastAnnouncedCommand = runtime.command;
+          this.managedCodexRuntimeSwitchPending = true;
           listener({ enabled: true, reason: "update", runtime });
         }
       } catch (error) {
@@ -1951,10 +1957,14 @@ export class DesktopSettingsService {
       if (nextEnabled === enabled) return;
       enabled = nextEnabled;
       if (enabled) {
+        lastAnnouncedCommand = this.managedCodexRuntime?.command;
+        this.managedCodexRuntimeSwitchPending = true;
         void checkForUpdate();
         armTimer();
       } else {
         clearTimer();
+        lastAnnouncedCommand = undefined;
+        this.managedCodexRuntimeSwitchPending = false;
         this.managedCodexRuntime = undefined;
       }
       listener({
@@ -1971,6 +1981,17 @@ export class DesktopSettingsService {
       clearTimer();
       unsubscribe();
     };
+  }
+
+  requiresManagedTokenMiserActivation(): boolean {
+    return Boolean(
+      this.options.ensureManagedCodexRuntime
+      && this.resolveTokenMiserEnabled(),
+    );
+  }
+
+  markManagedCodexRuntimeSwitchComplete(): void {
+    this.managedCodexRuntimeSwitchPending = false;
   }
 
   resolveProviderModelDefaults() {

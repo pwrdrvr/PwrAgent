@@ -2935,6 +2935,37 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("shows when the managed Codex switch is waiting for idle", async () => {
+    const snapshot = createSnapshot();
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      activation: { observedAt: 1_800_000_000_000, state: "active" },
+      managedCodex: {
+        state: "pending-switch",
+        version: "0.201.0-pwragent.1",
+      },
+      interceptionCount: 0,
+      originalCharacters: 0,
+      baselineParentTokens: 0,
+      replacementTokens: 0,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+    };
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        desktopApi={{} as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+        initialSection="experimental"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Waiting for idle")).toBeInTheDocument();
+    expect(screen.queryByText("Default on")).not.toBeInTheDocument();
+  });
+
   // Token Miser fails open, so an inert gate is invisible: turns keep running
   // and nothing is gated. Settings has to state the contradiction outright.
   it("warns when Token Miser is enabled but Codex never loaded the gate", async () => {

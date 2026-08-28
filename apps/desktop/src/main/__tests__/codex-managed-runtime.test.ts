@@ -205,6 +205,42 @@ describe("ensureManagedCodexRuntime", () => {
     expect(runtime.metadata.tag).toBe(tag);
   });
 
+  it("preserves a runtime marked by the current process while pruning", async () => {
+    const rootDir = await temporaryRoot();
+    const activeTag = "pwragent-v0.200.0-pwragent.1";
+    const compatibilityTag = "pwragent-v0.201.0-pwragent.1";
+    const currentTag = "pwragent-v0.202.0-pwragent.1";
+    const currentVersion = "0.202.0-pwragent.1";
+    await writeManagedCache(rootDir, {
+      tag: currentTag,
+      version: currentVersion,
+    });
+    const activeRoot = path.join(rootDir, "versions", activeTag);
+    await writeFakeBundle(activeRoot, "linux");
+    await writeFile(
+      path.join(activeRoot, `.pwragent-use-${process.pid}`),
+      "active\n",
+    );
+    await writeFakeBundle(
+      path.join(rootDir, "versions", compatibilityTag),
+      "linux",
+    );
+
+    await ensureManagedCodexRuntime({
+      arch: "x64",
+      checkMode: "ttl",
+      now: () => 101,
+      platform: "linux",
+      probeVersion: versionProbe(currentVersion),
+      rootDir,
+    });
+
+    expect(existsSync(activeRoot)).toBe(true);
+    expect(existsSync(
+      path.join(activeRoot, `.pwragent-use-${process.pid}`),
+    )).toBe(true);
+  });
+
   it("fails a first install instead of falling back to an arbitrary Codex", async () => {
     const rootDir = await temporaryRoot();
 

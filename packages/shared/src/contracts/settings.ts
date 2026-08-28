@@ -764,7 +764,7 @@ export type DesktopSettingsSnapshot = {
   runtime: {
     tokenMiser?: {
       managedCodex?: {
-        state: "ready" | "unavailable";
+        state: "pending-switch" | "ready" | "unavailable";
         reason?: string;
         version?: string;
       };

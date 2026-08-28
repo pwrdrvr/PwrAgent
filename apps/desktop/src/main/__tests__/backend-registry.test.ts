@@ -2767,8 +2767,10 @@ describe("DesktopBackendRegistry", () => {
       | ((change: ManagedCodexSelectionChange) => void)
       | undefined;
     const stopWatching = vi.fn();
+    const markSwitchComplete = vi.fn();
     const registry = new DesktopBackendRegistry({
       codexClient,
+      markManagedCodexRuntimeSwitchComplete: markSwitchComplete,
       overlayStore: createOverlayStoreMock(),
       watchManagedCodexRuntime: (listener) => {
         selectionListener = listener;
@@ -2778,6 +2780,7 @@ describe("DesktopBackendRegistry", () => {
 
     selectionListener?.({ enabled: true, reason: "availability" });
     await vi.waitFor(() => expect(codexClient.closeCallCount).toBe(1));
+    expect(markSwitchComplete).toHaveBeenCalledOnce();
 
     await registry.close();
     expect(stopWatching).toHaveBeenCalledOnce();
@@ -2785,11 +2788,13 @@ describe("DesktopBackendRegistry", () => {
 
   it("defers managed Codex reconnect until active turns are idle", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
+    const markSwitchComplete = vi.fn();
     let selectionListener:
       | ((change: ManagedCodexSelectionChange) => void)
       | undefined;
     const registry = new DesktopBackendRegistry({
       codexClient,
+      markManagedCodexRuntimeSwitchComplete: markSwitchComplete,
       overlayStore: createOverlayStoreMock(),
       watchManagedCodexRuntime: (listener) => {
         selectionListener = listener;
@@ -2805,12 +2810,14 @@ describe("DesktopBackendRegistry", () => {
     selectionListener?.({ enabled: true, reason: "availability" });
     await Promise.resolve();
     expect(codexClient.closeCallCount).toBe(0);
+    expect(markSwitchComplete).not.toHaveBeenCalled();
 
     internals.activeTurnKeys.delete("codex:thread-1:turn-1");
     await expect(
       internals.maybeRestartCodexForManagedRuntimeChange(),
     ).resolves.toBe(true);
     expect(codexClient.closeCallCount).toBe(1);
+    expect(markSwitchComplete).toHaveBeenCalledOnce();
 
     await registry.close();
   });
@@ -3956,6 +3963,71 @@ describe("DesktopBackendRegistry", () => {
       await internals.prepareTokenMiserRuntime();
 
       expect(startBridge).toHaveBeenCalledOnce();
+      expect(resolveRuntime).not.toHaveBeenCalled();
+      expect(ensureInstalled).not.toHaveBeenCalled();
+      expect(ensurePluginSource).not.toHaveBeenCalled();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("rejects managed runtimes that omit native Token Miser activation", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: {
+        codeModeOutputReducer: {
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
+          protocolVersion: 1,
+        },
+      },
+    });
+    const ensureInstalled = vi.fn();
+    const ensurePluginSource = vi.fn();
+    const resolveRuntime = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      resolveManagedTokenMiserActivationRequired: () => true,
+    });
+    const internals = registry as unknown as {
+      prepareTokenMiserRuntime: () => Promise<void>;
+      tokenMiserRuntimePreparationFailure?: string;
+      tokenMiserStore?: TokenMiserStore;
+      tokenMiserHookBridge?: {
+        start(): Promise<unknown>;
+        close(): Promise<void>;
+      };
+      tokenMiserPluginManager?: {
+        ensureInstalled: typeof ensureInstalled;
+        ensurePluginSource: typeof ensurePluginSource;
+      };
+      resolveTokenMiserCodexRuntimeFn?: typeof resolveRuntime;
+    };
+    internals.tokenMiserStore = {} as TokenMiserStore;
+    internals.tokenMiserHookBridge = {
+      start: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+    };
+    internals.tokenMiserPluginManager = {
+      ensureInstalled,
+      ensurePluginSource,
+    };
+    internals.resolveTokenMiserCodexRuntimeFn = resolveRuntime;
+
+    try {
+      await internals.prepareTokenMiserRuntime();
+
+      expect(internals.tokenMiserRuntimePreparationFailure).toBe(
+        "Managed Codex runtime lacks native Token Miser activation capability v1.",
+      );
       expect(resolveRuntime).not.toHaveBeenCalled();
       expect(ensureInstalled).not.toHaveBeenCalled();
       expect(ensurePluginSource).not.toHaveBeenCalled();
