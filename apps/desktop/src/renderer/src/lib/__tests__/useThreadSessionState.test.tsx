@@ -7914,6 +7914,59 @@ describe("useThreadSessionState", () => {
     });
   });
 
+  it("retries a failed transcript read after the thread is reselected", async () => {
+    const thread = buildThread({ id: "thread-1", updatedAt: 1_000 });
+    const readThread = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Federation peer is not connected"))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [messageEntry({
+          createdAt: 1_000,
+          id: "recovered-message",
+          text: "Remote thread recovered.",
+        })],
+        hasPreviousPage: false,
+      }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+
+    const { result, rerender } = renderHook(
+      ({ currentThread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: currentThread,
+        }),
+      {
+        initialProps: {
+          currentThread: thread as NavigationThreadSummary | undefined,
+        },
+      },
+    );
+
+    await waitFor(() => {
+      expect(result.current.error).toBe("Federation peer is not connected");
+    });
+    expect(readThread).toHaveBeenCalledTimes(1);
+
+    rerender({ currentThread: undefined });
+    rerender({ currentThread: thread });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(result.current.error).toBeUndefined();
+      expect(result.current.messages).toEqual([
+        expect.objectContaining({
+          id: "recovered-message",
+          text: "Remote thread recovered.",
+        }),
+      ]);
+    });
+  });
+
   it("keeps thinking visible during metadata notifications for an active turn", async () => {
     const agentEventListeners = new Set<
       Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]

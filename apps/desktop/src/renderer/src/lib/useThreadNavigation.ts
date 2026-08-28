@@ -5184,6 +5184,10 @@ export function useThreadNavigation(
             }));
           }
         }
+      } catch {
+        // A selected remote thread can become unreachable between the
+        // navigation snapshot and this write. Keep its unread state intact;
+        // selecting it again will submit a fresh attempt.
       } finally {
         if (mountedRef.current) {
           setPendingSeenThreadKey((current) =>
