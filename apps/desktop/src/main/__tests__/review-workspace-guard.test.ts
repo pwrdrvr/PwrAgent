@@ -115,6 +115,38 @@ describe("assertReviewWorkspaceMatchesAttachedPullRequest", () => {
     expect(runGit).not.toHaveBeenCalled();
   });
 
+  it("ignores a polluted path association when the selected repository differs", async () => {
+    const runGit = vi.fn(async (_cwd: string, args: string[]) => {
+      if (args[0] === "merge-base") {
+        throw new Error("not an ancestor");
+      }
+      if (args[0] === "rev-parse" && args[1] === "HEAD") {
+        return { stdout: CURRENT_HEAD };
+      }
+      return { stdout: "refs/remotes/origin/pwragent" };
+    });
+    const resolveGitHubRepos = vi.fn(async () => [{
+      host: "github.com",
+      owner: "pwrdrvr",
+      repo: "other-repository",
+    }]);
+    const params = {
+      cwd: "/other-repository",
+      prs: [pullRequest({
+        linkedDirectoryPaths: ["/worktree", "/other-repository"],
+      })],
+      resolveGitHubRepos,
+      runGit,
+      target: { type: "baseBranch" as const, branch: "pwragent" },
+    };
+
+    await expect(
+      assertReviewWorkspaceMatchesAttachedPullRequest(params),
+    ).resolves.toBeUndefined();
+    expect(resolveGitHubRepos).toHaveBeenCalledWith("/other-repository");
+    expect(runGit).not.toHaveBeenCalled();
+  });
+
   it("fails closed without running local Git for a remote workspace", async () => {
     const runGit = vi.fn();
 

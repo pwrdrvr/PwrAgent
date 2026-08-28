@@ -71,16 +71,29 @@ export async function detectPullRequestsForThread(params: {
             .catch(() => []),
         ),
       );
-      return prsByBranch.flat();
+      return prsByBranch.flat().map((pr) => ({
+        ...pr,
+        linkedDirectoryPaths: uniqueNonEmpty([
+          ...(pr.linkedDirectoryPaths ?? []),
+          cwd,
+        ]),
+      }));
     }),
   );
 
   const seenByUrl = new Map<string, PrSummary>();
   for (const prs of results) {
     for (const pr of prs) {
-      if (!seenByUrl.has(pr.url)) {
-        seenByUrl.set(pr.url, pr);
-      }
+      const existing = seenByUrl.get(pr.url);
+      seenByUrl.set(pr.url, existing
+        ? {
+            ...pr,
+            linkedDirectoryPaths: uniqueNonEmpty([
+              ...(existing.linkedDirectoryPaths ?? []),
+              ...(pr.linkedDirectoryPaths ?? []),
+            ]),
+          }
+        : pr);
     }
   }
   return [...seenByUrl.values()];

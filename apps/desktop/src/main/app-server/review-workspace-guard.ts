@@ -1,5 +1,9 @@
 import type { AppServerReviewTarget, PrSummary } from "@pwragent/shared";
 import { runGitCommand } from "./git-executable";
+import {
+  resolveGitHubReposForDirectory,
+  type GitHubRepoRef,
+} from "../pr-status/git-remote";
 
 type ReviewGitRunner = (
   cwd: string,
@@ -16,6 +20,12 @@ function prBelongsToWorkspace(pr: PrSummary, cwd: string): boolean {
   return (pr.linkedDirectoryPaths ?? []).some(
     (directoryPath) => normalizeWorkspacePath(directoryPath) === selectedWorkspace,
   );
+}
+
+function prMatchesRepository(pr: PrSummary, repo: GitHubRepoRef): boolean {
+  return pr.provider.trim().toLowerCase() === repo.host.toLowerCase()
+    && pr.org.trim().toLowerCase() === repo.owner.toLowerCase()
+    && pr.repo.trim().toLowerCase() === repo.repo.toLowerCase();
 }
 
 function normalizeFullRef(ref: string): string {
@@ -91,6 +101,7 @@ export async function assertReviewWorkspaceMatchesAttachedPullRequest(params: {
   cwd?: string;
   executionTarget?: "local" | "remote";
   prs?: PrSummary[];
+  resolveGitHubRepos?: (cwd: string) => Promise<GitHubRepoRef[]>;
   runGit?: ReviewGitRunner;
   target: AppServerReviewTarget;
 }): Promise<void> {
@@ -117,11 +128,23 @@ export async function assertReviewWorkspaceMatchesAttachedPullRequest(params: {
     );
   }
 
-  const workspacePullRequests = reviewablePullRequests.filter((pr) =>
+  let workspacePullRequests = reviewablePullRequests.filter((pr) =>
     prBelongsToWorkspace(pr, cwd)
   );
   if (workspacePullRequests.length === 0) {
     return;
+  }
+
+  const resolveGitHubRepos =
+    params.resolveGitHubRepos ?? resolveGitHubReposForDirectory;
+  const workspaceRepositories = await resolveGitHubRepos(cwd);
+  if (workspaceRepositories.length > 0) {
+    workspacePullRequests = workspacePullRequests.filter((pr) =>
+      workspaceRepositories.some((repo) => prMatchesRepository(pr, repo))
+    );
+    if (workspacePullRequests.length === 0) {
+      return;
+    }
   }
 
   const runGit = params.runGit ?? runGitCommand;

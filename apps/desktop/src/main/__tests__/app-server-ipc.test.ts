@@ -4325,6 +4325,50 @@ describe("app server ipc", () => {
     });
   });
 
+  it("does not associate a discovered PR with sibling repositories", async () => {
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const request = {
+      backend: "codex",
+      threadId: "thread-multi-repository-pr",
+      trigger: "user",
+      branch: "fix/shared-branch-name",
+      directoryPaths: ["/repo/catalog-service", "/repo/deployment-fixtures"],
+    } satisfies RefreshThreadPullRequestsRequest;
+    const requestKey = buildThreadPrRequestKey({
+      backend: request.backend,
+      threadId: request.threadId,
+      branch: request.branch,
+      directoryPaths: request.directoryPaths,
+    });
+    const discoveredPr = githubPr({
+      number: 1854,
+      org: "ExampleOrg",
+      repo: "catalog-service",
+      state: "passing",
+      headSha: "b".repeat(40),
+      linkedDirectoryPaths: [request.directoryPaths[0]!],
+      url: "https://github.com/ExampleOrg/catalog-service/pull/1854",
+    });
+    getThreadOverlayState.mockResolvedValueOnce(undefined);
+    detectPullRequestsForThread.mockResolvedValueOnce([discoveredPr]);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.({}, request);
+
+    await vi.waitFor(() => {
+      expect(setThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: request.threadId,
+        prs: [{
+          ...discoveredPr,
+          commitShas: undefined,
+        }],
+        fetchedAt: expect.any(Number),
+        refreshKey: requestKey,
+      });
+    });
+  });
+
   it("logs user-triggered PR refresh decisions and background completion with PR ids", async () => {
     const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
     const request = {
