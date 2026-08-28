@@ -66,12 +66,14 @@ describe("TokenMiserHookBridge", () => {
       token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
     });
     expect(Buffer.from(bridge.activationNonce, "base64url")).toHaveLength(32);
-    expect(
-      (await fs.stat(path.dirname(bridge.bridgeDescriptorPath))).mode & 0o777,
-    ).toBe(0o700);
-    expect((await fs.stat(bridge.bridgeDescriptorPath)).mode & 0o777).toBe(
-      0o600,
-    );
+    if (process.platform !== "win32") {
+      expect(
+        (await fs.stat(path.dirname(bridge.bridgeDescriptorPath))).mode & 0o777,
+      ).toBe(0o700);
+      expect((await fs.stat(bridge.bridgeDescriptorPath)).mode & 0o777).toBe(
+        0o600,
+      );
+    }
   });
 
   it("stages an authorized direct replacement and commits only after fork acceptance", async () => {
