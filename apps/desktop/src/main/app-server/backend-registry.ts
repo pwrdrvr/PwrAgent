@@ -24965,7 +24965,12 @@ export class DesktopBackendRegistry {
     // security cross-check in messaging-controller relies on it).
     logRouting = true,
   ): Promise<T> {
-    await this.maybeRestartCodexForManagedRuntimeChange();
+    if (
+      this.codexRuntimeRestartPending
+      || this.codexRuntimeRestartPromise
+    ) {
+      await this.maybeRestartCodexForManagedRuntimeChange();
+    }
     // Single-client passthrough. The mode passed to the operation is no
     // longer a routing decision — it's documentation for callers that
     // want to forward it to codex's per-turn approvalPolicy/sandboxPolicy
