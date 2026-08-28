@@ -8,6 +8,7 @@ import {
   isE2eMemorySecretStorageEnabled,
   MemoryDesktopSecretStore,
 } from "./desktop-secret-store";
+import { ensureManagedCodexRuntime } from "../codex-managed-runtime";
 
 let desktopSettingsService: DesktopSettingsService | undefined;
 
@@ -31,6 +32,11 @@ export function getDesktopSettingsService(): DesktopSettingsService {
       // keep managed downloads opt-in until the downstream signing lane is
       // configured and publishing signed Apple/Windows assets.
       defaultManagedGrokBuilds: app.isPackaged !== true,
+      ensureManagedCodexRuntime: async ({ checkMode }) =>
+        await ensureManagedCodexRuntime({
+          checkMode,
+          requirePlatformSignature: app.isPackaged === true,
+        }),
       resolveAppVersion: () => app.getVersion(),
       secretStore,
       ...(bootstrap

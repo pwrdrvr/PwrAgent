@@ -203,6 +203,10 @@ import {
   CODEX_DISCOVERY_SUCCESS_TTL_MS,
   CodexDiscoveryCoordinator,
 } from "../codex-discovery-coordinator";
+import type {
+  ManagedCodexCheckMode,
+  ManagedCodexRuntime,
+} from "../codex-managed-runtime";
 
 const LOGIN_SHELL_ENV_MARKER_START = "__PWRAGENT_LOGIN_SHELL_ENV_START__";
 const LOGIN_SHELL_ENV_MARKER_END = "__PWRAGENT_LOGIN_SHELL_ENV_END__";
@@ -245,6 +249,9 @@ type DesktopSettingsServiceOptions = {
   configPath?: string;
   defaultDeveloperMode?: boolean;
   defaultManagedGrokBuilds?: boolean;
+  ensureManagedCodexRuntime?: (options: {
+    checkMode: ManagedCodexCheckMode;
+  }) => Promise<ManagedCodexRuntime>;
   env?: NodeJS.ProcessEnv;
   argv?: readonly string[];
   secretStore: DesktopSecretStore;
@@ -548,8 +555,12 @@ export class DesktopSettingsService {
       undefined,
       secretStorage.available,
     );
+    const codexDiscoveryCommand = await this.resolveCodexDiscoveryCommand(
+      config,
+      options.forceCodexDiscovery === true ? "force" : "ttl",
+    );
     const codexDiscovery = await this.codexDiscoveryCoordinator.discover(
-      this.resolveCodexCommandPreferenceFromConfig(config),
+      codexDiscoveryCommand,
       {
         allowStaleSuccess: true,
         force: options.forceCodexDiscovery === true,
@@ -1514,8 +1525,23 @@ export class DesktopSettingsService {
         `Cannot save settings because ${this.configPath} could not be parsed: ${current.error}`,
       );
     }
+    const enablingTokenMiser =
+      patch.experimental?.tokenMiserEnabled === true
+      && !this.resolveConfigBoolean(
+        current.config.experimental?.tokenMiserEnabled,
+        false,
+      ).value;
+    // The switch is a transaction from the operator's perspective: acquire a
+    // usable managed Codex first, then persist availability. A failed first
+    // install leaves the feature off instead of selecting an arbitrary Codex.
+    if (enablingTokenMiser && this.options.ensureManagedCodexRuntime) {
+      await this.options.ensureManagedCodexRuntime({ checkMode: "force" });
+    }
     applyDesktopSettingsPatch(this.configPath, patch);
-    if (patch.models?.codex?.path !== undefined) {
+    if (
+      patch.models?.codex?.path !== undefined
+      || patch.experimental?.tokenMiserEnabled !== undefined
+    ) {
       this.codexDiscoveryCoordinator.invalidate();
     }
     // Fan out appearance updates to every open window so aux surfaces
@@ -1797,8 +1823,17 @@ export class DesktopSettingsService {
   }
 
   async resolveCodexCommand(): Promise<ResolvedCodexCommandCandidate> {
+    const config = this.readConfig().config;
+    const managedRuntime = await this.resolveManagedCodexRuntime(config, "ttl");
+    if (managedRuntime) {
+      return {
+        command: managedRuntime.command,
+        source: "config",
+        version: managedRuntime.metadata.version,
+      };
+    }
     return await this.codexDiscoveryCoordinator.resolve(
-      this.resolveCodexCommandPreference(),
+      this.resolveCodexCommandPreferenceFromConfig(config),
     );
   }
 
@@ -1957,6 +1992,34 @@ export class DesktopSettingsService {
       || config.models?.codex?.path
       || undefined
     );
+  }
+
+  private async resolveCodexDiscoveryCommand(
+    config: DesktopSettingsConfig,
+    checkMode: ManagedCodexCheckMode,
+  ): Promise<string | undefined> {
+    const managedRuntime = await this.resolveManagedCodexRuntime(
+      config,
+      checkMode,
+    );
+    return managedRuntime?.command
+      ?? this.resolveCodexCommandPreferenceFromConfig(config);
+  }
+
+  private async resolveManagedCodexRuntime(
+    config: DesktopSettingsConfig,
+    checkMode: ManagedCodexCheckMode,
+  ): Promise<ManagedCodexRuntime | undefined> {
+    if (
+      !this.options.ensureManagedCodexRuntime
+      || !this.resolveConfigBoolean(
+        config.experimental?.tokenMiserEnabled,
+        false,
+      ).value
+    ) {
+      return undefined;
+    }
+    return await this.options.ensureManagedCodexRuntime({ checkMode });
   }
 
   private ensureBaseTerminalSpawnEnv(): NodeJS.ProcessEnv {

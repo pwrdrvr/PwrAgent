@@ -36,6 +36,10 @@ function createTempRoot(): string {
   return root;
 }
 
+function existsOrEmpty(filePath: string): boolean {
+  return !fs.existsSync(filePath) || fs.readFileSync(filePath, "utf8") === "";
+}
+
 describe("DesktopSettingsService", () => {
   it("forces discovery refresh and invalidates command-setting writes", async () => {
     const root = createTempRoot();
@@ -860,6 +864,170 @@ describe("DesktopSettingsService", () => {
     ].join("\n"));
     expect(service.resolveTokenMiserEnabled()).toBe(true);
     expect(service.resolveTokenMiserDefaultEnabled()).toBe(false);
+  });
+
+  it("acquires and durably selects managed Codex when Token Miser becomes available", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const discover = vi.fn(async (configuredCommand?: string) => ({
+      candidates: configuredCommand
+        ? [{
+            command: configuredCommand,
+            executable: true,
+            selected: true,
+            source: "config" as const,
+            version: "0.200.0-pwragent.1",
+          }]
+        : [],
+      ...(configuredCommand
+        ? {
+            selectedCommand: configuredCommand,
+            selectedSource: "config" as const,
+          }
+        : {}),
+    }));
+    const resolve = vi.fn(async () => ({
+      command: "/usr/local/bin/codex",
+      source: "path" as const,
+      version: "0.999.0",
+    }));
+    const invalidate = vi.fn();
+    const ensureManaged = vi.fn(async () => ({
+      appServerCommand: "/managed/codex-app-server",
+      codeModeHostCommand: "/managed/codex-code-mode-host",
+      command: "/managed/codex",
+      metadata: {
+        asset: "pwragent-codex-0.200.0-pwragent.1-linux-x86_64.tar.gz",
+        checkedAt: 1,
+        installedAt: 1,
+        repository: "pwrdrvr/codex",
+        schemaVersion: 1,
+        sha256: "a".repeat(64),
+        tag: "pwragent-v0.200.0-pwragent.1",
+        version: "0.200.0-pwragent.1",
+      },
+    }));
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: { discover, invalidate, resolve },
+      configPath,
+      ensureManagedCodexRuntime: ensureManaged,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await service.readSettings();
+    expect(ensureManaged).not.toHaveBeenCalled();
+
+    await service.writeConfigPatch({
+      experimental: { tokenMiserEnabled: true },
+    });
+
+    expect(ensureManaged).toHaveBeenNthCalledWith(1, { checkMode: "force" });
+    expect(ensureManaged).toHaveBeenLastCalledWith({ checkMode: "ttl" });
+    expect(invalidate).toHaveBeenCalledOnce();
+    expect(discover).toHaveBeenLastCalledWith("/managed/codex", {
+      allowStaleSuccess: true,
+      force: false,
+    });
+    await expect(service.resolveCodexCommand()).resolves.toEqual({
+      command: "/managed/codex",
+      source: "config",
+      version: "0.200.0-pwragent.1",
+    });
+    expect(resolve).not.toHaveBeenCalled();
+    expect(fs.readFileSync(configPath, "utf8")).toContain(
+      "token_miser_enabled = true",
+    );
+  });
+
+  it("leaves Token Miser off when the first managed Codex install fails", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const invalidate = vi.fn();
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({ candidates: [] })),
+        invalidate,
+        resolve: vi.fn(async () => {
+          throw new Error("not installed");
+        }),
+      },
+      configPath,
+      ensureManagedCodexRuntime: vi.fn(async () => {
+        throw new Error("No compatible signed Codex release is available.");
+      }),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await expect(service.writeConfigPatch({
+      experimental: { tokenMiserEnabled: true },
+    })).rejects.toThrow("No compatible signed Codex release");
+
+    expect(service.resolveTokenMiserEnabled()).toBe(false);
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(existsOrEmpty(configPath)).toBe(true);
+  });
+
+  it("returns to ordinary Codex discovery without checking managed releases when disabled", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, [
+      "[experimental]",
+      "token_miser_enabled = true",
+      "",
+      "[models.codex]",
+      'path = "/operator/codex"',
+      "",
+    ].join("\n"));
+    const ensureManaged = vi.fn(async () => ({
+      appServerCommand: "/managed/codex-app-server",
+      codeModeHostCommand: "/managed/codex-code-mode-host",
+      command: "/managed/codex",
+      metadata: {
+        asset: "pwragent-codex-0.200.0-pwragent.1-linux-x86_64.tar.gz",
+        checkedAt: 1,
+        installedAt: 1,
+        repository: "pwrdrvr/codex",
+        schemaVersion: 1,
+        sha256: "a".repeat(64),
+        tag: "pwragent-v0.200.0-pwragent.1",
+        version: "0.200.0-pwragent.1",
+      },
+    }));
+    const discover = vi.fn(async () => ({ candidates: [] }));
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover,
+        invalidate: vi.fn(),
+        resolve: vi.fn(async (command) => ({
+          command: command ?? "/path/codex",
+          source: command ? "config" as const : "path" as const,
+          version: "0.999.0",
+        })),
+      },
+      configPath,
+      ensureManagedCodexRuntime: ensureManaged,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await expect(service.resolveCodexCommand()).resolves.toMatchObject({
+      command: "/managed/codex",
+    });
+    ensureManaged.mockClear();
+
+    await service.writeConfigPatch({
+      experimental: { tokenMiserEnabled: false },
+    });
+    await expect(service.resolveCodexCommand()).resolves.toMatchObject({
+      command: "/operator/codex",
+    });
+    expect(ensureManaged).not.toHaveBeenCalled();
+    expect(discover).toHaveBeenLastCalledWith("/operator/codex", {
+      allowStaleSuccess: true,
+      force: false,
+    });
   });
 
   it("reads and lazily mirrors the legacy general Token Miser opt-in", async () => {
