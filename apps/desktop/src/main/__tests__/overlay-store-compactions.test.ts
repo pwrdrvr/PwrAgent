@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ThreadCompactionRecord } from "@pwragent/shared";
+import type {
+  ThreadCompactionRecord,
+  ThreadUsageLineRecord,
+} from "@pwragent/shared";
 import { SqliteOverlayStore } from "../state/overlay-store-sqlite";
 import { StateDb } from "../state/state-db";
 import { openInMemoryStateDb } from "./sqlite-test-utils";
@@ -236,4 +239,73 @@ describe("SqliteOverlayStore — compaction markers", () => {
       updatedAt: 2500,
     })).toBe(false);
   });
+
+  it("waits for a newly observed cold replay before claiming a later marker", async () => {
+    const firstReplay = buildUsageLine({
+      observedColdReplayCount: 1,
+      observedColdReplayUncachedTokens: 100,
+      uncachedInputTokens: 200,
+    });
+    await store.upsertThreadUsageLine({ line: firstReplay });
+    await store.recordThreadCompaction({
+      compaction: buildCompaction({ observedAt: Date.now() - 1 }),
+    });
+
+    // Re-emitting the unchanged cumulative tally after the marker must not
+    // make the old replay look post-compaction or consume the marker with a
+    // zero delta.
+    await store.upsertThreadUsageLine({ line: firstReplay });
+    let compactions = await store.listThreadCompactions({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(compactions[0]?.coldUsageLineId).toBeUndefined();
+
+    await store.upsertThreadUsageLine({
+      line: buildUsageLine({
+        observedColdReplayCount: 2,
+        observedColdReplayUncachedTokens: 220,
+        uncachedInputTokens: 320,
+      }),
+    });
+    compactions = await store.listThreadCompactions({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(compactions[0]?.coldUsageLineId).toBe("usage-1");
+    expect(compactions[0]?.coldUncachedTokens).toBe(120);
+  });
 });
+
+function buildUsageLine(
+  overrides: Partial<ThreadUsageLineRecord> = {},
+): ThreadUsageLineRecord {
+  return {
+    backend: "codex",
+    cachedInputCostMicros: 0,
+    cachedInputTokens: 0,
+    createdAt: Date.now(),
+    currency: "USD",
+    inputTokens: 320,
+    model: "gpt-5.5",
+    outputCostMicros: 0,
+    outputTokens: 0,
+    priceStatus: "priced",
+    provider: "openai",
+    pricingCatalogId: "openai-api",
+    pricingCatalogVersion: "2026-06-16",
+    pricingRateId: "openai:2026-06-16:gpt-5.5:standard",
+    reasoningOutputTokens: 0,
+    scope: "turn",
+    source: "live",
+    status: "pending",
+    threadId: "thread-1",
+    totalCostMicros: 1_600,
+    totalTokens: 320,
+    turnId: "turn-1",
+    uncachedInputCostMicros: 1_600,
+    uncachedInputTokens: 320,
+    usageLineId: "usage-1",
+    ...overrides,
+  };
+}

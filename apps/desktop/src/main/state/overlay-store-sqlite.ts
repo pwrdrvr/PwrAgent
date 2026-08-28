@@ -1603,31 +1603,41 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       // A cold replay is a full uncached context re-read, which is what a
       // compaction forces. Claim it for the compaction that preceded it so the
       // cost has a cause; rides this transaction, so it adds no commit.
-      if ((line.observedColdReplayCount ?? 0) > 0) {
-        const coldTokens = line.observedColdReplayUncachedTokens
-          ?? line.uncachedInputTokens;
-        // Cost the cold subset, not the turn. `uncachedInputCostMicros` is the
-        // whole turn's uncached spend, so pairing it with the cold-replay token
-        // count overstated what the compaction cost by the ratio between them.
-        const coldCostMicros = line.uncachedInputTokens > 0
-          ? Math.round(
-            line.uncachedInputCostMicros
-            * (coldTokens / line.uncachedInputTokens),
-          )
-          : 0;
-        this.attributeThreadCompactionColdReplaySync({
-          backend: line.backend as AppServerBackendKind,
-          costMicros: coldCostMicros,
-          // Anchored to now, not `line.createdAt`: the usage line is per turn
-          // and its created_at is pinned by MIN() to the turn's first flush, so
-          // a marker written mid-turn always sorted after it and could never be
-          // claimed by the turn it actually interrupted.
-          observedAt: now,
-          threadId: line.threadId,
-          uncachedTokens: coldTokens,
-          usageLineId: line.usageLineId,
-          updatedAt: now,
-        });
+      const priorColdReplayCount = existing?.observedColdReplayCount ?? 0;
+      const nextColdReplayCount = line.observedColdReplayCount ?? 0;
+      if (nextColdReplayCount > priorColdReplayCount) {
+        const priorColdTokens =
+          existing?.observedColdReplayUncachedTokens ?? 0;
+        const coldTokens = line.observedColdReplayUncachedTokens !== undefined
+          ? Math.max(
+              0,
+              line.observedColdReplayUncachedTokens - priorColdTokens,
+            )
+          : line.uncachedInputTokens;
+        if (coldTokens > 0) {
+          // Cost the cold subset, not the turn. `uncachedInputCostMicros` is
+          // the whole turn's uncached spend, so pairing it with the cold-replay
+          // token count overstated what the compaction cost by their ratio.
+          const coldCostMicros = line.uncachedInputTokens > 0
+            ? Math.round(
+              line.uncachedInputCostMicros
+              * (coldTokens / line.uncachedInputTokens),
+            )
+            : 0;
+          this.attributeThreadCompactionColdReplayDeltaSync({
+            backend: line.backend as AppServerBackendKind,
+            costMicros: coldCostMicros,
+            // Anchored to now, not `line.createdAt`: the usage line is per turn
+            // and its created_at is pinned by MIN() to the turn's first flush,
+            // so a marker written mid-turn always sorted after it and could
+            // never be claimed by the turn it actually interrupted.
+            observedAt: now,
+            threadId: line.threadId,
+            uncachedTokens: coldTokens,
+            usageLineId: line.usageLineId,
+            updatedAt: now,
+          });
+        }
       }
       return line;
     };
@@ -1938,6 +1948,47 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         params.backend,
         params.threadId,
         params.usageLineId,
+        params.backend,
+        params.threadId,
+        params.observedAt,
+        params.usageLineId,
+        params.uncachedTokens,
+        params.costMicros,
+        params.updatedAt,
+      );
+    return result.changes > 0;
+  }
+
+  private attributeThreadCompactionColdReplayDeltaSync(params: {
+    backend: AppServerBackendKind;
+    costMicros: number;
+    observedAt: number;
+    threadId: string;
+    uncachedTokens: number;
+    usageLineId: string;
+    updatedAt: number;
+  }): boolean {
+    // The usage upsert already reduced the cumulative replay counters to the
+    // newly observed delta. Attribute that delta directly so an unchanged
+    // cumulative line cannot consume a newer compaction marker.
+    const result = this.stateDb.raw
+      .prepare(
+        `WITH candidate AS (
+           SELECT compaction_id FROM thread_compactions
+           WHERE backend = ? AND thread_id = ?
+             AND cold_usage_line_id IS NULL
+             AND observed_at <= ?
+           ORDER BY observed_at DESC
+           LIMIT 1
+         )
+         UPDATE thread_compactions
+         SET cold_usage_line_id = ?,
+             cold_uncached_tokens = MAX(0, ?),
+             cold_cost_micros = MAX(0, ?),
+             updated_at = ?
+         WHERE compaction_id = (SELECT compaction_id FROM candidate)`,
+      )
+      .run(
         params.backend,
         params.threadId,
         params.observedAt,
@@ -6709,6 +6760,10 @@ type ThreadUsageLineRow = {
   output_cost_micros: number;
   total_cost_micros: number;
   cumulative_total_cost_micros: number | null;
+  observed_cold_replay_count: number | null;
+  observed_cold_replay_uncached_tokens: number | null;
+  observed_hot_replay_cached_tokens: number | null;
+  observed_hot_replay_count: number | null;
   updated_at: number;
 };
 
@@ -7318,6 +7373,21 @@ function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord 
       : {}),
     inputTokens: row.input_tokens,
     ...(row.model ? { model: row.model } : {}),
+    ...(row.observed_cold_replay_count !== null
+      ? { observedColdReplayCount: row.observed_cold_replay_count }
+      : {}),
+    ...(row.observed_cold_replay_uncached_tokens !== null
+      ? {
+          observedColdReplayUncachedTokens:
+            row.observed_cold_replay_uncached_tokens,
+        }
+      : {}),
+    ...(row.observed_hot_replay_cached_tokens !== null
+      ? { observedHotReplayCachedTokens: row.observed_hot_replay_cached_tokens }
+      : {}),
+    ...(row.observed_hot_replay_count !== null
+      ? { observedHotReplayCount: row.observed_hot_replay_count }
+      : {}),
     outputCostMicros: row.output_cost_micros,
     outputTokens: row.output_tokens,
     ...(row.parent_thread_id ? { parentThreadId: row.parent_thread_id } : {}),

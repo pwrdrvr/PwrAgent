@@ -3679,6 +3679,54 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("does not stop newer Token Miser replay gates for a duplicate compaction", async () => {
+    const recordThreadCompaction = vi.fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      recordThreadCompaction,
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+    });
+    const internals = registry as unknown as {
+      handleThreadCompactionReplayBoundary: (
+        event: {
+          backend: "codex";
+          notification: {
+            method: "thread/compacted";
+            params: { itemId: string; threadId: string };
+          };
+        },
+      ) => Promise<void>;
+      stopTokenMiserReplayTrackingAtCompaction: (
+        event: unknown,
+      ) => Promise<void>;
+    };
+    const stopReplayTracking = vi
+      .spyOn(internals, "stopTokenMiserReplayTrackingAtCompaction")
+      .mockResolvedValue(undefined);
+    const event = {
+      backend: "codex" as const,
+      notification: {
+        method: "thread/compacted" as const,
+        params: { itemId: "compaction-1", threadId: "thread-1" },
+      },
+    };
+
+    try {
+      await internals.handleThreadCompactionReplayBoundary(event);
+      await internals.handleThreadCompactionReplayBoundary(event);
+
+      expect(recordThreadCompaction).toHaveBeenCalledTimes(2);
+      expect(stopReplayTracking).toHaveBeenCalledTimes(1);
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("configures the code-mode reducer when a Token Miser thread is created", async () => {
     const codexClient = new MockBackendClient({ threads: [] });
     const registry = new DesktopBackendRegistry({
@@ -4123,7 +4171,12 @@ describe("DesktopBackendRegistry", () => {
     );
     const internals = registry as unknown as {
       prepareTokenMiserRuntime: (options?: { prune?: boolean }) => Promise<void>;
+      resolveTokenMiserDefaultEnabledFn: () => boolean;
       resolveTokenMiserEnabledFn: () => boolean;
+      resolveTokenMiserThreadOverride: (
+        backend: "codex",
+        threadId: string,
+      ) => Promise<boolean | undefined>;
       tokenMiserCodeModeReducerDescriptorPath?: string;
       tokenMiserStateDir?: string;
       tokenMiserStore?: TokenMiserStore;
@@ -4137,6 +4190,12 @@ describe("DesktopBackendRegistry", () => {
       path.join(tokenMiserStateDir, "objects"),
     );
     internals.resolveTokenMiserEnabledFn = () => true;
+    internals.resolveTokenMiserDefaultEnabledFn = () => false;
+    await overlayStore.setThreadTokenMiser?.({
+      backend: "codex",
+      threadId: "thread-1",
+      enabled: true,
+    });
     const prepare = vi.spyOn(internals, "prepareTokenMiserRuntime");
 
     try {
@@ -4175,11 +4234,23 @@ describe("DesktopBackendRegistry", () => {
           "read_all_token_miser_output",
         ],
       );
+      expect(
+        await internals.resolveTokenMiserThreadOverride(
+          "codex",
+          "managed-review-child",
+        ),
+      ).toBe(true);
       await overlayStore.setThreadTokenMiser?.({
         backend: "codex",
         threadId: "thread-1",
         enabled: false,
       });
+      expect(
+        await internals.resolveTokenMiserThreadOverride(
+          "codex",
+          "managed-review-child",
+        ),
+      ).toBe(false);
       const staleToolResponse = await codexClient.emitRequest({
         method: "item/tool/call",
         params: {

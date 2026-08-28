@@ -7430,6 +7430,10 @@ export class DesktopBackendRegistry {
     string,
     ReviewSubAgentRecord
   >();
+  private readonly managedReviewParentsByChildThread = new Map<
+    string,
+    { parentBackend: AppServerBackendKind; parentThreadId: string }
+  >();
   private readonly managedReviewOutputByReviewTurn = new Map<string, string>();
   private readonly codexNativeSubAgentParents = new Map<string, string>();
   private readonly codexNativeSubAgentReconciliations = new Map<
@@ -8220,13 +8224,8 @@ export class DesktopBackendRegistry {
         isEnabledByDefault: () => this.resolveTokenMiserDefaultEnabledFn(),
         // A thread can override the inherited default while the experiment is
         // available; the global experimental flag remains the outer gate.
-        isEnabledForThread: async (threadId) => {
-          const overlay = await this.overlayStore.getThreadOverlayState({
-            backend: "codex",
-            threadId,
-          });
-          return overlay?.tokenMiserEnabled;
-        },
+        isEnabledForThread: async (threadId) =>
+          await this.resolveTokenMiserThreadOverride("codex", threadId),
         getParentCumulativeInputTokens: (threadId) =>
           this.liveThreadReplayInputCursor.get(
             ["codex", threadId].join(":"),
@@ -14878,6 +14877,14 @@ export class DesktopBackendRegistry {
         ? { dynamicTools: tokenMiserDynamicTools }
         : {}),
     });
+    let managedReviewChildKey = buildThreadIdentityKey(
+      "codex",
+      thread.threadId,
+    );
+    this.managedReviewParentsByChildThread.set(managedReviewChildKey, {
+      parentBackend: params.parentBackend,
+      parentThreadId: params.parentThreadId,
+    });
     this.reservedCodexStartThreadIds.add(thread.threadId);
     try {
       const turn = await client.startTurn({
@@ -14894,6 +14901,23 @@ export class DesktopBackendRegistry {
           ? { dynamicTools: tokenMiserDynamicTools }
           : {}),
       });
+      const startedReviewChildKey = buildThreadIdentityKey(
+        "codex",
+        turn.threadId,
+      );
+      if (startedReviewChildKey !== managedReviewChildKey) {
+        const parent = this.managedReviewParentsByChildThread.get(
+          managedReviewChildKey,
+        );
+        this.managedReviewParentsByChildThread.delete(managedReviewChildKey);
+        managedReviewChildKey = startedReviewChildKey;
+        if (parent) {
+          this.managedReviewParentsByChildThread.set(
+            managedReviewChildKey,
+            parent,
+          );
+        }
+      }
       this.activeTurnKeys.add(
         buildActiveTurnKey("codex", turn.threadId, turn.turnId),
       );
@@ -14906,6 +14930,9 @@ export class DesktopBackendRegistry {
         reviewThreadId: turn.threadId,
         turnId: turn.turnId,
       };
+    } catch (error) {
+      this.managedReviewParentsByChildThread.delete(managedReviewChildKey);
+      throw error;
     } finally {
       this.reservedCodexStartThreadIds.delete(thread.threadId);
     }
@@ -24040,6 +24067,9 @@ export class DesktopBackendRegistry {
 
     this.activeReviewSubAgents.delete(activeReview.key);
     const { record } = activeReview;
+    this.managedReviewParentsByChildThread.delete(
+      buildThreadIdentityKey(record.backend, record.reviewThreadId),
+    );
     const completedAt = params.completedAt ?? Date.now();
     if (params.method === "turn/completed") {
       await this.persistReviewSubAgent(record, {
@@ -26861,9 +26891,9 @@ export class DesktopBackendRegistry {
    * keyed on the backend's own item id when it reports one, so a re-emitted
    * notification does not become a second compaction.
    */
-  private async recordThreadCompaction(event: AgentEvent): Promise<void> {
+  private async recordThreadCompaction(event: AgentEvent): Promise<boolean> {
     if (event.notification.method !== "thread/compacted") {
-      return;
+      return false;
     }
     const threadId = event.notification.params.threadId;
     const itemId = typeof event.notification.params.itemId === "string"
@@ -26881,7 +26911,7 @@ export class DesktopBackendRegistry {
       turnId,
     });
     try {
-      await this.overlayStore.recordThreadCompaction?.({
+      return await this.overlayStore.recordThreadCompaction?.({
         compaction: {
           backend: event.backend,
           compactionId,
@@ -26891,13 +26921,16 @@ export class DesktopBackendRegistry {
           ...(itemId ? { itemId } : {}),
           ...(turnId ? { turnId } : {}),
         },
-      });
+      }) ?? true;
     } catch (error) {
       backendRegistryLog.warn("compaction marker write failed", {
         backend: event.backend,
         error: error instanceof Error ? error.message : String(error),
         threadId,
       });
+      // The notification is still authoritative even when durable accounting
+      // is unavailable. Stop the pre-compaction replay window conservatively.
+      return true;
     }
   }
 
@@ -26946,6 +26979,15 @@ export class DesktopBackendRegistry {
       backend: "codex",
       threadId: event.notification.params.threadId,
     });
+  }
+
+  private async handleThreadCompactionReplayBoundary(
+    event: AgentEvent,
+  ): Promise<void> {
+    const shouldStopReplayTracking = await this.recordThreadCompaction(event);
+    if (shouldStopReplayTracking) {
+      await this.stopTokenMiserReplayTrackingAtCompaction(event);
+    }
   }
 
   /**
@@ -28039,28 +28081,60 @@ export class DesktopBackendRegistry {
     if (!this.resolveTokenMiserEnabledFn()) {
       return false;
     }
+    const threadOverride = await this.resolveTokenMiserThreadOverride(
+      backend,
+      call.threadId,
+    );
+    return threadOverride ?? this.resolveTokenMiserDefaultEnabledFn();
+  }
+
+  private async resolveTokenMiserThreadOverride(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<boolean | undefined> {
     const directOverlay = await this.overlayStore.getThreadOverlayState({
       backend,
-      threadId: call.threadId,
+      threadId,
     });
     if (directOverlay?.tokenMiserEnabled !== undefined) {
       return directOverlay.tokenMiserEnabled;
     }
-    const review = Array.from(this.activeReviewSubAgents.values()).find(
-      (record) =>
-        record.backend === backend
-        && record.reviewThreadId === call.threadId,
-    );
-    if (review?.parentBackend === "codex") {
-      const parentOverlay = await this.overlayStore.getThreadOverlayState({
-        backend: "codex",
-        threadId: review.parentThreadId,
-      });
-      if (parentOverlay?.tokenMiserEnabled !== undefined) {
-        return parentOverlay.tokenMiserEnabled;
-      }
+    const managedReviewParent = this.findManagedReviewParentForChild({
+      backend,
+      reviewThreadId: threadId,
+    });
+    if (managedReviewParent?.parentBackend !== "codex") {
+      return undefined;
     }
-    return this.resolveTokenMiserDefaultEnabledFn();
+    const parentOverlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: managedReviewParent.parentThreadId,
+    });
+    return parentOverlay?.tokenMiserEnabled;
+  }
+
+  private findManagedReviewParentForChild(params: {
+    backend: AppServerBackendKind;
+    reviewThreadId: string;
+  }): { parentBackend: AppServerBackendKind; parentThreadId: string } | undefined {
+    const pending = this.managedReviewParentsByChildThread.get(
+      buildThreadIdentityKey(params.backend, params.reviewThreadId),
+    );
+    if (pending) {
+      return pending;
+    }
+    const active = Array.from(this.activeReviewSubAgents.values()).find(
+      (record) =>
+        record.mode === "managed"
+        && record.backend === params.backend
+        && record.reviewThreadId === params.reviewThreadId,
+    );
+    return active
+      ? {
+          parentBackend: active.parentBackend,
+          parentThreadId: active.parentThreadId,
+        }
+      : undefined;
   }
 
   private resolveTokenMiserEnabledForOverride(
@@ -34725,8 +34799,7 @@ export class DesktopBackendRegistry {
       "recordTokenMiserParentModelRequest",
       () => this.recordTokenMiserParentModelRequest(event),
     );
-    await this.recordThreadCompaction(event);
-    await this.stopTokenMiserReplayTrackingAtCompaction(event);
+    await this.handleThreadCompactionReplayBoundary(event);
     await this.recordToolInvocationAccounting(event);
     this.forgetCompletedTurnReplayObservations(event);
     await this.recordCodexNativeSubAgentActivity(event);
