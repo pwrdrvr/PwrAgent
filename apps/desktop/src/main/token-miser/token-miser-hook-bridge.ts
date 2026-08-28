@@ -19,17 +19,27 @@ const MAX_HOOK_REQUEST_BYTES = 32 * 1024 * 1024;
 const DEFAULT_CODE_MODE_ACCEPTANCE_TIMEOUT_MS = 60_000;
 export const TOKEN_MISER_CODE_MODE_REDUCER_DESCRIPTOR_FILENAME_PREFIX =
   "code-mode-reducer";
-export const TOKEN_MISER_BRIDGE_DESCRIPTOR_FILENAME_PREFIX = "bridge";
+export const TOKEN_MISER_BRIDGE_DESCRIPTOR_FILENAME =
+  "token-miser-bridge-v1.json";
 export const TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV =
   "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH";
+export const TOKEN_MISER_MANAGED_IDENTITY =
+  "pwrdrvr.pwragent.token-miser";
+
+function tokenMiserRuntimeDirectory(
+  stateDir: string,
+  instanceId: string,
+): string {
+  return path.join(stateDir, "runtimes", instanceId);
+}
 
 export function getTokenMiserBridgeDescriptorPath(
   stateDir: string,
   instanceId: string,
 ): string {
   return path.join(
-    stateDir,
-    `${TOKEN_MISER_BRIDGE_DESCRIPTOR_FILENAME_PREFIX}.${instanceId}.json`,
+    tokenMiserRuntimeDirectory(stateDir, instanceId),
+    TOKEN_MISER_BRIDGE_DESCRIPTOR_FILENAME,
   );
 }
 
@@ -38,14 +48,17 @@ export function getTokenMiserCodeModeReducerDescriptorPath(
   instanceId: string,
 ): string {
   return path.join(
-    stateDir,
-    `${TOKEN_MISER_CODE_MODE_REDUCER_DESCRIPTOR_FILENAME_PREFIX}.${instanceId}.json`,
+    tokenMiserRuntimeDirectory(stateDir, instanceId),
+    `${TOKEN_MISER_CODE_MODE_REDUCER_DESCRIPTOR_FILENAME_PREFIX}-v1.json`,
   );
 }
 
 export type TokenMiserBridgeDescriptor = {
   version: 1;
+  identity: typeof TOKEN_MISER_MANAGED_IDENTITY;
+  activation_nonce: string;
   url: string;
+  acceptance_url: string;
   token: string;
 };
 
@@ -88,6 +101,7 @@ export class TokenMiserHookBridge {
   private readonly acceptanceTimeoutMs: number;
   readonly bridgeDescriptorPath: string;
   readonly codeModeReducerDescriptorPath: string;
+  readonly activationNonce: string;
 
   constructor(
     private readonly options: {
@@ -95,11 +109,14 @@ export class TokenMiserHookBridge {
       service: TokenMiserService;
       codeModeAcceptanceTimeoutMs?: number;
       instanceId?: string;
+      activationNonce?: string;
     },
   ) {
     this.acceptanceTimeoutMs =
       options.codeModeAcceptanceTimeoutMs
       ?? DEFAULT_CODE_MODE_ACCEPTANCE_TIMEOUT_MS;
+    this.activationNonce =
+      options.activationNonce ?? randomBytes(32).toString("base64url");
     const instanceId = options.instanceId ?? `${process.pid}-${randomUUID()}`;
     this.bridgeDescriptorPath = getTokenMiserBridgeDescriptorPath(
       options.stateDir,
@@ -130,7 +147,10 @@ export class TokenMiserHookBridge {
 
   private async startOnce(): Promise<TokenMiserBridgeDescriptor> {
     this.shuttingDown = false;
-    await fs.mkdir(this.options.stateDir, { recursive: true, mode: 0o700 });
+    await fs.mkdir(path.dirname(this.bridgeDescriptorPath), {
+      recursive: true,
+      mode: 0o700,
+    });
     const token = randomBytes(32).toString("base64url");
     const server = createServer((request, response) => {
       void this.handleRequest(request, response, token);
@@ -150,7 +170,11 @@ export class TokenMiserHookBridge {
     this.server = server;
     const descriptor = {
       version: 1,
+      identity: TOKEN_MISER_MANAGED_IDENTITY,
+      activation_nonce: this.activationNonce,
       url: `http://127.0.0.1:${address.port}/v1/post-tool-use`,
+      acceptance_url:
+        `http://127.0.0.1:${address.port}/v1/accept-code-mode-output`,
       token,
     } satisfies TokenMiserBridgeDescriptor;
     const codeModeDescriptor = {

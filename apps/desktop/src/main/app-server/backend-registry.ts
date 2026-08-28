@@ -1,6 +1,6 @@
 import { app } from "electron";
 import { execFile as execFileCallback } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -348,6 +348,7 @@ import {
 import {
   CodexAppServerClient,
   DEFAULT_CODEX_THREAD_TITLE_MODEL,
+  type CodexPwrdrvrTokenMiserActivation,
   type CodexServerCapabilities,
 } from "../codex-app-server/client";
 import {
@@ -740,6 +741,7 @@ type BackendClient = {
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
     threadSource?: CodexThreadSource;
+    pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
   }): Promise<{ threadId: string }>;
   forkThread?(params: {
     threadId: string;
@@ -768,6 +770,7 @@ type BackendClient = {
     config?: CodexThreadStartParams["config"];
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
+    pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
   }): Promise<{
     threadId: string;
     turnId: string;
@@ -7905,6 +7908,9 @@ export class DesktopBackendRegistry {
           this.runtimeInstanceId,
         )
       : undefined;
+    const tokenMiserActivationNonce = tokenMiserStateDir
+      ? randomBytes(32).toString("base64url")
+      : undefined;
     this.resolveCodexDefaultModeRequestUserInputFn =
       options?.resolveCodexDefaultModeRequestUserInput ??
       (() => {
@@ -8111,6 +8117,10 @@ export class DesktopBackendRegistry {
             )
           : undefined,
         clientVersion,
+        resolvePwrdrvrTokenMiserActivationNonce: () =>
+          this.resolveTokenMiserEnabledFn()
+            ? tokenMiserActivationNonce
+            : undefined,
         // Fire the gate at the client level too, not just the
         // listThreads layer. Without this, `describeCodexBackend`
         // (called by `listBackends` on app startup) would call
@@ -8230,6 +8240,7 @@ export class DesktopBackendRegistry {
         stateDir: tokenMiserStateDir,
         service: tokenMiserService,
         instanceId: this.runtimeInstanceId,
+        activationNonce: tokenMiserActivationNonce,
       });
       this.tokenMiserCodeModeReducerDescriptorPath =
         this.tokenMiserHookBridge.codeModeReducerDescriptorPath;
@@ -12566,6 +12577,12 @@ export class DesktopBackendRegistry {
           enabled: tokenMiserEnabled,
         })
       : undefined;
+    const pwrdrvrTokenMiser = client
+      ? await this.buildSupportedPwrdrvrTokenMiserActivation({
+          client,
+          enabled: tokenMiserEnabled,
+        })
+      : undefined;
     const codexThreadConfig = mergeCodexThreadConfigs(
       pdfMcpConfig,
       connectionMcpConfig,
@@ -12629,6 +12646,9 @@ export class DesktopBackendRegistry {
                     this.resolveCodexDefaultModeRequestUserInputFn(),
                   threadSource: "user" as CodexThreadSource,
                   ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
+                  ...(pwrdrvrTokenMiser
+                    ? { pwrdrvrTokenMiser }
+                    : {}),
                 }
               : {}),
             dynamicTools,
@@ -14038,6 +14058,11 @@ export class DesktopBackendRegistry {
               client,
               tokenMiserEnabled: tokenMiserEnabledForThread,
             });
+          const pwrdrvrTokenMiser =
+            await this.buildSupportedPwrdrvrTokenMiserActivation({
+              client,
+              enabled: tokenMiserEnabledForThread,
+            });
           const supportedCodexThreadConfig = mergeCodexThreadConfigs(
             codexThreadConfig,
             tokenMiserConfig,
@@ -14059,6 +14084,9 @@ export class DesktopBackendRegistry {
             defaultModeRequestUserInput:
               this.resolveCodexDefaultModeRequestUserInputFn(),
             ...(dynamicTools !== undefined ? { dynamicTools } : {}),
+            ...(pwrdrvrTokenMiser !== undefined
+              ? { pwrdrvrTokenMiser }
+              : {}),
           });
           activeTurnMode = effectiveMode;
           return started;
@@ -14826,6 +14854,11 @@ export class DesktopBackendRegistry {
       client,
       enabled: params.tokenMiserEnabled,
     });
+    const pwrdrvrTokenMiser =
+      await this.buildSupportedPwrdrvrTokenMiserActivation({
+        client,
+        enabled: params.tokenMiserEnabled,
+      });
     const tokenMiserDynamicTools = params.tokenMiserEnabled
       ? buildCodexTokenMiserDynamicToolSpecs(this.tokenMiserStore)
       : [];
@@ -14847,6 +14880,7 @@ export class DesktopBackendRegistry {
         ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
         : {}),
       ...(tokenMiserConfig ? { config: tokenMiserConfig } : {}),
+      ...(pwrdrvrTokenMiser ? { pwrdrvrTokenMiser } : {}),
       ...(tokenMiserDynamicTools.length > 0
         ? { dynamicTools: tokenMiserDynamicTools }
         : {}),
@@ -14874,6 +14908,7 @@ export class DesktopBackendRegistry {
         ...(dynamicToolsResumeSupported
           ? { dynamicTools: tokenMiserDynamicTools }
           : {}),
+        ...(pwrdrvrTokenMiser !== undefined ? { pwrdrvrTokenMiser } : {}),
       });
       const startedReviewChildKey = buildThreadIdentityKey(
         "codex",
@@ -19775,6 +19810,19 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private async buildSupportedPwrdrvrTokenMiserActivation(params: {
+    client: BackendClient;
+    enabled: boolean;
+  }): Promise<CodexPwrdrvrTokenMiserActivation | null | undefined> {
+    const capabilities = await this.readTokenMiserServerCapabilities(
+      params.client,
+    );
+    if (capabilities?.pwrdrvrTokenMiser?.version !== 1) {
+      return undefined;
+    }
+    return params.enabled ? { version: 1, enabled: true } : null;
+  }
+
   private buildCodexParentDynamicTools(
     tokenMiserEnabled: boolean,
   ): CodexDynamicToolSpec[] {
@@ -19843,12 +19891,21 @@ export class DesktopBackendRegistry {
       return;
     }
     try {
-      const codexRuntime = await this.resolveTokenMiserCodexRuntimeFn?.();
+      await this.tokenMiserHookBridge.start();
+      const capabilities = await this.readTokenMiserServerCapabilities(
+        this.codexClient,
+      );
+      const managedActivation =
+        capabilities?.pwrdrvrTokenMiser?.version === 1;
+      const codexRuntime = managedActivation
+        ? undefined
+        : await this.resolveTokenMiserCodexRuntimeFn?.();
       await Promise.all([
-        this.tokenMiserHookBridge.start(),
-        codexRuntime
-          ? this.tokenMiserPluginManager.ensureInstalled(codexRuntime)
-          : this.tokenMiserPluginManager.ensurePluginSource(),
+        managedActivation
+          ? Promise.resolve()
+          : codexRuntime
+            ? this.tokenMiserPluginManager.ensureInstalled(codexRuntime)
+            : this.tokenMiserPluginManager.ensurePluginSource(),
         options.prune
           ? this.tokenMiserStore.prune({
               maxAgeMs: 7 * 24 * 60 * 60 * 1_000,

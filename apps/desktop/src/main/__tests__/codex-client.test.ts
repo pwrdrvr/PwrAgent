@@ -1308,8 +1308,48 @@ describe("CodexAppServerClient", () => {
     );
   });
 
+  it("negotiates the exact managed Token Miser initialize capability", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const nonce = "A".repeat(43);
+    const client = new CodexAppServerClient({
+      clientVersion: "1.2.3",
+      resolvePwrdrvrTokenMiserActivationNonce: () => nonce,
+    });
+
+    await client.getInitializeResult();
+
+    const initialize = MockTransport.instances.at(-1)!.sentMessages
+      .map((message) => JSON.parse(message) as {
+        method: string;
+        params: Record<string, unknown>;
+      })
+      .find((request) => request.method === "initialize");
+    expect(initialize?.params).toMatchObject({
+      clientInfo: {
+        name: "pwragent-desktop",
+        version: "1.2.3",
+      },
+      capabilities: {
+        pwrdrvrTokenMiser: {
+          version: 1,
+          activationNonce: nonce,
+        },
+      },
+    });
+  });
+
   it("reads the code-mode output reducer capability from the server", async () => {
     MockTransport.serverCapabilitiesResult = {
+      pwrdrvrTokenMiser: {
+        version: 1,
+        identity: "pwrdrvr.pwragent.token-miser",
+        initializeCapabilityField: "pwrdrvrTokenMiser",
+        threadStartField: "pwrdrvrTokenMiser",
+        threadResumeField: "pwrdrvrTokenMiser",
+        descriptorEnvironmentVariable:
+          "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+        descriptorVersion: 1,
+      },
       codeModeOutputReducer: {
         actionableState: {
           version: 1,
@@ -1349,6 +1389,16 @@ describe("CodexAppServerClient", () => {
     const client = new CodexAppServerClient({ command: "codex" });
 
     await expect(client.readServerCapabilities()).resolves.toEqual({
+      pwrdrvrTokenMiser: {
+        version: 1,
+        identity: "pwrdrvr.pwragent.token-miser",
+        initializeCapabilityField: "pwrdrvrTokenMiser",
+        threadStartField: "pwrdrvrTokenMiser",
+        threadResumeField: "pwrdrvrTokenMiser",
+        descriptorEnvironmentVariable:
+          "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+        descriptorVersion: 1,
+      },
       codeModeOutputReducer: {
         actionableState: {
           version: 1,
@@ -7379,6 +7429,43 @@ describe("CodexAppServerClient", () => {
     expect(
       requests.find((request) => request.method === "turn/start")?.params,
     ).not.toHaveProperty("dynamicTools");
+
+    await client.close();
+  });
+
+  it("sends managed Token Miser activation only on thread start and resume", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const client = new CodexAppServerClient({ command: "codex" });
+
+    await client.startThread({
+      pwrdrvrTokenMiser: { version: 1, enabled: true },
+    });
+    await client.startTurn({
+      threadId: "thread-existing",
+      input: [{ type: "text", text: "Continue." }],
+      pwrdrvrTokenMiser: null,
+    });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    expect(
+      requests.find((request) => request.method === "thread/start")?.params,
+    ).toMatchObject({
+      pwrdrvrTokenMiser: { version: 1, enabled: true },
+    });
+    expect(
+      requests.find((request) => request.method === "thread/resume")?.params,
+    ).toMatchObject({
+      threadId: "thread-existing",
+      pwrdrvrTokenMiser: null,
+    });
+    expect(
+      requests.find((request) => request.method === "turn/start")?.params,
+    ).not.toHaveProperty("pwrdrvrTokenMiser");
 
     await client.close();
   });

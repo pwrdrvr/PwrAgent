@@ -77,6 +77,10 @@ import {
   getCodexFastModeMismatchWarning,
   withTokenMiserBridgeDescriptorEnv,
 } from "../app-server/backend-registry";
+import type {
+  CodexPwrdrvrTokenMiserActivation,
+  CodexServerCapabilities,
+} from "../codex-app-server/client";
 import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
 import type { AcpAvailableCommandsRecord } from "../acp/acp-available-commands-store";
 import {
@@ -1540,6 +1544,7 @@ class MockBackendClient {
     config?: CodexThreadStartParams["config"];
     defaultModeRequestUserInput?: boolean;
     threadSource?: CodexThreadSource;
+    pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
   };
   lastForkThreadParams?: {
     threadId: string;
@@ -1569,6 +1574,7 @@ class MockBackendClient {
     config?: CodexThreadStartParams["config"];
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: unknown;
+    pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
   };
   interruptTurnCallCount = 0;
   lastInterruptTurnParams?: {
@@ -1693,26 +1699,7 @@ class MockBackendClient {
         methods?: string[];
       };
       initializeError?: Error;
-      serverCapabilities?: {
-        codeModeOutputReducer?: {
-          dynamicToolsResumeField?: "dynamicTools";
-          modelGuidance?: {
-            version: 1;
-            toolDescriptionConfigKey:
-              "features.code_mode.output_reducer.tool_description_guidance";
-            continuationConfigKey:
-              "features.code_mode.output_reducer.continuation_guidance";
-            modelVisibleOverheadRequestField:
-              "model_visible_overhead_characters";
-          };
-          postToolUseExactOutput?: {
-            version: 1;
-            versionField: "token_miser_exact_tool_response_version";
-            responseField: "token_miser_exact_tool_response";
-          };
-          protocolVersion?: number;
-        };
-      };
+      serverCapabilities?: CodexServerCapabilities;
       serverCapabilitiesError?: Error;
       threads?: AppServerThreadSummary[];
       nativeSubAgentThreads?: AppServerThreadSummary[];
@@ -1980,6 +1967,7 @@ class MockBackendClient {
     config?: CodexThreadStartParams["config"];
     defaultModeRequestUserInput?: boolean;
     threadSource?: CodexThreadSource;
+    pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
   }): Promise<{ threadId: string }> {
     this.lastStartThreadParams = params;
     return this.options.startThreadResult ?? { threadId: "thread-1" };
@@ -2018,6 +2006,7 @@ class MockBackendClient {
     config?: CodexThreadStartParams["config"];
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: unknown;
+    pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
   }): Promise<{ threadId: string; turnId: string }> {
     this.startTurnCallCount += 1;
     await this.options.startTurnDelay;
@@ -3824,6 +3813,152 @@ describe("DesktopBackendRegistry", () => {
         },
       });
       expect(codexClient.readServerCapabilitiesCallCount).toBe(1);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("negotiates native Token Miser enablement and explicit per-thread disable", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: {
+        pwrdrvrTokenMiser: {
+          version: 1,
+          identity: "pwrdrvr.pwragent.token-miser",
+          initializeCapabilityField: "pwrdrvrTokenMiser",
+          threadStartField: "pwrdrvrTokenMiser",
+          threadResumeField: "pwrdrvrTokenMiser",
+          descriptorEnvironmentVariable:
+            "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+          descriptorVersion: 1,
+        },
+        codeModeOutputReducer: {
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
+          protocolVersion: 1,
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-off": {
+            backend: "codex",
+            threadId: "thread-off",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            tokenMiserEnabled: false,
+          },
+        },
+      }),
+    });
+    const internals = registry as unknown as {
+      prepareTokenMiserRuntime: () => Promise<void>;
+      resolveTokenMiserEnabledFn: () => boolean;
+      tokenMiserCodeModeReducerDescriptorPath?: string;
+    };
+    internals.resolveTokenMiserEnabledFn = () => true;
+    internals.tokenMiserCodeModeReducerDescriptorPath = path.join(
+      "/tmp",
+      "token-miser-native",
+      "code-mode-reducer-v1.json",
+    );
+    vi.spyOn(internals, "prepareTokenMiserRuntime").mockResolvedValue(undefined);
+
+    try {
+      await registry.startThread({ backend: "codex", cwd: process.cwd() });
+      expect(codexClient.lastStartThreadParams?.pwrdrvrTokenMiser).toEqual({
+        version: 1,
+        enabled: true,
+      });
+
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-off",
+        input: [{ type: "text", text: "Keep this thread opted out." }],
+      });
+      expect(codexClient.lastStartTurnParams?.pwrdrvrTokenMiser).toBeNull();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("does not install the legacy plugin when native activation is negotiated", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: {
+        pwrdrvrTokenMiser: {
+          version: 1,
+          identity: "pwrdrvr.pwragent.token-miser",
+          initializeCapabilityField: "pwrdrvrTokenMiser",
+          threadStartField: "pwrdrvrTokenMiser",
+          threadResumeField: "pwrdrvrTokenMiser",
+          descriptorEnvironmentVariable:
+            "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+          descriptorVersion: 1,
+        },
+        codeModeOutputReducer: {
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
+          protocolVersion: 1,
+        },
+      },
+    });
+    const ensureInstalled = vi.fn();
+    const ensurePluginSource = vi.fn();
+    const resolveRuntime = vi.fn();
+    const startBridge = vi.fn(async () => undefined);
+    const closeBridge = vi.fn(async () => undefined);
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const internals = registry as unknown as {
+      prepareTokenMiserRuntime: () => Promise<void>;
+      tokenMiserStore?: TokenMiserStore;
+      tokenMiserHookBridge?: {
+        start(): Promise<unknown>;
+        close(): Promise<void>;
+      };
+      tokenMiserPluginManager?: {
+        ensureInstalled: typeof ensureInstalled;
+        ensurePluginSource: typeof ensurePluginSource;
+      };
+      resolveTokenMiserCodexRuntimeFn?: typeof resolveRuntime;
+    };
+    internals.tokenMiserStore = {} as TokenMiserStore;
+    internals.tokenMiserHookBridge = {
+      start: startBridge,
+      close: closeBridge,
+    };
+    internals.tokenMiserPluginManager = {
+      ensureInstalled,
+      ensurePluginSource,
+    };
+    internals.resolveTokenMiserCodexRuntimeFn = resolveRuntime;
+
+    try {
+      await internals.prepareTokenMiserRuntime();
+
+      expect(startBridge).toHaveBeenCalledOnce();
+      expect(resolveRuntime).not.toHaveBeenCalled();
+      expect(ensureInstalled).not.toHaveBeenCalled();
+      expect(ensurePluginSource).not.toHaveBeenCalled();
     } finally {
       await registry.close();
     }

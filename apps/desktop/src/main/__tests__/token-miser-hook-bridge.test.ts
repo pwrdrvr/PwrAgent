@@ -20,13 +20,57 @@ describe("TokenMiserHookBridge", () => {
     });
 
     expect(bridge.bridgeDescriptorPath).toBe(
-      path.join("/tmp/pwragent-token-miser", "bridge.process-a.json"),
+      path.join(
+        "/tmp/pwragent-token-miser",
+        "runtimes",
+        "process-a",
+        "token-miser-bridge-v1.json",
+      ),
     );
     expect(bridge.codeModeReducerDescriptorPath).toBe(
       path.join(
         "/tmp/pwragent-token-miser",
-        "code-mode-reducer.process-a.json",
+        "runtimes",
+        "process-a",
+        "code-mode-reducer-v1.json",
       ),
+    );
+  });
+
+  it("writes the closed managed activation descriptor contract", async () => {
+    const stateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "pwragent-token-miser-managed-descriptor-"),
+    );
+    const bridge = new TokenMiserHookBridge({
+      stateDir,
+      service: {} as TokenMiserService,
+      instanceId: "process-a",
+    });
+    cleanups.push(async () => {
+      await bridge.close();
+      await fs.rm(stateDir, { force: true, recursive: true });
+    });
+
+    const descriptor = await bridge.start();
+
+    expect(descriptor).toEqual({
+      version: 1,
+      identity: "pwrdrvr.pwragent.token-miser",
+      activation_nonce: bridge.activationNonce,
+      url: expect.stringMatching(
+        /^http:\/\/127\.0\.0\.1:[0-9]+\/v1\/post-tool-use$/u,
+      ),
+      acceptance_url: expect.stringMatching(
+        /^http:\/\/127\.0\.0\.1:[0-9]+\/v1\/accept-code-mode-output$/u,
+      ),
+      token: expect.stringMatching(/^[A-Za-z0-9_-]{43}$/u),
+    });
+    expect(Buffer.from(bridge.activationNonce, "base64url")).toHaveLength(32);
+    expect(
+      (await fs.stat(path.dirname(bridge.bridgeDescriptorPath))).mode & 0o777,
+    ).toBe(0o700);
+    expect((await fs.stat(bridge.bridgeDescriptorPath)).mode & 0o777).toBe(
+      0o600,
     );
   });
 
