@@ -1688,6 +1688,8 @@ export type SetPullRequestPollingFocusRequest = {
 
 export type RefreshThreadPullRequestsRequest = {
   backend?: AppServerBackendKind;
+  /** Route the lookup to the instance that owns the thread and its checkout. */
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   /** Forge host for this lookup. Defaults to github.com while GitHub is the only provider. */
   provider?: PullRequestProvider;
@@ -1710,6 +1712,15 @@ export type RefreshThreadPullRequestsRequest = {
   /** Include status freshness metadata in the response. Used by agent tools. */
   includeStatusFreshness?: boolean;
 };
+
+/**
+ * Federation refresh intent. The owner resolves branch and checkout paths
+ * from its maintained thread state instead of trusting viewer filesystem data.
+ */
+export type RefreshOwnedThreadPullRequestsRequest = Pick<
+  RefreshThreadPullRequestsRequest,
+  "backend" | "provider" | "threadId" | "trigger"
+>;
 
 export type DetachThreadPullRequestRequest = {
   backend?: AppServerBackendKind;

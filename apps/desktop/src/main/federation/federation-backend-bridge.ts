@@ -86,6 +86,8 @@ import type {
   QueueThreadExecutionModeResponse,
   RefreshDirectoryGitStatusesRequest,
   RefreshDirectoryGitStatusesResponse,
+  RefreshOwnedThreadPullRequestsRequest,
+  RefreshThreadPullRequestsResponse,
   RecordModelSettingsRecentRequest,
   RecordRecentFileReferencesRequest,
   ResolveThreadRequest,
@@ -176,6 +178,20 @@ export type FederatedTranscriptImageResponse = {
 export type FederationStartTurnRequest = StartTurnRequest & {
   messageOrigin?: AppServerThreadMessageOrigin;
 };
+
+export type FederationRefreshThreadPullRequestsRequest =
+  RefreshOwnedThreadPullRequestsRequest;
+
+function localizeRefreshThreadPullRequestsRequest(
+  request: RefreshOwnedThreadPullRequestsRequest,
+): FederationRefreshThreadPullRequestsRequest {
+  return {
+    backend: request.backend,
+    threadId: request.threadId,
+    ...(request.provider ? { provider: request.provider } : {}),
+    ...(request.trigger ? { trigger: request.trigger } : {}),
+  };
+}
 
 type FederationMaterializeDirectoryLaunchpadRequest =
   MaterializeDirectoryLaunchpadRequest & {
@@ -314,6 +330,7 @@ export const FEDERATION_BACKEND_METHODS = {
   runCodexEnvironmentAction: "backend.runCodexEnvironmentAction",
   stopCodexEnvironmentAction: "backend.stopCodexEnvironmentAction",
   setCodexThreadEnvironment: "backend.setCodexThreadEnvironment",
+  refreshThreadPullRequests: "backend.refreshThreadPullRequests",
   refreshDirectoryGitStatuses: "backend.refreshDirectoryGitStatuses",
   ensureDirectoryLaunchpad: "backend.ensureDirectoryLaunchpad",
   listRecentFileReferences: "backend.listRecentFileReferences",
@@ -412,6 +429,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.runCodexEnvironmentAction]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.stopCodexEnvironmentAction]: "environment_actions",
   [FEDERATION_BACKEND_METHODS.setCodexThreadEnvironment]: "environment_actions",
+  [FEDERATION_BACKEND_METHODS.refreshThreadPullRequests]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.ensureDirectoryLaunchpad]: "launchpad_metadata",
   [FEDERATION_BACKEND_METHODS.listRecentFileReferences]: "remote_window",
@@ -592,6 +610,9 @@ export type FederationBackendOperations = {
   setCodexThreadEnvironment(
     request: SetCodexThreadEnvironmentRequest,
   ): Promise<SetCodexThreadEnvironmentResponse>;
+  refreshThreadPullRequests(
+    request: FederationRefreshThreadPullRequestsRequest,
+  ): Promise<RefreshThreadPullRequestsResponse>;
   refreshDirectoryGitStatuses(
     request: RefreshDirectoryGitStatusesRequest,
   ): Promise<RefreshDirectoryGitStatusesResponse>;
@@ -1134,6 +1155,15 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) =>
       await params.backend.setCodexThreadEnvironment(
         envelope.params as SetCodexThreadEnvironmentRequest,
+      ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.refreshThreadPullRequests,
+    async (envelope) =>
+      await params.backend.refreshThreadPullRequests(
+        localizeRefreshThreadPullRequestsRequest(
+          envelope.params as RefreshOwnedThreadPullRequestsRequest,
+        ),
       ),
   );
   params.router.registerHandler(
@@ -1764,6 +1794,15 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<RefreshDirectoryGitStatusesResponse> {
     return await this.rpc.request<RefreshDirectoryGitStatusesResponse>({
       method: FEDERATION_BACKEND_METHODS.refreshDirectoryGitStatuses,
+      params: request,
+    });
+  }
+
+  async refreshThreadPullRequests(
+    request: FederationRefreshThreadPullRequestsRequest,
+  ): Promise<RefreshThreadPullRequestsResponse> {
+    return await this.rpc.request<RefreshThreadPullRequestsResponse>({
+      method: FEDERATION_BACKEND_METHODS.refreshThreadPullRequests,
       params: request,
     });
   }

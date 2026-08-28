@@ -55,6 +55,7 @@ import type {
   ReadFederationPinImpactRequest,
   ReadFederationPinImpactResponse,
   RefreshDirectoryGitStatusesResponse,
+  RefreshThreadPullRequestsResponse,
   ResetFederationEnrollmentRequest,
   RetainThreadBranchDriftResponse,
   RenameThreadResponse,
@@ -239,6 +240,7 @@ import {
   type FederationBackendEventNotification,
   type FederationBackendOperations,
   type FederationEnvironmentSetupProgressNotification,
+  type FederationRefreshThreadPullRequestsRequest,
   type FederationStartTurnRequest,
 } from "./federation-backend-bridge";
 import {
@@ -5196,6 +5198,11 @@ function localBackendOperations(): FederationBackendOperations {
       request: RefreshDirectoryGitStatusesRequest,
     ): Promise<RefreshDirectoryGitStatusesResponse> {
       return await getDesktopBackendRegistry().refreshDirectoryGitStatuses(request);
+    },
+    async refreshThreadPullRequests(
+      request: FederationRefreshThreadPullRequestsRequest,
+    ): Promise<RefreshThreadPullRequestsResponse> {
+      return await getDesktopBackendRegistry().refreshOwnedThreadPullRequests(request);
     },
     async ensureDirectoryLaunchpad(request: EnsureDirectoryLaunchpadRequest) {
       return await new DesktopMessagingBackendBridge()

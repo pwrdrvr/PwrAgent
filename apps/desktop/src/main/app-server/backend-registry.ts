@@ -203,6 +203,8 @@ import {
   type QueueThreadExecutionModeResponse,
   type RefreshDirectoryGitStatusesRequest,
   type RefreshDirectoryGitStatusesResponse,
+  type RefreshOwnedThreadPullRequestsRequest,
+  type RefreshThreadPullRequestsResponse,
   type NavigationDirectoryGitStatusUpdatedNotification,
   type CancelThreadExecutionModeQueueRequest,
   type CancelThreadExecutionModeQueueResponse,
@@ -1784,6 +1786,10 @@ type DirectoryGitStatusWriter = (params: {
 type ThreadPullRequestDetachHandler = (
   request: DetachThreadPullRequestRequest,
 ) => Promise<DetachThreadPullRequestResponse>;
+
+type ThreadPullRequestRefreshHandler = (
+  request: RefreshOwnedThreadPullRequestsRequest,
+) => Promise<RefreshThreadPullRequestsResponse>;
 
 type ThreadPrAutoDispatchHandler = {
   preferenceChanged: (request: SetThreadPrAutoDispatchRequest) => Promise<void>;
@@ -7638,6 +7644,9 @@ export class DesktopBackendRegistry {
   private threadPullRequestDetachHandler:
     | ThreadPullRequestDetachHandler
     | undefined;
+  private threadPullRequestRefreshHandler:
+    | ThreadPullRequestRefreshHandler
+    | undefined;
   private threadPullRequestCanonicalizer:
     | ThreadPullRequestCanonicalizer
     | undefined;
@@ -8776,6 +8785,26 @@ export class DesktopBackendRegistry {
     handler: ThreadPullRequestDetachHandler | null | undefined,
   ): void {
     this.threadPullRequestDetachHandler = handler ?? undefined;
+  }
+
+  setThreadPullRequestRefreshHandler(
+    handler: ThreadPullRequestRefreshHandler | null | undefined,
+  ): void {
+    this.threadPullRequestRefreshHandler = handler ?? undefined;
+  }
+
+  /**
+   * Refresh PR state through the desktop app-server service. Federation uses
+   * this mediator so its backend bridge does not import the IPC module.
+   */
+  async refreshOwnedThreadPullRequests(
+    request: RefreshOwnedThreadPullRequestsRequest,
+  ): Promise<RefreshThreadPullRequestsResponse> {
+    const handler = this.threadPullRequestRefreshHandler;
+    if (!handler) {
+      throw new Error("Pull-request refresh service is not available yet.");
+    }
+    return await handler(request);
   }
 
   /**

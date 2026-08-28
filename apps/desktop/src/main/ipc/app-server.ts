@@ -80,6 +80,7 @@ import {
   type RefreshDirectoryGitStatusesResponse,
   type RefreshThreadGitWorkingStateRequest,
   type RefreshThreadGitWorkingStateResponse,
+  type RefreshOwnedThreadPullRequestsRequest,
   type RefreshThreadPullRequestsRequest,
   type SetPullRequestPollingFocusRequest,
   type RefreshThreadPullRequestsResponse,
@@ -3607,6 +3608,19 @@ class DesktopAppServerService {
   async refreshThreadPullRequests(
     request: RefreshThreadPullRequestsRequest,
   ): Promise<RefreshThreadPullRequestsResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      return await getDesktopFederationRuntime()
+        .remoteBackend(request.federationTarget)
+        .refreshThreadPullRequests({
+          backend: request.backend,
+          threadId: request.threadId,
+          ...(request.provider ? { provider: request.provider } : {}),
+          ...(request.trigger ? { trigger: request.trigger } : {}),
+        });
+    }
     const backend = request.backend ?? "codex";
     const requestKey = getThreadPullRequestsRequestKey(backend, request);
     const pending = this.pendingThreadPullRequestRefreshes.get(requestKey);
@@ -3635,6 +3649,36 @@ class DesktopAppServerService {
     } finally {
       this.pendingThreadPullRequestRefreshes.delete(requestKey);
     }
+  }
+
+  async refreshOwnedThreadPullRequests(
+    request: RefreshOwnedThreadPullRequestsRequest,
+  ): Promise<RefreshThreadPullRequestsResponse> {
+    const backend = request.backend ?? "codex";
+    const threadKey = buildThreadIdentityKey(backend, request.threadId);
+    const [firstContext, ...remainingContexts] =
+      this.prRefreshContextByThreadKey.get(threadKey) ?? [];
+    if (!firstContext) {
+      throw new Error(
+        `No owner PR refresh context is available for ${threadKey}.`,
+      );
+    }
+    const refreshContext = async (
+      context: ThreadPrRefreshContext,
+    ): Promise<RefreshThreadPullRequestsResponse> => {
+      const { branchScoped: _branchScoped, ...lookupRequest } = context;
+      return await this.refreshThreadPullRequests({
+        ...lookupRequest,
+        ...(request.provider ? { provider: request.provider } : {}),
+        ...(request.trigger ? { trigger: request.trigger } : {}),
+      });
+    };
+
+    let response = await refreshContext(firstContext);
+    for (const context of remainingContexts) {
+      response = await refreshContext(context);
+    }
+    return response;
   }
 
   async checkThreadPullRequestStatusForTool(
@@ -7615,6 +7659,10 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setThreadPullRequestDetachHandler(
     async (request) => await appServerService.detachThreadPullRequest(request),
   );
+  getDesktopBackendRegistry().setThreadPullRequestRefreshHandler(
+    async (request) =>
+      await appServerService.refreshOwnedThreadPullRequests(request),
+  );
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
     preferenceChanged: async (request) =>
       await appServerService.handleThreadPrAutoDispatchPreference(request),
@@ -8080,15 +8128,18 @@ export function registerAppServerIpcHandlers(): void {
       event,
       request: RefreshThreadPullRequestsRequest,
     ): Promise<RefreshThreadPullRequestsResponse> => {
-      // Defense in depth behind the renderer-side guard: a remote
-      // federation window's PR lookups belong to the owning instance.
-      // Running them here would use THIS machine's paths and GitHub
-      // credentials against a remote thread id. Throw (renderer refresh
-      // paths swallow errors) rather than return an empty result a
-      // caller might diff against snapshot PRs and loop on.
-      if (isFederationWindowWebContents(event?.sender)) {
+      // Defense in depth behind renderer target stamping: a remote window's
+      // lookup must be routed to the owning instance. Running an untargeted
+      // lookup here would use this machine's checkout and GitHub credentials.
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
         throw new Error(
-          "PR lookups for remote threads run on the owning instance.",
+          "PR lookups for remote threads must target the owning instance.",
         );
       }
       return await timeStartupProfileOperation({
@@ -8579,6 +8630,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   registry?.setDirectoryGitStatusWriter(undefined);
   registry?.setThreadPrAutoDispatchHandler(undefined);
   registry?.setThreadPullRequestDetachHandler(undefined);
+  registry?.setThreadPullRequestRefreshHandler(undefined);
   await appServerService.close();
 }
 

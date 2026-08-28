@@ -1987,6 +1987,43 @@ describe("federation backend bridge", () => {
     });
     await expect(refreshPending).resolves.toEqual({ scheduledCount: 1 });
 
+    const refreshPrPending = client.refreshThreadPullRequests({
+      backend: "codex",
+      threadId: "thread-1",
+      trigger: "user",
+    });
+    const refreshPrRequest = sent.at(-1)!;
+    expect(refreshPrRequest).toMatchObject({
+      kind: "request",
+      method: FEDERATION_BACKEND_METHODS.refreshThreadPullRequests,
+      params: {
+        backend: "codex",
+        threadId: "thread-1",
+        trigger: "user",
+      },
+    });
+    rpc.receiveEnvelope({
+      id: "response-pr-refresh",
+      kind: "response",
+      requestId: refreshPrRequest.id,
+      protocolVersion: 1,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "gateway_one",
+      createdAt: 1_350,
+      result: {
+        backend: "codex",
+        threadId: "thread-1",
+        provider: "github.com",
+        ghAvailable: true,
+        prs: [],
+      },
+    });
+    await expect(refreshPrPending).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      prs: [],
+    });
+
     const cancelPending = client.cancelQueuedTurn({ queueEntryId: "queue-1" });
     const cancelRequest = sent.at(-1)!;
     expect(cancelRequest).toMatchObject({
@@ -2165,6 +2202,73 @@ describe("federation backend bridge", () => {
         kind: "response",
         requestId: "refresh-request",
         result: { scheduledCount: 1 },
+      },
+    ]);
+  });
+
+  it("executes pull-request refreshes on the target instance", async () => {
+    const refreshThreadPullRequests = vi.fn(async () => ({
+      backend: "codex" as const,
+      threadId: "thread-1",
+      provider: "github.com" as const,
+      ghAvailable: true,
+      prs: [],
+    }));
+    const backend = {
+      refreshThreadPullRequests,
+    } as unknown as FederationBackendOperations;
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["thread_navigation"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({ router, backend });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "refresh-pr-request",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.refreshThreadPullRequests,
+        params: {
+          backend: "codex",
+          threadId: "thread-1",
+          trigger: "user",
+          branch: "fix/remote-pr-hover",
+          directoryPaths: ["/remote/repo"],
+          federationTarget: {
+            scope: "remote",
+            instanceId: "untrusted-relay-target",
+          },
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(refreshThreadPullRequests).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex",
+      threadId: "thread-1",
+      trigger: "user",
+    });
+    expect(replies).toMatchObject([
+      {
+        kind: "response",
+        requestId: "refresh-pr-request",
+        result: {
+          backend: "codex",
+          threadId: "thread-1",
+          provider: "github.com",
+          ghAvailable: true,
+          prs: [],
+        },
       },
     ]);
   });
@@ -2702,6 +2806,7 @@ describe("federation backend bridge", () => {
       })),
       stopCodexEnvironmentAction: vi.fn(),
       setCodexThreadEnvironment: vi.fn(),
+      refreshThreadPullRequests: vi.fn(),
       materializeDirectoryLaunchpad: vi.fn(),
       refreshDirectoryGitStatuses: vi.fn(),
       ensureDirectoryLaunchpad: vi.fn(),
@@ -3043,6 +3148,7 @@ describe("federation backend bridge", () => {
         runCodexEnvironmentAction: vi.fn(),
         stopCodexEnvironmentAction: vi.fn(),
         setCodexThreadEnvironment: vi.fn(),
+        refreshThreadPullRequests: vi.fn(),
         refreshDirectoryGitStatuses: vi.fn(),
         ensureDirectoryLaunchpad: vi.fn(),
         listRecentFileReferences: vi.fn(),
