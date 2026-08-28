@@ -1,6 +1,7 @@
 # Token Miser one-click enablement plan
 
-Status: in progress
+Status: PwrAgent implementation complete; custom Codex PR and first signed
+release pending
 
 ## Decisions
 
@@ -38,3 +39,21 @@ Status: in progress
   release is published, but the feature cannot pass end-to-end acceptance
   until that signed release exists.
 
+## Progress
+
+- PwrAgent now downloads, verifies, caches, and durably selects the managed
+  Codex runtime only while the experimental availability gate is enabled.
+- Release verification requires the last-uploaded completion marker, the
+  closed update-manifest schema, matching checksums and sizes, a Sigstore v0.3
+  SLSA statement, the exact tagged GitHub Actions workflow identity, source
+  repository/commit/ref claims, certificate transparency, and Rekor inclusion.
+- Native app-server negotiation activates Token Miser per thread and suppresses
+  the legacy plugin path whenever the managed capability is present.
+- Runtime updates switch only at an idle Codex boundary. Turning the gate off
+  stops update checks and restores normal Codex selection.
+- Settings reports installation and activation readiness without asking the
+  operator to choose a binary or approve a hook.
+- Focused unit/integration coverage, desktop typecheck, production build,
+  dependency boundaries, and lint validation pass. The custom Codex follow-up
+  has separately passed its native button-negotiation E2E; the cross-repository
+  release acceptance remains pending publication of the first signed release.
