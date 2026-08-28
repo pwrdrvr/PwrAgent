@@ -563,6 +563,9 @@ export const PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL =
   "profiles:graduate-bootstrap-config";
 export const APP_GET_BOOT_INFO_CHANNEL = "app:get-boot-info";
 export const APP_QUIT_CHANNEL = "app:quit";
+export const QUIT_BLOCKERS_READ_CHANNEL = "quit-blockers:read";
+export const QUIT_BLOCKER_REVEAL_CHANNEL = "quit-blockers:reveal";
+export const WINDOW_SHOW_QUIT_BLOCKERS_CHANNEL = "window:show-quit-blockers";
 export const APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL = "app:wait-for-profile-alive";
 export const PROFILES_WRITE_SECRETS_CHANNEL = "profiles:write-secrets";
 // Windows custom title-bar menu bar (see shared/app-menu.ts). `model` returns

@@ -46,7 +46,7 @@ describe("requestShowThread", () => {
     getFocusedWindowMock.mockReturnValue(focusedWindow);
     vi.mocked(subscribersForChannel).mockReturnValue([focusedWindow.webContents]);
 
-    requestShowThread(request);
+    expect(requestShowThread(request)).toBe(focusedWebContents);
 
     expect(subscribersForChannel).toHaveBeenCalledWith(WINDOW_SHOW_THREAD_CHANNEL);
     expect(focusedWindow.show).toHaveBeenCalledOnce();
@@ -70,7 +70,7 @@ describe("requestShowThread", () => {
     vi.mocked(subscribersForChannel).mockReturnValue([fallbackContents]);
     fromWebContentsMock.mockReturnValue(fallbackWindow);
 
-    requestShowThread(request);
+    expect(requestShowThread(request)).toBe(fallbackContents);
 
     expect(fallbackWindow.restore).toHaveBeenCalledOnce();
     expect(fallbackWindow.show).toHaveBeenCalledOnce();
@@ -82,9 +82,9 @@ describe("requestShowThread", () => {
     getFocusedWindowMock.mockReturnValue(null);
     vi.mocked(subscribersForChannel).mockReturnValue([]);
 
-    expect(() =>
+    expect(
       requestShowThread({ backend: "codex", threadId: "thread-3" }),
-    ).not.toThrow();
+    ).toBeUndefined();
     expect(fromWebContentsMock).not.toHaveBeenCalled();
   });
 });

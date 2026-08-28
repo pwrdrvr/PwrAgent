@@ -435,6 +435,11 @@ import type {
   IntegratedTerminalSetPanelHiddenRequest,
   IntegratedTerminalWriteRequest,
 } from "../shared/integrated-terminal";
+import type {
+  QuitBlockerQueueSnapshot,
+  RevealQuitBlockerRequest,
+  RevealQuitBlockerResponse,
+} from "../shared/quit-blockers";
 import {
   AGENT_CANCEL_QUEUED_TURN_CHANNEL,
   SCHEDULED_ACTIONS_CANCEL_CHANNEL,
@@ -682,6 +687,8 @@ import {
   APP_GET_BOOT_INFO_CHANNEL,
   APP_QUIT_CHANNEL,
   APP_WAIT_FOR_PROFILE_ALIVE_CHANNEL,
+  QUIT_BLOCKERS_READ_CHANNEL,
+  QUIT_BLOCKER_REVEAL_CHANNEL,
   PROFILES_DELETE_CHANNEL,
   PROFILES_GRADUATE_BOOTSTRAP_CONFIG_CHANNEL,
   PROFILES_LIST_CHANNEL,
@@ -716,6 +723,7 @@ import {
   WINDOW_REPLAY_ONBOARDING_CHANNEL,
   WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL,
   WINDOW_SHOW_THREAD_CHANNEL,
+  WINDOW_SHOW_QUIT_BLOCKERS_CHANNEL,
   APP_MENU_MODEL_CHANNEL,
   APP_MENU_POPUP_CHANNEL,
 } from "../shared/ipc";
@@ -1014,6 +1022,12 @@ const desktopApi = Object.freeze({
       APP_GET_BOOT_INFO_CHANNEL,
     ),
   quitApp: async (): Promise<void> => await ipcRenderer.invoke(APP_QUIT_CHANNEL),
+  readQuitBlockerQueue: async (): Promise<QuitBlockerQueueSnapshot> =>
+    await ipcRenderer.invoke(QUIT_BLOCKERS_READ_CHANNEL),
+  revealQuitBlocker: async (
+    request: RevealQuitBlockerRequest,
+  ): Promise<RevealQuitBlockerResponse> =>
+    await ipcRenderer.invoke(QUIT_BLOCKER_REVEAL_CHANNEL, request),
   waitForProfileAlive: async (
     request: WaitForDesktopProfileAliveRequest,
   ): Promise<WaitForDesktopProfileAliveResponse> =>
@@ -2057,6 +2071,18 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(WINDOW_SHOW_THREAD_CHANNEL, listener);
     return () => {
       ipcRenderer.off(WINDOW_SHOW_THREAD_CHANNEL, listener);
+    };
+  },
+  onShowQuitBlockersRequested: (
+    callback: (snapshot: QuitBlockerQueueSnapshot) => void,
+  ): (() => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      snapshot: QuitBlockerQueueSnapshot,
+    ) => callback(snapshot);
+    ipcRenderer.on(WINDOW_SHOW_QUIT_BLOCKERS_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(WINDOW_SHOW_QUIT_BLOCKERS_CHANNEL, listener);
     };
   },
   onReplayOnboardingRequested: (callback: () => void): (() => void) => {

@@ -113,6 +113,10 @@ vi.mock("../window-show-thread", () => ({
   requestShowThread: vi.fn(),
 }));
 
+vi.mock("../window-show-quit-blockers", () => ({
+  requestShowQuitBlockers: vi.fn(),
+}));
+
 vi.mock("../settings/appearance-bootstrap", () => ({
   readBootstrapAppearance: () => ({ theme: "dark" }),
 }));
@@ -121,6 +125,7 @@ import type { WebContents } from "electron";
 import { parseThreadIdentityKey } from "@pwragent/shared";
 import { revealIntegratedTerminal } from "../ipc/integrated-terminal";
 import { requestShowThread } from "../window-show-thread";
+import { requestShowQuitBlockers } from "../window-show-quit-blockers";
 import {
   focusActiveQuitConfirmationDialog,
   formatQuitItemAction,
@@ -443,6 +448,8 @@ describe("clicking a quit dialog row", () => {
     await Promise.resolve();
     dialogWindows.length = 0;
     vi.mocked(revealIntegratedTerminal).mockReset();
+    vi.mocked(requestShowThread).mockReset();
+    vi.mocked(requestShowQuitBlockers).mockReset();
   });
 
   /**
@@ -459,6 +466,7 @@ describe("clicking a quit dialog row", () => {
       revealed: true,
       owner,
     });
+    vi.mocked(requestShowThread).mockReturnValue(owner);
     const item: QuitBlockerItem = {
       kind: "terminal",
       backend: "codex",
@@ -492,6 +500,13 @@ describe("clicking a quit dialog row", () => {
       },
       { preferWebContents: owner },
     );
+    expect(requestShowQuitBlockers).toHaveBeenCalledWith(owner, {
+      inProgressThreadCount: 0,
+      automationRunCount: 0,
+      terminalSessionCount: 1,
+      actionRunCount: 0,
+      items: [item],
+    });
     await expect(pending).resolves.toBe("manual-cancel");
   });
 
@@ -522,6 +537,7 @@ describe("clicking a quit dialog row", () => {
       { backend: "codex", threadId: "local-thread" },
       { preferWebContents: undefined },
     );
+    expect(requestShowQuitBlockers).not.toHaveBeenCalled();
     await expect(pending).resolves.toBe("manual-cancel");
   });
 });

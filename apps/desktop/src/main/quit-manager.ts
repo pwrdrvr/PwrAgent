@@ -26,10 +26,13 @@ import { getDesktopSettingsService } from "./settings/desktop-settings-singleton
 import {
   focusActiveQuitConfirmationDialog,
   showQuitConfirmationDialog,
-  type QuitBlockerItem,
   type QuitConfirmationDialogResult,
   type QuitConfirmationDialogSnapshot,
 } from "./quit-confirmation-dialog";
+import type {
+  QuitBlockerItem,
+  QuitBlockerQueueSnapshot,
+} from "../shared/quit-blockers";
 
 export type { QuitBlockerItem };
 
@@ -274,7 +277,7 @@ export function createQuitManager(
   };
 }
 
-async function buildQuitConfirmationSnapshot(
+export async function buildQuitConfirmationSnapshot(
   snapshot: QuitBlockerSnapshot,
   resolveThreadTitles: QuitManagerDependencies["resolveThreadTitles"],
   log: QuitManagerDependencies["log"],
@@ -601,36 +604,53 @@ function splitQuitThreadKey(threadKey: string): {
 
 const quitLog = getMainLogger("pwragent:quit");
 
+export function getCurrentQuitBlockers(): QuitBlockerSnapshot {
+  return buildQuitBlockerSnapshot({
+    inProgressThreads:
+      getDesktopBackendRegistry().getInProgressThreadSnapshotForQuit(),
+    terminalSessions: getIntegratedTerminalQuitSnapshot(),
+    actionRuns: listRunningDetachedCommands(),
+  });
+}
+
+async function resolveCurrentQuitBlockerTitles(
+  items: QuitBlockerItem[],
+): Promise<Map<string, string>> {
+  return await resolveQuitBlockerThreadTitles(items, {
+    listLocalThreads: async () =>
+      await getDesktopBackendRegistry().listThreads({
+        callerReason: "quit-confirmation",
+      }),
+    cachedRemoteThreadName: (params) =>
+      getDesktopFederationRuntime()
+        .remoteThreadSummaries()
+        .cachedThreadNameFromPeer(params),
+    listRemoteThreadPins: async () =>
+      await getDesktopOverlayStore().listRemoteThreadPins(),
+  });
+}
+
+export async function readQuitBlockerQueueSnapshot(): Promise<
+  QuitBlockerQueueSnapshot
+> {
+  return await buildQuitConfirmationSnapshot(
+    getCurrentQuitBlockers(),
+    resolveCurrentQuitBlockerTitles,
+    quitLog,
+  );
+}
+
 export const appQuitManager = createQuitManager({
   focusPendingConfirmation: () => focusActiveQuitConfirmationDialog(),
   getConfirmationEnabled: () =>
     getDesktopSettingsService().resolveConfirmQuitWithInProgressThreads(),
   getFocusedWindow: () => BrowserWindow.getFocusedWindow(),
-  getQuitBlockers: () =>
-    buildQuitBlockerSnapshot({
-      inProgressThreads:
-        getDesktopBackendRegistry().getInProgressThreadSnapshotForQuit(),
-      terminalSessions: getIntegratedTerminalQuitSnapshot(),
-      actionRuns: listRunningDetachedCommands(),
-    }),
+  getQuitBlockers: getCurrentQuitBlockers,
   quiesceAutomationDispatch: () =>
     getDesktopAutomationService().quiesceDispatch(),
-  resolveThreadTitles: async (items) =>
-    await resolveQuitBlockerThreadTitles(items, {
-      listLocalThreads: async () =>
-        await getDesktopBackendRegistry().listThreads({
-          callerReason: "quit-confirmation",
-        }),
-      // Map read, no peer round trip: names remembered from every peer
-      // snapshot this instance has seen, which is why the name is normally
-      // in hand for anything that could be blocking the quit.
-      cachedRemoteThreadName: (params) =>
-        getDesktopFederationRuntime()
-          .remoteThreadSummaries()
-          .cachedThreadNameFromPeer(params),
-      listRemoteThreadPins: async () =>
-        await getDesktopOverlayStore().listRemoteThreadPins(),
-    }),
+  // Map/store reads only, no peer round trip. Names remembered from peer
+  // snapshots keep remote blockers readable without delaying shutdown.
+  resolveThreadTitles: resolveCurrentQuitBlockerTitles,
   log: quitLog,
   performQuit: () => {
     app.quit();

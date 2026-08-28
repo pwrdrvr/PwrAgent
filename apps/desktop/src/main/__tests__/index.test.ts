@@ -53,6 +53,8 @@ const openDesktopPwrAgentProfileMock = vi.fn();
 const registerRendererErrorIpcHandlersMock = vi.fn();
 const registerBootInfoIpcHandlersMock = vi.fn();
 const disposeBootInfoIpcHandlersMock = vi.fn();
+const registerQuitBlockerIpcHandlersMock = vi.fn();
+const disposeQuitBlockerIpcHandlersMock = vi.fn();
 const registerRuntimeIdentityIpcHandlersMock = vi.fn();
 const disposeRuntimeIdentityIpcHandlersMock = vi.fn();
 const registerSettingsIpcHandlersMock = vi.fn();
@@ -422,6 +424,11 @@ vi.mock("../ipc/boot-info", () => ({
   disposeBootInfoIpcHandlers: disposeBootInfoIpcHandlersMock,
 }));
 
+vi.mock("../ipc/quit-blockers", () => ({
+  registerQuitBlockerIpcHandlers: registerQuitBlockerIpcHandlersMock,
+  disposeQuitBlockerIpcHandlers: disposeQuitBlockerIpcHandlersMock,
+}));
+
 vi.mock("../ipc/runtime-identity", () => ({
   registerRuntimeIdentityIpcHandlers: registerRuntimeIdentityIpcHandlersMock,
   disposeRuntimeIdentityIpcHandlers: disposeRuntimeIdentityIpcHandlersMock,
@@ -661,6 +668,8 @@ describe("bootstrapApp", () => {
     registerRendererErrorIpcHandlersMock.mockReset();
     registerBootInfoIpcHandlersMock.mockReset();
     disposeBootInfoIpcHandlersMock.mockReset();
+    registerQuitBlockerIpcHandlersMock.mockReset();
+    disposeQuitBlockerIpcHandlersMock.mockReset();
     registerRuntimeIdentityIpcHandlersMock.mockReset();
     disposeRuntimeIdentityIpcHandlersMock.mockReset();
     registerSettingsIpcHandlersMock.mockReset();
