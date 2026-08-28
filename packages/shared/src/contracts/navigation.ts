@@ -1633,6 +1633,8 @@ export type SetPullRequestPollingFocusRequest = {
 
 export type RefreshThreadPullRequestsRequest = {
   backend?: AppServerBackendKind;
+  /** Route the lookup to the instance that owns the thread and its checkout. */
+  federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   /** Forge host for this lookup. Defaults to github.com while GitHub is the only provider. */
   provider?: PullRequestProvider;

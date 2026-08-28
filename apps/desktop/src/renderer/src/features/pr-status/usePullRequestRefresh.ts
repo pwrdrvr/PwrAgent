@@ -1,5 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
-import type { NavigationThreadSummary, PrSummary } from "@pwragent/shared";
+import type {
+  FederationRemoteTarget,
+  NavigationThreadSummary,
+  PrSummary,
+} from "@pwragent/shared";
 import {
   buildThreadIdentityKey,
   isRemoteFederationTarget,
@@ -41,14 +45,9 @@ export function usePullRequestRefresh(params: {
   onRefreshNavigation?: () => Promise<void>;
   selectedThread?: NavigationThreadSummary;
 }): { prefetch: (thread: NavigationThreadSummary) => void } {
-  // PR polling is owned by the instance that owns the thread. A remote
-  // federation window must never drive local `gh` lookups: the paths and
-  // branch belong to the peer machine, so a local lookup either wastes a
-  // subprocess or — worse, with the same repo checked out locally —
-  // records wrong PR data under the remote thread id. Remote windows get
-  // PR state from the remote snapshot and relayed backend events.
-  const isFederationWindow = Boolean(readRendererFederationTarget());
   const desktopApi = params.desktopApi;
+  const federationWindowInstanceId =
+    readRendererFederationTarget()?.instanceId;
   const onRefreshNavigation = params.onRefreshNavigation;
   const onRefreshNavigationRef = useRef(onRefreshNavigation);
   useEffect(() => {
@@ -61,9 +60,12 @@ export function usePullRequestRefresh(params: {
       trigger: "scheduled" | "user" = "scheduled",
     ): void => {
       if (!desktopApi?.refreshThreadPullRequests) return;
-      if (isFederationWindow || isRemoteFederatedThread(thread)) return;
       const target = resolvePullRequestLookupTarget(thread);
       if (!target) return;
+      const federationTarget = resolvePullRequestFederationTarget(
+        thread,
+        federationWindowInstanceId,
+      );
       void desktopApi
         .refreshThreadPullRequests({
           backend: thread.source,
@@ -71,6 +73,7 @@ export function usePullRequestRefresh(params: {
           trigger,
           branch: target.branch,
           directoryPaths: target.directoryPaths,
+          ...(federationTarget ? { federationTarget } : {}),
         })
         .then((response) => {
           if (prSummariesEqual(thread.prs, response.prs)) {
@@ -82,14 +85,16 @@ export function usePullRequestRefresh(params: {
           // Logged in main — keep the renderer silent.
         });
     },
-    [desktopApi, isFederationWindow],
+    [desktopApi, federationWindowInstanceId],
   );
 
   const selected = params.selectedThread;
   const selectedRef = useRef<NavigationThreadSummary | undefined>(selected);
   const selectedRefreshKey = useMemo(
-    () => selected ? buildRefreshRequestKey(selected) : undefined,
-    [selected],
+    () => selected
+      ? buildRefreshRequestKey(selected, federationWindowInstanceId)
+      : undefined,
+    [federationWindowInstanceId, selected],
   );
 
   useEffect(() => {
@@ -106,7 +111,10 @@ export function usePullRequestRefresh(params: {
     const refreshSelected = (): void => {
       const currentSelected = selectedRef.current;
       if (!currentSelected) return;
-      if (buildRefreshRequestKey(currentSelected) !== selectedRefreshKey) return;
+      if (
+        buildRefreshRequestKey(currentSelected, federationWindowInstanceId)
+        !== selectedRefreshKey
+      ) return;
       refresh(currentSelected, "scheduled");
     };
 
@@ -117,7 +125,7 @@ export function usePullRequestRefresh(params: {
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [selectedRefreshKey, refresh]);
+  }, [federationWindowInstanceId, selectedRefreshKey, refresh]);
 
   // Tell main's background PR poller which thread the operator is actually
   // looking at, so its PRs land on the fast tier while the other 20-30 open
@@ -130,13 +138,15 @@ export function usePullRequestRefresh(params: {
   const selectedThreadKey = selected
     ? buildThreadIdentityKey(selected.source, selected.id)
     : undefined;
+  const selectedIsRemoteFederated = Boolean(
+    selected && resolvePullRequestFederationTarget(selected),
+  );
   useEffect(() => {
     const setFocus = desktopApi?.setPullRequestPollingFocus;
     if (!setFocus) return;
-    // A federation window's selection is a remote thread key — pushing it
-    // into the LOCAL poller's focus set would clobber the local window's
-    // fast tier while matching nothing.
-    if (isFederationWindow) return;
+    if (federationWindowInstanceId || selectedIsRemoteFederated) {
+      return;
+    }
     const threadKeys = selectedThreadKey ? [selectedThreadKey] : [];
     const timeoutId = window.setTimeout(() => {
       void setFocus({ threadKeys }).catch(() => {
@@ -146,7 +156,12 @@ export function usePullRequestRefresh(params: {
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [desktopApi, isFederationWindow, selectedThreadKey]);
+  }, [
+    desktopApi,
+    federationWindowInstanceId,
+    selectedIsRemoteFederated,
+    selectedThreadKey,
+  ]);
 
   // Hover prefetch: dedupe so a flood of mouseenter events for the same
   // thread doesn't trigger a flood of gh subprocesses. User-triggered
@@ -154,7 +169,10 @@ export function usePullRequestRefresh(params: {
   const inflightKeysRef = useRef<Set<string>>(new Set());
   const prefetch = useCallback(
     (thread: NavigationThreadSummary): void => {
-      const key = buildThreadIdentityKey(thread.source, thread.id);
+      const key = buildPullRequestThreadKey(
+        thread,
+        federationWindowInstanceId,
+      );
       if (inflightKeysRef.current.has(key)) return;
       inflightKeysRef.current.add(key);
       try {
@@ -169,25 +187,50 @@ export function usePullRequestRefresh(params: {
         }, 10_000);
       }
     },
-    [refresh],
+    [federationWindowInstanceId, refresh],
   );
 
   return { prefetch };
 }
 
-function isRemoteFederatedThread(thread: NavigationThreadSummary): boolean {
-  const target = thread.federation?.ref.target;
-  return Boolean(target && isRemoteFederationTarget(target));
-}
-
-function buildRefreshRequestKey(thread: NavigationThreadSummary): string | undefined {
+function buildRefreshRequestKey(
+  thread: NavigationThreadSummary,
+  federationWindowInstanceId?: string,
+): string | undefined {
   const target = resolvePullRequestLookupTarget(thread);
   if (!target) return undefined;
 
   return JSON.stringify({
-    threadKey: buildThreadIdentityKey(thread.source, thread.id),
+    threadKey: buildPullRequestThreadKey(thread, federationWindowInstanceId),
     target,
   });
+}
+
+function buildPullRequestThreadKey(
+  thread: NavigationThreadSummary,
+  federationWindowInstanceId?: string,
+): string {
+  const federationTarget = resolvePullRequestFederationTarget(
+    thread,
+    federationWindowInstanceId,
+  );
+  return `${federationTarget?.instanceId ?? "local"}:${buildThreadIdentityKey(
+    thread.source,
+    thread.id,
+  )}`;
+}
+
+function resolvePullRequestFederationTarget(
+  thread: NavigationThreadSummary,
+  federationWindowInstanceId?: string,
+): FederationRemoteTarget | undefined {
+  const threadTarget = thread.federation?.ref.target;
+  if (threadTarget && isRemoteFederationTarget(threadTarget)) {
+    return threadTarget;
+  }
+  return federationWindowInstanceId
+    ? { scope: "remote", instanceId: federationWindowInstanceId }
+    : undefined;
 }
 
 function resolvePullRequestLookupTarget(

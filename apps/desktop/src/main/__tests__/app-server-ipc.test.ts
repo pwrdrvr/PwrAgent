@@ -73,6 +73,13 @@ const federationMock = vi.hoisted(() => {
       threadId: request.threadId,
       renamedAt: 6_000,
     })),
+    refreshThreadPullRequests: vi.fn(async (request: RefreshThreadPullRequestsRequest) => ({
+      backend: request.backend ?? "codex",
+      threadId: request.threadId,
+      provider: request.provider ?? "github.com",
+      ghAvailable: true,
+      prs: [],
+    })),
     refreshDirectoryGitStatuses: vi.fn(async () => ({ scheduledCount: 1 })),
     ensureDirectoryLaunchpad: vi.fn(),
     listRecentFileReferences: vi.fn(async () => ({
@@ -496,6 +503,7 @@ const setLocalPullRequestAuthorityResolver = vi.fn();
 const setThreadPullRequestWatchToolHandler = vi.fn();
 const setThreadPrAutoDispatchHandler = vi.fn();
 const setThreadPullRequestDetachHandler = vi.fn();
+const setThreadPullRequestRefreshHandler = vi.fn();
 const setDirectoryGitStatusWriter = vi.fn();
 const setThreadPrAutoDispatchBatch = vi.fn(async () => undefined);
 const ensureDirectoryLaunchpad = vi.fn(async (request: {
@@ -913,6 +921,7 @@ vi.mock("../app-server/backend-registry", () => {
     setThreadPullRequestWatchToolHandler,
     setThreadPrAutoDispatchHandler,
     setThreadPullRequestDetachHandler,
+    setThreadPullRequestRefreshHandler,
     setDirectoryGitStatusWriter,
     setThreadPrAutoDispatchBatch,
     ensureDirectoryLaunchpad,
@@ -999,6 +1008,7 @@ describe("app server ipc", () => {
     federationMock.remoteBackend.markThreadSeen.mockClear();
     federationMock.remoteBackend.setThreadReaction.mockClear();
     federationMock.remoteBackend.setThreadParent.mockClear();
+    federationMock.remoteBackend.refreshThreadPullRequests.mockClear();
     federationMock.remoteBackend.refreshDirectoryGitStatuses.mockClear();
     federationMock.remoteBackend.ensureDirectoryLaunchpad.mockReset();
     federationMock.remoteBackend.listRecentFileReferences.mockReset();
@@ -1048,6 +1058,7 @@ describe("app server ipc", () => {
     setThreadPullRequestWatchToolHandler.mockClear();
     setThreadPrAutoDispatchHandler.mockClear();
     setThreadPullRequestDetachHandler.mockClear();
+    setThreadPullRequestRefreshHandler.mockClear();
     setDirectoryGitStatusWriter.mockClear();
     setThreadPrAutoDispatchBatch.mockClear();
     ensureDirectoryLaunchpad.mockClear();
@@ -4170,6 +4181,48 @@ describe("app server ipc", () => {
           reactions: ["👀"],
         },
       },
+    });
+  });
+
+  it("routes remote-window PR refreshes to the thread-owning instance", async () => {
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "pwr_owner",
+    };
+    const request = {
+      backend: "codex",
+      threadId: "thread-remote",
+      trigger: "user" as const,
+      branch: "fix/remote-pr-hover",
+      directoryPaths: ["/remote/repo"],
+      federationTarget,
+    };
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      { sender: { id: 999 } },
+      request,
+    );
+
+    expect(federationMock.runtime.remoteBackend).toHaveBeenCalledWith(
+      federationTarget,
+    );
+    expect(
+      federationMock.remoteBackend.refreshThreadPullRequests,
+    ).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-remote",
+      trigger: "user",
+      branch: "fix/remote-pr-hover",
+      directoryPaths: ["/remote/repo"],
+    });
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-remote",
+      provider: "github.com",
+      ghAvailable: true,
+      prs: [],
     });
   });
 

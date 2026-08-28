@@ -3589,6 +3589,15 @@ class DesktopAppServerService {
   async refreshThreadPullRequests(
     request: RefreshThreadPullRequestsRequest,
   ): Promise<RefreshThreadPullRequestsResponse> {
+    if (
+      request.federationTarget
+      && isRemoteFederationTarget(request.federationTarget)
+    ) {
+      const { federationTarget, ...remoteRequest } = request;
+      return await getDesktopFederationRuntime()
+        .remoteBackend(federationTarget)
+        .refreshThreadPullRequests(remoteRequest);
+    }
     const backend = request.backend ?? "codex";
     const requestKey = getThreadPullRequestsRequestKey(backend, request);
     const pending = this.pendingThreadPullRequestRefreshes.get(requestKey);
@@ -7562,6 +7571,9 @@ export function registerAppServerIpcHandlers(): void {
   getDesktopBackendRegistry().setThreadPullRequestDetachHandler(
     async (request) => await appServerService.detachThreadPullRequest(request),
   );
+  getDesktopBackendRegistry().setThreadPullRequestRefreshHandler(
+    async (request) => await appServerService.refreshThreadPullRequests(request),
+  );
   getDesktopBackendRegistry().setThreadPrAutoDispatchHandler({
     preferenceChanged: async (request) =>
       await appServerService.handleThreadPrAutoDispatchPreference(request),
@@ -8017,15 +8029,18 @@ export function registerAppServerIpcHandlers(): void {
       event,
       request: RefreshThreadPullRequestsRequest,
     ): Promise<RefreshThreadPullRequestsResponse> => {
-      // Defense in depth behind the renderer-side guard: a remote
-      // federation window's PR lookups belong to the owning instance.
-      // Running them here would use THIS machine's paths and GitHub
-      // credentials against a remote thread id. Throw (renderer refresh
-      // paths swallow errors) rather than return an empty result a
-      // caller might diff against snapshot PRs and loop on.
-      if (isFederationWindowWebContents(event?.sender)) {
+      // Defense in depth behind renderer target stamping: a remote window's
+      // lookup must be routed to the owning instance. Running an untargeted
+      // lookup here would use this machine's checkout and GitHub credentials.
+      if (
+        isFederationWindowWebContents(event?.sender)
+        && !(
+          request.federationTarget
+          && isRemoteFederationTarget(request.federationTarget)
+        )
+      ) {
         throw new Error(
-          "PR lookups for remote threads run on the owning instance.",
+          "PR lookups for remote threads must target the owning instance.",
         );
       }
       return await timeStartupProfileOperation({
@@ -8516,6 +8531,7 @@ export async function disposeAppServerIpcHandlers(): Promise<void> {
   registry?.setDirectoryGitStatusWriter(undefined);
   registry?.setThreadPrAutoDispatchHandler(undefined);
   registry?.setThreadPullRequestDetachHandler(undefined);
+  registry?.setThreadPullRequestRefreshHandler(undefined);
   await appServerService.close();
 }
 

@@ -84,37 +84,47 @@ describe("usePullRequestRefresh", () => {
     });
   });
 
-  it("never drives local PR lookups for a remote thread pinned into the main window", async () => {
+  it("refreshes a remote thread through the caller-provided scoped API", async () => {
     const onRefreshNavigation = vi.fn(async () => undefined);
     const refreshThreadPullRequests = vi.fn(async () => buildResponse());
     const desktopApi = {
       refreshThreadPullRequests,
     } satisfies DesktopApi;
 
-    // Main window (no window-level federation target), but the selected
-    // thread is remote-owned: the per-thread guard must hold — its branch
-    // and paths belong to the peer machine.
-    renderHook(() =>
+    const { result } = renderHook(() =>
       usePullRequestRefresh({
         desktopApi,
         onRefreshNavigation,
-        selectedThread: buildThread({
-          federation: {
-            ref: buildFederatedThreadRef({
-              backend: "codex",
-              instanceId: "peer-laptop",
-              threadId: "thread-1",
-            }),
-            instanceLabel: "Laptop",
-            peerStatus: "connected",
-          },
-        }),
       }),
     );
+    result.current.prefetch(buildThread({
+      federation: {
+        ref: buildFederatedThreadRef({
+          backend: "codex",
+          instanceId: "peer-laptop",
+          threadId: "thread-1",
+        }),
+        instanceLabel: "Laptop",
+        peerStatus: "connected",
+      },
+    }));
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(refreshThreadPullRequests).not.toHaveBeenCalled();
-    expect(onRefreshNavigation).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(refreshThreadPullRequests).toHaveBeenCalledWith({
+        backend: "codex",
+        threadId: "thread-1",
+        trigger: "user",
+        branch: "feat/pr-chip",
+        directoryPaths: ["/repo"],
+        federationTarget: {
+          scope: "remote",
+          instanceId: "peer-laptop",
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(onRefreshNavigation).toHaveBeenCalledOnce();
+    });
   });
 
   it("does not refresh navigation when the PR probe matches current PRs", async () => {
