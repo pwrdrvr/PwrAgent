@@ -160,6 +160,13 @@
     "rowsChanged": 2,
     "statements": 2
   },
+  "thread-compaction-markers": {
+    "commits": 3,
+    "note": "two compaction markers plus one cold-replay usage line whose attribution rides the pricing-ledger transaction",
+    "observedWalBytes": 90640,
+    "rowsChanged": 5,
+    "statements": 5
+  },
   "thread-pricing-lazy-repair": {
     "commits": 1,
     "note": "one thread load lazily reprices 25 usage rows in ten-row progress batches; a second load is read-only",
@@ -173,6 +180,20 @@
     "observedWalBytes": 32960,
     "rowsChanged": 2,
     "statements": 2
+  },
+  "token-miser-retrieval-ledger": {
+    "commits": 1,
+    "note": "one previously gated output retrieved in a later parent turn, updating its savings equation at the turn boundary",
+    "observedWalBytes": 16480,
+    "rowsChanged": 1,
+    "statements": 1
+  },
+  "token-miser-turn-ledger": {
+    "commits": 2,
+    "note": "nine finalized Token Miser helper lines persisted during the active turn, plus one batched parent overlay write at completion",
+    "observedWalBytes": 82400,
+    "rowsChanged": 20,
+    "statements": 20
   },
   "tool-output-history-analysis": {
     "commits": 1,

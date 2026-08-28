@@ -22,6 +22,7 @@ import {
   subAgentUsageLabel,
 } from "./subagent-kind";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
 
 type SubAgentsPanelProps = {
   desktopApi?: DesktopApi;
@@ -190,6 +191,11 @@ export function SubAgentsPanel(props: SubAgentsPanelProps) {
                       usage: subAgent.monitorUsage,
                     })}
                   </p>
+                ) : null}
+                {subAgent.tokenMiserAccounting ? (
+                  <TokenMiserSavingsBreakdown
+                    accounting={subAgent.tokenMiserAccounting}
+                  />
                 ) : null}
                 <div className="context-list__actions rail-card__actions">
                   <button

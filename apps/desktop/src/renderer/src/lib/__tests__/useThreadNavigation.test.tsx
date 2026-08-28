@@ -10362,6 +10362,76 @@ describe("useThreadNavigation", () => {
     });
   });
 
+  it("applies live Token Miser sub-agents without waiting for navigation refresh", async () => {
+    const listeners = new Set<(event: AgentEvent) => void>();
+    const getNavigationSnapshot = vi.fn(async () => ({
+      backend: "all" as const,
+      fetchedAt: Date.now(),
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [
+        {
+          id: "thread-miser",
+          title: "Token Miser thread",
+          titleSource: "explicit" as const,
+          summary: "A running thread with gated output.",
+          source: "codex" as const,
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+          subAgents: [],
+          updatedAt: 1_000,
+        },
+      ],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex" as const,
+        executionMode: "default" as const,
+      },
+    }));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        listeners.add(callback);
+        return () => listeners.delete(callback);
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-miser");
+    });
+
+    await act(async () => {
+      for (const listener of listeners) {
+        listener({
+          backend: "codex",
+          notification: {
+            method: "thread/subAgents/updated",
+            params: {
+              threadId: "thread-miser",
+              subAgents: [
+                {
+                  agentName: "Token Miser",
+                  createdAt: 2_000,
+                  monitorId: "system:token-miser:gate-live",
+                  status: "success",
+                  task: "Gate Bash output",
+                  updatedAt: 2_000,
+                },
+              ],
+            },
+          },
+        });
+      }
+    });
+
+    expect(result.current.selectedThread?.subAgents).toEqual([
+      expect.objectContaining({
+        monitorId: "system:token-miser:gate-live",
+      }),
+    ]);
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+  });
+
   it("restores backend state and surfaces errors when rename fails", async () => {
     const renameThread = vi.fn(async () => {
       throw new Error("rename failed");
@@ -11602,6 +11672,55 @@ describe("useThreadNavigation", () => {
     expect(
       result.current.selectedThread?.messagingBindings?.[0]?.platform,
     ).toBe("discord");
+  });
+
+  it("reconciles a Token Miser override when the backend thread timestamp is unchanged", async () => {
+    let navigationCallCount = 0;
+    const getNavigationSnapshot = vi.fn(async () => {
+      navigationCallCount += 1;
+      return {
+        backend: "all" as const,
+        fetchedAt: 1_000 + navigationCallCount,
+        unchanged: false,
+        inboxThreadKeys: [],
+        threads: [
+          {
+            id: "thread-1",
+            title: "Control thread",
+            titleSource: "explicit" as const,
+            source: "codex" as const,
+            linkedDirectories: [],
+            inbox: { inInbox: false },
+            updatedAt: 1_000,
+            ...(navigationCallCount > 1
+              ? { tokenMiserEnabled: false }
+              : {}),
+          },
+        ],
+        directories: [],
+        launchpadDefaults: {
+          backend: "codex" as const,
+          executionMode: "default" as const,
+        },
+      };
+    });
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+    expect(result.current.selectedThread?.tokenMiserEnabled).toBeUndefined();
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+
+    expect(result.current.selectedThread?.tokenMiserEnabled).toBe(false);
   });
 
   it("reconciles queued turns when the backend thread timestamp is unchanged", async () => {

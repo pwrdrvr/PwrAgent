@@ -188,6 +188,14 @@ function createSnapshot(
         value: false,
         source: "default",
       },
+      tokenMiserEnabled: {
+        value: false,
+        source: "default",
+      },
+      tokenMiserDefaultEnabled: {
+        value: true,
+        source: "default",
+      },
       threadToolAccounting: {
         value: false,
         source: "default",
@@ -1108,6 +1116,16 @@ describe("SettingsScreen", () => {
     ).not.toBeDisabled();
 
     fireEvent.click(within(sections).getByRole("button", { name: "Experimental" }));
+    const tokenMiserSwitch = screen.getByRole("switch", {
+      name: "Make Token Miser available",
+    });
+    expect(tokenMiserSwitch).toHaveAttribute("aria-checked", "false");
+    fireEvent.click(tokenMiserSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { tokenMiserEnabled: true },
+      });
+    });
     expect(screen.queryByRole("radiogroup", { name: "Chat Reply Composer" })).not.toBeInTheDocument();
     expect(
       screen.queryByRole("switch", {
@@ -2874,6 +2892,100 @@ describe("SettingsScreen", () => {
       expect(dialog).toHaveTextContent("work is logged in.");
     });
     expect(dialog).not.toHaveTextContent("Codex login exited before emitting a login link");
+  });
+
+  it("lets an available Token Miser experiment default threads on or off", async () => {
+    const snapshot = createSnapshot();
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
+    snapshot.experimental.tokenMiserDefaultEnabled = {
+      value: false,
+      source: "config",
+    };
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        desktopApi={{} as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+        initialSection="experimental"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Opt-in")).toBeInTheDocument();
+    const defaultSwitch = screen.getByRole("switch", {
+      name: "Enable Token Miser on threads by default",
+    });
+    expect(defaultSwitch).toHaveAttribute("aria-checked", "false");
+    expect(defaultSwitch).not.toBeDisabled();
+    fireEvent.click(defaultSwitch);
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { tokenMiserDefaultEnabled: true },
+      });
+    });
+  });
+
+  // Token Miser fails open, so an inert gate is invisible: turns keep running
+  // and nothing is gated. Settings has to state the contradiction outright.
+  it("warns when Token Miser is enabled but Codex never loaded the gate", async () => {
+    const snapshot = createSnapshot();
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      activation: {
+        observedAt: 1_800_000_000_000,
+        reason: "marketplace 'pwragent-local' is already added from a different source",
+        state: "unavailable",
+      },
+      interceptionCount: 0,
+      originalCharacters: 0,
+      baselineParentTokens: 0,
+      replacementTokens: 0,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+    };
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        desktopApi={{} as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+        initialSection="experimental"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Codex could not load the gate")).toBeInTheDocument();
+    expect(screen.getByText("Enabled, not running")).toBeInTheDocument();
+    expect(
+      screen.getByText(/already added from a different source/),
+    ).toBeInTheDocument();
+  });
+
+  it("leaves the Token Miser section unflagged when the gate loaded", async () => {
+    const snapshot = createSnapshot();
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      activation: { observedAt: 1_800_000_000_000, state: "active" },
+      interceptionCount: 0,
+      originalCharacters: 0,
+      baselineParentTokens: 0,
+      replacementTokens: 0,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+    };
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        desktopApi={{} as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+        initialSection="experimental"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.queryByText("Codex could not load the gate")).not.toBeInTheDocument();
   });
 
   it("shows resolved gh discovery details and saves an alternate candidate", async () => {

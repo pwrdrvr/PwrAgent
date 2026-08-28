@@ -8414,6 +8414,12 @@ textarea,
   border-top: 1px solid var(--border-subtle);
 }
 
+/* Contradiction state: the setting says on, the runtime says it never loaded.
+   Semantic warning, not the accent — this reports health, not emphasis. */
+.settings-field__value--warn {
+  color: var(--status-warning);
+}
+
 .settings-field:first-child {
   border-top: 0;
 }
@@ -16941,6 +16947,502 @@ a.transcript-message__messaging-origin:focus-visible {
   border-bottom: 1px solid var(--border-subtle);
 }
 
+/* Lens switch — the Explorer answers two questions (what did tool output cost,
+   and what did gating buy) and they do not belong in one column. */
+.incident-explorer__lenses {
+  display: flex;
+  gap: 22px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.incident-explorer__lens {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 9px 2px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.incident-explorer__lens[aria-selected="true"] {
+  border-bottom-color: var(--accent);
+  color: var(--text-primary);
+}
+
+.incident-explorer__lens span {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__lens[aria-selected="true"] span {
+  color: var(--text-secondary);
+}
+
+/* Cross-link on the incidents lens: one line, below the headline, never the
+   headline itself. */
+.incident-explorer__token-miser-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel-hover);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.incident-explorer__token-miser-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--status-ok);
+  flex: none;
+}
+
+.incident-explorer__token-miser-strip[data-state="inactive"]
+  .incident-explorer__token-miser-dot {
+  background: var(--text-muted);
+}
+
+.incident-explorer__token-miser-spacer {
+  flex: 1 1 auto;
+}
+
+.incident-explorer__token-miser-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* Savings lens. */
+/* The lens claims the window's remaining height but does not scroll itself:
+   the figure, the equation and the filters stay put while only the gate list
+   moves. `min-height: 0` runs the whole way down — savings, gates, gate-list —
+   because a flex child refuses to shrink below its content, and one missing
+   link anywhere in that chain pushes the scroll back up to the whole lens. */
+.incident-explorer__savings {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 14px;
+  min-height: 0;
+  padding: 16px 18px 20px;
+}
+
+.incident-explorer__savings-empty,
+.incident-explorer__edges-empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.incident-explorer__savings-hero {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px 32px;
+}
+
+.incident-explorer__savings-figure {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 6px 0 0;
+}
+
+.incident-explorer__savings-figure strong {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__savings-figure span {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+}
+
+.incident-explorer__savings-terms {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0;
+  min-width: min(560px, 62vw);
+  background: var(--border-subtle);
+}
+
+.incident-explorer__savings-terms div {
+  padding: 6px 10px;
+  background: var(--bg-panel);
+}
+
+.incident-explorer__savings-terms dt {
+  color: var(--text-muted);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.incident-explorer__savings-terms dd {
+  display: flex;
+  flex-direction: column;
+  margin: 2px 0 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__savings-terms dd span {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  font-weight: 400;
+}
+
+.incident-explorer__savings-compare {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__savings-compare b {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+/* Confidence marker. Semantic, not accent: this reports how much of the figure
+   was measured versus inferred, which is a different axis from emphasis. */
+.incident-explorer__confidence {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 0 0;
+  padding: 5px 10px;
+  border: 1px solid var(--success-border);
+  border-radius: 4px;
+  background: var(--success-soft);
+  color: var(--success-text);
+  font-size: 11.5px;
+}
+
+.incident-explorer__confidence[data-kind="reconstructed"] {
+  border-color: color-mix(in srgb, var(--status-warning) 34%, transparent);
+  background: color-mix(in srgb, var(--status-warning) 12%, transparent);
+  color: var(--status-warning);
+}
+
+.incident-explorer__confidence span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+
+.incident-explorer__savings-terms[data-terms="3"] dd {
+  font-size: 17px;
+}
+
+.incident-explorer__savings-caption {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__gates {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+
+.incident-explorer__gates-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.incident-explorer__gate-filters {
+  display: flex;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+}
+
+.incident-explorer__gate-filter {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 0;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.incident-explorer__gate-filter[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--accent-on);
+}
+
+.incident-explorer__gate-filter:disabled {
+  color: var(--text-muted);
+  cursor: default;
+  opacity: 0.55;
+}
+
+.incident-explorer__gate-filter em {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__gate-list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0;
+  list-style: none;
+}
+
+/* `flex: none` is load-bearing: `overflow: hidden` (for the stripe and the
+   rounded corners) gives a flex item an automatic minimum height of zero, so
+   inside the bounded, scrolling list a card would shrink to share space and
+   clip its own summary instead of growing to fit — the list then never
+   overflowed, so nothing scrolled. Cards keep their content height; the list
+   scrolls. */
+.incident-explorer__gate {
+  display: grid;
+  flex: none;
+  grid-template-columns: 3px minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-panel-elevated);
+}
+
+.incident-explorer__gate[data-outcome="win"] .incident-explorer__edge-stripe {
+  background: var(--success-text);
+}
+
+.incident-explorer__gate[data-outcome="miss"] .incident-explorer__edge-stripe {
+  background: var(--status-warning);
+}
+
+.incident-explorer__gate[data-outcome="big-miss"] .incident-explorer__edge-stripe {
+  background: var(--danger-text);
+}
+
+.incident-explorer__gate-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  width: 100%;
+  padding: 9px 13px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.incident-explorer__gate-row:hover {
+  background: var(--bg-panel-hover);
+}
+
+.incident-explorer__gate-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.incident-explorer__gate-identity code {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.incident-explorer__gate-identity span {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.incident-explorer__gate-verdict {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.incident-explorer__gate[data-outcome="big-miss"] .incident-explorer__gate-verdict {
+  color: var(--danger-text);
+}
+
+.incident-explorer__gate-detail {
+  grid-column: 2;
+  padding: 0 13px 12px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.incident-explorer__gate-detail p {
+  margin: 9px 0 0;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.incident-explorer__gate-detail ul {
+  margin: 8px 0 0;
+  padding-left: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.incident-explorer__gate-detail li {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.incident-explorer__gate-summary {
+  color: var(--text-primary) !important;
+}
+
+.incident-explorer__gate-next b {
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.incident-explorer__edge {
+  display: grid;
+  grid-template-columns: 3px minmax(0, 1fr) auto;
+  gap: 0 14px;
+  align-items: center;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 5px;
+  background: var(--bg-panel-elevated);
+}
+
+.incident-explorer__edge-stripe {
+  align-self: stretch;
+  background: var(--border-strong);
+}
+
+.incident-explorer__edge[data-kind="cost"] .incident-explorer__edge-stripe {
+  background: var(--danger-text);
+}
+
+.incident-explorer__edge[data-kind="leak"] .incident-explorer__edge-stripe,
+.incident-explorer__edge[data-kind="truncated"] .incident-explorer__edge-stripe {
+  background: var(--status-warning);
+}
+
+.incident-explorer__edge[data-kind="repeat"] .incident-explorer__edge-stripe {
+  background: var(--info-text);
+}
+
+.incident-explorer__edge > div:nth-child(2) {
+  min-width: 0;
+  padding: 10px 0;
+}
+
+.incident-explorer__edge code {
+  display: block;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.incident-explorer__edge p {
+  margin: 3px 0 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.incident-explorer__edge[data-kind="cost"] .incident-explorer__edge[data-kind="truncated"] .incident-explorer__edge[data-kind="repeat"] /* Per-invocation gate box in the incidents lens: this call's own before/after,
+   shown beside the raw-output budget it replaced. */
+.incident-explorer__token-miser-call {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--border-subtle));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.incident-explorer__token-miser-call span {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.incident-explorer__token-miser-call strong,
+.incident-explorer__token-miser-call p {
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.incident-explorer__token-miser-call p {
+  margin: 0;
+  color: var(--text-muted);
+  text-align: right;
+}
+
 .incident-explorer__hero {
   display: flex;
   align-items: baseline;
@@ -22897,6 +23399,212 @@ a.transcript-message__messaging-origin:focus-visible {
   color: var(--text-secondary);
 }
 
+.rail-card__token-miser-savings {
+  display: grid;
+  gap: 1px;
+  margin: 2px 0 0;
+  background: var(--border-subtle);
+}
+
+.rail-card__token-miser-savings > div {
+  display: grid;
+  grid-template-columns: minmax(112px, 0.8fr) minmax(0, 1.2fr);
+  gap: 8px;
+  align-items: start;
+  padding: 5px 7px;
+  background: var(--bg-panel);
+}
+
+.rail-card__token-miser-savings dt {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.rail-card__token-miser-savings dd {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  min-width: 0;
+  margin: 0;
+  text-align: right;
+}
+
+.rail-card__token-miser-savings dd strong {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.rail-card__token-miser-savings dd span {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.rail-card__token-miser-savings > div[data-total="true"] {
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-panel));
+}
+
+.rail-card__token-miser-savings > div[data-total="true"] dt,
+.rail-card__token-miser-savings > div[data-total="true"] dd strong {
+  color: var(--accent);
+}
+
+/* A gate that cost more than it saved: the total row carries the warning
+   tone instead of the accent, so overhead never reads as a saving. */
+.rail-card__token-miser-savings[data-negative="true"] > div[data-total="true"] {
+  background: color-mix(in srgb, var(--status-warning) 9%, var(--bg-panel));
+}
+
+.rail-card__token-miser-savings[data-negative="true"] > div[data-total="true"] dt,
+.rail-card__token-miser-savings[data-negative="true"] > div[data-total="true"] dd strong {
+  color: var(--status-warning);
+}
+
+/* Turn card hierarchy. The cost is the answer the card exists to give, so it
+   is the one line set in primary; tokens, timing and replay estimates stay
+   in the muted mono the rail already uses for metadata. */
+.pricing-usage-row__cost {
+  margin: 4px 0 0;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+}
+
+/* Token Miser folded under its turn: one summary line that keeps moving as
+   replays are counted, a chevron, and cards only for gates worth a card. */
+.pricing-token-miser {
+  margin: 6px 0 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  background: var(--bg-panel);
+}
+
+.pricing-token-miser__summary {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pricing-token-miser__summary:hover {
+  background: var(--bg-panel-hover);
+}
+
+.pricing-token-miser__summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.pricing-token-miser__chevron {
+  display: inline-block;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+
+.pricing-token-miser[data-expanded="true"] .pricing-token-miser__chevron {
+  transform: rotate(90deg);
+}
+
+.pricing-token-miser__label {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.pricing-token-miser__count {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pricing-token-miser__verdict {
+  margin-left: auto;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pricing-token-miser__verdict[data-negative="true"] {
+  color: var(--status-warning);
+}
+
+/* The body scrolls inside a bounded height so a long list of gates moves
+   under the summary line rather than carrying it — and the turn card above
+   it — off the screen. The chevron and the context it names stay put. */
+.pricing-token-miser__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 2px 8px 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pricing-token-miser__gates {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+/* An orphan group stands in for its gates' cards; the group carries its own
+   chrome, so the list item wrapping it is transparent. */
+.pricing-usage-row--orphan-gates {
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.pricing-usage-row--orphan-gates .pricing-token-miser {
+  margin: 0;
+}
+
+.pricing-token-miser__folded {
+  margin: 4px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.4;
+  text-align: left;
+}
+
+button.pricing-token-miser__folded {
+  color: var(--accent-bright);
+  cursor: pointer;
+}
+
+button.pricing-token-miser__folded:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .rail-card__actions {
   width: 100%;
   margin-top: 2px;
@@ -23156,6 +23864,63 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .pricing-running-total__tokens {
   margin-top: 4px;
+}
+
+/* Compaction breakdown — same disclosure primitive as the running total, but
+   carrying a warning tone: a compaction is real spend the turn's own token
+   counts cannot show, because the re-read arrives as ordinary uncached input. */
+.pricing-compactions {
+  margin: 6px 0 0;
+  padding: 5px 8px;
+  border-left: 2px solid var(--status-warning);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--status-warning) 8%, transparent);
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.35;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.pricing-compactions__summary {
+  cursor: pointer;
+  list-style: none;
+  overflow-wrap: anywhere;
+}
+
+.pricing-compactions__summary::-webkit-details-marker {
+  display: none;
+}
+
+.pricing-compactions__summary::before {
+  content: "›";
+  display: inline-block;
+  margin-right: 4px;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+
+.pricing-compactions[open] .pricing-compactions__summary::before {
+  transform: rotate(90deg);
+}
+
+.pricing-compactions__list {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.pricing-compactions__list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
 }
 
 /* Sub-agent Details modal — a centered, in-window dialog (mirrors the
@@ -25132,6 +25897,14 @@ a.transcript-message__messaging-origin:focus-visible {
   font-weight: 650;
 }
 
+/* "· this thread" beside a menu item whose per-thread override is set, so an
+   override is visibly different from following the global setting. */
+.composer-thread-options__note {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
 .composer-thread-options__toggle {
   width: 28px;
   height: 16px;
@@ -25166,19 +25939,6 @@ a.transcript-message__messaging-origin:focus-visible {
   .composer-thread-options__toggle-thumb {
   transform: translateX(12px);
   background: var(--button-text);
-}
-
-.composer-thread-options__item.tooltip-target[data-tooltip]::after {
-  right: 0;
-  bottom: calc(100% + 8px);
-  left: auto;
-  z-index: 31;
-  transform: translateY(4px);
-}
-
-.composer-thread-options__item.tooltip-target[data-tooltip]:hover::after,
-.composer-thread-options__item.tooltip-target[data-tooltip]:focus-within::after {
-  transform: translateY(0);
 }
 
 /* ============================================================

@@ -77,6 +77,170 @@ describe("sqlite write metrics", () => {
     ).toMatchObject({ commits: 2, rowsChanged: 2, statements: 2 });
   });
 
+  it("persists live Token Miser helper pricing and batches terminal cards", async () => {
+    const threadId = "thread-token-miser";
+    const subAgents = Array.from({ length: 9 }, (_, index) => ({
+      monitorId: `system:token-miser:gate-${index}`,
+      task: "Gate command output",
+      status: "success" as const,
+      createdAt: 1_800_000_000_000 + index,
+      updatedAt: 1_800_000_000_000 + index,
+      backend: "codex" as const,
+      agentName: "Token Miser",
+      outcome: "success" as const,
+      completedAt: 1_800_000_000_000 + index,
+    }));
+    const lines: ThreadUsageLineRecord[] = subAgents.map((subAgent, index) => ({
+      backend: "codex",
+      cachedInputCostMicros: 0,
+      cachedInputTokens: 0,
+      createdAt: subAgent.createdAt,
+      currency: "USD",
+      inputTokens: 1_000,
+      model: "gpt-5.6-luna",
+      outputCostMicros: 0,
+      outputTokens: 100,
+      parentThreadId: threadId,
+      priceStatus: "unpriced",
+      provider: "openai",
+      reasoningOutputTokens: 0,
+      scope: "monitor",
+      source: "monitor",
+      sourceItemId: subAgent.monitorId,
+      status: "finalized",
+      threadId: `helper-thread-${index}`,
+      totalCostMicros: 0,
+      totalTokens: 1_100,
+      turnId: `helper-turn-${index}`,
+      uncachedInputCostMicros: 0,
+      uncachedInputTokens: 1_000,
+      usageLineId: `token-miser-line-${index}`,
+    }));
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.upsertThreadUsageLines({ lines });
+      await store.upsertThreadSubAgents({
+        backend: "codex",
+        threadId,
+        subAgents,
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note:
+        "nine finalized Token Miser helper lines persisted during the active "
+        + "turn, plus one batched parent overlay write at completion",
+      scenario: "token-miser-turn-ledger",
+      writes,
+    });
+  });
+
+  it("records compaction markers and their attribution without extra commits", async () => {
+    const threadId = "thread-compaction-writes";
+    const { writes } = await measureSqliteWrites(async () => {
+      // Two compactions in one turn, then the cold-replay usage line whose
+      // attribution UPDATE must ride the existing usage-line transaction.
+      for (const index of [0, 1]) {
+        await store.recordThreadCompaction({
+          compaction: {
+            backend: "codex",
+            compactionId: `codex:${threadId}:item-${index}`,
+            itemId: `item-${index}`,
+            observedAt: 1_800_000_000_000 + index,
+            threadId,
+            turnId: "turn-1",
+            updatedAt: 1_800_000_000_000 + index,
+          },
+        });
+      }
+      await store.upsertThreadUsageLines({
+        lines: [{
+          backend: "codex",
+          cachedInputCostMicros: 0,
+          cachedInputTokens: 0,
+          createdAt: 1_800_000_000_100,
+          currency: "USD",
+          inputTokens: 135_236,
+          observedColdReplayCount: 1,
+          observedColdReplayUncachedTokens: 135_236,
+          outputCostMicros: 0,
+          outputTokens: 0,
+          priceStatus: "priced",
+          provider: "openai",
+          reasoningOutputTokens: 0,
+          scope: "turn",
+          source: "live",
+          status: "finalized",
+          threadId,
+          totalCostMicros: 680_000,
+          totalTokens: 135_236,
+          turnId: "turn-1",
+          uncachedInputCostMicros: 680_000,
+          uncachedInputTokens: 135_236,
+          usageLineId: `${threadId}:turn-1:live`,
+        }],
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note:
+        "two compaction markers plus one cold-replay usage line whose "
+        + "attribution rides the pricing-ledger transaction",
+      scenario: "thread-compaction-markers",
+      writes,
+    });
+  });
+
+  it("updates retrieved Token Miser savings in one turn-boundary commit", async () => {
+    const threadId = "thread-token-miser-retrieval";
+    const subAgent = {
+      monitorId: "system:token-miser:gate-retrieved",
+      task: "Gate command output",
+      status: "success" as const,
+      createdAt: 1_800_000_000_000,
+      updatedAt: 1_800_000_000_000,
+      backend: "codex" as const,
+      agentName: "Token Miser",
+      outcome: "success" as const,
+      completedAt: 1_800_000_000_000,
+    };
+    await store.upsertThreadSubAgent({
+      backend: "codex",
+      threadId,
+      subAgent,
+    });
+
+    const { writes } = await measureSqliteWrites(async () => {
+      await store.upsertThreadSubAgents({
+        backend: "codex",
+        threadId,
+        subAgents: [{
+          ...subAgent,
+          tokenMiserAccounting: {
+            currency: "USD",
+            originalModel: "gpt-5.6-terra",
+            baselineParentTokens: 6_000,
+            baselineParentCostMicros: 12_000,
+            gateModel: "gpt-5.6-luna",
+            gateTotalTokens: 2_100,
+            gateCostMicros: 520,
+            revealedParentTokens: 1_225,
+            revealedParentCostMicros: 2_450,
+            savingsMicros: 9_030,
+          },
+        }],
+      });
+    });
+
+    expectSqliteWriteBudget({
+      note:
+        "one previously gated output retrieved in a later parent turn, "
+        + "updating its savings equation at the turn boundary",
+      scenario: "token-miser-retrieval-ledger",
+      writes,
+    });
+  });
+
   it("counts a batched transaction as one commit, not one per statement", () => {
     // Write amplification tracks commits, not statements: each implicit
     // transaction flushes its dirty pages plus every index they moved. A

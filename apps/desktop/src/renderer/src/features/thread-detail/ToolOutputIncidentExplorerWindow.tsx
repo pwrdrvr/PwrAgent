@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
   FederationInstanceId,
@@ -7,6 +7,8 @@ import type {
   AppServerThreadActivityDetail,
   ThreadToolAccounting,
   ThreadToolAnalysisCoverage,
+  ThreadCompactionRecord,
+  ThreadTokenMiserSavings,
   ThreadToolInvocationRecord,
 } from "@pwragent/shared";
 import {
@@ -27,9 +29,14 @@ import type {
   TurnCostRow,
   TurnCostStrip,
   TurnStripScope,
+  TokenMiserContextComparison,
+  TokenMiserGateEntry,
+  TokenMiserGateOutcome,
 } from "./tool-output-incident-insights";
 import {
   buildCategoryComposition,
+  buildTokenMiserContextComparison,
+  buildTokenMiserGateEntries,
   buildTurnCostStrip,
   capMeterWidth,
   countRepeatedCommands,
@@ -41,6 +48,7 @@ import {
   formatTurnWhen,
   invocationStatusTone,
   isOverOutputCap,
+  matchTokenMiserInvocations,
   refineToolCategory,
   repeatCountFor,
   sortIncidentCases,
@@ -48,6 +56,7 @@ import {
 } from "./tool-output-incident-insights";
 
 const HISTORY_PAGE_LIMIT = 100;
+const DEFAULT_MODEL_VISIBLE_TOOL_OUTPUT_CAP_CHARACTERS = 40_000;
 
 export function ToolOutputIncidentExplorerWindow() {
   const desktopApi = useDesktopApi();
@@ -121,6 +130,55 @@ export function ToolOutputIncidentExplorerWindow() {
     });
   }, [desktopApi, refresh]);
 
+  useEffect(() => {
+    if (!desktopApi?.onAgentEvent || !route) return;
+    return desktopApi.onAgentEvent((event) => {
+      if (event.backend !== route.backend) {
+        return;
+      }
+      const notification = event.notification;
+      if (notification.method === "thread/pricing/updated") {
+        // Only the pricing half is refreshed. Calling refresh() here replaced
+        // `latest` wholesale, and the selection effect keyed on that identity
+        // reset the operator's typed steering text mid-turn.
+        // Same shape as the read response's pricing by contract; the union
+        // narrowing does not survive into the callback.
+        const pricing = notification.params
+          .pricing as AppServerReadThreadResponse["pricing"];
+        if (notification.params.threadId === route.threadId && pricing) {
+          setLatest((current) => current ? { ...current, pricing } : current);
+        }
+        return;
+      }
+      if (notification.method !== "thread/toolAccounting/updated") {
+        return;
+      }
+      if (!notification.params || typeof notification.params !== "object") {
+        return;
+      }
+      const params = notification.params as {
+        threadId?: unknown;
+        toolAccounting?: ThreadToolAccounting;
+      };
+      if (params.threadId !== route.threadId || !params.toolAccounting) {
+        return;
+      }
+      // The event payload is capped at the newest 200 invocations while this
+      // window loaded every one of them, so adopting it wholesale shrank the
+      // case list mid-session. Take the Token Miser accounting, which is
+      // thread-wide, and keep the fuller invocation set already loaded.
+      const live = params.toolAccounting;
+      setAccounting((current) => {
+        if (!current) {
+          return live;
+        }
+        return current.invocations.length > live.invocations.length
+          ? { ...current, ...live, invocations: current.invocations }
+          : live;
+      });
+    });
+  }, [desktopApi, refresh, route]);
+
   const allInvocations = useMemo(
     () => accounting?.invocations ?? [],
     [accounting?.invocations],
@@ -142,6 +200,72 @@ export function ToolOutputIncidentExplorerWindow() {
     [allInvocations, largeOutputThresholdChars],
   );
   const usageLines = latest?.pricing?.lines;
+  const tokenMiser = accounting?.tokenMiser;
+  const activeTokenMiser = tokenMiser && (
+    tokenMiser.interceptionCount > 0
+    || (tokenMiser.codeMode?.callCount ?? 0) > 0
+  )
+    ? tokenMiser
+    : undefined;
+  const totalEstimatedParentTokensSaved = activeTokenMiser
+    ? activeTokenMiser.estimatedParentTokensSaved
+      + (activeTokenMiser.estimatedCachedReplayTokensSaved ?? 0)
+    : 0;
+  const tokenMiserEnabled =
+    settings.snapshot?.experimental.tokenMiserEnabled.value ?? false;
+  const tokenMiserComparison = useMemo(
+    () => buildTokenMiserContextComparison(allInvocations, activeTokenMiser),
+    [activeTokenMiser, allInvocations],
+  );
+  const gateEntries = useMemo(
+    () => buildTokenMiserGateEntries(allInvocations, activeTokenMiser),
+    [activeTokenMiser, allInvocations],
+  );
+  // The savings lens only exists where gating is part of the story. With the
+  // feature off and nothing ever gated, this stays the single-lens screen it
+  // was rather than growing a tab that can only say "nothing happened".
+  const showSavingsLens = tokenMiserEnabled || Boolean(activeTokenMiser);
+  const [lensChoice, setLens] = useState<ExplorerLens>("incidents");
+  // Latch the opening lens the first time accounting arrives, then leave it
+  // alone. Re-deriving it from `activeTokenMiser` would yank the operator out
+  // of the case they are reading the moment a gate lands mid-turn.
+  //
+  // Adjusted during render rather than in an effect: an effect commits one
+  // painted frame on the incidents lens before switching, so a thread that
+  // gated would open on the wrong lens and visibly flip. React discards this
+  // render and re-runs before painting.
+  const lensLatched = useRef(false);
+  if (!lensLatched.current && accounting) {
+    lensLatched.current = true;
+    if (
+      (accounting.tokenMiser?.interceptionCount ?? 0) > 0
+      || (accounting.tokenMiser?.codeMode?.callCount ?? 0) > 0
+    ) {
+      setLens("savings");
+    }
+  }
+  const lens: ExplorerLens = showSavingsLens ? lensChoice : "incidents";
+  const tokenMiserUsageLines = useMemo(
+    () => (usageLines ?? []).filter((line) =>
+      line.scope === "monitor"
+      && line.sourceItemId?.startsWith("system:token-miser:"),
+    ),
+    [usageLines],
+  );
+  const tokenMiserGateTokens = tokenMiserUsageLines.reduce(
+    (total, line) => total + line.totalTokens,
+    0,
+  );
+  const tokenMiserGateCostMicros = tokenMiserUsageLines.reduce(
+    (total, line) => total + line.totalCostMicros,
+    0,
+  );
+  // The thread's own billed total, for "cost X, would have cost Y". Provider
+  // summaries are the same rows the Pricing rail totals.
+  const threadCostMicros = latest?.pricing?.summaries.reduce(
+    (total, provider) => total + provider.totalCostMicros,
+    0,
+  ) ?? 0;
   const turnStrip = useMemo(
     () => buildTurnCostStrip(allInvocations, {
       largeOutputThresholdChars,
@@ -151,6 +275,10 @@ export function ToolOutputIncidentExplorerWindow() {
     [allInvocations, largeOutputThresholdChars, turnScope, usageLines],
   );
   const currency = usageLines?.[0]?.currency;
+  const contextWindowSummary = useMemo(
+    () => buildContextWindowSummary(usageLines ?? []),
+    [usageLines],
+  );
   const composition = useMemo(() => buildCategoryComposition(flagged), [flagged]);
   /* Which refined categories the active legend entry stands for. "Other" is a
      real set, not a leftover, so selecting it filters to its members. */
@@ -190,6 +318,12 @@ export function ToolOutputIncidentExplorerWindow() {
   }, [flagged, search, selectedCategories, sortMode, turnFilter]);
   const selected = invocations.find((invocation) => invocation.invocationId === selectedId)
     ?? invocations[0];
+  const selectedTokenMiser = selected
+    ? matchTokenMiserInvocations(
+        allInvocations,
+        tokenMiser?.interceptions ?? [],
+      ).get(selected.invocationId)
+    : undefined;
 
   useEffect(() => {
     setPrompt(selected
@@ -311,6 +445,10 @@ export function ToolOutputIncidentExplorerWindow() {
     }
   };
 
+  const breadcrumbCurrent = showSavingsLens && lens === "savings"
+    ? "Token Miser Savings"
+    : "Tool Output Incidents";
+
   return (
     <div className="incident-explorer">
       <header className="activity-titlebar">
@@ -321,7 +459,7 @@ export function ToolOutputIncidentExplorerWindow() {
           aria-label={[
             route.projectLabel,
             route.title,
-            "Tool Output Incidents",
+            breadcrumbCurrent,
           ].filter(Boolean).join(" > ")}
           className="activity-titlebar__breadcrumb"
         >
@@ -353,7 +491,7 @@ export function ToolOutputIncidentExplorerWindow() {
             }}
           />
           <span aria-hidden="true" className="activity-titlebar__separator">›</span>
-          <span className="activity-titlebar__current">Tool Output Incidents</span>
+          <span className="activity-titlebar__current">{breadcrumbCurrent}</span>
         </div>
         <span className="chip chip--backend">
           {formatBackendLabel(route.backend)}
@@ -381,9 +519,58 @@ export function ToolOutputIncidentExplorerWindow() {
         </div>
       </header>
 
+      {showSavingsLens ? (
+        <div className="incident-explorer__lenses" role="tablist" aria-label="Tool output lens">
+          <button
+            aria-selected={lens === "savings"}
+            className="incident-explorer__lens"
+            onClick={() => setLens("savings")}
+            role="tab"
+            type="button"
+          >
+            Savings
+            <span>
+              {activeTokenMiser
+                ? formatCompactTokens(
+                    totalEstimatedParentTokensSaved,
+                  ) + " avoided"
+                : "nothing gated"}
+            </span>
+          </button>
+          <button
+            aria-selected={lens === "incidents"}
+            className="incident-explorer__lens"
+            onClick={() => setLens("incidents")}
+            role="tab"
+            type="button"
+          >
+            Incidents
+            <span>
+              {summary.caseCount.toLocaleString()}{" "}
+              {summary.caseCount === 1 ? "case" : "cases"}
+            </span>
+          </button>
+        </div>
+      ) : null}
+
+      {lens === "savings" ? (
+        <TokenMiserSavingsLens
+          comparison={tokenMiserComparison}
+          compactions={latest?.pricing?.compactions ?? []}
+          contextWindow={contextWindowSummary}
+          {...(currency ? { currency } : {})}
+          gateCostMicros={tokenMiserGateCostMicros}
+          gateTokens={tokenMiserGateTokens}
+          gates={gateEntries}
+          invocations={allInvocations}
+          threadCostMicros={threadCostMicros}
+          tokenMiser={activeTokenMiser}
+        />
+      ) : (
+      <>
       <div className="incident-explorer__summary" aria-label="Incident metrics">
         <div className="incident-explorer__headline">
-          <p className="incident-explorer__eyebrow">Replay cost from flagged calls</p>
+          <p className="incident-explorer__eyebrow">Raw output from flagged calls</p>
           <p className="incident-explorer__hero">
             <strong>{formatCompactTokens(summary.incidentTokens)}</strong>
             <span>
@@ -453,6 +640,42 @@ export function ToolOutputIncidentExplorerWindow() {
           />
         </div>
       </div>
+
+      {/* One line, never the headline: the incidents lens is about raw output,
+          and gating is a cross-reference from it rather than its subject. */}
+      {showSavingsLens ? (
+        <div
+          className="incident-explorer__token-miser-strip"
+          data-state={activeTokenMiser ? "active" : "inactive"}
+        >
+          <span aria-hidden="true" className="incident-explorer__token-miser-dot" />
+          <span>
+            {activeTokenMiser
+              ? describeTokenMiserReach({
+                  gatedCount: activeTokenMiser.interceptionCount,
+                  passThroughCount: activeTokenMiser.passThroughCount ?? 0,
+                  ...(activeTokenMiser.codeMode
+                    ? {
+                        codeModeCallCount: activeTokenMiser.codeMode.callCount,
+                        directCount: activeTokenMiser.codeMode.directCount,
+                        retrievalCount: activeTokenMiser.codeMode.retrievalCount,
+                      }
+                    : {}),
+                  savedTokens: totalEstimatedParentTokensSaved,
+                  toolCallCount: allInvocations.length,
+                })
+              : "No historical Token Miser observations were recorded for this thread."}
+          </span>
+          <span className="incident-explorer__token-miser-spacer" />
+          <button
+            className="incident-explorer__token-miser-link"
+            onClick={() => setLens("savings")}
+            type="button"
+          >
+            See the breakdown →
+          </button>
+        </div>
+      ) : null}
 
       <TurnStrip
         {...(currency ? { currency } : {})}
@@ -592,7 +815,7 @@ export function ToolOutputIncidentExplorerWindow() {
                   ) : null}
                   <Fact label="observed" value={formatTimestamp(selected.observedAt)} />
                   <Fact
-                    label="output"
+                    label="telemetry"
                     tone={selected.outputState === "available" ? undefined : "warning"}
                     value={describeAvailability(selected)}
                   />
@@ -601,7 +824,9 @@ export function ToolOutputIncidentExplorerWindow() {
 
                 <div className="incident-explorer__budget">
                   <div className="incident-explorer__budget-head">
-                    <strong>{selected.estimatedOutputTokens.toLocaleString()} tokens</strong>
+                    <strong>
+                      {selected.estimatedOutputTokens.toLocaleString()} raw-output tokens
+                    </strong>
                     <span>{formatCapShare(selected.outputChars)}</span>
                   </div>
                   <span aria-hidden="true" className="incident-explorer__meter">
@@ -610,16 +835,65 @@ export function ToolOutputIncidentExplorerWindow() {
                       style={{ width: `${capMeterWidth(selected.outputChars) * 100}%` }}
                     />
                   </span>
-                  <p className="incident-explorer__caption">
-                    {selected.outputChars.toLocaleString()} chars ·{" "}
-                    {laterTripsInTurn > 0
-                      ? `replayed on the ${laterTripsInTurn.toLocaleString()} later round ${laterTripsInTurn === 1 ? "trip" : "trips"} in this turn`
-                      : "no later round trips in this turn replayed it"}
-                  </p>
+                  {selectedTokenMiser
+                    && selectedTokenMiser.disposition !== "passed_through" ? (
+                      <>
+                        <p className="incident-explorer__caption">
+                          Emitted {selected.outputChars.toLocaleString()} raw characters;
+                          {" Token Miser revealed "}
+                          {(selectedTokenMiser.replacementCharacters
+                            ?? selectedTokenMiser.replacementTokens * 4)
+                            .toLocaleString()} characters.
+                        </p>
+                        <p className="incident-explorer__caption">
+                          Raw output would otherwise have replayed across{" "}
+                          {(selectedTokenMiser.cachedReplayCount ?? 0).toLocaleString()}
+                          {" later parent "}
+                          {(selectedTokenMiser.cachedReplayCount ?? 0) === 1
+                            ? "request."
+                            : "requests."}
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="incident-explorer__caption">
+                          Raw emitted: {selected.outputChars.toLocaleString()} characters.
+                          {" Estimated parent-visible payload after the standard cap: up to "}
+                          {Math.min(
+                            selected.outputChars,
+                            DEFAULT_MODEL_VISIBLE_TOOL_OUTPUT_CAP_CHARACTERS,
+                          ).toLocaleString()} characters, before the outer status envelope.
+                        </p>
+                        <p className="incident-explorer__caption">
+                          {laterTripsInTurn.toLocaleString()} later recorded tool invocations.
+                          {" This is not parent-request replay or billing evidence."}
+                        </p>
+                      </>
+                    )}
                   <p className="incident-explorer__reason">
                     {selected.noisyReason ?? "large output"}
                   </p>
                 </div>
+                {selectedTokenMiser ? (
+                  <div className="incident-explorer__token-miser-call">
+                    <div>
+                      <span>Gated by Token Miser</span>
+                      <strong>
+                        {formatCompactTokens(selectedTokenMiser.baselineParentTokens)} baseline
+                        {" → "}
+                        {formatCompactTokens(selectedTokenMiser.replacementTokens)} summary
+                      </strong>
+                    </div>
+                    <p>
+                      {describeTokenMiserOutcome(
+                        selectedTokenMiser.estimatedParentTokensSaved,
+                      )}
+                      {selectedTokenMiser.retrievedTokens > 0
+                        ? ` · ${formatCompactTokens(selectedTokenMiser.retrievedTokens)} retrieved later`
+                        : " · nothing retrieved later"}
+                    </p>
+                  </div>
+                ) : null}
               </section>
 
               <section className="incident-explorer__prompt">
@@ -690,7 +964,686 @@ export function ToolOutputIncidentExplorerWindow() {
           ) : null}
         </main>
       </div>
+      </>
+      )}
     </div>
+  );
+}
+
+/**
+ * How much of the thread the gate actually caught.
+ *
+ * The denominator is every tool call, not the flagged ones: flagging uses the
+ * alert threshold while gating uses Token Miser's own, much lower one, so gated
+ * calls are not a subset of flagged calls — pairing them produced "gated 25 of
+ * 7 flagged calls". When the counts still cannot be reconciled (accounting that
+ * does not list every gated call), report the gated count alone rather than a
+ * ratio that cannot be true.
+ */
+function describeTokenMiserReach(params: {
+  codeModeCallCount?: number;
+  directCount?: number;
+  gatedCount: number;
+  passThroughCount: number;
+  retrievalCount?: number;
+  savedTokens: number;
+  toolCallCount: number;
+}): string {
+  const kept =
+    `kept ${formatCompactTokens(params.savedTokens)} out of the parent's context.`;
+  if (params.codeModeCallCount !== undefined) {
+    const summarized = params.gatedCount - params.passThroughCount;
+    return `Token Miser observed ${params.codeModeCallCount.toLocaleString()} Code Mode `
+      + `${params.codeModeCallCount === 1 ? "result" : "results"}: `
+      + `${summarized.toLocaleString()} summarized, `
+      + `${params.passThroughCount.toLocaleString()} passed through, `
+      + `${(params.directCount ?? 0).toLocaleString()} stayed direct, and `
+      + `${(params.retrievalCount ?? 0).toLocaleString()} `
+      + `${(params.retrievalCount ?? 0) === 1 ? "retrieval" : "retrievals"} ran. It ${kept}`;
+  }
+  if (params.passThroughCount > 0) {
+    return `Token Miser made ${params.gatedCount.toLocaleString()} `
+      + `${params.gatedCount === 1 ? "decision" : "decisions"}, passed `
+      + `${params.passThroughCount.toLocaleString()} through, and ${kept}`;
+  }
+  if (params.toolCallCount < params.gatedCount || params.toolCallCount === 0) {
+    return `Token Miser gated ${params.gatedCount.toLocaleString()} `
+      + `${params.gatedCount === 1 ? "call" : "calls"} and ${kept}`;
+  }
+  return `Token Miser gated ${params.gatedCount.toLocaleString()} of `
+    + `${params.toolCallCount.toLocaleString()} tool `
+    + `${params.toolCallCount === 1 ? "call" : "calls"} and ${kept}`;
+}
+
+type ExplorerLens = "incidents" | "savings";
+
+function describeTokenMiserOutcome(estimatedTokensSaved: number): string {
+  return estimatedTokensSaved >= 0
+    ? `${formatCompactTokens(estimatedTokensSaved)} estimated parent-context footprint avoided`
+    : `${formatCompactTokens(Math.abs(estimatedTokensSaved))} estimated net parent-context token overhead`;
+}
+
+function describeSameTrajectoryCostChange(
+  observedCostMicros: number,
+  savingsMicros: number,
+): string | undefined {
+  if (observedCostMicros <= 0) return undefined;
+  const unfilteredCostMicros = observedCostMicros + savingsMicros;
+  if (unfilteredCostMicros <= 0) return undefined;
+  const percent = Math.abs(savingsMicros) / unfilteredCostMicros * 100;
+  if (savingsMicros === 0) {
+    return `${percent.toFixed(1)}% change from estimated unfiltered cost`;
+  }
+  return `${percent.toFixed(1)}% ${savingsMicros > 0 ? "less" : "more"} `
+    + "than estimated unfiltered cost";
+}
+
+/**
+ * What gating bought, and where it did not.
+ *
+ * Costs are reported in tokens rather than dollars because this window only
+ * has the gate's own priced usage lines — pricing the avoided footprint needs
+ * the parent model's rates, which live with the thread's pricing ledger. The
+ * gate's compute cost is real money and is shown as such.
+ */
+/**
+ * How much of the replay count was actually observed.
+ *
+ * Directly-observed replays were counted at a request boundary. Reconstructed
+ * ones were inferred from later tool invocations on pre-v2 gates, which cannot
+ * see cross-turn replays or compaction boundaries — a floor, not a count. The
+ * distinction has to survive into the UI, because the two are summed into one
+ * savings figure and only one of them is exact.
+ *
+ * The count is payload replays, not model requests: it sums each gate against
+ * the requests that followed it, so 25 gates over 65 requests is on the order
+ * of a thousand. Calling those "replays tracked at the request boundary" read
+ * as a request count and produced "902 of 902" on a single-turn thread.
+ */
+function SavingsConfidence(props: { savings: ThreadTokenMiserSavings }) {
+  const { directlyObservedReplayCount, reconstructedReplayCount } = props.savings;
+  const total = directlyObservedReplayCount + reconstructedReplayCount;
+  const reconstructed = reconstructedReplayCount > 0;
+  const unpriced = props.savings.gateCount - props.savings.pricedGateCount;
+  const gates = props.savings.gateCount;
+  const passThroughs = props.savings.passThroughCount ?? 0;
+  const decisionLabel = passThroughs > 0
+    ? `${gates.toLocaleString()} decisions (${passThroughs.toLocaleString()} pass-through)`
+    : `${gates.toLocaleString()} ${gates === 1 ? "gate" : "gates"}`;
+  return (
+    <p
+      className="incident-explorer__confidence"
+      data-kind={reconstructed ? "reconstructed" : "observed"}
+    >
+      <span aria-hidden="true" />
+      {reconstructed
+        ? `Partly reconstructed · ${reconstructedReplayCount.toLocaleString()} of `
+          + `${total.toLocaleString()} payload replays inferred from later tool calls`
+        : `Directly observed · ${total.toLocaleString()} payload `
+          + `${total === 1 ? "replay" : "replays"} across ${decisionLabel}, `
+          + "each counted at a request boundary"}
+      {unpriced > 0
+        ? ` · ${unpriced.toLocaleString()} ${unpriced === 1 ? "gate is" : "gates are"} not priced yet`
+        : ""}
+    </p>
+  );
+}
+
+function TokenMiserSavingsLens(props: {
+  comparison?: TokenMiserContextComparison;
+  compactions: readonly ThreadCompactionRecord[];
+  contextWindow?: TokenMiserContextWindowSummary;
+  currency?: string;
+  gateCostMicros: number;
+  gateTokens: number;
+  gates: TokenMiserGateEntry[];
+  invocations: ThreadToolInvocationRecord[];
+  threadCostMicros: number;
+  tokenMiser?: ThreadToolAccounting["tokenMiser"];
+}) {
+  const tokenMiser = props.tokenMiser;
+  if (!tokenMiser) {
+    return (
+      <div className="incident-explorer__savings">
+        <p className="incident-explorer__savings-empty">
+          No Token Miser observations were recorded for this thread. Current
+          profile activation does not establish its historical turn setting.
+        </p>
+      </div>
+    );
+  }
+  if (!props.comparison) {
+    return (
+      <div className="incident-explorer__savings">
+        <TokenMiserCodeModeStats
+          tokenMiser={tokenMiser}
+        />
+        <p className="incident-explorer__savings-empty">
+          No reducer decision was recorded.
+        </p>
+        <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} />
+      </div>
+    );
+  }
+  const savings = tokenMiser.savings;
+  const cachedReplayTokens = tokenMiser.estimatedCachedReplayTokensSaved ?? 0;
+  const cachedReplayCount = tokenMiser.cachedReplayCount ?? 0;
+  const cachedRevealedTokens = tokenMiser.cachedRevealedTokens ?? 0;
+  const cachedBaselineTokens = tokenMiser.cachedBaselineTokens
+    ?? cachedRevealedTokens + cachedReplayTokens;
+  const revealedTokens =
+    (tokenMiser.replacementTokens ?? 0)
+    + (tokenMiser.retrievedTokens ?? 0);
+  const hasCompleteDispositionBreakdown =
+    tokenMiser.interceptions?.length === tokenMiser.interceptionCount;
+  const summarizedReplacementTokens = hasCompleteDispositionBreakdown
+    ? tokenMiser.interceptions?.reduce(
+        (total, interception) => interception.disposition === "passed_through"
+          ? total
+          : total + interception.replacementTokens,
+        0,
+      ) ?? 0
+    : 0;
+  const passedThroughReplacementTokens = hasCompleteDispositionBreakdown
+    ? tokenMiser.interceptions?.reduce(
+        (total, interception) => interception.disposition === "passed_through"
+          ? total + interception.replacementTokens
+          : total,
+        0,
+      ) ?? 0
+    : 0;
+  const partialPricingPrefix = savings
+    && savings.pricedGateCount < savings.gateCount
+    ? "All gates · "
+    : "";
+  const sameTrajectoryCostChange = savings
+    ? describeSameTrajectoryCostChange(
+        props.threadCostMicros,
+        savings.savingsMicros,
+      )
+    : undefined;
+  return (
+    <div className="incident-explorer__savings">
+      <div className="incident-explorer__savings-hero">
+        <div>
+          {savings ? (
+            <>
+              <p className="incident-explorer__eyebrow">
+                {savings.savingsMicros >= 0
+                  ? "Estimated same-trajectory savings"
+                  : "Estimated same-trajectory overhead"}
+              </p>
+              <p className="incident-explorer__savings-figure">
+                <strong>
+                  {formatMicrosCurrency(
+                    Math.abs(savings.savingsMicros),
+                    savings.currency,
+                  )}
+                </strong>
+                {sameTrajectoryCostChange ? (
+                  <span>{sameTrajectoryCostChange}</span>
+                ) : null}
+              </p>
+              {props.threadCostMicros > 0 ? (
+                <p className="incident-explorer__savings-compare">
+                  Observed thread cost{" "}
+                  <b>
+                    {formatMicrosCurrency(props.threadCostMicros, savings.currency)}
+                  </b>
+                  {" · estimated same-trajectory cost without filtering "}
+                  <b>
+                    {formatMicrosCurrency(
+                      props.threadCostMicros + savings.savingsMicros,
+                      savings.currency,
+                    )}
+                  </b>
+                </p>
+              ) : null}
+              <SavingsConfidence savings={savings} />
+            </>
+          ) : (
+            <>
+              <p className="incident-explorer__eyebrow">Kept out of the parent's context</p>
+              <p className="incident-explorer__savings-figure">
+                <strong>
+                  {formatCompactTokens(props.comparison.avoidedParentTokens)}
+                </strong>
+                <span>
+                  tokens, once · {formatCompactTokens(cachedReplayTokens)} more across{" "}
+                  {cachedReplayCount.toLocaleString()}{" "}
+                  {cachedReplayCount === 1 ? "replay" : "replays"}
+                </span>
+              </p>
+              <p className="incident-explorer__savings-compare">
+                Dollar terms appear once the gate's usage line is priced.
+              </p>
+            </>
+          )}
+        </div>
+        {savings ? (
+          <dl className="incident-explorer__savings-terms" data-terms="3">
+            <div>
+              <dt>1 · Without the gate</dt>
+              <dd>
+                {formatMicrosCurrency(savings.withoutGateCostMicros, savings.currency)}
+                <span>
+                  {partialPricingPrefix}
+                  {formatCompactTokens(tokenMiser.baselineParentTokens)} uncached
+                  {cachedBaselineTokens > 0
+                    ? ` + ${formatCompactTokens(cachedBaselineTokens)} cached`
+                    : ""}
+                  {" · gated tool output at "}
+                  {savings.parentModel ?? "the parent model"} rates
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt>2 · Gate compute</dt>
+              <dd>
+                {formatMicrosCurrency(savings.gateCostMicros, savings.currency)}
+                <span>
+                  {formatCompactTokens(props.gateTokens)} total ·{" "}
+                  {savings.gateModel ?? "helper"}
+                </span>
+              </dd>
+            </div>
+            <div>
+              <dt>3 · Revealed to parent</dt>
+              <dd>
+                {formatMicrosCurrency(savings.revealedCostMicros, savings.currency)}
+                <span>
+                  {partialPricingPrefix}
+                  {formatCompactTokens(revealedTokens)} uncached
+                  {cachedRevealedTokens > 0
+                    ? ` + ${formatCompactTokens(cachedRevealedTokens)} cached`
+                    : ""}
+                  {tokenMiser.passThroughCount
+                    ? " · summaries, retrievals, and deliberate pass-throughs"
+                    : " · summaries and retrievals"}
+                </span>
+              </dd>
+            </div>
+          </dl>
+        ) : (
+          <dl className="incident-explorer__savings-terms">
+            <div>
+              <dt>Without the gate</dt>
+              <dd>{formatCompactTokens(tokenMiser.baselineParentTokens)}</dd>
+            </div>
+            <div>
+              <dt>Actual parent context</dt>
+              <dd>{formatCompactTokens(revealedTokens)}</dd>
+            </div>
+            <div>
+              <dt>Gate compute</dt>
+              <dd>
+                {props.gateTokens > 0
+                  ? formatCompactTokens(props.gateTokens)
+                  : "—"}
+                {props.gateCostMicros > 0 ? (
+                  <span>
+                    {formatMicrosCurrency(props.gateCostMicros, props.currency ?? "USD")}
+                  </span>
+                ) : (
+                  <span>awaiting the pricing ledger</span>
+                )}
+              </dd>
+            </div>
+          </dl>
+        )}
+      </div>
+
+      <p className="incident-explorer__savings-caption">
+        {tokenMiser.passThroughCount
+          ? `${(tokenMiser.interceptionCount - tokenMiser.passThroughCount).toLocaleString()} summarized · ${tokenMiser.passThroughCount.toLocaleString()} passed through`
+          : `${tokenMiser.interceptionCount.toLocaleString()} gated ${tokenMiser.interceptionCount === 1 ? "call" : "calls"}`} ·{" "}
+        {tokenMiser.passThroughCount
+          ? hasCompleteDispositionBreakdown
+            ? `${formatCompactTokens(summarizedReplacementTokens)} summary tokens · ${formatCompactTokens(passedThroughReplacementTokens)} pass-through tokens`
+            : `${formatCompactTokens(tokenMiser.replacementTokens)} revealed before retrieval`
+          : `${formatCompactTokens(tokenMiser.replacementTokens)} of summaries`} ·{" "}
+        {tokenMiser.retrievedTokens > 0
+          ? `${formatCompactTokens(tokenMiser.retrievedTokens)} read back later`
+          : "nothing read back later"}
+      </p>
+      <p className="incident-explorer__savings-caption">
+        {tokenMiser.interceptionCount.toLocaleString()} decisions
+        {" · "}{(tokenMiser.helperDecisionCount ?? 0).toLocaleString()} Luna evaluations
+        {" · "}{(tokenMiser.policyPassThroughCount ?? 0).toLocaleString()} policy pass-throughs
+        {" · "}{(tokenMiser.helperPassThroughCount ?? 0).toLocaleString()} helper pass-throughs
+      </p>
+      <TokenMiserCompactionStats
+        compactions={props.compactions}
+        contextWindow={props.contextWindow}
+        currency={props.currency}
+      />
+
+      <TokenMiserCodeModeStats
+        tokenMiser={tokenMiser}
+      />
+      <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} />
+    </div>
+  );
+}
+
+function TokenMiserCompactionStats(props: {
+  compactions: readonly ThreadCompactionRecord[];
+  contextWindow?: TokenMiserContextWindowSummary;
+  currency?: string;
+}) {
+  const coldReplayTokens = props.compactions.reduce(
+    (total, entry) => total + (entry.coldUncachedTokens ?? 0),
+    0,
+  );
+  const coldReplayCostMicros = props.compactions.reduce(
+    (total, entry) => total + (entry.coldCostMicros ?? 0),
+    0,
+  );
+  return (
+    <section className="incident-explorer__gates" aria-label="Context boundaries">
+      <div className="incident-explorer__gates-head">
+        <p className="incident-explorer__eyebrow">Context boundaries</p>
+      </div>
+      <p className="incident-explorer__savings-caption">
+        {props.compactions.length.toLocaleString()} parent compactions
+        {" · "}{formatCompactTokens(coldReplayTokens)} compaction-attributed cold replay tokens
+        {" · "}{coldReplayCostMicros > 0
+          ? formatMicrosCurrency(coldReplayCostMicros, props.currency ?? "USD")
+          : "no attributed cold-replay cost"}
+      </p>
+      <p className="incident-explorer__savings-caption">
+        Token Miser replay savings stop at each recorded compaction boundary.
+      </p>
+      {props.contextWindow ? (
+        <p className="incident-explorer__savings-caption">
+          Peak context {formatContextWindowPoint(
+            props.contextWindow.peakTokens,
+            props.contextWindow.peakModelContextWindow,
+          )}
+          {" · "}final context {formatContextWindowPoint(
+            props.contextWindow.finalTokens,
+            props.contextWindow.finalModelContextWindow,
+          )}
+          {props.contextWindow.peakTokens
+            / props.contextWindow.peakModelContextWindow >= 0.85
+            ? " · warning: this thread approached the context limit"
+            : ""}
+        </p>
+      ) : (
+        <p className="incident-explorer__savings-caption">
+          Peak and final context were not observed by this PwrAgent version.
+        </p>
+      )}
+    </section>
+  );
+}
+
+type TokenMiserContextWindowSummary = {
+  finalModelContextWindow: number;
+  finalTokens: number;
+  peakModelContextWindow: number;
+  peakTokens: number;
+};
+
+function buildContextWindowSummary(
+  lines: NonNullable<AppServerReadThreadResponse["pricing"]>["lines"],
+): TokenMiserContextWindowSummary | undefined {
+  const observed = lines.filter((line) =>
+    line.scope === "turn"
+    && typeof line.finalContextTokens === "number"
+    && typeof line.peakContextTokens === "number"
+    && typeof line.modelContextWindow === "number"
+    && line.modelContextWindow > 0
+  );
+  if (observed.length === 0) {
+    return undefined;
+  }
+  const latest = [...observed].sort(
+    (left, right) =>
+      (right.completedAt ?? right.createdAt)
+      - (left.completedAt ?? left.createdAt),
+  )[0]!;
+  const peak = [...observed].sort(
+    (left, right) =>
+      right.peakContextTokens! / right.modelContextWindow!
+      - left.peakContextTokens! / left.modelContextWindow!,
+  )[0]!;
+  return {
+    finalModelContextWindow: latest.modelContextWindow!,
+    finalTokens: latest.finalContextTokens!,
+    peakModelContextWindow: peak.modelContextWindow!,
+    peakTokens: peak.peakContextTokens!,
+  };
+}
+
+function formatContextWindowPoint(tokens: number, window: number): string {
+  return `${formatCompactTokens(tokens)} / ${formatCompactTokens(window)} (${(
+    tokens / window * 100
+  ).toFixed(1)}%)`;
+}
+
+function TokenMiserCodeModeStats(props: {
+  tokenMiser: NonNullable<ThreadToolAccounting["tokenMiser"]>;
+}) {
+  const codeMode = props.tokenMiser.codeMode;
+  if (!codeMode || codeMode.callCount === 0) return null;
+  const commandCells = codeMode.commandCellCount ?? 0;
+  const nestedCommands = codeMode.nestedCommandInvocationCount ?? 0;
+  return (
+    <section className="incident-explorer__gates" aria-label="Code Mode behavior">
+      <div className="incident-explorer__gates-head">
+        <p className="incident-explorer__eyebrow">Code Mode behavior</p>
+      </div>
+      <p className="incident-explorer__savings-caption">
+        {codeMode.callCount.toLocaleString()} Code Mode calls
+        {" · "}{commandCells.toLocaleString()} command-bearing cells
+        {" · "}{nestedCommands.toLocaleString()} nested command invocations
+        {" · "}{commandCells > 0
+          ? (nestedCommands / commandCells).toFixed(2)
+          : "0.00"} per command cell
+        {" · "}{(codeMode.dispatchClusterCount ?? 0).toLocaleString()} dispatch clusters
+        {" · "}{(codeMode.multiInvocationClusterCount ?? 0).toLocaleString()} multi-invocation
+        {(codeMode.multiInvocationClusterCount ?? 0) > 0
+          ? ` (largest ${(codeMode.largestDispatchCluster ?? 0).toLocaleString()})`
+          : ""}
+      </p>
+      <p className="incident-explorer__savings-caption">
+        {(codeMode.directCommandCellCount ?? 0).toLocaleString()} direct command cells
+        {" · "}{props.tokenMiser.interceptionCount.toLocaleString()} reducer decisions
+        {" · "}{codeMode.summarizedCount.toLocaleString()} summarized
+        {" · "}{codeMode.passThroughCount.toLocaleString()} explicit pass-through
+        {" · "}{(codeMode.patchCellCount ?? 0).toLocaleString()} patch cells
+        {" · "}{(codeMode.otherCellCount ?? 0).toLocaleString()} other cells
+        {" · "}{codeMode.retrievalCount.toLocaleString()} retrieval cells
+        {" · "}{(codeMode.pollingCellCount ?? 0).toLocaleString()} polling cells
+      </p>
+    </section>
+  );
+}
+
+type TokenMiserResultFilter = "all" | TokenMiserGateOutcome | "direct";
+
+const RESULT_FILTERS: Array<{
+  key: TokenMiserResultFilter;
+  label: string;
+}> = [
+  { key: "all", label: "All" },
+  { key: "win", label: "Wins" },
+  { key: "miss", label: "Misses" },
+  { key: "big-miss", label: "Big misses" },
+  { key: "pass-through", label: "Pass-throughs" },
+  { key: "direct", label: "Direct" },
+];
+
+/**
+ * Every observed result in one filterable list.
+ *
+ * Gated entries carry the summary the parent actually got; direct entries carry
+ * the ordinary result preview. Keeping both populations behind one filter makes
+ * "All" truthful and avoids spending a second section on a single outcome.
+ */
+function TokenMiserResultList(props: {
+  entries: TokenMiserGateEntry[];
+  tokenMiser: NonNullable<ThreadToolAccounting["tokenMiser"]>;
+}) {
+  const [filter, setFilter] = useState<TokenMiserResultFilter>("all");
+  const [expanded, setExpanded] = useState<string>();
+  const direct = props.tokenMiser.codeMode?.observations.filter(
+    (entry) => entry.disposition === "direct",
+  ) ?? [];
+  const counts = props.entries.reduce(
+    (totals, entry) => ({ ...totals, [entry.outcome]: totals[entry.outcome] + 1 }),
+    { "big-miss": 0, miss: 0, "pass-through": 0, win: 0 } as Record<TokenMiserGateOutcome, number>,
+  );
+  const visibleGates = filter === "all"
+    ? props.entries
+    : filter === "direct"
+      ? []
+      : props.entries.filter((entry) => entry.outcome === filter);
+  const visibleDirect = filter === "all" || filter === "direct" ? direct : [];
+
+  return (
+    <section className="incident-explorer__gates" aria-label="Tool output results">
+      <div className="incident-explorer__gates-head">
+        <p className="incident-explorer__eyebrow">Tool output results</p>
+        <div className="incident-explorer__gate-filters" role="group" aria-label="Filter tool output results by outcome">
+          {RESULT_FILTERS.map((option) => {
+            const count = option.key === "all"
+              ? props.entries.length + direct.length
+              : option.key === "direct"
+                ? direct.length
+                : counts[option.key];
+            return (
+              <button
+                aria-pressed={filter === option.key}
+                className="incident-explorer__gate-filter"
+                disabled={count === 0 && option.key !== "all"}
+                key={option.key}
+                onClick={() => setFilter(option.key)}
+                type="button"
+              >
+                {option.label}
+                <em>{count.toLocaleString()}</em>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {visibleGates.length === 0 && visibleDirect.length === 0 ? (
+        <p className="incident-explorer__edges-empty">
+          No results in this group.
+        </p>
+      ) : (
+        <ul className="incident-explorer__gate-list">
+          {visibleGates.map((entry) => {
+            const isOpen = expanded === entry.interception.objectId;
+            const saved = entry.interception.estimatedParentTokensSaved;
+            return (
+              <li
+                className="incident-explorer__gate"
+                data-outcome={entry.outcome}
+                key={entry.interception.objectId}
+              >
+                <span aria-hidden="true" className="incident-explorer__edge-stripe" />
+                <button
+                  aria-expanded={isOpen}
+                  className="incident-explorer__gate-row"
+                  onClick={() => setExpanded(isOpen ? undefined : entry.interception.objectId)}
+                  type="button"
+                >
+                  <span className="incident-explorer__gate-identity">
+                    <code>{entry.command}</code>
+                    <span>
+                      {entry.edge
+                        ? entry.edge.label
+                        : entry.interception.disposition === "passed_through"
+                          ? `${formatCompactTokens(entry.interception.baselineParentTokens)} passed through unchanged`
+                        : `${formatCompactTokens(entry.interception.baselineParentTokens)} → `
+                          + `${formatCompactTokens(entry.interception.replacementTokens)} summary`}
+                    </span>
+                  </span>
+                  <span className="incident-explorer__gate-verdict">
+                    {entry.interception.disposition === "passed_through"
+                      ? "unchanged"
+                      : `${saved >= 0 ? "+" : "−"}${formatCompactTokens(Math.abs(saved))}`}
+                  </span>
+                </button>
+                {isOpen ? (
+                  <div className="incident-explorer__gate-detail">
+                    {entry.edge ? <p>{entry.edge.detail}</p> : null}
+                    {entry.interception.summary ? (
+                      <>
+                        <p className="incident-explorer__gate-summary">
+                          {entry.interception.summary.summary}
+                        </p>
+                        {entry.interception.summary.usefulDetails.length > 0 ? (
+                          <ul>
+                            {entry.interception.summary.usefulDetails.map((detail) => (
+                              <li key={detail}>{detail}</li>
+                            ))}
+                          </ul>
+                        ) : null}
+                        {entry.interception.summary.suggestedNextStep ? (
+                          <p className="incident-explorer__gate-next">
+                            <b>Legacy suggested next step</b>{" "}
+                            {entry.interception.summary.suggestedNextStep}
+                          </p>
+                        ) : null}
+                      </>
+                    ) : (
+                      <p className="incident-explorer__gate-summary">
+                        No summary was recorded for this gate.
+                      </p>
+                    )}
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+          {visibleDirect.map((entry) => {
+            const expandedKey = `direct:${entry.observationId}`;
+            const isOpen = expanded === expandedKey;
+            return (
+              <li
+                className="incident-explorer__gate"
+                data-outcome="direct"
+                key={expandedKey}
+              >
+                <span aria-hidden="true" className="incident-explorer__edge-stripe" />
+                <button
+                  aria-expanded={isOpen}
+                  className="incident-explorer__gate-row"
+                  onClick={() => setExpanded(isOpen ? undefined : expandedKey)}
+                  type="button"
+                >
+                  <span className="incident-explorer__gate-identity">
+                    <code>Code Mode</code>
+                    <span>{entry.outputCharacters.toLocaleString()} characters</span>
+                  </span>
+                  <span className="incident-explorer__gate-verdict">direct</span>
+                </button>
+                {isOpen ? (
+                  <div className="incident-explorer__gate-detail">
+                    <p>
+                      No reducer replacement was selected; the ordinary result
+                      reached the parent directly.
+                    </p>
+                    {entry.script ? <pre><code>{entry.script}</code></pre> : null}
+                    {entry.outputPreview ? (
+                      <pre><code>
+                        {entry.outputPreview}
+                        {entry.outputPreviewTruncated ? "\n… preview truncated" : ""}
+                      </code></pre>
+                    ) : null}
+                  </div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -995,8 +1948,16 @@ function scaleWidth(value: number, max: number, floor = 2): number {
 }
 
 function describeAvailability(invocation: ThreadToolInvocationRecord): string {
-  return invocation.outputState
-    ?? (invocation.outputTruncated ? "truncated" : "unavailable");
+  if (invocation.outputTruncated || invocation.outputState === "truncated") {
+    return "truncated size recorded";
+  }
+  if (invocation.outputState === "available") {
+    return "size recorded";
+  }
+  if (invocation.outputState === "compacted") {
+    return "compacted size recorded";
+  }
+  return "size unavailable";
 }
 
 /**

@@ -2,10 +2,37 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
+  buildThreadCompactionIdentity,
   foldObservedContextReplay,
   type ObservedContextReplayCursor,
   type ObservedContextReplayTally,
 } from "../app-server/backend-registry";
+
+describe("buildThreadCompactionIdentity", () => {
+  it("deduplicates an item-less notification at one request boundary", () => {
+    const first = buildThreadCompactionIdentity({
+      backend: "codex",
+      cumulativeInputTokens: 120_000,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    const duplicate = buildThreadCompactionIdentity({
+      backend: "codex",
+      cumulativeInputTokens: 120_000,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    const later = buildThreadCompactionIdentity({
+      backend: "codex",
+      cumulativeInputTokens: 180_000,
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+
+    expect(duplicate).toBe(first);
+    expect(later).not.toBe(first);
+  });
+});
 
 // Replays the committed synthetic protocol capture through the pure
 // accumulator, mirroring how the registry maintains a per-thread cumulative

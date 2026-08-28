@@ -34,6 +34,8 @@ import type {
   MessagingToolUpdateMode,
 } from "@pwragent/shared";
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import {
   DEFAULT_BACKGROUND_PR_POLLING,
   DEFAULT_PR_AUTO_DISPATCH_ALLOWED,
@@ -173,6 +175,11 @@ import {
   readEnvString,
   readEnvWorktreeStorage,
 } from "./desktop-settings-env";
+import {
+  TOKEN_MISER_ACTIVATION_FILENAME,
+  type TokenMiserActivationStatus,
+} from "../token-miser/token-miser-types";
+import { TokenMiserStore } from "../token-miser/token-miser-store";
 import {
   discoverCodexAuthProfiles,
   resolveCodexHomeForProfile,
@@ -594,12 +601,31 @@ export class DesktopSettingsService {
     const slackChannelUserAccessMode = this.resolveSlackChannelUserAccessMode(
       config.messaging?.slack?.channelUserAccessMode,
     );
+    const tokenMiserUsage = await new TokenMiserStore(
+      path.join(
+        path.dirname(this.configPath),
+        "state",
+        "token-miser",
+        "objects",
+      ),
+    ).summarizeUsage().catch(() => ({
+      interceptionCount: 0,
+      originalCharacters: 0,
+      baselineParentTokens: 0,
+      replacementTokens: 0,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+    }));
+    const tokenMiserActivation = await this.readTokenMiserActivation();
 
     return {
       fetchedAt: this.now(),
       configPath: this.configPath,
       configError: error,
       runtime: {
+        tokenMiser: tokenMiserActivation
+          ? { ...tokenMiserUsage, activation: tokenMiserActivation }
+          : tokenMiserUsage,
         messaging: {
           disabled: messagingOverride.disabled,
           overrideActive: messagingOverride.disabled,
@@ -761,6 +787,14 @@ export class DesktopSettingsService {
         threadPricingDisplayCodexCredits: this.resolveConfigBoolean(
           config.experimental?.threadPricingDisplayCodexCredits,
           false,
+        ),
+        tokenMiserEnabled: this.resolveConfigBoolean(
+          config.experimental?.tokenMiserEnabled,
+          false,
+        ),
+        tokenMiserDefaultEnabled: this.resolveConfigBoolean(
+          config.experimental?.tokenMiserDefaultEnabled,
+          true,
         ),
         threadToolAccounting: this.resolveConfigBoolean(
           config.experimental?.threadToolAccounting,
@@ -1344,6 +1378,20 @@ export class DesktopSettingsService {
     return this.resolveConfigBoolean(
       this.readConfig().config.general?.notificationsEnabled,
       false,
+    ).value;
+  }
+
+  resolveTokenMiserEnabled(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.experimental?.tokenMiserEnabled,
+      false,
+    ).value;
+  }
+
+  resolveTokenMiserDefaultEnabled(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.experimental?.tokenMiserDefaultEnabled,
+      true,
     ).value;
   }
 
@@ -2587,6 +2635,34 @@ export class DesktopSettingsService {
       value: configValue ?? SLACK_DM_ACCESS_MODE_DEFAULT,
       source: configValue === undefined ? "default" : "config",
     };
+  }
+
+  /**
+   * Last recorded Codex-side activation result. Absent on a profile that has
+   * never tried to activate, which reads as "no claim either way" rather than
+   * as a failure.
+   */
+  private async readTokenMiserActivation(): Promise<
+    TokenMiserActivationStatus | undefined
+  > {
+    try {
+      const raw = await readFile(
+        path.join(
+          path.dirname(this.configPath),
+          "state",
+          "token-miser",
+          TOKEN_MISER_ACTIVATION_FILENAME,
+        ),
+        "utf8",
+      );
+      const parsed = JSON.parse(raw) as TokenMiserActivationStatus;
+      if (parsed.state !== "active" && parsed.state !== "unavailable") {
+        return undefined;
+      }
+      return parsed;
+    } catch {
+      return undefined;
+    }
   }
 
   private resolveSlackChannelUserAccessMode(

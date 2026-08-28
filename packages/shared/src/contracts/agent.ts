@@ -874,6 +874,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "fastMode"
       | "acpRuntime"
       | "prAutoDispatchEnabled"
+      | "tokenMiserEnabled"
       | "messagingToolUpdateMode"
       | "workMode"
       | "branchName"

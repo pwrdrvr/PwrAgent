@@ -15,6 +15,7 @@ import type {
   PrSummary,
   ThreadPrAutoDispatchEventKind,
   ThreadPrAutoDispatchPending,
+  ThreadSubAgentSummary,
 } from "./navigation";
 import type {
   ThreadPricingSummary,
@@ -927,6 +928,8 @@ export type AppServerReadThreadResponse = {
    */
   pendingRequest?: AppServerPendingRequestNotification;
   pricing?: {
+    /** Observed context compactions, oldest first. */
+    compactions?: ThreadCompactionRecord[];
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
@@ -960,6 +963,30 @@ export type ThreadToolInvocationOutputState =
   | "compacted"
   | "truncated"
   | "unavailable";
+
+/**
+ * One observed context compaction.
+ *
+ * Compaction is the boundary that ends a preserved tool payload's replay life,
+ * and the first request after it re-sends the whole surviving context uncached.
+ * The replay fold already classifies that request as a cold replay, but a cold
+ * replay can equally be prompt-cache expiry or a long gap between turns — the
+ * `cold*` fields exist to name the ones compaction actually caused.
+ */
+export type ThreadCompactionRecord = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  turnId?: string;
+  /** Compaction marker item, when the backend reports one. */
+  itemId?: string;
+  compactionId: string;
+  observedAt: number;
+  /** The first priced request observed after this compaction, once it lands. */
+  coldUsageLineId?: string;
+  coldUncachedTokens?: number;
+  coldCostMicros?: number;
+  updatedAt: number;
+};
 
 export type ThreadToolInvocationRecord = {
   backend: AppServerBackendKind;
@@ -1047,11 +1074,152 @@ export type ThreadToolAnalysisCoverage = {
   explanation?: string;
 };
 
+/**
+ * Thread-level dollar accounting for the gate, aggregated from the same
+ * per-gate terms the Pricing rail shows so the two views cannot disagree.
+ *
+ * A gate is only priced once its own usage line lands and the parent turn has a
+ * known model and rate, so `pricedGateCount` can trail `gateCount` — the token
+ * counts are always available, the dollars are not.
+ */
+export type ThreadTokenMiserSavings = {
+  currency: "USD";
+  /** Gates whose dollar terms are complete; the rest contribute tokens only. */
+  pricedGateCount: number;
+  gateCount: number;
+  /** Decisions that deliberately returned the ordinary original result. */
+  passThroughCount?: number;
+  policyPassThroughCount?: number;
+  helperPassThroughCount?: number;
+  helperDecisionCount?: number;
+  /** 1 — the gated payloads at parent rates, uncached once plus later replays. */
+  withoutGateCostMicros: number;
+  /** 2 — what the helper actually charged. */
+  gateCostMicros: number;
+  /** 3 — summaries and retrievals the parent did receive, and their replays. */
+  revealedCostMicros: number;
+  /** 1 − 2 − 3. Negative when the gate cost more than it saved. */
+  savingsMicros: number;
+  /** Replays counted at an observed request boundary. */
+  directlyObservedReplayCount: number;
+  /**
+   * Replays inferred from later tool invocations on pre-v2 gates. Cannot see
+   * cross-turn replays or compaction boundaries, so it is a floor, not a count.
+   */
+  reconstructedReplayCount: number;
+  gateModel?: string;
+  parentModel?: string;
+};
+
+export type ThreadTokenMiserAccounting = {
+  savings?: ThreadTokenMiserSavings;
+  interceptionCount: number;
+  passThroughCount?: number;
+  policyPassThroughCount?: number;
+  helperPassThroughCount?: number;
+  helperDecisionCount?: number;
+  originalCharacters: number;
+  baselineParentTokens: number;
+  replacementTokens: number;
+  retrievedTokens: number;
+  estimatedParentTokensSaved: number;
+  cachedReplayCount?: number;
+  cachedBaselineTokens?: number;
+  cachedRevealedTokens?: number;
+  estimatedCachedReplayTokensSaved?: number;
+  interceptions?: ThreadTokenMiserInterceptionAccounting[];
+  codeMode?: ThreadTokenMiserCodeModeAccounting;
+};
+
+export type ThreadTokenMiserCodeModeObservation = {
+  observationId: string;
+  turnId: string;
+  callId: string;
+  cellId: string;
+  createdAt: number;
+  outputCharacters: number;
+  outputPreview?: string;
+  outputPreviewTruncated?: boolean;
+  maxOutputTokens: number;
+  scriptStatus: string;
+  script?: string;
+  retrieval: boolean;
+  capturedNestedInvocationCount: number;
+  capturedCommandInvocationCount?: number;
+  capturedPollingInvocationCount?: number;
+  capturedPatchInvocationCount?: number;
+  capturedOtherInvocationCount?: number;
+  disposition: "direct" | "summarized" | "passed_through" | "retrieval";
+};
+
+export type ThreadTokenMiserCodeModeAccounting = {
+  callCount: number;
+  commandCellCount: number;
+  directCommandCellCount: number;
+  dispatchClusterCount: number;
+  multiInvocationClusterCount: number;
+  largestDispatchCluster: number;
+  nestedCommandInvocationCount: number;
+  patchCellCount: number;
+  otherCellCount: number;
+  pollingCellCount: number;
+  directCount: number;
+  summarizedCount: number;
+  passThroughCount: number;
+  retrievalCount: number;
+  capturedNestedInvocationCount: number;
+  observations: ThreadTokenMiserCodeModeObservation[];
+};
+
+export type ThreadTokenMiserInterceptionAccounting = {
+  objectId: string;
+  turnId: string;
+  toolUseId: string;
+  toolName: string;
+  createdAt: number;
+  originalCharacters: number;
+  baselineParentTokens: number;
+  /** Exact replacement size delivered to Codex before token estimation. */
+  replacementCharacters?: number;
+  replacementTokens: number;
+  /** Exact later retrieval size delivered to the parent. */
+  retrievedCharacters?: number;
+  retrievedTokens: number;
+  estimatedParentTokensSaved: number;
+  cachedReplayCount?: number;
+  cachedBaselineTokens?: number;
+  cachedRevealedTokens?: number;
+  estimatedCachedReplayTokensSaved?: number;
+  replayTrackingVersion?: 2;
+  disposition?: "summarized" | "passed_through";
+  /** Whether Luna evaluated this decision or deterministic policy selected it. */
+  decisionSource?: "helper" | "policy";
+  /** Nested Code Mode calls represented by this outer reducer decision. */
+  groupMembers?: Array<{
+    objectId: string;
+    toolCallId: string;
+    toolName: string;
+    summary: string;
+  }>;
+  /**
+   * What the parent actually received in place of the payload. This is the
+   * gate's real product — carrying it here is what lets the Explorer show the
+   * operator what was traded away, rather than only how many tokens it cost.
+   */
+  summary?: {
+    summary: string;
+    usefulDetails: string[];
+    suggestedNextStep?: string;
+  };
+};
+
 export type ThreadToolAccounting = {
   analysis?: ThreadToolAnalysisCoverage;
   alerts: ThreadToolInvocationAlert[];
   invocations: ThreadToolInvocationRecord[];
   summaries: ThreadToolInvocationSummary[];
+  /** Actual Token Miser gate activity for this thread, not raw-output risk. */
+  tokenMiser?: ThreadTokenMiserAccounting;
 };
 
 export type PersistThreadUsageActivityRequest = {
@@ -1421,6 +1589,8 @@ export type AppServerNotification =
       params: {
         threadId: string;
         pricing: {
+          /** Observed context compactions, oldest first. */
+          compactions?: ThreadCompactionRecord[];
           lines: ThreadUsageLineRecord[];
           summaries: ThreadPricingSummary[];
         };
@@ -1696,6 +1866,7 @@ export type AppServerNotification =
       method: "thread/subAgents/updated";
       params: {
         threadId: string;
+        subAgents?: ThreadSubAgentSummary[];
       };
     }
   | {

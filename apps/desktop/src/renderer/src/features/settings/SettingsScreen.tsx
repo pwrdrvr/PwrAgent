@@ -546,6 +546,16 @@ function SettingsSectionBody(props: {
             experimental: { threadToolAccounting: enabled },
           });
         }}
+        onTokenMiserEnabledChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { tokenMiserEnabled: enabled },
+          });
+        }}
+        onTokenMiserDefaultEnabledChange={async (enabled: boolean) => {
+          await props.settings.writeConfig({
+            experimental: { tokenMiserDefaultEnabled: enabled },
+          });
+        }}
         onCodexDefaultModeRequestUserInputChange={async (enabled: boolean) => {
           await props.settings.writeConfig({
             experimental: { codexDefaultModeRequestUserInput: enabled },

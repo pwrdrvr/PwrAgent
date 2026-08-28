@@ -70,6 +70,12 @@ export type ThreadUsageLineRecord = {
   observedColdReplayUncachedTokens?: number;
   observedHotReplayCachedTokens?: number;
   observedHotReplayCount?: number;
+  /** Latest observed model-request context for this turn. */
+  finalContextTokens?: number;
+  /** Largest observed model-request context for this turn. */
+  peakContextTokens?: number;
+  /** Provider-reported context-window ceiling paired with these observations. */
+  modelContextWindow?: number;
   outputCostMicros: number;
   outputTokens: number;
   parentThreadId?: string;

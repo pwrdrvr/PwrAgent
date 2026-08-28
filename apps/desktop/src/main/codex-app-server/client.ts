@@ -287,6 +287,43 @@ export class CodexBootstrapDeferredError extends Error {
 
 type InitializeResult = Partial<CodexInitializeResponse>;
 
+export type CodexServerCapabilities = {
+  codeModeOutputReducer?: {
+    actionableState?: {
+      version: 1;
+      reducerRequestField: "actionable_state";
+      reducerResponseField: "actionable_state";
+      modelOutputTag: "codex_actionable_state";
+    };
+    continuationGuidanceVersion?: number;
+    dynamicToolsResumeField?: "dynamicTools";
+    intentContextVersion?: 1;
+    modelGuidance?: {
+      version: 1;
+      toolDescriptionConfigKey:
+        "features.code_mode.output_reducer.tool_description_guidance";
+      continuationConfigKey:
+        "features.code_mode.output_reducer.continuation_guidance";
+      modelVisibleOverheadRequestField:
+        "model_visible_overhead_characters";
+    };
+    postToolUseField?: "parent_intent";
+    postToolUseGrouping?: {
+      versionField: string;
+      version: number;
+      cellIdField: string;
+      toolCallIdField: string;
+    };
+    postToolUseExactOutput?: {
+      version: 1;
+      versionField: "token_miser_exact_tool_response_version";
+      responseField: "token_miser_exact_tool_response";
+    };
+    protocolVersion?: number;
+    reducerRequestField?: "parent_intent";
+  };
+};
+
 type RawCodexThreadSummary = Omit<
   AppServerThreadSummary,
   "source" | "linkedDirectories"
@@ -318,9 +355,10 @@ type CodexThreadStartPayload = Omit<
 
 type CodexThreadResumePayload = Omit<
   CodexThreadResumeParams,
-  "approvalPolicy"
+  "approvalPolicy" | "dynamicTools"
 > & {
   approvalPolicy?: CompatibleApprovalPolicy;
+  dynamicTools?: CompatibleDynamicToolSpec[] | null;
   persistExtendedHistory?: boolean;
 };
 
@@ -379,6 +417,8 @@ const GENERATED_CODEX_NOTIFICATION_METHODS = new Set<string>([
   "item/commandExecution/outputDelta",
   "item/commandExecution/terminalInteraction",
   "item/fileChange/outputDelta",
+  "hook/started",
+  "hook/completed",
   "mcpServer/oauthLogin/completed",
   "mcpServer/startupStatus/updated",
 ]);
@@ -6451,6 +6491,7 @@ function buildThreadResumePayloads(params: {
   config?: CodexThreadResumeParams["config"];
   defaultModeRequestUserInput?: boolean;
   bundledToolsDirectory?: string;
+  dynamicTools?: CodexDynamicToolSpec[];
 }, compatibility: CodexProtocolCompatibility): CodexThreadResumePayload[] {
   const base: CodexThreadResumePayload = {
     threadId: params.threadId,
@@ -6494,6 +6535,12 @@ function buildThreadResumePayloads(params: {
   );
   if (config) {
     base.config = config;
+  }
+  if (params.dynamicTools) {
+    base.dynamicTools = serializeCompatibleDynamicTools(
+      params.dynamicTools,
+      compatibility,
+    );
   }
 
   return [base];
@@ -7237,6 +7284,114 @@ export class CodexAppServerClient {
   async getInitializeResult(): Promise<InitializeResult> {
     await this.ensureInitialized();
     return this.initializeResult ?? {};
+  }
+
+  async readServerCapabilities(): Promise<CodexServerCapabilities> {
+    await this.ensureInitialized();
+    const result = asRecord(
+      await this.connection.request(
+        "server/capabilities/read",
+        {},
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      ),
+    );
+    const outputReducer = asRecord(result?.codeModeOutputReducer);
+    const actionableState = asRecord(outputReducer?.actionableState);
+    const protocolVersion = outputReducer?.protocolVersion;
+    const continuationGuidanceVersion =
+      outputReducer?.continuationGuidanceVersion;
+    const hasParentIntentContract =
+      outputReducer?.intentContextVersion === 1
+      && outputReducer.reducerRequestField === "parent_intent"
+      && outputReducer.postToolUseField === "parent_intent";
+    const grouping = asRecord(outputReducer?.postToolUseGrouping);
+    const modelGuidance = asRecord(outputReducer?.modelGuidance);
+    const exactOutput = asRecord(outputReducer?.postToolUseExactOutput);
+    const dynamicToolsResumeField =
+      outputReducer?.dynamicToolsResumeField === "dynamicTools"
+        ? "dynamicTools"
+        : undefined;
+
+    return typeof protocolVersion === "number"
+      ? {
+          codeModeOutputReducer: {
+            ...(actionableState?.version === 1
+              && actionableState.reducerRequestField === "actionable_state"
+              && actionableState.reducerResponseField === "actionable_state"
+              && actionableState.modelOutputTag === "codex_actionable_state"
+              ? {
+                  actionableState: {
+                    version: 1 as const,
+                    reducerRequestField: "actionable_state" as const,
+                    reducerResponseField: "actionable_state" as const,
+                    modelOutputTag: "codex_actionable_state" as const,
+                  },
+                }
+              : {}),
+            ...(typeof continuationGuidanceVersion === "number"
+              ? { continuationGuidanceVersion }
+              : {}),
+            ...(dynamicToolsResumeField
+              ? { dynamicToolsResumeField }
+              : {}),
+            ...(hasParentIntentContract
+              ? {
+                  intentContextVersion: 1 as const,
+                  postToolUseField: "parent_intent" as const,
+                  reducerRequestField: "parent_intent" as const,
+                }
+              : {}),
+            ...(modelGuidance?.version === 1
+              && modelGuidance.toolDescriptionConfigKey
+                === "features.code_mode.output_reducer.tool_description_guidance"
+              && modelGuidance.continuationConfigKey
+                === "features.code_mode.output_reducer.continuation_guidance"
+              && modelGuidance.modelVisibleOverheadRequestField
+                === "model_visible_overhead_characters"
+              ? {
+                  modelGuidance: {
+                    version: 1 as const,
+                    toolDescriptionConfigKey:
+                      "features.code_mode.output_reducer.tool_description_guidance" as const,
+                    continuationConfigKey:
+                      "features.code_mode.output_reducer.continuation_guidance" as const,
+                    modelVisibleOverheadRequestField:
+                      "model_visible_overhead_characters" as const,
+                  },
+                }
+              : {}),
+            ...(typeof grouping?.versionField === "string"
+              && typeof grouping.version === "number"
+              && typeof grouping.cellIdField === "string"
+              && typeof grouping.toolCallIdField === "string"
+              ? {
+                  postToolUseGrouping: {
+                    versionField: grouping.versionField,
+                    version: grouping.version,
+                    cellIdField: grouping.cellIdField,
+                    toolCallIdField: grouping.toolCallIdField,
+                  },
+                }
+              : {}),
+            ...(exactOutput?.version === 1
+              && exactOutput.versionField
+                === "token_miser_exact_tool_response_version"
+              && exactOutput.responseField
+                === "token_miser_exact_tool_response"
+              ? {
+                  postToolUseExactOutput: {
+                    version: 1 as const,
+                    versionField:
+                      "token_miser_exact_tool_response_version" as const,
+                    responseField:
+                      "token_miser_exact_tool_response" as const,
+                  },
+                }
+              : {}),
+            protocolVersion,
+          },
+        }
+      : {};
   }
 
   async readCodexHome(): Promise<string> {
@@ -8139,6 +8294,7 @@ export class CodexAppServerClient {
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     config?: CodexThreadResumeParams["config"];
     defaultModeRequestUserInput?: boolean;
+    dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{
     threadId: string;
     turnId: string;
@@ -8148,13 +8304,16 @@ export class CodexAppServerClient {
     const pendingFirstTurnResult = this.pendingFirstTurnThreadResults.get(params.threadId);
     // thread/resume primes the per-thread permission profile in codex
     // before later turn/start calls. A just-created thread has no rollout
-    // yet, so resume is guaranteed to be too early; turn/start already
-    // carries the permission/model overrides needed for the first turn.
-    // Dynamic tools are intentionally absent here: Codex accepts them only
-    // on thread/start and restores that persisted catalog on thread/resume.
-    const resumeResult =
-      pendingFirstTurnResult ??
-      (await requestWithFallbacks({
+    // yet, so stock Codex cannot resume it before the first turn. The
+    // PwrAgent fork explicitly advertises a dynamic-tools resume extension
+    // that supports this no-rollout refresh. The registry passes a complete
+    // replacement catalog only after negotiating that exact capability.
+    const refreshPendingFirstTurn =
+      pendingFirstTurnResult !== undefined
+      && params.dynamicTools !== undefined;
+    let resumeResult = pendingFirstTurnResult;
+    if (!pendingFirstTurnResult || refreshPendingFirstTurn) {
+      const resume = requestWithFallbacks({
         client: this.connection,
         methods: ["thread/resume"],
         payloads: buildThreadResumePayloads(
@@ -8171,19 +8330,24 @@ export class CodexAppServerClient {
             config: params.config,
             defaultModeRequestUserInput: params.defaultModeRequestUserInput,
             bundledToolsDirectory: this.options.bundledToolsDirectory,
+            dynamicTools: params.dynamicTools,
           },
           this.getProtocolCompatibility(),
         ),
-        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
-      }).catch((error: unknown) => {
-        codexClientLog.warn("thread/resume failed before turn/start", {
-          threadId: params.threadId,
-          requestedApprovalPolicy: params.approvalPolicy ?? null,
-          requestedSandbox: params.sandbox ?? null,
-          error: error instanceof Error ? error.message : String(error),
-        });
-        return undefined;
-      }));
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
+      resumeResult = params.dynamicTools !== undefined
+        ? await resume
+        : await resume.catch((error: unknown) => {
+            codexClientLog.warn("thread/resume failed before turn/start", {
+              threadId: params.threadId,
+              requestedApprovalPolicy: params.approvalPolicy ?? null,
+              requestedSandbox: params.sandbox ?? null,
+              error: error instanceof Error ? error.message : String(error),
+            });
+            return undefined;
+          });
+    }
 
     const codexInput = await prepareCodexUserInput({
       input: params.input,
@@ -8245,6 +8409,7 @@ export class CodexAppServerClient {
    */
   async generateStructuredObject(params: {
     model?: string;
+    reasoningEffort?: string;
     prompt: string;
     schema: Record<string, unknown>;
     system?: string;
@@ -8326,6 +8491,7 @@ export class CodexAppServerClient {
 
   private async runHelperStructuredTurn(params: {
     model?: string;
+    reasoningEffort?: string;
     prompt: string;
     schema: Record<string, unknown>;
     system?: string;
@@ -8340,6 +8506,8 @@ export class CodexAppServerClient {
     const timeoutMs = params.timeoutMs ?? DEFAULT_CODEX_THREAD_TITLE_TIMEOUT_MS;
     const helperWorkspaceDir = await ensureCodexThreadTitleWorkspace();
     const helperModel = params.model?.trim() || DEFAULT_CODEX_THREAD_TITLE_MODEL;
+    const helperReasoningEffort =
+      normalizeCodexReasoningEffort(params.reasoningEffort) ?? "low";
     const helperSystem = params.system?.trim() || "";
     const protocolCompatibility = this.getProtocolCompatibility();
     try {
@@ -8439,7 +8607,7 @@ export class CodexAppServerClient {
               input: [{ type: "text", text: params.prompt, text_elements: [] }],
               model: helperModel,
               serviceTier: null,
-              reasoningEffort: "low",
+              reasoningEffort: helperReasoningEffort,
               outputSchema: params.schema as CodexTurnStartParams["outputSchema"],
             },
             protocolCompatibility,
@@ -8458,7 +8626,7 @@ export class CodexAppServerClient {
           helperThreadId,
           ...(helperTurnId ? { helperTurnId } : {}),
           model: helperModel,
-          reasoningEffort: "low",
+          reasoningEffort: helperReasoningEffort,
           ...(tokenUsage !== undefined ? { tokenUsage } : {}),
         };
       }
@@ -8482,7 +8650,7 @@ export class CodexAppServerClient {
         helperThreadId,
         helperTurnId,
         model: helperModel,
-        reasoningEffort: "low",
+        reasoningEffort: helperReasoningEffort,
         ...(helperResult.tokenUsage !== undefined
           ? { tokenUsage: helperResult.tokenUsage }
           : {}),
@@ -8541,11 +8709,16 @@ export class CodexAppServerClient {
     fastMode?: boolean;
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadStartParams["config"];
+    dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     await this.ensureInitialized();
 
-    if (!this.pendingFirstTurnThreadResults.has(params.threadId)) {
-      await requestWithFallbacks({
+    const pendingFirstTurn = this.pendingFirstTurnThreadResults.has(
+      params.threadId,
+    );
+    if (!pendingFirstTurn || params.dynamicTools !== undefined) {
+      const resume = requestWithFallbacks({
         client: this.connection,
         methods: ["thread/resume"],
         payloads: buildThreadResumePayloads(
@@ -8557,12 +8730,19 @@ export class CodexAppServerClient {
             reasoningEffort: params.reasoningEffort,
             fastMode: params.fastMode,
             codexEnvironmentRuntime: params.codexEnvironmentRuntime,
+            config: params.config,
             bundledToolsDirectory: this.options.bundledToolsDirectory,
+            dynamicTools: params.dynamicTools,
           },
           this.getProtocolCompatibility(),
         ),
         timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      }).catch(() => undefined);
+      });
+      if (params.dynamicTools !== undefined) {
+        await resume;
+      } else {
+        await resume.catch(() => undefined);
+      }
     }
 
     const settingsPayload = buildThreadSettingsUpdatePayload({

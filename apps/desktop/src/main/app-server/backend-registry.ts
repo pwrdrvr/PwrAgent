@@ -1,7 +1,7 @@
 import { app } from "electron";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { realpath, stat } from "node:fs/promises";
+import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -26,6 +26,7 @@ import {
   findLiveProfileRuntimeMarkers,
   getProcessRuntimeIdentity,
   resolveActiveProfileName,
+  resolveActiveProfilePath,
 } from "../profile";
 import {
   getAppStateDb,
@@ -266,8 +267,13 @@ import {
   type ThreadOverlayState,
   type ThreadWorkspaceHandoffStrategy,
   type ThreadSubAgentSummary,
+  type ThreadToolAccounting,
+  type ThreadTokenMiserAccounting,
   type ThreadToolInvocationAlert,
   type ThreadToolInvocationRecord,
+  type ThreadCompactionRecord,
+  type ThreadTokenMiserSavings,
+  type ThreadPricingSummary,
   type ThreadUsageLineRecord,
   type PrSummary,
   type WorktreeSnapshotSummary,
@@ -342,6 +348,7 @@ import {
 import {
   CodexAppServerClient,
   DEFAULT_CODEX_THREAD_TITLE_MODEL,
+  type CodexServerCapabilities,
 } from "../codex-app-server/client";
 import {
   isCodexInvalidResponseMessageIdError,
@@ -422,6 +429,30 @@ import type { MessagingAgentToolService } from "../messaging/messaging-agent-too
 import { resolveAutomationInspectionMcpCommand } from "../automations/automation-inspection-cli";
 import { resolveAgentToolCatalogs } from "../agent-tools/agent-tool-catalog-registry";
 import {
+  AgentToolRouter,
+  readAgentDynamicToolCall,
+  toDynamicToolResponse,
+} from "../agent-tools/agent-tool-router";
+import { buildTokenMiserToolDefinitions } from "../agent-tools/token-miser-agent-tools";
+import {
+  getTokenMiserBridgeDescriptorPath,
+  TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV,
+  TokenMiserHookBridge,
+} from "../token-miser/token-miser-hook-bridge";
+import { TokenMiserPluginManager } from "../token-miser/token-miser-plugin-manager";
+import {
+  TOKEN_MISER_ACTIVATION_FILENAME,
+  TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES,
+  TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS,
+  type TokenMiserActivationStatus,
+} from "../token-miser/token-miser-types";
+import { TokenMiserService } from "../token-miser/token-miser-service";
+import { TokenMiserStore } from "../token-miser/token-miser-store";
+import {
+  estimateTokenCount,
+  type TokenMiserObjectMetadata,
+} from "../token-miser/token-miser-types";
+import {
   AgentToolMcpServer,
   type AgentToolMcpClientContext,
   type AgentToolMcpRegistration,
@@ -474,6 +505,7 @@ import { analyzeNormalizedToolReplay } from "./tool-output-replay-analyzer";
 import { detectUsageSpendAlerts } from "./usage-spend-alerts";
 import {
   ThreadTitleGenerationService,
+  type ThreadTitleAdapterResult,
   type ThreadTitleGenerator,
   type ThreadTitleGenerationResult,
 } from "./thread-title-generation-service";
@@ -622,6 +654,7 @@ function assistantOutputForTurn(
 type BackendClient = {
   close(): Promise<void>;
   getInitializeResult(): Promise<InitializeResult>;
+  readServerCapabilities?(): Promise<CodexServerCapabilities>;
   readCodexHome?(): Promise<string>;
   readConfiguredMcpServerNames?(params?: {
     cwd?: string;
@@ -666,6 +699,7 @@ type BackendClient = {
   generateTitle?: ThreadTitleGenerator["generateTitle"];
   generateStructuredObject?(params: {
     model?: string;
+    reasoningEffort?: string;
     prompt: string;
     schema: Record<string, unknown>;
     system?: string;
@@ -752,6 +786,8 @@ type BackendClient = {
     fastMode?: boolean;
     cwd?: string;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
+    config?: CodexThreadStartParams["config"];
+    dynamicTools?: CodexDynamicToolSpec[];
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }>;
   listModels?(diagnostics?: {
     callerReason?: string;
@@ -2133,6 +2169,27 @@ export function buildCodexClientArgs(env?: NodeJS.ProcessEnv): string[] {
   return args;
 }
 
+export function withTokenMiserBridgeDescriptorEnv(
+  env: NodeJS.ProcessEnv,
+  descriptorPath: string | undefined,
+): NodeJS.ProcessEnv;
+export function withTokenMiserBridgeDescriptorEnv(
+  env: NodeJS.ProcessEnv | undefined,
+  descriptorPath: string | undefined,
+): NodeJS.ProcessEnv | undefined;
+export function withTokenMiserBridgeDescriptorEnv(
+  env: NodeJS.ProcessEnv | undefined,
+  descriptorPath: string | undefined,
+): NodeJS.ProcessEnv | undefined {
+  if (!descriptorPath) {
+    return env;
+  }
+  return {
+    ...(env ?? process.env),
+    [TOKEN_MISER_BRIDGE_DESCRIPTOR_ENV]: descriptorPath,
+  };
+}
+
 function formatTomlString(value: string): string {
   return JSON.stringify(value);
 }
@@ -3428,6 +3485,12 @@ export type ObservedContextReplayTally = {
   hotReplayCount: number;
 };
 
+type LiveThreadContextWindowObservation = {
+  finalContextTokens: number;
+  modelContextWindow: number;
+  peakContextTokens: number;
+};
+
 // Below this per-request input size, the request is the new prompt/tool payload
 // rather than a full context replay — do not count it. Mirrors the renderer's
 // former MIN_CONTEXT_REPLAY_INPUT_TOKENS floor.
@@ -3450,6 +3513,24 @@ export type ObservedContextReplayCursor = {
   // start), in which case cold attribution falls back to the full uncached.
   lastContextTokens?: number;
 };
+
+export function buildThreadCompactionIdentity(params: {
+  backend: AppServerBackendKind;
+  cumulativeInputTokens?: number;
+  itemId?: string;
+  threadId: string;
+  turnId?: string;
+}): string {
+  if (params.itemId) {
+    return [params.backend, params.threadId, params.itemId].join(":");
+  }
+  return [
+    params.backend,
+    params.threadId,
+    params.turnId ?? "unknown",
+    `request-${params.cumulativeInputTokens ?? "unobserved"}`,
+  ].join(":");
+}
 
 // Pure core of the context-replay accumulator: fold one token-usage update into
 // a running per-turn tally, given the per-thread cursor. A replay is counted
@@ -4104,6 +4185,281 @@ function buildTaskMonitorUsageLine(params: {
   };
 }
 
+/**
+ * Whether a persisted gate sub-agent needs rewriting. Only the fields the rail
+ * renders and that are stable across processes take part; see the call site.
+ */
+function tokenMiserSubAgentProjectionChanged(
+  existing: ThreadSubAgentSummary,
+  next: ThreadSubAgentSummary,
+): boolean {
+  return existing.parentTurnId !== next.parentTurnId
+    || JSON.stringify(existing.tokenMiserAccounting)
+      !== JSON.stringify(next.tokenMiserAccounting);
+}
+
+function buildTokenMiserSubAgentAccounting(params: {
+  entry: TokenMiserObjectMetadata;
+  gateUsageLine?: ThreadUsageLineRecord;
+  legacyCachedReplayCount?: number;
+  parentUsageLine?: ThreadUsageLineRecord;
+}): ThreadSubAgentSummary["tokenMiserAccounting"] {
+  // Prefer the live parent line; fall back to the model stamped at creation.
+  // The stamp is what lets a review-turn gate price at all — the reviewer has
+  // no usage line — and what keeps a mid-turn gate priced before its parent
+  // line lands.
+  const originalModel = params.parentUsageLine?.model ?? params.entry.parentModel;
+  const originalServiceTier =
+    params.parentUsageLine?.serviceTier ?? params.entry.parentServiceTier;
+  const policyPassThrough =
+    params.entry.disposition === "passed_through"
+    && !params.entry.helperUsage;
+  const gateModel = params.gateUsageLine?.model
+    ?? (policyPassThrough ? "policy" : undefined);
+  if (
+    !originalModel
+    || !gateModel
+    || (!policyPassThrough && params.gateUsageLine?.priceStatus !== "priced")
+    || (!policyPassThrough && params.gateUsageLine?.currency !== "USD")
+  ) {
+    return undefined;
+  }
+  const pricingParams = {
+    at: params.entry.createdAt,
+    cachedInputTokens: 0,
+    fastMode: params.parentUsageLine?.fastMode,
+    model: originalModel,
+    outputTokens: 0,
+    serviceTier: originalServiceTier,
+  };
+  const baselineCost = estimateTokenUsageCost({
+    ...pricingParams,
+    uncachedInputTokens: params.entry.baselineParentTokens,
+  });
+  const revealedParentTokens =
+    estimateTokenCount(params.entry.replacementCharacters)
+    + estimateTokenCount(params.entry.retrievedCharacters);
+  const revealedCost = estimateTokenUsageCost({
+    ...pricingParams,
+    uncachedInputTokens: revealedParentTokens,
+  });
+  const cachedReplayCount = params.entry.replayTrackingVersion === 2
+    ? params.entry.cachedReplayCount ?? 0
+    : params.legacyCachedReplayCount ?? 0;
+  const cachedBaselineTokens = params.entry.replayTrackingVersion === 2
+    ? params.entry.cachedBaselineTokens ?? 0
+    : params.entry.baselineParentTokens * cachedReplayCount;
+  const cachedRevealedTokens = params.entry.replayTrackingVersion === 2
+    ? params.entry.cachedRevealedTokens ?? 0
+    : revealedParentTokens * cachedReplayCount;
+  const cachedBaselineCost = estimateTokenUsageCost({
+    ...pricingParams,
+    cachedInputTokens: cachedBaselineTokens,
+    uncachedInputTokens: 0,
+  });
+  const cachedRevealedCost = estimateTokenUsageCost({
+    ...pricingParams,
+    cachedInputTokens: cachedRevealedTokens,
+    uncachedInputTokens: 0,
+  });
+  if (
+    !baselineCost
+    || !revealedCost
+    || !cachedBaselineCost
+    || !cachedRevealedCost
+  ) {
+    return undefined;
+  }
+  const gateCostMicros = params.gateUsageLine?.totalCostMicros ?? 0;
+  const savingsMicros =
+    baselineCost.uncachedInputCostMicros
+    + cachedBaselineCost.cachedInputCostMicros
+    - gateCostMicros
+    - revealedCost.uncachedInputCostMicros
+    - cachedRevealedCost.cachedInputCostMicros;
+  return {
+    currency: "USD",
+    decisionSource: policyPassThrough ? "policy" : "helper",
+    ...(params.entry.disposition
+      ? { disposition: params.entry.disposition }
+      : {}),
+    originalModel,
+    ...(originalServiceTier ? { originalServiceTier } : {}),
+    baselineParentTokens: params.entry.baselineParentTokens,
+    baselineParentCostMicros: baselineCost.uncachedInputCostMicros,
+    cachedReplayCount,
+    cachedBaselineTokens,
+    cachedBaselineCostMicros: cachedBaselineCost.cachedInputCostMicros,
+    gateModel,
+    gateTotalTokens: params.gateUsageLine?.totalTokens ?? 0,
+    gateCostMicros,
+    revealedParentTokens,
+    revealedParentCostMicros: revealedCost.uncachedInputCostMicros,
+    cachedRevealedTokens,
+    cachedRevealedCostMicros: cachedRevealedCost.cachedInputCostMicros,
+    savingsMicros,
+  };
+}
+
+function countLegacyTokenMiserCachedReplays(params: {
+  entry: TokenMiserObjectMetadata;
+  invocations: readonly ThreadToolInvocationRecord[];
+}): number {
+  if (params.entry.replayTrackingVersion === 2) {
+    return 0;
+  }
+  return countCachedReplaysAfterInvocation({
+    invocations: params.invocations,
+    toolUseId: params.entry.toolUseId,
+    turnId: params.entry.turnId,
+  });
+}
+
+function countCachedReplaysAfterInvocation(params: {
+  invocations: readonly ThreadToolInvocationRecord[];
+  toolUseId: string;
+  turnId: string;
+}): number {
+  const ordered = [...params.invocations]
+    .filter((invocation) => invocation.turnId === params.turnId)
+    .sort((left, right) =>
+      left.observedAt - right.observedAt
+      || left.invocationId.localeCompare(right.invocationId)
+    );
+  const selectedIndex = ordered.findIndex(
+    (invocation) => invocation.itemId === params.toolUseId,
+  );
+  if (selectedIndex < 0) {
+    return 0;
+  }
+  // The first later round trip is the uncached request that initially receives
+  // the tool result. Cached replay begins with the following model request.
+  return Math.max(0, ordered.length - selectedIndex - 2);
+}
+
+function withLegacyTokenMiserReplayAccounting(
+  accounting: ThreadTokenMiserAccounting,
+  invocations: readonly ThreadToolInvocationRecord[],
+): ThreadTokenMiserAccounting {
+  if (!accounting.interceptions) {
+    return accounting;
+  }
+  const interceptions = accounting.interceptions.map((entry) => {
+    if (entry.replayTrackingVersion === 2) {
+      return entry;
+    }
+    const cachedReplayCount = countCachedReplaysAfterInvocation({
+      invocations,
+      toolUseId: entry.toolUseId,
+      turnId: entry.turnId,
+    });
+    const revealedTokens = entry.replacementTokens + entry.retrievedTokens;
+    const cachedBaselineTokens = entry.baselineParentTokens * cachedReplayCount;
+    const cachedRevealedTokens = revealedTokens * cachedReplayCount;
+    return {
+      ...entry,
+      cachedReplayCount,
+      cachedBaselineTokens,
+      cachedRevealedTokens,
+      estimatedCachedReplayTokensSaved:
+        cachedBaselineTokens - cachedRevealedTokens,
+    };
+  });
+  const cachedBaselineTokens = interceptions.reduce(
+    (total, entry) => total + (entry.cachedBaselineTokens ?? 0),
+    0,
+  );
+  const cachedRevealedTokens = interceptions.reduce(
+    (total, entry) => total + (entry.cachedRevealedTokens ?? 0),
+    0,
+  );
+  return {
+    ...accounting,
+    interceptions,
+    cachedReplayCount: interceptions.reduce(
+      (total, entry) => total + (entry.cachedReplayCount ?? 0),
+      0,
+    ),
+    cachedBaselineTokens,
+    cachedRevealedTokens,
+    estimatedCachedReplayTokensSaved:
+      cachedBaselineTokens - cachedRevealedTokens,
+  };
+}
+
+type ThreadPricingLedger = {
+  compactions?: ThreadCompactionRecord[];
+  lines: ThreadUsageLineRecord[];
+  summaries: ThreadPricingSummary[];
+};
+
+function mergeThreadPricingLines(
+  pricing: ThreadPricingLedger,
+  extraLines: readonly ThreadUsageLineRecord[],
+): ThreadPricingLedger {
+  if (extraLines.length === 0) {
+    return pricing;
+  }
+  const linesById = new Map(
+    pricing.lines.map((line) => [line.usageLineId, line]),
+  );
+  for (const line of extraLines) {
+    linesById.set(line.usageLineId, line);
+  }
+  const lines = [...linesById.values()].sort((left, right) =>
+    right.createdAt - left.createdAt
+    || right.usageLineId.localeCompare(left.usageLineId)
+  );
+  const summariesByKey = new Map<string, ThreadPricingSummary>();
+  for (const line of lines) {
+    const threadId = line.parentThreadId ?? line.threadId;
+    const key = [line.backend, threadId, line.provider, line.currency].join(":");
+    const summary = summariesByKey.get(key) ?? {
+      backend: line.backend,
+      cachedInputTokens: 0,
+      currency: line.currency,
+      inputTokens: 0,
+      outputTokens: 0,
+      pricedUsageLineCount: 0,
+      provider: line.provider,
+      reasoningOutputTokens: 0,
+      threadId,
+      totalCostMicros: 0,
+      totalTokens: 0,
+      uncachedInputTokens: 0,
+      unpricedUsageLineCount: 0,
+      updatedAt: 0,
+      usageLineCount: 0,
+    };
+    summary.cachedInputTokens += line.cachedInputTokens;
+    summary.inputTokens += line.inputTokens;
+    summary.outputTokens += line.outputTokens;
+    summary.pricedUsageLineCount += line.priceStatus === "priced" ? 1 : 0;
+    summary.reasoningOutputTokens += line.reasoningOutputTokens;
+    summary.totalCostMicros += line.totalCostMicros;
+    summary.totalTokens += line.totalTokens;
+    summary.uncachedInputTokens += line.uncachedInputTokens;
+    summary.unpricedUsageLineCount += line.priceStatus === "priced" ? 0 : 1;
+    summary.updatedAt = Math.max(
+      summary.updatedAt,
+      line.completedAt ?? line.createdAt,
+    );
+    summary.usageLineCount += 1;
+    summariesByKey.set(key, summary);
+  }
+  return {
+    // Spread the source ledger: rebuilding it field-by-field silently dropped
+    // `compactions` for every thread with a live gate line, which is exactly
+    // the thread that has compaction markers worth showing.
+    ...pricing,
+    lines,
+    summaries: [...summariesByKey.values()].sort((left, right) =>
+      left.provider.localeCompare(right.provider)
+      || left.currency.localeCompare(right.currency)
+    ),
+  };
+}
+
 function findNestedUsageValue(value: unknown, keys: string[]): unknown {
   const record = readRecord(value);
   if (!record) {
@@ -4131,6 +4487,13 @@ function readUsageString(value: unknown, keys: string[]): string | undefined {
 function readUsageBoolean(value: unknown, keys: string[]): boolean | undefined {
   const nested = findNestedUsageValue(value, keys);
   return typeof nested === "boolean" ? nested : undefined;
+}
+
+function readUsageNumber(value: unknown, keys: string[]): number | undefined {
+  const nested = findNestedUsageValue(value, keys);
+  return typeof nested === "number" && Number.isFinite(nested)
+    ? nested
+    : undefined;
 }
 
 function readTaskMonitorUsageModel(params: {
@@ -4225,6 +4588,7 @@ function buildLiveThreadUsageLine(params: {
   createdAt?: number;
   fastMode?: boolean;
   model?: string;
+  contextWindow?: LiveThreadContextWindowObservation;
   observedReplays?: ObservedContextReplayTally;
   reasoningEffort?: string;
   serviceTier?: string;
@@ -4289,6 +4653,13 @@ function buildLiveThreadUsageLine(params: {
         }
       : {}),
     ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
+    ...(params.contextWindow
+      ? {
+          finalContextTokens: params.contextWindow.finalContextTokens,
+          modelContextWindow: params.contextWindow.modelContextWindow,
+          peakContextTokens: params.contextWindow.peakContextTokens,
+        }
+      : {}),
     inputTokens,
     ...(params.model ? { model: params.model } : {}),
     ...(params.observedReplays
@@ -6175,6 +6546,19 @@ function buildCodexParentDynamicToolSpecs(
   );
 }
 
+function buildCodexTokenMiserDynamicToolSpecs(
+  store: TokenMiserStore | undefined,
+): CodexDynamicToolSpec[] {
+  if (!store) {
+    return [];
+  }
+  return buildCodexParentDynamicToolSpecs(
+    resolveAgentToolCatalogs({ tokenMiserStore: store }).filter(
+      (catalog) => catalog.id === "token_miser",
+    ),
+  );
+}
+
 const PWRAGENT_PDF_MCP_SERVER_NAME = "pwragent_pdf";
 const PWRAGENT_CONNECTION_MCP_SERVER_PREFIX = "pwragent_";
 const PWRAGENT_CONNECTION_MCP_SERVER_HASH_LENGTH = 32;
@@ -6292,6 +6676,8 @@ function mergeCodexThreadConfigs(
       const record = config as Record<string, unknown>;
       const currentServers = result.mcp_servers;
       const nextServers = record.mcp_servers;
+      const currentFeatures = result.features;
+      const nextFeatures = record.features;
       return {
         ...result,
         ...record,
@@ -6303,11 +6689,101 @@ function mergeCodexThreadConfigs(
               },
             }
           : {}),
+        ...(isConfigRecord(currentFeatures) && isConfigRecord(nextFeatures)
+          ? {
+              features: mergeCodexFeatureConfigs(
+                currentFeatures,
+                nextFeatures,
+              ),
+            }
+          : {}),
       };
     },
     {},
   );
   return merged as CodexThreadStartParams["config"];
+}
+
+function mergeCodexFeatureConfigs(
+  current: Record<string, unknown>,
+  next: Record<string, unknown>,
+): Record<string, unknown> {
+  const currentCodeMode = current.code_mode;
+  const nextCodeMode = next.code_mode;
+  if (!isConfigRecord(currentCodeMode) || !isConfigRecord(nextCodeMode)) {
+    return { ...current, ...next };
+  }
+  const currentReducer = currentCodeMode.output_reducer;
+  const nextReducer = nextCodeMode.output_reducer;
+  return {
+    ...current,
+    ...next,
+    code_mode: {
+      ...currentCodeMode,
+      ...nextCodeMode,
+      ...(isConfigRecord(currentReducer) && isConfigRecord(nextReducer)
+        ? { output_reducer: { ...currentReducer, ...nextReducer } }
+        : {}),
+    },
+  };
+}
+
+function isConfigRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Configures the reducer added by pwrdrvr/codex at the script-to-model
+ * boundary. This does not enable Code Mode; it only applies when the thread's
+ * existing model/config selects it. Direct tool calls continue through the
+ * PostToolUse plugin.
+ */
+const TOKEN_MISER_CODE_MODE_TOOL_DESCRIPTION_GUIDANCE = [
+  "Run independent operations concurrently with `Promise.all`. ",
+  "Nested tool results remain complete inside the cell; inspect or transform ",
+  "them there and emit the information needed for the next decision.",
+].join("");
+
+function hasTokenMiserModelGuidance(
+  capability: CodexServerCapabilities["codeModeOutputReducer"],
+): boolean {
+  const guidance = capability?.modelGuidance;
+  return (
+    guidance?.version === 1
+    && guidance.toolDescriptionConfigKey
+      === "features.code_mode.output_reducer.tool_description_guidance"
+    && guidance.continuationConfigKey
+      === "features.code_mode.output_reducer.continuation_guidance"
+    && guidance.modelVisibleOverheadRequestField
+      === "model_visible_overhead_characters"
+  );
+}
+
+function buildCodexTokenMiserConfig(
+  reducerDescriptorPath: string,
+): CodexThreadStartParams["config"] {
+  return {
+    features: {
+      code_mode: {
+        max_output_tokens_ceiling: TOKEN_MISER_MODEL_VISIBLE_CAP_TOKENS,
+        output_reducer: {
+          descriptor_path: reducerDescriptorPath,
+          max_request_bytes: 32 * 1024 * 1024,
+          max_response_bytes: TOKEN_MISER_CODE_MODE_MAX_RESPONSE_BYTES,
+          // Observe every Code Mode result so the Explorer can distinguish
+          // direct cells, retrievals, and reducer decisions. The local service
+          // still applies the 5k-character evaluation threshold before Luna.
+          min_trigger_bytes: 0,
+          // The Luna request has a 45-second application timeout. Leave enough
+          // room for serialization and the loopback response while staying
+          // below the existing 60-second PostToolUse hook budget.
+          timeout_ms: 55_000,
+          tool_description_guidance:
+            TOKEN_MISER_CODE_MODE_TOOL_DESCRIPTION_GUIDANCE,
+        },
+      },
+    },
+  } as CodexThreadStartParams["config"];
 }
 
 function mergeCodexDynamicToolSpecs(
@@ -6629,10 +7105,13 @@ type BackendRegistryOverlayStoreLike = OverlayStoreLike & Partial<
     SqliteOverlayStore,
     | "readThreadGitWorkingStateCache"
     | "listRemoteThreadPins"
+    | "listThreadCompactions"
+    | "recordThreadCompaction"
     | "reconcileOrphanedThreadSubAgents"
     | "markThreadToolInvocationsNoisy"
     | "setThreadSpendAlertPending"
     | "persistThreadToolInvocationBoundary"
+    | "upsertThreadSubAgents"
     | "upsertThreadUsageLines"
     | "writeThreadGitWorkingStateCacheEntry"
   >
@@ -6895,6 +7374,10 @@ export class DesktopBackendRegistry {
     string,
     ReviewSubAgentRecord
   >();
+  private readonly managedReviewParentsByChildThread = new Map<
+    string,
+    { parentBackend: AppServerBackendKind; parentThreadId: string }
+  >();
   private readonly managedReviewOutputByReviewTurn = new Map<string, string>();
   private readonly codexNativeSubAgentParents = new Map<string, string>();
   private readonly codexNativeSubAgentReconciliations = new Map<
@@ -6952,6 +7435,10 @@ export class DesktopBackendRegistry {
     string,
     ObservedContextReplayTally
   >();
+  private readonly liveThreadContextWindowObservations = new Map<
+    string,
+    LiveThreadContextWindowObservation
+  >();
   // Per-thread replay cursor (key: backend:threadId): the high-water mark of
   // cumulative `total.inputTokens` (detects a genuinely new model request, so
   // duplicate re-emissions are no-ops) plus the prior request's context size
@@ -6971,6 +7458,37 @@ export class DesktopBackendRegistry {
     string,
     PendingLiveThreadUsageLine
   >();
+  private readonly pendingTokenMiserInterceptions = new Map<
+    string,
+    TokenMiserObjectMetadata
+  >();
+  private readonly activeTokenMiserReplayEntries = new Map<
+    string,
+    Map<string, TokenMiserObjectMetadata>
+  >();
+  /**
+   * Per-thread request boundary for Token Miser (key: backend:threadId): the
+   * high-water mark of the thread's cumulative `total.inputTokens`.
+   *
+   * One cursor per thread, not one per gate. The cumulative total is a property
+   * of the thread's request sequence, so deciding "is this a new request?" once
+   * keeps every gate on the same answer; per-gate marks made the answer depend
+   * on when each gate was created. The process epoch passed to the store lets a
+   * resumed session re-anchor below the previous process's persisted watermark.
+   */
+  private readonly liveTokenMiserRequestCursor = new Map<string, number>();
+  private readonly tokenMiserRequestEpoch = randomUUID();
+  private readonly tokenMiserRequestEpochByCursor = new Map<string, string>();
+  private readonly liveTokenMiserSubAgents = new Map<
+    string,
+    Map<string, ThreadSubAgentSummary>
+  >();
+  private readonly liveTokenMiserUsageLines = new Map<
+    string,
+    Map<string, ThreadUsageLineRecord>
+  >();
+  private tokenMiserLedgerReconciliation: Promise<void> = Promise.resolve();
+  private tokenMiserLivePublishChain: Promise<void> = Promise.resolve();
   private liveThreadUsageObservationSequence = 0;
   /**
    * Usage notifications overlap at the JSON-RPC transport. Register each one
@@ -7221,6 +7739,8 @@ export class DesktopBackendRegistry {
   >;
   private readonly resolveCodexFastAllowedFn: () => boolean;
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
+  private readonly resolveTokenMiserEnabledFn: () => boolean;
+  private readonly resolveTokenMiserDefaultEnabledFn: () => boolean;
   private readonly resolveSpendAlertPolicyFn: () => DesktopSpendAlertPolicy;
   private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
   private spendAlertPolicy = DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
@@ -7228,6 +7748,23 @@ export class DesktopBackendRegistry {
   private readonly localFilePrivateStorageRoots: readonly string[];
   private readonly pdfAttachmentStore = new PdfAttachmentStore();
   private readonly pdfToolMcpServer?: AgentToolMcpServerLike;
+  private readonly tokenMiserStore?: TokenMiserStore;
+  private readonly tokenMiserHookBridge?: TokenMiserHookBridge;
+  private tokenMiserCodeModeReducerDescriptorPath?: string;
+  private readonly tokenMiserServerCapabilities = new WeakMap<
+    BackendClient,
+    Promise<CodexServerCapabilities | undefined>
+  >();
+  private tokenMiserReducerCapabilityState?: "supported" | "unsupported";
+  private tokenMiserCodeModeGroupingVersion?: number;
+  private tokenMiserPostToolUseExactOutputVersion?: number;
+  private tokenMiserRuntimePreparationFailure?: string;
+  private readonly tokenMiserPluginManager?: TokenMiserPluginManager;
+  private tokenMiserStateDir?: string;
+  private readonly resolveTokenMiserCodexRuntimeFn?: () => Promise<{
+    codexCommand: string;
+    codexEnv: NodeJS.ProcessEnv;
+  }>;
   private readonly mcpConnectionService?: Pick<
     PwrSnapConnectionService,
     "registerBridge"
@@ -7352,6 +7889,16 @@ export class DesktopBackendRegistry {
     const settingsService = createsLiveCodexClient
       ? getDesktopSettingsService()
       : undefined;
+    const tokenMiserStateDir =
+      createsLiveCodexClient && isAppStateInitialized()
+        ? resolveActiveProfilePath("state/token-miser")
+        : undefined;
+    const tokenMiserBridgeDescriptorPath = tokenMiserStateDir
+      ? getTokenMiserBridgeDescriptorPath(
+          tokenMiserStateDir,
+          this.runtimeInstanceId,
+        )
+      : undefined;
     this.resolveCodexDefaultModeRequestUserInputFn =
       options?.resolveCodexDefaultModeRequestUserInput ??
       (() => {
@@ -7427,6 +7974,33 @@ export class DesktopBackendRegistry {
           return true;
         }
       });
+    this.resolveTokenMiserEnabledFn = () => {
+      try {
+        return (
+          settingsService ?? getDesktopSettingsService()
+        ).resolveTokenMiserEnabled();
+      } catch (error) {
+        backendRegistryLog.warn("failed to resolve Token Miser setting", {
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return false;
+      }
+    };
+    this.resolveTokenMiserDefaultEnabledFn = () => {
+      try {
+        return (
+          settingsService ?? getDesktopSettingsService()
+        ).resolveTokenMiserDefaultEnabled();
+      } catch (error) {
+        backendRegistryLog.warn(
+          "failed to resolve Token Miser thread default setting",
+          {
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+        return true;
+      }
+    };
     this.resolveToolOutputAlertPolicyFn =
       options?.resolveToolOutputAlertPolicy ??
       (() => {
@@ -7471,6 +8045,9 @@ export class DesktopBackendRegistry {
         settingsService.onConfigWritten(() => {
           this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
           this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
+          if (this.resolveTokenMiserEnabledFn()) {
+            void this.prepareTokenMiserRuntime({ prune: true });
+          }
         }),
       );
     }
@@ -7479,6 +8056,25 @@ export class DesktopBackendRegistry {
       typeof settingsService?.resolveCodexSpawnEnv === "function"
         ? settingsService.resolveCodexSpawnEnv()
         : undefined;
+    const codexSpawnEnv = withTokenMiserBridgeDescriptorEnv(
+      codexEnv,
+      tokenMiserBridgeDescriptorPath,
+    );
+    this.resolveTokenMiserCodexRuntimeFn = settingsService
+      ? async () => {
+          const [resolvedCommand, resolvedEnv] = await Promise.all([
+            settingsService.resolveCodexCommand(),
+            settingsService.resolveCodexSpawnEnvAsync(),
+          ]);
+          return {
+            codexCommand: resolvedCommand.command,
+            codexEnv: resolvedEnv,
+          };
+        }
+      : async () => ({
+          codexCommand: codexCommand ?? "codex",
+          codexEnv: codexEnv ?? process.env,
+        });
     this.codexEnvironmentCommandEnv = codexEnv;
     this.codexEnvironmentCommandRunner = options?.codexEnvironmentCommandRunner;
     this.codexEnvironmentHydrationStore =
@@ -7495,7 +8091,7 @@ export class DesktopBackendRegistry {
         args: settingsService ? undefined : buildCodexClientArgs(codexEnv),
         command: codexCommand,
         connectionObserver: codexObserver,
-        env: codexEnv,
+        env: codexSpawnEnv,
         resolveArgs: settingsService
           ? async (env) => buildCodexClientArgs(env)
           : undefined,
@@ -7503,7 +8099,10 @@ export class DesktopBackendRegistry {
           ? async () => await settingsService.resolveCodexCommand()
           : undefined,
         resolveEnv: settingsService
-          ? async () => await settingsService.resolveCodexSpawnEnvAsync()
+          ? async () => withTokenMiserBridgeDescriptorEnv(
+              await settingsService.resolveCodexSpawnEnvAsync(),
+              tokenMiserBridgeDescriptorPath,
+            )
           : undefined,
         clientVersion,
         // Fire the gate at the client level too, not just the
@@ -7517,6 +8116,107 @@ export class DesktopBackendRegistry {
         // surfaces as `available: false` with a clean reason.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
+    if (tokenMiserStateDir) {
+      this.tokenMiserStore = new TokenMiserStore(
+        path.join(tokenMiserStateDir, "objects"),
+        {
+          onMetadataUpdated: async (metadata, reason) => {
+            this.pendingTokenMiserInterceptions.set(metadata.objectId, metadata);
+            this.rememberActiveTokenMiserReplayEntry(metadata);
+            // A replay-counter write changes nothing the gate card or its usage
+            // line renders, and it fires once per active gate per model
+            // request. Republishing the whole ledger for each one turned a
+            // single usage event into N pricing reads and 2N notifications;
+            // `recordTokenMiserParentModelRequest` already emits once for the
+            // whole batch.
+            if (reason === "replay") {
+              return;
+            }
+            const publish = this.tokenMiserLivePublishChain.then(() =>
+              this.publishLiveTokenMiserLedgerEntry(metadata),
+            );
+            this.tokenMiserLivePublishChain = publish.catch(() => undefined);
+            try {
+              await publish;
+            } catch (error) {
+              backendRegistryLog.warn("live Token Miser ledger publish failed", {
+                error: error instanceof Error ? error.message : String(error),
+                objectId: metadata.objectId,
+                threadId: metadata.threadId,
+              });
+            }
+          },
+          onCodeModeObservationUpdated: (observation) => {
+            // Persist the observation before Codex receives its result, but do
+            // not make the reducer response wait for a full accounting read
+            // and renderer notification. Those are observational UI work.
+            void this.emitThreadToolAccountingUpdated({
+              backend: "codex",
+              threadId: observation.threadId,
+            }).catch((error) => {
+              backendRegistryLog.warn("live Code Mode accounting publish failed", {
+                error: error instanceof Error ? error.message : String(error),
+                threadId: observation.threadId,
+              });
+            });
+          },
+        },
+      );
+      const tokenMiserService = new TokenMiserService({
+        store: this.tokenMiserStore,
+        isEnabled: () => this.resolveTokenMiserEnabledFn(),
+        isEnabledByDefault: () => this.resolveTokenMiserDefaultEnabledFn(),
+        // A thread can override the inherited default while the experiment is
+        // available; the global experimental flag remains the outer gate.
+        isEnabledForThread: async (threadId) =>
+          await this.resolveTokenMiserThreadOverride("codex", threadId),
+        getParentCumulativeInputTokens: (threadId) =>
+          this.liveThreadReplayInputCursor.get(
+            ["codex", threadId].join(":"),
+          )?.cumulativeInputTokens,
+        resolveParentModel: (threadId) =>
+          this.resolveTokenMiserParentModel(threadId),
+        codeModeGroupingVersion: () =>
+          this.tokenMiserCodeModeGroupingVersion,
+        postToolUseExactOutputVersion: () =>
+          this.tokenMiserPostToolUseExactOutputVersion,
+        generateSummary: async (params) => {
+          if (!this.codexClient.generateStructuredObject) {
+            return {
+              status: "unavailable",
+              reason: "codex_structured_generation_unavailable",
+            };
+          }
+          return await this.codexClient.generateStructuredObject({
+            ...params,
+            isMatch: (record) =>
+              (record.disposition === "pass_through"
+                || record.disposition === "summarize")
+              && typeof record.summary === "string"
+              && Array.isArray(record.usefulDetails)
+              && (
+                !Array.isArray(params.schema.required)
+                || !params.schema.required.includes("members")
+                || Array.isArray(record.members)
+              ),
+          });
+        },
+      });
+      this.tokenMiserHookBridge = new TokenMiserHookBridge({
+        stateDir: tokenMiserStateDir,
+        service: tokenMiserService,
+        instanceId: this.runtimeInstanceId,
+      });
+      this.tokenMiserCodeModeReducerDescriptorPath =
+        this.tokenMiserHookBridge.codeModeReducerDescriptorPath;
+      this.tokenMiserStateDir = tokenMiserStateDir;
+      this.tokenMiserPluginManager = new TokenMiserPluginManager({
+        stateDir: tokenMiserStateDir,
+        profileName: resolveActiveProfileName(),
+        executablePath: process.execPath,
+        hookEntryPath: path.join(__dirname, "token-miser-hook.js"),
+      });
+    }
     this.acpWorktreeRepositoryResolver =
       options?.acpWorktreeRepositoryResolver ??
       resolveWorktreeRepositoryDirectory;
@@ -7531,6 +8231,21 @@ export class DesktopBackendRegistry {
       options?.acpAvailableCommandProbeBudgetMs
       ?? ACP_AVAILABLE_COMMAND_PROBE_BUDGET_MS;
     this.overlayStore = options?.overlayStore ?? getDesktopOverlayStore();
+    if (this.tokenMiserStore) {
+      this.tokenMiserLedgerReconciliation = Promise.resolve()
+        .then(async () => await this.reconcileTokenMiserLedger())
+        .catch((error) => {
+          backendRegistryLog.warn("Token Miser ledger reconciliation failed", {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        });
+      // Bring the gate up at boot when the feature is on, so a resumed thread
+      // is covered from its first tool call rather than from whenever a new
+      // thread happens to be created. Retention pruning rides this one call.
+      if (this.resolveTokenMiserEnabledFn()) {
+        void this.prepareTokenMiserRuntime({ prune: true });
+      }
+    }
     this.gitDirectoryService =
       options?.gitDirectoryService ??
       new GitDirectoryService({
@@ -7562,6 +8277,7 @@ export class DesktopBackendRegistry {
                   await this.handleAgentTaskMonitorRequest(request),
                 threadInspectionHandler: this.threadInspectionHandler,
                 threadOrchestrationHandler: this.threadOrchestrationHandler,
+                tokenMiserStore: this.tokenMiserStore,
               }, { taskMonitorRole: "all" }),
             authorizeToolCall: (params) =>
               this.authorizeAgentToolMcpCall(params),
@@ -9288,13 +10004,10 @@ export class DesktopBackendRegistry {
       replay: replayWithMessageOrigins,
       subAgents: overlay?.subAgents,
     });
-    const pricing =
-      typeof this.overlayStore.readThreadPricing === "function"
-        ? await this.overlayStore.readThreadPricing({
-            backend,
-            threadId: request.threadId,
-          })
-        : { lines: [], summaries: [] };
+    const pricing = await this.readThreadPricingWithLiveTokenMiser({
+      backend,
+      threadId: request.threadId,
+    });
     // Tool accounting is durable, but the response replaces the renderer's
     // whole session snapshot — so omitting it here does not just leave the
     // field stale, it erases whatever the live
@@ -9302,7 +10015,7 @@ export class DesktopBackendRegistry {
     // ACP thread that read lands as the turn ends, which is why the Pricing
     // Tool calls tab used to appear during a turn and vanish
     // the moment it finished.
-    const toolAccounting =
+    const storedToolAccounting =
       typeof this.overlayStore.readThreadToolAccounting === "function"
         ? await this.overlayStore.readThreadToolAccounting({
             backend,
@@ -9312,6 +10025,13 @@ export class DesktopBackendRegistry {
             threadId: request.threadId,
           })
         : undefined;
+    const toolAccounting = storedToolAccounting
+      ? await this.withTokenMiserAccounting({
+          accounting: storedToolAccounting,
+          backend,
+          threadId: request.threadId,
+        })
+      : undefined;
     const pendingRequest = this.pendingServerRequestForThread({
       backend,
       threadId: request.threadId,
@@ -11071,14 +11791,11 @@ export class DesktopBackendRegistry {
       await this.flushLiveThreadUsageLines();
       await this.persistReplayUsageLines(replayWithEnvironment);
     }
-    const pricing =
-      typeof this.overlayStore.readThreadPricing === "function"
-        ? await this.overlayStore.readThreadPricing({
-            backend,
-            threadId: request.threadId,
-          })
-        : { lines: [], summaries: [] };
-    const toolAccounting =
+    const pricing = await this.readThreadPricingWithLiveTokenMiser({
+      backend,
+      threadId: request.threadId,
+    });
+    const storedToolAccounting =
       typeof this.overlayStore.readThreadToolAccounting === "function"
         ? await this.overlayStore.readThreadToolAccounting({
             backend,
@@ -11088,6 +11805,13 @@ export class DesktopBackendRegistry {
             threadId: request.threadId,
           })
         : undefined;
+    const toolAccounting = storedToolAccounting
+      ? await this.withTokenMiserAccounting({
+          accounting: storedToolAccounting,
+          backend,
+          threadId: request.threadId,
+        })
+      : undefined;
     const pendingRequest = this.pendingServerRequestForThread({
       backend,
       threadId: request.threadId,
@@ -11178,9 +11902,14 @@ export class DesktopBackendRegistry {
     });
     const persistMs = Math.round(performance.now() - persistStartedAt);
     const readbackStartedAt = performance.now();
-    const accounting = await this.overlayStore.readThreadToolAccounting({
+    const storedAccounting = await this.overlayStore.readThreadToolAccounting({
       backend: request.backend,
       includeAllInvocations: true,
+      threadId: request.threadId,
+    });
+    const accounting = await this.withTokenMiserAccounting({
+      accounting: storedAccounting,
+      backend: request.backend,
       threadId: request.threadId,
     });
     const readbackMs = Math.round(performance.now() - readbackStartedAt);
@@ -11250,15 +11979,81 @@ export class DesktopBackendRegistry {
     }
   }
 
+  withLiveTokenMiserNavigationSnapshot(
+    snapshot: NavigationSnapshot,
+  ): NavigationSnapshot {
+    if (this.liveTokenMiserSubAgents.size === 0) {
+      return snapshot;
+    }
+    let changed = false;
+    const threads = snapshot.threads.map((thread) => {
+      if (thread.source !== "codex" || thread.federation) {
+        return thread;
+      }
+      const live = this.liveTokenMiserSubAgents.get(thread.id);
+      if (!live || live.size === 0) {
+        return thread;
+      }
+      changed = true;
+      return {
+        ...thread,
+        subAgents: this.mergeLiveTokenMiserSubAgents(
+          thread.id,
+          thread.subAgents,
+        ),
+      };
+    });
+    return changed ? { ...snapshot, threads, unchanged: false } : snapshot;
+  }
+
+  private mergeLiveTokenMiserSubAgents(
+    threadId: string,
+    persisted: readonly ThreadSubAgentSummary[] | undefined,
+  ): ThreadSubAgentSummary[] {
+    const byId = new Map(
+      (persisted ?? []).map((subAgent) => [subAgent.monitorId, subAgent]),
+    );
+    for (const subAgent of this.liveTokenMiserSubAgents.get(threadId)?.values()
+      ?? []) {
+      byId.set(subAgent.monitorId, subAgent);
+    }
+    return [...byId.values()].sort((left, right) =>
+      right.updatedAt - left.updatedAt
+      || right.monitorId.localeCompare(left.monitorId)
+    );
+  }
+
+  private async readThreadPricingWithLiveTokenMiser(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadPricingLedger> {
+    const pricing = typeof this.overlayStore.readThreadPricing === "function"
+      ? await this.overlayStore.readThreadPricing(params)
+      : { lines: [], summaries: [] };
+    // Compactions ride the pricing payload rather than a channel of their own:
+    // their whole purpose here is to explain a cold replay already in `lines`,
+    // and splitting them would let the two arrive out of step.
+    const compactions = await this.overlayStore.listThreadCompactions?.(params);
+    const withCompactions = compactions?.length
+      ? { ...pricing, compactions }
+      : pricing;
+    if (params.backend !== "codex") {
+      return withCompactions;
+    }
+    return mergeThreadPricingLines(
+      withCompactions,
+      [
+        ...(this.liveTokenMiserUsageLines.get(params.threadId)?.values() ?? []),
+      ],
+    );
+  }
+
   private async emitThreadPricingUpdated(params: {
     activeTurnIds?: readonly string[];
     backend: AppServerBackendKind;
     threadId: string;
   }): Promise<void> {
-    if (typeof this.overlayStore.readThreadPricing !== "function") {
-      return;
-    }
-    const pricing = await this.overlayStore.readThreadPricing({
+    const pricing = await this.readThreadPricingWithLiveTokenMiser({
       backend: params.backend,
       threadId: params.threadId,
     });
@@ -11326,7 +12121,12 @@ export class DesktopBackendRegistry {
     if (typeof this.overlayStore.readThreadToolAccounting !== "function") {
       return;
     }
-    const toolAccounting = await this.overlayStore.readThreadToolAccounting({
+    const storedToolAccounting = await this.overlayStore.readThreadToolAccounting({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    const toolAccounting = await this.withTokenMiserAccounting({
+      accounting: storedToolAccounting,
       backend: params.backend,
       threadId: params.threadId,
     });
@@ -11360,6 +12160,40 @@ export class DesktopBackendRegistry {
         },
       },
     });
+  }
+
+  private async withTokenMiserAccounting(params: {
+    accounting: ThreadToolAccounting;
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadToolAccounting> {
+    if (params.backend !== "codex" || !this.tokenMiserStore) {
+      return params.accounting;
+    }
+    try {
+      const tokenMiser = await this.tokenMiserStore.summarizeThreadUsage(
+        params.threadId,
+      );
+      const withReplays = withLegacyTokenMiserReplayAccounting(
+        tokenMiser,
+        params.accounting.invocations,
+      );
+      const savings = await this.buildTokenMiserThreadSavings({
+        backend: params.backend,
+        invocations: params.accounting.invocations,
+        threadId: params.threadId,
+      });
+      return {
+        ...params.accounting,
+        tokenMiser: savings ? { ...withReplays, savings } : withReplays,
+      };
+    } catch (error) {
+      backendRegistryLog.warn("failed to read Token Miser thread accounting", {
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId,
+      });
+      return params.accounting;
+    }
   }
 
   /**
@@ -11520,6 +12354,7 @@ export class DesktopBackendRegistry {
     parentThreadBackend?: AppServerBackendKind;
     parentThreadInstanceId?: string;
     prAutoDispatchEnabled?: boolean;
+    tokenMiserEnabled?: boolean;
     codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
     linkedDirectories?: LinkedDirectorySummary[];
   }): Promise<StartThreadResponse> {
@@ -11536,6 +12371,7 @@ export class DesktopBackendRegistry {
       parentThreadBackend,
       parentThreadInstanceId,
       prAutoDispatchEnabled,
+      tokenMiserEnabled: tokenMiserOverride,
       mcpConnectionIds,
       ...request
     } = params;
@@ -11651,6 +12487,14 @@ export class DesktopBackendRegistry {
       executionMode: effectiveExecutionMode,
       runtime: acpRuntimeWithModel,
     });
+    const client = backend === "codex"
+      ? this.getClient(backend, effectiveExecutionMode)
+      : undefined;
+    const tokenMiserEnabled = backend === "codex"
+      && this.resolveTokenMiserEnabledForOverride(tokenMiserOverride);
+    if (tokenMiserEnabled) {
+      await this.prepareTokenMiserRuntime();
+    }
     const agentToolCatalogs = resolveAgentToolCatalogs({
       appManagementHandler: this.appManagementHandler,
       automationInspectionHandler: this.automationInspectionHandler,
@@ -11660,6 +12504,11 @@ export class DesktopBackendRegistry {
         await this.handleAgentTaskMonitorRequest(request),
       threadInspectionHandler: this.threadInspectionHandler,
       threadOrchestrationHandler: this.threadOrchestrationHandler,
+      // Gated on the setting, not merely on the store existing: the store is
+      // constructed for any live Codex client, so passing it unconditionally
+      // advertised three retrieval tools into every turn of an operator who
+      // never enabled the feature.
+      ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore } : {}),
     });
     const pdfMcpRegistration =
       backend === "codex" && this.resolvePdfAnalysisEnabledFn()
@@ -11687,9 +12536,16 @@ export class DesktopBackendRegistry {
         ? await this.readConfiguredCodexMcpServerNames(cwd)
         : undefined,
     );
-    const codexMcpConfig = mergeCodexThreadConfigs(
+    const tokenMiserConfig = client
+      ? await this.buildSupportedCodexTokenMiserConfig({
+          client,
+          enabled: tokenMiserEnabled,
+        })
+      : undefined;
+    const codexThreadConfig = mergeCodexThreadConfigs(
       pdfMcpConfig,
       connectionMcpConfig,
+      tokenMiserConfig,
     );
     const acpMcpRegistration = mcpConnectionRegistrations.length > 0
       ? {
@@ -11734,7 +12590,9 @@ export class DesktopBackendRegistry {
             reasoningEffort: modelSettings.reasoningEffort,
             mcpRegistration: acpMcpRegistration,
           })
-        : await this.getClient(backend, effectiveExecutionMode).startThread({
+        : await (
+            client ?? this.getClient(backend, effectiveExecutionMode)
+          ).startThread({
             ...request,
             ...modelSettings,
             cwd,
@@ -11746,7 +12604,7 @@ export class DesktopBackendRegistry {
                   defaultModeRequestUserInput:
                     this.resolveCodexDefaultModeRequestUserInputFn(),
                   threadSource: "user" as CodexThreadSource,
-                  ...(codexMcpConfig ? { config: codexMcpConfig } : {}),
+                  ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
                 }
               : {}),
             dynamicTools,
@@ -11809,6 +12667,9 @@ export class DesktopBackendRegistry {
           ).map(normalizeLinkedDirectoryKind),
         ),
         gitBranch,
+        ...(tokenMiserOverride !== undefined
+          ? { tokenMiserEnabled: tokenMiserOverride }
+          : {}),
       },
     );
     if (effectiveWorkMode === "worktree") {
@@ -11826,6 +12687,13 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         executionMode: effectiveExecutionMode,
       });
+      if (tokenMiserOverride !== undefined) {
+        await this.overlayStore.setThreadTokenMiser?.({
+          backend,
+          threadId: result.threadId,
+          enabled: tokenMiserOverride,
+        });
+      }
       if (
         pdfMcpRegistration &&
         typeof this.overlayStore.setThreadMessagingPdfToolCatalogVersion === "function"
@@ -12062,6 +12930,20 @@ export class DesktopBackendRegistry {
         ? buildCodexPdfMcpConfig(pdfMcpRegistration)
         : buildCodexPdfMcpDisabledConfig()
       : undefined;
+    const tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
+      sourceOverlay?.tokenMiserEnabled,
+    );
+    if (tokenMiserEnabled) {
+      await this.prepareTokenMiserRuntime();
+    }
+    const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
+      client,
+      enabled: tokenMiserEnabled,
+    });
+    const codexThreadConfig = mergeCodexThreadConfigs(
+      pdfMcpConfig,
+      tokenMiserConfig,
+    );
 
     let result: { threadId: string };
     let forkedCodexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
@@ -12107,7 +12989,7 @@ export class DesktopBackendRegistry {
         approvalPolicy: request.approvalPolicy ?? modeSettings.approvalPolicy,
         sandbox: request.sandbox ?? modeSettings.sandbox,
         codexEnvironmentRuntime: forkedCodexEnvironmentRuntime,
-        ...(pdfMcpConfig ? { config: pdfMcpConfig } : {}),
+        ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
       });
       pdfMcpRegistration?.bindThread(result.threadId);
     } catch (error) {
@@ -12165,6 +13047,13 @@ export class DesktopBackendRegistry {
         threadId: result.threadId,
         executionMode,
       });
+      if (sourceOverlay?.tokenMiserEnabled !== undefined) {
+        await this.overlayStore.setThreadTokenMiser({
+          backend,
+          threadId: result.threadId,
+          enabled: sourceOverlay.tokenMiserEnabled,
+        });
+      }
       await this.overlayStore.setThreadPrAutoDispatchEnabled({
         backend,
         threadId: result.threadId,
@@ -12952,7 +13841,8 @@ export class DesktopBackendRegistry {
     let turnParams!: ModelSettings;
     let cwd: string | undefined;
     let activeTurnMode: ThreadExecutionMode | undefined;
-    let codexMcpConfig: CodexThreadStartParams["config"] | undefined;
+    let codexThreadConfig: CodexThreadStartParams["config"] | undefined;
+    let tokenMiserEnabledForThread = false;
     let pdfMcpAvailable = false;
     try {
       if (params.backend === "codex") {
@@ -12962,6 +13852,18 @@ export class DesktopBackendRegistry {
         backend: params.backend,
         threadId: params.threadId,
       });
+      if (params.backend === "codex") {
+        tokenMiserEnabledForThread = this.resolveTokenMiserEnabledForOverride(
+          overlay?.tokenMiserEnabled,
+        );
+        // Existing threads reach the gate through here, not through
+        // startThread. Await the bridge before this turn's first code-mode or
+        // direct tool result. A per-thread override can opt out, but cannot
+        // bypass the global experimental gate.
+        if (tokenMiserEnabledForThread) {
+          await this.prepareTokenMiserRuntime();
+        }
+      }
       cwd =
         params.backend === "codex"
           ? await this.resolveThreadEnvironmentCwd(
@@ -12977,7 +13879,7 @@ export class DesktopBackendRegistry {
           ? await this.registerPdfMcpClient({ threadId: params.threadId })
           : undefined;
         pdfMcpAvailable = registration !== undefined;
-        codexMcpConfig = registration
+        codexThreadConfig = registration
           ? buildCodexPdfMcpConfig(registration)
           : buildCodexPdfMcpDisabledConfig();
       }
@@ -12986,8 +13888,8 @@ export class DesktopBackendRegistry {
           overlay.mcpConnectionIds,
           params.threadId,
         );
-        codexMcpConfig = mergeCodexThreadConfigs(
-          codexMcpConfig,
+        codexThreadConfig = mergeCodexThreadConfigs(
+          codexThreadConfig,
           buildCodexConnectionMcpConfig(
             registrations,
             await this.readConfiguredCodexMcpServerNames(cwd),
@@ -13102,20 +14004,37 @@ export class DesktopBackendRegistry {
           }
           const effectiveMode = params.executionMode ?? mode;
           const modeSettings = EXECUTION_MODE_SUMMARIES[effectiveMode];
+          const tokenMiserConfig =
+            await this.buildSupportedCodexTokenMiserConfig({
+              client,
+              enabled: tokenMiserEnabledForThread,
+            });
+          const dynamicTools =
+            await this.buildSupportedCodexDynamicToolsRefresh({
+              client,
+              tokenMiserEnabled: tokenMiserEnabledForThread,
+            });
+          const supportedCodexThreadConfig = mergeCodexThreadConfigs(
+            codexThreadConfig,
+            tokenMiserConfig,
+          );
           const started = await client.startTurn({
-              threadId: params.threadId,
-              input,
-              ...(cwd ? { cwd } : {}),
-              collaborationMode: params.collaborationMode,
-              ...turnParams,
-              approvalPolicy: params.approvalPolicy ?? modeSettings.approvalPolicy,
-              sandbox: params.sandbox ?? modeSettings.sandbox,
-              ...(overlay?.codexEnvironmentRuntime
-                ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
-                : {}),
-              ...(codexMcpConfig ? { config: codexMcpConfig } : {}),
-              defaultModeRequestUserInput:
-                this.resolveCodexDefaultModeRequestUserInputFn(),
+            threadId: params.threadId,
+            input,
+            ...(cwd ? { cwd } : {}),
+            collaborationMode: params.collaborationMode,
+            ...turnParams,
+            approvalPolicy: params.approvalPolicy ?? modeSettings.approvalPolicy,
+            sandbox: params.sandbox ?? modeSettings.sandbox,
+            ...(overlay?.codexEnvironmentRuntime
+              ? { codexEnvironmentRuntime: overlay.codexEnvironmentRuntime }
+              : {}),
+            ...(supportedCodexThreadConfig
+              ? { config: supportedCodexThreadConfig }
+              : {}),
+            defaultModeRequestUserInput:
+              this.resolveCodexDefaultModeRequestUserInputFn(),
+            ...(dynamicTools !== undefined ? { dynamicTools } : {}),
           });
           activeTurnMode = effectiveMode;
           return started;
@@ -13586,6 +14505,7 @@ export class DesktopBackendRegistry {
     let overlay: ThreadOverlayState | undefined;
     let cwd: string | undefined;
     let codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
+    let tokenMiserEnabled = false;
     try {
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
@@ -13596,6 +14516,14 @@ export class DesktopBackendRegistry {
             threadId: params.threadId,
           })
         : undefined;
+      if (reviewBackend === "codex") {
+        tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
+          params.backend === "codex" ? overlay?.tokenMiserEnabled : undefined,
+        );
+        if (tokenMiserEnabled) {
+          await this.prepareTokenMiserRuntime();
+        }
+      }
       if (params.backend === "codex") {
         codexEnvironmentRuntime = overlay?.codexEnvironmentRuntime;
         const threadCwd = await this.resolveThreadEnvironmentCwd(
@@ -13677,6 +14605,16 @@ export class DesktopBackendRegistry {
         if (!client.startReview) {
           throw new Error("Selected backend does not support review/start");
         }
+        const tokenMiserConfig =
+          await this.buildSupportedCodexTokenMiserConfig({
+            client,
+            enabled: tokenMiserEnabled,
+          });
+        const dynamicTools =
+          await this.buildSupportedCodexDynamicToolsRefresh({
+            client,
+            tokenMiserEnabled,
+          });
         return await client.startReview({
           threadId: params.threadId,
           target: params.target,
@@ -13686,6 +14624,8 @@ export class DesktopBackendRegistry {
           ...(codexEnvironmentRuntime
             ? { codexEnvironmentRuntime }
             : {}),
+          ...(tokenMiserConfig ? { config: tokenMiserConfig } : {}),
+          ...(dynamicTools !== undefined ? { dynamicTools } : {}),
         });
       };
 
@@ -13702,6 +14642,7 @@ export class DesktopBackendRegistry {
             parentBackend: params.backend,
             parentThreadId: params.threadId,
             target: params.target,
+            tokenMiserEnabled,
           })
         : params.backend === "codex"
           ? await this.withCodexThreadClient(params.threadId, startWithClient)
@@ -13811,6 +14752,7 @@ export class DesktopBackendRegistry {
     parentBackend: AppServerBackendKind;
     parentThreadId: string;
     target: StartReviewRequest["target"];
+    tokenMiserEnabled: boolean;
   }): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> {
     // Only a same-provider review can inherit the parent's live session state;
     // another provider's agent runtime and execution mode do not transfer.
@@ -13856,6 +14798,15 @@ export class DesktopBackendRegistry {
       : params.overlay?.executionMode ?? "default";
     const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
     const client = this.getClient("codex", executionMode);
+    const tokenMiserConfig = await this.buildSupportedCodexTokenMiserConfig({
+      client,
+      enabled: params.tokenMiserEnabled,
+    });
+    const tokenMiserDynamicTools = params.tokenMiserEnabled
+      ? buildCodexTokenMiserDynamicToolSpecs(this.tokenMiserStore)
+      : [];
+    const dynamicToolsResumeSupported =
+      await this.supportsTokenMiserDynamicToolsResume(client);
     const thread = await client.startThread({
       ...(params.cwd ? { cwd: params.cwd } : {}),
       approvalPolicy: modeSettings.approvalPolicy,
@@ -13871,6 +14822,18 @@ export class DesktopBackendRegistry {
       ...(params.codexEnvironmentRuntime
         ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
         : {}),
+      ...(tokenMiserConfig ? { config: tokenMiserConfig } : {}),
+      ...(tokenMiserDynamicTools.length > 0
+        ? { dynamicTools: tokenMiserDynamicTools }
+        : {}),
+    });
+    let managedReviewChildKey = buildThreadIdentityKey(
+      "codex",
+      thread.threadId,
+    );
+    this.managedReviewParentsByChildThread.set(managedReviewChildKey, {
+      parentBackend: params.parentBackend,
+      parentThreadId: params.parentThreadId,
     });
     this.reservedCodexStartThreadIds.add(thread.threadId);
     try {
@@ -13884,7 +14847,27 @@ export class DesktopBackendRegistry {
         ...(params.codexEnvironmentRuntime
           ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
           : {}),
+        ...(dynamicToolsResumeSupported
+          ? { dynamicTools: tokenMiserDynamicTools }
+          : {}),
       });
+      const startedReviewChildKey = buildThreadIdentityKey(
+        "codex",
+        turn.threadId,
+      );
+      if (startedReviewChildKey !== managedReviewChildKey) {
+        const parent = this.managedReviewParentsByChildThread.get(
+          managedReviewChildKey,
+        );
+        this.managedReviewParentsByChildThread.delete(managedReviewChildKey);
+        managedReviewChildKey = startedReviewChildKey;
+        if (parent) {
+          this.managedReviewParentsByChildThread.set(
+            managedReviewChildKey,
+            parent,
+          );
+        }
+      }
       this.activeTurnKeys.add(
         buildActiveTurnKey("codex", turn.threadId, turn.turnId),
       );
@@ -13897,6 +14880,9 @@ export class DesktopBackendRegistry {
         reviewThreadId: turn.threadId,
         turnId: turn.turnId,
       };
+    } catch (error) {
+      this.managedReviewParentsByChildThread.delete(managedReviewChildKey);
+      throw error;
     } finally {
       this.reservedCodexStartThreadIds.delete(thread.threadId);
     }
@@ -18128,6 +19114,7 @@ export class DesktopBackendRegistry {
       mcpConnectionIds: launchpad.mcpConnectionIds,
       prAutoDispatchEnabled:
         launchpad.prAutoDispatchEnabled ?? this.resolveDefaultPrAutoDispatchEnabledFn(),
+      tokenMiserEnabled: launchpad.tokenMiserEnabled,
       acpRuntime: launchpad.acpRuntime,
       codexEnvironmentRuntime,
       directoryKey: launchpad.directoryKey,
@@ -18470,6 +19457,7 @@ export class DesktopBackendRegistry {
     // in memory. `closed` prevents either drain from re-arming its timer; the
     // serialized flush chains ensure no write survives close().
     await liveThreadUsageEmitBarrier;
+    await this.tokenMiserLedgerReconciliation;
     this.completedTaskMonitorsByThread.clear();
     await this.flushLiveThreadUsageLines();
     // A command streaming at quit time has accounting worth up to one flush
@@ -18510,6 +19498,10 @@ export class DesktopBackendRegistry {
         close: () => this.codexProtocolCaptureSession?.close(),
       },
       { name: "pdf-mcp", close: () => this.pdfToolMcpServer?.close() },
+      {
+        name: "token-miser-hook-bridge",
+        close: () => this.tokenMiserHookBridge?.close(),
+      },
       {
         name: "codex",
         close: async () => {
@@ -18603,14 +19595,13 @@ export class DesktopBackendRegistry {
   async generateStructuredObject(params: {
     backend?: "codex";
     model?: string;
+    reasoningEffort?: string;
     system: string;
     prompt: string;
     schema: Record<string, unknown>;
     schemaName?: string;
     timeoutMs?: number;
-  }): Promise<
-    { status: "ok"; object: unknown } | { status: "unavailable" | "failed"; reason: string }
-  > {
+  }): Promise<ThreadTitleAdapterResult> {
     const defaults = await this.overlayStore.getLaunchpadDefaults();
     const backend = params.backend === "codex"
       ? (await this.listBackends({ includeUnavailable: true })).backends.find(
@@ -18627,6 +19618,7 @@ export class DesktopBackendRegistry {
       return await this.codexClient.generateStructuredObject({
         system: params.system,
         model: params.model,
+        reasoningEffort: params.reasoningEffort,
         prompt: params.prompt,
         schema: params.schema,
         isMatch: (record) =>
@@ -18641,6 +19633,263 @@ export class DesktopBackendRegistry {
       status: "unavailable",
       reason: `${params.backend ?? backend?.kind ?? "backend"}_structured_generation_unavailable`,
     };
+  }
+
+  /** Probe once per client; reducer support is immutable for one app-server. */
+  private async readTokenMiserServerCapabilities(
+    client: BackendClient,
+  ): Promise<CodexServerCapabilities | undefined> {
+    const cached = this.tokenMiserServerCapabilities.get(client);
+    if (cached) {
+      return await cached;
+    }
+
+    const probe = (async () => {
+      if (!client.readServerCapabilities) {
+        this.tokenMiserReducerCapabilityState = "unsupported";
+        this.tokenMiserCodeModeGroupingVersion = undefined;
+        this.tokenMiserPostToolUseExactOutputVersion = undefined;
+        await this.recordTokenMiserActivation({
+          reason: "Codex runtime lacks Token Miser reducer model-guidance v1.",
+          state: "unavailable",
+        });
+        return undefined;
+      }
+      try {
+        const capabilities = await client.readServerCapabilities();
+        const reducerCapability = capabilities.codeModeOutputReducer;
+        const supported =
+          reducerCapability?.protocolVersion === 1
+          && hasTokenMiserModelGuidance(reducerCapability);
+        const grouping = capabilities.codeModeOutputReducer?.postToolUseGrouping;
+        this.tokenMiserCodeModeGroupingVersion =
+          supported
+          && grouping?.version === 1
+          && grouping.versionField === "token_miser_grouping_version"
+          && grouping.cellIdField === "code_mode_cell_id"
+          && grouping.toolCallIdField === "code_mode_tool_call_id"
+            ? 1
+            : undefined;
+        const exactOutput =
+          capabilities.codeModeOutputReducer?.postToolUseExactOutput;
+        this.tokenMiserPostToolUseExactOutputVersion =
+          supported
+          && exactOutput?.version === 1
+          && exactOutput.versionField
+            === "token_miser_exact_tool_response_version"
+          && exactOutput.responseField === "token_miser_exact_tool_response"
+            ? 1
+            : undefined;
+        this.tokenMiserReducerCapabilityState = supported
+          ? "supported"
+          : "unsupported";
+        await this.recordTokenMiserActivation(
+          supported && !this.tokenMiserRuntimePreparationFailure
+            ? { state: "active" }
+            : {
+                reason:
+                  this.tokenMiserRuntimePreparationFailure
+                  ?? "Codex runtime lacks Token Miser reducer model-guidance v1.",
+                state: "unavailable",
+              },
+        );
+        return capabilities;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const normalized = message.toLowerCase();
+        if (
+          normalized.includes("method not found")
+          || normalized.includes("unknown method")
+          || normalized.includes(
+            "unknown variant `server/capabilities/read`",
+          )
+        ) {
+          backendRegistryLog.debug(
+            "Codex code-mode output reducer capability is unavailable",
+            { reason: message },
+          );
+        } else {
+          backendRegistryLog.warn(
+            "Codex code-mode output reducer capability probe failed open",
+            { error: message },
+          );
+        }
+        this.tokenMiserReducerCapabilityState = "unsupported";
+        this.tokenMiserCodeModeGroupingVersion = undefined;
+        this.tokenMiserPostToolUseExactOutputVersion = undefined;
+        await this.recordTokenMiserActivation({
+          reason:
+            this.tokenMiserRuntimePreparationFailure
+            ?? "Codex runtime lacks Token Miser reducer model-guidance v1.",
+          state: "unavailable",
+        });
+        return undefined;
+      }
+    })();
+    this.tokenMiserServerCapabilities.set(client, probe);
+    return await probe;
+  }
+
+  private async supportsTokenMiserCodeModeReducer(
+    client: BackendClient,
+  ): Promise<boolean> {
+    const capabilities = await this.readTokenMiserServerCapabilities(client);
+    return (
+      capabilities?.codeModeOutputReducer?.protocolVersion === 1
+      && hasTokenMiserModelGuidance(capabilities.codeModeOutputReducer)
+    );
+  }
+
+  private async supportsTokenMiserDynamicToolsResume(
+    client: BackendClient,
+  ): Promise<boolean> {
+    const capabilities = await this.readTokenMiserServerCapabilities(client);
+    return (
+      capabilities?.codeModeOutputReducer?.protocolVersion === 1
+      && capabilities.codeModeOutputReducer.dynamicToolsResumeField
+        === "dynamicTools"
+    );
+  }
+
+  private buildCodexParentDynamicTools(
+    tokenMiserEnabled: boolean,
+  ): CodexDynamicToolSpec[] {
+    return buildCodexParentDynamicToolSpecs(
+      resolveAgentToolCatalogs({
+        appManagementHandler: this.appManagementHandler,
+        automationInspectionHandler: this.automationInspectionHandler,
+        federationHandler: this.federationHandler,
+        messagingHandler: this.messagingHandler,
+        taskMonitorHandler: async (request) =>
+          await this.handleAgentTaskMonitorRequest(request),
+        threadInspectionHandler: this.threadInspectionHandler,
+        threadOrchestrationHandler: this.threadOrchestrationHandler,
+        ...(tokenMiserEnabled ? { tokenMiserStore: this.tokenMiserStore } : {}),
+      }),
+    );
+  }
+
+  private async buildSupportedCodexDynamicToolsRefresh(params: {
+    client: BackendClient;
+    tokenMiserEnabled: boolean;
+  }): Promise<CodexDynamicToolSpec[] | undefined> {
+    if (!(await this.supportsTokenMiserDynamicToolsResume(params.client))) {
+      return undefined;
+    }
+    return this.buildCodexParentDynamicTools(params.tokenMiserEnabled);
+  }
+
+  private async buildSupportedCodexTokenMiserConfig(params: {
+    client: BackendClient;
+    enabled: boolean;
+  }): Promise<CodexThreadStartParams["config"] | undefined> {
+    if (
+      !params.enabled
+      || !this.tokenMiserCodeModeReducerDescriptorPath
+      || !(await this.supportsTokenMiserCodeModeReducer(params.client))
+    ) {
+      return undefined;
+    }
+    return buildCodexTokenMiserConfig(
+      this.tokenMiserCodeModeReducerDescriptorPath,
+    );
+  }
+
+  /**
+   * Bring the Codex-side gate up: the loopback bridge the hook talks to, and
+   * the plugin registration that makes Codex run the hook at all.
+   *
+   * Runs at boot, on every Codex turn start, and when the setting changes.
+   * It used to run only when a *new* thread was created, so an app that
+   * booted and resumed an existing thread had no bridge for that thread until
+   * something else happened to start one — five minutes of fail-open on the
+   * turn this was diagnosed from, nine large results ungated. Every call
+   * after the first is cheap: the bridge start and the plugin install are
+   * memoized, retention pruning is boot-only, and the activation record is
+   * written only when its state changes.
+   */
+  private async prepareTokenMiserRuntime(
+    options: { prune?: boolean } = {},
+  ): Promise<void> {
+    if (
+      !this.tokenMiserStore
+      || !this.tokenMiserHookBridge
+      || !this.tokenMiserPluginManager
+    ) {
+      return;
+    }
+    try {
+      const codexRuntime = await this.resolveTokenMiserCodexRuntimeFn?.();
+      await Promise.all([
+        this.tokenMiserHookBridge.start(),
+        codexRuntime
+          ? this.tokenMiserPluginManager.ensureInstalled(codexRuntime)
+          : this.tokenMiserPluginManager.ensurePluginSource(),
+        options.prune
+          ? this.tokenMiserStore.prune({
+              maxAgeMs: 7 * 24 * 60 * 60 * 1_000,
+              maxBytes: 512 * 1024 * 1024,
+            })
+          : Promise.resolve(),
+      ]);
+      this.tokenMiserRuntimePreparationFailure = undefined;
+      await this.recordTokenMiserActivation(
+        this.tokenMiserReducerCapabilityState === "supported"
+          ? { state: "active" }
+          : {
+              reason: this.tokenMiserReducerCapabilityState === "unsupported"
+                ? "Codex runtime lacks Token Miser reducer model-guidance v1."
+                : "Waiting for Codex to report Token Miser output reducer support.",
+              state: "unavailable",
+            },
+      );
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      this.tokenMiserRuntimePreparationFailure = reason;
+      backendRegistryLog.warn("Token Miser runtime preparation failed open", {
+        error: reason,
+      });
+      // Failing open keeps the turn running, but it also makes an inert gate
+      // indistinguishable from one that had nothing to gate. Record it so the
+      // Settings screen can say the feature is on but not running.
+      await this.recordTokenMiserActivation({ reason, state: "unavailable" });
+    }
+  }
+
+  private lastRecordedTokenMiserActivation?: string;
+
+  private async recordTokenMiserActivation(params: {
+    reason?: string;
+    state: TokenMiserActivationStatus["state"];
+  }): Promise<void> {
+    if (!this.tokenMiserStateDir) {
+      return;
+    }
+    // Now called on every turn start; only a change is worth a file write.
+    const signature = `${params.state}:${params.reason ?? ""}`;
+    if (this.lastRecordedTokenMiserActivation === signature) {
+      return;
+    }
+    this.lastRecordedTokenMiserActivation = signature;
+    try {
+      await mkdir(this.tokenMiserStateDir, {
+        recursive: true,
+        mode: 0o700,
+      });
+      await writeFile(
+        path.join(this.tokenMiserStateDir, TOKEN_MISER_ACTIVATION_FILENAME),
+        JSON.stringify({
+          observedAt: Date.now(),
+          ...(params.reason ? { reason: params.reason } : {}),
+          state: params.state,
+        } satisfies TokenMiserActivationStatus),
+        { encoding: "utf8", mode: 0o600 },
+      );
+    } catch (error) {
+      backendRegistryLog.warn("failed to record Token Miser activation", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   private async resolveLaunchpadBackend(
@@ -21288,6 +22537,45 @@ export class DesktopBackendRegistry {
     return tally;
   }
 
+  private observeLiveThreadContextWindow(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    tokenUsage: unknown;
+    turnId?: string;
+  }): LiveThreadContextWindowObservation | undefined {
+    if (!params.turnId) {
+      return undefined;
+    }
+    const latest = readTaskMonitorTokenUsageRecords(
+      params.tokenUsage,
+    )?.latestUsage;
+    const finalContextTokens = latest?.totalTokens;
+    const modelContextWindow = readUsageNumber(
+      params.tokenUsage,
+      ["modelContextWindow", "model_context_window"],
+    );
+    if (
+      typeof finalContextTokens !== "number"
+      || finalContextTokens < 0
+      || typeof modelContextWindow !== "number"
+      || modelContextWindow <= 0
+    ) {
+      return undefined;
+    }
+    const key = [params.backend, params.threadId, params.turnId].join(":");
+    const prior = this.liveThreadContextWindowObservations.get(key);
+    const observation = {
+      finalContextTokens,
+      modelContextWindow,
+      peakContextTokens: Math.max(
+        finalContextTokens,
+        prior?.peakContextTokens ?? 0,
+      ),
+    };
+    this.liveThreadContextWindowObservations.set(key, observation);
+    return observation;
+  }
+
   // Dev-only diagnostic: one line per genuinely new model request explaining how
   // it was classified (hot/cold/not-counted) and the numbers behind the
   // decision — the observed `last.input`/`cached`, the prior-context snapshot,
@@ -21375,6 +22663,9 @@ export class DesktopBackendRegistry {
       return;
     }
     this.liveThreadReplayObservations.delete(
+      [event.backend, threadId, turnId].join(":"),
+    );
+    this.liveThreadContextWindowObservations.delete(
       [event.backend, threadId, turnId].join(":"),
     );
   }
@@ -21476,6 +22767,7 @@ export class DesktopBackendRegistry {
     await work.precedingDerivation;
     let derivedUsage: DerivedLiveThreadTokenUsage | undefined;
     let observedReplays: ObservedContextReplayTally | undefined;
+    let contextWindow: LiveThreadContextWindowObservation | undefined;
     try {
       if (
         event.backend === "codex"
@@ -21517,6 +22809,12 @@ export class DesktopBackendRegistry {
         turnId: notification.params.turnId ?? undefined,
       });
       observedReplays = this.observeLiveThreadContextReplay({
+        backend: event.backend,
+        threadId,
+        tokenUsage,
+        turnId: notification.params.turnId ?? undefined,
+      });
+      contextWindow = this.observeLiveThreadContextWindow({
         backend: event.backend,
         threadId,
         tokenUsage,
@@ -21566,6 +22864,7 @@ export class DesktopBackendRegistry {
       cumulativeTokenUsage: derivedUsage.cumulativeTokenUsage,
       ...usageTiming,
       fastMode,
+      contextWindow,
       model,
       observedReplays,
       reasoningEffort,
@@ -22718,6 +24017,9 @@ export class DesktopBackendRegistry {
 
     this.activeReviewSubAgents.delete(activeReview.key);
     const { record } = activeReview;
+    this.managedReviewParentsByChildThread.delete(
+      buildThreadIdentityKey(record.backend, record.reviewThreadId),
+    );
     const completedAt = params.completedAt ?? Date.now();
     if (params.method === "turn/completed") {
       await this.persistReviewSubAgent(record, {
@@ -25205,6 +26507,989 @@ export class DesktopBackendRegistry {
     }
   }
 
+  private async reconcileTokenMiserLedger(): Promise<void> {
+    if (!this.tokenMiserStore) {
+      return;
+    }
+    const restored = await this.tokenMiserStore.listMetadata();
+    const stoppedCount =
+      await this.stopTokenMiserGatesCompactedWhileClosed(restored);
+    // Re-read after closing gates: `restored` was captured before the stop, so
+    // registering from it would put the just-stopped gates straight back into
+    // the active set and publish a stale ledger.
+    const metadata = stoppedCount > 0
+      ? await this.tokenMiserStore.listMetadata()
+      : restored;
+    for (const entry of metadata) {
+      this.rememberActiveTokenMiserReplayEntry(entry);
+      this.seedTokenMiserRequestCursor(entry);
+    }
+    await this.persistTokenMiserLedgerEntries(metadata);
+  }
+
+  /**
+   * Close out gates whose thread compacted while this instance was not running.
+   *
+   * Restore re-registers every unstopped gate, so without this a gate created
+   * before a compaction stays active forever and keeps counting cached replays
+   * against content the compaction already removed from context. The live
+   * `thread/compacted` handler cannot cover this: the event fired when nobody
+   * was listening. Persisted markers are what make the boundary survive.
+   */
+  private async stopTokenMiserGatesCompactedWhileClosed(
+    metadata: readonly TokenMiserObjectMetadata[],
+  ): Promise<number> {
+    const active = metadata.filter((entry) =>
+      entry.replayTrackingVersion === 2
+      && entry.replayTrackingStoppedAt === undefined
+    );
+    if (active.length === 0) {
+      return 0;
+    }
+    const compactedAtByThread = new Map<string, number>();
+    for (const threadId of new Set(active.map((entry) => entry.threadId))) {
+      const compactions = await this.overlayStore.listThreadCompactions?.({
+        backend: "codex",
+        threadId,
+      });
+      const latest = compactions?.at(-1);
+      if (latest) {
+        compactedAtByThread.set(threadId, latest.observedAt);
+      }
+    }
+    let stopped = 0;
+    for (const entry of active) {
+      const compactedAt = compactedAtByThread.get(entry.threadId);
+      // Only a compaction that happened after the gate bounds it; an earlier
+      // one belongs to context the gate never entered.
+      if (compactedAt === undefined || compactedAt <= entry.createdAt) {
+        continue;
+      }
+      if (
+        await this.tokenMiserStore!.stopReplayTracking({
+          objectId: entry.objectId,
+          stoppedAt: compactedAt,
+        })
+      ) {
+        stopped += 1;
+      }
+    }
+    return stopped;
+  }
+
+  /**
+   * Restore the thread's request boundary from stored gate marks.
+   *
+   * Codex reports `total.inputTokens` cumulatively for the thread, so it
+   * survives a restart — but the in-memory cursor does not. Without seeding,
+   * the first usage event after a relaunch would look like a new request to
+   * every gate and credit a replay that already happened.
+   */
+  private seedTokenMiserRequestCursor(_metadata: TokenMiserObjectMetadata): void {
+    // Intentionally does not seed. `total.inputTokens` is cumulative for the
+    // Codex *session*, not the thread's lifetime (see acp-usage.ts), so a mark
+    // persisted by the previous process sits above everything the new session
+    // reports. Seeding from it made every later event fail the advance test and
+    // froze replay counting for the life of the process. The sibling
+    // observed-context-replay fold re-seeds per process for the same reason.
+  }
+
+  private rememberActiveTokenMiserReplayEntry(
+    metadata: TokenMiserObjectMetadata,
+  ): void {
+    const active = this.activeTokenMiserReplayEntries.get(metadata.threadId);
+    if (
+      metadata.replayTrackingVersion !== 2
+      || metadata.replayTrackingStoppedAt !== undefined
+    ) {
+      active?.delete(metadata.objectId);
+      if (active?.size === 0) {
+        this.activeTokenMiserReplayEntries.delete(metadata.threadId);
+      }
+      return;
+    }
+    const entries = active ?? new Map<string, TokenMiserObjectMetadata>();
+    entries.set(metadata.objectId, metadata);
+    this.activeTokenMiserReplayEntries.set(metadata.threadId, entries);
+  }
+
+  private async runTokenMiserSideEffect(
+    stage: string,
+    run: () => Promise<void>,
+  ): Promise<void> {
+    try {
+      await run();
+    } catch (error) {
+      backendRegistryLog.warn("Token Miser side effect failed open", {
+        error: error instanceof Error ? error.message : String(error),
+        stage,
+      });
+    }
+  }
+
+  /**
+   * The model whose context a new gate is protecting.
+   *
+   * A native review runs on the parent thread under its own inner turn id —
+   * the hook reports one id, `review/start` returned another — and produces no
+   * usage line, so a gate created during one has no line to price against. The
+   * review record knows the reviewer's model, and while it is active it is the
+   * only thing making requests on that thread. Otherwise the newest priced turn
+   * line is the parent's current model.
+   */
+  private async resolveTokenMiserParentModel(
+    threadId: string,
+  ): Promise<{ model?: string; serviceTier?: string } | undefined> {
+    for (const record of this.activeReviewSubAgents.values()) {
+      if (
+        record.mode === "native"
+        && record.reviewThreadId === threadId
+        && record.model
+      ) {
+        return {
+          model: record.model,
+          ...(record.serviceTier ? { serviceTier: record.serviceTier } : {}),
+        };
+      }
+    }
+    if (typeof this.overlayStore.readThreadPricing !== "function") {
+      return undefined;
+    }
+    const pricing = await this.overlayStore.readThreadPricing({
+      backend: "codex",
+      threadId,
+    });
+    const line = [...pricing.lines]
+      .filter((entry) => entry.scope !== "monitor" && Boolean(entry.model))
+      .sort((left, right) => right.createdAt - left.createdAt)[0];
+    return line
+      ? {
+          model: line.model,
+          ...(line.serviceTier ? { serviceTier: line.serviceTier } : {}),
+        }
+      : undefined;
+  }
+
+  private async recordTokenMiserParentModelRequest(
+    event: AgentEvent,
+  ): Promise<void> {
+    if (
+      event.backend !== "codex"
+      || event.notification.method !== "thread/tokenUsage/updated"
+    ) {
+      return;
+    }
+    const threadId = event.notification.params.threadId;
+    // Past this point every observation is logged in development, either as a
+    // skip reason or as a per-gate decision, so a live run can tell "the
+    // handler never ran" apart from "it ran and declined".
+    if (!this.tokenMiserStore) {
+      this.logTokenMiserReplaySkip("no-store", threadId);
+      return;
+    }
+    const entries = this.activeTokenMiserReplayEntries.get(threadId);
+    if (!entries || entries.size === 0) {
+      this.logTokenMiserReplaySkip("no-active-gates", threadId);
+      return;
+    }
+    const totalUsage = readTaskMonitorTokenUsageRecords(
+      event.notification.params.tokenUsage,
+    )?.totalUsage;
+    const cumulativeInputTokens = totalUsage?.inputTokens;
+    if (typeof cumulativeInputTokens !== "number") {
+      this.logTokenMiserReplaySkip("no-cumulative-input", threadId);
+      return;
+    }
+    // One request boundary per thread, decided here.
+    //
+    // Each gate used to compare this cumulative high-water mark against its own
+    // copy, which made the answer depend on when the gate was created: an
+    // out-of-order or replayed usage event can sit above an older gate's mark
+    // and below a newer one's, so the same event advanced some gates and not
+    // others and their replay counts drifted apart. The thread has exactly one
+    // request sequence, so it gets exactly one cursor.
+    const cursorKey = [event.backend, threadId].join(":");
+    const priorCursor = this.liveTokenMiserRequestCursor.get(cursorKey);
+    if (priorCursor !== undefined && cumulativeInputTokens <= priorCursor) {
+      // A large drop means the session restarted and its cumulative total reset,
+      // not that this is a duplicate. Re-anchor instead of declining forever;
+      // treating it as a duplicate is what makes a thread stop counting.
+      if (cumulativeInputTokens * 2 < priorCursor) {
+        this.liveTokenMiserRequestCursor.set(cursorKey, cumulativeInputTokens);
+        // A Codex app-server restart can reset cumulative usage without
+        // recreating this registry. Rotate only this thread's epoch so stored
+        // gates accept the new lower sequence while other live threads retain
+        // their own monotonic request histories.
+        this.tokenMiserRequestEpochByCursor.set(cursorKey, randomUUID());
+        this.logTokenMiserReplaySkip("session-reset", threadId);
+        return;
+      }
+      this.logTokenMiserReplaySkip("no-advance", threadId);
+      return;
+    }
+    this.liveTokenMiserRequestCursor.set(cursorKey, cumulativeInputTokens);
+    const observed = [...entries.entries()];
+    const updated = await Promise.all(
+      observed.map(([objectId]) =>
+        this.tokenMiserStore!.recordParentModelRequest({
+          cumulativeInputTokens,
+          objectId,
+          requestEpoch:
+            this.tokenMiserRequestEpochByCursor.get(cursorKey)
+            ?? this.tokenMiserRequestEpoch,
+        })
+      ),
+    );
+    this.logTokenMiserReplayDecision({
+      cumulativeInputTokens,
+      observed,
+      threadId,
+      tokenUsage: event.notification.params.tokenUsage,
+      updated,
+    });
+    if (!updated.some(Boolean)) {
+      return;
+    }
+    await this.publishLiveTokenMiserReplayEntries(
+      updated.filter(
+        (entry): entry is TokenMiserObjectMetadata => entry !== undefined,
+      ),
+    );
+    await this.emitThreadToolAccountingUpdated({
+      backend: "codex",
+      threadId,
+    });
+  }
+
+  private logTokenMiserReplaySkip(reason: string, threadId: string): void {
+    if (!isDevelopment) {
+      return;
+    }
+    logDebug("tokenMiser:replay", { decision: `skip:${reason}`, threadId });
+  }
+
+  // Dev-only diagnostic for the Token Miser replay heuristic: one line per
+  // active gate per observed `thread/tokenUsage/updated`, recording the
+  // warm-up state machine's decision beside what the thread-level observed
+  // context-replay fold made of the same event. The two derive request
+  // boundaries independently — the gate from its own per-object cumulative
+  // high-water mark, the fold from the per-thread cursor — so logging them
+  // together is what lets a live run prove or disprove the two-observation
+  // assumption instead of inspecting end-state metadata that cannot show
+  // ordering. Runs after `recordLiveThreadUsage`, so the fold has already
+  // folded this event: an unadvanced cursor means the fold rejected it.
+  // Gated on isDevelopment, so packaged builds do no parsing work here.
+  private logTokenMiserReplayDecision(params: {
+    cumulativeInputTokens: number;
+    observed: readonly (readonly [string, TokenMiserObjectMetadata])[];
+    threadId: string;
+    tokenUsage: unknown;
+    updated: readonly (TokenMiserObjectMetadata | undefined)[];
+  }): void {
+    if (!isDevelopment) {
+      return;
+    }
+    const last = readTaskMonitorTokenUsageRecords(params.tokenUsage)?.latestUsage;
+    const cursor = this.liveThreadReplayInputCursor.get(
+      ["codex", params.threadId].join(":"),
+    );
+    const turnPrefix = ["codex", params.threadId, ""].join(":");
+    const fold = [...this.liveThreadReplayObservations.entries()]
+      .filter(([key]) => key.startsWith(turnPrefix))
+      .reduce(
+        (totals, [, tally]) => ({
+          cold: totals.cold + tally.coldReplayCount,
+          hot: totals.hot + tally.hotReplayCount,
+        }),
+        { cold: 0, hot: 0 },
+      );
+    params.observed.forEach(([objectId, before], index) => {
+      const after = params.updated[index];
+      const decision = !after
+        ? "no-advance"
+        : (after.cachedReplayCount ?? 0) > (before.cachedReplayCount ?? 0)
+          ? "counted"
+          : "warmup-skipped";
+      logDebug("tokenMiser:replay", {
+        cachedReplayCount: after?.cachedReplayCount ?? before.cachedReplayCount ?? 0,
+        cumulativeInput: params.cumulativeInputTokens,
+        decision,
+        // The fold's per-thread high-water mark after this same event. Equal to
+        // `cumulativeInput` means both mechanisms accepted this as a new
+        // request; a lower value means only the gate did.
+        foldCursorInput: cursor?.cumulativeInputTokens,
+        foldColdCount: fold.cold,
+        foldHotCount: fold.hot,
+        lastCached: last?.cachedInputTokens,
+        lastInput: last?.inputTokens,
+        objectId,
+        observationIndex: after?.parentRequestsObservedAfterGate
+          ?? before.parentRequestsObservedAfterGate
+          ?? 0,
+        priorCumulativeInput: before.lastParentCumulativeInputTokens,
+        threadId: params.threadId,
+      });
+    });
+  }
+
+  /**
+   * Persist one observed compaction.
+   *
+   * Compaction bounds how long a preserved payload can still be replayed, and
+   * it used to be live-only: a compaction seen while the app was closed stopped
+   * nothing, and historical accounting had no boundary at all. The marker is
+   * keyed on the backend's own item id when it reports one, so a re-emitted
+   * notification does not become a second compaction.
+   */
+  private async recordThreadCompaction(event: AgentEvent): Promise<boolean> {
+    if (event.notification.method !== "thread/compacted") {
+      return false;
+    }
+    const threadId = event.notification.params.threadId;
+    const itemId = typeof event.notification.params.itemId === "string"
+      ? event.notification.params.itemId
+      : undefined;
+    const observedAt = Date.now();
+    const turnId = this.findActiveTurnIdForThread(event.backend, threadId);
+    const compactionId = buildThreadCompactionIdentity({
+      backend: event.backend,
+      cumulativeInputTokens: this.liveThreadReplayInputCursor.get(
+        [event.backend, threadId].join(":"),
+      )?.cumulativeInputTokens,
+      itemId,
+      threadId,
+      turnId,
+    });
+    try {
+      return await this.overlayStore.recordThreadCompaction?.({
+        compaction: {
+          backend: event.backend,
+          compactionId,
+          observedAt,
+          threadId,
+          updatedAt: observedAt,
+          ...(itemId ? { itemId } : {}),
+          ...(turnId ? { turnId } : {}),
+        },
+      }) ?? true;
+    } catch (error) {
+      backendRegistryLog.warn("compaction marker write failed", {
+        backend: event.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId,
+      });
+      // The notification is still authoritative even when durable accounting
+      // is unavailable. Stop the pre-compaction replay window conservatively.
+      return true;
+    }
+  }
+
+  // The compaction notification carries no turn id, so recover it from the
+  // active-turn set: compaction happens inside a turn, and attributing the
+  // marker to that turn is what lets the pricing view group it under the work
+  // that caused it.
+  private findActiveTurnIdForThread(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): string | undefined {
+    const prefix = `${backend}:${threadId}:`;
+    for (const key of this.activeTurnKeys) {
+      if (key.startsWith(prefix)) {
+        return key.slice(prefix.length);
+      }
+    }
+    return undefined;
+  }
+
+  private async stopTokenMiserReplayTrackingAtCompaction(
+    event: AgentEvent,
+  ): Promise<void> {
+    if (
+      event.backend !== "codex"
+      || event.notification.method !== "thread/compacted"
+      || !this.tokenMiserStore
+    ) {
+      return;
+    }
+    const entries = this.activeTokenMiserReplayEntries.get(
+      event.notification.params.threadId,
+    );
+    if (!entries || entries.size === 0) {
+      return;
+    }
+    const stopped = await Promise.all(
+      [...entries.keys()].map((objectId) =>
+        this.tokenMiserStore!.stopReplayTracking({ objectId })
+      ),
+    );
+    if (!stopped.some(Boolean)) {
+      return;
+    }
+    await this.emitThreadToolAccountingUpdated({
+      backend: "codex",
+      threadId: event.notification.params.threadId,
+    });
+  }
+
+  private async handleThreadCompactionReplayBoundary(
+    event: AgentEvent,
+  ): Promise<void> {
+    const shouldStopReplayTracking = await this.recordThreadCompaction(event);
+    if (shouldStopReplayTracking) {
+      await this.stopTokenMiserReplayTrackingAtCompaction(event);
+    }
+  }
+
+  /**
+   * Thread-level dollar accounting for the gate.
+   *
+   * Built from `buildTokenMiserLedgerArtifact`, the same per-gate computation
+   * behind the Pricing rail cards, so the Explorer's total and the rail's rows
+   * are the same arithmetic rather than two implementations that can drift.
+   *
+   * Gates whose dollars are not resolvable yet — the helper's usage line has
+   * not landed, or the parent turn has no known model or rate — contribute to
+   * `gateCount` but not to any total. Reporting a partial sum as the whole is
+   * how a savings figure quietly becomes wrong.
+   */
+  private async buildTokenMiserThreadSavings(params: {
+    backend: AppServerBackendKind;
+    invocations: readonly ThreadToolInvocationRecord[];
+    threadId: string;
+  }): Promise<ThreadTokenMiserSavings | undefined> {
+    if (!this.tokenMiserStore) {
+      return undefined;
+    }
+    const entries = (await this.tokenMiserStore.listMetadata())
+      .filter((entry) => entry.threadId === params.threadId);
+    if (entries.length === 0) {
+      return undefined;
+    }
+    const pricing = typeof this.overlayStore.readThreadPricing === "function"
+      ? await this.overlayStore.readThreadPricing({
+          backend: params.backend,
+          threadId: params.threadId,
+        })
+      : { lines: [], summaries: [] };
+    const pricingLines = [
+      ...pricing.lines,
+      ...(this.liveTokenMiserUsageLines.get(params.threadId)?.values() ?? []),
+    ];
+
+    let pricedGateCount = 0;
+    let withoutGateCostMicros = 0;
+    let gateCostMicros = 0;
+    let revealedCostMicros = 0;
+    let savingsMicros = 0;
+    let directlyObservedReplayCount = 0;
+    let reconstructedReplayCount = 0;
+    let gateModel: string | undefined;
+    let parentModel: string | undefined;
+
+    for (const entry of entries) {
+      const replayCount = entry.replayTrackingVersion === 2
+        ? entry.cachedReplayCount ?? 0
+        : countLegacyTokenMiserCachedReplays({
+            entry,
+            invocations: params.invocations,
+          });
+      const accounting = this.buildTokenMiserLedgerArtifact({
+        entry,
+        pricingLines,
+        toolInvocations: params.invocations,
+      }).subAgent.tokenMiserAccounting;
+      if (!accounting) {
+        continue;
+      }
+      // Counted after the guard, with the dollars. Counting replays for a gate
+      // whose dollars were skipped made the confidence chip report replays the
+      // savings figure does not include.
+      if (entry.replayTrackingVersion === 2) {
+        directlyObservedReplayCount += replayCount;
+      } else {
+        reconstructedReplayCount += replayCount;
+      }
+      pricedGateCount += 1;
+      withoutGateCostMicros +=
+        accounting.baselineParentCostMicros
+        + (accounting.cachedBaselineCostMicros ?? 0);
+      gateCostMicros += accounting.gateCostMicros;
+      revealedCostMicros +=
+        accounting.revealedParentCostMicros
+        + (accounting.cachedRevealedCostMicros ?? 0);
+      savingsMicros += accounting.savingsMicros;
+      gateModel ??= accounting.gateModel;
+      parentModel ??= accounting.originalModel;
+    }
+
+    // No priced gate means no equation. Returning a zeroed ledger rendered
+    // "Net saved $0.00" as measured fact and made the token-only fallback,
+    // which says the dollars are not in yet, unreachable.
+    if (pricedGateCount === 0) {
+      return undefined;
+    }
+    return {
+      currency: "USD",
+      directlyObservedReplayCount,
+      gateCostMicros,
+      gateCount: entries.length,
+      passThroughCount: entries.filter(
+        (entry) => entry.disposition === "passed_through",
+      ).length,
+      policyPassThroughCount: entries.filter(
+        (entry) => entry.disposition === "passed_through" && !entry.helperUsage,
+      ).length,
+      helperPassThroughCount: entries.filter(
+        (entry) => entry.disposition === "passed_through" && Boolean(entry.helperUsage),
+      ).length,
+      helperDecisionCount: entries.filter(
+        (entry) => Boolean(entry.helperUsage),
+      ).length,
+      ...(gateModel ? { gateModel } : {}),
+      ...(parentModel ? { parentModel } : {}),
+      pricedGateCount,
+      reconstructedReplayCount,
+      revealedCostMicros,
+      savingsMicros,
+      withoutGateCostMicros,
+    };
+  }
+
+  private buildTokenMiserLedgerArtifact(params: {
+    entry: TokenMiserObjectMetadata;
+    pricingLines: readonly ThreadUsageLineRecord[];
+    toolInvocations?: readonly ThreadToolInvocationRecord[];
+  }): {
+    gateUsageLine?: ThreadUsageLineRecord;
+    subAgent: ThreadSubAgentSummary;
+  } {
+    const { entry, pricingLines } = params;
+    const monitorId = `system:token-miser:${entry.objectId}`;
+    const usage = entry.helperUsage?.tokenUsage
+      ? buildTaskMonitorUsageSnapshot({
+          model: entry.helperUsage.model,
+          serviceTier: entry.helperUsage.serviceTier,
+          tokenUsage: entry.helperUsage.tokenUsage,
+        })
+      : undefined;
+    let gateUsageLine = pricingLines.find(
+      (line) => line.sourceItemId === monitorId,
+    );
+    if (!gateUsageLine && usage) {
+      gateUsageLine = buildTaskMonitorUsageLine({
+        backend: "codex",
+        model: entry.helperUsage?.model,
+        monitorId,
+        monitorThreadId:
+          entry.helperUsage?.helperThreadId ?? `token-miser:${entry.objectId}`,
+        monitorTurnId: entry.helperUsage?.helperTurnId ?? entry.turnId,
+        parentThreadId: entry.threadId,
+        reasoningEffort: entry.helperUsage?.reasoningEffort,
+        serviceTier: entry.helperUsage?.serviceTier,
+        source: "monitor",
+        usage,
+      });
+      gateUsageLine.createdAt = entry.createdAt;
+    }
+    const parentUsageLine = pricingLines.find((line) =>
+      line.scope !== "monitor"
+      && line.threadId === entry.threadId
+      && (line.turnId === entry.turnId || line.usageTurnId === entry.turnId)
+      && Boolean(line.model),
+    );
+    const tokenMiserAccounting = buildTokenMiserSubAgentAccounting({
+      entry,
+      gateUsageLine,
+      legacyCachedReplayCount: countLegacyTokenMiserCachedReplays({
+        entry,
+        invocations: params.toolInvocations ?? [],
+      }),
+      parentUsageLine,
+    });
+    const policyPassThrough =
+      entry.disposition === "passed_through"
+      && !entry.helperUsage;
+    return {
+      ...(gateUsageLine ? { gateUsageLine } : {}),
+      subAgent: {
+        monitorId,
+        task: policyPassThrough
+          ? `Pass through ${entry.toolName} output by policy`
+          : entry.disposition === "passed_through"
+            ? `Evaluate ${entry.toolName} output`
+          : `Gate ${entry.toolName} output`,
+        status: "success",
+        createdAt: entry.createdAt,
+        updatedAt: entry.createdAt,
+        ownerRuntimeInstanceId: this.runtimeInstanceId,
+        ownerRegistrySessionId: this.registrySessionId,
+        backend: "codex",
+        agentName: "Token Miser",
+        ...(entry.helperUsage?.model
+          ? { preferredModel: entry.helperUsage.model }
+          : {}),
+        ...(entry.helperUsage?.reasoningEffort
+          ? { preferredReasoningEffort: entry.helperUsage.reasoningEffort }
+          : {}),
+        ...(entry.helperUsage?.helperThreadId
+          ? { monitorThreadId: entry.helperUsage.helperThreadId }
+          : {}),
+        parentTurnId: entry.turnId,
+        ...(entry.helperUsage?.helperTurnId
+          ? { monitorTurnId: entry.helperUsage.helperTurnId }
+          : {}),
+        lastMessage: policyPassThrough
+          ? `Passed ${entry.originalCharacters.toLocaleString()} characters `
+            + `from ${entry.toolName} through unchanged by deterministic policy.`
+          : entry.disposition === "passed_through"
+            ? `Passed ${entry.originalCharacters.toLocaleString()} characters `
+              + `from ${entry.toolName} through unchanged after evaluation.`
+          : `Compressed ${entry.originalCharacters.toLocaleString()} characters `
+            + `from ${entry.toolName} before they entered the parent context.`,
+        outcome: "success",
+        completedAt: entry.createdAt,
+        completionSource: {
+          type: "pwragent_fallback",
+          reason: entry.disposition === "passed_through"
+            ? "system_token_miser_pass_through"
+            : "system_token_miser_gate",
+          recoveryAttempted: false,
+          terminalStatus: "completed",
+        },
+        ...(usage ? { monitorUsage: usage } : {}),
+        ...(tokenMiserAccounting ? { tokenMiserAccounting } : {}),
+      },
+    };
+  }
+
+  private async publishLiveTokenMiserLedgerEntry(
+    entry: TokenMiserObjectMetadata,
+  ): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    const pricing = typeof this.overlayStore.readThreadPricing === "function"
+      ? await this.overlayStore.readThreadPricing({
+          backend: "codex",
+          threadId: entry.threadId,
+        })
+      : { lines: [], summaries: [] };
+    const toolAccounting =
+      typeof this.overlayStore.readThreadToolAccounting === "function"
+        ? await this.overlayStore.readThreadToolAccounting({
+            backend: "codex",
+            includeAllInvocations: true,
+            threadId: entry.threadId,
+          })
+        : undefined;
+    const linesById = new Map(
+      pricing.lines.map((line) => [line.usageLineId, line]),
+    );
+    for (const pending of this.pendingLiveThreadUsageLines.values()) {
+      const lineThreadId = pending.line.parentThreadId ?? pending.line.threadId;
+      if (pending.backend === "codex" && lineThreadId === entry.threadId) {
+        linesById.set(pending.line.usageLineId, pending.line);
+      }
+    }
+    for (const line of this.liveTokenMiserUsageLines.get(entry.threadId)?.values()
+      ?? []) {
+      linesById.set(line.usageLineId, line);
+    }
+    const artifact = this.buildTokenMiserLedgerArtifact({
+      entry,
+      pricingLines: [...linesById.values()],
+      toolInvocations: toolAccounting?.invocations,
+    });
+    if (
+      artifact.gateUsageLine
+      && !pricing.lines.some((line) =>
+        line.usageLineId === artifact.gateUsageLine?.usageLineId
+      )
+      && !this.pendingLiveThreadUsageLines.has(
+        artifact.gateUsageLine.usageLineId,
+      )
+    ) {
+      logUnpricedThreadUsageLine(artifact.gateUsageLine);
+      if (typeof this.overlayStore.upsertThreadUsageLines === "function") {
+        this.bufferLiveThreadUsageLine({
+          backend: "codex",
+          line: artifact.gateUsageLine,
+          observationSequence: ++this.liveThreadUsageObservationSequence,
+        });
+      } else if (typeof this.overlayStore.upsertThreadUsageLine === "function") {
+        await this.overlayStore.upsertThreadUsageLine({
+          line: artifact.gateUsageLine,
+        });
+      }
+    }
+    const liveSubAgents = this.liveTokenMiserSubAgents.get(entry.threadId)
+      ?? new Map<string, ThreadSubAgentSummary>();
+    liveSubAgents.set(artifact.subAgent.monitorId, artifact.subAgent);
+    this.liveTokenMiserSubAgents.set(entry.threadId, liveSubAgents);
+    if (artifact.gateUsageLine) {
+      const liveUsageLines = this.liveTokenMiserUsageLines.get(entry.threadId)
+        ?? new Map<string, ThreadUsageLineRecord>();
+      liveUsageLines.set(
+        artifact.gateUsageLine.usageLineId,
+        artifact.gateUsageLine,
+      );
+      this.liveTokenMiserUsageLines.set(entry.threadId, liveUsageLines);
+    }
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: entry.threadId,
+    });
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId: entry.threadId,
+          subAgents: this.mergeLiveTokenMiserSubAgents(
+            entry.threadId,
+            overlay?.subAgents,
+          ),
+        },
+      },
+    });
+    await this.emitThreadPricingUpdated({
+      backend: "codex",
+      threadId: entry.threadId,
+    });
+  }
+
+  /**
+   * Refresh every live gate card once after a parent request advances replay
+   * accounting. The store updates N objects for one request boundary; doing a
+   * full pricing read and renderer publish from each metadata callback would
+   * turn that into N reads and 2N notifications. Active v2 entries already
+   * carry their parent model and helper usage, so rebuild them together from
+   * the in-memory usage lines and emit one sub-agent snapshot.
+   */
+  private async publishLiveTokenMiserReplayEntries(
+    entries: readonly TokenMiserObjectMetadata[],
+  ): Promise<void> {
+    const first = entries[0];
+    if (this.closed || !first) {
+      return;
+    }
+    const threadId = first.threadId;
+    const liveSubAgents = this.liveTokenMiserSubAgents.get(threadId)
+      ?? new Map<string, ThreadSubAgentSummary>();
+    const liveUsageLines = this.liveTokenMiserUsageLines.get(threadId)
+      ?? new Map<string, ThreadUsageLineRecord>();
+    for (const entry of entries) {
+      if (entry.threadId !== threadId) {
+        continue;
+      }
+      const artifact = this.buildTokenMiserLedgerArtifact({
+        entry,
+        pricingLines: [...liveUsageLines.values()],
+      });
+      liveSubAgents.set(artifact.subAgent.monitorId, artifact.subAgent);
+      if (artifact.gateUsageLine) {
+        liveUsageLines.set(
+          artifact.gateUsageLine.usageLineId,
+          artifact.gateUsageLine,
+        );
+      }
+    }
+    this.liveTokenMiserSubAgents.set(threadId, liveSubAgents);
+    this.liveTokenMiserUsageLines.set(threadId, liveUsageLines);
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId,
+    });
+    await this.emit({
+      backend: "codex",
+      notification: {
+        method: "thread/subAgents/updated",
+        params: {
+          threadId,
+          subAgents: this.mergeLiveTokenMiserSubAgents(
+            threadId,
+            overlay?.subAgents,
+          ),
+        },
+      },
+    });
+  }
+
+  private clearLiveTokenMiserLedgerEntries(
+    threadId: string,
+    entries: readonly TokenMiserObjectMetadata[],
+  ): boolean {
+    const liveSubAgents = this.liveTokenMiserSubAgents.get(threadId);
+    const liveUsageLines = this.liveTokenMiserUsageLines.get(threadId);
+    let changed = false;
+    for (const entry of entries) {
+      const monitorId = `system:token-miser:${entry.objectId}`;
+      changed = liveSubAgents?.delete(monitorId) === true || changed;
+      for (const [usageLineId, line] of liveUsageLines ?? []) {
+        if (line.sourceItemId === monitorId) {
+          liveUsageLines?.delete(usageLineId);
+          changed = true;
+        }
+      }
+    }
+    if (liveSubAgents?.size === 0) {
+      this.liveTokenMiserSubAgents.delete(threadId);
+    }
+    if (liveUsageLines?.size === 0) {
+      this.liveTokenMiserUsageLines.delete(threadId);
+    }
+    return changed;
+  }
+
+  private async flushPendingTokenMiserLedger(params: {
+    threadId: string;
+  }): Promise<void> {
+    await this.tokenMiserLedgerReconciliation;
+    const metadata = Array.from(this.pendingTokenMiserInterceptions.values())
+      .filter((entry) =>
+        entry.threadId === params.threadId,
+      );
+    await this.persistTokenMiserLedgerEntries(metadata);
+  }
+
+  private async persistTokenMiserLedgerEntries(
+    metadata: readonly TokenMiserObjectMetadata[],
+  ): Promise<void> {
+    // Finalized helper usage joins the same one-second bulk-write window as
+    // parent usage. Drain that window before terminal reconciliation so the
+    // stable helper line is found instead of inserted a second time.
+    await this.flushLiveThreadUsageLines();
+    const byThread = new Map<string, TokenMiserObjectMetadata[]>();
+    for (const entry of metadata) {
+      const entries = byThread.get(entry.threadId) ?? [];
+      entries.push(entry);
+      byThread.set(entry.threadId, entries);
+    }
+
+    for (const [threadId, entries] of byThread) {
+      const overlay = await this.overlayStore.getThreadOverlayState({
+        backend: "codex",
+        threadId,
+      });
+      const pricing = typeof this.overlayStore.readThreadPricing === "function"
+        ? await this.overlayStore.readThreadPricing({
+            backend: "codex",
+            threadId,
+          })
+        : undefined;
+      const toolAccounting =
+        typeof this.overlayStore.readThreadToolAccounting === "function"
+          ? await this.overlayStore.readThreadToolAccounting({
+              backend: "codex",
+              includeAllInvocations: true,
+              threadId,
+            })
+          : undefined;
+      const existingSubAgents = new Map(
+        overlay?.subAgents?.map((subAgent) => [subAgent.monitorId, subAgent])
+          ?? [],
+      );
+      const knownUsageLineIds = new Set(
+        pricing?.lines.map((line) => line.usageLineId) ?? [],
+      );
+      const subAgents: ThreadSubAgentSummary[] = [];
+      const usageLines: ThreadUsageLineRecord[] = [];
+
+      for (const entry of entries) {
+        const artifact = this.buildTokenMiserLedgerArtifact({
+          entry,
+          pricingLines: pricing?.lines ?? [],
+          toolInvocations: toolAccounting?.invocations,
+        });
+        const existingSubAgent = existingSubAgents.get(
+          artifact.subAgent.monitorId,
+        );
+        // Compare the fields the rail actually renders, not the whole record:
+        // owner ids change every process, so a whole-record compare would
+        // rewrite every gate on every launch. But comparing accounting alone
+        // meant a new rendered field — `parentTurnId`, which the rail nests
+        // on — never reached gates whose numbers had not moved, so a restart
+        // left them un-nested indefinitely.
+        if (
+          !existingSubAgent
+          || tokenMiserSubAgentProjectionChanged(
+            existingSubAgent,
+            artifact.subAgent,
+          )
+        ) {
+          subAgents.push(artifact.subAgent);
+        }
+        if (
+          artifact.gateUsageLine
+          && !knownUsageLineIds.has(artifact.gateUsageLine.usageLineId)
+        ) {
+          logUnpricedThreadUsageLine(artifact.gateUsageLine);
+          usageLines.push(artifact.gateUsageLine);
+        }
+      }
+
+      if (subAgents.length > 0) {
+        if (typeof this.overlayStore.upsertThreadSubAgents === "function") {
+          await this.overlayStore.upsertThreadSubAgents({
+            backend: "codex",
+            threadId,
+            subAgents,
+          });
+        } else {
+          for (const subAgent of subAgents) {
+            await this.overlayStore.upsertThreadSubAgent({
+              backend: "codex",
+              threadId,
+              subAgent,
+            });
+          }
+        }
+        this.invalidateThreadListCache("codex");
+      }
+      if (usageLines.length > 0) {
+        if (typeof this.overlayStore.upsertThreadUsageLines === "function") {
+          await this.overlayStore.upsertThreadUsageLines({ lines: usageLines });
+        } else {
+          for (const line of usageLines) {
+            await this.overlayStore.upsertThreadUsageLine({ line });
+          }
+        }
+      }
+      const clearedLive = this.clearLiveTokenMiserLedgerEntries(
+        threadId,
+        entries,
+      );
+      for (const entry of entries) {
+        this.pendingTokenMiserInterceptions.delete(entry.objectId);
+      }
+      if (subAgents.length > 0 || clearedLive) {
+        const updatedOverlay = await this.overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId,
+        });
+        await this.emit({
+          backend: "codex",
+          notification: {
+            method: "thread/subAgents/updated",
+            params: {
+              threadId,
+              subAgents: this.mergeLiveTokenMiserSubAgents(
+                threadId,
+                updatedOverlay?.subAgents,
+              ),
+            },
+          },
+        });
+      }
+      if (usageLines.length > 0 || clearedLive) {
+        await this.emitThreadPricingUpdated({
+          backend: "codex",
+          threadId,
+        });
+      }
+    }
+  }
+
   private resolveTitleHelperRuntime(params: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -25325,6 +27610,41 @@ export class DesktopBackendRegistry {
         });
         return { decision: "approve" };
       }
+    }
+
+    const tokenMiserCall = readAgentDynamicToolCall({
+      method: request.method,
+      params: request.params,
+    });
+    const tokenMiserRouter = new AgentToolRouter(
+      buildTokenMiserToolDefinitions(this.tokenMiserStore),
+    );
+    if (
+      tokenMiserCall
+      && tokenMiserRouter.acceptsDynamicToolCall(tokenMiserCall)
+    ) {
+      if (!(await this.isTokenMiserDynamicToolCallEnabled(
+        backend,
+        tokenMiserCall,
+      ))) {
+        return toDynamicToolResponse({
+          ok: false,
+          code: "forbidden",
+          message: "Token Miser retrieval is disabled for this thread.",
+        });
+      }
+      if (!this.isLiveDynamicToolCall(backend, tokenMiserCall)) {
+        return toDynamicToolResponse({
+          ok: false,
+          code: "forbidden",
+          message:
+            "Token Miser retrieval must originate from an active turn on the owning thread.",
+        });
+      }
+      return await tokenMiserRouter.handleDynamicToolCall({
+        backend,
+        call: tokenMiserCall,
+      });
     }
 
     const dynamicToolCall = readAutomationInspectionDynamicToolCall({
@@ -25699,6 +28019,81 @@ export class DesktopBackendRegistry {
         );
       });
     });
+  }
+
+  private async isTokenMiserDynamicToolCallEnabled(
+    backend: AppServerBackendKind,
+    call: NonNullable<ReturnType<typeof readAgentDynamicToolCall>>,
+  ): Promise<boolean> {
+    if (backend !== "codex") {
+      return false;
+    }
+    if (!this.resolveTokenMiserEnabledFn()) {
+      return false;
+    }
+    const threadOverride = await this.resolveTokenMiserThreadOverride(
+      backend,
+      call.threadId,
+    );
+    return threadOverride ?? this.resolveTokenMiserDefaultEnabledFn();
+  }
+
+  private async resolveTokenMiserThreadOverride(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): Promise<boolean | undefined> {
+    const directOverlay = await this.overlayStore.getThreadOverlayState({
+      backend,
+      threadId,
+    });
+    if (directOverlay?.tokenMiserEnabled !== undefined) {
+      return directOverlay.tokenMiserEnabled;
+    }
+    const managedReviewParent = this.findManagedReviewParentForChild({
+      backend,
+      reviewThreadId: threadId,
+    });
+    if (managedReviewParent?.parentBackend !== "codex") {
+      return undefined;
+    }
+    const parentOverlay = await this.overlayStore.getThreadOverlayState({
+      backend: "codex",
+      threadId: managedReviewParent.parentThreadId,
+    });
+    return parentOverlay?.tokenMiserEnabled;
+  }
+
+  private findManagedReviewParentForChild(params: {
+    backend: AppServerBackendKind;
+    reviewThreadId: string;
+  }): { parentBackend: AppServerBackendKind; parentThreadId: string } | undefined {
+    const pending = this.managedReviewParentsByChildThread.get(
+      buildThreadIdentityKey(params.backend, params.reviewThreadId),
+    );
+    if (pending) {
+      return pending;
+    }
+    const active = Array.from(this.activeReviewSubAgents.values()).find(
+      (record) =>
+        record.mode === "managed"
+        && record.backend === params.backend
+        && record.reviewThreadId === params.reviewThreadId,
+    );
+    return active
+      ? {
+          parentBackend: active.parentBackend,
+          parentThreadId: active.parentThreadId,
+        }
+      : undefined;
+  }
+
+  private resolveTokenMiserEnabledForOverride(
+    threadOverride: boolean | undefined,
+  ): boolean {
+    return (
+      this.resolveTokenMiserEnabledFn()
+      && (threadOverride ?? this.resolveTokenMiserDefaultEnabledFn())
+    );
   }
 
   private isLiveDynamicToolCall(
@@ -31983,6 +34378,11 @@ export class DesktopBackendRegistry {
         };
       };
       const turnId = turnIdFromTerminalNotification(notification);
+      if (event.backend === "codex") {
+        await this.flushPendingTokenMiserLedger({
+          threadId: notification.params.threadId,
+        });
+      }
       if (turnId) {
         this.pdfAttachmentStore.releaseTurn({
           backend: event.backend,
@@ -32336,6 +34736,17 @@ export class DesktopBackendRegistry {
       event,
       liveThreadUsageWork,
     );
+    // Token Miser is a fail-open accounting feature; a filesystem error in it
+    // must not abort the pipeline before `emitToListeners`, which would drop
+    // the notification the renderer is waiting on.
+    // Token Miser is fail-open accounting: a filesystem error in it must not
+    // abort the pipeline before `emitToListeners`, which would drop the
+    // notification the renderer is waiting on.
+    await this.runTokenMiserSideEffect(
+      "recordTokenMiserParentModelRequest",
+      () => this.recordTokenMiserParentModelRequest(event),
+    );
+    await this.handleThreadCompactionReplayBoundary(event);
     await this.recordToolInvocationAccounting(event);
     this.forgetCompletedTurnReplayObservations(event);
     await this.recordCodexNativeSubAgentActivity(event);
@@ -32751,6 +35162,9 @@ function toThreadInspectionSummary(
     updatedAt: thread.updatedAt,
     archivedAt: thread.archivedAt,
     agent: overlay?.agent,
+    ...(overlay?.tokenMiserEnabled !== undefined
+      ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+      : {}),
     handoffOrigin: overlay?.handoffOrigin,
     executionMode: thread.executionMode,
     model: thread.model,
@@ -32797,6 +35211,9 @@ function toThreadInspectionSummaryFromSearchResult(
     updatedAt: result.updatedAt,
     archivedAt: result.archivedAt,
     agent: overlay?.agent,
+    ...(overlay?.tokenMiserEnabled !== undefined
+      ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+      : {}),
     handoffOrigin: overlay?.handoffOrigin,
     model: result.model,
     linkedDirectories,

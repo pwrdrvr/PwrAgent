@@ -762,6 +762,24 @@ export type DesktopSettingsSnapshot = {
   configPath: string;
   configError?: string;
   runtime: {
+    tokenMiser?: {
+      /**
+       * Whether the Codex-side gate is actually installed. The feature fails
+       * open by design, so an activation failure otherwise looks identical to
+       * a thread that simply had nothing worth gating.
+       */
+      activation?: {
+        state: "active" | "unavailable";
+        reason?: string;
+        observedAt: number;
+      };
+      interceptionCount: number;
+      originalCharacters: number;
+      baselineParentTokens: number;
+      replacementTokens: number;
+      retrievedTokens: number;
+      estimatedParentTokensSaved: number;
+    };
     messaging: {
       disabled: boolean;
       disabledReason?: string;
@@ -823,6 +841,18 @@ export type DesktopSettingsSnapshot = {
      * a currency conversion from USD.
      */
     threadPricingDisplayCodexCredits?: DesktopSettingsValue<boolean>;
+    /**
+     * Replace oversized Codex tool results with a bounded summary and preserve
+     * the exact model-facing response for deliberate retrieval. This is the
+     * outer experiment gate; per-thread controls may only opt out while it is
+     * enabled.
+     */
+    tokenMiserEnabled: DesktopSettingsValue<boolean>;
+    /**
+     * Inherited Token Miser state for Codex threads without a per-thread
+     * override. This only has an effect while the experiment gate is enabled.
+     */
+    tokenMiserDefaultEnabled?: DesktopSettingsValue<boolean>;
     /**
      * Shows the experimental Tool calls tab in the thread context rail.
      * The desktop app may still collect tool metrics while this is disabled;
@@ -1099,6 +1129,8 @@ export type DesktopSettingsConfigPatch = {
     threadPricingSummary?: boolean;
     threadPricingDisplayUsd?: boolean;
     threadPricingDisplayCodexCredits?: boolean;
+    tokenMiserEnabled?: boolean;
+    tokenMiserDefaultEnabled?: boolean;
     threadToolAccounting?: boolean;
     codexDefaultModeRequestUserInput?: boolean;
     managedReview?: boolean;

@@ -25,6 +25,7 @@ import type {
   PrSummary,
   ThreadAgentMetadata,
   ThreadExecutionMode,
+  ThreadSubAgentSummary,
 } from "@pwragent/shared";
 import {
   AGENT_PERSONA_INSTRUCTIONS_LINE_GUIDANCE,
@@ -870,6 +871,7 @@ function threadSummariesEqual(
     left.reasoningEffort === right.reasoningEffort &&
     left.serviceTier === right.serviceTier &&
     left.fastMode === right.fastMode &&
+    left.tokenMiserEnabled === right.tokenMiserEnabled &&
     left.prAutoDispatchEnabled === right.prAutoDispatchEnabled &&
     JSON.stringify(left.prAutoDispatchPending ?? null) ===
       JSON.stringify(right.prAutoDispatchPending ?? null) &&
@@ -1230,6 +1232,36 @@ function updateThreadReactionsInSnapshot(
   }
 
   return { ...snapshot, threads };
+}
+
+function updateThreadSubAgentsInSnapshot(
+  snapshot: NavigationSnapshot | undefined,
+  params: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    subAgents: ThreadSubAgentSummary[];
+    threadId: string;
+  },
+): NavigationSnapshot | undefined {
+  if (!snapshot) {
+    return snapshot;
+  }
+  const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+  let changed = false;
+  const threads = snapshot.threads.map((thread) => {
+    if (
+      buildThreadIdentityKey(thread.source, thread.id) !== threadKey
+      || !federationTargetsEqual(
+        thread.federation?.ref.target,
+        params.federationTarget,
+      )
+    ) {
+      return thread;
+    }
+    changed = true;
+    return { ...thread, subAgents: params.subAgents };
+  });
+  return changed ? { ...snapshot, threads } : snapshot;
 }
 
 function updateThreadPinInSnapshot(
@@ -2750,6 +2782,7 @@ function buildOptimisticThreadFromLaunchpad(params: {
     reasoningEffort: params.launchpad.reasoningEffort,
     serviceTier: params.launchpad.serviceTier,
     fastMode: params.launchpad.fastMode,
+    tokenMiserEnabled: params.launchpad.tokenMiserEnabled,
     ...(params.launchpad.agent
       ? {
           agent: {
@@ -4630,12 +4663,37 @@ export function useThreadNavigation(
         return;
       }
 
+      if (method === "thread/subAgents/updated") {
+        const params = event.notification.params as {
+          subAgents?: ThreadSubAgentSummary[];
+          threadId: string;
+        };
+        if (!params.subAgents) {
+          scheduleRefresh();
+          return;
+        }
+        setState((current) => ({
+          ...current,
+          response: updateThreadSubAgentsInSnapshot(current.response, {
+            backend: event.backend,
+            federationTarget: event.federationTarget,
+            subAgents: params.subAgents ?? [],
+            threadId: params.threadId,
+          }),
+        }));
+        setOptimisticThread((current) =>
+          current && agentEventMatchesThread(event, current, params.threadId)
+            ? { ...current, subAgents: params.subAgents }
+            : current
+        );
+        return;
+      }
+
       if (
         method === "thread/automations/updated" ||
         method === "automation/run/updated" ||
         method === "thread/turnQueue/updated" ||
-        method === "thread/agent/updated" ||
-        method === "thread/subAgents/updated"
+        method === "thread/agent/updated"
       ) {
         scheduleRefresh();
         return;

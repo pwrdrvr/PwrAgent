@@ -39,6 +39,16 @@ const DEFAULT_THREAD_TOOL_ACCOUNTING = {
   source: "default" as const,
 };
 
+const DEFAULT_TOKEN_MISER_ENABLED = {
+  value: false,
+  source: "default" as const,
+};
+
+const DEFAULT_TOKEN_MISER_DEFAULT_ENABLED = {
+  value: true,
+  source: "default" as const,
+};
+
 export function ExperimentalSettings(props: {
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
@@ -47,6 +57,8 @@ export function ExperimentalSettings(props: {
   onLightweightNavigationRefreshChange: (enabled: boolean) => Promise<void>;
   onMarkdownMathRenderingChange: (enabled: boolean) => Promise<void>;
   onThreadToolAccountingChange: (enabled: boolean) => Promise<void>;
+  onTokenMiserEnabledChange: (enabled: boolean) => Promise<void>;
+  onTokenMiserDefaultEnabledChange: (enabled: boolean) => Promise<void>;
   onCodexDefaultModeRequestUserInputChange: (
     enabled: boolean,
   ) => Promise<void>;
@@ -65,6 +77,18 @@ export function ExperimentalSettings(props: {
   const threadToolAccounting =
     props.snapshot.experimental.threadToolAccounting ??
     DEFAULT_THREAD_TOOL_ACCOUNTING;
+  const tokenMiserEnabled =
+    props.snapshot.experimental.tokenMiserEnabled ??
+    DEFAULT_TOKEN_MISER_ENABLED;
+  const tokenMiserDefaultEnabled =
+    props.snapshot.experimental.tokenMiserDefaultEnabled ??
+    DEFAULT_TOKEN_MISER_DEFAULT_ENABLED;
+  const tokenMiserUsage = props.snapshot.runtime.tokenMiser;
+  const tokenMiserActivation = tokenMiserUsage?.activation;
+  // Only a contradiction is worth reporting: switched on, but the Codex side
+  // never loaded. Off-and-unavailable is just off.
+  const tokenMiserInert =
+    tokenMiserEnabled.value && tokenMiserActivation?.state === "unavailable";
   const codexDefaultModeRequestUserInput =
     props.snapshot.experimental.codexDefaultModeRequestUserInput ??
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
@@ -81,6 +105,87 @@ export function ExperimentalSettings(props: {
         title="Experimental features"
         help="Features that may change shape or be removed without notice."
       />
+
+      <SettingsSection
+        eyebrow="Experimental"
+        title="Token Miser"
+        description="Keep accidental walls of Codex tool output out of the parent thread while preserving the exact result for targeted retrieval."
+        chip={
+          tokenMiserInert
+            ? "Not running"
+            : !tokenMiserEnabled.value
+              ? "Off"
+              : tokenMiserDefaultEnabled.value ? "Default on" : "Opt-in"
+        }
+        chipKind={
+          tokenMiserInert
+            ? "warn"
+            : tokenMiserEnabled.value ? "ok" : "default"
+        }
+      >
+        <div className="settings-fields">
+          <SettingsField
+            label="Make Token Miser available"
+            sub="Load the Token Miser runtime and expose per-thread controls."
+            help="Off by default. Requires a separately installed Token Miser-compatible Codex; PwrAgent does not download or update that executable. Codex also requires you to approve the exact PwrAgent hook with /hooks before it can run. New or reloaded Codex threads pick up the hook after approval. If the bridge or summarizer is unavailable, the original result passes through unchanged."
+            source={sourceBadge(tokenMiserEnabled)}
+            control={
+              <SettingsSwitch
+                checked={tokenMiserEnabled.value}
+                disabled={props.saving}
+                label="Make Token Miser available"
+                onChange={(enabled) => {
+                  void props.onTokenMiserEnabledChange(enabled);
+                }}
+              />
+            }
+          />
+          <SettingsField
+            label="Enable on threads by default"
+            sub="Threads without an explicit override inherit this setting. Individual threads can still turn Token Miser on or off from the composer menu."
+            help="On preserves the original Token Miser behavior: every Codex thread uses it unless opted out. Off makes Token Miser available as a per-thread opt-in."
+            source={sourceBadge(tokenMiserDefaultEnabled)}
+            control={
+              <SettingsSwitch
+                checked={tokenMiserDefaultEnabled.value}
+                disabled={props.saving || !tokenMiserEnabled.value}
+                label="Enable Token Miser on threads by default"
+                onChange={(enabled) => {
+                  void props.onTokenMiserDefaultEnabledChange(enabled);
+                }}
+              />
+            }
+          />
+          {tokenMiserInert ? (
+            <SettingsField
+              label="Codex could not load the gate"
+              sub={tokenMiserActivation?.reason
+                ?? "Codex plugin activation did not complete."}
+              help="Token Miser fails open, so turns keep running with tool output unchanged — nothing is gated until this clears. PwrAgent retries activation each time a Codex backend starts, so relaunching after fixing the cause is usually enough."
+              control={
+                <span className="settings-field__value settings-field__value--warn">
+                  Enabled, not running
+                </span>
+              }
+            />
+          ) : null}
+          {tokenMiserUsage && tokenMiserUsage.interceptionCount > 0 ? (
+            <SettingsField
+              label="Estimated parent-context savings"
+              sub={`${tokenMiserUsage.interceptionCount.toLocaleString()} intercepted results · ${tokenMiserUsage.baselineParentTokens.toLocaleString()} baseline tokens − ${tokenMiserUsage.replacementTokens.toLocaleString()} summary tokens − ${tokenMiserUsage.retrievedTokens.toLocaleString()} retrieved tokens.`}
+              help="This estimate measures tokens kept out of the parent thread after Codex's model-visible output cap. It is separate from the Luna helper's own token cost. Repeated retrievals count each time, so reading everything can make the savings negative."
+              control={
+                <span className="settings-field__value">
+                  {tokenMiserUsage.estimatedParentTokensSaved >= 0 ? "Saved " : "Added "}
+                  {Math.abs(
+                    tokenMiserUsage.estimatedParentTokensSaved,
+                  ).toLocaleString()} tokens
+                </span>
+              }
+            />
+          ) : null}
+        </div>
+      </SettingsSection>
 
       <SettingsSection
         eyebrow="Experimental"

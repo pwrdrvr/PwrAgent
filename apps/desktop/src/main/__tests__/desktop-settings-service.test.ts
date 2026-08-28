@@ -781,6 +781,118 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  // Token Miser fails open, so an inert gate looks exactly like a thread with
+  // nothing worth gating. The activation record is what lets Settings say the
+  // feature is switched on but not actually running.
+  it("surfaces a recorded Token Miser activation failure", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const stateDir = path.join(root, "state", "token-miser");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "activation.json"),
+      JSON.stringify({
+        observedAt: 1_800_000_000_000,
+        reason: "marketplace 'pwragent-local' is already added from a different source",
+        state: "unavailable",
+      }),
+      "utf8",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.runtime.tokenMiser?.activation).toMatchObject({
+      state: "unavailable",
+    });
+    expect(snapshot.runtime.tokenMiser?.activation?.reason)
+      .toContain("already added from a different source");
+  });
+
+  it("reports no activation claim when the profile never tried", async () => {
+    const root = createTempRoot();
+    const service = new DesktopSettingsService({
+      configPath: path.join(root, "config.toml"),
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).runtime.tokenMiser?.activation)
+      .toBeUndefined();
+  });
+
+  it("defaults Token Miser unavailable with inherited thread use on", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).experimental.tokenMiserEnabled).toEqual({
+      value: false,
+      source: "default",
+    });
+    expect(service.resolveTokenMiserEnabled()).toBe(false);
+    expect(
+      (await service.readSettings()).experimental.tokenMiserDefaultEnabled,
+    ).toEqual({
+      value: true,
+      source: "default",
+    });
+    expect(service.resolveTokenMiserDefaultEnabled()).toBe(true);
+
+    await service.writeConfigPatch({
+      experimental: {
+        tokenMiserEnabled: true,
+        tokenMiserDefaultEnabled: false,
+      },
+    });
+
+    expect(fs.readFileSync(configPath, "utf8")).toContain([
+      "[experimental]",
+      "token_miser_enabled = true",
+      "token_miser_default_enabled = false",
+    ].join("\n"));
+    expect(service.resolveTokenMiserEnabled()).toBe(true);
+    expect(service.resolveTokenMiserDefaultEnabled()).toBe(false);
+  });
+
+  it("reads and lazily mirrors the legacy general Token Miser opt-in", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, [
+      "[general]",
+      "token_miser_enabled = true",
+      "untouched = \"keep\"",
+    ].join("\n"));
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect((await service.readSettings()).experimental.tokenMiserEnabled).toEqual({
+      value: true,
+      source: "config",
+    });
+
+    await service.writeConfigPatch({
+      experimental: { tokenMiserEnabled: false },
+    });
+
+    const contents = fs.readFileSync(configPath, "utf8");
+    expect(contents).toContain(
+      "# pwragent-legacy-settings key=token_miser_enabled shape=boolean used_through=1.1.0-alpha.1 kept_for_older_clients\ntoken_miser_enabled = false",
+    );
+    expect(contents).toContain("[experimental]\ntoken_miser_enabled = false");
+    expect(contents).toContain("untouched = \"keep\"");
+  });
+
   it("persists bounded active-turn and thread spend alerts", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

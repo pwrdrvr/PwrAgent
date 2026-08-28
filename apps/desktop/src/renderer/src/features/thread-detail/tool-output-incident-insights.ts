@@ -1,6 +1,8 @@
 import type {
+  ThreadTokenMiserInterceptionAccounting,
   ThreadToolInvocationCategory,
   ThreadToolInvocationRecord,
+  ThreadToolAccounting,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
@@ -50,6 +52,320 @@ export type IncidentSummary = {
   turnCount: number;
   worstChars: number;
 };
+
+export type TokenMiserContextComparison = {
+  actualParentTokens: number;
+  avoidedParentTokens: number;
+  withoutTokenMiserTokens: number;
+};
+
+export function buildTokenMiserContextComparison(
+  invocations: readonly ThreadToolInvocationRecord[],
+  tokenMiser: ThreadToolAccounting["tokenMiser"],
+): TokenMiserContextComparison | undefined {
+  if (!tokenMiser || tokenMiser.interceptionCount === 0) {
+    return undefined;
+  }
+  const matches = matchTokenMiserInvocations(
+    invocations,
+    tokenMiser.interceptions ?? [],
+  );
+  const modelVisibleTokens = (invocation: ThreadToolInvocationRecord): number =>
+    Math.ceil(Math.min(invocation.outputChars, TOOL_OUTPUT_CAP_CHARS) / 4);
+  const accountedTokens = invocations.reduce(
+    (total, invocation) => total + modelVisibleTokens(invocation),
+    0,
+  );
+  const accountedGatedTokens = invocations.reduce((total, invocation) => {
+    const isGated = matches.has(invocation.invocationId);
+    return total + (isGated ? modelVisibleTokens(invocation) : 0);
+  }, 0);
+  const withoutTokenMiserTokens =
+    accountedTokens - accountedGatedTokens + tokenMiser.baselineParentTokens;
+  return {
+    actualParentTokens:
+      withoutTokenMiserTokens - tokenMiser.estimatedParentTokensSaved,
+    avoidedParentTokens: tokenMiser.estimatedParentTokensSaved,
+    withoutTokenMiserTokens,
+  };
+}
+
+/**
+ * A gate that did not pay off, or a payload the gate never really controlled.
+ *
+ * Aggregate savings hide these: a thread can show a large avoided footprint
+ * while individual gates cost more than they saved, hand most of the payload
+ * back through retrieval, or summarize the same output several times over.
+ */
+export type TokenMiserRoughEdge = {
+  detail: string;
+  key: string;
+  kind: "cost" | "leak" | "repeat" | "truncated";
+  label: string;
+  title: string;
+  value: string;
+};
+
+const ROUGH_EDGE_ORDER: Record<TokenMiserRoughEdge["kind"], number> = {
+  cost: 0,
+  leak: 1,
+  repeat: 2,
+  truncated: 3,
+};
+
+export function buildTokenMiserRoughEdges(
+  invocations: readonly ThreadToolInvocationRecord[],
+  tokenMiser: ThreadToolAccounting["tokenMiser"],
+): TokenMiserRoughEdge[] {
+  const interceptions = tokenMiser?.interceptions ?? [];
+  if (interceptions.length === 0) {
+    return [];
+  }
+  const invocationByToolUseId = new Map<string, ThreadToolInvocationRecord>();
+  for (const invocation of invocations) {
+    if (invocation.itemId) {
+      invocationByToolUseId.set(invocation.itemId, invocation);
+    }
+  }
+  const matchedInvocations = matchTokenMiserInvocations(invocations, interceptions);
+  const matchedInvocationByObjectId = new Map<string, ThreadToolInvocationRecord>();
+  for (const invocation of invocations) {
+    const interception = matchedInvocations.get(invocation.invocationId);
+    if (interception && !matchedInvocationByObjectId.has(interception.objectId)) {
+      matchedInvocationByObjectId.set(interception.objectId, invocation);
+    }
+  }
+  const matchedCommand = (toolUseId: string): string | undefined => {
+    const interception = interceptions.find(
+      (entry) => entry.toolUseId === toolUseId,
+    );
+    return interception
+      ? matchedInvocationByObjectId.get(interception.objectId)?.normalizedCommand
+      : undefined;
+  };
+  const describe = (toolUseId: string, toolName: string): string =>
+    invocationByToolUseId.get(toolUseId)?.normalizedCommand
+    ?? matchedCommand(toolUseId)
+    ?? toolName;
+
+  // Only a resolved command identifies a payload. Codex names every shell call
+  // `commandExecution`, so grouping on the toolName fallback merged unrelated
+  // gates into one bogus repeat finding and downgraded each of them to a miss.
+  const groupingKey = (toolUseId: string): string | undefined =>
+    invocationByToolUseId.get(toolUseId)?.normalizedCommand
+    ?? matchedCommand(toolUseId);
+
+  // Count gates per command so a payload summarized several times reads as one
+  // finding about the repetition rather than N unrelated gates.
+  const gatesByCommand = new Map<string, number>();
+  for (const entry of interceptions) {
+    if (entry.disposition === "passed_through") {
+      continue;
+    }
+    const key = groupingKey(entry.toolUseId);
+    if (key === undefined) {
+      continue;
+    }
+    gatesByCommand.set(key, (gatesByCommand.get(key) ?? 0) + 1);
+  }
+
+  const edges: TokenMiserRoughEdge[] = [];
+  const reportedRepeats = new Set<string>();
+  for (const entry of interceptions) {
+    const command = describe(entry.toolUseId, entry.toolName);
+    if (entry.disposition === "passed_through") {
+      continue;
+    }
+    if (entry.estimatedParentTokensSaved <= 0) {
+      edges.push({
+        detail:
+          `A ${formatCompactTokens(entry.baselineParentTokens)} baseline became `
+          + `${formatCompactTokens(entry.replacementTokens + entry.retrievedTokens)} of summary and retrieval.`,
+        key: entry.objectId,
+        kind: "cost",
+        label: "Cost more than it saved",
+        title: command,
+        value: `${formatCompactTokens(Math.abs(entry.estimatedParentTokensSaved))} over`,
+      });
+      continue;
+    }
+    if (entry.retrievedTokens > 0 && entry.retrievedTokens * 2 >= entry.baselineParentTokens) {
+      edges.push({
+        detail:
+          `The agent read ${formatCompactTokens(entry.retrievedTokens)} of the `
+          + `${formatCompactTokens(entry.baselineParentTokens)} baseline back. The gate still saved `
+          + `${formatCompactTokens(entry.estimatedParentTokensSaved)}, but most of the payload reached the parent anyway.`,
+        key: entry.objectId,
+        kind: "leak",
+        label: "Most output retrieved",
+        title: command,
+        value: `${formatCompactTokens(entry.estimatedParentTokensSaved)} net`,
+      });
+      continue;
+    }
+    const repeatKey = groupingKey(entry.toolUseId);
+    const gateCount = repeatKey === undefined
+      ? 1
+      : gatesByCommand.get(repeatKey) ?? 1;
+    if (repeatKey !== undefined && gateCount > 1 && !reportedRepeats.has(repeatKey)) {
+      reportedRepeats.add(repeatKey);
+      edges.push({
+        detail:
+          `The same output was gated ${gateCount.toLocaleString()} times, so `
+          + `${(gateCount - 1).toLocaleString()} extra ${gateCount === 2 ? "summary was" : "summaries were"} written for one payload.`,
+        key: `repeat:${command}`,
+        kind: "repeat",
+        label: `Gated ${gateCount.toLocaleString()}×`,
+        title: command,
+        value: `${(gateCount - 1).toLocaleString()} redundant`,
+      });
+      continue;
+    }
+    // Codex caps tool output before the hook sees it, so a payload far past the
+    // cap was never gateable in full — the gate only ever saw the capped head.
+    const emitted = invocationByToolUseId.get(entry.toolUseId)?.outputChars ?? 0;
+    if (emitted > TOOL_OUTPUT_CAP_CHARS * 2) {
+      edges.push({
+        detail:
+          `The tool emitted ${emitted.toLocaleString()} characters. Codex truncated it to `
+          + `${TOOL_OUTPUT_CAP_CHARS.toLocaleString()} before the hook saw it, so only the cap was ever gateable.`,
+        key: `truncated:${entry.objectId}`,
+        kind: "truncated",
+        label: "Truncated upstream",
+        title: command,
+        value: `${formatCompactTokens(entry.baselineParentTokens)} of ${formatCompactTokens(Math.ceil(emitted / 4))}`,
+      });
+    }
+  }
+  return edges.sort((left, right) =>
+    ROUGH_EDGE_ORDER[left.kind] - ROUGH_EDGE_ORDER[right.kind]
+  );
+}
+
+/**
+ * Every gate, classified by how it actually turned out.
+ *
+ * The rough-edges list answered "where did this go wrong", which is only useful
+ * once you can also see what went right. Outcome is one axis over the same set,
+ * so the operator can move between all / wins / misses instead of seeing only
+ * the failures and inferring the rest.
+ */
+export type TokenMiserGateOutcome =
+  | "win"
+  | "miss"
+  | "big-miss"
+  | "pass-through";
+
+export type TokenMiserGateEntry = {
+  command: string;
+  edge?: TokenMiserRoughEdge;
+  interception: ThreadTokenMiserInterceptionAccounting;
+  outcome: TokenMiserGateOutcome;
+};
+
+export function buildTokenMiserGateEntries(
+  invocations: readonly ThreadToolInvocationRecord[],
+  tokenMiser: ThreadToolAccounting["tokenMiser"],
+): TokenMiserGateEntry[] {
+  const interceptions = tokenMiser?.interceptions ?? [];
+  if (interceptions.length === 0) {
+    return [];
+  }
+  const edgesByKey = new Map<string, TokenMiserRoughEdge>();
+  for (const edge of buildTokenMiserRoughEdges(invocations, tokenMiser)) {
+    edgesByKey.set(edge.key, edge);
+  }
+  const invocationByToolUseId = new Map<string, ThreadToolInvocationRecord>();
+  for (const invocation of invocations) {
+    if (invocation.itemId) {
+      invocationByToolUseId.set(invocation.itemId, invocation);
+    }
+  }
+  const matchedInvocations = matchTokenMiserInvocations(invocations, interceptions);
+  const matchedByObjectId = new Map<string, ThreadToolInvocationRecord[]>();
+  for (const invocation of invocations) {
+    const interception = matchedInvocations.get(invocation.invocationId);
+    if (!interception) continue;
+    const matched = matchedByObjectId.get(interception.objectId) ?? [];
+    matched.push(invocation);
+    matchedByObjectId.set(interception.objectId, matched);
+  }
+  return interceptions.map((interception) => {
+    const nested = matchedByObjectId.get(interception.objectId) ?? [];
+    const command =
+      invocationByToolUseId.get(interception.toolUseId)?.normalizedCommand
+      ?? (nested.length === 1 ? nested[0]?.normalizedCommand : undefined)
+      ?? (nested.length > 1 ? `${nested.length.toLocaleString()} nested operations` : undefined)
+      ?? interception.toolName;
+    // Rough edges are keyed by object id, except the repeat finding which is
+    // reported once per command; look for both so a repeated gate still shows
+    // its finding on every row it applies to.
+    const edge = edgesByKey.get(interception.objectId)
+      ?? edgesByKey.get(`repeat:${command}`)
+      ?? edgesByKey.get(`truncated:${interception.objectId}`);
+    const outcome: TokenMiserGateOutcome =
+      interception.disposition === "passed_through"
+        ? "pass-through"
+        : interception.estimatedParentTokensSaved <= 0
+        ? "big-miss"
+        : edge
+          ? "miss"
+          : "win";
+    return {
+      command,
+      ...(edge ? { edge } : {}),
+      interception,
+      outcome,
+    };
+  });
+}
+
+/**
+ * Join outer Code Mode reducer decisions to nested invocation telemetry.
+ *
+ * Codex gives the reducer an outer `call_*` id while command accounting uses
+ * the nested `exec-*` id. Grouped cells carry the exact member ids. A legacy
+ * or singleton cell can lack those ids, so use the unique same-turn raw-size
+ * match as a bounded fallback; never guess when more than one candidate fits.
+ */
+export function matchTokenMiserInvocations(
+  invocations: readonly ThreadToolInvocationRecord[],
+  interceptions: readonly ThreadTokenMiserInterceptionAccounting[],
+): Map<string, ThreadTokenMiserInterceptionAccounting> {
+  const matches = new Map<string, ThreadTokenMiserInterceptionAccounting>();
+  const invocationByItemId = new Map(
+    invocations.map((invocation) => [invocation.itemId, invocation]),
+  );
+  const matchedInterceptions = new Set<string>();
+
+  for (const interception of interceptions) {
+    const exactIds = [
+      interception.toolUseId,
+      ...(interception.groupMembers?.map((member) => member.toolCallId) ?? []),
+    ];
+    for (const itemId of exactIds) {
+      const invocation = invocationByItemId.get(itemId)
+        ?? invocations.find((candidate) =>
+          candidate.invocationId.endsWith(`:${itemId}`)
+        );
+      if (!invocation) continue;
+      matches.set(invocation.invocationId, interception);
+      matchedInterceptions.add(interception.objectId);
+    }
+  }
+
+  for (const interception of interceptions) {
+    if (matchedInterceptions.has(interception.objectId)) continue;
+    const candidates = invocations.filter((invocation) =>
+      !matches.has(invocation.invocationId)
+      && (invocation.turnId ?? "") === interception.turnId
+      && invocation.outputChars === interception.originalCharacters
+    );
+    if (candidates.length !== 1) continue;
+    matches.set(candidates[0]!.invocationId, interception);
+  }
+  return matches;
+}
 
 export type TurnCostRow = {
   callCount: number;

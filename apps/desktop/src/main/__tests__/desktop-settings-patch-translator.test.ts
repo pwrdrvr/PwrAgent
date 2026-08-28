@@ -174,6 +174,69 @@ describe("desktopSettingsPatchToEdits — general", () => {
     ]);
   });
 
+  it("writes the Token Miser opt-in", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        experimental: { tokenMiserEnabled: true },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["experimental", "token_miser_enabled"],
+        value: true,
+      },
+    ]);
+  });
+
+  it("writes the inherited Token Miser thread default", () => {
+    expect(
+      desktopSettingsPatchToEdits({
+        experimental: { tokenMiserDefaultEnabled: false },
+      }),
+    ).toEqual([
+      {
+        op: "set",
+        path: ["experimental", "token_miser_default_enabled"],
+        value: false,
+      },
+    ]);
+  });
+
+  it("preserves and mirrors the legacy general Token Miser key", () => {
+    const edits = desktopSettingsPatchToEdits(
+      {
+        experimental: { tokenMiserEnabled: false },
+      },
+      parseTomlTables(
+        [
+          "[general]",
+          "token_miser_enabled = true",
+        ].join("\n"),
+        "config.toml",
+      ),
+    );
+
+    expect(edits).toEqual([
+      {
+        op: "ensureCommentBefore",
+        path: ["general", "token_miser_enabled"],
+        marker: "pwragent-legacy-settings",
+        comment:
+          "# pwragent-legacy-settings key=token_miser_enabled shape=boolean used_through=1.1.0-alpha.1 kept_for_older_clients",
+      },
+      {
+        op: "set",
+        path: ["general", "token_miser_enabled"],
+        value: false,
+      },
+      {
+        op: "set",
+        path: ["experimental", "token_miser_enabled"],
+        value: false,
+      },
+    ]);
+  });
+
   it("writes spend alert preferences", () => {
     const edits = desktopSettingsPatchToEdits({
       general: {

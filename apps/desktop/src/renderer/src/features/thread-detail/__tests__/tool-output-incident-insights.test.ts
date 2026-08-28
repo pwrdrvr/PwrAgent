@@ -2,6 +2,9 @@ import type { ThreadToolInvocationRecord } from "@pwragent/shared";
 import { describe, expect, it } from "vitest";
 import {
   buildCategoryComposition,
+  buildTokenMiserContextComparison,
+  buildTokenMiserGateEntries,
+  buildTokenMiserRoughEdges,
   buildTurnCostStrip,
   capMeterWidth,
   formatCapShare,
@@ -48,6 +51,40 @@ describe("summarizeIncidents", () => {
     expect(summarizeIncidents(records, {
       largeOutputThresholdChars: 10_000,
     }).caseCount).toBe(1);
+  });
+});
+
+describe("buildTokenMiserContextComparison", () => {
+  it("compares actual parent tool context with the no-gate counterfactual", () => {
+    const gated = invocation({ outputChars: 24_000 });
+    gated.itemId = "tool-1";
+    const quiet = invocation({ invocationId: "invocation-quiet", outputChars: 400 });
+    quiet.itemId = "tool-2";
+
+    expect(buildTokenMiserContextComparison([gated, quiet], {
+      interceptionCount: 1,
+      originalCharacters: 24_000,
+      baselineParentTokens: 6_000,
+      replacementTokens: 225,
+      retrievedTokens: 100,
+      estimatedParentTokensSaved: 5_675,
+      interceptions: [{
+        objectId: "gate-1",
+        turnId: "turn-1",
+        toolUseId: "tool-1",
+        toolName: "commandExecution",
+        createdAt: 1,
+        originalCharacters: 24_000,
+        baselineParentTokens: 6_000,
+        replacementTokens: 225,
+        retrievedTokens: 100,
+        estimatedParentTokensSaved: 5_675,
+      }],
+    })).toEqual({
+      actualParentTokens: 425,
+      avoidedParentTokens: 5_675,
+      withoutTokenMiserTokens: 6_100,
+    });
   });
 });
 
@@ -655,5 +692,181 @@ describe("turn strip scope and ranking", () => {
 
     expect(strip.rankedBy).toBe("estimate");
     expect(strip.rows[0]?.key).toBe("turn-a");
+  });
+});
+
+describe("buildTokenMiserRoughEdges", () => {
+  const gate = (overrides: Record<string, unknown>) => ({
+    objectId: "obj-1",
+    turnId: "turn-1",
+    toolUseId: "item-1",
+    toolName: "shell",
+    createdAt: 1_000,
+    originalCharacters: 40_000,
+    baselineParentTokens: 10_000,
+    replacementTokens: 300,
+    retrievedTokens: 0,
+    estimatedParentTokensSaved: 9_700,
+    ...overrides,
+  }) as never;
+
+  it("returns nothing when no gate went wrong", () => {
+    expect(buildTokenMiserRoughEdges([], {
+      interceptionCount: 1,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementTokens: 300,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 9_700,
+      interceptions: [gate({})],
+    })).toEqual([]);
+  });
+
+  it("flags a gate that cost more than it saved", () => {
+    const edges = buildTokenMiserRoughEdges([], {
+      interceptionCount: 1,
+      originalCharacters: 10_000,
+      baselineParentTokens: 2_500,
+      replacementTokens: 2_600,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: -100,
+      interceptions: [gate({
+        baselineParentTokens: 2_500,
+        replacementTokens: 2_600,
+        estimatedParentTokensSaved: -100,
+      })],
+    });
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.kind).toBe("cost");
+    expect(edges[0]?.label).toBe("Cost more than it saved");
+  });
+
+  it("classifies a deliberate pass-through separately from a failed gate", () => {
+    const passThrough = gate({
+      disposition: "passed_through",
+      baselineParentTokens: 2_500,
+      replacementTokens: 2_500,
+      estimatedParentTokensSaved: 0,
+    });
+    expect(buildTokenMiserRoughEdges([], {
+      interceptionCount: 1,
+      passThroughCount: 1,
+      originalCharacters: 10_000,
+      baselineParentTokens: 2_500,
+      replacementTokens: 2_500,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+      interceptions: [passThrough],
+    })).toEqual([]);
+    expect(buildTokenMiserGateEntries([], {
+      interceptionCount: 1,
+      passThroughCount: 1,
+      originalCharacters: 10_000,
+      baselineParentTokens: 2_500,
+      replacementTokens: 2_500,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+      interceptions: [passThrough],
+    })[0]?.outcome).toBe("pass-through");
+  });
+
+  it("correlates an outer Code Mode gate with its single nested invocation", () => {
+    const nested = invocation({
+      invocationId: "codex:thread-1:exec-nested",
+      itemId: "exec-nested",
+      normalizedCommand: "rg -n -C 8 'cancel' apps/desktop/src",
+      outputChars: 35_122,
+      turnId: "turn-1",
+    });
+    const outer = gate({
+      toolUseId: "call-outer-code-mode",
+      toolName: "Code Mode",
+      originalCharacters: 35_122,
+      baselineParentTokens: 8_781,
+      replacementTokens: 312,
+      estimatedParentTokensSaved: 8_469,
+    });
+
+    expect(buildTokenMiserGateEntries([nested], {
+      interceptionCount: 1,
+      originalCharacters: 35_122,
+      baselineParentTokens: 8_781,
+      replacementTokens: 312,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 8_469,
+      interceptions: [outer],
+    })[0]?.command).toBe("rg -n -C 8 'cancel' apps/desktop/src");
+  });
+
+  // Retrieval is the gate's escape hatch, so a gate that hands most of the
+  // payload back is worth surfacing even though its saving stays positive.
+  it("flags a gate whose payload was mostly retrieved back", () => {
+    const edges = buildTokenMiserRoughEdges([], {
+      interceptionCount: 1,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementTokens: 300,
+      retrievedTokens: 6_000,
+      estimatedParentTokensSaved: 3_700,
+      interceptions: [gate({
+        retrievedTokens: 6_000,
+        estimatedParentTokensSaved: 3_700,
+      })],
+    });
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.kind).toBe("leak");
+    expect(edges[0]?.label).toBe("Most output retrieved");
+    expect(edges[0]?.detail).toContain("The gate still saved 3.7k");
+  });
+
+  // Grouping keys on the resolved command, so the fixture has to supply the
+  // invocations. Codex names every shell call `commandExecution`, so grouping
+  // on the toolName fallback would merge unrelated gates.
+  it("collapses repeated gates on one command into a single finding", () => {
+    const repeated = ["item-1", "item-2", "item-3"].map((itemId, index) =>
+      invocation({
+        invocationId: `invocation-${index + 1}`,
+        itemId,
+        normalizedCommand: "sed -n '1,300p' AGENTS.md",
+        outputChars: 24_000,
+      })
+    );
+    const edges = buildTokenMiserRoughEdges(repeated, {
+      interceptionCount: 3,
+      originalCharacters: 120_000,
+      baselineParentTokens: 30_000,
+      replacementTokens: 900,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 29_100,
+      interceptions: [
+        gate({ objectId: "obj-1", toolUseId: "item-1" }),
+        gate({ objectId: "obj-2", toolUseId: "item-2" }),
+        gate({ objectId: "obj-3", toolUseId: "item-3" }),
+      ],
+    });
+    expect(edges).toHaveLength(1);
+    expect(edges[0]?.kind).toBe("repeat");
+    expect(edges[0]?.label).toBe("Gated 3×");
+    expect(edges[0]?.value).toBe("2 redundant");
+  });
+
+  // Without a resolved command there is nothing to say two gates share, and
+  // merging them produced a bogus "Gated N×" that also downgraded each gate
+  // from a win to a miss.
+  it("does not group gates whose command could not be resolved", () => {
+    const edges = buildTokenMiserRoughEdges([], {
+      interceptionCount: 3,
+      originalCharacters: 120_000,
+      baselineParentTokens: 30_000,
+      replacementTokens: 900,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 29_100,
+      interceptions: [
+        gate({ objectId: "obj-1", toolUseId: "item-1" }),
+        gate({ objectId: "obj-2", toolUseId: "item-2" }),
+        gate({ objectId: "obj-3", toolUseId: "item-3" }),
+      ],
+    });
+    expect(edges.filter((edge) => edge.kind === "repeat")).toHaveLength(0);
   });
 });

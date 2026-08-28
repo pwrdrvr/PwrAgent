@@ -862,6 +862,8 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("3 invocations")).toBeInTheDocument();
     expect(screen.getByText("6k est. tokens")).toBeInTheDocument();
     expect(screen.getByText("Diagnostics")).toBeInTheDocument();
+    expect(screen.getByText("Warning-like lines")).toBeInTheDocument();
+    expect(screen.getByText("Error-like lines")).toBeInTheDocument();
     expect(screen.getByText("Repeated queued checks")).toBeInTheDocument();
     expect(screen.getByText(/Repeated write_stdin polling/)).toBeInTheDocument();
     expect(screen.getByText("write_stdin · polling")).toBeInTheDocument();
@@ -1057,7 +1059,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByRole("heading", { level: 3, name: "Pricing" })).toBeInTheDocument();
     expect(screen.getByText("Pricing summary")).toBeInTheDocument();
     expect(screen.getByText("1 row")).toBeInTheDocument();
-    expect(screen.getByText("Token volume")).toBeInTheDocument();
+    expect(screen.getByText("Parent model token volume")).toBeInTheDocument();
     expect(screen.getByText("$0.010")).toBeInTheDocument();
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
     expect(screen.getByText("gpt-5.5 · high · Fast")).toBeInTheDocument();
@@ -1070,6 +1072,78 @@ describe("ThreadContextPanel", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("$0.010 list price this turn")).toBeInTheDocument();
     expect(screen.getByText("Running total: $0.010 list price")).toBeInTheDocument();
+  });
+
+  it("keeps helper tokens out of the parent model summary", () => {
+    const parentLine: ThreadUsageLineRecord = {
+      backend: "codex",
+      cachedInputCostMicros: 45_000,
+      cachedInputTokens: 90_000,
+      createdAt: 1_800_000_000_000,
+      currency: "USD",
+      inputTokens: 100_000,
+      model: "gpt-5.6-sol",
+      outputCostMicros: 30_000,
+      outputTokens: 1_000,
+      priceStatus: "priced",
+      provider: "openai",
+      reasoningOutputTokens: 250,
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      threadId: "thread-1",
+      totalCostMicros: 125_000,
+      totalTokens: 101_000,
+      turnId: "turn-1",
+      uncachedInputCostMicros: 50_000,
+      uncachedInputTokens: 10_000,
+      usageLineId: "turn-line-1",
+    };
+    const gateLine = buildMonitorLine({
+      inputTokens: 5_000,
+      model: "gpt-5.6-luna",
+      outputTokens: 400,
+      reasoningOutputTokens: 50,
+      sourceItemId: "system:token-miser:gate-1",
+      totalCostMicros: 2_000,
+      totalTokens: 5_400,
+      uncachedInputTokens: 5_000,
+      usageLineId: "gate-line-1",
+    });
+    const namingLine = buildMonitorLine({
+      inputTokens: 2_000,
+      model: "gpt-5.6-luna",
+      outputTokens: 20,
+      sourceItemId: "thread-naming-1",
+      totalCostMicros: 1_000,
+      totalTokens: 2_020,
+      uncachedInputTokens: 2_000,
+      usageLineId: "naming-line-1",
+    });
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        lines: [gateLine, namingLine, parentLine],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const summaryCard = screen.getByText("Pricing summary").closest(
+      ".pricing-summary-card",
+    );
+    expect(summaryCard).not.toBeNull();
+    const summary = within(summaryCard as HTMLElement);
+    expect(summary.getByText("$0.13")).toBeInTheDocument();
+    expect(summary.getByText("3 rows")).toBeInTheDocument();
+    expect(summary.getByText("Parent model token volume")).toBeInTheDocument();
+    expect(summary.getByText("10k")).toBeInTheDocument();
+    expect(summary.getByText("90k")).toBeInTheDocument();
+    expect(summary.getByText("1k")).toBeInTheDocument();
+    expect(summary.getByText("250")).toBeInTheDocument();
+    expect(summary.queryByText("17k")).not.toBeInTheDocument();
   });
 
   it("pages enormous pricing histories instead of rendering every row at once", () => {
@@ -1299,9 +1373,9 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("$56.98 · 1,424 Codex Credits estimated")).toBeInTheDocument();
     expect(screen.queryByText("$21.44 · 1,423 Codex Credits")).not.toBeInTheDocument();
     expect(document.body).toHaveTextContent("Uncached input2.8M");
-    expect(document.body).toHaveTextContent("Cached input70.6M");
-    expect(document.body).toHaveTextContent("Output222.8k");
-    expect(document.body).toHaveTextContent("Reasoning37.1k");
+    expect(document.body).toHaveTextContent("Cached input70.5M");
+    expect(document.body).toHaveTextContent("Output221.7k");
+    expect(document.body).toHaveTextContent("Reasoning37k");
     expect(screen.getByText("Historical usage estimate")).toBeInTheDocument();
     expect(
       screen.getByText("$56.23 estimated list price · 1,406 Codex Credits estimated"),
@@ -1789,6 +1863,152 @@ describe("ThreadContextPanel", () => {
     expect(screen.queryByText(/Estimated hot context replays/)).not.toBeInTheDocument();
   });
 
+  it("shows what a turn's compactions cost to re-read", () => {
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-compaction",
+      threadId: "thread-1",
+      turnId: "turn-compaction",
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 200_000,
+      uncachedInputTokens: 135_236,
+      cachedInputTokens: 64_764,
+      outputTokens: 1_000,
+      reasoningOutputTokens: 0,
+      totalTokens: 201_000,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 680_000,
+      cachedInputCostMicros: 0,
+      outputCostMicros: 0,
+      totalCostMicros: 680_000,
+      observedColdReplayCount: 1,
+      observedColdReplayUncachedTokens: 135_236,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        compactions: [
+          {
+            backend: "codex",
+            compactionId: "codex:thread-1:item-1",
+            observedAt: 1_799_999_000_000,
+            threadId: "thread-1",
+            turnId: "turn-compaction",
+            updatedAt: 1_800_000_000_000,
+            coldUsageLineId: "line-compaction",
+            coldUncachedTokens: 135_236,
+            coldCostMicros: 680_000,
+          },
+        ],
+        lines: [line],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(
+      screen.getByText("Compacted 1 time · 135,236 re-read uncached · $0.68"),
+    ).toBeInTheDocument();
+  });
+
+  // A compaction observed mid-turn has no cold replay to claim until the next
+  // request is priced. It still has to be visible, or the operator sees the
+  // context reset with nothing in the ledger acknowledging it.
+  it("shows an unattributed compaction against its turn", () => {
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-pending-compaction",
+      threadId: "thread-1",
+      turnId: "turn-pending",
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 1_000,
+      uncachedInputTokens: 1_000,
+      cachedInputTokens: 0,
+      outputTokens: 100,
+      reasoningOutputTokens: 0,
+      totalTokens: 1_100,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 5_000,
+      cachedInputCostMicros: 0,
+      outputCostMicros: 0,
+      totalCostMicros: 5_000,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: {
+        compactions: [
+          {
+            backend: "codex",
+            compactionId: "codex:thread-1:item-2",
+            observedAt: 1_800_000_500_000,
+            threadId: "thread-1",
+            turnId: "turn-pending",
+            updatedAt: 1_800_000_500_000,
+          },
+        ],
+        lines: [line],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(
+      screen.getByText("Compacted 1 time · cost not observed yet"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows no compaction disclosure when the thread never compacted", () => {
+    const line: ThreadUsageLineRecord = {
+      backend: "codex",
+      usageLineId: "line-no-compaction",
+      threadId: "thread-1",
+      turnId: "turn-no-compaction",
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      model: "gpt-5.5",
+      inputTokens: 1_000,
+      uncachedInputTokens: 1_000,
+      cachedInputTokens: 0,
+      outputTokens: 100,
+      reasoningOutputTokens: 0,
+      totalTokens: 1_100,
+      priceStatus: "priced",
+      currency: "USD",
+      uncachedInputCostMicros: 5_000,
+      cachedInputCostMicros: 0,
+      outputCostMicros: 0,
+      totalCostMicros: 5_000,
+      provider: "openai",
+      createdAt: 1_800_000_000_000,
+    };
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: { lines: [line], summaries: [] },
+      threadPricingSummaryEnabled: true,
+    });
+
+    expect(screen.queryByText(/^Compacted /)).not.toBeInTheDocument();
+  });
+
   it("honors pricing display options for observed replay costs", () => {
     const line: ThreadUsageLineRecord = {
       backend: "codex",
@@ -2272,6 +2492,493 @@ describe("ThreadContextPanel", () => {
     ).toBeInTheDocument();
     const times = activeRow?.querySelector(".rail-card__times");
     expect(times?.textContent).toContain("· 1m 5s");
+  });
+
+  it("shows Token Miser savings on the matching Pricing gate card", () => {
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_000_000,
+            monitorId: "mon-1",
+            status: "success",
+            task: "Gate Bash output",
+            tokenMiserAccounting: {
+              baselineParentCostMicros: 15_000,
+              baselineParentTokens: 6_000,
+              cachedReplayCount: 6,
+              cachedBaselineTokens: 36_000,
+              cachedBaselineCostMicros: 9_000,
+              currency: "USD",
+              gateCostMicros: 2_600,
+              gateModel: "gpt-5.6-luna",
+              gateTotalTokens: 2_100,
+              originalModel: "gpt-5.6-terra",
+              revealedParentCostMicros: 563,
+              revealedParentTokens: 225,
+              cachedRevealedTokens: 1_350,
+              cachedRevealedCostMicros: 338,
+              savingsMicros: 20_499,
+            },
+            updatedAt: 1_800_000_000_100,
+          },
+        ],
+      },
+      pricing: {
+        lines: [
+          buildMonitorLine({
+            model: "gpt-5.6-luna",
+            sourceItemId: "mon-1",
+          }),
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const savings = screen.getByLabelText("Token Miser savings");
+    expect(within(savings).getByText("1 · Without gate")).toBeInTheDocument();
+    expect(savings).toHaveTextContent("$0.024");
+    expect(savings).toHaveTextContent("36,000 cached across 6 replays");
+    expect(within(savings).getByText("2 · Gate model")).toBeInTheDocument();
+    expect(within(savings).getByText("3 · Revealed to parent"))
+      .toBeInTheDocument();
+    expect(within(savings).getByText("Savings · 1 − 2 − 3"))
+      .toBeInTheDocument();
+    expect(savings).toHaveTextContent("$0.021");
+  });
+
+  // Gate rows fold under the turn they happened in. The turn card carries one
+  // summary line that sums every gate; only a gate past ten cents gets its own
+  // card when expanded, the rest are one line.
+  // A gate whose parent turn has no usage row — a native review's inner turn,
+  // or a gate persisted before parentTurnId existed — cannot nest. Unpriced,
+  // it was a full card saying nothing; that is suppressed. Priced, it gets the
+  // same compact group a turn would, standing in for its cards.
+  it("suppresses unpriced orphan gates and compacts priced ones", () => {
+    const gateLine = (id: string, createdAt: number) => ({
+      ...buildMonitorLine({
+        model: "gpt-5.6-luna",
+        sourceItemId: `system:token-miser:${id}`,
+      }),
+      createdAt,
+      usageLineId: `gate-line-${id}`,
+      totalCostMicros: 2_000,
+    });
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_010_000,
+            monitorId: "system:token-miser:review-a",
+            parentTurnId: "review-inner-turn",
+            status: "success",
+            task: "Gate Bash output",
+            updatedAt: 1_800_000_010_000,
+          },
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_020_000,
+            monitorId: "system:token-miser:review-b",
+            parentTurnId: "review-inner-turn",
+            status: "success",
+            task: "Gate Bash output",
+            updatedAt: 1_800_000_020_000,
+          },
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_030_000,
+            monitorId: "system:token-miser:priced-orphan",
+            parentTurnId: "another-turn-with-no-row",
+            status: "success",
+            task: "Gate Bash output",
+            tokenMiserAccounting: {
+              baselineParentCostMicros: 50_000,
+              baselineParentTokens: 10_000,
+              cachedReplayCount: 0,
+              cachedBaselineTokens: 0,
+              cachedBaselineCostMicros: 0,
+              currency: "USD",
+              gateCostMicros: 2_000,
+              gateModel: "gpt-5.6-luna",
+              gateTotalTokens: 2_100,
+              originalModel: "gpt-5.6-sol",
+              revealedParentCostMicros: 1_500,
+              revealedParentTokens: 300,
+              cachedRevealedTokens: 0,
+              cachedRevealedCostMicros: 0,
+              savingsMicros: 46_500,
+            },
+            updatedAt: 1_800_000_030_000,
+          },
+        ],
+      },
+      pricing: {
+        lines: [
+          gateLine("review-a", 1_800_000_010_000),
+          gateLine("review-b", 1_800_000_020_000),
+          gateLine("priced-orphan", 1_800_000_030_000),
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    // The two unpriced review gates render nothing at all.
+    expect(screen.queryByText("Token Miser gate")).not.toBeInTheDocument();
+    // The priced orphan is one compact group, not a card.
+    const groups = screen.getAllByRole("button", { name: /Token Miser/ });
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toHaveTextContent("1 gate");
+    expect(groups[0]).toHaveTextContent("$0.047 saved");
+    expect(screen.queryAllByLabelText("Token Miser savings")).toHaveLength(0);
+  });
+
+  it("nests Token Miser gates under their turn and folds small ones", () => {
+    const gateAccounting = (savingsMicros: number) => ({
+      baselineParentCostMicros: 50_000,
+      baselineParentTokens: 10_000,
+      cachedReplayCount: 3,
+      cachedBaselineTokens: 30_000,
+      cachedBaselineCostMicros: 15_000,
+      currency: "USD" as const,
+      gateCostMicros: 2_000,
+      gateModel: "gpt-5.6-luna",
+      gateTotalTokens: 2_100,
+      originalModel: "gpt-5.6-sol",
+      revealedParentCostMicros: 1_500,
+      revealedParentTokens: 300,
+      cachedRevealedTokens: 900,
+      cachedRevealedCostMicros: 450,
+      savingsMicros,
+    });
+    const gateLine = (id: string, createdAt: number) => ({
+      ...buildMonitorLine({
+        model: "gpt-5.6-luna",
+        sourceItemId: `system:token-miser:${id}`,
+      }),
+      createdAt,
+      usageLineId: `gate-line-${id}`,
+      totalCostMicros: 2_000,
+    });
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_010_000,
+            monitorId: "system:token-miser:big",
+            parentTurnId: "turn-1",
+            status: "success",
+            task: "Gate Bash output",
+            tokenMiserAccounting: gateAccounting(250_000),
+            updatedAt: 1_800_000_010_000,
+          },
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_020_000,
+            monitorId: "system:token-miser:small",
+            parentTurnId: "turn-1",
+            status: "success",
+            task: "Gate Bash output",
+            tokenMiserAccounting: gateAccounting(4_000),
+            updatedAt: 1_800_000_020_000,
+          },
+        ],
+      },
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            usageLineId: "turn-line-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            scope: "turn",
+            source: "live",
+            status: "finalized",
+            model: "gpt-5.6-sol",
+            inputTokens: 100_000,
+            uncachedInputTokens: 10_000,
+            cachedInputTokens: 90_000,
+            outputTokens: 1_000,
+            reasoningOutputTokens: 0,
+            totalTokens: 101_000,
+            priceStatus: "priced",
+            currency: "USD",
+            uncachedInputCostMicros: 50_000,
+            cachedInputCostMicros: 45_000,
+            outputCostMicros: 30_000,
+            totalCostMicros: 125_000,
+            provider: "openai",
+            createdAt: 1_800_000_000_000,
+          },
+          gateLine("big", 1_800_000_010_000),
+          gateLine("small", 1_800_000_020_000),
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    // The gates are not standalone rows any more.
+    expect(screen.queryAllByLabelText("Token Miser savings")).toHaveLength(0);
+    // One summary on the turn, summing both gates: 250,000 + 4,000 micros.
+    const summary = screen.getByRole("button", { name: /Token Miser/ });
+    expect(summary).toHaveTextContent("2 gates");
+    expect(summary).toHaveTextContent("$0.26 saved");
+    expect(summary).toHaveAttribute("aria-expanded", "false");
+
+    fireEvent.click(summary);
+    // The gate past ten cents shows its card by default; the small one waits
+    // behind a toggle rather than being flattened to a line of prose.
+    expect(screen.getAllByLabelText("Token Miser savings")).toHaveLength(1);
+    const reveal = screen.getByRole("button", {
+      name: /Show 1 smaller gate · \$0\.004 saved between them/,
+    });
+    fireEvent.click(reveal);
+    expect(screen.getAllByLabelText("Token Miser savings")).toHaveLength(2);
+    expect(
+      screen.getByRole("button", { name: /Hide 1 smaller gate/ }),
+    ).toBeInTheDocument();
+    // The heading names the agent; nested cards keep their title only, not a
+    // second "Token Miser" line each.
+    expect(screen.getAllByText("Token Miser gate")).toHaveLength(2);
+    expect(screen.queryByText("Token Miser", { selector: ".rail-card__agent-name" }))
+      .not.toBeInTheDocument();
+  });
+
+  it("separates reducer decisions from priced Luna evaluations", () => {
+    const accounting = (disposition: "summarized" | "passed_through") => ({
+      baselineParentCostMicros: 50_000,
+      baselineParentTokens: 10_000,
+      cachedReplayCount: 0,
+      cachedBaselineTokens: 0,
+      cachedBaselineCostMicros: 0,
+      currency: "USD" as const,
+      decisionSource: "helper" as const,
+      disposition,
+      gateCostMicros: 2_000,
+      gateModel: "gpt-5.6-luna",
+      gateTotalTokens: 2_100,
+      originalModel: "gpt-5.6-sol",
+      revealedParentCostMicros: disposition === "passed_through" ? 50_000 : 1_500,
+      revealedParentTokens: disposition === "passed_through" ? 10_000 : 300,
+      savingsMicros: disposition === "passed_through" ? -2_000 : 46_500,
+    });
+    const interception = (
+      objectId: string,
+      disposition: "summarized" | "passed_through",
+      decisionSource: "helper" | "policy",
+    ) => ({
+      objectId,
+      turnId: "turn-1",
+      toolUseId: `tool-${objectId}`,
+      toolName: "Code Mode",
+      createdAt: 1_800_000_010_000,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementCharacters: disposition === "passed_through" ? 40_000 : 1_200,
+      replacementTokens: disposition === "passed_through" ? 10_000 : 300,
+      retrievedCharacters: 0,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: disposition === "passed_through" ? 0 : 9_700,
+      disposition,
+      decisionSource,
+    });
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_010_000,
+            monitorId: "system:token-miser:summary",
+            parentTurnId: "turn-1",
+            status: "success",
+            task: "Gate Code Mode output",
+            tokenMiserAccounting: accounting("summarized"),
+            updatedAt: 1_800_000_010_000,
+          },
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_020_000,
+            monitorId: "system:token-miser:helper-pass",
+            parentTurnId: "turn-1",
+            status: "success",
+            task: "Evaluate Code Mode output",
+            tokenMiserAccounting: accounting("passed_through"),
+            updatedAt: 1_800_000_020_000,
+          },
+        ],
+      },
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            usageLineId: "turn-line-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            scope: "turn",
+            source: "live",
+            status: "finalized",
+            model: "gpt-5.6-sol",
+            inputTokens: 10_000,
+            uncachedInputTokens: 10_000,
+            cachedInputTokens: 0,
+            outputTokens: 100,
+            reasoningOutputTokens: 0,
+            totalTokens: 10_100,
+            priceStatus: "priced",
+            currency: "USD",
+            uncachedInputCostMicros: 50_000,
+            cachedInputCostMicros: 0,
+            outputCostMicros: 3_000,
+            totalCostMicros: 53_000,
+            provider: "openai",
+            createdAt: 1_800_000_000_000,
+          },
+          {
+            ...buildMonitorLine({
+              sourceItemId: "system:token-miser:summary",
+            }),
+            usageLineId: "gate-line-summary",
+          },
+          {
+            ...buildMonitorLine({
+              sourceItemId: "system:token-miser:helper-pass",
+            }),
+            usageLineId: "gate-line-helper-pass",
+          },
+        ],
+        summaries: [],
+      },
+      toolAccounting: {
+        alerts: [],
+        invocations: [],
+        summaries: [],
+        tokenMiser: {
+          interceptionCount: 3,
+          passThroughCount: 2,
+          policyPassThroughCount: 1,
+          helperPassThroughCount: 1,
+          helperDecisionCount: 2,
+          originalCharacters: 120_000,
+          baselineParentTokens: 30_000,
+          replacementTokens: 20_300,
+          retrievedTokens: 0,
+          estimatedParentTokensSaved: 9_700,
+          interceptions: [
+            interception("summary", "summarized", "helper"),
+            interception("helper-pass", "passed_through", "helper"),
+            interception("policy-pass", "passed_through", "policy"),
+          ],
+        },
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const summary = screen.getByRole("button", { name: /Token Miser/ });
+    expect(summary).toHaveTextContent(
+      "3 decisions · 2 Luna evaluations · 2 pass-throughs (1 helper · 1 policy)",
+    );
+    expect(summary).not.toHaveTextContent("2 decisions");
+    fireEvent.click(summary);
+    expect(screen.getAllByLabelText("Token Miser savings")).toHaveLength(2);
+  });
+
+  // A group with nothing past the threshold has nothing to hold back, so
+  // expanding shows every card outright — never a summary line and no cards.
+  it("shows every card when no gate clears the threshold", () => {
+    const smallAccounting = {
+      baselineParentCostMicros: 5_000,
+      baselineParentTokens: 1_000,
+      cachedReplayCount: 2,
+      cachedBaselineTokens: 2_000,
+      cachedBaselineCostMicros: 1_000,
+      currency: "USD" as const,
+      gateCostMicros: 500,
+      gateModel: "gpt-5.6-luna",
+      gateTotalTokens: 800,
+      originalModel: "gpt-5.6-sol",
+      revealedParentCostMicros: 200,
+      revealedParentTokens: 40,
+      cachedRevealedTokens: 80,
+      cachedRevealedCostMicros: 40,
+      savingsMicros: 5_260,
+    };
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        subAgents: [{
+          agentName: "Token Miser",
+          createdAt: 1_800_000_010_000,
+          monitorId: "system:token-miser:tiny",
+          parentTurnId: "turn-1",
+          status: "success",
+          task: "Gate Bash output",
+          tokenMiserAccounting: smallAccounting,
+          updatedAt: 1_800_000_010_000,
+        }],
+      },
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            usageLineId: "turn-line-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            scope: "turn",
+            source: "live",
+            status: "finalized",
+            model: "gpt-5.6-sol",
+            inputTokens: 1_000,
+            uncachedInputTokens: 1_000,
+            cachedInputTokens: 0,
+            outputTokens: 10,
+            reasoningOutputTokens: 0,
+            totalTokens: 1_010,
+            priceStatus: "priced",
+            currency: "USD",
+            uncachedInputCostMicros: 5_000,
+            cachedInputCostMicros: 0,
+            outputCostMicros: 300,
+            totalCostMicros: 5_300,
+            provider: "openai",
+            createdAt: 1_800_000_000_000,
+          },
+          {
+            ...buildMonitorLine({
+              model: "gpt-5.6-luna",
+              sourceItemId: "system:token-miser:tiny",
+            }),
+            createdAt: 1_800_000_010_000,
+            usageLineId: "gate-line-tiny",
+            totalCostMicros: 500,
+          },
+        ],
+        summaries: [],
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /Token Miser/ }));
+    expect(screen.getAllByLabelText("Token Miser savings")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: /smaller gate/ })).not.toBeInTheDocument();
   });
 
   it("keeps a completed sub-agent duration on its pricing card", () => {

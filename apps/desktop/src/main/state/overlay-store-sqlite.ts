@@ -1,5 +1,6 @@
 import path from "node:path";
 import type {
+  AppServerBackendKind,
   AppServerBackendScope,
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
@@ -26,6 +27,7 @@ import type {
   ThreadToolAccounting,
   ThreadToolAnalysisCoverage,
   ThreadToolInvocationAlert,
+  ThreadCompactionRecord,
   ThreadToolInvocationRecord,
   ThreadToolInvocationStatus,
   ThreadToolInvocationSummary,
@@ -194,6 +196,38 @@ export type PrStatusWatchRegistrationResult = {
   status: "watching" | "duplicate";
   watch: ThreadPullRequestWatchSummary;
 };
+
+type ThreadCompactionRow = {
+  backend: string;
+  cold_cost_micros: number | null;
+  cold_uncached_tokens: number | null;
+  cold_usage_line_id: string | null;
+  compaction_id: string;
+  item_id: string | null;
+  observed_at: number;
+  thread_id: string;
+  turn_id: string | null;
+  updated_at: number;
+};
+
+function readThreadCompactionRow(row: ThreadCompactionRow): ThreadCompactionRecord {
+  return {
+    backend: row.backend as AppServerBackendKind,
+    compactionId: row.compaction_id,
+    observedAt: row.observed_at,
+    threadId: row.thread_id,
+    updatedAt: row.updated_at,
+    ...(row.cold_cost_micros !== null ? { coldCostMicros: row.cold_cost_micros } : {}),
+    ...(row.cold_uncached_tokens !== null
+      ? { coldUncachedTokens: row.cold_uncached_tokens }
+      : {}),
+    ...(row.cold_usage_line_id !== null
+      ? { coldUsageLineId: row.cold_usage_line_id }
+      : {}),
+    ...(row.item_id !== null ? { itemId: row.item_id } : {}),
+    ...(row.turn_id !== null ? { turnId: row.turn_id } : {}),
+  };
+}
 
 type PrAutoDispatchClaimRow = {
   payload: string;
@@ -1343,6 +1377,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             observed_cold_replay_uncached_tokens,
             observed_hot_replay_cached_tokens,
             observed_hot_replay_count,
+            final_context_tokens,
+            peak_context_tokens,
+            model_context_window,
             updated_at
           ) VALUES (
             @usageTurnId,
@@ -1364,6 +1401,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             @observedColdReplayUncachedTokens,
             @observedHotReplayCachedTokens,
             @observedHotReplayCount,
+            @finalContextTokens,
+            @peakContextTokens,
+            @modelContextWindow,
             @updatedAt
           )
           ON CONFLICT(usage_turn_id) DO UPDATE SET
@@ -1401,6 +1441,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
             observed_cold_replay_uncached_tokens = COALESCE(excluded.observed_cold_replay_uncached_tokens, thread_usage_turns.observed_cold_replay_uncached_tokens),
             observed_hot_replay_cached_tokens = COALESCE(excluded.observed_hot_replay_cached_tokens, thread_usage_turns.observed_hot_replay_cached_tokens),
             observed_hot_replay_count = COALESCE(excluded.observed_hot_replay_count, thread_usage_turns.observed_hot_replay_count),
+            final_context_tokens = COALESCE(excluded.final_context_tokens, thread_usage_turns.final_context_tokens),
+            peak_context_tokens = CASE
+              WHEN excluded.peak_context_tokens IS NULL THEN thread_usage_turns.peak_context_tokens
+              WHEN thread_usage_turns.peak_context_tokens IS NULL THEN excluded.peak_context_tokens
+              ELSE MAX(thread_usage_turns.peak_context_tokens, excluded.peak_context_tokens)
+            END,
+            model_context_window = COALESCE(excluded.model_context_window, thread_usage_turns.model_context_window),
             updated_at = excluded.updated_at`,
         )
         .run(toThreadUsageLineRowParams(line));
@@ -1587,6 +1634,45 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         threadId: line.parentThreadId ?? line.threadId,
         updatedAt: now,
       });
+      // A cold replay is a full uncached context re-read, which is what a
+      // compaction forces. Claim it for the compaction that preceded it so the
+      // cost has a cause; rides this transaction, so it adds no commit.
+      const priorColdReplayCount = existing?.observedColdReplayCount ?? 0;
+      const nextColdReplayCount = line.observedColdReplayCount ?? 0;
+      if (nextColdReplayCount > priorColdReplayCount) {
+        const priorColdTokens =
+          existing?.observedColdReplayUncachedTokens ?? 0;
+        const coldTokens = line.observedColdReplayUncachedTokens !== undefined
+          ? Math.max(
+              0,
+              line.observedColdReplayUncachedTokens - priorColdTokens,
+            )
+          : line.uncachedInputTokens;
+        if (coldTokens > 0) {
+          // Cost the cold subset, not the turn. `uncachedInputCostMicros` is
+          // the whole turn's uncached spend, so pairing it with the cold-replay
+          // token count overstated what the compaction cost by their ratio.
+          const coldCostMicros = line.uncachedInputTokens > 0
+            ? Math.round(
+              line.uncachedInputCostMicros
+              * (coldTokens / line.uncachedInputTokens),
+            )
+            : 0;
+          this.attributeThreadCompactionColdReplayDeltaSync({
+            backend: line.backend as AppServerBackendKind,
+            costMicros: coldCostMicros,
+            // Anchored to now, not `line.createdAt`: the usage line is per turn
+            // and its created_at is pinned by MIN() to the turn's first flush,
+            // so a marker written mid-turn always sorted after it and could
+            // never be claimed by the turn it actually interrupted.
+            observedAt: now,
+            threadId: line.threadId,
+            uncachedTokens: coldTokens,
+            usageLineId: line.usageLineId,
+            updatedAt: now,
+          });
+        }
+      }
       return line;
     };
 
@@ -1782,6 +1868,182 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
         this.recomputeThreadPricingSummarySync(target);
       }
     })();
+  }
+
+  /**
+   * Record one observed compaction. Idempotent on `compactionId`, so a
+   * re-emitted notification is a no-op rather than a second marker: the
+   * marker's whole job is to bound replay accounting, and a duplicate would
+   * make a single compaction look like two.
+   *
+   * Returns true only when a new marker was written, so callers can skip the
+   * downstream reconciliation and event emission on a duplicate.
+   */
+  async recordThreadCompaction(params: {
+    compaction: ThreadCompactionRecord;
+  }): Promise<boolean> {
+    const compaction = params.compaction;
+    const result = this.stateDb.raw
+      .prepare(
+        `INSERT INTO thread_compactions (
+          compaction_id,
+          backend,
+          thread_id,
+          turn_id,
+          item_id,
+          observed_at,
+          cold_usage_line_id,
+          cold_uncached_tokens,
+          cold_cost_micros,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(compaction_id) DO NOTHING`,
+      )
+      .run(
+        compaction.compactionId,
+        compaction.backend,
+        compaction.threadId,
+        compaction.turnId ?? null,
+        compaction.itemId ?? null,
+        compaction.observedAt,
+        compaction.coldUsageLineId ?? null,
+        compaction.coldUncachedTokens ?? null,
+        compaction.coldCostMicros ?? null,
+        compaction.updatedAt,
+      );
+    return result.changes > 0;
+  }
+
+  async listThreadCompactions(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadCompactionRecord[]> {
+    return (
+      this.stateDb.raw
+        .prepare(
+          `SELECT * FROM thread_compactions
+           WHERE backend = ? AND thread_id = ?
+           ORDER BY observed_at ASC`,
+        )
+        .all(params.backend, params.threadId) as ThreadCompactionRow[]
+    ).map(readThreadCompactionRow);
+  }
+
+  /**
+   * Name the cold replay a compaction caused.
+   *
+   * Applied to the newest marker that precedes the request and has no
+   * attribution yet, because the first priced request after a compaction is the
+   * one that re-sent the surviving context uncached. This is what separates a
+   * compaction-caused cold replay from one caused by prompt-cache expiry or a
+   * long gap between turns — the fold classifies both identically.
+   *
+   * Usage rows carry cumulative cold-replay totals. A long turn can compact
+   * more than once while keeping the same usage-line identity, so each newer
+   * marker receives only the delta since the preceding marker attributed to
+   * that line. Limiting the candidate to markers newer than that attribution
+   * keeps re-emitted rows idempotent without suppressing later compactions.
+   */
+  attributeThreadCompactionColdReplaySync(params: {
+    backend: AppServerBackendKind;
+    costMicros: number;
+    observedAt: number;
+    threadId: string;
+    uncachedTokens: number;
+    usageLineId: string;
+    updatedAt: number;
+  }): boolean {
+    const result = this.stateDb.raw
+      .prepare(
+        `WITH prior AS (
+           SELECT
+             COALESCE(SUM(cold_uncached_tokens), 0) AS uncached_tokens,
+             COALESCE(SUM(cold_cost_micros), 0) AS cost_micros,
+             COALESCE(MAX(observed_at), -1) AS observed_at
+           FROM thread_compactions
+           WHERE backend = ? AND thread_id = ? AND cold_usage_line_id = ?
+         ), candidate AS (
+           SELECT compaction_id FROM thread_compactions
+           WHERE backend = ? AND thread_id = ?
+             AND cold_usage_line_id IS NULL
+             AND observed_at <= ?
+             AND observed_at > (SELECT observed_at FROM prior)
+           ORDER BY observed_at DESC
+           LIMIT 1
+         )
+         UPDATE thread_compactions
+         SET cold_usage_line_id = ?,
+             cold_uncached_tokens = MAX(0, ? - (SELECT uncached_tokens FROM prior)),
+             cold_cost_micros = MAX(0, ? - (SELECT cost_micros FROM prior)),
+             updated_at = ?
+         WHERE compaction_id = (SELECT compaction_id FROM candidate)`,
+      )
+      .run(
+        params.backend,
+        params.threadId,
+        params.usageLineId,
+        params.backend,
+        params.threadId,
+        params.observedAt,
+        params.usageLineId,
+        params.uncachedTokens,
+        params.costMicros,
+        params.updatedAt,
+      );
+    return result.changes > 0;
+  }
+
+  private attributeThreadCompactionColdReplayDeltaSync(params: {
+    backend: AppServerBackendKind;
+    costMicros: number;
+    observedAt: number;
+    threadId: string;
+    uncachedTokens: number;
+    usageLineId: string;
+    updatedAt: number;
+  }): boolean {
+    // The usage upsert already reduced the cumulative replay counters to the
+    // newly observed delta. Attribute that delta directly so an unchanged
+    // cumulative line cannot consume a newer compaction marker.
+    const result = this.stateDb.raw
+      .prepare(
+        `WITH candidate AS (
+           SELECT compaction_id FROM thread_compactions
+           WHERE backend = ? AND thread_id = ?
+             AND cold_usage_line_id IS NULL
+             AND observed_at <= ?
+           ORDER BY observed_at DESC
+           LIMIT 1
+         )
+         UPDATE thread_compactions
+         SET cold_usage_line_id = ?,
+             cold_uncached_tokens = MAX(0, ?),
+             cold_cost_micros = MAX(0, ?),
+             updated_at = ?
+         WHERE compaction_id = (SELECT compaction_id FROM candidate)`,
+      )
+      .run(
+        params.backend,
+        params.threadId,
+        params.observedAt,
+        params.usageLineId,
+        params.uncachedTokens,
+        params.costMicros,
+        params.updatedAt,
+      );
+    return result.changes > 0;
+  }
+
+  async attributeThreadCompactionColdReplay(params: {
+    backend: AppServerBackendKind;
+    costMicros: number;
+    observedAt: number;
+    threadId: string;
+    uncachedTokens: number;
+    usageLineId: string;
+    updatedAt: number;
+  }): Promise<boolean> {
+    return this.attributeThreadCompactionColdReplaySync(params);
   }
 
   async upsertThreadToolInvocation(params: {
@@ -2296,7 +2558,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
                 observed_cold_replay_count,
                 observed_cold_replay_uncached_tokens,
                 observed_hot_replay_cached_tokens,
-                observed_hot_replay_count
+                observed_hot_replay_count,
+                final_context_tokens,
+                peak_context_tokens,
+                model_context_window
            FROM thread_usage_turns
           WHERE backend = ?
             AND thread_id = ?
@@ -2307,7 +2572,10 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
                 observed_cold_replay_count,
                 observed_cold_replay_uncached_tokens,
                 observed_hot_replay_cached_tokens,
-                observed_hot_replay_count
+                observed_hot_replay_count,
+                final_context_tokens,
+                peak_context_tokens,
+                model_context_window
            FROM thread_usage_turns
           WHERE backend = ?
             AND parent_thread_id = ?
@@ -2321,6 +2589,9 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       observed_cold_replay_uncached_tokens: number | null;
       observed_hot_replay_cached_tokens: number | null;
       observed_hot_replay_count: number | null;
+      final_context_tokens: number | null;
+      peak_context_tokens: number | null;
+      model_context_window: number | null;
     }>;
     if (turnRows.length === 0) {
       return;
@@ -2352,6 +2623,15 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       if (turn.observed_hot_replay_count !== null) {
         line.observedHotReplayCount = turn.observed_hot_replay_count;
       }
+      if (turn.final_context_tokens !== null) {
+        line.finalContextTokens = turn.final_context_tokens;
+      }
+      if (turn.peak_context_tokens !== null) {
+        line.peakContextTokens = turn.peak_context_tokens;
+      }
+      if (turn.model_context_window !== null) {
+        line.modelContextWindow = turn.model_context_window;
+      }
     }
   }
 
@@ -2360,6 +2640,18 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
     threadId: string;
     subAgent: ThreadSubAgentSummary;
   }): Promise<ThreadOverlayState> {
+    return await this.upsertThreadSubAgents({
+      backend: params.backend,
+      threadId: params.threadId,
+      subAgents: [params.subAgent],
+    });
+  }
+
+  async upsertThreadSubAgents(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    subAgents: ThreadSubAgentSummary[];
+  }): Promise<ThreadOverlayState> {
     const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
     const current = this.getThread(threadKey) ?? {
       backend: params.backend,
@@ -2367,10 +2659,13 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       executionMode: "default" as const,
       extraLinkedDirectories: [],
     };
+    const replacements = new Map(
+      params.subAgents.map((subAgent) => [subAgent.monitorId, subAgent]),
+    );
     const nextSubAgents = [
-      params.subAgent,
+      ...replacements.values(),
       ...(current.subAgents ?? []).filter(
-        (subAgent) => subAgent.monitorId !== params.subAgent.monitorId,
+        (subAgent) => !replacements.has(subAgent.monitorId),
       ),
     ].sort((left, right) => right.createdAt - left.createdAt);
     const nextState: ThreadOverlayState = {
@@ -3039,6 +3334,26 @@ export class SqliteOverlayStore implements RemoteThreadTargetStore {
       ...current,
       agent: params.agent ? normalizeThreadAgent(params.agent, params.now) : undefined,
     };
+    this.putThread(threadKey, nextState);
+    return nextState;
+  }
+
+  async setThreadTokenMiser(params: {
+    backend: ThreadOverlayState["backend"];
+    threadId: string;
+    enabled: boolean | null;
+  }): Promise<ThreadOverlayState> {
+    const threadKey = buildThreadIdentityKey(params.backend, params.threadId);
+    const current = this.getThread(threadKey) ?? {
+      backend: params.backend,
+      threadId: params.threadId,
+      executionMode: "default" as const,
+      extraLinkedDirectories: [],
+    };
+    const { tokenMiserEnabled: _cleared, ...rest } = current;
+    const nextState: ThreadOverlayState = params.enabled === null
+      ? rest
+      : { ...current, tokenMiserEnabled: params.enabled };
     this.putThread(threadKey, nextState);
     return nextState;
   }
@@ -6479,6 +6794,10 @@ type ThreadUsageLineRow = {
   output_cost_micros: number;
   total_cost_micros: number;
   cumulative_total_cost_micros: number | null;
+  observed_cold_replay_count: number | null;
+  observed_cold_replay_uncached_tokens: number | null;
+  observed_hot_replay_cached_tokens: number | null;
+  observed_hot_replay_count: number | null;
   updated_at: number;
 };
 
@@ -6936,6 +7255,7 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
     cumulativeUncachedInputTokens: line.cumulativeUncachedInputTokens ?? null,
     currency: line.currency,
     fastMode: typeof line.fastMode === "boolean" ? (line.fastMode ? 1 : 0) : null,
+    finalContextTokens: line.finalContextTokens ?? null,
     turnUsageAttributed:
       typeof line.turnUsageAttributed === "boolean"
         ? line.turnUsageAttributed
@@ -6944,12 +7264,14 @@ function toThreadUsageLineRowParams(line: ThreadUsageLineRecord): Record<string,
         : null,
     inputTokens: line.inputTokens,
     model: line.model ?? null,
+    modelContextWindow: line.modelContextWindow ?? null,
     observedColdReplayCount: line.observedColdReplayCount ?? null,
     observedColdReplayUncachedTokens: line.observedColdReplayUncachedTokens ?? null,
     observedHotReplayCachedTokens: line.observedHotReplayCachedTokens ?? null,
     observedHotReplayCount: line.observedHotReplayCount ?? null,
     outputCostMicros: line.outputCostMicros,
     outputTokens: line.outputTokens,
+    peakContextTokens: line.peakContextTokens ?? null,
     parentThreadId: line.parentThreadId ?? null,
     priceStatus: line.priceStatus,
     priceUnavailableReason: line.priceUnavailableReason ?? null,
@@ -7085,6 +7407,21 @@ function threadUsageLineFromRow(row: ThreadUsageLineRow): ThreadUsageLineRecord 
       : {}),
     inputTokens: row.input_tokens,
     ...(row.model ? { model: row.model } : {}),
+    ...(row.observed_cold_replay_count !== null
+      ? { observedColdReplayCount: row.observed_cold_replay_count }
+      : {}),
+    ...(row.observed_cold_replay_uncached_tokens !== null
+      ? {
+          observedColdReplayUncachedTokens:
+            row.observed_cold_replay_uncached_tokens,
+        }
+      : {}),
+    ...(row.observed_hot_replay_cached_tokens !== null
+      ? { observedHotReplayCachedTokens: row.observed_hot_replay_cached_tokens }
+      : {}),
+    ...(row.observed_hot_replay_count !== null
+      ? { observedHotReplayCount: row.observed_hot_replay_count }
+      : {}),
     outputCostMicros: row.output_cost_micros,
     outputTokens: row.output_tokens,
     ...(row.parent_thread_id ? { parentThreadId: row.parent_thread_id } : {}),
@@ -7311,6 +7648,7 @@ export type OverlayStoreLike = Pick<
   | "setThreadPin"
   | "setThreadParent"
   | "setThreadAgent"
+  | "setThreadTokenMiser"
   | "setThreadHandoffOrigin"
   | "setThreadForkOrigin"
   | "reorderThreadPins"

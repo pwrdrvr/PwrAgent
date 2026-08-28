@@ -127,6 +127,14 @@ export type NavigationThreadSummary = AppServerThreadSummary & {
    * to act as a personal Agent surface.
    */
   agent?: ThreadAgentMetadata;
+  /**
+   * Per-thread Token Miser override. `true`/`false` force the gate on or off
+   * for this thread regardless of the global setting; absent means follow the
+   * global setting. Set from the composer's thread menu — gating adds a
+   * synchronous helper round trip per large tool result, so a latency-
+   * sensitive thread wants a way to opt out without touching Settings.
+   */
+  tokenMiserEnabled?: boolean;
   /** User-curated position in the pinned section. Lower ranks sort first. */
   pinnedRank?: string;
   /**
@@ -265,6 +273,27 @@ export type ThreadSubAgentStatus =
   | "failure"
   | "cancelled";
 
+export type TokenMiserSubAgentAccounting = {
+  currency: "USD";
+  disposition?: "summarized" | "passed_through";
+  decisionSource?: "helper" | "policy";
+  originalModel: string;
+  originalServiceTier?: string;
+  baselineParentTokens: number;
+  baselineParentCostMicros: number;
+  cachedReplayCount?: number;
+  cachedBaselineTokens?: number;
+  cachedBaselineCostMicros?: number;
+  gateModel: string;
+  gateTotalTokens: number;
+  gateCostMicros: number;
+  revealedParentTokens: number;
+  revealedParentCostMicros: number;
+  cachedRevealedTokens?: number;
+  cachedRevealedCostMicros?: number;
+  savingsMicros: number;
+};
+
 export type ThreadSubAgentSummary = {
   monitorId: string;
   task: string;
@@ -296,11 +325,18 @@ export type ThreadSubAgentSummary = {
   preferredFastMode?: boolean;
   monitorThreadId?: ThreadIdentifier;
   monitorTurnId?: ThreadIdentifier;
+  /**
+   * The parent turn this sub-agent ran inside. Set for Token Miser gates so
+   * the Pricing rail can nest a gate under the turn it happened in — the gate's
+   * own usage line carries the helper's turn, not the parent's.
+   */
+  parentTurnId?: ThreadIdentifier;
   lastMessage?: string;
   outcome?: "success" | "failure" | "cancelled";
   completedAt?: number;
   completionSource?: TaskMonitorCompletionSource;
   monitorUsage?: TaskMonitorUsageSnapshot;
+  tokenMiserAccounting?: TokenMiserSubAgentAccounting;
   pollIntervalSeconds?: number;
   heartbeatIntervalSeconds?: number;
   startupTimeoutSeconds?: number;
@@ -776,6 +812,12 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
    * rewrite a launchpad the operator has already configured.
    */
   prAutoDispatchEnabled?: boolean;
+  /**
+   * Token Miser choice for the thread created from this launchpad. Absent
+   * follows the profile setting; true/false creates an explicit thread
+   * override before the first turn starts.
+   */
+  tokenMiserEnabled?: boolean;
   workMode: LaunchpadWorkMode;
   branchName?: string;
   /** Instance that owns the thread this viewer-side launchpad will create. */
@@ -1515,6 +1557,19 @@ export type SetThreadAgentResponse = {
   agent?: ThreadAgentMetadata;
 };
 
+export type SetThreadTokenMiserRequest = {
+  backend?: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  /** Null clears the override so the thread follows the global setting. */
+  enabled: boolean | null;
+};
+
+export type SetThreadTokenMiserResponse = {
+  backend: AppServerBackendKind;
+  threadId: ThreadIdentifier;
+  tokenMiserEnabled?: boolean;
+};
+
 export type ReorderThreadPinsRequest = {
   federationTarget?: FederationTarget;
   /**
@@ -1811,6 +1866,14 @@ export type ThreadOverlayState = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
   agent?: ThreadAgentMetadata;
+  /**
+   * Per-thread Token Miser override. `true`/`false` force the gate on or off
+   * for this thread regardless of the global setting; absent means follow the
+   * global setting. Set from the composer's thread menu — gating adds a
+   * synchronous helper round trip per large tool result, so a latency-
+   * sensitive thread wants a way to opt out without touching Settings.
+   */
+  tokenMiserEnabled?: boolean;
   executionMode?: ThreadExecutionMode;
   /**
    * Timestamp of the source that last established `executionMode`.

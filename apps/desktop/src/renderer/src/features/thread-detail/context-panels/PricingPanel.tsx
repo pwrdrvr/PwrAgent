@@ -1,7 +1,10 @@
 import type {
   AppServerBackendKind,
+  ThreadCompactionRecord,
   ThreadPricingSummary,
   ThreadSubAgentSummary,
+  ThreadTokenMiserAccounting,
+  ThreadTokenMiserInterceptionAccounting,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
 import {
@@ -9,7 +12,7 @@ import {
   estimateTokenUsageCost,
   formatTokenUsageMicrosAsUsd,
 } from "@pwragent/shared";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ChipContextMenu,
   type ChipContextMenuItem,
@@ -31,12 +34,14 @@ import {
 import { RailStatusChip } from "./RailStatusChip";
 import { subAgentPricingUsageTitle } from "./subagent-kind";
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
+import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
 
 type PricingPanelProps = {
   activeTurnId?: string;
   displayOptions?: PricingDisplayOptions;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   pricing?: {
+    compactions?: ThreadCompactionRecord[];
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
@@ -46,6 +51,7 @@ type PricingPanelProps = {
    * Supplies each sub-agent row's name and its live/terminal status.
    */
   subAgents?: ThreadSubAgentSummary[];
+  tokenMiserAccounting?: ThreadTokenMiserAccounting;
   threadReasoningEffort?: string;
 };
 
@@ -67,7 +73,16 @@ const PRICING_USAGE_PAGE_SIZE = 20;
 export function PricingPanel(props: PricingPanelProps) {
   const summaries = props.pricing?.summaries ?? [];
   const lines = props.pricing?.lines ?? [];
-  const displayLines = buildPricingDisplayLines(lines);
+  const allDisplayLines = buildPricingDisplayLines(lines);
+  const subAgentsById = new Map(
+    (props.subAgents ?? []).map((subAgent) => [subAgent.monitorId, subAgent]),
+  );
+  // Gate rows nest under the turn they happened in. Left in the flat list they
+  // sort *above* their turn — a gate is created mid-turn, after the turn's
+  // first usage flush — and each one is a full card, so a turn with 25 gates
+  // pushed its own row a screen below the noise it produced.
+  const { gateLinesByTurn, displayLines, orphanGroupsByAnchor } =
+    partitionTokenMiserGateLines(allDisplayLines, subAgentsById);
   const pricingHistoryKey = summaries[0]
     ? `${summaries[0].backend}:${summaries[0].threadId}`
     : displayLines[0]
@@ -83,22 +98,224 @@ export function PricingPanel(props: PricingPanelProps) {
       : PRICING_USAGE_PAGE_SIZE;
   const visibleDisplayLines = displayLines.slice(0, visibleUsageRowCount);
   const hiddenUsageRowCount = displayLines.length - visibleDisplayLines.length;
-  const estimatedLines = displayLines.filter(isEstimatedUsageGap);
+  const estimatedLines = allDisplayLines.filter(isEstimatedUsageGap);
   const displaySummaries = addEstimatedLinesToSummaries(summaries, estimatedLines);
   const summary =
-    aggregateSummaries(displaySummaries) ?? aggregateUsageLines(displayLines);
-  const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
-  const pricingTotals = buildPricingRunningTotals(displayLines);
-  const activeTurnId = props.activeTurnId;
-  const subAgentsById = new Map(
-    (props.subAgents ?? []).map((subAgent) => [subAgent.monitorId, subAgent]),
+    aggregateSummaries(displaySummaries) ?? aggregateUsageLines(allDisplayLines);
+  // The headline is the all-in bill, including naming, reviews, monitors and
+  // Token Miser. Token volume is a context question, though: only the parent
+  // thread's turn rows enter its model context. Helper usage already has its
+  // own cards below, and mixing it here made the summary disagree with both
+  // the turn card and Codex's context-window meter.
+  const parentModelSummary = aggregateUsageLines(
+    allDisplayLines.filter(isMainThreadUsageLine),
   );
-  const hasActiveRow = displayLines.some((line) =>
+  const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
+  // Totals run over every line, nested gates included: a gate's helper cost is
+  // still part of the running total of every turn after it.
+  const pricingTotals = buildPricingRunningTotals(allDisplayLines);
+  const activeTurnId = props.activeTurnId;
+  const hasActiveRow = allDisplayLines.some((line) =>
     isActiveUsageLine({ activeTurnId, line, subAgentsById }),
   );
   // Tick while any row is live — the main turn or any still-running sub-agent —
   // so completed threads render static and never spin a 1s interval.
   const now = useNowWhileActive(hasActiveRow);
+  const compactionsByRow = useMemo(
+    () => groupCompactionsByRow(props.pricing?.compactions ?? []),
+    [props.pricing?.compactions],
+  );
+  // Rebuilt per render alongside the row map: rows are laid out newest-first in
+  // one pass, so the first row of a turn claims that turn's pending markers.
+  const claimedCompactionTurns = new Set<string>();
+
+  // One usage row, whether it sits in the flat list or nested under a turn.
+  // Nested gates render the same full card as before — title, model, helper
+  // usage, timing, list price, the savings equation, running total — the
+  // heading above them is a fold, not a replacement.
+  const renderUsageRow = (
+    line: PricingUsageLine,
+    options: { nested?: boolean } = {},
+  ) => {
+    const orphanGroup = options.nested
+      ? undefined
+      : orphanGroupsByAnchor.get(line.usageLineId);
+    if (orphanGroup) {
+      // A gate with no turn to nest under is either the compact group
+      // or nothing. Full cards for gates that cannot be priced were
+      // pure noise — the summarizer's cost is still in the totals, and
+      // the Explorer still lists every gate.
+      const anyPriced = orphanGroup.some((gate) =>
+        gate.sourceItemId
+        && subAgentsById.get(gate.sourceItemId)?.tokenMiserAccounting,
+      );
+      return anyPriced ? (
+        <li
+          key={line.usageLineId}
+          className="rail-card pricing-usage-row pricing-usage-row--orphan-gates"
+        >
+          <TokenMiserTurnGroup
+            decisions={tokenMiserDecisionsForGateLines({
+              accounting: props.tokenMiserAccounting,
+              gates: orphanGroup,
+              subAgentsById,
+            })}
+            gates={orphanGroup}
+            renderGate={(gate) => renderUsageRow(gate, { nested: true })}
+            subAgentsById={subAgentsById}
+          />
+        </li>
+      ) : null;
+    }
+    const lineTotals = pricingTotals.byLineId.get(line.usageLineId);
+    const usageLineEstimate = formatUsageLineEstimates({
+      displayOptions,
+      line,
+      lineTotals,
+    });
+    const runningTotal = formatUsageLineRunningTotal({
+      displayOptions,
+      line,
+      lineTotals,
+    });
+    const contextReplayLines = formatContextReplayEstimate({
+      displayOptions,
+      line,
+    });
+    const rowCompactions = selectRowCompactions(
+      compactionsByRow,
+      line,
+      claimedCompactionTurns,
+    );
+    const runningTokens = formatUsageLineRunningTokens(line);
+    const subAgent =
+      line.scope === "monitor" && line.sourceItemId
+        ? subAgentsById.get(line.sourceItemId)
+        : undefined;
+    const nestedGates = line.scope !== "monitor" && line.turnId
+      ? (gateLinesByTurn.get(line.turnId) ?? [])
+      : [];
+    const isActive = isActiveUsageLine({ activeTurnId, line, subAgentsById });
+    const usageTitle = formatUsageLineTitle(line, subAgent);
+    const showUsageTitle = usageTitle !== "Turn usage";
+    const reasoningEffort =
+      line.reasoningEffort
+      ?? subAgent?.preferredReasoningEffort
+      ?? (isActive && line.scope !== "monitor"
+        ? props.threadReasoningEffort
+        : undefined);
+    const runtimeLabel = formatUsageLineRuntimeLabel(line, subAgent);
+    const runtimeModel =
+      line.model
+      ?? subAgent?.preferredModel
+      ?? subAgent?.monitorUsage?.model
+      ?? subAgent?.monitorUsage?.cost?.model;
+
+    return (
+      <li
+        key={line.usageLineId}
+        className={`rail-card pricing-usage-row${
+          isActive ? " pricing-usage-row--active" : ""
+        }`}
+      >
+        <div className="pricing-usage-row__header">
+          <div className="pricing-usage-row__identity">
+            {showUsageTitle ? (
+              <p className="rail-card__title">{usageTitle}</p>
+            ) : null}
+            <p className="rail-card__runtime">
+              <span className="rail-card__provider-chip">
+                {runtimeLabel}
+              </span>
+              <span className="rail-card__model">
+                {runtimeModel ?? "Unknown model"}
+                {reasoningEffort ? ` · ${reasoningEffort}` : ""}
+                {formatServiceTierLabel(line)}
+              </span>
+            </p>
+          </div>
+          <div className="pricing-usage-row__controls">
+            {isActive ? (
+              <RailStatusChip tone="active">Running</RailStatusChip>
+            ) : null}
+            <PricingUsageActions
+              line={line}
+              onScrollToTurn={props.onScrollToTurn}
+              startedAt={
+                subAgent?.createdAt ?? line.startedAt ?? line.createdAt
+              }
+              subAgent={subAgent}
+            />
+          </div>
+        </div>
+        {/* Under the Token Miser fold the heading already names the agent,
+            and the card keeps its own title — a second "Token Miser" line on
+            every nested card was one title too many. */}
+        {subAgent?.agentName && !options.nested ? (
+          <p className="rail-card__agent-name" title={subAgent.agentName}>
+            {subAgent.agentName}
+          </p>
+        ) : null}
+        {/* Cost first: it is the answer the card exists to give. Tokens,
+            timing and replay estimates are the working shown under it. */}
+        {usageLineEstimate ? (
+          <p className="pricing-usage-row__cost">{usageLineEstimate}</p>
+        ) : null}
+        <p className="rail-card__usage">
+          {formatTokenCount(line.uncachedInputTokens)} uncached in ·{" "}
+          {formatTokenCount(line.cachedInputTokens)} cached ·{" "}
+          {formatTokenCount(line.outputTokens)} out
+          {line.reasoningOutputTokens > 0
+            ? ` (${formatTokenCount(line.reasoningOutputTokens)} reasoning)`
+            : ""}
+        </p>
+        <PricingUsageTimestamp
+          isActive={isActive}
+          line={line}
+          now={now}
+          onScrollToTurn={props.onScrollToTurn}
+          subAgent={subAgent}
+        />
+        {contextReplayLines.map((replayLine) => (
+          <p key={replayLine} className="rail-card__usage">
+            {replayLine}
+          </p>
+        ))}
+        {subAgent?.tokenMiserAccounting ? (
+          <TokenMiserSavingsBreakdown
+            accounting={subAgent.tokenMiserAccounting}
+          />
+        ) : null}
+        {nestedGates.length > 0 ? (
+          <TokenMiserTurnGroup
+            decisions={tokenMiserDecisionsForTurn(
+              props.tokenMiserAccounting,
+              line.turnId,
+            )}
+            gates={nestedGates}
+            renderGate={(gate) => renderUsageRow(gate, { nested: true })}
+            subAgentsById={subAgentsById}
+          />
+        ) : null}
+        {rowCompactions.length > 0 ? (
+          <CompactionBreakdown compactions={rowCompactions} />
+        ) : null}
+        {runningTokens ? (
+          <details className="pricing-running-total">
+            <summary className="pricing-running-total__summary">
+              {runningTotal ?? "Running total"}
+            </summary>
+            <p className="rail-card__usage pricing-running-total__tokens">
+              {runningTokens}
+            </p>
+          </details>
+        ) : runningTotal ? (
+          <p className="rail-card__usage">{runningTotal}</p>
+        ) : null}
+      </li>
+    );
+    };
+
 
   return (
     <section className="context-panel__section">
@@ -128,27 +345,33 @@ export function PricingPanel(props: PricingPanelProps) {
               {summary.unpricedUsageLineCount.toLocaleString()} unpriced ·{" "}
               {formatTimestamp(summary.updatedAt)}
             </div>
-            <div className="rail-summary-card__section">
-              <span className="rail-summary-card__section-title">Token volume</span>
-              <RailSummaryRow
-                label="Uncached input"
-                value={formatCompactCount(summary.uncachedInputTokens)}
-              />
-              <RailSummaryRow
-                label="Cached input"
-                value={formatCompactCount(summary.cachedInputTokens)}
-              />
-              <RailSummaryRow
-                label="Output"
-                value={formatCompactCount(summary.outputTokens)}
-              />
-              {summary.reasoningOutputTokens > 0 ? (
+            {parentModelSummary ? (
+              <div className="rail-summary-card__section">
+                <span className="rail-summary-card__section-title">
+                  Parent model token volume
+                </span>
                 <RailSummaryRow
-                  label="Reasoning"
-                  value={formatCompactCount(summary.reasoningOutputTokens)}
+                  label="Uncached input"
+                  value={formatCompactCount(parentModelSummary.uncachedInputTokens)}
                 />
-              ) : null}
-            </div>
+                <RailSummaryRow
+                  label="Cached input"
+                  value={formatCompactCount(parentModelSummary.cachedInputTokens)}
+                />
+                <RailSummaryRow
+                  label="Output"
+                  value={formatCompactCount(parentModelSummary.outputTokens)}
+                />
+                {parentModelSummary.reasoningOutputTokens > 0 ? (
+                  <RailSummaryRow
+                    label="Reasoning"
+                    value={formatCompactCount(
+                      parentModelSummary.reasoningOutputTokens,
+                    )}
+                  />
+                ) : null}
+              </div>
+            ) : null}
             {displaySummaries.length > 1 ? (
               <div className="rail-summary-card__section">
                 <span className="rail-summary-card__section-title">By provider</span>
@@ -202,123 +425,7 @@ export function PricingPanel(props: PricingPanelProps) {
 
       {displayLines.length > 0 ? (
         <ul className="context-list context-list--cards pricing-usage-list">
-          {visibleDisplayLines.map((line) => {
-            const lineTotals = pricingTotals.byLineId.get(line.usageLineId);
-            const usageLineEstimate = formatUsageLineEstimates({
-              displayOptions,
-              line,
-              lineTotals,
-            });
-            const runningTotal = formatUsageLineRunningTotal({
-              displayOptions,
-              line,
-              lineTotals,
-            });
-            const contextReplayLines = formatContextReplayEstimate({
-              displayOptions,
-              line,
-            });
-            const runningTokens = formatUsageLineRunningTokens(line);
-            const subAgent =
-              line.scope === "monitor" && line.sourceItemId
-                ? subAgentsById.get(line.sourceItemId)
-                : undefined;
-            const isActive = isActiveUsageLine({ activeTurnId, line, subAgentsById });
-            const usageTitle = formatUsageLineTitle(line, subAgent);
-            const showUsageTitle = usageTitle !== "Turn usage";
-            const reasoningEffort =
-              line.reasoningEffort
-              ?? subAgent?.preferredReasoningEffort
-              ?? (isActive && line.scope !== "monitor"
-                ? props.threadReasoningEffort
-                : undefined);
-            const runtimeLabel = formatUsageLineRuntimeLabel(line, subAgent);
-            const runtimeModel =
-              line.model
-              ?? subAgent?.preferredModel
-              ?? subAgent?.monitorUsage?.model
-              ?? subAgent?.monitorUsage?.cost?.model;
-
-            return (
-              <li
-                key={line.usageLineId}
-                className={`rail-card pricing-usage-row${
-                  isActive ? " pricing-usage-row--active" : ""
-                }`}
-              >
-                <div className="pricing-usage-row__header">
-                  <div className="pricing-usage-row__identity">
-                    {showUsageTitle ? (
-                      <p className="rail-card__title">{usageTitle}</p>
-                    ) : null}
-                    <p className="rail-card__runtime">
-                      <span className="rail-card__provider-chip">
-                        {runtimeLabel}
-                      </span>
-                      <span className="rail-card__model">
-                        {runtimeModel ?? "Unknown model"}
-                        {reasoningEffort ? ` · ${reasoningEffort}` : ""}
-                        {formatServiceTierLabel(line)}
-                      </span>
-                    </p>
-                  </div>
-                  <div className="pricing-usage-row__controls">
-                    {isActive ? (
-                      <RailStatusChip tone="active">Running</RailStatusChip>
-                    ) : null}
-                    <PricingUsageActions
-                      line={line}
-                      onScrollToTurn={props.onScrollToTurn}
-                      startedAt={
-                        subAgent?.createdAt ?? line.startedAt ?? line.createdAt
-                      }
-                      subAgent={subAgent}
-                    />
-                  </div>
-                </div>
-                {subAgent?.agentName ? (
-                  <p className="rail-card__agent-name" title={subAgent.agentName}>
-                    {subAgent.agentName}
-                  </p>
-                ) : null}
-                <p className="rail-card__usage">
-                  {formatTokenCount(line.uncachedInputTokens)} uncached in ·{" "}
-                  {formatTokenCount(line.cachedInputTokens)} cached ·{" "}
-                  {formatTokenCount(line.outputTokens)} out
-                  {line.reasoningOutputTokens > 0
-                    ? ` (${formatTokenCount(line.reasoningOutputTokens)} reasoning)`
-                    : ""}
-                </p>
-                <PricingUsageTimestamp
-                  isActive={isActive}
-                  line={line}
-                  now={now}
-                  onScrollToTurn={props.onScrollToTurn}
-                  subAgent={subAgent}
-                />
-                {usageLineEstimate ? (
-                  <p className="rail-card__usage">{usageLineEstimate}</p>
-                ) : null}
-                {contextReplayLines.map((replayLine) => (
-                  <p key={replayLine} className="rail-card__usage">
-                    {replayLine}
-                  </p>
-                ))}
-                {runningTokens ? (
-                  <details className="pricing-running-total">
-                    <summary className="pricing-running-total__summary">
-                      {runningTotal ?? "Running total"}
-                    </summary>
-                    <p className="rail-card__usage pricing-running-total__tokens">
-                      {runningTokens}
-                    </p>
-                  </details>
-                ) : runningTotal ? (
-                  <p className="rail-card__usage">{runningTotal}</p>
-                ) : null}
-              </li>
-            );
-          })}
+          {visibleDisplayLines.map((line) => renderUsageRow(line))}
         </ul>
       ) : null}
       {hiddenUsageRowCount > 0 ? (
@@ -361,6 +468,373 @@ function formatServiceTierLabel(line: ThreadUsageLineRecord): string {
     return "";
   }
   return ` · ${line.serviceTier}`;
+}
+
+/**
+ * A gate below this saved (or cost) too little to earn its own card. Its
+ * dollars still count in the turn's summary line; only the card is withheld.
+ * Ten cents is where a card stops being noise: below it the equation reads as
+ * rounding, above it the reader can see which term moved.
+ */
+const TOKEN_MISER_CARD_MIN_MICROS = 100_000;
+
+const TOKEN_MISER_SOURCE_PREFIX = "system:token-miser:";
+
+function isTokenMiserGateLine(line: PricingUsageLine): boolean {
+  return line.scope === "monitor"
+    && Boolean(line.sourceItemId?.startsWith(TOKEN_MISER_SOURCE_PREFIX));
+}
+
+/**
+ * Split gate rows out of the flat list and attach each to its parent turn.
+ *
+ * A gate whose parent turn has no row of its own — a native review's inner
+ * turn, or a turn whose usage has not landed yet — stays in the flat list, so
+ * it is still visible rather than silently dropped.
+ */
+function partitionTokenMiserGateLines(
+  lines: readonly PricingUsageLine[],
+  subAgentsById: Map<string, ThreadSubAgentSummary>,
+): {
+  displayLines: PricingUsageLine[];
+  gateLinesByTurn: Map<string, PricingUsageLine[]>;
+  /**
+   * Gates with no turn row to nest under — a native review's inner turn, or a
+   * turn whose usage has not landed yet — grouped by parent turn and keyed by
+   * the usage line they should render in place of, so the group keeps the
+   * position of its newest gate rather than surfacing as N loose cards.
+   */
+  orphanGroupsByAnchor: Map<string, PricingUsageLine[]>;
+} {
+  const turnRowIds = new Set<string>();
+  for (const line of lines) {
+    if (!isTokenMiserGateLine(line) && line.scope !== "monitor" && line.turnId) {
+      turnRowIds.add(line.turnId);
+    }
+  }
+  const gateLinesByTurn = new Map<string, PricingUsageLine[]>();
+  const orphansByTurn = new Map<string, PricingUsageLine[]>();
+  const displayLines: PricingUsageLine[] = [];
+  const push = (map: Map<string, PricingUsageLine[]>, key: string, line: PricingUsageLine) => {
+    const bucket = map.get(key);
+    if (bucket) {
+      bucket.push(line);
+    } else {
+      map.set(key, [line]);
+    }
+  };
+  for (const line of lines) {
+    if (!isTokenMiserGateLine(line)) {
+      displayLines.push(line);
+      continue;
+    }
+    const parentTurnId = line.sourceItemId
+      ? subAgentsById.get(line.sourceItemId)?.parentTurnId
+      : undefined;
+    if (parentTurnId && turnRowIds.has(parentTurnId)) {
+      push(gateLinesByTurn, parentTurnId, line);
+      continue;
+    }
+    // No parent turn known at all (a gate persisted before parentTurnId
+    // existed) groups under its own id, so it still gets the compact form.
+    push(orphansByTurn, parentTurnId ?? `gate:${line.usageLineId}`, line);
+  }
+  // Lines are newest-first; the first gate seen in each orphan group is its
+  // anchor. It stays in the flat list as a placeholder the renderer swaps for
+  // the group.
+  const orphanGroupsByAnchor = new Map<string, PricingUsageLine[]>();
+  for (const gates of orphansByTurn.values()) {
+    const anchor = gates[0]!;
+    orphanGroupsByAnchor.set(anchor.usageLineId, gates);
+    displayLines.push(anchor);
+  }
+  displayLines.sort(compareUsageLinesDescending);
+  return { displayLines, gateLinesByTurn, orphanGroupsByAnchor };
+}
+
+function tokenMiserDecisionsForTurn(
+  accounting: ThreadTokenMiserAccounting | undefined,
+  turnId: string | undefined,
+): ThreadTokenMiserInterceptionAccounting[] | undefined {
+  if (!accounting?.interceptions || !turnId) {
+    return undefined;
+  }
+  const decisions = accounting.interceptions.filter((decision) =>
+    decision.turnId === turnId
+  );
+  return decisions.length > 0 ? decisions : undefined;
+}
+
+function tokenMiserDecisionsForGateLines(params: {
+  accounting?: ThreadTokenMiserAccounting;
+  gates: readonly PricingUsageLine[];
+  subAgentsById: Map<string, ThreadSubAgentSummary>;
+}): ThreadTokenMiserInterceptionAccounting[] | undefined {
+  if (!params.accounting?.interceptions) {
+    return undefined;
+  }
+  const turnIds = new Set(
+    params.gates.flatMap((gate) => {
+      const turnId = gate.sourceItemId
+        ? params.subAgentsById.get(gate.sourceItemId)?.parentTurnId
+        : undefined;
+      return turnId ? [turnId] : [];
+    }),
+  );
+  const decisions = params.accounting.interceptions.filter((decision) =>
+    turnIds.has(decision.turnId)
+  );
+  return decisions.length > 0 ? decisions : undefined;
+}
+
+/**
+ * The turn's Token Miser story, folded under the turn it belongs to.
+ *
+ * The summary line sums every gate — it is what the turn saved, and it keeps
+ * moving as replays are counted, until the next compaction. The expanded list
+ * shows a card only for gates past the threshold; the rest are one line, so a
+ * turn with twenty-five gates that each saved half a cent reads as one fact.
+ */
+function TokenMiserTurnGroup(props: {
+  decisions?: readonly ThreadTokenMiserInterceptionAccounting[];
+  gates: readonly PricingUsageLine[];
+  renderGate: (line: PricingUsageLine) => ReactNode;
+  subAgentsById: Map<string, ThreadSubAgentSummary>;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [showSmall, setShowSmall] = useState(false);
+  const entries = props.gates.map((line) => {
+    const subAgent = line.sourceItemId
+      ? props.subAgentsById.get(line.sourceItemId)
+      : undefined;
+    return {
+      accounting: subAgent?.tokenMiserAccounting,
+      line,
+      subAgent,
+    };
+  });
+  const priced = entries.filter((entry) => entry.accounting !== undefined);
+  const savingsMicros = priced.reduce(
+    (total, entry) => total + (entry.accounting?.savingsMicros ?? 0),
+    0,
+  );
+  const gateCostMicros = props.gates.reduce(
+    (total, line) => total + line.totalCostMicros,
+    0,
+  );
+  // Expanding must reveal cards, never a lone line of prose. Gates past the
+  // threshold show by default; the rest sit behind one more toggle rather than
+  // being flattened away — and when nothing clears the threshold, expanding
+  // shows every card outright, because there is nothing to hold back.
+  const significant = priced.filter((entry) =>
+    Math.abs(entry.accounting?.savingsMicros ?? 0) >= TOKEN_MISER_CARD_MIN_MICROS
+  );
+  const carded = significant.length > 0 ? significant : priced;
+  const small = priced.filter((entry) => !carded.includes(entry));
+  const smallMicros = small.reduce(
+    (total, entry) => total + (entry.accounting?.savingsMicros ?? 0),
+    0,
+  );
+  const unpricedCount = entries.length - priced.length;
+  const count = props.decisions?.length ?? props.gates.length;
+  const helperDecisionCount = props.decisions
+    ? props.decisions.filter((decision) => decision.decisionSource !== "policy").length
+    : entries.filter((entry) => entry.accounting?.decisionSource !== "policy").length;
+  const policyDecisionCount = props.decisions
+    ? props.decisions.filter((decision) => decision.decisionSource === "policy").length
+    : entries.filter((entry) => entry.accounting?.decisionSource === "policy").length;
+  const helperPassThroughCount = props.decisions
+    ? props.decisions.filter((decision) =>
+        decision.disposition === "passed_through"
+        && decision.decisionSource !== "policy"
+      ).length
+    : entries.filter((entry) =>
+        entry.accounting?.disposition === "passed_through"
+        && entry.accounting?.decisionSource !== "policy"
+      ).length;
+  const policyPassThroughCount = props.decisions
+    ? props.decisions.filter((decision) =>
+        decision.disposition === "passed_through"
+        && decision.decisionSource === "policy"
+      ).length
+    : entries.filter((entry) =>
+        entry.accounting?.disposition === "passed_through"
+        && entry.accounting?.decisionSource === "policy"
+      ).length;
+  const passThroughCount = helperPassThroughCount + policyPassThroughCount;
+  const countLabel = props.decisions || passThroughCount > 0
+    ? count === 1 ? "decision" : "decisions"
+    : count === 1 ? "gate" : "gates";
+  const verdict = priced.length === 0
+    ? `${formatTokenUsageMicrosAsUsd(gateCostMicros)} evaluating · savings not priced yet`
+    : savingsMicros >= 0
+      ? `${formatTokenUsageMicrosAsUsd(savingsMicros)} saved`
+      : `${formatTokenUsageMicrosAsUsd(Math.abs(savingsMicros))} net overhead`;
+
+  return (
+    <div className="pricing-token-miser" data-expanded={expanded ? "true" : "false"}>
+      <button
+        aria-expanded={expanded}
+        className="pricing-token-miser__summary"
+        onClick={() => setExpanded((current) => !current)}
+        type="button"
+      >
+        <span aria-hidden="true" className="pricing-token-miser__chevron">›</span>
+        <span className="pricing-token-miser__label">Token Miser</span>
+        <span className="pricing-token-miser__count">
+          {count.toLocaleString()} {countLabel}
+          {props.decisions
+            ? ` · ${helperDecisionCount.toLocaleString()} Luna ${helperDecisionCount === 1 ? "evaluation" : "evaluations"}`
+            : policyDecisionCount > 0
+              ? ` · ${helperDecisionCount.toLocaleString()} helper · ${policyDecisionCount.toLocaleString()} policy`
+            : ""}
+          {props.decisions && passThroughCount > 0
+            ? ` · ${passThroughCount.toLocaleString()} ${passThroughCount === 1 ? "pass-through" : "pass-throughs"} (${helperPassThroughCount.toLocaleString()} helper · ${policyPassThroughCount.toLocaleString()} policy)`
+            : ""}
+        </span>
+        <span className="pricing-token-miser__verdict" data-negative={savingsMicros < 0}>
+          {verdict}
+        </span>
+      </button>
+      {expanded ? (
+        <div className="pricing-token-miser__body">
+          <ul className="context-list context-list--cards pricing-token-miser__gates">
+            {[...carded, ...(showSmall ? small : [])].map((entry) =>
+              props.renderGate(entry.line)
+            )}
+          </ul>
+          {small.length > 0 ? (
+            <button
+              aria-expanded={showSmall}
+              className="pricing-token-miser__folded"
+              onClick={() => setShowSmall((current) => !current)}
+              type="button"
+            >
+              {showSmall ? "Hide" : "Show"}{" "}
+              {small.length.toLocaleString()} smaller{" "}
+              {small.length === 1 ? "gate" : "gates"} ·{" "}
+              {formatTokenUsageMicrosAsUsd(Math.abs(smallMicros))}{" "}
+              {smallMicros >= 0 ? "saved" : "overhead"} between them
+            </button>
+          ) : null}
+          {unpricedCount > 0 ? (
+            <p className="pricing-token-miser__folded">
+              {unpricedCount.toLocaleString()} not priced yet
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const COMPACTION_TURN_KEY_PREFIX = "turn:";
+
+/**
+ * Bucket compactions by the usage row that should show them.
+ *
+ * A compaction whose cold replay has been claimed belongs to that exact row —
+ * that request is the one that re-sent the surviving context uncached. One that
+ * has not been claimed yet falls back to its turn, so a compaction observed
+ * mid-turn is still visible before the request after it is priced.
+ */
+function groupCompactionsByRow(
+  compactions: readonly ThreadCompactionRecord[],
+): Map<string, ThreadCompactionRecord[]> {
+  const grouped = new Map<string, ThreadCompactionRecord[]>();
+  for (const compaction of compactions) {
+    const key = compaction.coldUsageLineId
+      ?? (compaction.turnId
+        ? `${COMPACTION_TURN_KEY_PREFIX}${compaction.turnId}`
+        : undefined);
+    if (!key) {
+      continue;
+    }
+    const bucket = grouped.get(key);
+    if (bucket) {
+      bucket.push(compaction);
+    } else {
+      grouped.set(key, [compaction]);
+    }
+  }
+  return grouped;
+}
+
+// A row claims its directly-attributed compactions plus any of its turn's
+// still-unattributed ones. Sub-agent rows are excluded: compaction is a
+// property of the parent thread's context, not of a monitor's own usage.
+function selectRowCompactions(
+  grouped: Map<string, ThreadCompactionRecord[]>,
+  line: PricingUsageLine,
+  claimedTurnKeys: Set<string>,
+): ThreadCompactionRecord[] {
+  if (grouped.size === 0 || line.scope === "monitor") {
+    return [];
+  }
+  const attributed = grouped.get(line.usageLineId) ?? [];
+  // Unattributed markers are claimed by one row per turn, not every row in it.
+  // A turn routinely has several usage lines, and showing the pending marker on
+  // each of them read as several compactions rather than one.
+  const turnKey = line.turnId
+    ? `${COMPACTION_TURN_KEY_PREFIX}${line.turnId}`
+    : undefined;
+  const pending = turnKey && !claimedTurnKeys.has(turnKey)
+    ? (grouped.get(turnKey) ?? [])
+    : [];
+  if (turnKey && pending.length > 0) {
+    claimedTurnKeys.add(turnKey);
+  }
+  return [...attributed, ...pending];
+}
+
+/**
+ * What a turn's compactions cost. A compaction forces the whole surviving
+ * context to be re-sent uncached on the next request, which is invisible in the
+ * turn's own token counts — it reads as ordinary input.
+ */
+function CompactionBreakdown(props: {
+  compactions: readonly ThreadCompactionRecord[];
+}) {
+  const count = props.compactions.length;
+  const uncachedTokens = props.compactions.reduce(
+    (total, entry) => total + (entry.coldUncachedTokens ?? 0),
+    0,
+  );
+  const costMicros = props.compactions.reduce(
+    (total, entry) => total + (entry.coldCostMicros ?? 0),
+    0,
+  );
+  const measured = props.compactions.some(
+    (entry) => entry.coldUsageLineId !== undefined,
+  );
+  return (
+    <details className="pricing-compactions">
+      <summary className="pricing-compactions__summary">
+        Compacted {count.toLocaleString()} time{count === 1 ? "" : "s"}
+        {measured
+          ? ` · ${formatTokenCount(uncachedTokens)} re-read uncached`
+            + (costMicros > 0
+              ? ` · ${formatTokenUsageMicrosAsUsd(costMicros)}`
+              : "")
+          : " · cost not observed yet"}
+      </summary>
+      <ul className="pricing-compactions__list">
+        {props.compactions.map((entry) => (
+          <li key={entry.compactionId}>
+            <span>{formatTimestamp(entry.observedAt)}</span>
+            <span>
+              {entry.coldUncachedTokens !== undefined
+                ? `${formatTokenCount(entry.coldUncachedTokens)} uncached`
+                  + (entry.coldCostMicros
+                    ? ` · ${formatTokenUsageMicrosAsUsd(entry.coldCostMicros)}`
+                    : "")
+                : "awaiting the next request"}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
 }
 
 function buildPricingDisplayLines(lines: ThreadUsageLineRecord[]): PricingUsageLine[] {

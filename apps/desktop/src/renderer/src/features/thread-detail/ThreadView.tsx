@@ -42,6 +42,7 @@ import type {
   NavigationThreadSummary,
   PendingRequestAction,
   ThreadExecutionMode,
+  ThreadCompactionRecord,
   ThreadPricingSummary,
   ThreadToolAccounting,
   ThreadToolInvocationRecord,
@@ -903,6 +904,7 @@ export type ThreadViewProps = {
   messageCount: number;
   contextWindow?: ThreadContextWindowState;
   pricing?: {
+    compactions?: ThreadCompactionRecord[];
     lines: ThreadUsageLineRecord[];
     summaries: ThreadPricingSummary[];
   };
@@ -924,6 +926,10 @@ export type ThreadViewProps = {
   threadBusy?: boolean;
   pastedImageMaxPatches?: number;
   pdfAnalysisEnabled?: boolean;
+  /** Token Miser experiment availability gate. */
+  tokenMiserEnabled?: boolean;
+  /** Inherited Token Miser state when a thread has no explicit override. */
+  tokenMiserDefaultEnabled?: boolean;
   platform?: string;
   selectedDirectory?: NavigationDirectorySummary;
   selectedLaunchpad?: NavigationLaunchpadDraft;
@@ -1115,6 +1121,7 @@ export type ThreadViewProps = {
         | "reasoningEffort"
         | "serviceTier"
         | "fastMode"
+        | "tokenMiserEnabled"
         | "workMode"
         | "branchName"
         | "directoryLabel"
@@ -3311,6 +3318,8 @@ export function ThreadView(props: ThreadViewProps) {
                   launchpadError={props.launchpadError}
                   pastedImageMaxPatches={props.pastedImageMaxPatches}
                   pdfAnalysisEnabled={props.pdfAnalysisEnabled}
+            tokenMiserEnabled={props.tokenMiserEnabled}
+            tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
                   fullAccessRiskWarningDismissed={
                     props.fullAccessRiskWarningDismissed
                   }
@@ -3676,6 +3685,8 @@ export function ThreadView(props: ThreadViewProps) {
             )}
             pastedImageMaxPatches={props.pastedImageMaxPatches}
             pdfAnalysisEnabled={props.pdfAnalysisEnabled}
+            tokenMiserEnabled={props.tokenMiserEnabled}
+            tokenMiserDefaultEnabled={props.tokenMiserDefaultEnabled}
             removeOptimisticMessage={props.removeOptimisticMessage}
             setExecutionModeError={props.setExecutionModeError}
             threadModelSettingsError={props.setThreadModelSettingsError}
