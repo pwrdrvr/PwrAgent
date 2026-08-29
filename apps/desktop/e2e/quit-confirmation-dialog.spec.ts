@@ -176,8 +176,21 @@ test("keeps running work reachable after cancelling and following a blocker", as
     // Resolve the foreground command. The authoritative blocker snapshot must
     // remove its row while keeping the queue visible long enough to show that
     // it is empty.
-    await app.window.locator(".integrated-terminal__viewport").click();
-    await app.window.keyboard.press("Control+C");
+    const activeTerminal = await app.getIntegratedTerminalQuitSnapshot();
+    const sessionId = activeTerminal?.sessionIds[0];
+    expect(sessionId).toBeTruthy();
+    if (!sessionId) {
+      throw new Error("Expected an active terminal session");
+    }
+    await app.window.evaluate(async (request) => {
+      await (
+        window as unknown as {
+          pwragent: {
+            writeIntegratedTerminal: (value: typeof request) => Promise<void>;
+          };
+        }
+      ).pwragent.writeIntegratedTerminal(request);
+    }, { sessionId, data: "\u0003" });
     await expect(queue.locator(".quit-blocker-queue__row")).toHaveCount(0, {
       timeout: 15_000,
     });
