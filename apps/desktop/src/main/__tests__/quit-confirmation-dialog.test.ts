@@ -485,7 +485,11 @@ describe("clicking a quit dialog row", () => {
     // back to whichever window subscribed first — for a peer's terminal that
     // is a window with no such thread.
     expect(requestShowThread).toHaveBeenCalledWith(
-      { backend: "codex", threadId: "0f9c2b7a-remote" },
+      {
+        backend: "codex",
+        federationTarget: { scope: "remote", instanceId: "peer-a" },
+        threadId: "0f9c2b7a-remote",
+      },
       { preferWebContents: owner },
     );
     await expect(pending).resolves.toBe("manual-cancel");

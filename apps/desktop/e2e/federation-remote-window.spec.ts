@@ -211,6 +211,24 @@ async function restoreE2eFederationIdentity(params: {
   );
 }
 
+async function setQuitConfirmation(page: Page, enabled: boolean): Promise<void> {
+  await page.evaluate(async (nextEnabled) => {
+    const api = (window as typeof window & {
+      pwragent?: {
+        writeSettingsConfig?: (request: unknown) => Promise<unknown>;
+      };
+    }).pwragent;
+    if (!api?.writeSettingsConfig) {
+      throw new Error("writeSettingsConfig API is unavailable");
+    }
+    await api.writeSettingsConfig({
+      patch: {
+        general: { confirmQuitWithInProgressThreads: nextEnabled },
+      },
+    });
+  }, enabled);
+}
+
 function disableE2eFederationBeforeRelaunch(homeRoot: string): void {
   applyDesktopSettingsPatch(
     path.join(
@@ -625,7 +643,7 @@ test.describe("federation remote window", () => {
     }
   });
 
-  test("enrolls, browses remote threads, pins on the owner, and hides local-only chrome", async () => {
+  test("enrolls, browses remote threads, routes mounted quit blockers, and hides local-only chrome", async () => {
     test.setTimeout(300_000);
 
     let gateway: InProcessFederationGateway | undefined;
@@ -873,6 +891,61 @@ test.describe("federation remote window", () => {
       await expect(
         window.getByText(/Remote transcript for Remote gateway thread one/),
       ).toBeVisible({ timeout: 30_000 });
+
+      // A mounted remote thread can own a remote PTY inside the LOCAL viewer.
+      // That is distinct from the dedicated remote window below: the quit
+      // dialog must route both the terminal reveal and the thread selection
+      // back to this viewer, with the owning federation instance preserved.
+      const mountedTerminalToggle = window.locator(
+        ".thread-header__terminal-toggle",
+      );
+      await mountedTerminalToggle.click();
+      await expect(
+        window.getByLabel("Integrated terminal", { exact: true }),
+      ).toBeVisible();
+      await expect(window.locator(".integrated-terminal__status")).toHaveText(
+        ownerPtyCwd,
+        { timeout: 30_000 },
+      );
+
+      // Leave the shell running while viewing a local thread, matching the
+      // operator repro. If the quit row loses its federation target, the
+      // renderer cannot match the mounted remote row and stays here.
+      await window
+        .getByRole("button", { name: "Local control thread" })
+        .click();
+      await expect(window.getByText("Local thread is ready.")).toBeVisible();
+      await setQuitConfirmation(window, true);
+
+      const quitDialogPromise = electronApp.waitForEvent("window");
+      void electronApp
+        .evaluate(({ app: electronApp }) => electronApp.quit())
+        .catch(() => undefined);
+      const quitDialog = await quitDialogPromise;
+      await expect(
+        quitDialog.getByRole("heading", { name: "Quit PwrAgent?" }),
+      ).toBeVisible();
+      const mountedRemoteQuitRow = quitDialog.locator("a.row", {
+        hasText: "Remote gateway thread one",
+      });
+      await expect(mountedRemoteQuitRow).toHaveCount(1);
+      await mountedRemoteQuitRow.dispatchEvent("click");
+      await quitDialog.waitForEvent("close");
+
+      await expect(
+        window.getByText(/Remote transcript for Remote gateway thread one/),
+      ).toBeVisible({ timeout: 30_000 });
+      await expect(
+        window.getByLabel("Integrated terminal", { exact: true }),
+      ).toBeVisible();
+
+      // Disarm the quit guard before releasing the mounted session and moving
+      // on to the dedicated-remote-window coverage below.
+      await setQuitConfirmation(window, false);
+      await window.getByRole("button", { name: "Close terminal" }).click();
+      await expect(
+        window.getByLabel("Integrated terminal", { exact: true }),
+      ).toHaveCount(0);
 
       // Local-only chrome stays hidden in the remote window.
       await expect(

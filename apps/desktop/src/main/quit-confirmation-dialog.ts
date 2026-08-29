@@ -370,7 +370,20 @@ export async function showQuitConfirmationDialog(
                     : {}),
                 })
               : undefined;
-          requestShowThread(parsed, { preferWebContents: revealed?.owner });
+          requestShowThread(
+            {
+              ...parsed,
+              ...(target.instanceId
+                ? {
+                    federationTarget: {
+                      scope: "remote" as const,
+                      instanceId: target.instanceId,
+                    },
+                  }
+                : {}),
+            },
+            { preferWebContents: revealed?.owner },
+          );
         }
         finish("manual-cancel");
         return;

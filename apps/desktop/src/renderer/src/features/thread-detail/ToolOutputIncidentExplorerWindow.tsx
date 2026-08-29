@@ -479,9 +479,9 @@ export function ToolOutputIncidentExplorerWindow() {
               title: route.title,
             }}
             onOpen={() => {
-              /* No federation target: `WindowShowThreadRequest` has none, and
-                 the main-process handler routes to this window's own owner.
-                 Passing one would be silently dropped by the spread. */
+              /* No federation target: this explorer is opened for a local
+                 thread, and the main-process handler routes back to its
+                 owning main window. */
               void desktopApi?.showThreadFromToolOutputIncidentExplorer?.({
                 backend: route.backend,
                 threadId: route.threadId,
