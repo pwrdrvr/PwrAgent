@@ -1,9 +1,13 @@
 import { BrowserWindow, nativeTheme } from "electron";
-import type { FederationRemoteTarget } from "@pwragent/shared";
 import { parseThreadIdentityKey } from "@pwragent/shared";
+import type {
+  QuitBlockerItem,
+  QuitBlockerQueueSnapshot,
+} from "../shared/quit-blockers";
 import { revealIntegratedTerminal } from "./ipc/integrated-terminal";
 import { getMainLogger } from "./log";
 import { readBootstrapAppearance } from "./settings/appearance-bootstrap";
+import { requestShowQuitBlockers } from "./window-show-quit-blockers";
 import { requestShowThread } from "./window-show-thread";
 
 const quitDialogLog = getMainLogger("pwragent:quit-dialog");
@@ -14,32 +18,8 @@ export type QuitConfirmationDialogResult =
   | "countdown-expired"
   | "work-completed";
 
-/**
- * One row in the dialog's "still running" list. Declared here rather than in
- * `quit-manager` because quit-manager imports this module — the reverse would
- * be a dependency cycle.
- */
-export type QuitBlockerItem = {
-  kind: "turn" | "automation" | "terminal" | "action";
-  backend: string;
-  threadId: string;
-  threadKey: string;
-  /**
-   * Peer that owns this work, when it does not run on this machine. Both the
-   * title lookup and the row's navigation need it: a remote thread is absent
-   * from this instance's thread list and from every window but the one
-   * fronting that peer.
-   */
-  target?: FederationRemoteTarget;
-  /** Resolved just before the dialog opens; falls back to the thread id. */
-  title?: string;
-  /** The active turn belongs to a worker owned by this thread. */
-  isSubAgent?: boolean;
-  /** Secondary line — the owning peer, or an action's command and pid. */
-  detail?: string;
-  /** Start time for live elapsed/completion reporting in the quit prompt. */
-  startedAt?: number;
-};
+/** One row in the dialog's "still running" list. */
+export type { QuitBlockerItem } from "../shared/quit-blockers";
 
 export type QuitConfirmationDialogOptions = {
   countdownSeconds: number;
@@ -52,13 +32,7 @@ export type QuitConfirmationDialogOptions = {
   refresh?: () => Promise<QuitConfirmationDialogSnapshot>;
 };
 
-export type QuitConfirmationDialogSnapshot = {
-  inProgressThreadCount: number;
-  automationRunCount: number;
-  terminalSessionCount: number;
-  actionRunCount: number;
-  items: QuitBlockerItem[];
-};
+export type QuitConfirmationDialogSnapshot = QuitBlockerQueueSnapshot;
 
 /**
  * Quit-dialog theme palette. The dialog is a standalone `data:` HTML window
@@ -253,6 +227,13 @@ export async function showQuitConfirmationDialog(
       actionRunCount: options.actionRunCount ?? 0,
       items,
     });
+    let latestSnapshot: QuitConfirmationDialogSnapshot = {
+      inProgressThreadCount: options.inProgressThreadCount,
+      automationRunCount: options.automationRunCount ?? 0,
+      terminalSessionCount: options.terminalSessionCount,
+      actionRunCount: options.actionRunCount ?? 0,
+      items,
+    };
 
     const finish = (result: QuitConfirmationDialogResult): void => {
       if (settled) return;
@@ -287,6 +268,7 @@ export async function showQuitConfirmationDialog(
       refreshInFlight = true;
       try {
         const snapshot = await options.refresh();
+        latestSnapshot = snapshot;
         const signature = JSON.stringify(snapshot);
         const payload = buildQuitDialogUpdatePayload(snapshot, navigationPrefix);
         lastTotalCount = payload.totalCount;
@@ -370,7 +352,7 @@ export async function showQuitConfirmationDialog(
                     : {}),
                 })
               : undefined;
-          requestShowThread(
+          const viewer = requestShowThread(
             {
               ...parsed,
               ...(target.instanceId
@@ -384,6 +366,9 @@ export async function showQuitConfirmationDialog(
             },
             { preferWebContents: revealed?.owner },
           );
+          if (viewer) {
+            requestShowQuitBlockers(viewer, latestSnapshot);
+          }
         }
         finish("manual-cancel");
         return;

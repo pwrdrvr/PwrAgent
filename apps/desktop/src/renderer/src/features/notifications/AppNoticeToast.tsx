@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -47,6 +47,7 @@ export type AppNoticeToastNotice = {
 };
 
 export function AppNoticeToast(props: {
+  children?: ReactNode;
   desktopApi?: Pick<DesktopApi, "copyText">;
   navigation?: {
     current: number;
@@ -188,6 +189,9 @@ export function AppNoticeToast(props: {
           <CloseIcon size={14} aria-hidden="true" />
         </button>
       </div>
+      {props.children ? (
+        <div className="app-notice-toast__body">{props.children}</div>
+      ) : null}
       {customActions.length > 0 && !props.navigation ? (
         <div className="app-notice-toast__custom-actions">
           {customActions.map((action) => (

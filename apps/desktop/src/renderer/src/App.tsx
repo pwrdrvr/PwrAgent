@@ -108,6 +108,7 @@ import { resolveThreadWorkingStatePath } from "./lib/thread-working-state-path";
 import { CodexConfigWarningBanner } from "./features/codex-config/CodexConfigWarningBanner";
 import type { AppNoticeToastNotice } from "./features/notifications/AppNoticeToast";
 import { AppNoticeStack } from "./features/notifications/AppNoticeStack";
+import { QuitBlockerQueueToast } from "./features/notifications/QuitBlockerQueueToast";
 import {
   appNoticeReducer,
   INITIAL_APP_NOTICE_STATE,
@@ -2923,6 +2924,7 @@ function DesktopAppShell(props: {
             })),
           ]}
         >
+          <QuitBlockerQueueToast desktopApi={desktopApi} />
           <AppUpdateBanner desktopApi={desktopApi} />
         </AppNoticeStack>
       </div>

@@ -35,6 +35,11 @@ import type {
   IntegratedTerminalWriteRequest,
 } from "../../../shared/integrated-terminal";
 import type {
+  QuitBlockerQueueSnapshot,
+  RevealQuitBlockerRequest,
+  RevealQuitBlockerResponse,
+} from "../../../shared/quit-blockers";
+import type {
   AgentEvent,
   AutomationIdRequest,
   AutomationMutationResponse,
@@ -555,6 +560,10 @@ export type DesktopApi = {
    *  confirmation step when the operator declines to set up the
    *  requested profile. */
   quitApp?: () => Promise<void>;
+  readQuitBlockerQueue?: () => Promise<QuitBlockerQueueSnapshot>;
+  revealQuitBlocker?: (
+    request: RevealQuitBlockerRequest,
+  ) => Promise<RevealQuitBlockerResponse>;
   /** Wait for another PwrAgent process to be alive on a target
    *  profile. The wizard's graduation path uses this to delay its
    *  own quit until the new profile's window has fully loaded —
@@ -1301,6 +1310,9 @@ export type DesktopApi = {
    */
   onShowThreadRequested?: (
     callback: (request: WindowShowThreadRequest) => void,
+  ) => () => void;
+  onShowQuitBlockersRequested?: (
+    callback: (snapshot: QuitBlockerQueueSnapshot) => void,
   ) => () => void;
   /**
    * Main → renderer push: fires when the user invokes Help →

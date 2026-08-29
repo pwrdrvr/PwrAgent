@@ -102,6 +102,10 @@ import {
   registerBootInfoIpcHandlers,
 } from "./ipc/boot-info";
 import {
+  disposeQuitBlockerIpcHandlers,
+  registerQuitBlockerIpcHandlers,
+} from "./ipc/quit-blockers";
+import {
   disposeProfilesIpcHandlers,
   listDesktopPwrAgentProfiles,
   openDesktopPwrAgentProfile,
@@ -528,6 +532,7 @@ function disposeMainProcessResourcesSync(options?: {
   }
   disposePreloadLogIpcHandlers();
   disposeBootInfoIpcHandlers();
+  disposeQuitBlockerIpcHandlers();
   disposeProfilesIpcHandlers();
   disposeSettingsIpcHandlers();
   disposeWindowPointerIpcHandlers();
@@ -1299,6 +1304,7 @@ export function bootstrapApp(): void {
         await requestQuit({ source: "ipc" });
       },
     });
+    registerQuitBlockerIpcHandlers();
     registerSettingsIpcHandlers(undefined, {
       onConfigPatchWritten: async (patch) => {
         if (patch.federation !== undefined) {

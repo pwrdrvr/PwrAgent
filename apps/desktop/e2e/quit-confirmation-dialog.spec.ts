@@ -54,7 +54,7 @@ async function openIntegratedTerminal(page: Page) {
  * listeners are bound to, so the fake-scheme round trip is still exercised
  * end to end — which is the part that actually breaks.
  */
-test("lists running terminals, cancels auto-quit, and stays open", async () => {
+test("keeps running work reachable after cancelling and following a blocker", async () => {
   // Spawning a real login shell, then standing up a second BrowserWindow, is
   // slower than the 30s default.
   test.setTimeout(90_000);
@@ -144,10 +144,66 @@ test("lists running terminals, cancels auto-quit, and stays open", async () => {
     await expect(
       app.window.getByLabel("Integrated terminal", { exact: true }),
     ).toBeVisible();
+
+    // Ask again, then follow the blocker instead of merely cancelling. The
+    // standalone dialog closes, but its live queue must remain in this viewer
+    // so the operator can work through every remaining item.
+    const followUpDialogPromise = app.electronApp.waitForEvent("window");
+    void app.electronApp
+      .evaluate(({ app: electronApp }) => {
+        electronApp.quit();
+      })
+      .catch(() => undefined);
+    const followUpDialog = await followUpDialogPromise;
+    await expect(
+      followUpDialog.getByRole("heading", { name: "Quit PwrAgent?" }),
+    ).toBeVisible();
+    await followUpDialog.evaluate(() => {
+      (document.querySelector("a.row") as HTMLAnchorElement | null)?.click();
+    });
+    await followUpDialog.waitForEvent("close");
+
+    const queue = app.window.getByTestId("quit-blocker-queue");
+    await expect(queue).toBeVisible();
+    await expect(queue).toContainText("Integrated terminals");
+    await expect(queue.locator(".quit-blocker-queue__row")).toHaveCount(1);
+    expect(
+      await queue.locator(".quit-blocker-queue__list").evaluate(
+        (element) => getComputedStyle(element).overflowY,
+      ),
+    ).toBe("auto");
+
+    // Resolve the foreground command. The authoritative blocker snapshot must
+    // remove its row while keeping the queue visible long enough to show that
+    // it is empty.
+    const activeTerminal = await app.getIntegratedTerminalQuitSnapshot();
+    const sessionId = activeTerminal?.sessionIds[0];
+    expect(sessionId).toBeTruthy();
+    if (!sessionId) {
+      throw new Error("Expected an active terminal session");
+    }
+    await app.window.evaluate(async (request) => {
+      await (
+        window as unknown as {
+          pwragent: {
+            writeIntegratedTerminal: (value: typeof request) => Promise<void>;
+          };
+        }
+      ).pwragent.writeIntegratedTerminal(request);
+    }, { sessionId, data: "\u0003" });
+    await expect(queue.locator(".quit-blocker-queue__row")).toHaveCount(0, {
+      timeout: 15_000,
+    });
+    const queueToast = app.window.locator(".app-notice-toast").filter({
+      has: queue,
+    });
+    await expect(queueToast).toContainText("No running work.");
+    await expect(queue).toContainText(
+      "PwrAgent can quit without interrupting work.",
+    );
   } finally {
-    // Disarm the confirmation before teardown. The terminal is still running,
-    // so `app.close()` would trip the quit path again and hang on a second
-    // dialog that nobody is there to answer.
+    // Disarm before teardown so an assertion failure while the command is
+    // still active cannot open a dialog that nobody is there to answer.
     await setQuitConfirmation(app.window, false).catch(() => undefined);
     await app.close();
   }

@@ -17,7 +17,7 @@ export type RequestShowThreadOptions = {
 export function requestShowThread(
   request: WindowShowThreadRequest,
   options: RequestShowThreadOptions = {},
-): void {
+): WebContents | undefined {
   const focused = BrowserWindow.getFocusedWindow();
   const subscribers = subscribersForChannel(WINDOW_SHOW_THREAD_CHANNEL);
 
@@ -28,7 +28,7 @@ export function requestShowThread(
       showWindow(preferredWindow);
     }
     preferred.send(WINDOW_SHOW_THREAD_CHANNEL, request);
-    return;
+    return preferred;
   }
 
   if (focused && !focused.isDestroyed()) {
@@ -38,19 +38,20 @@ export function requestShowThread(
     if (focusedSubscriber) {
       showWindow(focused);
       focusedSubscriber.send(WINDOW_SHOW_THREAD_CHANNEL, request);
-      return;
+      return focusedSubscriber;
     }
   }
 
   const fallback = subscribers[0];
   if (!fallback) {
-    return;
+    return undefined;
   }
   const fallbackWindow = BrowserWindow.fromWebContents(fallback);
   if (fallbackWindow && !fallbackWindow.isDestroyed()) {
     showWindow(fallbackWindow);
   }
   fallback.send(WINDOW_SHOW_THREAD_CHANNEL, request);
+  return fallback;
 }
 
 function showWindow(window: BrowserWindow): void {
