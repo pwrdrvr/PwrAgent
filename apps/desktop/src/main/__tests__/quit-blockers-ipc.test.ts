@@ -20,18 +20,31 @@ vi.mock("../window-show-thread", () => ({
   requestShowThread: vi.fn(),
 }));
 
+vi.mock("../window-channels", () => ({
+  subscribersForChannel: vi.fn(),
+}));
+
+vi.mock("../window", () => ({
+  isFederationWindowWebContents: vi.fn(),
+}));
+
 import type { WebContents } from "electron";
 import { getCurrentQuitBlockers } from "../quit-manager";
 import { revealIntegratedTerminal } from "../ipc/integrated-terminal";
 import { requestShowThread } from "../window-show-thread";
+import { subscribersForChannel } from "../window-channels";
+import { isFederationWindowWebContents } from "../window";
 import { revealCurrentQuitBlocker } from "../ipc/quit-blockers";
 
 describe("quit blocker IPC", () => {
   const sender = { id: 10 } as unknown as WebContents;
   const owner = { id: 11 } as unknown as WebContents;
+  const localViewer = { id: 12 } as unknown as WebContents;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(isFederationWindowWebContents).mockReturnValue(false);
+    vi.mocked(subscribersForChannel).mockReturnValue([]);
   });
 
   it("reveals the authoritative remote item and keeps its mounted viewer route", () => {
@@ -79,6 +92,40 @@ describe("quit blocker IPC", () => {
     expect(requestShowThread).toHaveBeenCalledWith(
       { backend: "codex", threadId: "shared" },
       { preferWebContents: owner },
+    );
+  });
+
+  it("routes a local blocker from a federation queue to a local viewer", () => {
+    vi.mocked(getCurrentQuitBlockers).mockReturnValue({
+      count: 1,
+      terminalSessionCount: 0,
+      terminalThreadKeys: [],
+      threadIds: ["local-thread"],
+      actionRunCount: 0,
+      automationRunCount: 0,
+      items: [
+        {
+          kind: "turn",
+          backend: "codex",
+          threadId: "local-thread",
+          threadKey: "codex:local-thread",
+        },
+      ],
+    });
+    vi.mocked(isFederationWindowWebContents).mockImplementation(
+      (webContents) => webContents === sender,
+    );
+    vi.mocked(subscribersForChannel).mockReturnValue([sender, localViewer]);
+
+    expect(
+      revealCurrentQuitBlocker(
+        { kind: "turn", threadKey: "codex:local-thread" },
+        sender,
+      ),
+    ).toEqual({ revealed: true });
+    expect(requestShowThread).toHaveBeenCalledWith(
+      { backend: "codex", threadId: "local-thread" },
+      { preferWebContents: localViewer },
     );
   });
 
