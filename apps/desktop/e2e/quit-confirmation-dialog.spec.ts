@@ -194,7 +194,10 @@ test("keeps running work reachable after cancelling and following a blocker", as
     await expect(queue.locator(".quit-blocker-queue__row")).toHaveCount(0, {
       timeout: 15_000,
     });
-    await expect(queue).toContainText("No running work.");
+    const queueToast = app.window.locator(".app-notice-toast").filter({
+      has: queue,
+    });
+    await expect(queueToast).toContainText("No running work.");
     await expect(queue).toContainText(
       "PwrAgent can quit without interrupting work.",
     );
