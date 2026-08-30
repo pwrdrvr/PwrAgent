@@ -36,6 +36,7 @@ export function useHoverStableSnapshot<T>(params: {
   onPointerLeave: PointerEventHandler<HTMLDivElement>;
   onPointerOut: PointerEventHandler<HTMLDivElement>;
   onPointerOver: PointerEventHandler<HTMLDivElement>;
+  release: () => void;
   value: T;
 } {
   const latestValueRef = useRef(params.value);
@@ -101,6 +102,7 @@ export function useHoverStableSnapshot<T>(params: {
     onPointerLeave: release,
     onPointerOut,
     onPointerOver,
+    release,
     value: hoveringRowRef.current
       ? params.hydrateFrozenValue?.(frozenValueRef.current, params.value)
         ?? frozenValueRef.current

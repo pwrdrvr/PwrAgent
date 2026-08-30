@@ -106,6 +106,7 @@ type HoverStableSidebarSnapshot = {
 function hydrateHoverStableSidebarSnapshot(
   frozen: HoverStableSidebarSnapshot,
   latest: HoverStableSidebarSnapshot,
+  options?: { removeMissingThreads?: boolean },
 ): HoverStableSidebarSnapshot {
   const latestDirectoriesByKey = new Map(
     latest.directories.map((directory) => [directory.key, directory]),
@@ -147,23 +148,26 @@ function hydrateHoverStableSidebarSnapshot(
         .map((directory) => ({ ...directory, pinnedRank: undefined })),
     ],
     threads: [
-      ...frozen.threads.map((thread) => {
+      ...frozen.threads.flatMap((thread) => {
         const latestThread = latestThreadsByKey.get(
           threadSummaryIdentityKey(thread),
         );
-        return latestThread
-          ? {
-              ...latestThread,
-              createdAt: thread.createdAt,
-              parentThreadBackend: thread.parentThreadBackend,
-              parentThreadId: thread.parentThreadId,
-              parentThreadInstanceId: thread.parentThreadInstanceId,
-              pinnedRank: thread.pinnedRank,
-              codexNativeSubAgents: thread.codexNativeSubAgents,
-              subthreadsCollapsed: thread.subthreadsCollapsed,
-              subthreadOrder: thread.subthreadOrder,
-            }
-          : thread;
+        if (!latestThread) {
+          return options?.removeMissingThreads ? [] : [thread];
+        }
+        return [
+          {
+            ...latestThread,
+            createdAt: thread.createdAt,
+            parentThreadBackend: thread.parentThreadBackend,
+            parentThreadId: thread.parentThreadId,
+            parentThreadInstanceId: thread.parentThreadInstanceId,
+            pinnedRank: thread.pinnedRank,
+            codexNativeSubAgents: thread.codexNativeSubAgents,
+            subthreadsCollapsed: thread.subthreadsCollapsed,
+            subthreadOrder: thread.subthreadOrder,
+          },
+        ];
       }),
       ...latest.threads
         .filter((thread) => !frozenThreadKeys.has(
@@ -178,6 +182,16 @@ function hydrateHoverStableSidebarSnapshot(
           pinnedRank: undefined,
         })),
     ],
+  };
+}
+
+function releaseBeforeListChange<Args extends unknown[], Result>(
+  release: () => void,
+  operation: (...args: Args) => Result,
+): (...args: Args) => Result {
+  return (...args) => {
+    release();
+    return operation(...args);
   };
 }
 
@@ -586,7 +600,10 @@ export function Sidebar(props: SidebarProps) {
           ? props.recentThreads ?? props.threads
           : updatedOrderThreads;
   const hoverStableSnapshot = useHoverStableSnapshot({
-    hydrateFrozenValue: hydrateHoverStableSidebarSnapshot,
+    hydrateFrozenValue: (frozen, latest) =>
+      hydrateHoverStableSidebarSnapshot(frozen, latest, {
+        removeMissingThreads: props.browseMode === "attention",
+      }),
     scope: props.browseMode,
     value: {
       directories: props.directories,
@@ -596,6 +613,72 @@ export function Sidebar(props: SidebarProps) {
   });
   const renderedDirectories = hoverStableSnapshot.value.directories;
   const renderedThreads = hoverStableSnapshot.value.threads;
+  /**
+   * Hover stability protects a target from background list churn. A command
+   * the operator chose must instead reveal its resulting snapshot immediately.
+   */
+  const releaseHoverStableSnapshot = hoverStableSnapshot.release;
+  const hoverReleasedListHandlers = useMemo(
+    () => ({
+      openLaunchpad: releaseBeforeListChange(
+        releaseHoverStableSnapshot,
+        props.onOpenLaunchpad,
+      ),
+      reorderDirectoryPins: props.onReorderDirectoryPins
+        ? releaseBeforeListChange(
+            releaseHoverStableSnapshot,
+            props.onReorderDirectoryPins,
+          )
+        : undefined,
+      reorderThreadPins: props.onReorderThreadPins
+        ? releaseBeforeListChange(
+            releaseHoverStableSnapshot,
+            props.onReorderThreadPins,
+          )
+        : undefined,
+      setDirectoryPin: props.onSetDirectoryPin
+        ? releaseBeforeListChange(
+            releaseHoverStableSnapshot,
+            props.onSetDirectoryPin,
+          )
+        : undefined,
+      setDirectoryThreadsCollapsed: props.onSetDirectoryThreadsCollapsed
+        ? releaseBeforeListChange(
+            releaseHoverStableSnapshot,
+            props.onSetDirectoryThreadsCollapsed,
+          )
+        : undefined,
+      setSubthreadsCollapsed: props.onSetSubthreadsCollapsed
+        ? releaseBeforeListChange(
+            releaseHoverStableSnapshot,
+            props.onSetSubthreadsCollapsed,
+          )
+        : undefined,
+      setThreadPin: props.onSetThreadPin
+        ? releaseBeforeListChange(
+            releaseHoverStableSnapshot,
+            props.onSetThreadPin,
+          )
+        : undefined,
+      updateSubthreadOrder: props.onUpdateSubthreadOrder
+        ? releaseBeforeListChange(
+            releaseHoverStableSnapshot,
+            props.onUpdateSubthreadOrder,
+          )
+        : undefined,
+    }),
+    [
+      props.onOpenLaunchpad,
+      props.onReorderDirectoryPins,
+      props.onReorderThreadPins,
+      props.onSetDirectoryPin,
+      props.onSetDirectoryThreadsCollapsed,
+      props.onSetSubthreadsCollapsed,
+      props.onSetThreadPin,
+      props.onUpdateSubthreadOrder,
+      releaseHoverStableSnapshot,
+    ],
+  );
   /**
    * The numbers on the Attention tab. Counted over the very rows the lens
    * renders, not over `props.threads`, so the tab and the list cannot report
@@ -1204,6 +1287,7 @@ export function Sidebar(props: SidebarProps) {
     options?: ArchiveThreadOptions,
   ): void => {
     setContextMenu(undefined);
+    hoverStableSnapshot.release();
     if (options) {
       void onArchiveThread(thread, options);
       return;
@@ -1216,6 +1300,7 @@ export function Sidebar(props: SidebarProps) {
     mode: ThreadWorkspaceMode,
   ): void => {
     setContextMenu(undefined);
+    hoverStableSnapshot.release();
     void props.onCreateSubthread?.(thread, mode);
   };
 
@@ -1224,11 +1309,13 @@ export function Sidebar(props: SidebarProps) {
     mode: ThreadWorkspaceMode,
   ): void => {
     setContextMenu(undefined);
+    hoverStableSnapshot.release();
     void props.onForkThread?.(thread, mode);
   };
 
   const unlinkSubthreadFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
+    hoverStableSnapshot.release();
     if (props.onUnlinkThreads) {
       void props.onUnlinkThreads([thread]);
       return;
@@ -1238,16 +1325,18 @@ export function Sidebar(props: SidebarProps) {
 
   const togglePinFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
-    void props.onSetThreadPin?.(thread, !thread.pinnedRank);
+    void hoverReleasedListHandlers.setThreadPin?.(thread, !thread.pinnedRank);
   };
 
   const markUnreadFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
+    hoverStableSnapshot.release();
     void props.onMarkThreadUnread?.(thread);
   };
 
   const markReadFromContextMenu = (thread: NavigationThreadSummary): void => {
     setContextMenu(undefined);
+    hoverStableSnapshot.release();
     void props.onMarkThreadsSeen?.([thread]);
   };
 
@@ -1255,6 +1344,7 @@ export function Sidebar(props: SidebarProps) {
     thread: NavigationThreadSummary,
   ): void => {
     setContextMenu(undefined);
+    hoverStableSnapshot.release();
     // Viewer-side delete only: works while the owner is unreachable and
     // never archives the owner's thread.
     void props.onRemoveRemoteThreadPin?.(thread);
@@ -1292,13 +1382,17 @@ export function Sidebar(props: SidebarProps) {
     directory: NavigationDirectorySummary,
   ): void => {
     setDirectoryContextMenu(undefined);
-    void props.onSetDirectoryPin?.(directory, !directory.pinnedRank);
+    void hoverReleasedListHandlers.setDirectoryPin?.(
+      directory,
+      !directory.pinnedRank,
+    );
   };
 
   const removeDirectoryFromContextMenu = (
     directory: NavigationDirectorySummary,
   ): void => {
     setDirectoryContextMenu(undefined);
+    hoverStableSnapshot.release();
     props.onRemoveDirectory?.(directory);
   };
 
@@ -1319,6 +1413,7 @@ export function Sidebar(props: SidebarProps) {
         ) && thread.inbox.inInbox,
     );
     setDirectoryContextMenu(undefined);
+    hoverStableSnapshot.release();
     void props.onMarkThreadsSeen?.(unreadThreads);
   };
 
@@ -1377,7 +1472,7 @@ export function Sidebar(props: SidebarProps) {
     // tick, so subsequent Move clicks see updated adjacency.
     // Pin / Unpin / Rename / Archive are terminal actions and
     // still dismiss the menu.
-    void props.onReorderThreadPins?.(nextKeys);
+    void hoverReleasedListHandlers.reorderThreadPins?.(nextKeys);
   };
 
   const moveDirectoryFromContextMenu = (
@@ -1399,13 +1494,14 @@ export function Sidebar(props: SidebarProps) {
     );
     // See `moveThreadFromContextMenu` for why we don't dismiss
     // the menu here.
-    void props.onReorderDirectoryPins?.(nextKeys);
+    void hoverReleasedListHandlers.reorderDirectoryPins?.(nextKeys);
   };
 
   const archiveThreadsFromContextMenu = (
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
+    hoverStableSnapshot.release();
     void Promise.all(threads.map((thread) => onArchiveThread(thread)));
   };
 
@@ -1413,6 +1509,7 @@ export function Sidebar(props: SidebarProps) {
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
+    hoverStableSnapshot.release();
     if (props.onUnlinkThreads) {
       void props.onUnlinkThreads(threads);
       return;
@@ -1428,6 +1525,7 @@ export function Sidebar(props: SidebarProps) {
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
+    hoverStableSnapshot.release();
     const threadKeys = threads.map((thread) =>
       threadSummaryIdentityKey(thread),
     );
@@ -1449,6 +1547,7 @@ export function Sidebar(props: SidebarProps) {
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
+    hoverStableSnapshot.release();
     void Promise.all(
       threads.map((thread) => props.onSetThreadPin?.(thread, false)),
     );
@@ -1997,7 +2096,7 @@ export function Sidebar(props: SidebarProps) {
               thinkingThreadKeys={props.thinkingThreadKeys}
               threads={renderedThreads}
               onOpenThreadContextMenu={openThreadContextMenu}
-              onOpenLaunchpad={props.onOpenLaunchpad}
+              onOpenLaunchpad={hoverReleasedListHandlers.openLaunchpad}
               onOpenFederationTargetMenu={
                 federationThreadTargets.length > 0
                   ? openDirectoryTargetMenu
@@ -2012,13 +2111,21 @@ export function Sidebar(props: SidebarProps) {
                 props.onRevealSelectedThreadComplete
               }
               onDetachPullRequest={detachPullRequest}
-              onReorderThreadPins={props.onReorderThreadPins}
-              onUpdateSubthreadOrder={props.onUpdateSubthreadOrder}
-              onSetSubthreadsCollapsed={props.onSetSubthreadsCollapsed}
-              onSetDirectoryPin={props.onSetDirectoryPin}
-              onReorderDirectoryPins={props.onReorderDirectoryPins}
+              onReorderThreadPins={
+                hoverReleasedListHandlers.reorderThreadPins
+              }
+              onUpdateSubthreadOrder={
+                hoverReleasedListHandlers.updateSubthreadOrder
+              }
+              onSetSubthreadsCollapsed={
+                hoverReleasedListHandlers.setSubthreadsCollapsed
+              }
+              onSetDirectoryPin={hoverReleasedListHandlers.setDirectoryPin}
+              onReorderDirectoryPins={
+                hoverReleasedListHandlers.reorderDirectoryPins
+              }
               onSetDirectoryThreadsCollapsed={
-                props.onSetDirectoryThreadsCollapsed
+                hoverReleasedListHandlers.setDirectoryThreadsCollapsed
               }
               onOpenDirectoryContextMenu={
                 props.onSetDirectoryPin || props.onMarkThreadsSeen
@@ -2029,7 +2136,7 @@ export function Sidebar(props: SidebarProps) {
               onSelectDirectory={selectDirectoryFromList}
               onSelectThread={selectThreadFromList}
               onSetReaction={props.onSetThreadReaction}
-              onSetThreadPin={props.onSetThreadPin}
+              onSetThreadPin={hoverReleasedListHandlers.setThreadPin}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
             />
           ) : (
@@ -2066,11 +2173,15 @@ export function Sidebar(props: SidebarProps) {
                   props.onRevealSelectedThreadComplete
                 }
                 onDetachPullRequest={detachPullRequest}
-                onUpdateSubthreadOrder={props.onUpdateSubthreadOrder}
-                onSetSubthreadsCollapsed={props.onSetSubthreadsCollapsed}
+                onUpdateSubthreadOrder={
+                  hoverReleasedListHandlers.updateSubthreadOrder
+                }
+                onSetSubthreadsCollapsed={
+                  hoverReleasedListHandlers.setSubthreadsCollapsed
+                }
                 onSelectThread={selectThreadFromList}
                 onSetReaction={props.onSetThreadReaction}
-                onSetThreadPin={props.onSetThreadPin}
+                onSetThreadPin={hoverReleasedListHandlers.setThreadPin}
                 onUnbindMessagingBinding={props.onUnbindMessagingBinding}
               />
             )
