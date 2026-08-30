@@ -15,6 +15,9 @@ import type {
   PrSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../desktop-api";
+import {
+  getComposerMentionNavigationRevision,
+} from "../composer-mention-navigation-revision";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   beginNativeDragInteraction,
@@ -12948,6 +12951,7 @@ describe("useThreadNavigation", () => {
 
       const { result } = renderHook(() => useThreadNavigation(desktopApi));
       await waitFor(() => expect(result.current.loading).toBe(false));
+      const mentionNavigationRevision = getComposerMentionNavigationRevision();
 
       await act(async () => {
         await result.current.addProjectDirectory();
@@ -12956,6 +12960,9 @@ describe("useThreadNavigation", () => {
       expect(result.current.browseMode).toBe("directories");
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
       expect(result.current.selectedItemKey).toBeUndefined();
+      expect(getComposerMentionNavigationRevision()).toBe(
+        mentionNavigationRevision + 1,
+      );
       expect(result.current.directories).toEqual(
         expect.arrayContaining([
           expect.objectContaining({

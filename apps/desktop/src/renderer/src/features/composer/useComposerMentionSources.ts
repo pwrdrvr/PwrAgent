@@ -4,6 +4,9 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import {
+  getComposerMentionNavigationRevision,
+} from "../../lib/composer-mention-navigation-revision";
 
 /**
  * How long a fetched population stays good enough for an autocomplete.
@@ -34,6 +37,7 @@ const EMPTY_POPULATION: NavigationPopulation = {
  */
 let cachedPopulation: NavigationPopulation | undefined;
 let cachedAt = 0;
+let cachedRevision = -1;
 let inFlight: Promise<void> | undefined;
 const subscribers = new Set<(population: NavigationPopulation) => void>();
 
@@ -41,6 +45,7 @@ const subscribers = new Set<(population: NavigationPopulation) => void>();
 export function resetComposerMentionSourcesCache(): void {
   cachedPopulation = undefined;
   cachedAt = 0;
+  cachedRevision = -1;
   inFlight = undefined;
 }
 
@@ -50,6 +55,7 @@ async function loadPopulation(desktopApi: DesktopApi | undefined): Promise<void>
     return;
   }
 
+  const requestedRevision = getComposerMentionNavigationRevision();
   try {
     const snapshot = await getNavigationSnapshot();
     cachedPopulation = {
@@ -57,6 +63,10 @@ async function loadPopulation(desktopApi: DesktopApi | undefined): Promise<void>
       threads: snapshot.threads,
     };
     cachedAt = Date.now();
+    // Capture the generation from request start. If a directory is registered
+    // while this bridge call is in flight, the response may predate it and the
+    // next picker open must fetch again.
+    cachedRevision = requestedRevision;
     for (const subscriber of subscribers) {
       subscriber(cachedPopulation);
     }
@@ -115,7 +125,13 @@ export function useComposerMentionSources(params: {
     // completed load changes that object's identity and re-runs whatever
     // effect asked for the load. Unguarded, that is a fetch loop rather
     // than a one-shot.
-    if (inFlight || Date.now() - cachedAt < NAVIGATION_STALE_MS) {
+    if (
+      inFlight
+      || (
+        cachedRevision === getComposerMentionNavigationRevision()
+        && Date.now() - cachedAt < NAVIGATION_STALE_MS
+      )
+    ) {
       return;
     }
     inFlight = loadPopulation(desktopApi).finally(() => {

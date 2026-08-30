@@ -15,6 +15,9 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
+import {
+  notifyComposerMentionNavigationChanged,
+} from "../../../lib/composer-mention-navigation-revision";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { StarMapChatCard } from "../StarMapChatCard";
 import {
@@ -2141,6 +2144,39 @@ describe("StarMapChatCard mentions", () => {
       await screen.findByRole("option");
     }
     expect(desktopApi.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes a fresh mention cache after project registration", async () => {
+    const getNavigationSnapshot = vi.fn()
+      .mockResolvedValueOnce(SNAPSHOT)
+      .mockResolvedValueOnce({
+        ...SNAPSHOT,
+        directories: [
+          ...SNAPSHOT.directories,
+          {
+            key: "d-new-project",
+            kind: "repo",
+            label: "new-project",
+            latestUpdatedAt: 3,
+            path: "/Users/dev/new-project",
+          },
+        ],
+      });
+    const desktopApi = mentionApi({ getNavigationSnapshot });
+    renderCard({ desktopApi, thread: localThread() });
+    await screen.findByRole("button", { name: "Send" });
+
+    fireEvent.change(composer(), { target: { value: "check @ap" } });
+    expect((await screen.findByRole("option")).textContent).toContain("app");
+    fireEvent.change(composer(), { target: { value: "check " } });
+
+    notifyComposerMentionNavigationChanged();
+    fireEvent.change(composer(), { target: { value: "check @new" } });
+
+    await waitFor(() => {
+      expect(screen.getByRole("option").textContent).toContain("new-project");
+    });
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("never offers the thread the card is already on", async () => {
