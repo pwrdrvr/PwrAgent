@@ -1,5 +1,6 @@
 import type {
   AppServerBackendKind,
+  AppServerReadThreadResponse,
   AppServerThreadActivityStatus,
   AppServerThreadMessage,
   AppServerThreadReplayPagination,
@@ -154,6 +155,11 @@ export type ReadThreadToolArgs = {
    * Defaults to true.
    */
   includeStatus?: boolean;
+  /**
+   * Include the owning instance's effective Token Miser state, pricing rows,
+   * and Token Miser accounting. Defaults to false.
+   */
+  includeEvaluation?: boolean;
   /**
    * Maximum characters retained in each text-like transcript field.
    * Implementations clamp this to a bounded product limit.
@@ -522,6 +528,16 @@ export type ThreadReadResult = {
   lastAssistantMessage?: string;
   pagination: AppServerThreadReplayPagination;
   status?: AppServerThreadStatus;
+  evaluation?: {
+    /** Effective state after applying the owning profile's gate and default. */
+    tokenMiserEnabled?: boolean;
+    /** Persisted per-thread override; absent means the owning profile default. */
+    tokenMiserOverride?: boolean;
+    pricing?: AppServerReadThreadResponse["pricing"];
+    tokenMiser?: NonNullable<
+      AppServerReadThreadResponse["toolAccounting"]
+    >["tokenMiser"];
+  };
 };
 
 export type PwrAgentThreadInspectionToolArgsByOperation = {

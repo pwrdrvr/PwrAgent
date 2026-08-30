@@ -36111,6 +36111,41 @@ script = "printf setup"
         backend: "codex" as const,
         fetchedAt: 2_000,
         threadId: "remote-thread",
+        tokenMiserEnabled: true,
+        tokenMiserEffectiveEnabled: true,
+        pricing: {
+          lines: [],
+          summaries: [{
+            backend: "codex",
+            cachedInputTokens: 1_000,
+            currency: "USD",
+            inputTokens: 1_500,
+            outputTokens: 200,
+            pricedUsageLineCount: 1,
+            provider: "openai",
+            reasoningOutputTokens: 50,
+            threadId: "remote-thread",
+            totalCostMicros: 42_000,
+            totalTokens: 1_700,
+            uncachedInputTokens: 500,
+            unpricedUsageLineCount: 0,
+            updatedAt: 2_000,
+            usageLineCount: 1,
+          }],
+        },
+        toolAccounting: {
+          alerts: [],
+          invocations: [],
+          summaries: [],
+          tokenMiser: {
+            interceptionCount: 1,
+            originalCharacters: 8_000,
+            baselineParentTokens: 2_000,
+            replacementTokens: 200,
+            retrievedTokens: 0,
+            estimatedParentTokensSaved: 1_800,
+          },
+        },
         replay: {
           entries: [],
           messages: [
@@ -36154,6 +36189,7 @@ script = "printf setup"
         arguments: {
           backend: "codex",
           threadId: "remote-thread",
+          includeEvaluation: true,
         },
       },
     } as AppServerPendingRequestNotification);
@@ -36177,6 +36213,17 @@ script = "printf setup"
         messageUrl: expect.stringContaining("messageId=remote-result"),
         messageLink: expect.stringContaining("messageId=remote-result"),
       }],
+      evaluation: {
+        tokenMiserEnabled: true,
+        tokenMiserOverride: true,
+        pricing: {
+          summaries: [{ totalCostMicros: 42_000 }],
+        },
+        tokenMiser: {
+          interceptionCount: 1,
+          estimatedParentTokensSaved: 1_800,
+        },
+      },
     });
     expect(federatedInspection).toHaveBeenCalledWith({
       backend: "codex",
@@ -36330,6 +36377,7 @@ script = "printf setup"
       includeTurns: true,
       limit: 5,
     });
+    expect(payload.read).not.toHaveProperty("evaluation");
 
     await registry.close();
   });
@@ -39254,7 +39302,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("round-trips the Token Miser override through readThread", async () => {
+  it("reports the Token Miser override and effective state through readThread", async () => {
     const overlayStore = createOverlayStoreMock();
     await overlayStore.setThreadTokenMiser({
       backend: "codex",
@@ -39267,6 +39315,12 @@ script = "printf setup"
       }),
       overlayStore,
     });
+    const internals = registry as unknown as {
+      resolveTokenMiserDefaultEnabledFn: () => boolean;
+      resolveTokenMiserEnabledFn: () => boolean;
+    };
+    internals.resolveTokenMiserDefaultEnabledFn = () => true;
+    internals.resolveTokenMiserEnabledFn = () => true;
 
     await expect(registry.readThread({
       backend: "codex",
@@ -39275,7 +39329,19 @@ script = "printf setup"
       backend: "codex",
       threadId: "thread-1",
       tokenMiserEnabled: false,
+      tokenMiserEffectiveEnabled: false,
     });
+
+    const defaulted = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-default",
+    });
+    expect(defaulted).toMatchObject({
+      backend: "codex",
+      threadId: "thread-default",
+      tokenMiserEffectiveEnabled: true,
+    });
+    expect(defaulted).not.toHaveProperty("tokenMiserEnabled");
 
     await registry.close();
   });

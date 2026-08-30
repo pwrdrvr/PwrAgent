@@ -750,6 +750,8 @@ function buildLaunchpadDraft(params: {
   const acpRuntime = stored?.acpRuntime ?? defaults.acpRuntime;
   const providerSettings = stored?.providerSettings ?? defaults.providerSettings;
   const branchName = args.branchName ?? stored?.branchName;
+  const tokenMiserEnabled =
+    args.tokenMiserEnabled ?? stored?.tokenMiserEnabled;
   const now = Date.now();
   return {
     createdAt: stored?.createdAt ?? now,
@@ -764,6 +766,7 @@ function buildLaunchpadDraft(params: {
     ...(fastMode !== undefined ? { fastMode } : {}),
     ...(acpRuntime !== undefined ? { acpRuntime } : {}),
     ...(providerSettings !== undefined ? { providerSettings } : {}),
+    ...(tokenMiserEnabled !== undefined ? { tokenMiserEnabled } : {}),
     ...(stored?.mcpConnectionIds
       ? { mcpConnectionIds: stored.mcpConnectionIds }
       : {}),

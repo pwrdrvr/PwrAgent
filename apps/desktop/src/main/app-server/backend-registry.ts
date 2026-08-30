@@ -11898,6 +11898,9 @@ export class DesktopBackendRegistry {
       fetchedAt: Date.now(),
       readDurationMs: Math.max(0, Math.round(performance.now() - readStartedAt)),
       threadId: request.threadId,
+      tokenMiserEffectiveEnabled: this.resolveTokenMiserEnabledForOverride(
+        overlay?.tokenMiserEnabled,
+      ),
       ...(overlay?.tokenMiserEnabled !== undefined
         ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
         : {}),
@@ -33623,6 +33626,25 @@ export class DesktopBackendRegistry {
               : status
                 ? { status }
                 : {}),
+            ...(args.includeEvaluation
+              ? {
+                  evaluation: {
+                    ...(response.tokenMiserEffectiveEnabled !== undefined
+                      ? {
+                          tokenMiserEnabled:
+                            response.tokenMiserEffectiveEnabled,
+                        }
+                      : {}),
+                    ...(response.tokenMiserEnabled !== undefined
+                      ? { tokenMiserOverride: response.tokenMiserEnabled }
+                      : {}),
+                    ...(response.pricing ? { pricing: response.pricing } : {}),
+                    ...(response.toolAccounting?.tokenMiser
+                      ? { tokenMiser: response.toolAccounting.tokenMiser }
+                      : {}),
+                  },
+                }
+              : {}),
           },
         },
       };

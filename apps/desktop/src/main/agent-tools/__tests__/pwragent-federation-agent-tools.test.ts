@@ -233,6 +233,7 @@ describe("pwragent federation agent tools", () => {
           branchName: " origin/main ",
           groupingMode: "subthread",
           fastMode: true,
+          tokenMiserEnabled: false,
         },
       },
     });
@@ -254,6 +255,7 @@ describe("pwragent federation agent tools", () => {
         branchName: "origin/main",
         groupingMode: "subthread",
         fastMode: true,
+        tokenMiserEnabled: false,
       },
     });
   });

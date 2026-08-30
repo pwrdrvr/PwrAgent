@@ -131,7 +131,7 @@ function descriptionForOperation(
     case "search_threads":
       return "Search known PwrAgent threads. By default, metadata search includes connected peers. Content and advanced filters work only on the local instance. Omit query to list recent candidates. Use instanceId for one peer or includeRemote=false for local metadata only. Results can include pending handoffs and workspace moves. Do not retry a pending operation.";
     case "read_thread":
-      return "Read a bounded page of transcript and activity from another known PwrAgent thread. Use search_threads when threadId is unknown. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. Return threadLink or a messageLink verbatim when referring to what was read.";
+      return "Read a bounded page of transcript and activity from another known PwrAgent thread. Use search_threads when threadId is unknown. Pass instanceId for a known remote thread. Otherwise, PwrAgent resolves the owner. Set includeEvaluation=true only when pricing and Token Miser accounting are needed. Return threadLink or a messageLink verbatim when referring to what was read.";
     case "get_thread_status":
       return "Read compact status and metadata for a PwrAgent thread. Results include linked directories, repository groups, pull requests, PR automation, pending handoffs, and workspace moves. Omit backend and threadId for the current thread. Pass instanceId for a known remote thread. Follow the returned prAutomation.guidance. Reading this status does not start or convert an Auto-fix repair turn. autoFixActive only reports whether the inspected thread owns automatic monitoring. Monitoring ownership does not mean another agent is repairing the PR. The current turn is a repair turn only when PwrAgent started it with an Auto-fix PR event. During such a turn, continue only the reported repair and ignore unrelated prior context unless the user added it. When autoFixActive is true without such an event, avoid duplicate polling and follow the returned guidance. When it is false, do not assume PwrAgent will dispatch a repair turn.";
     case "attach_thread_pull_request":
@@ -306,6 +306,11 @@ function inputSchemaForOperation(
             type: "boolean",
             description:
               "Whether to include current thread status when available. Defaults to true.",
+          },
+          includeEvaluation: {
+            type: "boolean",
+            description:
+              "Include effective Token Miser state, pricing, and Token Miser accounting from the owning instance. Defaults to false.",
           },
           maxCharsPerEntry: {
             type: "integer",

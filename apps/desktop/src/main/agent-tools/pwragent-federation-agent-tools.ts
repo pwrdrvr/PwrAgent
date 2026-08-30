@@ -173,6 +173,11 @@ function inputSchemaForOperation(
           reasoningEffort: { type: "string" },
           executionMode: { type: "string" },
           fastMode: { type: "boolean" },
+          tokenMiserEnabled: {
+            type: "boolean",
+            description:
+              "Explicitly enable or disable Token Miser for the created thread before its first turn. The target profile's experiment gate must also be enabled.",
+          },
           workMode: {
             type: "string",
             enum: LAUNCHPAD_WORK_MODES,
@@ -370,6 +375,12 @@ function normalizeCreateInstanceThreadArgs(
   const reasoningEffort = readTrimmedString(args.reasoningEffort);
   const executionMode = readTrimmedString(args.executionMode);
   const branchName = readTrimmedString(args.branchName);
+  if (
+    Object.hasOwn(args, "tokenMiserEnabled")
+    && typeof args.tokenMiserEnabled !== "boolean"
+  ) {
+    return undefined;
+  }
   return {
     instanceId,
     projectKey,
@@ -380,6 +391,9 @@ function normalizeCreateInstanceThreadArgs(
       ? { executionMode: executionMode as ThreadExecutionMode }
       : {}),
     ...(typeof args.fastMode === "boolean" ? { fastMode: args.fastMode } : {}),
+    ...(typeof args.tokenMiserEnabled === "boolean"
+      ? { tokenMiserEnabled: args.tokenMiserEnabled }
+      : {}),
     ...(workMode ? { workMode } : {}),
     ...(branchName ? { branchName } : {}),
     ...(groupingMode ? { groupingMode } : {}),

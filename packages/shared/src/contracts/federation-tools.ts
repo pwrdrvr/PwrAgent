@@ -153,6 +153,11 @@ export type CreateInstanceThreadToolArgs = {
   reasoningEffort?: string;
   executionMode?: ThreadExecutionMode;
   fastMode?: boolean;
+  /**
+   * Explicit Token Miser choice for the created thread. The owning instance
+   * applies this launchpad override before the initial turn starts.
+   */
+  tokenMiserEnabled?: boolean;
   workMode?: LaunchpadWorkMode;
   /** Existing base branch/ref for workMode=worktree, e.g. `origin/main`. */
   branchName?: string;

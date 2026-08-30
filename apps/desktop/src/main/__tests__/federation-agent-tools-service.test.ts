@@ -613,6 +613,7 @@ describe("federation agent tools service", () => {
         input: "Fix the recorder crash",
         model: "gpt-5.5-codex-max",
         executionMode: "full-access",
+        tokenMiserEnabled: false,
       },
     });
 
@@ -624,6 +625,7 @@ describe("federation agent tools service", () => {
           executionMode: "full-access",
           workMode: "worktree",
           model: "gpt-5.5-codex-max",
+          tokenMiserEnabled: false,
           directoryKey: "dir:/Users/op/pwragent",
           directoryLabel: "PwrAgent",
           prompt: "",
