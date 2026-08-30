@@ -8599,6 +8599,23 @@ describe("app server ipc", () => {
     expect(registerDirectoryFromDiskService).not.toHaveBeenCalled();
   });
 
+  it("broadcasts mention-source changes after directory registration", async () => {
+    const {
+      NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
+      NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
+    } = await import("../../shared/ipc");
+    registerAppServerIpcHandlers();
+
+    await handlers.get(NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL)?.(
+      { sender: { id: 1 } },
+      { path: "/repo/new-project" },
+    );
+
+    expect(prAutoDispatchBudgetStatusSend).toHaveBeenCalledWith(
+      NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
+    );
+  });
+
   it("attaches directories with path-shaped linked directory ids", async () => {
     const { NAVIGATION_ATTACH_DIRECTORY_TO_THREAD_CHANNEL } = await import("../../shared/ipc");
     const directoryPath = path.resolve("/repo/app");

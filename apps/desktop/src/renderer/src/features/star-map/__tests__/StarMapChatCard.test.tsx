@@ -2143,6 +2143,52 @@ describe("StarMapChatCard mentions", () => {
     expect(desktopApi.getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
+  it("refreshes a fresh mention cache after project registration", async () => {
+    let notifyNavigationChanged: (() => void) | undefined;
+    const getNavigationSnapshot = vi.fn()
+      .mockResolvedValueOnce(SNAPSHOT)
+      .mockResolvedValueOnce({
+        ...SNAPSHOT,
+        directories: [
+          ...SNAPSHOT.directories,
+          {
+            key: "d-new-project",
+            kind: "repo",
+            label: "new-project",
+            latestUpdatedAt: 3,
+            path: "/Users/dev/new-project",
+          },
+        ],
+      });
+    const onNavigationMentionSourcesChanged = vi.fn(
+      (callback: () => void) => {
+        notifyNavigationChanged = callback;
+        return () => undefined;
+      },
+    );
+    const desktopApi = mentionApi({
+      getNavigationSnapshot,
+      onNavigationMentionSourcesChanged,
+    });
+    renderCard({ desktopApi, thread: localThread() });
+    await screen.findByRole("button", { name: "Send" });
+    expect(onNavigationMentionSourcesChanged).toHaveBeenCalledOnce();
+
+    fireEvent.change(composer(), { target: { value: "check @ap" } });
+    expect((await screen.findByRole("option")).textContent).toContain("app");
+    fireEvent.change(composer(), { target: { value: "check " } });
+
+    act(() => notifyNavigationChanged?.());
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+    });
+    fireEvent.change(composer(), { target: { value: "check @new" } });
+
+    await waitFor(() => {
+      expect(screen.getByRole("option").textContent).toContain("new-project");
+    });
+  });
+
   it("never offers the thread the card is already on", async () => {
     // On a bare `#` the current thread would otherwise take the first row,
     // and referencing it tells the agent nothing it does not have.

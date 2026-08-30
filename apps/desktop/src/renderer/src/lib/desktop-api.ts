@@ -800,6 +800,9 @@ export type DesktopApi = {
   getNavigationSnapshotTransport?: (
     request: GetNavigationSnapshotTransportRequest,
   ) => Promise<NavigationSnapshotTransportResponse>;
+  onNavigationMentionSourcesChanged?: (
+    callback: () => void,
+  ) => () => void;
   setNavigationBrowseMode?: (
     request: SetNavigationBrowseModeRequest,
   ) => Promise<SetNavigationBrowseModeResponse>;
