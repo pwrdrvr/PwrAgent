@@ -65,3 +65,12 @@ PwrAgent PR pending merge
   PwrAgent PR merged: published Linux sibling artifacts exceed the original
   512 MiB manifest ceiling, and sigstore-js 5 requires Fulcio's raw GitHub
   claim bytes from the parallel v1 certificate OIDs.
+- Electron's BoringSSL-backed Node runtime does not infer SHA-256 for the ECDSA
+  signatures used by Sigstore and TUF. Narrow dependency patches now specify
+  that algorithm while preserving Fulcio, Rekor, transparency-log, and
+  certificate-identity verification.
+- Live button acceptance on the `dev` profile downloaded the 218 MiB Apple
+  Silicon archive, installed and durably selected `0.149.0-pwragent.1`, and
+  negotiated native Token Miser activation without hook approval. Settings
+  shows installation immediately and refreshes after either an immediate or
+  delayed safe runtime switch.

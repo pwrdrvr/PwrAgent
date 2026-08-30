@@ -6,6 +6,28 @@ import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../../lib/useBackendSummarie
 import { useDesktopSettings } from "../useDesktopSettings";
 
 describe("useDesktopSettings", () => {
+  it("refreshes when a delayed managed runtime switch completes", async () => {
+    let runtimeChanged: (() => void) | undefined;
+    const readSettings = vi
+      .fn<NonNullable<DesktopApi["readSettings"]>>()
+      .mockResolvedValue({ snapshot: {} as DesktopSettingsSnapshot });
+    const desktopApi: DesktopApi = {
+      onSettingsRuntimeChanged: (callback) => {
+        runtimeChanged = callback;
+        return () => {
+          runtimeChanged = undefined;
+        };
+      },
+      readSettings,
+    };
+    renderHook(() => useDesktopSettings(desktopApi));
+    await vi.waitFor(() => expect(readSettings).toHaveBeenCalledTimes(1));
+
+    act(() => runtimeChanged?.());
+
+    await vi.waitFor(() => expect(readSettings).toHaveBeenCalledTimes(2));
+  });
+
   it("refreshes backend summaries after ACP provider settings change", async () => {
     const onRefresh = vi.fn();
     const writeSettingsConfig = vi

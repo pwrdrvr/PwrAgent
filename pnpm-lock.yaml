@@ -32,6 +32,14 @@ overrides:
 
 pnpmfileChecksum: sha256-ENVI4WvTe5sygYLw830xNJB8CimBQgr6EM0Oi3TR7os=
 
+patchedDependencies:
+  '@sigstore/core@4.0.1':
+    hash: 114fda379171cf845319631cc801b3ee84fc2b10b7a95e19bd05bc626f050947
+    path: patches/@sigstore__core@4.0.1.patch
+  '@tufjs/models@5.0.0':
+    hash: cda0010163043e933ba6f86a04f2852496a944bf384d5bae3cea219e226ff6dc
+    path: patches/@tufjs__models@5.0.0.patch
+
 importers:
 
   .:
@@ -5487,7 +5495,7 @@ snapshots:
     dependencies:
       '@sigstore/protobuf-specs': 0.5.1
 
-  '@sigstore/core@4.0.1': {}
+  '@sigstore/core@4.0.1(patch_hash=114fda379171cf845319631cc801b3ee84fc2b10b7a95e19bd05bc626f050947)': {}
 
   '@sigstore/protobuf-specs@0.5.1': {}
 
@@ -5495,7 +5503,7 @@ snapshots:
     dependencies:
       '@gar/promise-retry': 1.0.3
       '@sigstore/bundle': 5.0.0
-      '@sigstore/core': 4.0.1
+      '@sigstore/core': 4.0.1(patch_hash=114fda379171cf845319631cc801b3ee84fc2b10b7a95e19bd05bc626f050947)
       '@sigstore/protobuf-specs': 0.5.1
       make-fetch-happen: 16.0.1
       proc-log: 7.0.0
@@ -5513,7 +5521,7 @@ snapshots:
   '@sigstore/verify@4.1.2':
     dependencies:
       '@sigstore/bundle': 5.0.0
-      '@sigstore/core': 4.0.1
+      '@sigstore/core': 4.0.1(patch_hash=114fda379171cf845319631cc801b3ee84fc2b10b7a95e19bd05bc626f050947)
       '@sigstore/protobuf-specs': 0.5.1
 
   '@sindresorhus/is@4.6.0': {}
@@ -5782,7 +5790,7 @@ snapshots:
 
   '@tufjs/canonical-json@2.0.0': {}
 
-  '@tufjs/models@5.0.0':
+  '@tufjs/models@5.0.0(patch_hash=cda0010163043e933ba6f86a04f2852496a944bf384d5bae3cea219e226ff6dc)':
     dependencies:
       '@tufjs/canonical-json': 2.0.0
       minimatch: 10.2.6
@@ -8786,7 +8794,7 @@ snapshots:
   sigstore@5.0.0:
     dependencies:
       '@sigstore/bundle': 5.0.0
-      '@sigstore/core': 4.0.1
+      '@sigstore/core': 4.0.1(patch_hash=114fda379171cf845319631cc801b3ee84fc2b10b7a95e19bd05bc626f050947)
       '@sigstore/protobuf-specs': 0.5.1
       '@sigstore/sign': 5.0.0
       '@sigstore/tuf': 5.0.0
@@ -9017,7 +9025,7 @@ snapshots:
   tuf-js@6.0.0:
     dependencies:
       '@gar/promise-retry': 1.0.3
-      '@tufjs/models': 5.0.0
+      '@tufjs/models': 5.0.0(patch_hash=cda0010163043e933ba6f86a04f2852496a944bf384d5bae3cea219e226ff6dc)
       debug: 4.4.3
     transitivePeerDependencies:
       - supports-color

@@ -1,0 +1,14 @@
+diff --git a/dist/utils/verify.js b/dist/utils/verify.js
+index 8232b6f6a97ab1713303f5e3696f4de253b8e22b..1be8a53f7dbaf9508fe2bc41e79821378889b025 100644
+--- a/dist/utils/verify.js
++++ b/dist/utils/verify.js
+@@ -8,6 +8,8 @@ const canonical_json_1 = require("@tufjs/canonical-json");
+ const crypto_1 = __importDefault(require("crypto"));
+ const verifySignature = (metaDataSignedData, key, signature) => {
+     const canonicalData = Buffer.from((0, canonical_json_1.canonicalize)(metaDataSignedData));
+-    return crypto_1.default.verify(undefined, canonicalData, key, Buffer.from(signature, 'hex'));
++    const keyObject = key instanceof crypto_1.default.KeyObject ? key : key.key;
++    const algorithm = keyObject?.asymmetricKeyType === 'ec' ? 'sha256' : undefined;
++    return crypto_1.default.verify(algorithm, canonicalData, key, Buffer.from(signature, 'hex'));
+ };
+ exports.verifySignature = verifySignature;

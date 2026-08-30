@@ -1142,6 +1142,73 @@ describe("DesktopSettingsService", () => {
     }
   });
 
+  it("waits for an idle managed Codex switch before returning the enabled snapshot", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    const managedRuntime = {
+      appServerCommand: "/managed/codex-app-server",
+      codeModeHostCommand: "/managed/codex-code-mode-host",
+      command: "/managed/codex",
+      metadata: {
+        asset: "pwragent-codex-0.200.0-pwragent.1-linux-x86_64.tar.gz",
+        checkedAt: 1,
+        installedAt: 1,
+        repository: "pwrdrvr/codex",
+        schemaVersion: 1 as const,
+        sha256: "a".repeat(64),
+        tag: "pwragent-v0.200.0-pwragent.1",
+        version: "0.200.0-pwragent.1",
+      },
+    };
+    const onManagedCodexRuntimeSwitchComplete = vi.fn();
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({ candidates: [] })),
+        invalidate: vi.fn(),
+        resolve: vi.fn(async () => ({
+          command: "/path/codex",
+          source: "path" as const,
+        })),
+      },
+      configPath,
+      ensureManagedCodexRuntime: vi.fn(async () => managedRuntime),
+      env: {},
+      onManagedCodexRuntimeSwitchComplete,
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    let finishSwitch: (() => void) | undefined;
+    const selectionChanged = vi.fn(() => new Promise<void>((resolve) => {
+      finishSwitch = resolve;
+    }));
+    const stop = service.watchManagedCodexRuntime(selectionChanged);
+
+    let writeSettled = false;
+    const write = service.writeConfigPatch({
+      experimental: { tokenMiserEnabled: true },
+    }).then((snapshot) => {
+      writeSettled = true;
+      return snapshot;
+    });
+    await vi.waitFor(() => expect(selectionChanged).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: true, reason: "availability" }),
+    ));
+    expect(writeSettled).toBe(false);
+
+    service.markManagedCodexRuntimeSwitchComplete();
+    expect(onManagedCodexRuntimeSwitchComplete).toHaveBeenCalledOnce();
+    finishSwitch?.();
+    await expect(write).resolves.toMatchObject({
+      runtime: {
+        tokenMiser: {
+          managedCodex: {
+            state: "ready",
+            version: "0.200.0-pwragent.1",
+          },
+        },
+      },
+    });
+    stop();
+  });
+
   it("announces an update installed by another settings read", async () => {
     vi.useFakeTimers();
     try {

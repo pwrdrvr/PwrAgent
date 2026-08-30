@@ -7852,7 +7852,9 @@ export class DesktopBackendRegistry {
     resolveManagedTokenMiserActivationRequired?: () => boolean;
     markManagedCodexRuntimeSwitchComplete?: () => void;
     watchManagedCodexRuntime?: (
-      listener: (change: ManagedCodexSelectionChange) => void,
+      listener: (
+        change: ManagedCodexSelectionChange,
+      ) => Promise<unknown> | unknown,
     ) => () => void;
     runtimeInstanceId?: string;
     registrySessionId?: string;
@@ -8153,7 +8155,7 @@ export class DesktopBackendRegistry {
             version: change.runtime?.metadata.version,
           });
           this.codexRuntimeRestartPending = true;
-          void this.maybeRestartCodexForManagedRuntimeChange();
+          return this.maybeRestartCodexForManagedRuntimeChange();
         }),
       );
     }

@@ -9,6 +9,8 @@ import {
   MemoryDesktopSecretStore,
 } from "./desktop-secret-store";
 import { ensureManagedCodexRuntime } from "../codex-managed-runtime";
+import { SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL } from "../../shared/ipc";
+import { subscribersForChannel } from "../window-channels";
 
 let desktopSettingsService: DesktopSettingsService | undefined;
 
@@ -46,6 +48,13 @@ export function getDesktopSettingsService(): DesktopSettingsService {
       // fan out to every open window via the broadcaster, which sends to
       // every subscriber of APPEARANCE_CHANGED_EVENT_CHANNEL.
       onAppearanceChange: broadcastAppearanceChange,
+      onManagedCodexRuntimeSwitchComplete: () => {
+        for (const webContents of subscribersForChannel(
+          SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL,
+        )) {
+          webContents.send(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL);
+        }
+      },
     });
   }
   return desktopSettingsService;

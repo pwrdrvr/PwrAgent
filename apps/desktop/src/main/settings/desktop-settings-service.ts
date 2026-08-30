@@ -275,6 +275,7 @@ type DesktopSettingsServiceOptions = {
     sidebarTextSize: DesktopTextSize;
     transcriptTextSize: DesktopTextSize;
   }) => void;
+  onManagedCodexRuntimeSwitchComplete?: () => void;
 };
 
 export const MANAGED_CODEX_UPDATE_POLL_INTERVAL_MS = 60 * 60_000;
@@ -444,6 +445,7 @@ export class DesktopSettingsService {
   private terminalSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
   private managedCodexRuntime?: ManagedCodexRuntime;
   private managedCodexRuntimeSwitchPending = false;
+  private managedCodexRuntimeSwitchAttempt?: Promise<void>;
 
   constructor(private readonly options: DesktopSettingsServiceOptions) {
     this.env = options.env ?? process.env;
@@ -1640,6 +1642,9 @@ export class DesktopSettingsService {
         // Listeners are best-effort side effects; never fail a settings write.
       }
     }
+    if (patch.experimental?.tokenMiserEnabled !== undefined) {
+      await this.managedCodexRuntimeSwitchAttempt;
+    }
     return this.readSettings();
   }
 
@@ -1905,7 +1910,9 @@ export class DesktopSettingsService {
    * network TTL and immutable-release validation.
    */
   watchManagedCodexRuntime(
-    listener: (change: ManagedCodexSelectionChange) => void,
+    listener: (
+      change: ManagedCodexSelectionChange,
+    ) => Promise<unknown> | unknown,
     options: { intervalMs?: number } = {},
   ): () => void {
     const intervalMs = options.intervalMs ?? MANAGED_CODEX_UPDATE_POLL_INTERVAL_MS;
@@ -1920,6 +1927,19 @@ export class DesktopSettingsService {
         timer = undefined;
       }
     };
+    const announce = (change: ManagedCodexSelectionChange): Promise<void> => {
+      const attempt = Promise.resolve()
+        .then(() => listener(change))
+        .then(() => undefined)
+        .catch((error) => {
+          getMainLogger("pwragent:managed-codex").warn(
+            "managed-codex-selection-change-failed",
+            { error: error instanceof Error ? error.message : String(error) },
+          );
+        });
+      this.managedCodexRuntimeSwitchAttempt = attempt;
+      return attempt;
+    };
     const checkForUpdate = async () => {
       if (stopped || !this.resolveTokenMiserEnabled()) return;
       try {
@@ -1930,7 +1950,7 @@ export class DesktopSettingsService {
         } else if (runtime.command !== lastAnnouncedCommand) {
           lastAnnouncedCommand = runtime.command;
           this.managedCodexRuntimeSwitchPending = true;
-          listener({ enabled: true, reason: "update", runtime });
+          await announce({ enabled: true, reason: "update", runtime });
         }
       } catch (error) {
         getMainLogger("pwragent:managed-codex").warn(
@@ -1967,7 +1987,7 @@ export class DesktopSettingsService {
         this.managedCodexRuntimeSwitchPending = false;
         this.managedCodexRuntime = undefined;
       }
-      listener({
+      void announce({
         enabled,
         reason: "availability",
         ...(enabled && this.managedCodexRuntime
@@ -1992,6 +2012,7 @@ export class DesktopSettingsService {
 
   markManagedCodexRuntimeSwitchComplete(): void {
     this.managedCodexRuntimeSwitchPending = false;
+    this.options.onManagedCodexRuntimeSwitchComplete?.();
   }
 
   resolveProviderModelDefaults() {

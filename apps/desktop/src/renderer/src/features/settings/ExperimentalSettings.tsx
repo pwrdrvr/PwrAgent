@@ -1,4 +1,5 @@
 import type { DesktopSettingsSnapshot } from "@pwragent/shared";
+import { useState } from "react";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -64,6 +65,9 @@ export function ExperimentalSettings(props: {
   ) => Promise<void>;
   onManagedReviewChange: (enabled: boolean) => Promise<void>;
 }) {
+  const [tokenMiserWriteTarget, setTokenMiserWriteTarget] = useState<
+    boolean | undefined
+  >();
   const condensation = props.snapshot.experimental.diffCondensation;
   const liveTranscriptEventFiltering =
     props.snapshot.experimental.liveTranscriptEventFiltering ??
@@ -93,6 +97,8 @@ export function ExperimentalSettings(props: {
   // never loaded. Off-and-unavailable is just off.
   const tokenMiserInert =
     tokenMiserEnabled.value
+    && tokenMiserWriteTarget === undefined
+    && !tokenMiserSwitchPending
     && (
       managedCodex?.state === "unavailable"
       || tokenMiserActivation?.state === "unavailable"
@@ -126,19 +132,23 @@ export function ExperimentalSettings(props: {
         title="Token Miser"
         description="Keep accidental walls of Codex tool output out of the parent thread while preserving the exact result for targeted retrieval."
         chip={
-          tokenMiserInert
-            ? "Not running"
-            : !tokenMiserEnabled.value
-              ? "Off"
-              : tokenMiserSwitchPending
-                ? "Waiting for idle"
-              : tokenMiserStarting
-                ? "Starting"
-              : tokenMiserDefaultEnabled.value ? "Default on" : "Opt-in"
+          tokenMiserWriteTarget === true
+            ? "Installing"
+            : tokenMiserWriteTarget === false
+              ? "Turning off"
+              : tokenMiserInert
+                ? "Not running"
+                : !tokenMiserEnabled.value
+                  ? "Off"
+                  : tokenMiserSwitchPending
+                    ? "Waiting for idle"
+                    : tokenMiserStarting
+                      ? "Starting"
+                      : tokenMiserDefaultEnabled.value ? "Default on" : "Opt-in"
         }
         chipKind={
-            tokenMiserInert
-              ? "warn"
+          tokenMiserWriteTarget === undefined && tokenMiserInert
+            ? "warn"
             : tokenMiserEnabled.value && !tokenMiserStarting ? "ok" : "default"
         }
       >
@@ -150,11 +160,16 @@ export function ExperimentalSettings(props: {
             source={sourceBadge(tokenMiserEnabled)}
             control={
               <SettingsSwitch
-                checked={tokenMiserEnabled.value}
-                disabled={props.saving}
+                checked={tokenMiserWriteTarget ?? tokenMiserEnabled.value}
+                disabled={
+                  props.saving || tokenMiserWriteTarget !== undefined
+                }
                 label="Make Token Miser available"
                 onChange={(enabled) => {
-                  void props.onTokenMiserEnabledChange(enabled);
+                  setTokenMiserWriteTarget(enabled);
+                  void props.onTokenMiserEnabledChange(enabled).finally(() => {
+                    setTokenMiserWriteTarget(undefined);
+                  });
                 }}
               />
             }
