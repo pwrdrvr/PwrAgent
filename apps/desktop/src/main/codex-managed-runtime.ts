@@ -48,7 +48,11 @@ export const MANAGED_CODEX_UPDATE_SIGNATURE_NAME =
   "pwragent-codex-update-v1.json.sigstore.json";
 export const MANAGED_CODEX_PUBLICATION_MARKER_NAME =
   "pwragent-codex-publication-complete-v1.json";
-const MANAGED_CODEX_MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
+// The manifest describes every published target, so this limit must cover the
+// largest sibling artifact even when the current machine downloads a smaller
+// archive. Rust Linux bundles currently exceed 512 MiB because they carry the
+// sandbox companion binaries alongside Codex.
+const MANAGED_CODEX_MAX_ARCHIVE_BYTES = 768 * 1024 * 1024;
 const MANAGED_CODEX_FETCH_TIMEOUT_MS = 5 * 60_000;
 const MANAGED_CODEX_METADATA_VERSION = 1;
 
@@ -954,11 +958,14 @@ async function verifyManagedCodexSigstoreBundle(
     certificateIdentityURI: `^${escapeRegularExpression(workflowIdentity)}$`,
     certificateIssuer: "https://token.actions.githubusercontent.com",
     certificateOIDs: {
-      "1.3.6.1.4.1.57264.1.12":
-        `https://github.com/${MANAGED_CODEX_REPOSITORY}`,
-      "1.3.6.1.4.1.57264.1.13": params.sourceCommit,
-      "1.3.6.1.4.1.57264.1.14": `refs/tags/${params.tag}`,
-      "1.3.6.1.4.1.57264.1.20": "push",
+      // sigstore-js 5 compares policy bytes directly. Fulcio's newer v2
+      // extensions wrap these values as DER UTF8String values, while the
+      // parallel v1 extensions contain the raw bytes that the verifier API
+      // accepts. Pin the same GitHub claims through their v1 OIDs.
+      "1.3.6.1.4.1.57264.1.2": "push",
+      "1.3.6.1.4.1.57264.1.3": params.sourceCommit,
+      "1.3.6.1.4.1.57264.1.5": MANAGED_CODEX_REPOSITORY,
+      "1.3.6.1.4.1.57264.1.6": `refs/tags/${params.tag}`,
     },
     ctLogThreshold: 1,
     tlogThreshold: 1,

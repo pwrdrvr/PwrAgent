@@ -160,8 +160,10 @@ describe("ensureManagedCodexRuntime", () => {
       expect.objectContaining({
         certificateIssuer: "https://token.actions.githubusercontent.com",
         certificateOIDs: expect.objectContaining({
-          "1.3.6.1.4.1.57264.1.13": "a".repeat(40),
-          "1.3.6.1.4.1.57264.1.20": "push",
+          "1.3.6.1.4.1.57264.1.2": "push",
+          "1.3.6.1.4.1.57264.1.3": "a".repeat(40),
+          "1.3.6.1.4.1.57264.1.5": "pwrdrvr/codex",
+          "1.3.6.1.4.1.57264.1.6": `refs/tags/${tag}`,
         }),
         ctLogThreshold: 1,
         tlogThreshold: 1,
@@ -184,6 +186,35 @@ describe("ensureManagedCodexRuntime", () => {
     expect(JSON.parse(
       await readFile(path.join(rootDir, "managed-release.json"), "utf8"),
     )).toMatchObject({ sha256: digest, tag, version });
+  });
+
+  it("accepts a manifest with supported large sibling artifacts", async () => {
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v0.200.0-pwragent.1";
+    const version = "0.200.0-pwragent.1";
+    const archiveName = `pwragent-codex-${version}-macos-aarch64.tar.gz`;
+    const archive = Buffer.from("small selected archive");
+    const digest = createHash("sha256").update(archive).digest("hex");
+
+    const runtime = await ensureManagedCodexRuntime({
+      arch: "arm64",
+      checkMode: "force",
+      extractArchive: async (_archivePath, targetDir) => {
+        await writeFakeBundle(targetDir, "darwin");
+      },
+      fetch: releaseFetch({
+        archive,
+        archiveName,
+        digest,
+        tag,
+        unselectedArtifactSize: 636_579_696,
+      }) as typeof globalThis.fetch,
+      platform: "darwin",
+      probeVersion: versionProbe(version),
+      rootDir,
+    });
+
+    expect(runtime.metadata.tag).toBe(tag);
   });
 
   it("uses the verified cache when a forced update check is offline", async () => {
@@ -415,6 +446,7 @@ function releaseFetch(params: {
   archiveName: string;
   digest: string;
   tag: string;
+  unselectedArtifactSize?: number;
 }) {
   const publication = publicationFixture(params);
   const payload = [release(params.tag, [
@@ -451,6 +483,7 @@ function publicationFixture(params: {
   archiveName: string;
   digest: string;
   tag: string;
+  unselectedArtifactSize?: number;
 }) {
   const version = params.tag.slice("pwragent-v".length);
   const targets = [
@@ -473,7 +506,9 @@ function publicationFixture(params: {
         sha256: selected
           ? params.digest
           : createHash("sha256").update(file).digest("hex"),
-        size: selected ? params.archive.length : 1,
+        size: selected
+          ? params.archive.length
+          : params.unselectedArtifactSize ?? 1,
         target,
       };
     },

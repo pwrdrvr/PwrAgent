@@ -1,7 +1,7 @@
 # Token Miser one-click enablement plan
 
-Status: PwrAgent implementation complete; custom Codex PR and first signed
-release pending
+Status: PwrAgent implementation and first signed custom Codex release complete;
+PwrAgent PR pending merge
 
 ## Decisions
 
@@ -55,5 +55,13 @@ release pending
   operator to choose a binary or approve a hook.
 - Focused unit/integration coverage, desktop typecheck, production build,
   dependency boundaries, and lint validation pass. The custom Codex follow-up
-  has separately passed its native button-negotiation E2E; the cross-repository
-  release acceptance remains pending publication of the first signed release.
+  has separately passed its native button-negotiation E2E.
+- `pwragent-v0.149.0-pwragent.1` is published with all five platform archives,
+  a signed update manifest, and the last-uploaded completion marker. A live
+  Apple Silicon acceptance downloaded the public release, verified its Sigstore
+  identity and checksums, extracted all executables, confirmed the PwrDrvr LLC
+  platform signature, and negotiated both native Token Miser capabilities.
+- Release acceptance exposed and fixed two integration mismatches before the
+  PwrAgent PR merged: published Linux sibling artifacts exceed the original
+  512 MiB manifest ceiling, and sigstore-js 5 requires Fulcio's raw GitHub
+  claim bytes from the parallel v1 certificate OIDs.
