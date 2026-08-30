@@ -10085,6 +10085,9 @@ export class DesktopBackendRegistry {
       fetchedAt: Date.now(),
       pricing,
       threadId: request.threadId,
+      ...(overlay?.tokenMiserEnabled !== undefined
+        ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+        : {}),
       ...(toolAccounting ? { toolAccounting } : {}),
       ...(pendingRequest ? { pendingRequest } : {}),
       ...(replayWithReviewers.threadStatus
@@ -11866,6 +11869,9 @@ export class DesktopBackendRegistry {
       fetchedAt: Date.now(),
       readDurationMs: Math.max(0, Math.round(performance.now() - readStartedAt)),
       threadId: request.threadId,
+      ...(overlay?.tokenMiserEnabled !== undefined
+        ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+        : {}),
       pricing,
       ...(toolAccounting ? { toolAccounting } : {}),
       ...(pendingRequest ? { pendingRequest } : {}),

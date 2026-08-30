@@ -39254,6 +39254,32 @@ script = "printf setup"
     await registry.close();
   });
 
+  it("round-trips the Token Miser override through readThread", async () => {
+    const overlayStore = createOverlayStoreMock();
+    await overlayStore.setThreadTokenMiser({
+      backend: "codex",
+      threadId: "thread-1",
+      enabled: false,
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({
+        initializeResult: { methods: ["thread/read"] },
+      }),
+      overlayStore,
+    });
+
+    await expect(registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+    })).resolves.toMatchObject({
+      backend: "codex",
+      threadId: "thread-1",
+      tokenMiserEnabled: false,
+    });
+
+    await registry.close();
+  });
+
   it("forwards normalized read-thread status metadata", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/read"] },

@@ -96,12 +96,12 @@ describe("managed Codex release selection", () => {
 
   it("rejects downstream tags before the managed-runtime floor", () => {
     expect(MANAGED_CODEX_MINIMUM_SIGNED_TAG).toBe(
-      "pwragent-v0.149.0-pwragent.1",
-    );
-    expect(isManagedCodexTagEligible("pwragent-v0.148.0-pwragent.9")).toBe(
-      false,
+      "pwragent-v0.149.0-pwragent.2",
     );
     expect(isManagedCodexTagEligible("pwragent-v0.149.0-pwragent.1")).toBe(
+      false,
+    );
+    expect(isManagedCodexTagEligible("pwragent-v0.149.0-pwragent.2")).toBe(
       true,
     );
     expect(isManagedCodexTagEligible("pwragent-v0.200.0-pwragent.1")).toBe(
@@ -215,6 +215,7 @@ describe("ensureManagedCodexRuntime", () => {
       platform: "darwin",
       probeVersion: versionProbe(version),
       rootDir,
+      verifyMacosCodeModeHostEntitlements: vi.fn(async () => undefined),
     });
 
     expect(runtime.metadata.tag).toBe(tag);
@@ -222,8 +223,8 @@ describe("ensureManagedCodexRuntime", () => {
 
   it("uses the verified cache when a forced update check is offline", async () => {
     const rootDir = await temporaryRoot();
-    const tag = "pwragent-v0.149.0-pwragent.1";
-    const version = "0.149.0-pwragent.1";
+    const tag = "pwragent-v0.149.0-pwragent.2";
+    const version = "0.149.0-pwragent.2";
     await writeManagedCache(rootDir, { tag, version });
 
     const runtime = await ensureManagedCodexRuntime({
@@ -241,8 +242,8 @@ describe("ensureManagedCodexRuntime", () => {
 
   it("serves a stale verified cache while its update check runs", async () => {
     const rootDir = await temporaryRoot();
-    const tag = "pwragent-v0.149.0-pwragent.1";
-    const version = "0.149.0-pwragent.1";
+    const tag = "pwragent-v0.149.0-pwragent.2";
+    const version = "0.149.0-pwragent.2";
     await writeManagedCache(rootDir, { tag, version });
     const controller = new AbortController();
     let fetchAborted = false;
@@ -435,6 +436,7 @@ describe("ensureManagedCodexRuntime", () => {
     const archiveName = `pwragent-codex-${version}-macos-aarch64.tar.gz`;
     const archive = Buffer.from("signed codex archive");
     const digest = createHash("sha256").update(archive).digest("hex");
+    const verifyMacosCodeModeHostEntitlements = vi.fn(async () => undefined);
     const verifyPlatformSignature = vi.fn(async () => undefined);
 
     await ensureManagedCodexRuntime({
@@ -454,12 +456,22 @@ describe("ensureManagedCodexRuntime", () => {
       probeVersion: versionProbe(version),
       requirePlatformSignature: true,
       rootDir,
+      verifyMacosCodeModeHostEntitlements,
       verifyPlatformSignature,
     });
 
+    expect(verifyMacosCodeModeHostEntitlements).toHaveBeenCalledOnce();
+    expect(verifyMacosCodeModeHostEntitlements).toHaveBeenCalledWith(
+      expect.stringMatching(/codex-code-mode-host$/u),
+    );
     expect(verifyPlatformSignature).toHaveBeenCalledTimes(3);
     expect(verifyPlatformSignature).toHaveBeenCalledWith(
       expect.stringMatching(/codex-app-server$/u),
+      "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
+      "darwin",
+    );
+    expect(verifyPlatformSignature).toHaveBeenCalledWith(
+      expect.stringMatching(/codex-code-mode-host$/u),
       "/Applications/PwrAgent.app/Contents/MacOS/PwrAgent",
       "darwin",
     );

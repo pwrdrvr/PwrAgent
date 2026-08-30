@@ -3,6 +3,50 @@ import { promisify } from "node:util";
 
 const execFile = promisify(execFileCallback);
 
+export const MACOS_CODE_MODE_HOST_JIT_ENTITLEMENTS = [
+  "com.apple.security.cs.allow-jit",
+  "com.apple.security.cs.allow-unsigned-executable-memory",
+] as const;
+
+export function missingMacosCodeModeHostJitEntitlements(
+  details: string,
+): string[] {
+  return MACOS_CODE_MODE_HOST_JIT_ENTITLEMENTS.filter((entitlement) => {
+    const escaped = escapeRegularExpression(entitlement);
+    return !(
+      new RegExp(
+        `\\[Key\\]\\s+${escaped}\\s+\\[Value\\]\\s+\\[Bool\\]\\s+true`,
+        "u",
+      ).test(details)
+      || new RegExp(
+        `<key>\\s*${escaped}\\s*</key>\\s*<true\\s*/>`,
+        "u",
+      ).test(details)
+    );
+  });
+}
+
+export async function verifyMacosCodeModeHostJitEntitlements(
+  command: string,
+): Promise<void> {
+  const entitlements = await execFile("codesign", [
+    "--display",
+    "--entitlements",
+    "-",
+    command,
+  ]);
+  const entitlementDetails =
+    `${entitlements.stdout ?? ""}\n${entitlements.stderr ?? ""}`;
+  const missing = missingMacosCodeModeHostJitEntitlements(
+    entitlementDetails,
+  );
+  if (missing.length > 0) {
+    throw new Error(
+      `Managed Codex Code Mode host is missing required macOS JIT entitlements: ${missing.join(", ")}`,
+    );
+  }
+}
+
 // Windows PowerShell 5.1 inherits the parent process's PSModulePath. When that
 // value is PowerShell 7-oriented, autoloading Windows PowerShell's own
 // Microsoft.PowerShell.Security fails. Pin its own module locations first.
@@ -92,3 +136,6 @@ export async function verifyMatchingPlatformSignature(
   }
 }
 
+function escapeRegularExpression(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+}

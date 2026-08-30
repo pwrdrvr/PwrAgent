@@ -26,7 +26,10 @@ import { promisify } from "node:util";
 import { verify as verifySigstore } from "sigstore";
 import type { Bundle as SigstoreBundle } from "sigstore";
 import { getMainLogger } from "./log.js";
-import { verifyMatchingPlatformSignature } from "./managed-runtime-signature.js";
+import {
+  verifyMacosCodeModeHostJitEntitlements,
+  verifyMatchingPlatformSignature,
+} from "./managed-runtime-signature.js";
 import { resolvePwragentRoot } from "./profile.js";
 
 const execFile = promisify(execFileCallback);
@@ -40,7 +43,7 @@ export const MANAGED_CODEX_RELEASES_FEED_URL =
 // The capability probe remains authoritative. This floor only prevents a
 // pre-integration downstream tag from becoming a download candidate.
 export const MANAGED_CODEX_MINIMUM_SIGNED_TAG =
-  "pwragent-v0.149.0-pwragent.1";
+  "pwragent-v0.149.0-pwragent.2";
 export const MANAGED_CODEX_CHECK_TTL_MS = 24 * 60 * 60_000;
 export const MANAGED_CODEX_UPDATE_MANIFEST_NAME =
   "pwragent-codex-update-v1.json";
@@ -135,6 +138,7 @@ type ManagedCodexRuntimeOptions = {
   requirePlatformSignature?: boolean;
   rootDir?: string;
   signal?: AbortSignal;
+  verifyMacosCodeModeHostEntitlements?: (command: string) => Promise<void>;
   verifySigstoreBundle?: typeof verifyManagedCodexSigstoreBundle;
   verifyPlatformSignature?: (
     command: string,
@@ -174,6 +178,9 @@ type BundleValidationOptions = {
   probeVersion?: ManagedCodexRuntimeOptions["probeVersion"];
   requirePlatformSignature: boolean;
   tag: string;
+  verifyMacosCodeModeHostEntitlements?: (
+    command: string,
+  ) => Promise<void>;
   verifyPlatformSignature?: ManagedCodexRuntimeOptions["verifyPlatformSignature"];
 };
 
@@ -1255,6 +1262,12 @@ async function validateExtractedBundle(
       await chmod(command, 0o755),
     ));
   }
+  if (options.platform === "darwin") {
+    await (
+      options.verifyMacosCodeModeHostEntitlements
+      ?? verifyMacosCodeModeHostJitEntitlements
+    )(path.join(directory, "codex-code-mode-host"));
+  }
   if (
     options.requirePlatformSignature
     && (options.platform === "darwin" || options.platform === "win32")
@@ -1331,6 +1344,12 @@ function bundleValidationOptions(
     platform: options.platform ?? process.platform,
     ...(options.probeVersion ? { probeVersion: options.probeVersion } : {}),
     requirePlatformSignature: options.requirePlatformSignature === true,
+    ...(options.verifyMacosCodeModeHostEntitlements
+      ? {
+          verifyMacosCodeModeHostEntitlements:
+            options.verifyMacosCodeModeHostEntitlements,
+        }
+      : {}),
     ...(options.verifyPlatformSignature
       ? { verifyPlatformSignature: options.verifyPlatformSignature }
       : {}),
