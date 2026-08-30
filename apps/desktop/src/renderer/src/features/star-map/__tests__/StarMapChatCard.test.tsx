@@ -15,9 +15,6 @@ import type {
   NavigationThreadSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
-import {
-  notifyComposerMentionNavigationChanged,
-} from "../../../lib/composer-mention-navigation-revision";
 import { normalizeImageFile } from "../../../lib/image-normalization";
 import { StarMapChatCard } from "../StarMapChatCard";
 import {
@@ -2147,6 +2144,7 @@ describe("StarMapChatCard mentions", () => {
   });
 
   it("refreshes a fresh mention cache after project registration", async () => {
+    let notifyNavigationChanged: (() => void) | undefined;
     const getNavigationSnapshot = vi.fn()
       .mockResolvedValueOnce(SNAPSHOT)
       .mockResolvedValueOnce({
@@ -2162,21 +2160,33 @@ describe("StarMapChatCard mentions", () => {
           },
         ],
       });
-    const desktopApi = mentionApi({ getNavigationSnapshot });
+    const onNavigationMentionSourcesChanged = vi.fn(
+      (callback: () => void) => {
+        notifyNavigationChanged = callback;
+        return () => undefined;
+      },
+    );
+    const desktopApi = mentionApi({
+      getNavigationSnapshot,
+      onNavigationMentionSourcesChanged,
+    });
     renderCard({ desktopApi, thread: localThread() });
     await screen.findByRole("button", { name: "Send" });
+    expect(onNavigationMentionSourcesChanged).toHaveBeenCalledOnce();
 
     fireEvent.change(composer(), { target: { value: "check @ap" } });
     expect((await screen.findByRole("option")).textContent).toContain("app");
     fireEvent.change(composer(), { target: { value: "check " } });
 
-    notifyComposerMentionNavigationChanged();
+    act(() => notifyNavigationChanged?.());
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
+    });
     fireEvent.change(composer(), { target: { value: "check @new" } });
 
     await waitFor(() => {
       expect(screen.getByRole("option").textContent).toContain("new-project");
     });
-    expect(getNavigationSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("never offers the thread the card is already on", async () => {

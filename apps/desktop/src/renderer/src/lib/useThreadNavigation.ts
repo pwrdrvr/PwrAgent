@@ -49,7 +49,6 @@ import {
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import type { ThreadActionErrorKind } from "../features/notifications/thread-action-error-notice";
-import { notifyComposerMentionNavigationChanged } from "./composer-mention-navigation-revision";
 import { fileLabelFromPath } from "./directory-references";
 import {
   readRendererFederationLabel,
@@ -6299,7 +6298,6 @@ export function useThreadNavigation(
           setPickDirectoryError(result.message);
           return;
         }
-        notifyComposerMentionNavigationChanged();
         pendingPickedDirectoryKey = result.directoryKey;
         pendingPickedLaunchpadRef.current.set(result.directoryKey, result.launchpad);
         setLocalLaunchpads((current) => ({
@@ -6387,7 +6385,6 @@ export function useThreadNavigation(
         recordPickDirectoryError(result.message);
         return undefined;
       }
-      notifyComposerMentionNavigationChanged();
       setLocalLaunchpads((current) => ({
         ...current,
         [result.directoryKey]: result.launchpad,

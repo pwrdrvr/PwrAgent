@@ -12,6 +12,7 @@ import {
 import {
   AGENT_EVENT_CHANNEL,
   APPEARANCE_CHANGED_EVENT_CHANNEL,
+  NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
   WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL,
 } from "../shared/ipc";
 import {
@@ -108,7 +109,9 @@ export function showStarMapWindow(source: WindowPlacementSource = {}): void {
   // deltas, and federation peer changes all arrive as agent events, so
   // this window subscribes to that push channel (unlike the polling
   // Messaging Activity window). Appearance broadcasts keep the theme in
-  // sync when the operator changes it from another window. The window is
+  // sync when the operator changes it from another window. Project-directory
+  // broadcasts refresh composer mention sources without waiting for their
+  // time-based cache expiry. The window is
   // deliberately registered WITHOUT a federation target: remote-scoped
   // event delivery is gated per-webContents by the renderer's own
   // `setFederationEventSubscriptions` registration instead. The diagnostics
@@ -118,6 +121,7 @@ export function showStarMapWindow(source: WindowPlacementSource = {}): void {
   registerWindowChannels(window, WINDOW_KIND_STAR_MAP, [
     AGENT_EVENT_CHANNEL,
     APPEARANCE_CHANGED_EVENT_CHANNEL,
+    NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
     WINDOW_COPY_LOCAL_DIAGNOSTICS_INFO_CHANNEL,
   ]);
 

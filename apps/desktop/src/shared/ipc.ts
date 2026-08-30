@@ -378,6 +378,13 @@ export const NAVIGATION_PICK_DIRECTORY_FROM_DISK_CHANNEL =
 export const NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL =
   "navigation:register-directory-from-disk";
 /**
+ * Main → renderer invalidation after a successful project registration.
+ * Dedicated Star Map and main renderers have separate module caches, so this
+ * tells each subscribed window to refetch instead of relying on the cache TTL.
+ */
+export const NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL =
+  "navigation:mention-sources-changed";
+/**
  * File variant of the picker above, used by the composer's file
  * reference flows ("Add file…" in the @ popover / + menu). No register
  * step — files are referenced by path, not tracked like directories.

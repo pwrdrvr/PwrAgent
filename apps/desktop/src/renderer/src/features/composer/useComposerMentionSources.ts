@@ -6,6 +6,7 @@ import type {
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
   getComposerMentionNavigationRevision,
+  notifyComposerMentionNavigationChanged,
 } from "../../lib/composer-mention-navigation-revision";
 
 /**
@@ -40,6 +41,45 @@ let cachedAt = 0;
 let cachedRevision = -1;
 let inFlight: Promise<void> | undefined;
 const subscribers = new Set<(population: NavigationPopulation) => void>();
+const eventSubscriptions = new Map<
+  DesktopApi,
+  { refCount: number; unsubscribe: () => void }
+>();
+
+function retainNavigationChangedSubscription(
+  desktopApi: DesktopApi | undefined,
+): () => void {
+  const subscribe = desktopApi?.onNavigationMentionSourcesChanged;
+  if (!desktopApi || !subscribe) {
+    return () => undefined;
+  }
+  const existing = eventSubscriptions.get(desktopApi);
+  if (existing) {
+    existing.refCount += 1;
+  } else {
+    eventSubscriptions.set(desktopApi, {
+      refCount: 1,
+      unsubscribe: subscribe(() => {
+        notifyComposerMentionNavigationChanged();
+        // Registration is rare and operator-driven. Refresh immediately so
+        // an already-open picker in this window sees the new project without
+        // another keystroke; every mounted card shares this one bridge call.
+        beginPopulationLoad(desktopApi);
+      }),
+    });
+  }
+  return () => {
+    const current = eventSubscriptions.get(desktopApi);
+    if (!current) {
+      return;
+    }
+    current.refCount -= 1;
+    if (current.refCount === 0) {
+      current.unsubscribe();
+      eventSubscriptions.delete(desktopApi);
+    }
+  };
+}
 
 /** Test seam: drop the shared cache so specs do not leak into each other. */
 export function resetComposerMentionSourcesCache(): void {
@@ -75,6 +115,21 @@ async function loadPopulation(desktopApi: DesktopApi | undefined): Promise<void>
     // autocomplete that cannot reach the bridge should offer nothing and
     // let the trigger stay literal, not raise an error over a transcript.
   }
+}
+
+function beginPopulationLoad(desktopApi: DesktopApi | undefined): void {
+  if (inFlight || !desktopApi?.getNavigationSnapshot) {
+    return;
+  }
+  const requestedRevision = getComposerMentionNavigationRevision();
+  inFlight = loadPopulation(desktopApi).finally(() => {
+    inFlight = undefined;
+    // A registration can land while the old snapshot is in flight. Its
+    // generation must receive its own fetch instead of waiting for the TTL.
+    if (requestedRevision !== getComposerMentionNavigationRevision()) {
+      beginPopulationLoad(desktopApi);
+    }
+  });
 }
 
 /**
@@ -119,6 +174,11 @@ export function useComposerMentionSources(params: {
     };
   }, []);
 
+  useEffect(
+    () => retainNavigationChangedSubscription(desktopApi),
+    [desktopApi],
+  );
+
   const ensureLoaded = useCallback((): void => {
     // Both guards are load-bearing, and not only against redundant work: a
     // host builds its sources object from the population this returns, so a
@@ -134,9 +194,7 @@ export function useComposerMentionSources(params: {
     ) {
       return;
     }
-    inFlight = loadPopulation(desktopApi).finally(() => {
-      inFlight = undefined;
-    });
+    beginPopulationLoad(desktopApi);
   }, [desktopApi]);
 
   return {

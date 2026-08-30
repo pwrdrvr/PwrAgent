@@ -655,6 +655,7 @@ import {
   NAVIGATION_LIST_WORKTREE_OTHER_CHANGES_CHANNEL,
   NAVIGATION_GET_WORKTREE_OTHER_CHANGE_DIFF_CHANNEL,
   NAVIGATION_LIST_WORKTREE_UNPUBLISHED_COMMITS_CHANNEL,
+  NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
   NAVIGATION_GET_WORKTREE_UNPUBLISHED_COMMIT_DIFF_CHANNEL,
   FEDERATION_JUMP_SEARCH_CHANNEL,
   NAVIGATION_ADD_REMOTE_THREAD_PIN_CHANNEL,
@@ -1985,6 +1986,18 @@ const desktopApi = Object.freeze({
       NAVIGATION_REGISTER_DIRECTORY_FROM_DISK_CHANNEL,
       request,
     ),
+  onNavigationMentionSourcesChanged: (
+    callback: () => void,
+  ): (() => void) => {
+    const listener = () => callback();
+    ipcRenderer.on(NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(
+        NAVIGATION_MENTION_SOURCES_CHANGED_EVENT_CHANNEL,
+        listener,
+      );
+    };
+  },
   attachDirectoryToThread: async (
     request: AttachDirectoryToThreadRequest,
   ): Promise<AttachDirectoryToThreadResponse> =>

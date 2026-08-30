@@ -1,9 +1,9 @@
 let revision = 0;
 
 /**
- * A renderer-local generation for the navigation population behind composer
- * `@` and `#` autocomplete. Directory registration changes that population
- * without an agent event, so the shared lazy cache needs an explicit signal.
+ * Each BrowserWindow's generation for the navigation population behind
+ * composer `@` and `#` autocomplete. The main-process registration broadcast
+ * advances this local copy so separate renderer caches become stale together.
  */
 export function getComposerMentionNavigationRevision(): number {
   return revision;
