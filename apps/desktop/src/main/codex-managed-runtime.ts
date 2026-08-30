@@ -54,6 +54,7 @@ export const MANAGED_CODEX_PUBLICATION_MARKER_NAME =
 // sandbox companion binaries alongside Codex.
 const MANAGED_CODEX_MAX_ARCHIVE_BYTES = 768 * 1024 * 1024;
 const MANAGED_CODEX_FETCH_TIMEOUT_MS = 5 * 60_000;
+const MANAGED_CODEX_RETRY_BACKOFF_MS = 60 * 60_000;
 const MANAGED_CODEX_METADATA_VERSION = 1;
 
 export type ManagedCodexCheckMode = "once-per-process" | "ttl" | "force";
@@ -121,7 +122,11 @@ type ManagedCodexRuntimeOptions = {
   applicationCommand?: string;
   arch?: NodeJS.Architecture;
   checkMode?: ManagedCodexCheckMode;
-  extractArchive?: (archivePath: string, targetDir: string) => Promise<void>;
+  extractArchive?: (
+    archivePath: string,
+    targetDir: string,
+    signal?: AbortSignal,
+  ) => Promise<void>;
   fetch?: typeof globalThis.fetch;
   isProcessAlive?: (pid: number) => boolean;
   now?: () => number;
@@ -129,12 +134,14 @@ type ManagedCodexRuntimeOptions = {
   probeVersion?: (command: string) => Promise<string>;
   requirePlatformSignature?: boolean;
   rootDir?: string;
+  signal?: AbortSignal;
   verifySigstoreBundle?: typeof verifyManagedCodexSigstoreBundle;
   verifyPlatformSignature?: (
     command: string,
     applicationCommand: string,
     platform: NodeJS.Platform,
   ) => Promise<void>;
+  waitForUpdate?: boolean;
 };
 
 type ManagedCodexManifestArtifact = {
@@ -158,6 +165,7 @@ type ManagedCodexSigstoreVerification = {
   expectedSubjects: Record<string, string>;
   sourceCommit: string;
   tag: string;
+  tufCachePath: string;
 };
 
 type BundleValidationOptions = {
@@ -178,6 +186,7 @@ type ParsedSemver = {
 
 const processChecks = new Set<string>();
 const activeChecks = new Map<string, Promise<ManagedCodexRuntime>>();
+const retryChecksAfter = new Map<string, number>();
 const markedRuntimeCommands = new Map<string, string>();
 const MANAGED_CODEX_ARTIFACT_TARGETS = [
   {
@@ -219,8 +228,10 @@ const MANAGED_CODEX_ARTIFACT_TARGETS = [
 
 /**
  * Resolve a verified PwrAgent Codex distribution, installing or updating it
- * when the selected check policy requires. A verified cache is the offline
- * fallback; the first install fails instead of selecting an arbitrary Codex.
+ * when the selected check policy requires. TTL callers receive a verified
+ * cache immediately while its refresh runs in the background; the watcher can
+ * opt into awaiting that refresh. A first install still fails instead of
+ * selecting an arbitrary Codex.
  */
 export async function ensureManagedCodexRuntime(
   options: ManagedCodexRuntimeOptions = {},
@@ -230,6 +241,28 @@ export async function ensureManagedCodexRuntime(
     "agents",
     "codex",
   );
+  const checkMode = options.checkMode ?? "ttl";
+  if (checkMode === "ttl" && !options.waitForUpdate) {
+    const cached = await readCachedRuntime(rootDir, options);
+    if (cached) {
+      const now = options.now?.() ?? Date.now();
+      if (
+        now - cached.metadata.checkedAt >= MANAGED_CODEX_CHECK_TTL_MS
+        && now >= (retryChecksAfter.get(rootDir) ?? 0)
+      ) {
+        void ensureManagedCodexRuntime({
+          ...options,
+          waitForUpdate: true,
+        }).catch((error) => {
+          managedCodexLog.warn("managed_codex_background_update_failed", {
+            error: error instanceof Error ? error.message : String(error),
+            usingCachedTag: cached.metadata.tag,
+          });
+        });
+      }
+      return await activateRuntime(rootDir, cached, options);
+    }
+  }
   const existing = activeChecks.get(rootDir);
   if (existing) {
     return await existing;
@@ -274,6 +307,7 @@ async function ensureManagedCodexRuntimeInner(
     if (cached?.metadata.tag === release.tag) {
       const metadata = { ...cached.metadata, checkedAt: now };
       await writeMetadata(rootDir, metadata);
+      retryChecksAfter.delete(rootDir);
       return await activateRuntime(
         rootDir,
         { ...cached, metadata },
@@ -281,6 +315,7 @@ async function ensureManagedCodexRuntimeInner(
       );
     }
     const runtime = await installRelease(rootDir, release, now, options);
+    retryChecksAfter.delete(rootDir);
     managedCodexLog.info("managed_codex_runtime_installed", {
       asset: runtime.metadata.asset,
       command: runtime.command,
@@ -293,6 +328,9 @@ async function ensureManagedCodexRuntimeInner(
       usingCachedTag: cached?.metadata.tag,
     });
     if (cached) {
+      if (!options.signal?.aborted) {
+        retryChecksAfter.set(rootDir, now + MANAGED_CODEX_RETRY_BACKOFF_MS);
+      }
       return await activateRuntime(rootDir, cached, options);
     }
     throw error;
@@ -316,7 +354,7 @@ async function fetchLatestCompatibleRelease(
       "User-Agent": "PwrAgent-managed-codex-runtime",
       "X-GitHub-Api-Version": "2022-11-28",
     },
-    signal: AbortSignal.timeout(MANAGED_CODEX_FETCH_TIMEOUT_MS),
+    signal: managedCodexFetchSignal(options.signal),
   });
   if (response.ok) {
     const releases = await response.json();
@@ -333,7 +371,7 @@ async function fetchLatestCompatibleRelease(
 
   const feedResponse = await fetchImpl(MANAGED_CODEX_RELEASES_FEED_URL, {
     headers: { "User-Agent": "PwrAgent-managed-codex-runtime" },
-    signal: AbortSignal.timeout(MANAGED_CODEX_FETCH_TIMEOUT_MS),
+    signal: managedCodexFetchSignal(options.signal),
   });
   if (!feedResponse.ok) {
     throw new Error(
@@ -565,6 +603,7 @@ async function installRelease(
   now: number,
   options: ManagedCodexRuntimeOptions,
 ): Promise<ManagedCodexRuntime> {
+  options.signal?.throwIfAborted();
   await mkdir(rootDir, { recursive: true });
   const stagingRoot = await mkdtemp(path.join(rootDir, ".install-"));
   try {
@@ -575,11 +614,37 @@ async function installRelease(
     const signaturePath = path.join(stagingRoot, release.signature.name);
     // The publisher uploads this marker last. Fetch it first so an Atom feed
     // entry cannot expose a partially uploaded release as installable.
-    await downloadFile(release.completion.url, completionPath, options.fetch);
-    await downloadFile(release.manifest.url, manifestPath, options.fetch);
-    await downloadFile(release.signature.url, signaturePath, options.fetch);
-    await downloadFile(release.checksum.url, checksumPath, options.fetch);
-    await downloadFile(release.archive.url, archivePath, options.fetch);
+    await downloadFile(
+      release.completion.url,
+      completionPath,
+      options.fetch,
+      options.signal,
+    );
+    await downloadFile(
+      release.manifest.url,
+      manifestPath,
+      options.fetch,
+      options.signal,
+    );
+    await downloadFile(
+      release.signature.url,
+      signaturePath,
+      options.fetch,
+      options.signal,
+    );
+    await downloadFile(
+      release.checksum.url,
+      checksumPath,
+      options.fetch,
+      options.signal,
+    );
+    await downloadFile(
+      release.archive.url,
+      archivePath,
+      options.fetch,
+      options.signal,
+    );
+    options.signal?.throwIfAborted();
     const completionBytes = await readFile(completionPath);
     const manifestBytes = await readFile(manifestPath);
     const publication = parseManagedCodexPublicationMarker(
@@ -621,7 +686,7 @@ async function installRelease(
         `Release digest disagrees with SHA256SUMS for ${release.archive.name}.`,
       );
     }
-    const actual = await sha256(archivePath);
+    const actual = await sha256(archivePath, options.signal);
     if (actual !== expected) {
       throw new Error(
         `Checksum mismatch for ${release.archive.name}: expected ${expected}, got ${actual}.`,
@@ -646,7 +711,7 @@ async function installRelease(
         artifact.file,
         artifact.sha256,
       ]),
-      [release.checksum.name, await sha256(checksumPath)],
+      [release.checksum.name, await sha256(checksumPath, options.signal)],
       [release.manifest.name, manifestDigest],
     ]);
     await (
@@ -656,11 +721,18 @@ async function installRelease(
       expectedSubjects,
       sourceCommit: manifest.sourceCommit,
       tag: release.tag,
+      tufCachePath: path.join(rootDir, "tuf"),
     });
+    options.signal?.throwIfAborted();
 
     const extractedRoot = path.join(stagingRoot, "extracted");
     await mkdir(extractedRoot);
-    await (options.extractArchive ?? extractArchive)(archivePath, extractedRoot);
+    await (options.extractArchive ?? extractArchive)(
+      archivePath,
+      extractedRoot,
+      options.signal,
+    );
+    options.signal?.throwIfAborted();
     const validationOptions = {
       ...bundleValidationOptions(options),
       tag: release.tag,
@@ -669,6 +741,7 @@ async function installRelease(
       extractedRoot,
       validationOptions,
     );
+    options.signal?.throwIfAborted();
     const versionRoot = path.join(rootDir, "versions", release.tag);
     await mkdir(path.dirname(versionRoot), { recursive: true });
     await activateExtractedVersion(
@@ -676,6 +749,7 @@ async function installRelease(
       versionRoot,
       validationOptions,
     );
+    options.signal?.throwIfAborted();
     const version = versionForTag(release.tag);
     const metadata: ManagedCodexMetadata = {
       asset: release.archive.name,
@@ -954,6 +1028,7 @@ async function verifyManagedCodexSigstoreBundle(
   const workflowIdentity =
     `https://github.com/${MANAGED_CODEX_REPOSITORY}/.github/workflows/`
     + `pwragent-release.yml@refs/tags/${params.tag}`;
+  await mkdir(params.tufCachePath, { recursive: true });
   await verifySigstore(bundle as SigstoreBundle, {
     certificateIdentityURI: `^${escapeRegularExpression(workflowIdentity)}$`,
     certificateIssuer: "https://token.actions.githubusercontent.com",
@@ -969,6 +1044,7 @@ async function verifyManagedCodexSigstoreBundle(
     },
     ctLogThreshold: 1,
     tlogThreshold: 1,
+    tufCachePath: params.tufCachePath,
   });
 
   const envelope = requireJsonObject(
@@ -1082,11 +1158,13 @@ async function downloadFile(
   url: string,
   targetPath: string,
   fetchOverride: typeof globalThis.fetch | undefined,
+  signal?: AbortSignal,
 ): Promise<void> {
+  const fetchSignal = managedCodexFetchSignal(signal);
   const response = await (fetchOverride ?? globalThis.fetch)(url, {
     headers: { "User-Agent": "PwrAgent-managed-codex-runtime" },
     redirect: "follow",
-    signal: AbortSignal.timeout(MANAGED_CODEX_FETCH_TIMEOUT_MS),
+    signal: fetchSignal,
   });
   if (!response.ok || !response.body) {
     throw new Error(`Download failed with HTTP ${response.status} for ${url}.`);
@@ -1114,17 +1192,31 @@ async function downloadFile(
   const body = Readable.fromWeb(
     response.body as unknown as NodeReadableStream<Uint8Array>,
   );
-  await pipeline(body, limiter, createWriteStream(targetPath, { flags: "wx" }));
+  await pipeline(
+    body,
+    limiter,
+    createWriteStream(targetPath, { flags: "wx" }),
+    { signal: fetchSignal },
+  );
 }
 
 async function extractArchive(
   archivePath: string,
   targetDir: string,
+  signal?: AbortSignal,
 ): Promise<void> {
   const tar = process.platform === "win32" ? "tar.exe" : "tar";
   await execFile(tar, ["-xf", archivePath, "-C", targetDir], {
+    signal,
     timeout: MANAGED_CODEX_FETCH_TIMEOUT_MS,
   });
+}
+
+function managedCodexFetchSignal(signal?: AbortSignal): AbortSignal {
+  const timeoutSignal = AbortSignal.timeout(MANAGED_CODEX_FETCH_TIMEOUT_MS);
+  return signal
+    ? AbortSignal.any([signal, timeoutSignal])
+    : timeoutSignal;
 }
 
 async function validateExtractedBundle(
@@ -1260,9 +1352,13 @@ function expectedChecksum(checksumText: string, assetName: string): string {
   throw new Error(`SHA256SUMS does not contain ${assetName}.`);
 }
 
-async function sha256(filePath: string): Promise<string> {
+async function sha256(
+  filePath: string,
+  signal?: AbortSignal,
+): Promise<string> {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(filePath)) {
+    signal?.throwIfAborted();
     hash.update(chunk);
   }
   return hash.digest("hex");

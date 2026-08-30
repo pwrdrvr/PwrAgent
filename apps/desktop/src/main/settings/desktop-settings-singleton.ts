@@ -34,10 +34,16 @@ export function getDesktopSettingsService(): DesktopSettingsService {
       // keep managed downloads opt-in until the downstream signing lane is
       // configured and publishing signed Apple/Windows assets.
       defaultManagedGrokBuilds: app.isPackaged !== true,
-      ensureManagedCodexRuntime: async ({ checkMode }) =>
+      ensureManagedCodexRuntime: async ({
+        checkMode,
+        signal,
+        waitForUpdate,
+      }) =>
         await ensureManagedCodexRuntime({
           checkMode,
           requirePlatformSignature: app.isPackaged === true,
+          signal,
+          waitForUpdate,
         }),
       resolveAppVersion: () => app.getVersion(),
       secretStore,

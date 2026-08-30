@@ -251,6 +251,8 @@ type DesktopSettingsServiceOptions = {
   defaultManagedGrokBuilds?: boolean;
   ensureManagedCodexRuntime?: (options: {
     checkMode: ManagedCodexCheckMode;
+    signal?: AbortSignal;
+    waitForUpdate?: boolean;
   }) => Promise<ManagedCodexRuntime>;
   env?: NodeJS.ProcessEnv;
   argv?: readonly string[];
@@ -444,6 +446,7 @@ export class DesktopSettingsService {
   private terminalSpawnEnv?: NodeJS.ProcessEnv;
   private terminalSpawnEnvHydrationPromise?: Promise<NodeJS.ProcessEnv>;
   private managedCodexRuntime?: ManagedCodexRuntime;
+  private managedCodexUpdateAbortController?: AbortController;
   private managedCodexRuntimeSwitchPending = false;
   private managedCodexRuntimeSwitchAttempt?: Promise<void>;
 
@@ -1595,11 +1598,20 @@ export class DesktopSettingsService {
         current.config.experimental?.tokenMiserEnabled,
         false,
       ).value;
+    const disablingTokenMiser =
+      patch.experimental?.tokenMiserEnabled === false
+      && this.resolveConfigBoolean(
+        current.config.experimental?.tokenMiserEnabled,
+        false,
+      ).value;
     // The switch is a transaction from the operator's perspective: acquire a
     // usable managed Codex first, then persist availability. A failed first
     // install leaves the feature off instead of selecting an arbitrary Codex.
     if (enablingTokenMiser && this.options.ensureManagedCodexRuntime) {
       await this.ensureManagedCodexRuntime("force");
+    }
+    if (disablingTokenMiser) {
+      this.abortManagedCodexUpdate();
     }
     applyDesktopSettingsPatch(this.configPath, patch);
     if (
@@ -1918,6 +1930,8 @@ export class DesktopSettingsService {
     const intervalMs = options.intervalMs ?? MANAGED_CODEX_UPDATE_POLL_INTERVAL_MS;
     let enabled = this.resolveTokenMiserEnabled();
     let lastAnnouncedCommand = this.managedCodexRuntime?.command;
+    let announceFirstSuccessfulCheck =
+      enabled && lastAnnouncedCommand === undefined;
     let timer: NodeJS.Timeout | undefined;
     let stopped = false;
 
@@ -1942,17 +1956,42 @@ export class DesktopSettingsService {
     };
     const checkForUpdate = async () => {
       if (stopped || !this.resolveTokenMiserEnabled()) return;
+      const signal = this.resolveManagedCodexUpdateSignal();
       try {
-        const runtime = await this.ensureManagedCodexRuntimeIfEnabled("ttl");
-        if (!runtime) return;
+        const runtime = await this.ensureManagedCodexRuntimeIfEnabled("ttl", {
+          signal,
+          waitForUpdate: true,
+        });
+        if (
+          !runtime
+          || stopped
+          || signal.aborted
+          || !this.resolveTokenMiserEnabled()
+        ) {
+          return;
+        }
         if (lastAnnouncedCommand === undefined) {
           lastAnnouncedCommand = runtime.command;
+          if (announceFirstSuccessfulCheck) {
+            announceFirstSuccessfulCheck = false;
+            this.managedCodexRuntimeSwitchPending = true;
+            await announce({ enabled: true, reason: "update", runtime });
+          }
         } else if (runtime.command !== lastAnnouncedCommand) {
           lastAnnouncedCommand = runtime.command;
+          announceFirstSuccessfulCheck = false;
           this.managedCodexRuntimeSwitchPending = true;
           await announce({ enabled: true, reason: "update", runtime });
         }
       } catch (error) {
+        if (
+          stopped
+          || signal.aborted
+          || !this.resolveTokenMiserEnabled()
+        ) {
+          return;
+        }
+        announceFirstSuccessfulCheck = true;
         getMainLogger("pwragent:managed-codex").warn(
           "managed-codex-background-update-failed",
           { error: error instanceof Error ? error.message : String(error) },
@@ -1978,12 +2017,15 @@ export class DesktopSettingsService {
       enabled = nextEnabled;
       if (enabled) {
         lastAnnouncedCommand = this.managedCodexRuntime?.command;
+        announceFirstSuccessfulCheck = lastAnnouncedCommand === undefined;
         this.managedCodexRuntimeSwitchPending = true;
         void checkForUpdate();
         armTimer();
       } else {
+        this.abortManagedCodexUpdate();
         clearTimer();
         lastAnnouncedCommand = undefined;
+        announceFirstSuccessfulCheck = false;
         this.managedCodexRuntimeSwitchPending = false;
         this.managedCodexRuntime = undefined;
       }
@@ -1998,6 +2040,7 @@ export class DesktopSettingsService {
 
     return () => {
       stopped = true;
+      this.abortManagedCodexUpdate();
       clearTimer();
       unsubscribe();
     };
@@ -2175,6 +2218,10 @@ export class DesktopSettingsService {
   private async resolveManagedCodexRuntime(
     config: DesktopSettingsConfig,
     checkMode: ManagedCodexCheckMode,
+    options: {
+      signal?: AbortSignal;
+      waitForUpdate?: boolean;
+    } = {},
   ): Promise<ManagedCodexRuntime | undefined> {
     if (
       !this.options.ensureManagedCodexRuntime
@@ -2185,27 +2232,62 @@ export class DesktopSettingsService {
     ) {
       return undefined;
     }
-    return await this.ensureManagedCodexRuntime(checkMode);
+    return await this.ensureManagedCodexRuntime(checkMode, {
+      signal: options.signal ?? this.resolveManagedCodexUpdateSignal(),
+      ...(options.waitForUpdate !== undefined
+        ? { waitForUpdate: options.waitForUpdate }
+        : {}),
+    });
   }
 
   private async ensureManagedCodexRuntimeIfEnabled(
     checkMode: ManagedCodexCheckMode,
+    options: {
+      signal?: AbortSignal;
+      waitForUpdate?: boolean;
+    } = {},
   ): Promise<ManagedCodexRuntime | undefined> {
     return await this.resolveManagedCodexRuntime(
       this.readConfig().config,
       checkMode,
+      options,
     );
   }
 
   private async ensureManagedCodexRuntime(
     checkMode: ManagedCodexCheckMode,
+    options: {
+      signal?: AbortSignal;
+      waitForUpdate?: boolean;
+    } = {},
   ): Promise<ManagedCodexRuntime> {
     if (!this.options.ensureManagedCodexRuntime) {
       throw new Error("Managed Codex installation is unavailable.");
     }
-    const runtime = await this.options.ensureManagedCodexRuntime({ checkMode });
+    const runtime = await this.options.ensureManagedCodexRuntime({
+      checkMode,
+      ...(options.signal ? { signal: options.signal } : {}),
+      ...(options.waitForUpdate !== undefined
+        ? { waitForUpdate: options.waitForUpdate }
+        : {}),
+    });
     this.managedCodexRuntime = runtime;
     return runtime;
+  }
+
+  private resolveManagedCodexUpdateSignal(): AbortSignal {
+    if (
+      !this.managedCodexUpdateAbortController
+      || this.managedCodexUpdateAbortController.signal.aborted
+    ) {
+      this.managedCodexUpdateAbortController = new AbortController();
+    }
+    return this.managedCodexUpdateAbortController.signal;
+  }
+
+  private abortManagedCodexUpdate(): void {
+    this.managedCodexUpdateAbortController?.abort();
+    this.managedCodexUpdateAbortController = undefined;
   }
 
   private ensureBaseTerminalSpawnEnv(): NodeJS.ProcessEnv {

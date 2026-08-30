@@ -14,6 +14,7 @@ import {
   ensureManagedCodexRuntime,
   isManagedCodexTagEligible,
   managedCodexAssetPlatform,
+  MANAGED_CODEX_CHECK_TTL_MS,
   MANAGED_CODEX_MINIMUM_SIGNED_TAG,
   MANAGED_CODEX_PUBLICATION_MARKER_NAME,
   MANAGED_CODEX_RELEASES_FEED_URL,
@@ -167,8 +168,10 @@ describe("ensureManagedCodexRuntime", () => {
         }),
         ctLogThreshold: 1,
         tlogThreshold: 1,
+        tufCachePath: path.join(rootDir, "tuf"),
       }),
     );
+    expect(existsSync(path.join(rootDir, "tuf"))).toBe(true);
     const callsAfterInstall = fetchMock.mock.calls.length;
 
     const cached = await ensureManagedCodexRuntime({
@@ -234,6 +237,50 @@ describe("ensureManagedCodexRuntime", () => {
 
     expect(runtime.command).toBe(path.join(rootDir, "versions", tag, "codex"));
     expect(runtime.metadata.tag).toBe(tag);
+  });
+
+  it("serves a stale verified cache while its update check runs", async () => {
+    const rootDir = await temporaryRoot();
+    const tag = "pwragent-v0.149.0-pwragent.1";
+    const version = "0.149.0-pwragent.1";
+    await writeManagedCache(rootDir, { tag, version });
+    const controller = new AbortController();
+    let fetchAborted = false;
+    const fetchMock = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            fetchAborted = true;
+            reject(init.signal?.reason);
+          }, { once: true });
+        }),
+    );
+    let settled = false;
+    const runtimePromise = ensureManagedCodexRuntime({
+      arch: "x64",
+      checkMode: "ttl",
+      fetch: fetchMock as typeof globalThis.fetch,
+      now: () => 100 + MANAGED_CODEX_CHECK_TTL_MS,
+      platform: "linux",
+      probeVersion: versionProbe(version),
+      rootDir,
+      signal: controller.signal,
+    }).then((runtime) => {
+      settled = true;
+      return runtime;
+    });
+
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(settled).toBe(true));
+      await expect(runtimePromise).resolves.toMatchObject({
+        command: path.join(rootDir, "versions", tag, "codex"),
+        metadata: { tag },
+      });
+    } finally {
+      controller.abort();
+      expect(fetchAborted).toBe(true);
+    }
   });
 
   it("preserves a runtime marked by the current process while pruning", async () => {

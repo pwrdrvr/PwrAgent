@@ -923,7 +923,10 @@ describe("DesktopSettingsService", () => {
     });
 
     expect(ensureManaged).toHaveBeenNthCalledWith(1, { checkMode: "force" });
-    expect(ensureManaged).toHaveBeenLastCalledWith({ checkMode: "ttl" });
+    expect(ensureManaged).toHaveBeenLastCalledWith(expect.objectContaining({
+      checkMode: "ttl",
+      signal: expect.any(AbortSignal),
+    }));
     expect(invalidate).toHaveBeenCalledOnce();
     expect(discover).toHaveBeenLastCalledWith("/managed/codex", {
       allowStaleSuccess: true,
@@ -1123,7 +1126,11 @@ describe("DesktopSettingsService", () => {
       ensureManaged.mockClear();
 
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(ensureManaged).toHaveBeenCalledWith({ checkMode: "ttl" });
+      expect(ensureManaged).toHaveBeenCalledWith(expect.objectContaining({
+        checkMode: "ttl",
+        signal: expect.any(AbortSignal),
+        waitForUpdate: true,
+      }));
 
       await service.writeConfigPatch({
         experimental: { tokenMiserEnabled: false },
@@ -1140,6 +1147,116 @@ describe("DesktopSettingsService", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("announces recovery after the first successful managed Codex retry", async () => {
+    vi.useFakeTimers();
+    try {
+      const configPath = path.join(createTempRoot(), "config.toml");
+      fs.writeFileSync(configPath, [
+        "[experimental]",
+        "token_miser_enabled = true",
+        "",
+      ].join("\n"));
+      const runtime = {
+        appServerCommand: "/managed/codex-app-server",
+        codeModeHostCommand: "/managed/codex-code-mode-host",
+        command: "/managed/codex",
+        metadata: {
+          asset: "pwragent-codex-0.200.0-pwragent.1-linux-x86_64.tar.gz",
+          checkedAt: 1,
+          installedAt: 1,
+          repository: "pwrdrvr/codex",
+          schemaVersion: 1 as const,
+          sha256: "a".repeat(64),
+          tag: "pwragent-v0.200.0-pwragent.1",
+          version: "0.200.0-pwragent.1",
+        },
+      };
+      const ensureManaged = vi.fn()
+        .mockRejectedValueOnce(new Error("offline"))
+        .mockResolvedValue(runtime);
+      const service = new DesktopSettingsService({
+        codexDiscoveryCoordinator: {
+          discover: vi.fn(async () => ({ candidates: [] })),
+          invalidate: vi.fn(),
+          resolve: vi.fn(async () => ({
+            command: "/path/codex",
+            source: "path" as const,
+          })),
+        },
+        configPath,
+        ensureManagedCodexRuntime: ensureManaged,
+        env: {},
+        secretStore: new MemoryDesktopSecretStore(),
+      });
+      const changes = vi.fn();
+      const stop = service.watchManagedCodexRuntime(changes, {
+        intervalMs: 1_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(changes).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(changes).toHaveBeenCalledWith({
+        enabled: true,
+        reason: "update",
+        runtime,
+      });
+      stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts an in-flight managed Codex update when availability turns off", async () => {
+    const configPath = path.join(createTempRoot(), "config.toml");
+    fs.writeFileSync(configPath, [
+      "[experimental]",
+      "token_miser_enabled = true",
+      "",
+    ].join("\n"));
+    let updateSignal: AbortSignal | undefined;
+    const ensureManaged = vi.fn(async (options: { signal?: AbortSignal }) =>
+      await new Promise<never>((_resolve, reject) => {
+        updateSignal = options.signal;
+        options.signal?.addEventListener("abort", () => {
+          reject(options.signal?.reason);
+        }, { once: true });
+      }),
+    );
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({ candidates: [] })),
+        invalidate: vi.fn(),
+        resolve: vi.fn(async () => ({
+          command: "/path/codex",
+          source: "path" as const,
+        })),
+      },
+      configPath,
+      ensureManagedCodexRuntime: ensureManaged,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+    const changes = vi.fn();
+    const stop = service.watchManagedCodexRuntime(changes);
+    await vi.waitFor(() => expect(updateSignal).toBeDefined());
+
+    await service.writeConfigPatch({
+      experimental: { tokenMiserEnabled: false },
+    });
+
+    expect(updateSignal?.aborted).toBe(true);
+    expect(changes).toHaveBeenCalledWith({
+      enabled: false,
+      reason: "availability",
+    });
+    expect(changes).not.toHaveBeenCalledWith(expect.objectContaining({
+      reason: "update",
+    }));
+    stop();
   });
 
   it("waits for an idle managed Codex switch before returning the enabled snapshot", async () => {
@@ -1250,6 +1367,8 @@ describe("DesktopSettingsService", () => {
         secretStore: new MemoryDesktopSecretStore(),
       });
       const changes = vi.fn();
+      await service.readSettings();
+      ensureManaged.mockClear();
       const stop = service.watchManagedCodexRuntime(changes, {
         intervalMs: 1_000,
       });
