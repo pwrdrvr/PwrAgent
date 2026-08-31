@@ -53,6 +53,84 @@ describe("usage spend alerts", () => {
     ]);
   });
 
+  it("includes estimated historical usage gaps in total-thread spend", () => {
+    const alerts = detectUsageSpendAlerts({
+      backend: "codex",
+      policy: {
+        ...POLICY,
+        activeTurnSpendEnabled: false,
+        threadSpendThresholdUsd: 23,
+      },
+      pricing: {
+        lines: [
+          usageLine({
+            createdAt: Date.UTC(2026, 7, 31),
+            cumulativeCachedInputTokens: 0,
+            cumulativeInputTokens: 2_000_000,
+            cumulativeOutputTokens: 0,
+            cumulativeTotalTokens: 2_000_000,
+            cumulativeUncachedInputTokens: 2_000_000,
+            inputTokens: 1_000_000,
+            model: "gpt-5.6-sol",
+            totalCostMicros: 20_000_000,
+            totalTokens: 1_000_000,
+            uncachedInputTokens: 1_000_000,
+          }),
+        ],
+        summaries: [pricingSummary(20_000_000)],
+      },
+      threadId: "thread-1",
+      triggeredAlertIds: new Set(),
+    });
+
+    expect(alerts).toMatchObject([
+      {
+        kind: "thread-spend",
+        spendMicros: 24_000_000,
+        thresholdMicros: 23_000_000,
+      },
+    ]);
+  });
+
+  it("prices historical usage gaps at the rate in effect when usage occurred", () => {
+    const alerts = detectUsageSpendAlerts({
+      backend: "codex",
+      policy: {
+        ...POLICY,
+        activeTurnSpendEnabled: false,
+        threadSpendThresholdUsd: 24.5,
+      },
+      pricing: {
+        lines: [
+          usageLine({
+            createdAt: Date.UTC(2026, 7, 20, 23, 59, 59),
+            cumulativeCachedInputTokens: 0,
+            cumulativeInputTokens: 2_000_000,
+            cumulativeOutputTokens: 0,
+            cumulativeTotalTokens: 2_000_000,
+            cumulativeUncachedInputTokens: 2_000_000,
+            inputTokens: 1_000_000,
+            model: "gpt-5.6-sol",
+            totalCostMicros: 20_000_000,
+            totalTokens: 1_000_000,
+            uncachedInputTokens: 1_000_000,
+          }),
+        ],
+        summaries: [pricingSummary(20_000_000)],
+      },
+      threadId: "thread-1",
+      triggeredAlertIds: new Set(),
+    });
+
+    expect(alerts).toMatchObject([
+      {
+        kind: "thread-spend",
+        spendMicros: 25_000_000,
+        thresholdMicros: 24_500_000,
+      },
+    ]);
+  });
+
   it("evaluates every active turn represented in one usage batch", () => {
     const alerts = detectUsageSpendAlerts({
       activeTurnIds: ["turn-1", "turn-2", "turn-1"],

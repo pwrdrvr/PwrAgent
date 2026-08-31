@@ -4,6 +4,7 @@ import type {
   ThreadSpendAlert,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
+import { estimateHistoricalThreadUsageGapLines } from "@pwragent/shared";
 
 const USD_MICROS = 1_000_000;
 
@@ -84,6 +85,13 @@ export function detectUsageSpendAlerts(params: {
       (total, summary) =>
         summary.currency.toUpperCase() === "USD"
           ? total + summary.totalCostMicros
+          : total,
+      0,
+    ) + estimateHistoricalThreadUsageGapLines(params.pricing.lines).reduce(
+      (total, line) =>
+        line.priceStatus === "priced"
+        && line.currency.toUpperCase() === "USD"
+          ? total + line.totalCostMicros
           : total,
       0,
     );
