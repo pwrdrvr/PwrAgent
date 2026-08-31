@@ -8002,6 +8002,28 @@ textarea,
   color: var(--text-muted);
 }
 
+/* Clickable parent crumb when a sub-screen is open
+   (Settings › AI Providers › Codex). The `.settings-titlebar button`
+   drag carve-out already keeps it clickable. */
+.settings-titlebar__crumb {
+  appearance: none;
+  cursor: pointer;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.settings-titlebar__crumb:hover,
+.settings-titlebar__crumb:focus-visible {
+  color: var(--text-primary);
+  outline: none;
+  text-decoration: underline;
+}
+
 .settings-titlebar__current {
   min-width: 0;
   max-width: 380px;
@@ -8176,6 +8198,65 @@ textarea,
   text-transform: uppercase;
 }
 
+/* Section row: caret gutter + label button. Every row reserves the
+   24px gutter (caret button or spacer) so section labels align whether
+   or not the section expands into a sublist. The gutter is 24px rather
+   than the mark's visual width because the caret is a real click
+   target sitting flush against the label button: WCAG 2.2 target-size
+   (AA) wants 24x24, and adjacency rules out the spacing exception.
+   `a11y.spec.ts` gates this. */
+.settings-nav__row {
+  display: flex;
+  align-items: stretch;
+  width: 100%;
+}
+
+.settings-nav__caret,
+.settings-nav__caret-spacer {
+  display: inline-flex;
+  flex: 0 0 24px;
+  width: 24px;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-nav__caret {
+  appearance: none;
+  cursor: pointer;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+}
+
+.settings-nav__caret:focus-visible {
+  background: var(--accent-soft);
+  outline: none;
+}
+
+.settings-nav__caret:hover .settings-nav__caret-mark,
+.settings-nav__caret:focus-visible .settings-nav__caret-mark {
+  border-left-color: var(--text-primary);
+  opacity: 1;
+}
+
+/* Same filled disclosure triangle as `.directory-row__chevron` — the
+   app carries ONE disclosure vocabulary. Points right collapsed,
+   rotates to point down when the group is expanded. */
+.settings-nav__caret-mark {
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--text-muted);
+  opacity: 0.82;
+  transition: transform 120ms ease;
+}
+
+.settings-nav__caret-mark.is-open {
+  transform: rotate(90deg);
+}
+
 .settings-nav__button {
   display: flex;
   width: 100%;
@@ -8193,6 +8274,15 @@ textarea,
   text-align: left;
 }
 
+/* Inside a caret row the label shares the width with the 22px gutter.
+   (Automations reuses `.settings-nav__button` without rows, where the
+   bare `width: 100%` still applies.) */
+.settings-nav__row .settings-nav__button {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
 .settings-nav__button:hover,
 .settings-nav__button:focus-visible,
 .settings-nav__button.is-active {
@@ -8202,12 +8292,49 @@ textarea,
   outline: none;
 }
 
+/* Collapsible sublist under a group row — the same 120ms grid-rows
+   collapse the section bodies use (`.settings-section__body-clip`). */
+.settings-nav__sublist {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 120ms ease, opacity 120ms ease;
+}
+
+.settings-nav__sublist.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+/* Every animation on an audited surface is disabled under reduced motion
+   so `a11y.spec.ts` measures contrast at rest. Navigating to a group
+   expands its sublist immediately before the scan, and mid-fade axe
+   blends the sublabels toward the sidebar: `--text-muted` reads 4.55:1
+   at rest but 4.21:1 at ~94% opacity, which fails AA in light theme. */
+@media (prefers-reduced-motion: reduce) {
+  .settings-nav__sublist,
+  .settings-nav__caret-mark {
+    transition: none;
+  }
+}
+
+.settings-nav__sublist-clip {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Indent = the row's 24px caret gutter + the label button's 12px
+   padding, so the sublist's left rule lands under the section label's
+   first character. */
 .settings-nav__subbutton {
-  width: calc(100% - 24px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: calc(100% - 36px);
   appearance: none;
   cursor: pointer;
-  margin: -4px 0 4px 24px;
-  padding: 6px 12px;
+  margin: 0 0 2px 36px;
+  padding: 6px 10px;
   border: 0;
   border-left: 1px solid var(--border-subtle);
   background: transparent;
@@ -8217,12 +8344,51 @@ textarea,
   text-align: left;
 }
 
+.settings-nav__subbutton:last-child {
+  margin-bottom: 6px;
+}
+
 .settings-nav__subbutton:hover,
 .settings-nav__subbutton:focus-visible,
 .settings-nav__subbutton.is-active {
   border-left-color: var(--accent);
   color: var(--accent);
   outline: none;
+}
+
+.settings-nav__subdot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+.settings-nav__subdot--ok {
+  background: var(--status-ok);
+}
+
+.settings-nav__subdot--off {
+  background: color-mix(in srgb, var(--text-primary) 16%, transparent);
+}
+
+.settings-nav__sublabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-nav__subchip {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding: 1px 6px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
 }
 
 .settings-nav__divider {
@@ -8255,6 +8421,12 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* Programmatic focus target for hub↔focused pane swaps (tabindex="-1").
+   The pane is a landing spot, not an interactive control — no ring. */
+.settings-stack:focus {
+  outline: none;
 }
 
 /* Per-pane head: editorial preamble at the top of every settings pane.
@@ -8308,6 +8480,143 @@ textarea,
   justify-content: flex-end;
   gap: 8px;
   flex: 0 0 auto;
+}
+
+/* ----------------------------------------------------------------
+   SETTINGS CONTEXT STRIP — compact cross-link on focused sub-screens
+   (provider screens show the hub's "New thread defaults"; platform
+   screens show messaging "General"). One row: eyebrow + label,
+   summary chips, and a ghost action back to the hub editor.
+   ---------------------------------------------------------------- */
+
+.settings-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel);
+}
+
+.settings-strip__eyebrow {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.settings-strip__label {
+  flex: 0 0 auto;
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.settings-strip__meta {
+  display: flex;
+  flex: 1 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-strip__chip {
+  padding: 2px 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 550;
+  white-space: nowrap;
+}
+
+.settings-strip__action {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+
+/* ----------------------------------------------------------------
+   SETTINGS INDEX — hub list of per-provider / per-platform screens.
+   One bordered row per entry: optional glyph, name + mono meta,
+   status chip, and a "Configure ›" affordance on the right.
+   ---------------------------------------------------------------- */
+
+.settings-index {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-index__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  appearance: none;
+  cursor: pointer;
+  padding: 10px 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  text-align: left;
+}
+
+.settings-index__row:hover,
+.settings-index__row:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+  outline: none;
+}
+
+.settings-index__row:hover .settings-index__open,
+.settings-index__row:focus-visible .settings-index__open {
+  color: var(--accent);
+}
+
+.settings-index__glyph {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-index__main {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-index__name {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.settings-index__row.is-off .settings-index__name {
+  color: var(--text-muted);
+}
+
+.settings-index__meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.settings-index__open {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
 }
 
 /* Card panel — eyebrow + title + optional chip in head, body below. */

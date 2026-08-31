@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { isValidatedDiscoveryCandidate } from "@pwragent/shared";
 import type {
   BackendModelOption,
@@ -13,7 +13,9 @@ import type {
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import {
+  SettingsContextStrip,
   SettingsField,
+  SettingsIndexRow,
   SettingsPanelHead,
   SettingsSection,
   SettingsSectionStack,
@@ -29,6 +31,12 @@ import {
   CodexAuthProfileLoginButton,
 } from "./CodexAuthProfileSelect";
 import { AcpAgentsSettings } from "./AcpAgentsSettings";
+import { acpStatusLabel } from "./acp-agent-copy";
+import {
+  acpAgentEnabledInSnapshot,
+  displayOrderedAcpEntries,
+  useAcpAgentCatalog,
+} from "./useAcpAgentCatalog";
 import { SettingsSwitch } from "./SettingsSwitch";
 import {
   commandDiscoveryFailureDetail,
@@ -83,6 +91,11 @@ function migrationMatchesSelection(
 export function ModelsSettings(props: {
   cachedBackends?: BackendSummary[];
   desktopApi?: DesktopApi;
+  /** Focused provider screen: "codex" or an ACP registry id. Omitted =
+   *  the AI Providers hub (new-thread defaults + provider index). */
+  focus?: string;
+  /** Route within AI Providers — undefined returns to the hub. */
+  onFocusChange?: (focus?: string) => void;
   saving: boolean;
   snapshot: DesktopSettingsSnapshot;
   onClearSecret: (secret: DesktopSettingsSecretName) => Promise<boolean>;
@@ -164,11 +177,13 @@ export function ModelsSettings(props: {
     }
     setRefreshingCatalog(true);
     try {
+      let acpRegistryRefreshed = false;
       if (force && props.desktopApi.listAcpAgents) {
         await props.desktopApi.listAcpAgents({
           refresh: true,
           force: true,
         });
+        acpRegistryRefreshed = true;
       }
       const response = await props.desktopApi.listBackends({
         includeUnavailable: true,
@@ -176,6 +191,12 @@ export function ModelsSettings(props: {
       });
       setBackends(response.backends);
       setCatalogError(undefined);
+      if (acpRegistryRefreshed) {
+        // Announce the registry refresh so every catalog consumer (the
+        // hub index, the nav sub-items, other panes) re-reads — the
+        // catalog has no push channel of its own.
+        window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+      }
     } catch (error) {
       setCatalogError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -212,29 +233,21 @@ export function ModelsSettings(props: {
     void props.onSaveCodexPath(path.trim());
   };
 
-  return (
-    <SettingsSectionStack paneId="models" aria-label="Model settings">
-      <SettingsPanelHead
-        eyebrow="Models"
-        title="AI providers"
-        help="Choose profile-wide model baselines, inspect discovered models, and configure provider credentials."
-      />
+  // Names and status for the hub index + focused-screen titles. The
+  // registry probe runs from the hub and the Codex screen (which mounts
+  // no AcpAgentsSettings); focused ACP screens probe via their own
+  // AcpAgentsSettings mount.
+  const acpCatalog = useAcpAgentCatalog(props.desktopApi, {
+    probe: props.focus === undefined || props.focus === "codex",
+  });
+  const orderedAcpEntries = displayOrderedAcpEntries(acpCatalog.entries);
+  const focusedAcpEntry =
+    props.focus && props.focus !== "codex"
+      ? acpCatalog.entries.find((entry) => entry.registryId === props.focus)
+      : undefined;
+  const editDefaults = (): void => props.onFocusChange?.(undefined);
 
-      <ProviderModelDefaultsSettings
-        backends={backends}
-        desktopApi={props.desktopApi}
-        defaults={props.snapshot.models.providerDefaults ?? {}}
-        migrations={props.snapshot.models.providerThreadMigrations ?? {}}
-        codexFastAllowed={props.snapshot.models.codex.allowFast?.value ?? true}
-        error={catalogError}
-        refreshing={refreshingCatalog}
-        saving={props.saving}
-        onRefresh={() => refreshCatalog(true, true)}
-        onSave={props.onSaveProviderDefaults}
-        onSaveMigrations={props.onSaveProviderThreadMigrations}
-        onSaveCodexFastAllowed={props.onSaveCodexFastAllowed}
-      />
-
+  const codexSection = (
       <SettingsSection eyebrow="Models" title="Codex">
         <div className="settings-fields">
           <SettingsField
@@ -391,17 +404,200 @@ export function ModelsSettings(props: {
           />
         </div>
       </SettingsSection>
+  );
 
-      <AcpAgentsSettings
-        catalogRefreshing={refreshingCatalog}
-        desktopApi={props.desktopApi}
-        saving={props.saving}
-        snapshot={props.snapshot}
-        onCliPathChange={props.onAcpCliPathChange}
-        onEnabledChange={props.onAcpEnabledChange}
-        onManagedGrokBuildsChange={props.onManagedGrokBuildsChange}
+  if (props.focus === "codex") {
+    return (
+      <SettingsSectionStack
+        paneId="models-codex"
+        aria-label="Codex provider settings"
+      >
+        <SettingsPanelHead
+          eyebrow="AI Providers"
+          title="Codex"
+          help="Binary path, auth profile, and connection checks for the Codex CLI behind OpenAI threads."
+        />
+        <ProviderDefaultsStrip
+          backendKind="codex"
+          backends={backends}
+          codexFastAllowed={props.snapshot.models.codex.allowFast?.value ?? true}
+          defaults={props.snapshot.models.providerDefaults ?? {}}
+          error={catalogError}
+          onEditDefaults={editDefaults}
+        />
+        {codexSection}
+      </SettingsSectionStack>
+    );
+  }
+
+  if (props.focus) {
+    return (
+      <SettingsSectionStack
+        paneId={`models-${props.focus}`}
+        aria-label={`${focusedAcpEntry?.name ?? "Provider"} settings`}
+      >
+        <SettingsPanelHead
+          eyebrow="AI Providers"
+          title={focusedAcpEntry?.name ?? "Provider"}
+          help="Install status, detected binaries, and discovery for this agent."
+        />
+        <ProviderDefaultsStrip
+          backendKind={focusedAcpEntry?.backendId}
+          backends={backends}
+          defaults={props.snapshot.models.providerDefaults ?? {}}
+          error={catalogError}
+          onEditDefaults={editDefaults}
+        />
+        <AcpAgentsSettings
+          catalogRefreshing={refreshingCatalog}
+          desktopApi={props.desktopApi}
+          only={props.focus}
+          saving={props.saving}
+          snapshot={props.snapshot}
+          onCliPathChange={props.onAcpCliPathChange}
+          onEnabledChange={props.onAcpEnabledChange}
+          onManagedGrokBuildsChange={props.onManagedGrokBuildsChange}
+        />
+      </SettingsSectionStack>
+    );
+  }
+
+  return (
+    <SettingsSectionStack paneId="models" aria-label="Model settings">
+      <SettingsPanelHead
+        eyebrow="Models"
+        title="AI providers"
+        help="Choose profile-wide model baselines, inspect discovered models, and configure provider credentials."
       />
+
+      <ProviderModelDefaultsSettings
+        backends={backends}
+        desktopApi={props.desktopApi}
+        defaults={props.snapshot.models.providerDefaults ?? {}}
+        migrations={props.snapshot.models.providerThreadMigrations ?? {}}
+        codexFastAllowed={props.snapshot.models.codex.allowFast?.value ?? true}
+        error={catalogError}
+        refreshing={refreshingCatalog}
+        saving={props.saving}
+        onRefresh={() => refreshCatalog(true, true)}
+        onSave={props.onSaveProviderDefaults}
+        onSaveMigrations={props.onSaveProviderThreadMigrations}
+        onSaveCodexFastAllowed={props.onSaveCodexFastAllowed}
+      />
+
+      <SettingsSection
+        eyebrow="Models"
+        title="Providers"
+        sectionId="provider-index"
+        description="Each provider has its own screen for paths, auth, and connection checks."
+      >
+        <div className="settings-index" aria-label="Provider index">
+          <SettingsIndexRow
+            name="Codex"
+            meta={codex.discovery.selectedCommand ?? "No executable selected"}
+            chip={codex.discovery.selectedCommand ? "Discovered" : "Not found"}
+            chipKind={codex.discovery.selectedCommand ? "ok" : "muted"}
+            onOpen={() => props.onFocusChange?.("codex")}
+          />
+          {orderedAcpEntries.map((entry) => {
+            const enabled = acpAgentEnabledInSnapshot(
+              props.snapshot,
+              entry.registryId,
+            );
+            // Only a legacy CLI on disk: the operator must act, and the
+            // remediation card lives on the focused screen — the hub
+            // chip is their only hint anything is wrong.
+            const legacyOnly =
+              !entry.installed && Boolean(entry.incompatibleInstances?.length);
+            return (
+              <SettingsIndexRow
+                key={entry.registryId}
+                name={entry.name}
+                meta={entry.version ? `v${entry.version}` : undefined}
+                chip={enabled ? acpStatusLabel(entry) : "Disabled"}
+                chipKind={
+                  enabled
+                    ? entry.installed
+                      ? "ok"
+                      : legacyOnly
+                        ? "warn"
+                        : "muted"
+                    : "muted"
+                }
+                off={!enabled}
+                onOpen={() => props.onFocusChange?.(entry.registryId)}
+              />
+            );
+          })}
+          {orderedAcpEntries.length === 0 ? (
+            <p className="settings-empty">
+              {acpCatalog.unavailable
+                ? "ACP registry controls are unavailable in this build."
+                : acpCatalog.error
+                  ?? (acpCatalog.loaded
+                    ? "No AI providers are available right now."
+                    : "Discovering AI providers…")}
+            </p>
+          ) : null}
+        </div>
+      </SettingsSection>
     </SettingsSectionStack>
+  );
+}
+
+/**
+ * Defaults cross-link strip for focused provider screens. Editing a
+ * provider's paths must not strand the operator away from the model
+ * defaults, so each screen leads with the hub's current answer for
+ * this provider and one action back to the full editor.
+ */
+function ProviderDefaultsStrip(props: {
+  backendKind?: string;
+  backends: BackendSummary[];
+  /** Codex only: surface the Fast-mode master switch state. */
+  codexFastAllowed?: boolean;
+  defaults: Record<string, DesktopProviderModelDefaults>;
+  /** Model-catalog load failure — without it the strip silently falls
+   *  back to "Catalog default model" as if nothing went wrong. */
+  error?: string;
+  onEditDefaults: () => void;
+}) {
+  const backend = props.backends.find(
+    (candidate) => candidate.kind === props.backendKind,
+  );
+  const providerDefaults = props.backendKind
+    ? props.defaults[props.backendKind]
+    : undefined;
+  const model = providerDefaults?.model;
+  const modelLabel = model
+    ? backend?.launchpadOptions?.models?.find((option) => option.id === model)
+      ?.label ?? model
+    : "Catalog default model";
+  const effort = model
+    ? providerDefaults?.reasoningEffortsByModel?.[model]
+    : undefined;
+  const items: ReactNode[] = [modelLabel];
+  if (effort) {
+    items.push(`${effort} effort`);
+  }
+  if (props.codexFastAllowed !== undefined) {
+    items.push(props.codexFastAllowed ? "Fast mode allowed" : "Fast mode off");
+  }
+  return (
+    <>
+      <SettingsContextStrip
+        actionLabel="Edit defaults"
+        eyebrow="Defaults"
+        items={items}
+        label="New thread defaults"
+        onAction={props.onEditDefaults}
+      />
+      {props.error ? (
+        <p className="settings-row__error" role="alert">
+          Last refresh failed: {props.error}
+        </p>
+      ) : null}
+    </>
   );
 }
 

@@ -48,6 +48,7 @@ import {
 } from "@pwragent/shared";
 import { DiscordIcon, FeishuIcon, LineIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
+import { formatMessagingPlatformName } from "../../lib/messaging-platform-branding";
 import {
   SLACK_APPROVAL_TARGET_LABELS,
   slackApplicableApprovalTargets,
@@ -55,7 +56,9 @@ import {
 } from "../../lib/slack-pairing-approval";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
+  SettingsContextStrip,
   SettingsField,
+  SettingsIndexRow,
   SettingsPanelHead,
   SettingsSection,
   SettingsSectionStack,
@@ -77,8 +80,36 @@ import {
   sourceBadge,
 } from "./settings-fields";
 
+/** The six platforms that have a focused Settings screen. */
+export type MessagingSettingsFocus =
+  | "telegram"
+  | "discord"
+  | "mattermost"
+  | "slack"
+  | "feishu"
+  | "line";
+
+/** Settings-order list of the focused-screen platforms. The nav and
+ *  the hub index both derive from this, and labels come from
+ *  `formatMessagingPlatformName`, so the surfaces can never drift. */
+export const MESSAGING_SETTINGS_PLATFORMS: readonly MessagingSettingsFocus[] = [
+  "telegram",
+  "discord",
+  "mattermost",
+  "slack",
+  "feishu",
+  "line",
+];
+
 export function MessagingSettings(props: {
   desktopApi?: DesktopApi;
+  /**
+   * Focused platform screen. Undefined renders the messaging hub —
+   * general defaults, routes, and the platform index.
+   */
+  focus?: MessagingSettingsFocus;
+  /** Navigate between the hub (undefined) and a focused platform screen. */
+  onFocusChange?: (focus?: MessagingSettingsFocus) => void;
   onOpenThread?: (target: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -222,6 +253,56 @@ export function MessagingSettings(props: {
   const configuredRoutePlatforms = configuredMessagingRoutePlatforms(
     props.snapshot,
   );
+  const focusedPlatformLabel = props.focus
+    ? formatMessagingPlatformName(props.focus)
+    : undefined;
+  // Hub index descriptors — the one place a platform's glyph and
+  // credential secret are chosen. Discord uses the blurple mark: the
+  // brand-kit white variant disappears against the light theme's
+  // panel-elevated glyph backdrop.
+  const platformIndex: Array<{
+    kind: MessagingSettingsFocus;
+    glyph: ReactNode;
+    enabled: boolean;
+    secret: DesktopSettingsSnapshot["messaging"]["telegram"]["botToken"];
+  }> = [
+    {
+      kind: "telegram",
+      glyph: <TelegramIcon size={16} variant="color" />,
+      enabled: telegram.enabled.value,
+      secret: telegram.botToken,
+    },
+    {
+      kind: "discord",
+      glyph: <DiscordIcon size={16} variant="blurple" />,
+      enabled: discord.enabled.value,
+      secret: discord.botToken,
+    },
+    {
+      kind: "mattermost",
+      glyph: <MattermostIcon size={16} />,
+      enabled: mattermost.enabled.value,
+      secret: mattermost.botToken,
+    },
+    {
+      kind: "slack",
+      glyph: <SlackIcon size={16} />,
+      enabled: slack.enabled.value,
+      secret: slack.botToken,
+    },
+    {
+      kind: "feishu",
+      glyph: <FeishuIcon size={16} />,
+      enabled: feishu.enabled.value,
+      secret: feishu.appSecret,
+    },
+    {
+      kind: "line",
+      glyph: <LineIcon size={16} />,
+      enabled: line.enabled.value,
+      secret: line.channelAccessToken,
+    },
+  ];
 
   const previewToolUpdateBindingReset = async (
     targetKind: "thread" | "agent_thread",
@@ -287,12 +368,41 @@ export function MessagingSettings(props: {
 
   return (
     <MessagingRoutesProvider desktopApi={props.desktopApi}>
-      <SettingsSectionStack paneId="messaging" aria-label="Messaging settings">
-      <SettingsPanelHead
-        eyebrow="Messaging"
-        title="Connected chat platforms"
-        help="Bridge PwrAgent threads to messaging platforms so you can drive runs from your phone. Tokens are stored in the system keychain. Authorization defaults closed: if no allowed IDs are configured, inbound messages are discarded but logged in Messaging Activity so you can copy IDs into the allowlist."
-      />
+      <SettingsSectionStack
+        paneId={props.focus ? `messaging-${props.focus}` : "messaging"}
+        aria-label={
+          focusedPlatformLabel
+            ? `${focusedPlatformLabel} messaging settings`
+            : "Messaging settings"
+        }
+      >
+      {focusedPlatformLabel ? (
+        <SettingsPanelHead
+          eyebrow="Messaging"
+          title={focusedPlatformLabel}
+          help={`Adapter switch, tokens, pairing, and access controls for the ${focusedPlatformLabel} bridge.`}
+        />
+      ) : (
+        <SettingsPanelHead
+          eyebrow="Messaging"
+          title="Connected chat platforms"
+          help="Bridge PwrAgent threads to messaging platforms so you can drive runs from your phone. Tokens are stored in the system keychain. Authorization defaults closed: if no allowed IDs are configured, inbound messages are discarded but logged in Messaging Activity so you can copy IDs into the allowlist."
+        />
+      )}
+
+      {focusedPlatformLabel ? (
+        <SettingsContextStrip
+          actionLabel="Edit general"
+          eyebrow="Messaging"
+          items={[
+            masterEnabled ? "Messaging on" : "Messaging off",
+            `${toolUpdateModeLabel(toolUpdateMode.value)} thread updates`,
+            `${inputDebounceMs.value} ms debounce`,
+          ]}
+          label="General"
+          onAction={() => props.onFocusChange?.(undefined)}
+        />
+      ) : null}
 
       {runtimeMessaging.overrideActive && runtimeMessaging.disabled ? (
         <section className="settings-panel settings-panel--warning" role="status">
@@ -308,6 +418,50 @@ export function MessagingSettings(props: {
         </section>
       ) : null}
 
+      {/* Armed by the per-platform streaming toggles on the focused
+          screens, so it must render on every messaging pane — hub and
+          focused alike — or the offer is invisible where it was earned. */}
+      {streamingNudgeProvider ? (
+        <section
+          className="settings-panel settings-panel--warning"
+          role="status"
+        >
+          <div className="settings-panel__header">
+            <div>
+              <p className="eyebrow">Streaming enabled</p>
+              <h2>Show the streaming option on thread cards?</h2>
+            </div>
+          </div>
+          <p className="settings-row__description">
+            You turned on streaming for {streamingNudgeProvider}. Show the
+            per-thread streaming toggle in chat status cards and the New
+            Thread menu so you can pick it per thread? It stays an advanced
+            option — most people leave it off.
+          </p>
+          <div className="settings-inline-actions">
+            <button
+              className="button button--secondary"
+              disabled={props.saving}
+              onClick={() => {
+                setStreamingNudgeProvider(null);
+                void props.onShowStreamingOptionChange(true);
+              }}
+              type="button"
+            >
+              Show it on thread cards
+            </button>
+            <button
+              className="button button--ghost"
+              onClick={() => setStreamingNudgeProvider(null)}
+              type="button"
+            >
+              Not now
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {!props.focus ? (
       <SettingsSection eyebrow="Messaging" title="General">
         <div className="settings-fields">
           <ToggleField
@@ -468,55 +622,44 @@ export function MessagingSettings(props: {
               void props.onShowStreamingOptionChange(enabled);
             }}
           />
-          {streamingNudgeProvider ? (
-            <section
-              className="settings-panel settings-panel--warning"
-              role="status"
-            >
-              <div className="settings-panel__header">
-                <div>
-                  <p className="eyebrow">Streaming enabled</p>
-                  <h2>Show the streaming option on thread cards?</h2>
-                </div>
-              </div>
-              <p className="settings-row__description">
-                You turned on streaming for {streamingNudgeProvider}. Show the
-                per-thread streaming toggle in chat status cards and the New
-                Thread menu so you can pick it per thread? It stays an advanced
-                option — most people leave it off.
-              </p>
-              <div className="settings-inline-actions">
-                <button
-                  className="button button--secondary"
-                  disabled={props.saving}
-                  onClick={() => {
-                    setStreamingNudgeProvider(null);
-                    void props.onShowStreamingOptionChange(true);
-                  }}
-                  type="button"
-                >
-                  Show it on thread cards
-                </button>
-                <button
-                  className="button button--ghost"
-                  onClick={() => setStreamingNudgeProvider(null)}
-                  type="button"
-                >
-                  Not now
-                </button>
-              </div>
-            </section>
-          ) : null}
         </div>
       </SettingsSection>
+      ) : null}
 
-      <MessagingRoutesSettings
-        agentRouteToolUpdateMode={managerToolUpdateMode.value}
-        configuredPlatforms={configuredRoutePlatforms}
-        desktopApi={props.desktopApi}
-        onOpenThread={props.onOpenThread}
-      />
+      {!props.focus ? (
+        <MessagingRoutesSettings
+          agentRouteToolUpdateMode={managerToolUpdateMode.value}
+          configuredPlatforms={configuredRoutePlatforms}
+          desktopApi={props.desktopApi}
+          onOpenThread={props.onOpenThread}
+        />
+      ) : null}
 
+      {!props.focus ? (
+        <SettingsSection
+          eyebrow="Messaging"
+          title="Platforms"
+          sectionId="platform-index"
+          description="Each platform has its own screen for tokens, pairing, and access controls."
+        >
+          <div className="settings-index" aria-label="Platform index">
+            {platformIndex.map((platform) => (
+              <SettingsIndexRow
+                key={platform.kind}
+                glyph={platform.glyph}
+                name={formatMessagingPlatformName(platform.kind)}
+                meta={platform.enabled ? "Adapter enabled" : "Adapter off"}
+                chip={chipLabelForBotToken(platform.secret)}
+                chipKind={chipKindForBotToken(platform.secret)}
+                off={!platform.enabled}
+                onOpen={() => props.onFocusChange?.(platform.kind)}
+              />
+            ))}
+          </div>
+        </SettingsSection>
+      ) : null}
+
+      {props.focus === "telegram" ? (
       <SettingsSection
         eyebrow="Messaging"
         title="Telegram"
@@ -657,7 +800,9 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+      ) : null}
 
+      {props.focus === "discord" ? (
       <SettingsSection
         eyebrow="Messaging"
         title="Discord"
@@ -795,7 +940,9 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+      ) : null}
 
+      {props.focus === "mattermost" ? (
       <SettingsSection
         eyebrow="Messaging"
         title="Mattermost"
@@ -1034,7 +1181,9 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+      ) : null}
 
+      {props.focus === "slack" ? (
       <SettingsSection
         eyebrow="Messaging"
         title="Slack"
@@ -1419,7 +1568,9 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+      ) : null}
 
+      {props.focus === "feishu" ? (
       <SettingsSection
         eyebrow="Messaging"
         title="Feishu / Lark"
@@ -1682,7 +1833,9 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+      ) : null}
 
+      {props.focus === "line" ? (
       <SettingsSection
         eyebrow="Messaging"
         title="LINE"
@@ -1862,6 +2015,7 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+      ) : null}
       </SettingsSectionStack>
     </MessagingRoutesProvider>
   );

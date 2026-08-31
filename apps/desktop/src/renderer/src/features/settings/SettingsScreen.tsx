@@ -20,7 +20,12 @@ import { ExperimentalSettings } from "./ExperimentalSettings";
 import { FederationSettings } from "./FederationSettings";
 import { GeneralSettings } from "./GeneralSettings";
 import { GitSettings } from "./GitSettings";
-import { MessagingSettings } from "./MessagingSettings";
+import {
+  MESSAGING_SETTINGS_PLATFORMS,
+  MessagingSettings,
+  type MessagingSettingsFocus,
+} from "./MessagingSettings";
+import { formatMessagingPlatformName } from "../../lib/messaging-platform-branding";
 import { ModelsSettings } from "./ModelsSettings";
 import { ProfilesSettings } from "./ProfilesSettings";
 import { PricingSettings } from "./PricingSettings";
@@ -40,7 +45,19 @@ import {
   buildSlackPatchDelta,
   buildTelegramPatchDelta,
 } from "./settings-patch-delta";
-import { Fragment, useCallback, useEffect, useRef, useState } from "react";
+import {
+  acpAgentEnabledInSnapshot,
+  displayOrderedAcpEntries,
+  useAcpAgentCatalog,
+} from "./useAcpAgentCatalog";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 export type SettingsSection =
   | "general"
@@ -92,6 +109,31 @@ const PRIMARY_SECTIONS: SettingsSection[] = [
 
 const SETTINGS_NAV_DIVIDER_AFTER: SettingsSection = "federation";
 
+/** Sections whose nav row expands into a sub-list (thread-list caret). */
+const SETTINGS_NAV_GROUPS = new Set<SettingsSection>([
+  "plugins",
+  "models",
+  "messaging",
+]);
+
+function messagingPlatformFromSub(
+  sub: string | undefined,
+): MessagingSettingsFocus | undefined {
+  return MESSAGING_SETTINGS_PLATFORMS.find((platform) => platform === sub);
+}
+
+type SettingsNavChild = {
+  key: string;
+  label: string;
+  /** Sub-route id; undefined = the child re-targets the parent section
+   *  (Plugins → MCPs, which IS the plugins pane). */
+  sub?: string;
+  /** Status dot tone; omitted when the snapshot can't say. */
+  dot?: "ok" | "off";
+  /** Tiny trailing chip, e.g. "off" on a disabled provider. */
+  chip?: string;
+};
+
 const SECTION_LABELS = new Map(
   SECTIONS.map((section) => [section.id, section.label] as const),
 );
@@ -126,6 +168,10 @@ export function SettingsScreen(props: {
   settings: DesktopSettingsState;
   /** Initial section to render. Defaults to Applications. */
   initialSection?: SettingsSection;
+  /** Optional sub-screen within the initial section (a provider's
+   *  registry id under "models", a platform kind under "messaging").
+   *  Ignored without `initialSection`. */
+  initialSubsection?: string;
   onClose?: () => void;
   onOpenThread?: (target: {
     backend: AppServerBackendKind;
@@ -137,14 +183,67 @@ export function SettingsScreen(props: {
    *  Messaging Activity overlay (its own top-level mainView). */
   onOpenMessagingActivity?: (platform?: MessagingChannelKind) => void;
 }) {
-  const [section, setSection] = useState<SettingsSection>(
-    props.initialSection ?? "general",
+  const [route, setRoute] = useState<{
+    section: SettingsSection;
+    sub?: string;
+  }>(() => ({
+    section: props.initialSection ?? "general",
+    sub: props.initialSection ? props.initialSubsection : undefined,
+  }));
+  const section = route.section;
+  // Which nav groups are expanded. Groups open collapsed except the
+  // one holding the initial route — an active section hidden behind a
+  // closed caret would read as a dead nav.
+  const [openGroups, setOpenGroups] = useState<
+    Partial<Record<SettingsSection, boolean>>
+  >(() => {
+    const initial = props.initialSection ?? "general";
+    return SETTINGS_NAV_GROUPS.has(initial) ? { [initial]: true } : {};
+  });
+  const expandGroup = useCallback((target: SettingsSection) => {
+    if (!SETTINGS_NAV_GROUPS.has(target)) {
+      return;
+    }
+    setOpenGroups((current) =>
+      current[target] === true ? current : { ...current, [target]: true },
+    );
+  }, []);
+  const toggleGroup = useCallback((target: SettingsSection) => {
+    setOpenGroups((current) => ({
+      ...current,
+      [target]: current[target] !== true,
+    }));
+  }, []);
+  // Navigating always expands the destination group; only the caret
+  // collapses one. Clicking a parent label therefore both routes to
+  // the hub screen and reveals its children.
+  const openRoute = useCallback(
+    (target: SettingsSection, sub?: string) => {
+      setRoute((current) =>
+        current.section === target && current.sub === sub
+          ? current
+          : { section: target, sub },
+      );
+      expandGroup(target);
+    },
+    [expandGroup],
   );
   // When the parent re-mounts with a different initialSection (e.g.
   // a future deep-link), follow it.
   useEffect(() => {
-    if (props.initialSection) setSection(props.initialSection);
-  }, [props.initialSection]);
+    if (props.initialSection) {
+      openRoute(props.initialSection, props.initialSubsection);
+    }
+  }, [openRoute, props.initialSection, props.initialSubsection]);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  // Reset the pane scroll on every route change. Runs in a layout
+  // effect so the stack's own visited-section focus restore (a plain
+  // effect) can still win afterwards by scrolling its header into view.
+  useLayoutEffect(() => {
+    if (contentRef.current) {
+      contentRef.current.scrollTop = 0;
+    }
+  }, [route.section, route.sub]);
   const scrollClampFrameRef = useRef<number | undefined>(undefined);
   useEffect(() => {
     const clampDocumentScroll = () => {
@@ -186,6 +285,57 @@ export function SettingsScreen(props: {
   const snapshot = props.settings.snapshot;
   const activeSectionLabel =
     SECTIONS.find((entry) => entry.id === section)?.label ?? "Settings";
+  // Cached catalog read only — the nav never triggers agent probes.
+  // The AI Providers screens own refreshing; this re-reads on their
+  // BACKEND_SUMMARIES_REFRESH_EVENT announcements.
+  const acpCatalog = useAcpAgentCatalog(props.desktopApi);
+  const navChildren = (target: SettingsSection): SettingsNavChild[] => {
+    if (target === "plugins") {
+      return [{ key: "mcps", label: "MCPs" }];
+    }
+    if (target === "models") {
+      const codexConfigured = Boolean(
+        snapshot?.models.codex.discovery.selectedCommand,
+      );
+      return [
+        {
+          key: "codex",
+          label: "Codex",
+          sub: "codex",
+          dot: snapshot ? (codexConfigured ? "ok" : "off") : undefined,
+        },
+        ...displayOrderedAcpEntries(acpCatalog.entries).map((entry) => {
+          const enabled = acpAgentEnabledInSnapshot(snapshot, entry.registryId);
+          return {
+            key: entry.registryId,
+            label: entry.name,
+            sub: entry.registryId,
+            dot: (enabled && entry.installed ? "ok" : "off") as "ok" | "off",
+            ...(enabled ? {} : { chip: "off" }),
+          };
+        }),
+      ];
+    }
+    if (target === "messaging") {
+      return MESSAGING_SETTINGS_PLATFORMS.map((platform) => ({
+        key: platform,
+        label: formatMessagingPlatformName(platform),
+        sub: platform,
+        dot: snapshot
+          ? snapshot.messaging[platform].enabled.value
+            ? "ok"
+            : "off"
+          : undefined,
+      }));
+    }
+    return [];
+  };
+  // Crumb label from the same catalog the nav renders. An unknown sub
+  // gets no crumb rather than leaking the raw route id into the
+  // breadcrumb.
+  const activeSubLabel = route.sub
+    ? navChildren(section).find((child) => child.sub === route.sub)?.label
+    : undefined;
   // Platform-chip clicks in the title-bar strip route to the top-level
   // Messaging Activity overlay (NOT a settings section). The App-level
   // handler swaps mainView for us; no internal state change here.
@@ -226,37 +376,106 @@ export function SettingsScreen(props: {
         {/* Group label between Exit and the section list. */}
         <p className="settings-nav__group-label">General</p>
 
-        {ORDERED_SECTIONS.map((item) => (
-          <Fragment key={item.id}>
-            <button
-              aria-current={
-                section === item.id && item.id !== "plugins"
-                  ? "page"
-                  : undefined
-              }
-              className={`settings-nav__button${section === item.id ? " is-active" : ""}`}
-              type="button"
-              onClick={() => setSection(item.id)}
-            >
-              {item.label}
-            </button>
-            {item.id === "plugins" ? (
-              <button
-                aria-current={section === "plugins" ? "page" : undefined}
-                className={`settings-nav__subbutton${
-                  section === "plugins" ? " is-active" : ""
-                }`}
-                type="button"
-                onClick={() => setSection("plugins")}
+        {ORDERED_SECTIONS.map((item) => {
+          const isGroup = SETTINGS_NAV_GROUPS.has(item.id);
+          const open = openGroups[item.id] === true;
+          const sublistId = `settings-nav-sublist-${item.id}`;
+          // Plugins keeps its long-standing contract: the MCPs child —
+          // the pane's whole content — carries the active state, not
+          // the parent row.
+          const groupHoldsRoute = section === item.id;
+          const parentActive =
+            groupHoldsRoute
+            && route.sub === undefined
+            && item.id !== "plugins";
+          // A collapsed group hides its aria-current child inside an
+          // aria-hidden, inert sublist, so the parent row takes over
+          // the marker — the nav must always show where the operator
+          // is (this also covers collapsed Plugins).
+          const parentMarksRoute =
+            parentActive || (isGroup && !open && groupHoldsRoute);
+          const children = isGroup ? navChildren(item.id) : [];
+          return (
+            <Fragment key={item.id}>
+              <div
+                className={`settings-nav__row${parentMarksRoute ? " is-active" : ""}`}
               >
-                MCPs
-              </button>
-            ) : null}
-            {item.id === SETTINGS_NAV_DIVIDER_AFTER ? (
-              <hr className="settings-nav__divider" />
-            ) : null}
-          </Fragment>
-        ))}
+                {isGroup ? (
+                  <button
+                    aria-controls={sublistId}
+                    aria-expanded={open}
+                    aria-label={`${open ? "Collapse" : "Expand"} ${item.label}`}
+                    className="settings-nav__caret"
+                    type="button"
+                    onClick={() => toggleGroup(item.id)}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className={`settings-nav__caret-mark${open ? " is-open" : ""}`}
+                    />
+                  </button>
+                ) : (
+                  <span
+                    aria-hidden="true"
+                    className="settings-nav__caret-spacer"
+                  />
+                )}
+                <button
+                  aria-current={parentMarksRoute ? "page" : undefined}
+                  className={`settings-nav__button${parentMarksRoute ? " is-active" : ""}`}
+                  type="button"
+                  onClick={() => openRoute(item.id)}
+                >
+                  {item.label}
+                </button>
+              </div>
+              {isGroup ? (
+                <div
+                  aria-hidden={!open}
+                  className={`settings-nav__sublist${open ? " is-open" : ""}`}
+                  id={sublistId}
+                  inert={open ? undefined : true}
+                >
+                  <div className="settings-nav__sublist-clip">
+                    {children.map((child) => {
+                      const childActive =
+                        section === item.id && route.sub === child.sub;
+                      return (
+                        <button
+                          key={child.key}
+                          aria-current={childActive ? "page" : undefined}
+                          className={`settings-nav__subbutton${
+                            childActive ? " is-active" : ""
+                          }`}
+                          type="button"
+                          onClick={() => openRoute(item.id, child.sub)}
+                        >
+                          {child.dot ? (
+                            <span
+                              aria-hidden="true"
+                              className={`settings-nav__subdot settings-nav__subdot--${child.dot}`}
+                            />
+                          ) : null}
+                          <span className="settings-nav__sublabel">
+                            {child.label}
+                          </span>
+                          {child.chip ? (
+                            <span className="settings-nav__subchip">
+                              {child.chip}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
+              {item.id === SETTINGS_NAV_DIVIDER_AFTER ? (
+                <hr className="settings-nav__divider" />
+              ) : null}
+            </Fragment>
+          );
+        })}
       </nav>
 
       {/* Right pane — its own header (breadcrumb + MessagingStatusBar)
@@ -271,22 +490,46 @@ export function SettingsScreen(props: {
             <span aria-hidden="true" className="settings-titlebar__separator">
               ›
             </span>
-            <span
-              className="settings-titlebar__current"
-              title={activeSectionLabel}
-            >
-              {activeSectionLabel}
-            </span>
+            {route.sub && activeSubLabel ? (
+              <>
+                <button
+                  className="settings-titlebar__crumb"
+                  type="button"
+                  onClick={() => openRoute(section)}
+                >
+                  {activeSectionLabel}
+                </button>
+                <span
+                  aria-hidden="true"
+                  className="settings-titlebar__separator"
+                >
+                  ›
+                </span>
+                <span
+                  className="settings-titlebar__current"
+                  title={activeSubLabel}
+                >
+                  {activeSubLabel}
+                </span>
+              </>
+            ) : (
+              <span
+                className="settings-titlebar__current"
+                title={activeSectionLabel}
+              >
+                {activeSectionLabel}
+              </span>
+            )}
           </div>
           <div className="settings-titlebar__spacer" />
           <MessagingStatusBar
             desktopApi={props.desktopApi}
             onOpenActivity={onOpenActivity}
-            onOpenSettings={() => setSection("messaging")}
+            onOpenSettings={() => openRoute("messaging")}
           />
         </header>
 
-        <div className="settings-content">
+        <div className="settings-content" ref={contentRef}>
           {props.settings.loading && !snapshot ? (
             <p className="settings-empty">Loading settings...</p>
           ) : props.settings.error && !snapshot ? (
@@ -329,12 +572,14 @@ export function SettingsScreen(props: {
               appearanceController={props.appearanceController}
               cachedBackends={props.cachedBackends}
               desktopApi={props.desktopApi}
+              onOpenRoute={openRoute}
               onOpenThread={props.onOpenThread}
               onShowNotice={props.onShowNotice}
               profiles={props.profiles}
               section={section}
               settings={props.settings}
               snapshot={snapshot}
+              sub={route.sub}
             />
           ) : (
             <p className="settings-empty">Settings are unavailable.</p>
@@ -352,6 +597,7 @@ function SettingsSectionBody(props: {
   appearanceController?: AppearanceController;
   cachedBackends?: BackendSummary[];
   desktopApi?: DesktopApi;
+  onOpenRoute: (section: SettingsSection, sub?: string) => void;
   onOpenThread?: (target: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -361,6 +607,7 @@ function SettingsSectionBody(props: {
   section: SettingsSection;
   settings: DesktopSettingsState;
   snapshot: DesktopSettingsSnapshot;
+  sub?: string;
 }) {
   if (props.section === "about") {
     return <AboutSettings desktopApi={props.desktopApi} />;
@@ -574,6 +821,8 @@ function SettingsSectionBody(props: {
     return (
       <MessagingSettings
         desktopApi={props.desktopApi}
+        focus={messagingPlatformFromSub(props.sub)}
+        onFocusChange={(focus) => props.onOpenRoute("messaging", focus)}
         onOpenThread={props.onOpenThread}
         saving={props.settings.saving}
         snapshot={props.snapshot}
@@ -858,6 +1107,8 @@ function SettingsSectionBody(props: {
     <ModelsSettings
       cachedBackends={props.cachedBackends}
       desktopApi={props.desktopApi}
+      focus={props.sub}
+      onFocusChange={(focus) => props.onOpenRoute("models", focus)}
       saving={props.settings.saving}
       snapshot={props.snapshot}
       onClearSecret={props.settings.clearSecret}

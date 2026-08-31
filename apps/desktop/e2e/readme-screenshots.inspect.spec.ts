@@ -404,10 +404,11 @@ test("messenger-status — Settings → Messaging surface", async () => {
     ).toBeVisible();
     await app.window.getByRole("button", { name: "Open settings" }).click();
 
-    // Settings nav: click the Messaging row.
+    // Settings nav: click the Messaging row. Exact, so the group's
+    // "Expand Messaging" caret toggle doesn't also match.
     const messagingNav = app.window
       .getByRole("navigation", { name: "Settings sections" })
-      .getByRole("button", { name: "Messaging" });
+      .getByRole("button", { name: "Messaging", exact: true });
     await expect(messagingNav).toBeVisible();
     await messagingNav.click();
 
@@ -440,10 +441,18 @@ async function navigateToTelegramPairing(
 
   const messagingNav = app.window
     .getByRole("navigation", { name: "Settings sections" })
-    .getByRole("button", { name: "Messaging" });
+    .getByRole("button", { name: "Messaging", exact: true });
   await messagingNav.click();
   await expect(
     app.window.getByRole("region", { name: "Messaging settings" }),
+  ).toBeVisible();
+
+  // Pairing lives on Telegram's focused screen behind the hub index.
+  await app.window
+    .getByRole("button", { name: "Open Telegram settings" })
+    .click();
+  await expect(
+    app.window.getByRole("region", { name: "Telegram messaging settings" }),
   ).toBeVisible();
 
   const pairingTarget = app.window

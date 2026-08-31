@@ -626,8 +626,13 @@ describe("SettingsScreen", () => {
         refreshModels: true,
       });
     });
-    await waitFor(() => expect(listAcpAgents).toHaveBeenCalledTimes(2));
-    expect(screen.getByLabelText("Grok manual path")).toBeDisabled();
+    await waitFor(() => {
+      expect(listAcpAgents).toHaveBeenCalledWith({ refresh: true });
+    });
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Open Grok settings" }),
+    );
+    expect(await screen.findByLabelText("Grok manual path")).toBeDisabled();
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     expect(
       within(screen.getByLabelText("Grok installs")).getByRole("button", {
@@ -677,6 +682,7 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         initialSection="models"
+        initialSubsection="codex"
         settings={createSettingsState(snapshot)}
         onClose={() => undefined}
       />,
@@ -697,6 +703,7 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         initialSection="models"
+        initialSubsection="codex"
         settings={settings}
         onClose={() => undefined}
       />,
@@ -1283,11 +1290,41 @@ describe("SettingsScreen", () => {
         },
       });
     });
-    expect(screen.getByRole("heading", { name: "Telegram" })).toBeInTheDocument();
+    // Platforms live behind the hub's index now — each opens a focused
+    // screen with the platform's full section.
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Telegram settings" }),
+    );
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Telegram" }),
+    ).toBeInTheDocument();
     expect(screen.getByText("Authorized Groups / Supergroups")).toBeInTheDocument();
     expect(
       screen.getByRole("radio", { name: "Group/supergroup chat" }),
     ).toBeInTheDocument();
+    expect(screen.getAllByText("unset").length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Streaming Responses (Advanced)" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          telegram: {
+            streamingResponses: true,
+          },
+        },
+      });
+    });
+    // Turning on a provider's streaming arms the thread-card nudge, and
+    // the panel renders on the focused screen where it was earned — it
+    // used to render only inside the hub's General section, which the
+    // focused screens never show.
+    expect(
+      screen.getByRole("button", { name: "Show it on thread cards" }),
+    ).toBeInTheDocument();
+    // The focused screen's General strip leads back to the hub.
+    fireEvent.click(screen.getByRole("button", { name: "Edit general" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open Slack settings" }));
     expect(
       screen.getByText(
         "Shows Working Updates in one Slack task card per turn when Slack stream APIs are available; otherwise uses text updates.",
@@ -1305,27 +1342,57 @@ describe("SettingsScreen", () => {
         },
       });
     });
-    // Five providers expose a streaming toggle; LINE has no message-edit API so
-    // it deliberately has none.
-    expect(screen.getAllByText(/does not make turns finish sooner/)).toHaveLength(5);
-    expect(screen.getAllByText(/reach platform rate limits much sooner/)).toHaveLength(5);
+    // Slack's streaming toggle carries its own label (no "(Advanced)"
+    // suffix) and writes a Slack-scoped delta.
     fireEvent.click(
-      screen.getAllByRole("switch", { name: "Streaming Responses (Advanced)" })[0]!,
+      screen.getByRole("switch", { name: "Streaming responses" }),
     );
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         messaging: {
-          telegram: {
+          slack: {
             streamingResponses: true,
           },
         },
       });
     });
-    expect(screen.getAllByText("unset").length).toBeGreaterThanOrEqual(5);
-    expect(screen.getAllByText("default").length).toBeGreaterThanOrEqual(2);
+    // Discord, Mattermost, and Feishu each carry the advanced streaming
+    // toggle on their focused screens and write per-platform deltas.
+    for (const [platform, label] of [
+      ["discord", "Discord"],
+      ["mattermost", "Mattermost"],
+      ["feishu", "Feishu / Lark"],
+    ] as const) {
+      fireEvent.click(screen.getByRole("button", { name: "Edit general" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: `Open ${label} settings` }),
+      );
+      fireEvent.click(
+        screen.getByRole("switch", { name: "Streaming Responses (Advanced)" }),
+      );
+      await waitFor(() => {
+        expect(settings.writeConfig).toHaveBeenCalledWith({
+          messaging: {
+            [platform]: {
+              streamingResponses: true,
+            },
+          },
+        });
+      });
+    }
+    // LINE has no message-edit API, so its screen deliberately has no
+    // streaming toggle.
+    fireEvent.click(screen.getByRole("button", { name: "Edit general" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open LINE settings" }));
+    expect(
+      screen.queryByRole("switch", { name: "Streaming Responses (Advanced)" }),
+    ).not.toBeInTheDocument();
 
     fireEvent.click(within(sections).getByRole("button", { name: "AI Providers" }));
-    expect(screen.getByRole("heading", { name: "Codex" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open Codex settings" }));
+    expect(
+      screen.getByRole("heading", { level: 2, name: "Codex" }),
+    ).toBeInTheDocument();
     // The selected command appears in two places now: the pathrow
     // list (Codex discovery candidates) AND the SettingsTestBlock's
     // default name (it shows the path the Test button would invoke).
@@ -2364,8 +2431,10 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    // The ACP agents card now lives under the "AI Providers" pane (no separate
-    // "ACP Agents" nav item).
+    // Providers live under the "AI Providers" pane (no separate "ACP
+    // Agents" nav item). The hub's index always lists Codex, and once
+    // the catalog read settles with no agents it reports the settled
+    // empty state — not the transient "Discovering…" copy.
     expect(
       screen.getByRole("button", { name: "AI Providers" }),
     ).toHaveAttribute("aria-current", "page");
@@ -2373,8 +2442,14 @@ describe("SettingsScreen", () => {
       screen.queryByRole("button", { name: "ACP Agents" }),
     ).not.toBeInTheDocument();
     expect(
+      screen.getByRole("button", { name: "Open Codex settings" }),
+    ).toBeInTheDocument();
+    expect(
       await screen.findByText("No AI providers are available right now."),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Discovering AI providers…"),
+    ).not.toBeInTheDocument();
   });
 
   it("saves defaults and confirms launchpad, thread, and Fast bulk actions", async () => {
@@ -2814,6 +2889,7 @@ describe("SettingsScreen", () => {
       <SettingsScreen
         desktopApi={desktopApi}
         initialSection="models"
+        initialSubsection="codex"
         settings={settings}
         onClose={() => undefined}
       />,
@@ -2879,6 +2955,7 @@ describe("SettingsScreen", () => {
       <SettingsScreen
         desktopApi={desktopApi}
         initialSection="models"
+        initialSubsection="codex"
         settings={settings}
         onClose={() => undefined}
       />,
@@ -3191,6 +3268,7 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         initialSection="models"
+        initialSubsection="codex"
         settings={createSettingsState(snapshot)}
         onClose={() => undefined}
       />,
@@ -3230,6 +3308,7 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         initialSection="models"
+        initialSubsection="codex"
         settings={createSettingsState(snapshot)}
         onClose={() => undefined}
       />,
@@ -3291,6 +3370,7 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         initialSection="models"
+        initialSubsection="codex"
         settings={createSettingsState(snapshot)}
         onClose={() => undefined}
       />,
@@ -3380,9 +3460,12 @@ describe("SettingsScreen", () => {
 
     const sections = screen.getByRole("navigation", { name: "Settings sections" });
     fireEvent.click(within(sections).getByRole("button", { name: "Messaging" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Mattermost settings" }),
+    );
 
     expect(
-      screen.getByRole("heading", { name: "Mattermost" }),
+      screen.getByRole("heading", { level: 2, name: "Mattermost" }),
     ).toBeInTheDocument();
     expect(screen.getByText("Server URL")).toBeInTheDocument();
     expect(screen.getAllByText("Callback Base URL").length).toBeGreaterThan(0);
@@ -3480,13 +3563,17 @@ describe("SettingsScreen", () => {
           onMessagingBindingsChanged: () => () => undefined,
         }}
         initialSection="messaging"
+        initialSubsection="telegram"
         settings={createSettingsState(snapshot)}
         onClose={() => undefined}
       />,
     );
 
     expect(await screen.findByText("Topic default Agent")).toBeInTheDocument();
-    expect(screen.getAllByText("Jeeves")).toHaveLength(2);
+    // Routes (with their own default-agent list) live on the messaging
+    // hub now, so the focused Telegram screen shows one "Jeeves": the
+    // approved surface's picker.
+    expect(screen.getAllByText("Jeeves")).toHaveLength(1);
     expect(
       screen.getAllByText("OpenAI").every(
         (element) => element.classList.contains("chip--backend"),
@@ -3512,6 +3599,9 @@ describe("SettingsScreen", () => {
     );
 
     expect(screen.getByText(/Authorization defaults closed/)).toBeInTheDocument();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Telegram settings" }),
+    );
     expect(screen.getByText(/Rejected Telegram DMs show the peer ID/)).toBeInTheDocument();
 
     fireEvent.click(screen.getAllByRole("button", { name: "Add" })[0]!);
@@ -3556,6 +3646,7 @@ describe("SettingsScreen", () => {
       <SettingsScreen
         settings={createSettingsState()}
         initialSection="messaging"
+        initialSubsection="line"
         onClose={() => undefined}
       />,
     );
@@ -3580,6 +3671,7 @@ describe("SettingsScreen", () => {
       <SettingsScreen
         settings={createSettingsState()}
         initialSection="messaging"
+        initialSubsection="feishu"
         onClose={() => undefined}
       />,
     );
@@ -3589,11 +3681,11 @@ describe("SettingsScreen", () => {
     expect(screen.getByText(/Feishu is China only/)).toBeInTheDocument();
     expect(screen.getByLabelText("Tenant URL")).toHaveValue("");
     expect(screen.getByText(/Leave blank to use/)).toBeInTheDocument();
-    expect(screen.getAllByLabelText("Local Webhook Listener")).toHaveLength(1);
-    expect(screen.getByLabelText("Local Webhook Listener")).toHaveAttribute(
-      "placeholder",
-      "http://127.0.0.1:47822",
-    );
+    // Events mode hides the Feishu local webhook listener (LINE's
+    // listener now lives on LINE's own screen).
+    expect(
+      screen.queryByLabelText("Local Webhook Listener"),
+    ).not.toBeInTheDocument();
   });
 
   it("shows the Feishu local webhook listener only for webhook mode", () => {
@@ -3604,13 +3696,12 @@ describe("SettingsScreen", () => {
       <SettingsScreen
         settings={createSettingsState(snapshot)}
         initialSection="messaging"
+        initialSubsection="feishu"
         onClose={() => undefined}
       />,
     );
 
-    const feishuLocalWebhook = screen
-      .getAllByLabelText("Local Webhook Listener")
-      .find((input) => !input.hasAttribute("placeholder"));
+    const feishuLocalWebhook = screen.getByLabelText("Local Webhook Listener");
     expect(feishuLocalWebhook).toHaveValue("");
     expect(screen.getByText(/Default:/)).toHaveTextContent("http://127.0.0.1:47823");
     expect(screen.getByText(/Only used when Webhook is selected/)).toBeInTheDocument();
@@ -3633,6 +3724,7 @@ describe("SettingsScreen", () => {
         desktopApi={desktopApi}
         settings={settings}
         initialSection="messaging"
+        initialSubsection="telegram"
         onClose={() => undefined}
       />,
     );
@@ -3713,6 +3805,7 @@ describe("SettingsScreen", () => {
         desktopApi={desktopApi}
         settings={settings}
         initialSection="messaging"
+        initialSubsection="telegram"
         onClose={() => undefined}
       />,
     );
@@ -3777,6 +3870,7 @@ describe("SettingsScreen", () => {
         desktopApi={desktopApi}
         settings={settings}
         initialSection="messaging"
+        initialSubsection="telegram"
         onClose={() => undefined}
       />,
     );
@@ -3898,6 +3992,7 @@ describe("SettingsScreen", () => {
           desktopApi={desktopApi}
           settings={settings}
           initialSection="messaging"
+          initialSubsection="telegram"
           onClose={() => undefined}
         />
       );
@@ -3981,6 +4076,7 @@ describe("SettingsScreen", () => {
         desktopApi={desktopApi}
         settings={settings}
         initialSection="messaging"
+        initialSubsection="slack"
         onClose={() => undefined}
       />,
     );
@@ -4076,6 +4172,7 @@ describe("SettingsScreen", () => {
         desktopApi={desktopApi}
         settings={settings}
         initialSection="messaging"
+        initialSubsection="telegram"
         onClose={() => undefined}
       />,
     );
@@ -4119,6 +4216,7 @@ describe("SettingsScreen", () => {
         desktopApi={desktopApi}
         settings={settings}
         initialSection="messaging"
+        initialSubsection="slack"
         onClose={() => undefined}
       />,
     );
@@ -4205,6 +4303,7 @@ describe("SettingsScreen", () => {
         desktopApi={desktopApi}
         settings={settings}
         initialSection="messaging"
+        initialSubsection="slack"
         onClose={() => undefined}
       />,
     );
@@ -4257,11 +4356,16 @@ describe("SettingsScreen", () => {
       <SettingsScreen
         settings={settings}
         initialSection="messaging"
+        initialSubsection="slack"
         onClose={() => undefined}
       />,
     );
 
-    const slackHeader = screen.getByRole("button", { name: "Slack" });
+    // The nav's Slack sub-item shares the name, so scope to the pane.
+    const pane = screen.getByRole("region", {
+      name: "Slack messaging settings",
+    });
+    const slackHeader = within(pane).getByRole("button", { name: "Slack" });
     if (slackHeader.getAttribute("aria-expanded") !== "true") {
       fireEvent.click(slackHeader);
     }
@@ -4321,6 +4425,7 @@ describe("SettingsScreen", () => {
       <SettingsScreen
         settings={settings}
         initialSection="messaging"
+        initialSubsection="slack"
         onClose={() => undefined}
       />,
     );
@@ -4354,6 +4459,7 @@ describe("SettingsScreen", () => {
       <SettingsScreen
         settings={settings}
         initialSection="messaging"
+        initialSubsection="slack"
         onClose={() => undefined}
       />,
     );
@@ -4376,6 +4482,7 @@ describe("SettingsScreen", () => {
         settings={settings}
         desktopApi={{ openSlackCreateApp }}
         initialSection="messaging"
+        initialSubsection="slack"
         onClose={() => undefined}
       />,
     );
@@ -4397,6 +4504,7 @@ describe("SettingsScreen", () => {
       <SettingsScreen
         settings={settings}
         initialSection="messaging"
+        initialSubsection="slack"
         onClose={() => undefined}
       />,
     );
@@ -4427,6 +4535,7 @@ describe("SettingsScreen", () => {
       <SettingsScreen
         settings={settings}
         initialSection="messaging"
+        initialSubsection="telegram"
         onClose={() => undefined}
       />,
     );
@@ -4499,6 +4608,7 @@ describe("SettingsScreen", () => {
         desktopApi={desktopApi}
         settings={settings}
         initialSection="messaging"
+        initialSubsection="telegram"
         onClose={() => undefined}
       />,
     );
@@ -4576,6 +4686,7 @@ describe("SettingsScreen", () => {
       <SettingsScreen
         settings={settings}
         initialSection="messaging"
+        initialSubsection="telegram"
         onClose={() => undefined}
       />,
     );
@@ -5045,15 +5156,16 @@ describe("SettingsScreen", () => {
     expect(label?.textContent?.toLowerCase()).toBe("general");
 
     const nav = screen.getByRole("navigation", { name: "Settings sections" });
-    const buttons = within(nav)
-      .getAllByRole("button")
-      .map((button) => button.textContent);
+    // Caret toggles sit beside the group labels and sub-items live in
+    // collapsed sublists; the order contract is about section labels.
+    const buttons = Array.from(
+      nav.querySelectorAll(".settings-nav__exit, .settings-nav__button"),
+    ).map((button) => button.textContent);
     expect(buttons).toEqual([
       "← Exit Settings",
       "General",
       "Applications",
       "Plugins",
-      "MCPs",
       "Profiles",
       "AI Providers",
       "Usage & Pricing",
@@ -5068,9 +5180,204 @@ describe("SettingsScreen", () => {
       "Troubleshooting",
       "About",
     ]);
+    // The three group sections expand; every other row keeps the caret
+    // gutter so labels stay aligned.
+    const caretLabels = Array.from(
+      nav.querySelectorAll(".settings-nav__caret"),
+    ).map((button) => button.getAttribute("aria-label"));
+    expect(caretLabels).toEqual([
+      "Expand Plugins",
+      "Expand AI Providers",
+      "Expand Messaging",
+    ]);
+    // Collapsed sublists keep their children out of the accessibility
+    // tree — MCPs only appears once Plugins expands.
+    expect(
+      within(nav).queryByRole("button", { name: "MCPs" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Expand Plugins" }),
+    );
+    expect(
+      within(nav).getByRole("button", { name: "MCPs" }),
+    ).toBeInTheDocument();
     expect(within(nav).getByRole("separator")).toHaveClass(
       "settings-nav__divider",
     );
+  });
+
+  it("expands a nav group from the caret without navigating", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    const caret = within(nav).getByRole("button", {
+      name: "Expand AI Providers",
+    });
+    fireEvent.click(caret);
+
+    // Expanded, but still on General — the caret only discloses.
+    expect(within(nav).getByRole("button", { name: "Codex" }))
+      .toBeInTheDocument();
+    expect(
+      document.querySelector(".settings-titlebar__current")?.textContent,
+    ).toBe("General");
+    expect(within(nav).getByRole("button", { name: "General" }))
+      .toHaveAttribute("aria-current", "page");
+
+    fireEvent.click(
+      within(nav).getByRole("button", { name: "Collapse AI Providers" }),
+    );
+    expect(
+      within(nav).queryByRole("button", { name: "Codex" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("navigates and expands together when a group label is clicked", () => {
+    render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(nav).getByRole("button", { name: "Messaging" }));
+
+    expect(within(nav).getByRole("button", { name: "Messaging" }))
+      .toHaveAttribute("aria-current", "page");
+    expect(within(nav).getByRole("button", { name: "Telegram" }))
+      .toBeInTheDocument();
+    expect(
+      document.querySelector(".settings-titlebar__current")?.textContent,
+    ).toBe("Messaging");
+  });
+
+  it("opens a focused provider screen and returns through the breadcrumb", () => {
+    render(
+      <SettingsScreen
+        initialSection="models"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    fireEvent.click(within(nav).getByRole("button", { name: "Codex" }));
+
+    expect(within(nav).getByRole("button", { name: "Codex" }))
+      .toHaveAttribute("aria-current", "page");
+    expect(
+      screen.getByRole("region", { name: "Codex provider settings" }),
+    ).toBeInTheDocument();
+    // The defaults cross-link keeps the hub's answer one click away.
+    expect(
+      screen.getByRole("note", { name: "New thread defaults summary" }),
+    ).toBeInTheDocument();
+
+    // Breadcrumb: Settings › AI Providers › Codex, with a clickable
+    // parent crumb back to the hub.
+    expect(
+      document.querySelector(".settings-titlebar__current")?.textContent,
+    ).toBe("Codex");
+    const crumb = document.querySelector(".settings-titlebar__crumb");
+    expect(crumb).toHaveTextContent("AI Providers");
+    fireEvent.click(crumb as HTMLElement);
+    expect(
+      document.querySelector(".settings-titlebar__current")?.textContent,
+    ).toBe("AI Providers");
+    expect(
+      screen.getByRole("region", { name: "Model settings" }),
+    ).toBeInTheDocument();
+  });
+
+  it("returns to the models hub from a focused screen's Edit defaults action", () => {
+    render(
+      <SettingsScreen
+        initialSection="models"
+        initialSubsection="codex"
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit defaults" }));
+    expect(
+      screen.getByRole("region", { name: "Model settings" }),
+    ).toBeInTheDocument();
+    expect(
+      document.querySelector(".settings-titlebar__current")?.textContent,
+    ).toBe("AI Providers");
+  });
+
+  it("sorts Gemini CLI last and marks disabled providers off in the nav", async () => {
+    const baseSnapshot = createSnapshot();
+    const snapshot = createSnapshot({
+      acpAgents: {
+        ...baseSnapshot.acpAgents,
+        gemini: { cliPath: { value: "", source: "default" }, enabled: false },
+      },
+    } as Partial<DesktopSettingsSnapshot>);
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1000,
+      entries: [
+        {
+          backendId: "acp:gemini",
+          registryId: "gemini",
+          name: "Gemini CLI",
+          authors: [],
+          distributionKind: "local",
+          distributionSource: "gemini --acp",
+          installable: false,
+          installed: true,
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+        } satisfies AcpAgentSettingsEntry,
+        {
+          backendId: "acp:grok",
+          registryId: "grok",
+          name: "Grok",
+          authors: [],
+          distributionKind: "local",
+          distributionSource: "/usr/bin/grok",
+          installable: false,
+          installed: true,
+          installStatus: "installed",
+          authStatus: "not-required",
+          verificationStatus: "not-applicable",
+        } satisfies AcpAgentSettingsEntry,
+      ],
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{ listAcpAgents }}
+        initialSection="models"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    await within(nav).findByRole("button", { name: /Gemini CLI/ });
+    const subLabels = Array.from(
+      nav.querySelectorAll("#settings-nav-sublist-models .settings-nav__sublabel"),
+    ).map((label) => label.textContent);
+    expect(subLabels).toEqual(["Codex", "Grok", "Gemini CLI"]);
+    const geminiButton = within(nav).getByRole("button", {
+      name: /Gemini CLI/,
+    });
+    expect(
+      geminiButton.querySelector(".settings-nav__subchip")?.textContent,
+    ).toBe("off");
+    expect(
+      geminiButton.querySelector(".settings-nav__subdot--off"),
+    ).not.toBeNull();
   });
 
   it("relogs and removes MCP servers from the Plugins settings pane", async () => {
@@ -5372,6 +5679,9 @@ describe("SettingsScreen", () => {
     render(<SettingsScreen settings={settings} onClose={() => undefined} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Messaging" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Telegram settings" }),
+    );
     const tokenInput = screen.getAllByLabelText("Bot Token")[0];
     fireEvent.change(tokenInput, {
       target: { value: "123456789:secret-token" },
@@ -5392,6 +5702,9 @@ describe("SettingsScreen", () => {
     render(<SettingsScreen settings={settings} onClose={() => undefined} />);
 
     fireEvent.click(screen.getByRole("button", { name: "Messaging" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Open Telegram settings" }),
+    );
     const tokenInput = screen.getAllByLabelText("Bot Token")[0];
     fireEvent.change(tokenInput, {
       target: { value: "123456789:secret-token" },
