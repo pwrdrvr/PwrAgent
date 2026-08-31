@@ -137,6 +137,9 @@ export function MessagingSettings(props: {
 }) {
   const telegram = props.snapshot.messaging.telegram;
   const discord = props.snapshot.messaging.discord;
+  const discordMentionDetectionReady = validateDiscordSnowflake(
+    discord.applicationId.value,
+  ).ok;
   const mattermost = props.snapshot.messaging.mattermost;
   const slack = props.snapshot.messaging.slack;
   useEffect(() => {
@@ -745,7 +748,7 @@ export function MessagingSettings(props: {
           <TextField
             disabled={props.saving}
             label="Application ID"
-            sub="Discord application ID (snowflake) for slash commands."
+            sub="Discord application ID (snowflake) for slash commands and leading @bot mention detection."
             source={optionalStringSourceBadge(discord.applicationId)}
             value={discord.applicationId.value}
             onSave={(applicationId) => {
@@ -754,6 +757,25 @@ export function MessagingSettings(props: {
                 applicationId: {
                   ...discord.applicationId,
                   value: applicationId,
+                },
+              });
+            }}
+          />
+          <SegmentedField
+            disabled={props.saving || !discordMentionDetectionReady}
+            label="Discord response default"
+            sub={discordMentionDetectionReady
+              ? "Global default for Discord servers, channels, and native threads unless a server, channel/thread, or bound PwrAgent thread override is more specific."
+              : "Configure a valid Application ID before enabling leading @bot mention response modes."}
+            options={RESPONSE_MODE_OPTIONS}
+            source={sourceBadge(discord.responseMode)}
+            value={discord.responseMode.value}
+            onChange={(responseMode) => {
+              void props.onSaveDiscord({
+                ...discord,
+                responseMode: {
+                  ...discord.responseMode,
+                  value: responseMode,
                 },
               });
             }}
@@ -795,11 +817,12 @@ export function MessagingSettings(props: {
               "guild",
             )}
             label="Authorized Guilds"
-            sub="Discord guild (server) IDs that may host bound threads."
-            help="Snowflake (17-19 digit number), e.g. 1480554271907905731. Rejected server messages show the guild ID in Messaging Activity."
+            sub="Discord guild (server) IDs that may host bound threads. A row response mode overrides the global Discord default for that server."
+            help="Snowflake (17-19 digit number), e.g. 1480554271907905731. Rejected server messages show the guild ID in Messaging Activity. Channel, native-thread, and bound-thread overrides remain more specific."
             source={optionalListSourceBadge(discord.authorizedGuilds)}
             validateEntry={validateDiscordGuildIdEntry}
             value={discord.authorizedGuilds.value}
+            responseModePolicy={discordMentionDetectionReady}
             onSave={(authorizedGuilds) => {
               void props.onSaveDiscord({
                 ...discord,
@@ -810,6 +833,27 @@ export function MessagingSettings(props: {
               });
             }}
           />
+          {discordMentionDetectionReady ? (
+            <AuthorizedListField
+              disabled={props.saving}
+              label="Channel / Thread Response Overrides"
+              sub="Optional response behavior for one Discord channel or native thread. An exact native-thread override beats its parent channel; either beats the server and global defaults."
+              help="Use the Discord channel or native thread snowflake. Bound PwrAgent thread controls remain the most specific override."
+              source={optionalListSourceBadge(discord.responseModeOverrides)}
+              validateEntry={validateDiscordConversationIdEntry}
+              value={discord.responseModeOverrides.value}
+              responseModePolicy
+              onSave={(responseModeOverrides) => {
+                void props.onSaveDiscord({
+                  ...discord,
+                  responseModeOverrides: {
+                    ...discord.responseModeOverrides,
+                    value: responseModeOverrides,
+                  },
+                });
+              }}
+            />
+          ) : null}
         </div>
       </SettingsSection>
 
@@ -3726,6 +3770,14 @@ function validateDiscordGuildIdEntry(value: string): string | undefined {
     future: "That snowflake timestamp is in the future. Copy the guild ID from Messaging Activity.",
     length: "Discord guild IDs are snowflakes: 17-19 digits.",
     range: "Use a positive Discord guild snowflake, e.g. 1480554271907905731.",
+  });
+}
+
+function validateDiscordConversationIdEntry(value: string): string | undefined {
+  return validationMessage(validateDiscordSnowflake(value), "Discord channel or thread ID", {
+    format: "Use the numeric Discord snowflake, e.g. 1480556454498009352.",
+    length: "Discord IDs are snowflakes: 17-19 digits.",
+    range: "Use a positive Discord snowflake, e.g. 1480556454498009352.",
   });
 }
 

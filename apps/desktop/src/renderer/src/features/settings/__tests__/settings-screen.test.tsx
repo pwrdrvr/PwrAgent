@@ -292,6 +292,8 @@ function createSnapshot(
       },
       discord: {
         enabled: { value: false, source: "default" },
+        responseMode: { value: "every_message", source: "default" },
+        responseModeOverrides: { value: [], source: "default" },
         streamingResponses: { value: false, source: "default" },
         botToken: { configured: false, source: "unset", writable: true },
         applicationId: { value: "", source: "default" },
@@ -4659,6 +4661,79 @@ describe("SettingsScreen", () => {
 
     expect(
       screen.queryByRole("alert", { name: "Discord permission check result" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows Discord response defaults and inherited override scopes", async () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.discord.applicationId.value = "1480556454498009351";
+    snapshot.messaging.discord.authorizedGuilds.value = [
+      { id: "1480556454498009353", displayName: "PwrAgent test guild" },
+    ];
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const discordHeader = screen.getByRole("button", { name: "Discord" });
+    if (discordHeader.getAttribute("aria-expanded") !== "true") {
+      fireEvent.click(discordHeader);
+    }
+    const discordSection = discordHeader.closest("section");
+    expect(discordSection).not.toBeNull();
+    const discordControls = within(discordSection as HTMLElement);
+
+    expect(discordControls.getByText("Discord response default")).toBeInTheDocument();
+    expect(
+      discordControls.getByText("Channel / Thread Response Overrides"),
+    ).toBeInTheDocument();
+    expect(
+      discordControls.getByRole("combobox", {
+        name: "Authorized Guilds response mode 1",
+      }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      discordControls.getByRole("radio", { name: "@ mention only" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          discord: {
+            responseMode: "mention_only",
+          },
+        },
+      });
+    });
+  });
+
+  it("disables Discord mention modes without a valid application ID", () => {
+    const settings = createSettingsState();
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const discordHeader = screen.getByRole("button", { name: "Discord" });
+    if (discordHeader.getAttribute("aria-expanded") !== "true") {
+      fireEvent.click(discordHeader);
+    }
+    const discordControls = within(discordHeader.closest("section") as HTMLElement);
+
+    expect(
+      discordControls.getByRole("radio", { name: "@ mention only" }),
+    ).toBeDisabled();
+    expect(
+      discordControls.queryByText("Channel / Thread Response Overrides"),
     ).not.toBeInTheDocument();
   });
 

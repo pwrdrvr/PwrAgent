@@ -29,6 +29,8 @@ function telegramSnapshot(overrides: Partial<Telegram> = {}): Telegram {
 function discordSnapshot(overrides: Partial<Discord> = {}): Discord {
   return {
     enabled: { value: false, source: "default" },
+    responseMode: { value: "every_message", source: "default" },
+    responseModeOverrides: { value: [], source: "default" },
     streamingResponses: { value: false, source: "default" },
     botToken: { configured: false, source: "unset", writable: true },
     applicationId: { value: "", source: "default" },
@@ -217,6 +219,30 @@ describe("buildDiscordPatchDelta", () => {
     const delta = buildDiscordPatchDelta(snapshot, candidate);
     expect(delta).toEqual({ enabled: true });
     expect(delta).not.toHaveProperty("applicationId");
+  });
+
+  it("emits Discord response defaults and conversation overrides", () => {
+    const snapshot = discordSnapshot();
+    const responseModeOverrides = [
+      {
+        id: "1480556454498009352",
+        displayName: "release-chat",
+        responseMode: "mention_only" as const,
+      },
+    ];
+    const candidate: Discord = {
+      ...snapshot,
+      responseMode: { ...snapshot.responseMode, value: "mention_only" },
+      responseModeOverrides: {
+        ...snapshot.responseModeOverrides,
+        value: responseModeOverrides,
+      },
+    };
+
+    expect(buildDiscordPatchDelta(snapshot, candidate)).toEqual({
+      responseMode: "mention_only",
+      responseModeOverrides,
+    });
   });
 });
 

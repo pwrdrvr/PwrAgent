@@ -253,7 +253,7 @@ export function buildBindingStatusIntent(params: {
         ? `Responses: ${formatMessagingResponseModeLabel(responseMode)} (${
             params.binding.preferences?.responseMode
               ? "binding override"
-              : "channel default"
+              : "inherited default"
           })`
         : undefined,
       `Working Updates: ${formatMessagingToolUpdateModeLabel(toolUpdateMode)}`,
@@ -797,7 +797,7 @@ export function resolveMessagingStreamingResponseMode(
 
 /**
  * Resolve a streaming-responses mode to an effective on/off boolean: `"inherit"`
- * follows the channel default, otherwise the explicit setting wins. Single
+ * follows the inherited provider scope, otherwise the explicit setting wins. Single
  * source of truth for the on/off decision — the controller (to gate
  * stream-intent generation) and the new-thread summary both consult it, and it
  * mirrors the adapter-side `policy` check.
@@ -1537,7 +1537,7 @@ export function buildStatusResponseModePickerIntent(params: {
     mode: "inherit" | MessagingResponseMode;
   }> = [
     {
-      label: `Channel default (${formatMessagingResponseModeLabel(
+      label: `Inherited default (${formatMessagingResponseModeLabel(
         params.defaultMode,
       )})`,
       mode: "inherit",

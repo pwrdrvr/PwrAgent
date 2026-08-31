@@ -21502,7 +21502,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining(
-        "Responses: @mentions only (channel default)",
+        "Responses: @mentions only (inherited default)",
       ),
       actions: expect.arrayContaining([
         expect.objectContaining({
@@ -21524,7 +21524,7 @@ describe("MessagingController", () => {
       choices: expect.arrayContaining([
         expect.objectContaining({
           id: "status:set-response-mode",
-          label: "Channel default (@mentions only) (current)",
+          label: "Inherited default (@mentions only) (current)",
           value: { responseMode: "inherit" },
         }),
         expect.objectContaining({
@@ -21590,7 +21590,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining(
-        "Responses: @mentions only (channel default)",
+        "Responses: @mentions only (inherited default)",
       ),
     });
   });

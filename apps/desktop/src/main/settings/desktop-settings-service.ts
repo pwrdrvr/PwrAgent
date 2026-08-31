@@ -1043,6 +1043,13 @@ export class DesktopSettingsService {
             false,
             DISCORD_ENABLED_ENV,
           ),
+          responseMode: this.resolveConfigMessagingResponseMode(
+            config.messaging?.discord?.responseMode,
+            "every_message",
+          ),
+          responseModeOverrides: this.resolveConfigList(
+            config.messaging?.discord?.responseModeOverrides,
+          ),
           streamingResponses: this.resolveBoolean(
             config.messaging?.discord?.streamingResponses,
             false,

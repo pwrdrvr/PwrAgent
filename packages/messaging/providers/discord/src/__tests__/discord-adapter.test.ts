@@ -190,6 +190,21 @@ describe("discord adapter", () => {
     });
   });
 
+  it("does not advertise bot-mention reporting without a valid application ID", () => {
+    for (const applicationId of [undefined, "not-a-snowflake"]) {
+      const adapter = new DiscordAdapter({
+        config: {
+          applicationId,
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          botToken: "token",
+          channel: "discord",
+        },
+      });
+
+      expect(adapter.capabilityProfile.conversationInput).toBeUndefined();
+    }
+  });
+
   it("returns a failed delivery when a stale channel rejects new messages", async () => {
     const logger = { debug: vi.fn(), warn: vi.fn() };
     const adapter = new DiscordAdapter({

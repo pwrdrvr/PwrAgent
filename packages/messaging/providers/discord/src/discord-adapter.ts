@@ -304,9 +304,6 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   readonly channel = "discord" as const;
   readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy = "externalized";
   readonly capabilityProfile: MessagingCapabilityProfile = {
-    conversationInput: {
-      reportsBotMention: true,
-    },
     actions: {
       maxActions: 25,
       maxActionsPerRow: 5,
@@ -378,6 +375,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   constructor(options: DiscordAdapterOptions) {
     this.options = options;
+    if (validateDiscordSnowflake(options.config.applicationId).ok) {
+      this.capabilityProfile.conversationInput = {
+        reportsBotMention: true,
+      };
+    }
   }
 
   get authorizedActorIds(): readonly string[] {

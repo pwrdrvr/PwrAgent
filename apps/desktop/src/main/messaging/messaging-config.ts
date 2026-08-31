@@ -243,6 +243,8 @@ export const DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS = {
     botToken: "connection",
     channel: "irrelevant",
     enabled: "connection",
+    responseMode: "authorization",
+    responseModeOverrides: "authorization",
     streamingResponses: "rendering",
   },
   mattermost: {
@@ -585,6 +587,8 @@ export function loadDesktopMessagingConfig(
             enabled: true,
             botToken: discordBotToken,
             applicationId: readEnv(env, DISCORD_APPLICATION_ID_ENV),
+            responseMode: "every_message",
+            responseModeOverrides: [],
             streamingResponses: readEnvBoolean(
               env,
               DISCORD_STREAMING_RESPONSES_ENV,
@@ -975,6 +979,9 @@ export async function loadDesktopMessagingConfigFromSettings(
             (envConfig.discord?.applicationId
               ?? snapshot.messaging.discord.applicationId.value)
             || undefined,
+          responseMode: snapshot.messaging.discord.responseMode.value,
+          responseModeOverrides:
+            snapshot.messaging.discord.responseModeOverrides.value,
           streamingResponses: snapshot.messaging.discord.streamingResponses.value,
           authorizedActorIds: discordAuthorizedActorIds,
           authorizedGuildIds: discordAuthorizedGuildIds,
@@ -1455,6 +1462,10 @@ function authorizationUpdateForChannelConfig(
       return {
         authorizedActorIds: contactIds(config.discord?.authorizedActorIds),
         authorizedConversationIds: contactIds(config.discord?.authorizedGuildIds),
+        conversationResponseModes: conversationResponseModes(
+          config.discord?.responseModeOverrides,
+        ),
+        responseMode: config.discord?.responseMode,
       };
     case "mattermost":
       return {

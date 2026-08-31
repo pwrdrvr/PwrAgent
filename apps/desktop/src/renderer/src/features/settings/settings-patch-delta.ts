@@ -69,6 +69,17 @@ export function buildDiscordPatchDelta(
   if (snapshot.enabled.value !== candidate.enabled.value) {
     patch.enabled = candidate.enabled.value;
   }
+  if (snapshot.responseMode.value !== candidate.responseMode.value) {
+    patch.responseMode = candidate.responseMode.value;
+  }
+  if (
+    !authorizedContactArrayEqual(
+      snapshot.responseModeOverrides.value,
+      candidate.responseModeOverrides.value,
+    )
+  ) {
+    patch.responseModeOverrides = candidate.responseModeOverrides.value;
+  }
   if (snapshot.streamingResponses.value !== candidate.streamingResponses.value) {
     patch.streamingResponses = candidate.streamingResponses.value;
   }

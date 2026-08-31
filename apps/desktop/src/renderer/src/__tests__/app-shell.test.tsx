@@ -1620,6 +1620,8 @@ describe("App", () => {
         },
         discord: {
           enabled: { value: false, source: "default" },
+          responseMode: { value: "every_message", source: "default" },
+          responseModeOverrides: { value: [], source: "default" },
           streamingResponses: { value: false, source: "default" },
           botToken: { configured: false, source: "unset", writable: true },
           applicationId: { value: "", source: "default" },
