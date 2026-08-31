@@ -193,6 +193,32 @@ describe("usePullRequestRefresh", () => {
     expect(onRefreshNavigation).not.toHaveBeenCalled();
   });
 
+  it("does not refresh navigation when an attached instance skips the probe", async () => {
+    const onRefreshNavigation = vi.fn(async () => undefined);
+    const refreshThreadPullRequests = vi.fn(async () => buildResponse({
+      ghAvailable: false,
+      prs: [],
+      refreshStarted: false,
+      skippedReason: "remote_refresh_unsupported",
+    }));
+    const desktopApi = {
+      refreshThreadPullRequests,
+    } satisfies DesktopApi;
+
+    renderHook(() =>
+      usePullRequestRefresh({
+        desktopApi,
+        onRefreshNavigation,
+        selectedThread: buildThread({ prs: buildResponse().prs }),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(refreshThreadPullRequests).toHaveBeenCalledOnce();
+    });
+    expect(onRefreshNavigation).not.toHaveBeenCalled();
+  });
+
   it("refreshes navigation when a failing PR gains running-check metadata", async () => {
     const currentPr = {
       ...buildResponse().prs[0]!,

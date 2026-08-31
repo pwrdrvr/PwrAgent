@@ -767,6 +767,15 @@ function logDebug(event: string, payload: Record<string, unknown>): void {
   appServerLog.debug(event, payload);
 }
 
+function isFederationMethodNotFoundError(error: unknown): boolean {
+  return Boolean(
+    error
+    && typeof error === "object"
+    && "code" in error
+    && error.code === "method_not_found",
+  );
+}
+
 async function hydrateRetainedThreadOverlayData(
   overlayStore: OverlayStoreLike,
   threads: AppServerThreadSummary[],
@@ -3613,14 +3622,57 @@ class DesktopAppServerService {
       request.federationTarget
       && isRemoteFederationTarget(request.federationTarget)
     ) {
-      return await getDesktopFederationRuntime()
-        .remoteBackend(request.federationTarget)
-        .refreshThreadPullRequests({
-          backend: request.backend,
+      const federationTarget = request.federationTarget;
+      const federationRuntime = getDesktopFederationRuntime();
+      const instanceLabel = federationRuntime.connectedPeerTargets().find(
+        (peer) => peer.target.instanceId === federationTarget.instanceId,
+      )?.label ?? federationTarget.instanceId;
+      const skippedResponse = (
+        reason:
+          | "missing-thread-navigation-capability"
+          | "remote-method-not-found",
+      ): RefreshThreadPullRequestsResponse => {
+        const backend = request.backend ?? "codex";
+        appServerLog.info(
+          `thread PR refresh skipped: attached instance "${instanceLabel}" does not support remote PR refresh`,
+          {
+            backend,
+            instanceId: federationTarget.instanceId,
+            reason,
+            threadId: request.threadId,
+          },
+        );
+        return {
+          backend,
           threadId: request.threadId,
-          ...(request.provider ? { provider: request.provider } : {}),
-          ...(request.trigger ? { trigger: request.trigger } : {}),
-        });
+          provider: request.provider ?? DEFAULT_PULL_REQUEST_PROVIDER,
+          ghAvailable: false,
+          prs: [],
+          refreshStarted: false,
+          skippedReason: "remote_refresh_unsupported",
+        };
+      };
+      if (!federationRuntime.remoteTargetSupportsCapability(
+        federationTarget,
+        "thread_navigation",
+      )) {
+        return skippedResponse("missing-thread-navigation-capability");
+      }
+      try {
+        return await federationRuntime
+          .remoteBackend(federationTarget)
+          .refreshThreadPullRequests({
+            backend: request.backend,
+            threadId: request.threadId,
+            ...(request.provider ? { provider: request.provider } : {}),
+            ...(request.trigger ? { trigger: request.trigger } : {}),
+          });
+      } catch (error) {
+        if (isFederationMethodNotFoundError(error)) {
+          return skippedResponse("remote-method-not-found");
+        }
+        throw error;
+      }
     }
     const backend = request.backend ?? "codex";
     const requestKey = getThreadPullRequestsRequestKey(backend, request);
