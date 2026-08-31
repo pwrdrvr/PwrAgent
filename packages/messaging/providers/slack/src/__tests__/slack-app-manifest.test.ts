@@ -25,7 +25,7 @@ const manifestsDir = path.resolve(
 describe("official Slack app manifest", () => {
   it("matches the versioned JSON fixture", () => {
     const fixture = readFileSync(
-      path.join(manifestsDir, "pwragent-slack-app.v1.json"),
+      path.join(manifestsDir, "pwragent-slack-app.v2.json"),
       "utf8",
     );
     expect(slackAppManifestJson()).toBe(fixture);
@@ -33,7 +33,7 @@ describe("official Slack app manifest", () => {
 
   it("matches the versioned YAML fixture", () => {
     const fixture = readFileSync(
-      path.join(manifestsDir, "pwragent-slack-app.v1.yaml"),
+      path.join(manifestsDir, "pwragent-slack-app.v2.yaml"),
       "utf8",
     );
     expect(slackAppManifestYaml()).toBe(fixture);
@@ -53,13 +53,16 @@ describe("official Slack app manifest", () => {
 
   it("keeps PKCE, token rotation, and org deploy off", () => {
     const manifest = buildOfficialSlackAppManifest();
-    expect(SLACK_APP_MANIFEST_VERSION).toBe(1);
+    expect(SLACK_APP_MANIFEST_VERSION).toBe(2);
     expect(manifest.oauth_config.pkce_enabled).toBe(false);
     expect(manifest.settings.token_rotation_enabled).toBe(false);
     expect(manifest.settings.org_deploy_enabled).toBe(false);
     expect(manifest.settings.socket_mode_enabled).toBe(true);
     expect(manifest.settings.interactivity.is_enabled).toBe(true);
     expect(manifest.features.app_home.home_tab_enabled).toBe(true);
+    expect(manifest.features.agent_view.agent_description).toBe(
+      "Run and supervise coding agents on your own computer from Slack.",
+    );
     expect(manifest.oauth_config.scopes.bot).toEqual([
       ...SLACK_APP_MANIFEST_BOT_SCOPES,
     ]);

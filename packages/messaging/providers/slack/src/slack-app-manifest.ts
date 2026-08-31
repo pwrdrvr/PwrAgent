@@ -11,7 +11,7 @@ import { MESSAGING_COMMAND_CATALOG } from "@pwragent/messaging-interface";
  * commands, or settings flags change in a way that existing customer
  * apps should reinstall.
  */
-export const SLACK_APP_MANIFEST_VERSION = 1;
+export const SLACK_APP_MANIFEST_VERSION = 2;
 
 export const DEFAULT_SLACK_SLASH_COMMAND_PREFIX = "pwragent_";
 
@@ -34,6 +34,8 @@ export const SLACK_APP_MANIFEST_BOT_SCOPES = [
 ] as const;
 
 export const SLACK_APP_MANIFEST_BOT_EVENTS = [
+  "agent_session_stopped",
+  "agent_session_title_changed",
   "app_home_opened",
   "app_mention",
   "app_uninstalled",
@@ -62,6 +64,9 @@ export type SlackAppManifest = {
     background_color: string;
   };
   features: {
+    agent_view: {
+      agent_description: string;
+    };
     app_home: {
       home_tab_enabled: true;
       messages_tab_enabled: true;
@@ -111,6 +116,9 @@ export function buildOfficialSlackAppManifest(
       background_color: "#000000",
     },
     features: {
+      agent_view: {
+        agent_description: "Run and supervise coding agents on your own computer from Slack.",
+      },
       app_home: {
         home_tab_enabled: true,
         messages_tab_enabled: true,
