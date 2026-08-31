@@ -1353,6 +1353,7 @@ function createApi(options: {
   createInteractionResponse: ReturnType<typeof vi.fn>;
   createMessage: ReturnType<typeof vi.fn>;
   deleteApplicationCommand: ReturnType<typeof vi.fn>;
+  getCurrentApplicationId: ReturnType<typeof vi.fn>;
   listApplicationCommands: ReturnType<typeof vi.fn>;
   pinMessage: ReturnType<typeof vi.fn>;
   sendTyping: ReturnType<typeof vi.fn>;
@@ -1397,6 +1398,7 @@ function createApi(options: {
         );
       },
     ),
+    getCurrentApplicationId: vi.fn(async () => DISCORD_APP_ID),
     listApplicationCommands: vi.fn(
       async (_applicationId: string) => applicationCommands,
     ),

@@ -103,6 +103,8 @@ describe("desktop messaging config", () => {
       "botToken",
       "channel",
       "enabled",
+      "responseMode",
+      "responseModeOverrides",
       "streamingResponses",
     ]);
     expect(Object.keys(DESKTOP_MESSAGING_CHANNEL_CONFIG_FIELD_IMPACTS.mattermost).sort()).toEqual([
@@ -239,6 +241,62 @@ describe("desktop messaging config", () => {
       });
   });
 
+  it("hot-applies Discord response hierarchy changes", () => {
+    const previous = {
+      discord: {
+        channel: "discord" as const,
+        botToken: "token",
+        authorizedActorIds: [],
+        authorizedGuildIds: [
+          { id: "1480556454498009351", displayName: "Test server" },
+        ],
+        responseMode: "every_message" as const,
+        responseModeOverrides: [],
+      },
+    };
+    const next = {
+      discord: {
+        ...previous.discord,
+        authorizedGuildIds: [
+          {
+            id: "1480556454498009351",
+            displayName: "Test server",
+            responseMode: "mention_only" as const,
+          },
+        ],
+        responseMode: "mention_only" as const,
+        responseModeOverrides: [
+          {
+            id: "1480556454498009352",
+            displayName: "release-chat",
+            responseMode: "every_message" as const,
+          },
+        ],
+      },
+    };
+
+    expect(classifyDesktopMessagingChannelConfigUpdate(previous, next, "discord"))
+      .toEqual({
+        action: "hot",
+        changedFields: [
+          "discord.authorizedGuildIds",
+          "discord.responseMode",
+          "discord.responseModeOverrides",
+        ],
+        authorization: {
+          authorizedActorIds: [],
+          authorizedConversationIds: ["1480556454498009351"],
+          conversationResponseModes: [
+            {
+              conversationId: "1480556454498009352",
+              responseMode: "every_message",
+            },
+          ],
+          responseMode: "mention_only",
+        },
+      });
+  });
+
   it("enables configured channels when credentials are present before actor discovery", () => {
     const config = loadDesktopMessagingConfig({
       [TELEGRAM_BOT_TOKEN_ENV]: " tg-token ",
@@ -280,6 +338,8 @@ describe("desktop messaging config", () => {
         enabled: true,
         botToken: "discord-token",
         applicationId: undefined,
+        responseMode: "every_message",
+        responseModeOverrides: [],
         streamingResponses: false,
         authorizedActorIds: [],
         authorizedGuildIds: [],
@@ -556,6 +616,8 @@ describe("desktop messaging config", () => {
         enabled: true,
         applicationId: "discord-app",
         botToken: "settings-discord-token",
+        responseMode: "every_message",
+        responseModeOverrides: [],
         streamingResponses: true,
         authorizedActorIds: [{ id: "222222222", displayName: "" }],
         authorizedGuildIds: [],

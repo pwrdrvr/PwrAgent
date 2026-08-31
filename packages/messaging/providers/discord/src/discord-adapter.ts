@@ -232,6 +232,7 @@ export type DiscordApi = DiscordApplicationCommandApi & {
   ): Promise<DiscordThreadChannel>;
   getChannel(channelId: string): Promise<DiscordChannelInfo>;
   getGuild(guildId: string): Promise<DiscordGuildInfo>;
+  getCurrentApplicationId(): Promise<string>;
   getThreadPermissions(request: {
     channelId: string;
     guildId: string;
@@ -356,6 +357,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private static readonly BREADCRUMB_CACHE_CAP = 500;
   private readonly channelCache = new Map<string, DiscordChannelInfo>();
   private readonly guildCache = new Map<string, DiscordGuildInfo>();
+  private applicationId?: string;
   private readonly unauthorizedGuildLogKeys = new Set<string>();
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
@@ -375,6 +377,12 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   constructor(options: DiscordAdapterOptions) {
     this.options = options;
+    if (validateDiscordSnowflake(options.config.applicationId).ok) {
+      this.applicationId = options.config.applicationId;
+      this.capabilityProfile.conversationInput = {
+        reportsBotMention: true,
+      };
+    }
   }
 
   get authorizedActorIds(): readonly string[] {
@@ -421,7 +429,32 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
     const lifecycleGeneration = ++this.lifecycleGeneration;
-    await this.reconcileApplicationCommands();
+    let applicationId: string | undefined;
+    try {
+      applicationId = await this.resolveApplicationId();
+    } catch (error) {
+      this.options.logger?.warn?.(
+        "discord application ID discovery failed; continuing without mention-only response mode or slash commands",
+        { error: errorMessage(error) },
+      );
+    }
+    if (lifecycleGeneration !== this.lifecycleGeneration) {
+      return;
+    }
+    if (applicationId !== undefined) {
+      this.applicationId = applicationId;
+      this.capabilityProfile.conversationInput = {
+        reportsBotMention: true,
+      };
+      try {
+        await this.reconcileApplicationCommands(applicationId);
+      } catch (error) {
+        this.options.logger?.warn?.(
+          "discord slash command reconciliation failed; continuing with gateway startup",
+          { error: errorMessage(error) },
+        );
+      }
+    }
     if (lifecycleGeneration !== this.lifecycleGeneration) {
       return;
     }
@@ -1052,7 +1085,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       message.content !== undefined
         ? stripDiscordBotMention(
             message.content,
-            this.options.config.applicationId,
+            this.applicationId,
           )
         : undefined;
     const isPairingMessage = message.content !== undefined
@@ -1346,10 +1379,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         interaction.token,
         validateDiscordInteractionToken,
       )
-      && (this.options.config.applicationId === undefined
+      && (this.applicationId === undefined
         || this.validateIdentifier(
           "application_id",
-          this.options.config.applicationId,
+          this.applicationId,
           validateDiscordSnowflake,
         ))
       && (interaction.guild_id === undefined
@@ -1514,15 +1547,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     return false;
   }
 
-  private async reconcileApplicationCommands(): Promise<void> {
-    const applicationId = this.options.config.applicationId;
-    if (!applicationId) {
-      this.options.logger?.warn?.(
-        "discord slash command registration skipped because applicationId is not configured",
-      );
-      return;
-    }
-
+  private async reconcileApplicationCommands(applicationId: string): Promise<void> {
     const result = await reconcileDiscordApplicationCommands({
       api: this.api,
       applicationId,
@@ -1530,6 +1555,24 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     });
 
     this.options.logger?.debug("discord slash commands reconciled", result);
+  }
+
+  private async resolveApplicationId(): Promise<string> {
+    const configuredApplicationId = this.options.config.applicationId;
+    if (configuredApplicationId !== undefined) {
+      const validation = validateDiscordSnowflake(configuredApplicationId);
+      if (!validation.ok) {
+        throw new Error("Discord application ID override is not a valid snowflake.");
+      }
+      return configuredApplicationId;
+    }
+
+    const discoveredApplicationId = await this.api.getCurrentApplicationId();
+    const validation = validateDiscordSnowflake(discoveredApplicationId);
+    if (!validation.ok) {
+      throw new Error("Discord returned an invalid current application ID.");
+    }
+    return discoveredApplicationId;
   }
 
   private createCustomId(
@@ -2088,7 +2131,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     return {
       opaque: {
         applicationId: options?.interactionToken
-          ? (this.options.config.applicationId ?? null)
+          ? (this.applicationId ?? null)
           : null,
         channelId,
         channelType: options?.channelType ?? null,
@@ -2341,6 +2384,13 @@ class DiscordRestApi implements DiscordApi {
       name?: string;
     };
     return { id: raw.id, name: raw.name ?? undefined };
+  }
+
+  async getCurrentApplicationId(): Promise<string> {
+    const application = (await this.rest.get(
+      Routes.oauth2CurrentApplication(),
+    )) as { id?: unknown };
+    return typeof application.id === "string" ? application.id : "";
   }
 
   async getThreadPermissions(request: {
@@ -2863,7 +2913,18 @@ function discordChannelIsThread(channel: unknown): boolean {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.trim().length > 0) {
+    return message;
+  }
+  const retryAfterMs = retryAfterMsFromError(error);
+  if (retryAfterMs !== undefined) {
+    return `Discord API rate limit (retry after ${retryAfterMs} ms).`;
+  }
+  if (error instanceof Error && error.name !== "Error") {
+    return error.name;
+  }
+  return "Unknown Discord error.";
 }
 
 function retryAfterMsFromError(error: unknown): number | undefined {

@@ -24,7 +24,10 @@ export {
   textForDiscordIntent,
 } from "./discord-formatting.ts";
 export type { DiscordMessagingConfig } from "./discord-config.ts";
-export { validateCredentials } from "./validate-credentials.ts";
+export {
+  discoverDiscordApplicationId,
+  validateCredentials,
+} from "./validate-credentials.ts";
 export {
   buildDiscordThreadPermissionRequestUrl,
   DISCORD_THREAD_REPLY_PERMISSIONS,

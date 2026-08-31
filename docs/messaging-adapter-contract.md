@@ -531,7 +531,8 @@ export async function validateCredentials(
    webhook registered, no message sent. The probe MUST be a stateless
    REST call (or equivalent) using the provider's real SDK.
    - Telegram uses `grammy.Bot.api.getMe()`.
-   - Discord uses `discord.js.REST.get(Routes.user("@me"))`.
+   - Discord uses `discord.js.REST.get(Routes.oauth2CurrentApplication())` so
+     the same probe validates the token and discovers the application ID.
    - Future platforms should pick the cheapest "who am I" endpoint
      their SDK exposes.
 2. **Stateless.** Don't construct the full adapter. Don't touch the

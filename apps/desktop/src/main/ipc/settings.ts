@@ -1471,11 +1471,11 @@ export function registerSettingsIpcHandlers(
         getService(service),
         process.env,
       );
-      const applicationId = config.discord?.applicationId;
-      if (!applicationId) {
-        throw new Error("Configure the Discord application ID before requesting permissions.");
-      }
       const discordProvider = await import("@pwragent/messaging-provider-discord");
+      const applicationId = config.discord?.applicationId
+        ?? await discordProvider.discoverDiscordApplicationId({
+          botToken: config.discord?.botToken ?? "",
+        });
       const url = discordProvider.buildDiscordThreadPermissionRequestUrl({
         applicationId,
         ...(request.guildId ? { guildId: request.guildId } : {}),

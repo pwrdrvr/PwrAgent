@@ -59,7 +59,6 @@ import type {
   MessagingRateLimitInfo,
   MessagingReconnectInfo,
   MessagingRejectedInboundEvent,
-  MessagingResponseMode,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import {
@@ -78,6 +77,7 @@ import {
   type DesktopMessagingConfigChannel,
   type DesktopMessagingChannelConfigUpdate,
 } from "./messaging-config";
+import { resolveMessagingResponseModeForChannel } from "./messaging-response-mode";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
 import { resolvePwragentRoot } from "../profile";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
@@ -1275,13 +1275,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       return false;
     }
     const binding = await params.store.findActiveBindingForChannel(event.channel);
-    const responseMode =
-      binding?.preferences?.responseMode ??
-      responseModeForChannel(
-        await this.loadConfig(),
-        params.channel,
-        event.channel,
-      );
+    const responseMode = resolveMessagingResponseModeForChannel({
+      bindingResponseMode: binding?.preferences?.responseMode,
+      channel: params.channel,
+      channelRef: event.channel,
+      config: await this.loadConfig(),
+    });
     if (responseMode !== "mention_only") {
       return false;
     }
@@ -1367,11 +1366,11 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       showStreamingOption: async () =>
         (await this.loadConfig()).showStreamingOption ?? false,
       responseModeForConversation: async (channel) =>
-        responseModeForChannel(
-          await this.loadConfig(),
-          adapter.channel,
-          channel,
-        ),
+        resolveMessagingResponseModeForChannel({
+          channel: adapter.channel,
+          channelRef: channel,
+          config: await this.loadConfig(),
+        }),
       toolUpdateDefaultMode: async (targetKind) => {
         const config = await this.loadConfig();
         return targetKind === "agent_thread"
@@ -3124,33 +3123,6 @@ function streamingResponsesDefaultForChannel(
     // is correct for it (there is no LINE streaming setting).
     default:
       return false;
-  }
-}
-
-function responseModeForChannel(
-  config: DesktopMessagingConfig,
-  channel: MessagingChannelKind,
-  channelRef: MessagingChannelRef,
-): MessagingResponseMode {
-  const conversationIds = [
-    channelRef.conversation.id,
-    channelRef.conversation.parentId,
-  ].filter((id): id is string => Boolean(id));
-  switch (channel) {
-    case "slack": {
-      const specificMode = config.slack?.authorizedConversationIds
-        ?.find((contact) => conversationIds.includes(contact.id))
-        ?.responseMode;
-      return specificMode ?? config.slack?.responseMode ?? "mention_only";
-    }
-    case "telegram": {
-      const specificMode = config.telegram?.authorizedSupergroupIds
-        ?.find((contact) => conversationIds.includes(contact.id))
-        ?.responseMode;
-      return specificMode ?? config.telegram?.responseMode ?? "every_message";
-    }
-    default:
-      return "every_message";
   }
 }
 

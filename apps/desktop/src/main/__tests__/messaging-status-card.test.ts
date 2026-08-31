@@ -228,7 +228,7 @@ describe("buildBindingStatusIntent", () => {
     });
 
     expect(inheritedIntent.text).toContain(
-      "Responses: @mentions only (channel default)",
+      "Responses: @mentions only (inherited default)",
     );
     expect(inheritedIntent.actions).toContainEqual(
       expect.objectContaining({

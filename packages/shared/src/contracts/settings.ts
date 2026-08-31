@@ -927,6 +927,8 @@ export type DesktopSettingsSnapshot = {
     };
     discord: {
       enabled: DesktopSettingsValue<boolean>;
+      responseMode: DesktopSettingsValue<DesktopMessagingResponseMode>;
+      responseModeOverrides: DesktopSettingsValue<DesktopAuthorizedContact[]>;
       streamingResponses: DesktopSettingsValue<boolean>;
       botToken: DesktopSettingsSecretState;
       applicationId: DesktopSettingsValue<string>;
@@ -1198,6 +1200,8 @@ export type DesktopSettingsConfigPatch = {
     };
     discord?: {
       enabled?: boolean;
+      responseMode?: DesktopMessagingResponseMode;
+      responseModeOverrides?: DesktopAuthorizedContact[];
       streamingResponses?: boolean;
       applicationId?: string;
       authorizedUserIds?: DesktopAuthorizedContact[];

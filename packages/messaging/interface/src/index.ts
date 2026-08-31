@@ -2142,7 +2142,7 @@ export type MessagingCallbackHandleStore = {
  *
  * The probe MUST be non-disruptive — no polling started, no gateway
  * connected, no message sent. Telegram uses `grammy.Bot.api.getMe()`,
- * Discord uses `discord.js.REST.get(Routes.user('@me'))`. Both are
+ * Discord uses `discord.js.REST.get(Routes.oauth2CurrentApplication())`. Both are
  * stateless REST calls that don't change adapter state.
  *
  * The result carries only public identity (bot username, account

@@ -191,6 +191,8 @@ export type DesktopSettingsConfig = {
     };
     discord?: {
       enabled?: boolean;
+      responseMode?: DesktopMessagingResponseMode;
+      responseModeOverrides?: AuthorizedContactConfig[];
       streamingResponses?: boolean;
       applicationId?: string;
       authorizedUserIds?: AuthorizedContactConfig[];
@@ -1240,6 +1242,17 @@ export function desktopSettingsPatchToEdits(
   if (discord?.enabled !== undefined) {
     set(["messaging", "discord", "enabled"], discord.enabled);
   }
+  if (discord?.responseMode !== undefined) {
+    set(["messaging", "discord", "response_mode"], discord.responseMode);
+  }
+  if (discord?.responseModeOverrides !== undefined) {
+    setAuthorizedContacts(
+      ["messaging", "discord"],
+      "response_mode_overrides",
+      "response_mode_overrides",
+      discord.responseModeOverrides,
+    );
+  }
   if (discord?.streamingResponses !== undefined) {
     set(["messaging", "discord", "streaming_responses"], discord.streamingResponses);
   }
@@ -1900,6 +1913,10 @@ function normalizeDesktopConfig(
       },
       discord: {
         enabled: readBoolean(discord?.enabled),
+        responseMode: readMessagingResponseMode(discord?.response_mode),
+        responseModeOverrides: readAuthorizedContacts(
+          discord?.response_mode_overrides,
+        ),
         streamingResponses: readBoolean(discord?.streaming_responses),
         applicationId: readString(discord?.application_id),
         authorizedUserIds: readAuthorizedContacts(

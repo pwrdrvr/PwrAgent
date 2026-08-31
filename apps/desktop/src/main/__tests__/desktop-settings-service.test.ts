@@ -386,6 +386,63 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("round-trips the Discord response-mode hierarchy", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    const service = new DesktopSettingsService({
+      configPath,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await service.writeConfigPatch({
+      messaging: {
+        discord: {
+          responseMode: "mention_only",
+          authorizedGuilds: [
+            {
+              id: "1480556454498009351",
+              displayName: "Test server",
+              responseMode: "every_message",
+            },
+          ],
+          responseModeOverrides: [
+            {
+              id: "1480556454498009352",
+              displayName: "release-chat",
+              responseMode: "mention_only",
+            },
+          ],
+        },
+      },
+    });
+
+    const snapshot = await service.readSettings();
+    expect(snapshot.messaging.discord.responseMode).toEqual({
+      value: "mention_only",
+      source: "config",
+    });
+    expect(snapshot.messaging.discord.authorizedGuilds.value).toEqual([
+      {
+        id: "1480556454498009351",
+        displayName: "Test server",
+        responseMode: "every_message",
+      },
+    ]);
+    expect(snapshot.messaging.discord.responseModeOverrides.value).toEqual([
+      {
+        id: "1480556454498009352",
+        displayName: "release-chat",
+        responseMode: "mention_only",
+      },
+    ]);
+
+    const contents = fs.readFileSync(configPath, "utf8");
+    expect(contents).toContain('response_mode = "mention_only"');
+    expect(contents).toContain("[[messaging.discord.authorized_guilds]]");
+    expect(contents).toContain("[[messaging.discord.response_mode_overrides]]");
+  });
+
   it("infers Beta Prerelease from an alpha desktop version", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");

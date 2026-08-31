@@ -261,6 +261,8 @@ describe("desktop settings contracts", () => {
         },
         discord: {
           enabled: { value: false, source: "default" },
+          responseMode: { value: "every_message", source: "default" },
+          responseModeOverrides: { value: [], source: "default" },
           streamingResponses: { value: false, source: "default" },
           botToken: {
             configured: true,
