@@ -5027,7 +5027,7 @@ describe("DesktopBackendRegistry", () => {
     });
   });
 
-  it("configures the code-mode reducer before a native Token Miser review", async () => {
+  it("configures the code-mode reducer before an inline Token Miser review", async () => {
     const codexClient = new MockBackendClient({
       threads: [],
       serverCapabilities: {
@@ -5076,7 +5076,7 @@ describe("DesktopBackendRegistry", () => {
       });
 
       expect(prepare).toHaveBeenCalledTimes(1);
-      expect(codexClient.lastStartReviewParams?.config).toMatchObject({
+      expect(codexClient.lastStartTurnParams?.config).toMatchObject({
         features: {
           code_mode: {
             output_reducer: {
@@ -5090,7 +5090,7 @@ describe("DesktopBackendRegistry", () => {
         },
       });
       const dynamicToolNames = pwragentDynamicTools(
-        codexClient.lastStartReviewParams?.dynamicTools,
+        codexClient.lastStartTurnParams?.dynamicTools,
       ).map((tool) => tool.name);
       expect(dynamicToolNames).toContain("search_threads");
       expect(dynamicToolNames).toEqual(expect.arrayContaining([
@@ -5103,7 +5103,7 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("does not pass reducer config to native review for another protocol version", async () => {
+  it("does not pass reducer config to inline review for another protocol version", async () => {
     const codexClient = new MockBackendClient({
       threads: [],
       serverCapabilities: {
@@ -5137,13 +5137,13 @@ describe("DesktopBackendRegistry", () => {
       })).resolves.toMatchObject({ threadId: "thread-1" });
 
       expect(prepare).toHaveBeenCalledTimes(1);
-      expect(codexClient.lastStartReviewParams?.config).toBeUndefined();
+      expect(codexClient.lastStartTurnParams?.config).toBeUndefined();
     } finally {
       await registry.close();
     }
   });
 
-  it("removes Token Miser tools from an opted-out native review catalog", async () => {
+  it("removes Token Miser tools from an opted-out inline review catalog", async () => {
     const codexClient = new MockBackendClient({
       threads: [],
       serverCapabilities: {
@@ -5185,13 +5185,13 @@ describe("DesktopBackendRegistry", () => {
       });
 
       const dynamicToolNames = pwragentDynamicTools(
-        codexClient.lastStartReviewParams?.dynamicTools,
+        codexClient.lastStartTurnParams?.dynamicTools,
       ).map((tool) => tool.name);
       expect(dynamicToolNames).toContain("search_threads");
       expect(dynamicToolNames).not.toContain("search_token_miser_output");
       expect(dynamicToolNames).not.toContain("read_token_miser_output");
       expect(dynamicToolNames).not.toContain("read_all_token_miser_output");
-      expect(codexClient.lastStartReviewParams?.config).toBeUndefined();
+      expect(codexClient.lastStartTurnParams?.config).toBeUndefined();
     } finally {
       await registry.close();
     }
@@ -13957,7 +13957,7 @@ script = "echo setup"
       target: { type: "baseBranch", branch: "main" },
     });
 
-    expect(codexClient.lastStartReviewParams).toMatchObject({
+    expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-1",
       cwd: handoffWorktreePath,
     });
@@ -16044,10 +16044,12 @@ command = "pnpm grok"
       serviceTier: "priority",
       fastMode: true,
     });
-    expect(codexClient.lastStartReviewParams).toMatchObject({
+    expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-1",
-      target: { type: "baseBranch", branch: "main" },
-      delivery: "inline",
+      input: [{
+        type: "text",
+        text: expect.stringContaining("base branch 'main'"),
+      }],
       model: "gpt-5.4",
       reasoningEffort: "high",
       serviceTier: "priority",
@@ -23001,7 +23003,7 @@ command = "pnpm dev"
       fastMode: true,
     });
 
-    expect(codexClient.lastStartReviewParams).toMatchObject({
+    expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "thread-env",
       cwd: "/repo/app",
       codexEnvironmentRuntime,
@@ -23045,7 +23047,7 @@ command = "pnpm dev"
     });
 
     // The review itself runs on the picked model...
-    expect(codexClient.lastStartReviewParams).toMatchObject({
+    expect(codexClient.lastStartTurnParams).toMatchObject({
       model: "gpt-5.2",
       reasoningEffort: "high",
     });
@@ -25388,6 +25390,66 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("starts inline Codex reviews as turns on the parent thread", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startReviewResult: {
+        threadId: "thread-parent",
+        reviewThreadId: "ephemeral-review-thread",
+        turnId: "native-review-turn",
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const codexBackend = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends.find((backend) => backend.kind === "codex");
+    expect(codexBackend?.capabilities.startReview).toBe(true);
+
+    const response = await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "origin/main" },
+      delivery: "inline",
+    });
+
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-parent",
+      reviewThreadId: "thread-parent",
+      turnId: "turn-1",
+    });
+    expect(registry.getActiveTurnForThread({
+      backend: "codex",
+      threadId: "thread-parent",
+    })).toEqual({
+      backend: "codex",
+      threadId: "thread-parent",
+      turnId: "turn-1",
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 1,
+      threadIds: ["codex:thread-parent"],
+    });
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-parent",
+      input: [
+        {
+          type: "text",
+          text: expect.stringMatching(
+            /Review the code changes[\s\S]*origin\/main[\s\S]*prioritized findings/,
+          ),
+        },
+      ],
+    });
+
+    await registry.close();
+  });
+
   it("treats a Codex review as active until its terminal turn notification", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
@@ -25419,15 +25481,15 @@ command = "pnpm dev"
         input: [{ type: "text", text: "Follow-up while review is running" }],
       }),
     ).rejects.toThrow("A turn is already active for this thread.");
-    expect(codexClient.startTurnCallCount).toBe(0);
+    expect(codexClient.startTurnCallCount).toBe(1);
 
     await codexClient.emit({
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turnId: "turn-review-1",
+        turnId: "turn-1",
         turn: {
-          id: "turn-review-1",
+          id: "turn-1",
           status: "completed",
           completedAt: 1_781_178_272,
           output: [],
@@ -25440,7 +25502,7 @@ command = "pnpm dev"
       threadId: "thread-1",
       input: [{ type: "text", text: "Follow-up after review" }],
     });
-    expect(codexClient.startTurnCallCount).toBe(1);
+    expect(codexClient.startTurnCallCount).toBe(2);
 
     await registry.close();
   });
@@ -26408,7 +26470,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("persists Codex reviews as sub-agent summaries on the parent thread", async () => {
+  it("persists detached Codex reviews as sub-agent summaries on the parent thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
       models: [
@@ -26436,7 +26498,7 @@ command = "pnpm dev"
       backend: "codex",
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "main" },
-      delivery: "inline",
+      delivery: "detached",
     });
     expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
       count: 1,
@@ -26559,7 +26621,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("patches Codex review sub-agent usage when usage arrives after completion", async () => {
+  it("patches detached Codex review usage when usage arrives after completion", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start", "review/start"] },
       startReviewResult: {
@@ -26578,7 +26640,7 @@ command = "pnpm dev"
       backend: "codex",
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "main" },
-      delivery: "inline",
+      delivery: "detached",
     });
 
     await codexClient.emit({
@@ -27686,7 +27748,7 @@ command = "pnpm dev"
       backend: "codex",
       threadId: "thread-1",
       target: { type: "baseBranch", branch: "main" },
-      delivery: "inline",
+      delivery: "detached",
     });
     await codexClient.emit({
       method: "turn/started",
@@ -33946,10 +34008,12 @@ script = "printf setup"
       },
     });
 
-    expect(codexClient.lastStartReviewParams).toEqual({
+    expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "parent-thread",
-      target: { type: "uncommittedChanges" },
-      delivery: "inline",
+      input: [{
+        type: "text",
+        text: expect.stringContaining("staged, unstaged, and untracked"),
+      }],
     });
 
     await registry.close();
@@ -33961,7 +34025,7 @@ script = "printf setup"
       initializeResult: {
         methods: ["turn/start", "review/start", "thread/resume"],
       },
-      startReviewDelay: startReviewDelay.promise,
+      startTurnDelay: startReviewDelay.promise,
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -33997,7 +34061,7 @@ script = "printf setup"
       },
     });
     await vi.waitFor(() => {
-      expect(codexClient.lastStartReviewParams).toBeDefined();
+      expect(codexClient.startTurnCallCount).toBe(1);
     });
 
     expect(registry.cancelPendingReview(
@@ -34015,6 +34079,10 @@ script = "printf setup"
       initializeResult: {
         methods: ["turn/start", "review/start", "thread/resume"],
       },
+      startTurnResults: [
+        { threadId: "parent-thread", turnId: "turn-review-1" },
+        { threadId: "parent-thread", turnId: "turn-review-2" },
+      ],
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -34084,10 +34152,12 @@ script = "printf setup"
       },
     });
 
-    expect(codexClient.lastStartReviewParams).toEqual({
+    expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "parent-thread",
-      target: { type: "uncommittedChanges" },
-      delivery: "inline",
+      input: [{
+        type: "text",
+        text: expect.stringContaining("staged, unstaged, and untracked"),
+      }],
     });
     expect(events).toContainEqual({
       backend: "codex",
@@ -34129,10 +34199,12 @@ script = "printf setup"
       },
     });
 
-    expect(codexClient.lastStartReviewParams).toEqual({
+    expect(codexClient.lastStartTurnParams).toMatchObject({
       threadId: "parent-thread",
-      target: { type: "baseBranch", branch: "develop" },
-      delivery: "inline",
+      input: [{
+        type: "text",
+        text: expect.stringContaining("base branch 'develop'"),
+      }],
     });
     expect(events).toContainEqual({
       backend: "codex",
@@ -34153,7 +34225,7 @@ script = "printf setup"
       initializeResult: {
         methods: ["turn/start", "review/start", "thread/resume"],
       },
-      startReviewError: new Error("Codex disconnected"),
+      startTurnError: new Error("Codex disconnected"),
     });
     const registry = new DesktopBackendRegistry({
       codexClient,
@@ -47151,7 +47223,7 @@ script = "printf setup"
       await registry.close();
     });
 
-    it("startReview waits for an in-flight permission queue flush before review/start", async () => {
+    it("startReview waits for an in-flight permission queue flush before the inline turn", async () => {
       const permissionFlush = createDeferred<void>();
       const codexClient = new MockBackendClient({
         initializeResult: { methods: ["turn/start", "review/start", "thread/resume"] },
@@ -47203,10 +47275,14 @@ script = "printf setup"
         approvalPolicy: "never",
         sandbox: "danger-full-access",
       });
-      expect(codexClient.lastStartReviewParams).toEqual({
+      expect(codexClient.lastStartTurnParams).toMatchObject({
         threadId: "thread-1",
-        target: { type: "baseBranch", branch: "main" },
-        delivery: "inline",
+        input: [{
+          type: "text",
+          text: expect.stringContaining("base branch 'main'"),
+        }],
+        approvalPolicy: "never",
+        sandbox: "danger-full-access",
       });
       const overlay = await overlayStore.getThreadOverlayState({
         backend: "codex",

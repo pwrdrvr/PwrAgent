@@ -51,6 +51,7 @@ import {
   type PwrSnapConnectionService,
 } from "../mcp-connections/pwrsnap-connection-service";
 import {
+  buildInlineReviewPrompt,
   buildManagedReviewContextInput,
   buildManagedReviewPrompt,
   formatManagedReviewOutput,
@@ -2136,7 +2137,7 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     renameThread: supported.has("thread/name/set") || assumeCodexAppServerSurface,
     readThread: supported.has("thread/read") || assumeCodexAppServerSurface,
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
-    startReview: supported.has("review/start") || assumeCodexAppServerSurface,
+    startReview: supported.has("turn/start") || assumeCodexAppServerSurface,
     // A managed review child is an ephemeral thread plus one turn, so Codex
     // can review for another provider's thread even on builds whose native
     // review/start is absent.
@@ -15785,6 +15786,7 @@ export class DesktopBackendRegistry {
     const reviewerOverridden = Boolean(params.reviewBackend);
     const reviewBackend = params.reviewBackend ?? params.backend;
     const reviewBackendDiffers = reviewBackend !== params.backend;
+    const delivery = params.delivery ?? "inline";
     if (reviewBackendDiffers) {
       this.assertReviewBackendSupported(reviewBackend);
     }
@@ -15814,6 +15816,7 @@ export class DesktopBackendRegistry {
     let codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
     let reviewContext: AppServerReviewContext | undefined;
     let tokenMiserEnabled = false;
+    let inlineParentMode: boolean;
     try {
       if (params.backend === "codex") {
         await this.flushQueuedExecutionModeIfPresent(params.threadId);
@@ -15934,7 +15937,7 @@ export class DesktopBackendRegistry {
         return await client.startReview({
           threadId: params.threadId,
           target: params.target,
-          delivery: params.delivery ?? "inline",
+          delivery,
           ...modelSettings,
           ...(cwd ? { cwd } : {}),
           ...(codexEnvironmentRuntime
@@ -15944,6 +15947,50 @@ export class DesktopBackendRegistry {
           ...(dynamicTools !== undefined ? { dynamicTools } : {}),
         });
       };
+
+      const startInlineWithClient = async (
+        client: BackendClient,
+      ): Promise<{ threadId: string; reviewThreadId: string; turnId: string }> => {
+        const tokenMiserConfig =
+          await this.buildSupportedCodexTokenMiserConfig({
+            client,
+            enabled: tokenMiserEnabled,
+          });
+        const dynamicTools =
+          await this.buildSupportedCodexDynamicToolsRefresh({
+            client,
+            tokenMiserEnabled,
+          });
+        const executionMode =
+          overlay?.executionMode
+          ?? await this.resolveCodexThreadExecutionModeForActiveTurn(
+            params.threadId,
+          );
+        const modeSettings = EXECUTION_MODE_SUMMARIES[executionMode];
+        const turn = await client.startTurn({
+          threadId: params.threadId,
+          input: [{ type: "text", text: buildInlineReviewPrompt(params.target) }],
+          approvalPolicy: modeSettings.approvalPolicy,
+          sandbox: modeSettings.sandbox,
+          ...modelSettings,
+          ...(cwd ? { cwd } : {}),
+          ...(codexEnvironmentRuntime
+            ? { codexEnvironmentRuntime }
+            : {}),
+          ...(tokenMiserConfig ? { config: tokenMiserConfig } : {}),
+          ...(dynamicTools !== undefined ? { dynamicTools } : {}),
+        });
+        return {
+          threadId: params.threadId,
+          reviewThreadId: params.threadId,
+          turnId: turn.turnId,
+        };
+      };
+
+      inlineParentMode =
+        params.backend === "codex"
+        && delivery === "inline"
+        && !managedMode;
 
       result = managedMode
         ? await this.startManagedReviewChild({
@@ -15960,9 +16007,14 @@ export class DesktopBackendRegistry {
             target: params.target,
             tokenMiserEnabled,
           })
-        : params.backend === "codex"
-          ? await this.withCodexThreadClient(params.threadId, startWithClient)
-          : await startWithClient(this.getClient(params.backend));
+        : inlineParentMode
+          ? await this.withCodexThreadClient(
+              params.threadId,
+              startInlineWithClient,
+            )
+          : params.backend === "codex"
+            ? await this.withCodexThreadClient(params.threadId, startWithClient)
+            : await startWithClient(this.getClient(params.backend));
     } catch (error) {
       if (reserveCodexReviewStart) {
         this.reservedCodexStartThreadIds.delete(params.threadId);
@@ -16001,6 +16053,26 @@ export class DesktopBackendRegistry {
       }
     } else if (acpReviewReservationKey) {
       this.reservedAcpStartThreadKeys.delete(acpReviewReservationKey);
+    }
+
+    if (inlineParentMode) {
+      backendRegistryLog.info("inline code review started", {
+        parentThreadId: result.threadId,
+        turnId: result.turnId,
+      });
+      if (!reviewerOverridden && hasExplicitModelSettings(modelSettings)) {
+        await this.overlayStore.setThreadModelSettings({
+          backend: params.backend,
+          threadId: result.threadId,
+          ...modelSettings,
+        });
+      }
+      return {
+        backend: params.backend,
+        threadId: result.threadId,
+        reviewThreadId: result.threadId,
+        turnId: result.turnId,
+      };
     }
     const reviewSubAgentRecord: ReviewSubAgentRecord = {
       backend: reviewBackend,
