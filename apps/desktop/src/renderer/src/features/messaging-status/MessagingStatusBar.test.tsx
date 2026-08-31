@@ -8,6 +8,7 @@ import type {
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { HOVER_TRANSITION_GRACE_MS } from "../../lib/useHoverTransitionGrace";
+import discordBlurpleUrl from "../../assets/discord/symbol-blurple.svg";
 import { MessagingStatusBar } from "./MessagingStatusBar";
 
 afterEach(() => {
@@ -93,6 +94,29 @@ describe("MessagingStatusBar", () => {
     expect(popover).toHaveTextContent("open.larksuite.com");
     expect(popover).toHaveTextContent("Bot: PwrAgent");
     expect(popover).not.toHaveTextContent("Account detail: open.larksuite.com");
+  });
+
+  it("renders Discord with the visible Blurple brand icon", async () => {
+    const statuses = [
+      {
+        changedAt: 1000,
+        health: "enabled",
+        platform: "discord",
+      },
+    ] satisfies MessagingPlatformStatus[];
+    const desktopApi: DesktopApi = {
+      getMessagingPlatformStatuses: vi.fn(async () => statuses),
+      onMessagingPlatformStatusEvent: vi.fn(() => () => {}),
+    };
+
+    const { container } = render(<MessagingStatusBar desktopApi={desktopApi} />);
+
+    await screen.findByRole("button", { name: /Discord/ });
+    expect(
+      container.querySelector<HTMLImageElement>(
+        '.messaging-status-chip[title="Discord"] img',
+      ),
+    ).toHaveAttribute("src", discordBlurpleUrl);
   });
 
   it("renders degraded status with rate-limit detail in the tooltip", async () => {
