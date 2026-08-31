@@ -359,7 +359,8 @@ async function listInstanceProjects(
         kind: directory.kind,
         path: directory.path,
         hasLaunchpad: Boolean(directory.launchpad),
-        backend: directory.launchpad?.backend,
+        backend:
+          directory.launchpad?.backend ?? snapshot.launchpadDefaults.backend,
         workMode: directory.launchpad?.workMode,
         model: directory.launchpad?.model,
         executionMode: directory.launchpad?.executionMode,
@@ -395,6 +396,14 @@ async function createInstanceThread(
     return failure(
       "not_found",
       `No project with key ${args.projectKey} on ${instance.label}. Use list_instance_projects for the current project list.`,
+    );
+  }
+  const projectBackend =
+    directory.launchpad?.backend ?? snapshot.launchpadDefaults.backend;
+  if (args.tokenMiserEnabled !== undefined && projectBackend !== "codex") {
+    return failure(
+      "invalid_arguments",
+      `tokenMiserEnabled is supported only for Codex projects; ${args.projectKey} uses ${projectBackend}.`,
     );
   }
   let localInstanceId: FederationInstanceId | undefined;
@@ -742,6 +751,7 @@ function buildLaunchpadDraft(params: {
   // The stored prompt/editor document/attachments are the operator's unsent
   // draft — sending them from an agent tool would fire composer text the
   // operator never submitted.
+  const backend = stored?.backend ?? defaults.backend;
   const model = args.model ?? stored?.model ?? defaults.model;
   const reasoningEffort =
     args.reasoningEffort ?? stored?.reasoningEffort ?? defaults.reasoningEffort;
@@ -750,11 +760,14 @@ function buildLaunchpadDraft(params: {
   const acpRuntime = stored?.acpRuntime ?? defaults.acpRuntime;
   const providerSettings = stored?.providerSettings ?? defaults.providerSettings;
   const branchName = args.branchName ?? stored?.branchName;
+  const tokenMiserEnabled = backend === "codex"
+    ? args.tokenMiserEnabled ?? stored?.tokenMiserEnabled
+    : undefined;
   const now = Date.now();
   return {
     createdAt: stored?.createdAt ?? now,
     updatedAt: now,
-    backend: stored?.backend ?? defaults.backend,
+    backend,
     executionMode:
       args.executionMode ?? stored?.executionMode ?? defaults.executionMode,
     workMode: args.workMode ?? stored?.workMode ?? defaults.workMode ?? "worktree",
@@ -764,6 +777,7 @@ function buildLaunchpadDraft(params: {
     ...(fastMode !== undefined ? { fastMode } : {}),
     ...(acpRuntime !== undefined ? { acpRuntime } : {}),
     ...(providerSettings !== undefined ? { providerSettings } : {}),
+    ...(tokenMiserEnabled !== undefined ? { tokenMiserEnabled } : {}),
     ...(stored?.mcpConnectionIds
       ? { mcpConnectionIds: stored.mcpConnectionIds }
       : {}),

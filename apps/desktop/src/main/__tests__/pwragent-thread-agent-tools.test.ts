@@ -84,11 +84,15 @@ describe("PwrAgent thread agent tools", () => {
         description: expect.stringContaining("After creation, end the turn"),
       });
     expect(tools.find((tool) => tool.name === "read_thread")).toMatchObject({
-      description: expect.stringContaining("Pass instanceId for a known remote thread"),
+      description: expect.stringContaining("bounded aggregate pricing"),
       inputSchema: expect.objectContaining({
         properties: expect.objectContaining({
           instanceId: expect.objectContaining({ type: "string" }),
           includeRemote: expect.objectContaining({ type: "boolean" }),
+          includeEvaluation: expect.objectContaining({
+            type: "boolean",
+            description: expect.stringContaining("bounded aggregate pricing"),
+          }),
         }),
       }),
     });

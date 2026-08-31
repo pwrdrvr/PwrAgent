@@ -21,6 +21,7 @@ import {
   buildFederatedThreadRef,
   buildNavigationSnapshot,
   buildThreadIdentityKey,
+  MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES,
   PWRAGENT_MESSAGING_PDF_TOOL_CATALOG_VERSION,
   PWRSNAP_MCP_CONNECTION_ID,
 } from "@pwragent/shared";
@@ -4670,6 +4671,12 @@ describe("DesktopBackendRegistry", () => {
           "managed-review-child",
         ),
       ).toBe(true);
+      const enabledChild = await registry.readThread({
+        backend: "codex",
+        threadId: "managed-review-child",
+      });
+      expect(enabledChild.tokenMiserEnabled).toBe(true);
+      expect(enabledChild).not.toHaveProperty("tokenMiserOverride");
       await overlayStore.setThreadTokenMiser?.({
         backend: "codex",
         threadId: "thread-1",
@@ -4681,6 +4688,12 @@ describe("DesktopBackendRegistry", () => {
           "managed-review-child",
         ),
       ).toBe(false);
+      const disabledChild = await registry.readThread({
+        backend: "codex",
+        threadId: "managed-review-child",
+      });
+      expect(disabledChild.tokenMiserEnabled).toBe(false);
+      expect(disabledChild).not.toHaveProperty("tokenMiserOverride");
       const staleToolResponse = await codexClient.emitRequest({
         method: "item/tool/call",
         params: {
@@ -36425,6 +36438,130 @@ script = "printf setup"
         backend: "codex" as const,
         fetchedAt: 2_000,
         threadId: "remote-thread",
+        tokenMiserEnabled: true,
+        tokenMiserOverride: true,
+        pricing: {
+          compactions: [{
+            backend: "codex" as const,
+            threadId: "remote-thread",
+            compactionId: "compaction-1",
+            observedAt: 1_900,
+            updatedAt: 1_900,
+          }],
+          lines: [{
+            backend: "codex",
+            cachedInputCostMicros: 1_000,
+            cachedInputTokens: 1_000,
+            createdAt: 2_000,
+            currency: "USD",
+            inputTokens: 1_500,
+            outputCostMicros: 2_000,
+            outputTokens: 200,
+            priceStatus: "priced" as const,
+            provider: "openai",
+            reasoningOutputTokens: 50,
+            scope: "turn" as const,
+            source: "live" as const,
+            status: "finalized" as const,
+            threadId: "remote-thread",
+            totalCostMicros: 42_000,
+            totalTokens: 1_700,
+            turnId: "turn-remote",
+            turnUsageAttributed: true,
+            uncachedInputCostMicros: 39_000,
+            uncachedInputTokens: 500,
+            usageLineId: "usage-remote",
+          }],
+          summaries: Array.from(
+            {
+              length:
+                MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES + 1,
+            },
+            (_, index) => ({
+              backend: "codex" as const,
+              cachedInputTokens: 1_000,
+              currency: "USD",
+              inputTokens: 1_500,
+              outputTokens: 200,
+              pricedUsageLineCount: 1,
+              provider: `openai-${index}`,
+              reasoningOutputTokens: 50,
+              threadId: "remote-thread",
+              totalCostMicros: 42_000 + index,
+              totalTokens: 1_700,
+              uncachedInputTokens: 500,
+              unpricedUsageLineCount: 0,
+              updatedAt: 2_000,
+              usageLineCount: 1,
+            }),
+          ),
+        },
+        toolAccounting: {
+          alerts: [],
+          invocations: [],
+          summaries: [],
+          tokenMiser: {
+            savings: {
+              currency: "USD" as const,
+              pricedGateCount: 1,
+              gateCount: 1,
+              withoutGateCostMicros: 8_000,
+              gateCostMicros: 1_000,
+              revealedCostMicros: 500,
+              savingsMicros: 6_500,
+              directlyObservedReplayCount: 1,
+              reconstructedReplayCount: 0,
+            },
+            interceptionCount: 1,
+            originalCharacters: 8_000,
+            baselineParentTokens: 2_000,
+            replacementTokens: 200,
+            retrievedTokens: 0,
+            estimatedParentTokensSaved: 1_800,
+            interceptions: [{
+              objectId: "object-1",
+              turnId: "turn-remote",
+              toolUseId: "tool-use-1",
+              toolName: "exec_command",
+              createdAt: 1_950,
+              originalCharacters: 8_000,
+              baselineParentTokens: 2_000,
+              replacementTokens: 200,
+              retrievedTokens: 0,
+              estimatedParentTokensSaved: 1_800,
+            }],
+            codeMode: {
+              callCount: 1,
+              commandCellCount: 1,
+              directCommandCellCount: 0,
+              dispatchClusterCount: 1,
+              multiInvocationClusterCount: 0,
+              largestDispatchCluster: 1,
+              nestedCommandInvocationCount: 1,
+              patchCellCount: 0,
+              otherCellCount: 0,
+              pollingCellCount: 0,
+              directCount: 0,
+              summarizedCount: 1,
+              passThroughCount: 0,
+              retrievalCount: 0,
+              capturedNestedInvocationCount: 1,
+              observations: [{
+                observationId: "observation-1",
+                turnId: "turn-remote",
+                callId: "call-1",
+                cellId: "cell-1",
+                createdAt: 1_950,
+                outputCharacters: 8_000,
+                maxOutputTokens: 2_000,
+                scriptStatus: "completed",
+                retrieval: false,
+                capturedNestedInvocationCount: 1,
+                disposition: "summarized" as const,
+              }],
+            },
+          },
+        },
         replay: {
           entries: [],
           messages: [
@@ -36468,6 +36605,7 @@ script = "printf setup"
         arguments: {
           backend: "codex",
           threadId: "remote-thread",
+          includeEvaluation: true,
         },
       },
     } as AppServerPendingRequestNotification);
@@ -36491,7 +36629,45 @@ script = "printf setup"
         messageUrl: expect.stringContaining("messageId=remote-result"),
         messageLink: expect.stringContaining("messageId=remote-result"),
       }],
+      evaluation: {
+        tokenMiserEnabled: true,
+        tokenMiserOverride: true,
+        pricing: {
+          compactionCount: 1,
+          summaryCount:
+            MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES + 1,
+          usageLineCount: 1,
+          truncated: true,
+        },
+        tokenMiser: {
+          interceptionCount: 1,
+          interceptionDetailCount: 1,
+          estimatedParentTokensSaved: 1_800,
+          savings: {
+            savingsMicros: 6_500,
+          },
+          codeMode: {
+            callCount: 1,
+            observationCount: 1,
+            summarizedCount: 1,
+          },
+        },
+      },
     });
+    expect(payload.read.evaluation.pricing.summaries).toHaveLength(
+      MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES,
+    );
+    expect(payload.read.evaluation.pricing.summaries[0]).toMatchObject({
+      totalCostMicros: 42_000,
+    });
+    expect(payload.read.evaluation.pricing).not.toHaveProperty("lines");
+    expect(payload.read.evaluation.pricing).not.toHaveProperty("compactions");
+    expect(payload.read.evaluation.tokenMiser).not.toHaveProperty(
+      "interceptions",
+    );
+    expect(payload.read.evaluation.tokenMiser.codeMode).not.toHaveProperty(
+      "observations",
+    );
     expect(federatedInspection).toHaveBeenCalledWith({
       backend: "codex",
       threadId: "remote-thread",
@@ -36651,6 +36827,7 @@ script = "printf setup"
       includeTurns: true,
       limit: 5,
     });
+    expect(payload.read).not.toHaveProperty("evaluation");
 
     await registry.close();
   });
@@ -39575,7 +39752,7 @@ script = "printf setup"
     await registry.close();
   });
 
-  it("round-trips the Token Miser override through readThread", async () => {
+  it("reports the Token Miser override and effective state through readThread", async () => {
     const overlayStore = createOverlayStoreMock();
     await overlayStore.setThreadTokenMiser({
       backend: "codex",
@@ -39588,6 +39765,12 @@ script = "printf setup"
       }),
       overlayStore,
     });
+    const internals = registry as unknown as {
+      resolveTokenMiserDefaultEnabledFn: () => boolean;
+      resolveTokenMiserEnabledFn: () => boolean;
+    };
+    internals.resolveTokenMiserDefaultEnabledFn = () => true;
+    internals.resolveTokenMiserEnabledFn = () => true;
 
     await expect(registry.readThread({
       backend: "codex",
@@ -39596,7 +39779,19 @@ script = "printf setup"
       backend: "codex",
       threadId: "thread-1",
       tokenMiserEnabled: false,
+      tokenMiserOverride: false,
     });
+
+    const defaulted = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-default",
+    });
+    expect(defaulted).toMatchObject({
+      backend: "codex",
+      threadId: "thread-default",
+      tokenMiserEnabled: true,
+    });
+    expect(defaulted).not.toHaveProperty("tokenMiserOverride");
 
     await registry.close();
   });

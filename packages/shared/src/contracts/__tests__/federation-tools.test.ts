@@ -48,10 +48,12 @@ describe("federation tool contracts", () => {
       projectKey: "dir:/Users/op/pwrsnap",
       input: "Fix the recorder crash on stop",
       executionMode: "full-access",
+      tokenMiserEnabled: true,
       workMode: "worktree",
       branchName: "origin/main",
     };
     expect(args.projectKey).toContain("pwrsnap");
+    expect(args.tokenMiserEnabled).toBe(true);
 
     const result: SearchFederationThreadsResult = {
       query: "recorder crash",

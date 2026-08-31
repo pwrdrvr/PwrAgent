@@ -920,8 +920,10 @@ export type AppServerReadThreadResponse = {
    */
   readDurationMs?: number;
   threadId: ThreadIdentifier;
-  /** Effective Token Miser state for this thread. */
+  /** Effective Token Miser state after applying the owning profile's gate and default. */
   tokenMiserEnabled?: boolean;
+  /** Persisted per-thread Token Miser override; absent follows the default. */
+  tokenMiserOverride?: boolean;
   replay: AppServerThreadReplay;
   /**
    * A server request still awaiting an operator response. This lets a freshly
