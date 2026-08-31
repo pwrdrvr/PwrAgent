@@ -43,7 +43,13 @@ describe("Token Miser summary line", () => {
   it("lays the summary out as a grid so the counts get their own row", () => {
     const body = ruleBody(".pricing-token-miser__summary");
     expect(body).toMatch(/display:\s*grid;/);
-    expect(body).toMatch(/grid-template-columns:/);
+    // The verdict's track must stay flexible with a zero floor. `display:
+    // grid` alone does not fix anything: with a third track of `auto` the
+    // column sizes to the verdict's max-content and the overflow returns
+    // exactly as it was, while every other assertion here still passes.
+    expect(body).toMatch(
+      /grid-template-columns:[^;]*minmax\(\s*0\s*,\s*1fr\s*\);/,
+    );
   });
 
   it("gives the decision counts a full-width second row", () => {
@@ -62,6 +68,12 @@ describe("Token Miser summary line", () => {
     expect(body).not.toMatch(/white-space:\s*nowrap;/);
     expect(body).toMatch(/min-width:\s*0;/);
     expect(body).toMatch(/overflow-wrap:\s*anywhere;/);
+    // And it stays on the header row, right-aligned. Left unpinned, an edit
+    // could drop it onto row 2 with the counts — two items in one cell — and
+    // nothing here would notice.
+    expect(body).toMatch(/grid-row:\s*1;/);
+    expect(body).toMatch(/grid-column:\s*3;/);
+    expect(body).toMatch(/justify-self:\s*end;/);
   });
 
   it("ranks the awaiting-pricing figure as metadata, not as a verdict", () => {

@@ -688,6 +688,13 @@ function TokenMiserTurnGroup(props: {
       >
         <span aria-hidden="true" className="pricing-token-miser__chevron">›</span>
         <span className="pricing-token-miser__label">Token Miser</span>
+        <span
+          className="pricing-token-miser__verdict"
+          data-negative={!awaitingPricing && savingsMicros < 0}
+          data-pending={awaitingPricing}
+        >
+          {verdict}
+        </span>
         <span className="pricing-token-miser__count">
           {count.toLocaleString()} {countLabel}
           {props.decisions
@@ -698,14 +705,11 @@ function TokenMiserTurnGroup(props: {
           {props.decisions && passThroughCount > 0
             ? ` · ${passThroughCount.toLocaleString()} ${passThroughCount === 1 ? "pass-through" : "pass-throughs"} (${helperPassThroughCount.toLocaleString()} helper · ${policyPassThroughCount.toLocaleString()} policy)`
             : ""}
-          {awaitingPricing ? " · savings not priced yet" : ""}
-        </span>
-        <span
-          className="pricing-token-miser__verdict"
-          data-negative={savingsMicros < 0}
-          data-pending={awaitingPricing}
-        >
-          {verdict}
+          {awaitingPricing
+            ? " · savings not priced yet"
+            : unpricedCount > 0
+              ? ` · ${unpricedCount.toLocaleString()} not priced yet`
+              : ""}
         </span>
       </button>
       {expanded ? (
