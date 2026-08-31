@@ -92,7 +92,7 @@ import {
   disposeMcpConnectionIpcHandlers,
   registerMcpConnectionIpcHandlers,
 } from "./ipc/mcp-connections";
-import { getPwrSnapConnectionService } from "./mcp-connections/pwrsnap-connection-service";
+import { getMcpConnectionGatewayService } from "./mcp-connections/mcp-connection-gateway-service";
 import {
   disposePreloadLogIpcHandlers,
   registerPreloadLogIpcHandlers,
@@ -745,7 +745,7 @@ const runMainProcessShutdownBarrier = createShutdownBarrier({
     {
       name: "mcp-connections",
       timeoutMs: MCP_CONNECTION_SHUTDOWN_TIMEOUT_MS,
-      run: async () => await getPwrSnapConnectionService().close(),
+      run: async () => await getMcpConnectionGatewayService().close(),
     },
   ],
 });
@@ -1339,7 +1339,7 @@ export function bootstrapApp(): void {
     registerIntegratedTerminalIpcHandlers();
     registerMcpConnectionIpcHandlers();
     if (bootMode === "active-profile") {
-      void getPwrSnapConnectionService().start().catch((error) => {
+      void getMcpConnectionGatewayService().start().catch((error) => {
         mainLog.error("MCP connection gateway failed during startup", {
           error: error instanceof Error ? error.message : String(error),
         });

@@ -27,14 +27,14 @@ import {
   MCP_CONNECTION_REMOVE_CHANNEL,
 } from "../../shared/ipc";
 import {
-  getPwrSnapConnectionService,
-  type PwrSnapConnectionService,
-} from "../mcp-connections/pwrsnap-connection-service";
+  getMcpConnectionGatewayService,
+  type McpConnectionGatewayService,
+} from "../mcp-connections/mcp-connection-gateway-service";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { federationWindowTargetForWebContents } from "../window";
 
 export function registerMcpConnectionIpcHandlers(
-  service: PwrSnapConnectionService = getPwrSnapConnectionService(),
+  service: McpConnectionGatewayService = getMcpConnectionGatewayService(),
 ): void {
   const requireLocalOwner = (event: Electron.IpcMainInvokeEvent): void => {
     if (federationWindowTargetForWebContents(event.sender)) {

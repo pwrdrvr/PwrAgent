@@ -10,8 +10,8 @@ import {
 } from "../mcp-connections/mcp-connection-broker-discovery";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
 import {
-  PwrSnapConnectionService,
-} from "../mcp-connections/pwrsnap-connection-service";
+  McpConnectionGatewayService,
+} from "../mcp-connections/mcp-connection-gateway-service";
 
 function createSettings() {
   let genericCredential: string | undefined;
@@ -45,7 +45,7 @@ describe("MCP connection owner broker", () => {
       filePath: path.join(directory, "broker.json"),
     });
     const settings = createSettings();
-    const owner = new PwrSnapConnectionService({
+    const owner = new McpConnectionGatewayService({
       bridgeEntryPath: "/owner/mcp-connection-bridge.js",
       brokerDiscovery: discovery,
       leaseManager: new RuntimeLeaseManager({
@@ -61,7 +61,7 @@ describe("MCP connection owner broker", () => {
       }),
       settings,
     });
-    const viewer = new PwrSnapConnectionService({
+    const viewer = new McpConnectionGatewayService({
       bridgeEntryPath: "/viewer/mcp-connection-bridge.js",
       brokerDiscovery: discovery,
       leaseManager: new RuntimeLeaseManager({

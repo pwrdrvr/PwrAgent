@@ -21,7 +21,7 @@ import { ScheduledThreadActionStore } from "../scheduled-actions/scheduled-threa
 import { McpCredentialVault } from "../mcp-connections/mcp-credential-vault";
 import { McpConnectionBrokerDiscovery } from "../mcp-connections/mcp-connection-broker-discovery";
 import { McpConnectionRegistry } from "../mcp-connections/mcp-connection-registry";
-import { PwrSnapConnectionService } from "../mcp-connections/pwrsnap-connection-service";
+import { McpConnectionGatewayService } from "../mcp-connections/mcp-connection-gateway-service";
 import {
   AppRuntimeInstanceStore,
   RUNTIME_LEASE_DEAD_OWNER_GRACE_MS,
@@ -2014,13 +2014,13 @@ describe("sqlite write metrics", () => {
       profileName: "default",
       store: instances,
     });
-    const owner = new PwrSnapConnectionService({
+    const owner = new McpConnectionGatewayService({
       brokerDiscovery: discovery,
       leaseManager: ownerLeases,
       registry,
       settings,
     });
-    const viewer = new PwrSnapConnectionService({
+    const viewer = new McpConnectionGatewayService({
       brokerDiscovery: discovery,
       leaseManager: viewerLeases,
       registry,
