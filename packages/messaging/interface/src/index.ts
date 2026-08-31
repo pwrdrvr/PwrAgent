@@ -1370,6 +1370,12 @@ export type MessagingInboundBaseEvent = {
    * explicit event kinds and do not need this marker.
    */
   botMention?: boolean;
+  /**
+   * True when the original platform message explicitly addressed a different
+   * participant. Shared-conversation routing must not treat these messages as
+   * ambient input, even when the conversation accepts every other message.
+   */
+  addressedToOtherParticipant?: boolean;
   routingState?: MessagingAdapterState;
 };
 

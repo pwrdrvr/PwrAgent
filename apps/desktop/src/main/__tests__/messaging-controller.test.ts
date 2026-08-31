@@ -7610,6 +7610,32 @@ describe("MessagingController", () => {
     );
   });
 
+  it("ignores shared messages explicitly addressed to another participant", async () => {
+    const harness = await createHarness({
+      responseModeForConversation: () => "every_message",
+    });
+    const channel = buildTopicChannel("500");
+    await harness.store.upsertBinding({
+      id: "binding:telegram:topic:-1001:500:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel,
+      createdAt: 1000,
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("please handle this", {
+        addressedToOtherParticipant: true,
+        channel,
+      }),
+    );
+
+    expect(harness.startTurn).not.toHaveBeenCalled();
+  });
+
   it("ignores response modes when the provider cannot report bot mentions", async () => {
     const harness = await createHarness({
       capabilityProfile: {
@@ -24182,6 +24208,7 @@ async function seedConversationDefaultAgent(
 function buildTextEvent(
   text: string,
   params: {
+    addressedToOtherParticipant?: boolean;
     botMention?: boolean;
     channel?: MessagingInboundTextEvent["channel"];
     routingState?: MessagingInboundTextEvent["routingState"];
@@ -24201,6 +24228,9 @@ function buildTextEvent(
       },
     },
     receivedAt: 1000,
+    ...(params.addressedToOtherParticipant
+      ? { addressedToOtherParticipant: true }
+      : {}),
     ...(params.botMention ? { botMention: true } : {}),
     routingState: params.routingState,
     text,

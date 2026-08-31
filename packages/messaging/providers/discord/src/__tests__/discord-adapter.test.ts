@@ -1939,6 +1939,48 @@ describe("discord adapter", () => {
       });
       await adapter.stop();
     });
+
+    it("marks a leading mention of another user as addressed elsewhere", async () => {
+      const BOT_ID = "1480556454498009352";
+      const OTHER_USER_ID = "1490699645528309951";
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          applicationId: BOT_ID,
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          authorBot: false,
+          content: `<@${OTHER_USER_ID}> please handle this`,
+          id: "msg-addressed-elsewhere",
+        }),
+      });
+
+      expect(events).toEqual([
+        expect.objectContaining({
+          addressedToOtherParticipant: true,
+          kind: "text",
+          text: `<@${OTHER_USER_ID}> please handle this`,
+        }),
+      ]);
+      expect(events[0]).not.toHaveProperty("botMention");
+      await adapter.stop();
+    });
   });
 });
 
