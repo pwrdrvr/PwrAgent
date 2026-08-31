@@ -1646,6 +1646,7 @@ class MockBackendClient {
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: unknown;
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
+    suppressThreadTitleDerivation?: boolean;
   };
   interruptTurnCallCount = 0;
   lastInterruptTurnParams?: {
@@ -2085,6 +2086,7 @@ class MockBackendClient {
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: unknown;
     pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
+    suppressThreadTitleDerivation?: boolean;
   }): Promise<{ threadId: string; turnId: string }> {
     this.startTurnCallCount += 1;
     await this.options.startTurnDelay;
@@ -16072,10 +16074,9 @@ command = "pnpm grok"
   });
 
   it("names a thread launched straight into a review", async () => {
-    // A /review launch never calls startTurn, so the thread was born with no
-    // user prompt for the title generator to work from and kept its fallback
-    // name forever. Synthesize a prompt from what the review already knows:
-    // the repository, the branch, and the review target.
+    // The inline turn uses an internal review prompt. Keep that prompt out of
+    // Codex's derived-name path and synthesize the public title prompt from
+    // what the review already knows: repository, branch, and review target.
     const titleService = {
       generateTitle: vi.fn(async (_params: { userPrompt: string }) => ({
         status: "generated" as const,
@@ -16084,7 +16085,7 @@ command = "pnpm grok"
     };
     const codexClient = new MockBackendClient({
       initializeResult: {
-        methods: ["thread/start", "thread/name/set", "review/start"],
+        methods: ["thread/start", "thread/name/set", "turn/start"],
       },
       threads: [],
     });
@@ -16126,6 +16127,9 @@ command = "pnpm grok"
       threadId: "thread-1",
       name: "Review app against main",
     });
+    expect(codexClient.lastStartTurnParams?.suppressThreadTitleDerivation).toBe(
+      true,
+    );
 
     await registry.close();
   });
@@ -25408,6 +25412,7 @@ command = "pnpm dev"
       await registry.listBackends({ includeUnavailable: true })
     ).backends.find((backend) => backend.kind === "codex");
     expect(codexBackend?.capabilities.startReview).toBe(true);
+    expect(codexBackend?.capabilities.startDetachedReview).toBe(false);
 
     const response = await registry.startReview({
       backend: "codex",
@@ -25445,6 +25450,116 @@ command = "pnpm dev"
           ),
         },
       ],
+    });
+
+    await registry.close();
+  });
+
+  it("does not restore an inline review as active when its terminal event precedes turn/start", async () => {
+    const startTurnDelay = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      startTurnDelay: startTurnDelay.promise,
+      startTurnResults: [{ threadId: "thread-parent", turnId: "turn-fast-review" }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const review = registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "inline",
+    });
+    await vi.waitFor(() => {
+      expect(codexClient.startTurnCallCount).toBe(1);
+    });
+
+    await codexClient.emit({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-parent",
+        turnId: "turn-fast-review",
+        turn: {
+          id: "turn-fast-review",
+          status: "completed",
+          output: [],
+        },
+      },
+    });
+    startTurnDelay.resolve();
+
+    await expect(review).resolves.toMatchObject({
+      threadId: "thread-parent",
+      reviewThreadId: "thread-parent",
+      turnId: "turn-fast-review",
+    });
+    expect(registry.getInProgressThreadSnapshotForQuit()).toEqual({
+      count: 0,
+      threadIds: [],
+    });
+    await expect(registry.startTurn({
+      backend: "codex",
+      threadId: "thread-parent",
+      input: [{ type: "text", text: "Continue after the fast review" }],
+    })).resolves.toMatchObject({ threadId: "thread-parent" });
+
+    await registry.close();
+  });
+
+  it("rejects detached Codex review when neither native nor managed-child support exists", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    await expect(registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "detached",
+    })).rejects.toThrow(/detached review/i);
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
+
+    await registry.close();
+  });
+
+  it("falls back to a managed child for detached Codex review without review/start", async () => {
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["thread/start", "turn/start"] },
+      startThreadResult: { threadId: "managed-detached-review" },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    const codexBackend = (
+      await registry.listBackends({ includeUnavailable: true })
+    ).backends.find((backend) => backend.kind === "codex");
+    expect(codexBackend?.capabilities.startDetachedReview).toBe(true);
+
+    const response = await registry.startReview({
+      backend: "codex",
+      threadId: "thread-parent",
+      target: { type: "baseBranch", branch: "main" },
+      delivery: "detached",
+    });
+
+    expect(response).toMatchObject({
+      threadId: "thread-parent",
+      reviewThreadId: "managed-detached-review",
+      turnId: "turn-1",
+    });
+    expect(codexClient.lastStartReviewParams).toBeUndefined();
+    expect(codexClient.lastStartThreadParams).toMatchObject({
+      ephemeral: false,
+      threadSource: "subagent",
     });
 
     await registry.close();

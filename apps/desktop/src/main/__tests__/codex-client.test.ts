@@ -9107,6 +9107,57 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("does not derive a Codex thread name from an internal turn prompt", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
+    MockTransport.threadStartResult = {
+      thread: {
+        id: "thread-internal-prompt",
+        path: path.join(tempDir, "sessions/thread-internal-prompt.jsonl"),
+        cwd: "/Users/fixture-user/github/PwrAgent",
+        preview: "",
+        name: null,
+        updatedAt: 1_777_347_163,
+      },
+      model: "gpt-5.5",
+    };
+
+    try {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+      });
+
+      await client.startThread({
+        cwd: "/Users/fixture-user/github/PwrAgent",
+      });
+      await client.startTurn({
+        threadId: "thread-internal-prompt",
+        input: [{
+          type: "text",
+          text: "Review the code changes requested below. Do not modify files.",
+        }],
+        suppressThreadTitleDerivation: true,
+      });
+      await client.close();
+
+      const transport = MockTransport.instances.at(-1);
+      const nameRequests = transport?.sentMessages
+        .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
+        .filter((message) => message.method === "thread/name/set");
+      expect(nameRequests).toEqual([
+        expect.objectContaining({
+          params: {
+            threadId: "thread-internal-prompt",
+            name: "Untitled thread",
+          },
+        }),
+      ]);
+    } finally {
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("does not derive a Codex thread name for resumed threads with unknown current names", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 

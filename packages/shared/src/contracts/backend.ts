@@ -148,6 +148,11 @@ export type BackendCapabilities = {
   startTurn: boolean;
   startReview?: boolean;
   /**
+   * This backend can honor `delivery: "detached"` either through its native
+   * review method or through a managed review child.
+   */
+  startDetachedReview?: boolean;
+  /**
    * This backend can run a PwrAgent-managed review on behalf of a thread that
    * lives on a different provider, so it can be offered as a reviewer
    * override. Doubles as the feature probe for the override itself: an
