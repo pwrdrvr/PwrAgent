@@ -84,6 +84,10 @@ class MockTransport implements JsonRpcTransport {
   static serverVersion = "1.0.0";
   static codexHome = "/Users/fixture-user/.codex";
   static readThreadErrorByThreadId = new Map<string, { code: number; message: string }>();
+  static readThreadTransientErrorsByThreadId = new Map<
+    string,
+    Array<{ code: number; message: string }>
+  >();
   static readThreadResultByThreadId = new Map<string, unknown>();
   static threadStartResult: unknown = {
     thread: {
@@ -130,6 +134,10 @@ class MockTransport implements JsonRpcTransport {
     }
   };
   static threadNameSetResult: ThreadSetNameResponse = {};
+  static threadNameSetTransientErrorsByName = new Map<
+    string,
+    Array<{ code: number; message: string }>
+  >();
   static modelListResult: unknown = createModelListResponse([]);
   static configValueWriteResult: ConfigWriteResponse = {
     status: "ok",
@@ -789,9 +797,14 @@ class MockTransport implements JsonRpcTransport {
 
     if (payload.method === "thread/read") {
       const threadId = (JSON.parse(message) as { params?: { threadId?: string } }).params?.threadId;
-      const readThreadError = threadId
-        ? MockTransport.readThreadErrorByThreadId.get(threadId)
+      const transientErrors = threadId
+        ? MockTransport.readThreadTransientErrorsByThreadId.get(threadId)
         : undefined;
+      const readThreadError =
+        transientErrors?.shift()
+        ?? (threadId
+          ? MockTransport.readThreadErrorByThreadId.get(threadId)
+          : undefined);
       const readThreadResult = threadId
         ? MockTransport.readThreadResultByThreadId.get(threadId)
         : undefined;
@@ -1021,6 +1034,22 @@ class MockTransport implements JsonRpcTransport {
     }
 
     if (payload.method === "thread/name/set") {
+      const name = typeof payload.params?.name === "string"
+        ? payload.params.name
+        : undefined;
+      const threadNameSetError = name
+        ? MockTransport.threadNameSetTransientErrorsByName.get(name)?.shift()
+        : undefined;
+      if (threadNameSetError) {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            error: threadNameSetError,
+          }),
+        );
+        return;
+      }
       this.messageHandler(
         JSON.stringify({
           jsonrpc: "2.0",
@@ -1183,6 +1212,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.serverVersion = "1.0.0";
     MockTransport.codexHome = "/Users/fixture-user/.codex";
     MockTransport.readThreadErrorByThreadId.clear();
+    MockTransport.readThreadTransientErrorsByThreadId.clear();
     MockTransport.readThreadResultByThreadId.clear();
     MockTransport.threadStartResult = {
       thread: {
@@ -1224,6 +1254,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.turnInterruptResult = {};
     MockTransport.threadArchiveResult = {};
     MockTransport.threadNameSetResult = {};
+    MockTransport.threadNameSetTransientErrorsByName.clear();
     MockTransport.modelListResult = createModelListResponse([]);
     MockTransport.configValueWriteResult = {
       status: "ok",
@@ -8552,6 +8583,71 @@ describe("CodexAppServerClient", () => {
     }
   });
 
+  it("retries a derived thread name while new session metadata is temporarily unreadable", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "pwragent-session-index-"));
+    const threadId = "thread-transient-metadata-name";
+    const derivedName = "Repair the transient Codex thread metadata race";
+    MockTransport.threadStartResult = {
+      thread: {
+        id: threadId,
+        path: path.join(tempDir, "sessions/thread-transient-metadata-name.jsonl"),
+        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
+        preview: "",
+        name: null,
+        updatedAt: 1_777_401_255,
+      },
+      model: "gpt-5.5",
+    };
+    MockTransport.turnStartResult = {
+      thread: { id: threadId },
+      turn: { id: "turn-1" },
+    };
+    MockTransport.threadNameSetTransientErrorsByName.set(derivedName, [
+      {
+        code: -32603,
+        message:
+          `failed to set thread name: Fatal error: failed to update thread metadata ${threadId}: thread-store internal error: failed to read session metadata /tmp/rollout-${threadId}.jsonl`,
+      },
+    ]);
+
+    try {
+      const { CodexAppServerClient } = await import("../codex-app-server/client");
+      const client = new CodexAppServerClient({
+        command: "codex",
+        directoryResolver: async () => [],
+      });
+
+      await client.startThread({
+        cwd: "/Users/fixture-user/pwrdrvr/PwrAgent",
+      });
+      await client.startTurn({
+        threadId,
+        input: [{ type: "text", text: derivedName }],
+      });
+      await client.close();
+
+      const transport = MockTransport.instances.at(-1);
+      const derivedNameRequests = transport?.sentMessages
+        .map((message) => JSON.parse(message) as {
+          method?: string;
+          params?: { name?: string };
+        })
+        .filter(
+          (message) =>
+            message.method === "thread/name/set"
+            && message.params?.name === derivedName,
+        );
+
+      expect(derivedNameRequests).toHaveLength(2);
+      expect(codexClientLogWarn).not.toHaveBeenCalledWith(
+        "failed to set derived codex thread name",
+        expect.anything(),
+      );
+    } finally {
+      await fs.rm(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("does not derive a Codex thread name for resumed threads with unknown current names", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
@@ -9880,6 +9976,42 @@ describe("CodexAppServerClient", () => {
         hasPreviousPage: false
       }
     });
+
+    await client.close();
+  });
+
+  it("retries thread reads while new session metadata is temporarily unreadable", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadId = "thread-transient-metadata-read";
+    MockTransport.readThreadTransientErrorsByThreadId.set(threadId, [
+      {
+        code: -32603,
+        message:
+          `failed to read thread: thread-store internal error: failed to read session metadata /tmp/rollout-${threadId}.jsonl`,
+      },
+    ]);
+    MockTransport.readThreadResultByThreadId.set(threadId, {
+      thread: {
+        id: threadId,
+        turns: [],
+      },
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(client.readThread({ threadId })).resolves.toMatchObject({
+      entries: [],
+      messages: [],
+    });
+
+    const transport = MockTransport.instances.at(-1);
+    const readRequests = transport?.sentMessages
+      .map((message) => JSON.parse(message) as { method?: string })
+      .filter((message) => message.method === "thread/read");
+    expect(readRequests).toHaveLength(2);
 
     await client.close();
   });
