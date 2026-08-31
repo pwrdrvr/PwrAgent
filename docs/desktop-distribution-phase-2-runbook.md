@@ -91,7 +91,7 @@ Required changes:
   ```
 - `release.mjs` upload step: replace `--publish always` with a manual rclone
   copy of `dist/*.dmg`, `dist/*.zip`, `dist/*.blockmap`, `dist/latest-mac.yml`
-  to the bucket. `compound-engineering:rclone` skill can do this.
+  to the bucket.
 - Cache headers: `latest-mac.yml` ≤ 60s; `.zip` and `.dmg` for a year, busted
   by version.
 

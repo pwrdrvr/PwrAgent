@@ -2,8 +2,6 @@
 
 ## Source of Truth
 
-- Put new product requirements in `docs/brainstorms/`.
-- Put new implementation plans in `docs/plans/`.
 - UI theme tokens and visual rules are in [docs/UI-THEME.md](docs/UI-THEME.md).
 - Desktop UI direction is in [docs/design/desktop-style-guide.md](docs/design/desktop-style-guide.md).
 - PwrAgent v2 design references are in [docs/design/pwragent-v2/](docs/design/pwragent-v2/).
@@ -16,13 +14,9 @@
 
 ## Workflow
 
-- Treat plans as decision records. Do not use them as implementation scripts.
-- Follow the active plan unless the user changes the scope.
-- Treat brainstorms, plans, and solutions as historical records.
+- Treat existing brainstorms, plans, and solutions as historical records.
   - The record directories are `docs/brainstorms/`, `docs/plans/`, and `docs/solutions/`.
   - Do not delete or rewrite a record without explicit user authorization.
-  - You may update the plan that the current branch implements.
-  - Limit updates to progress, dependencies, and resolved implementation questions.
   - Read a record only for a specific provenance question or an explicit document reference.
   - Use current code, `ARCHITECTURE.md`, and package guidance for current behavior and API shape.
 - Default `rg` searches exclude brainstorms, plans, and solutions through [`.rgignore`](.rgignore).
