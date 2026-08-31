@@ -229,6 +229,7 @@ const SUPPORTED_CODEX_MODEL_ORDER = [
 const SUPPORTED_CODEX_MODELS = new Set<string>(SUPPORTED_CODEX_MODEL_ORDER);
 const MAX_INLINE_FILE_DIFF_CHARS = 512 * 1024;
 const MAX_MCP_RESOURCE_IMAGE_BASE64_CHARS = Math.ceil((16 * 1024 * 1024) / 3) * 4;
+const THREAD_METADATA_READ_RETRY_DELAYS_MS = [50, 150, 300] as const;
 const MCP_RESOURCE_IMAGE_MIME_TYPES = new Set([
   "image/avif",
   "image/bmp",
@@ -5798,6 +5799,35 @@ function isUnmaterializedThreadError(error: unknown): boolean {
   );
 }
 
+function isTransientThreadMetadataReadError(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  const normalized = text.toLowerCase();
+  return (
+    normalized.includes("thread-store internal error")
+    && normalized.includes("failed to read session metadata")
+  );
+}
+
+async function requestWithThreadMetadataReadRetry<T>(
+  request: () => Promise<T>,
+): Promise<T> {
+  let retryIndex = 0;
+  while (true) {
+    try {
+      return await request();
+    } catch (error) {
+      const delayMs = THREAD_METADATA_READ_RETRY_DELAYS_MS[retryIndex];
+      if (delayMs === undefined || !isTransientThreadMetadataReadError(error)) {
+        throw error;
+      }
+      retryIndex += 1;
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, delayMs);
+      });
+    }
+  }
+}
+
 function isThreadNotFoundError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   return text.toLowerCase().includes("thread not found:");
@@ -7616,11 +7646,13 @@ export class CodexAppServerClient {
     threadId: string;
     name: string;
   }): Promise<void> {
-    await requestWithFallbacks({
-      client: this.connection,
-      methods: ["thread/name/set"],
-      payloads: [{ threadId: params.threadId, name: params.name }],
-      timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+    await requestWithThreadMetadataReadRetry(async () => {
+      await requestWithFallbacks({
+        client: this.connection,
+        methods: ["thread/name/set"],
+        payloads: [{ threadId: params.threadId, name: params.name }],
+        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      });
     });
   }
 
@@ -8262,11 +8294,13 @@ export class CodexAppServerClient {
     let result: unknown;
     try {
       const payload = buildThreadReadPayload(params);
-      result = await requestWithFallbacks({
-        client: this.connection,
-        methods: ["thread/read"],
-        payloads: [payload],
-        timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+      result = await requestWithThreadMetadataReadRetry(async () => {
+        return await requestWithFallbacks({
+          client: this.connection,
+          methods: ["thread/read"],
+          payloads: [payload],
+          timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        });
       });
     } catch (error) {
       if (!isUnmaterializedThreadError(error)) {
