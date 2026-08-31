@@ -33,6 +33,9 @@ const providerMocks = vi.hoisted(() => ({
   resolveDiscordContact: vi.fn(),
   inspectDiscordThreadPermissions: vi.fn(),
   listDiscordThreadPermissionChannels: vi.fn(),
+  discoverDiscordApplicationId: vi.fn(
+    async () => "1480556454498009351",
+  ),
   buildDiscordThreadPermissionRequestUrl: vi.fn(
     () => "https://discord.com/oauth2/authorize?client_id=1480556454498009351",
   ),
@@ -175,6 +178,7 @@ vi.mock("@pwragent/messaging-provider-discord", () => ({
   inspectDiscordThreadPermissions: providerMocks.inspectDiscordThreadPermissions,
   listDiscordThreadPermissionChannels:
     providerMocks.listDiscordThreadPermissionChannels,
+  discoverDiscordApplicationId: providerMocks.discoverDiscordApplicationId,
   buildDiscordThreadPermissionRequestUrl:
     providerMocks.buildDiscordThreadPermissionRequestUrl,
 }));
@@ -208,6 +212,7 @@ describe("settings ipc", () => {
     providerMocks.resolveDiscordContact.mockReset();
     providerMocks.inspectDiscordThreadPermissions.mockReset();
     providerMocks.listDiscordThreadPermissionChannels.mockReset();
+    providerMocks.discoverDiscordApplicationId.mockClear();
     providerMocks.buildDiscordThreadPermissionRequestUrl.mockClear();
     providerMocks.resolveMattermostContact.mockReset();
     providerMocks.resolveSlackContact.mockReset();
@@ -524,7 +529,12 @@ describe("settings ipc", () => {
     messagingConfigMocks.loadDesktopMessagingConfigFromSettings
       .mockResolvedValueOnce(discordConfig)
       .mockResolvedValueOnce(discordConfig)
-      .mockResolvedValueOnce(discordConfig);
+      .mockResolvedValueOnce(discordConfig)
+      .mockResolvedValueOnce({
+        discord: {
+          botToken: "discord-token",
+        },
+      });
     providerMocks.listDiscordThreadPermissionChannels.mockResolvedValue({
       channels: [
         {
@@ -599,6 +609,23 @@ describe("settings ipc", () => {
     expect(electronMocks.openExternal).toHaveBeenCalledWith(
       "https://discord.com/oauth2/authorize?client_id=1480556454498009351",
     );
+    expect(providerMocks.discoverDiscordApplicationId).not.toHaveBeenCalled();
+
+    await expect(
+      handlers.get(SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL)?.(
+        {},
+        { guildId: "1480556454498009353", open: false },
+      ),
+    ).resolves.toMatchObject({ opened: false });
+    expect(providerMocks.discoverDiscordApplicationId).toHaveBeenCalledWith({
+      botToken: "discord-token",
+    });
+    expect(
+      providerMocks.buildDiscordThreadPermissionRequestUrl,
+    ).toHaveBeenLastCalledWith({
+      applicationId: "1480556454498009351",
+      guildId: "1480556454498009353",
+    });
 
     disposeSettingsIpcHandlers();
   });

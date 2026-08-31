@@ -24,6 +24,7 @@ import {
 } from "../discord-commands.ts";
 
 const unknownChannelError = new Error("DiscordAPIError[10003]: Unknown Channel");
+const TEST_APPLICATION_ID = "1480556454498009351";
 const TEST_CHANNEL_ID = "1480556454498009352";
 const TEST_GUILD_ID = "1480556454498009353";
 const TEST_MESSAGE_ID = "1480556454498009354";
@@ -203,6 +204,70 @@ describe("discord adapter", () => {
 
       expect(adapter.capabilityProfile.conversationInput).toBeUndefined();
     }
+  });
+
+  it("discovers the application ID before commands and mention reporting start", async () => {
+    const getCurrentApplicationId = vi.fn(async () => TEST_APPLICATION_ID);
+    const listApplicationCommands = vi.fn(async () => []);
+    const gateway: DiscordGatewayConnection = {
+      close: vi.fn(async () => undefined),
+      onEvent: vi.fn(() => () => undefined),
+      start: vi.fn(async () => undefined),
+    };
+    const adapter = new DiscordAdapter({
+      api: createApi({ getCurrentApplicationId, listApplicationCommands }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      gateway,
+    });
+
+    expect(adapter.capabilityProfile.conversationInput).toBeUndefined();
+    await adapter.start(async () => undefined);
+
+    expect(getCurrentApplicationId).toHaveBeenCalledOnce();
+    expect(listApplicationCommands).toHaveBeenCalledWith(TEST_APPLICATION_ID);
+    expect(adapter.capabilityProfile.conversationInput).toEqual({
+      reportsBotMention: true,
+    });
+    expect(gateway.start).toHaveBeenCalledOnce();
+  });
+
+  it("does not continue startup after application discovery is cancelled", async () => {
+    let resolveApplicationId!: (value: string) => void;
+    const applicationId = new Promise<string>((resolve) => {
+      resolveApplicationId = resolve;
+    });
+    const getCurrentApplicationId = vi.fn(async () => await applicationId);
+    const listApplicationCommands = vi.fn(async () => []);
+    const gateway: DiscordGatewayConnection = {
+      close: vi.fn(async () => undefined),
+      onEvent: vi.fn(() => () => undefined),
+      start: vi.fn(async () => undefined),
+    };
+    const adapter = new DiscordAdapter({
+      api: createApi({ getCurrentApplicationId, listApplicationCommands }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      gateway,
+    });
+
+    const startPromise = adapter.start(async () => undefined);
+    await vi.waitFor(() => {
+      expect(getCurrentApplicationId).toHaveBeenCalledOnce();
+    });
+    await adapter.stop();
+    resolveApplicationId(TEST_APPLICATION_ID);
+    await startPromise;
+
+    expect(listApplicationCommands).not.toHaveBeenCalled();
+    expect(gateway.start).not.toHaveBeenCalled();
+    expect(adapter.capabilityProfile.conversationInput).toBeUndefined();
   });
 
   it("returns a failed delivery when a stale channel rejects new messages", async () => {
@@ -2431,6 +2496,7 @@ function createApi(overrides: Partial<DiscordApi> = {}): DiscordApi {
     }),
     deleteApplicationCommand: async () => {},
     getChannel: async (id: string) => ({ id }),
+    getCurrentApplicationId: async () => TEST_APPLICATION_ID,
     getGuild: async (id: string) => ({ id }),
     getThreadPermissions: async ({ channelId, guildId }) => ({
       botId: "123456789012345678",

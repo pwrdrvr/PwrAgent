@@ -137,9 +137,9 @@ export function MessagingSettings(props: {
 }) {
   const telegram = props.snapshot.messaging.telegram;
   const discord = props.snapshot.messaging.discord;
-  const discordMentionDetectionReady = validateDiscordSnowflake(
-    discord.applicationId.value,
-  ).ok;
+  const discordIdentityConfigured =
+    discord.botToken.configured
+    || validateDiscordSnowflake(discord.applicationId.value).ok;
   const mattermost = props.snapshot.messaging.mattermost;
   const slack = props.snapshot.messaging.slack;
   useEffect(() => {
@@ -703,7 +703,7 @@ export function MessagingSettings(props: {
           />
           <SettingsField
             label="Connection test"
-            sub="Validates the bot token via /users/@me on the Discord API."
+            sub="Validates the bot token and discovers its application identity via the Discord API."
             control={
               <SettingsTestBlock
                 kind="discord"
@@ -717,6 +717,7 @@ export function MessagingSettings(props: {
           <DiscordThreadPermissionsField
             applicationId={discord.applicationId.value}
             authorizedGuilds={discord.authorizedGuilds.value}
+            botTokenConfigured={discord.botToken.configured}
             desktopApi={props.desktopApi}
             disabled={props.saving}
           />
@@ -747,9 +748,14 @@ export function MessagingSettings(props: {
           />
           <TextField
             disabled={props.saving}
-            label="Application ID"
-            sub="Discord application ID (snowflake) for slash commands and leading @bot mention detection."
-            source={optionalStringSourceBadge(discord.applicationId)}
+            label="Application ID Override (Advanced)"
+            sub="Optional. PwrAgent discovers the application ID from the bot token for slash commands and leading @bot mention detection."
+            placeholder="Auto-discovered from bot token"
+            source={discord.applicationId.value.trim()
+              ? optionalStringSourceBadge(discord.applicationId)
+              : discord.botToken.configured
+                ? "automatic"
+                : "unset"}
             value={discord.applicationId.value}
             onSave={(applicationId) => {
               void props.onSaveDiscord({
@@ -762,11 +768,11 @@ export function MessagingSettings(props: {
             }}
           />
           <SegmentedField
-            disabled={props.saving || !discordMentionDetectionReady}
+            disabled={props.saving || !discordIdentityConfigured}
             label="Discord response default"
-            sub={discordMentionDetectionReady
+            sub={discordIdentityConfigured
               ? "Global default for Discord servers, channels, and native threads unless a server, channel/thread, or bound PwrAgent thread override is more specific."
-              : "Configure a valid Application ID before enabling leading @bot mention response modes."}
+              : "Configure a bot token before enabling leading @bot mention response modes."}
             options={RESPONSE_MODE_OPTIONS}
             source={sourceBadge(discord.responseMode)}
             value={discord.responseMode.value}
@@ -822,7 +828,7 @@ export function MessagingSettings(props: {
             source={optionalListSourceBadge(discord.authorizedGuilds)}
             validateEntry={validateDiscordGuildIdEntry}
             value={discord.authorizedGuilds.value}
-            responseModePolicy={discordMentionDetectionReady}
+            responseModePolicy={discordIdentityConfigured}
             onSave={(authorizedGuilds) => {
               void props.onSaveDiscord({
                 ...discord,
@@ -833,7 +839,7 @@ export function MessagingSettings(props: {
               });
             }}
           />
-          {discordMentionDetectionReady ? (
+          {discordIdentityConfigured ? (
             <AuthorizedListField
               disabled={props.saving}
               label="Channel / Thread Response Overrides"
@@ -1945,6 +1951,7 @@ function configuredMessagingRoutePlatforms(
 function DiscordThreadPermissionsField(props: {
   applicationId: string;
   authorizedGuilds: DesktopAuthorizedContact[];
+  botTokenConfigured: boolean;
   desktopApi?: DesktopApi;
   disabled: boolean;
 }) {
@@ -2003,7 +2010,7 @@ function DiscordThreadPermissionsField(props: {
     && !checking;
   const canRequest =
     Boolean(props.desktopApi?.openDiscordThreadPermissionRequest)
-    && validateDiscordSnowflake(props.applicationId).ok
+    && (props.botTokenConfigured || validateDiscordSnowflake(props.applicationId).ok)
     && !props.disabled
     && !requesting;
 

@@ -4393,7 +4393,11 @@ describe("SettingsScreen", () => {
 
   it("checks and requests the suggested Discord thread-reply permissions", async () => {
     const snapshot = createSnapshot();
-    snapshot.messaging.discord.applicationId.value = "1480556454498009351";
+    snapshot.messaging.discord.botToken = {
+      configured: true,
+      source: "keychain",
+      writable: true,
+    };
     snapshot.messaging.discord.authorizedGuilds.value = [
       { id: "1480556454498009353", displayName: "general" },
     ];
@@ -4666,7 +4670,11 @@ describe("SettingsScreen", () => {
 
   it("shows Discord response defaults and inherited override scopes", async () => {
     const snapshot = createSnapshot();
-    snapshot.messaging.discord.applicationId.value = "1480556454498009351";
+    snapshot.messaging.discord.botToken = {
+      configured: true,
+      source: "keychain",
+      writable: true,
+    };
     snapshot.messaging.discord.authorizedGuilds.value = [
       { id: "1480556454498009353", displayName: "PwrAgent test guild" },
     ];
@@ -4689,6 +4697,12 @@ describe("SettingsScreen", () => {
     const discordControls = within(discordSection as HTMLElement);
 
     expect(discordControls.getByText("Discord response default")).toBeInTheDocument();
+    expect(discordControls.getByText("automatic")).toBeInTheDocument();
+    expect(
+      discordControls.getByRole("textbox", {
+        name: "Application ID Override (Advanced)",
+      }),
+    ).toHaveAttribute("placeholder", "Auto-discovered from bot token");
     expect(
       discordControls.getByText("Channel / Thread Response Overrides"),
     ).toBeInTheDocument();
@@ -4712,7 +4726,7 @@ describe("SettingsScreen", () => {
     });
   });
 
-  it("disables Discord mention modes without a valid application ID", () => {
+  it("disables Discord mention modes until a bot identity can be resolved", () => {
     const settings = createSettingsState();
 
     render(
