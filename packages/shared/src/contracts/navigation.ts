@@ -370,7 +370,8 @@ export type MessagingThreadBindingSummary = {
    */
   parentTitle?: string;
   /**
-   * Two levels up. Today: Discord threads — the guild name.
+   * Two levels up. Today: Discord threads and categorized channels — the
+   * guild name.
    */
   ancestorTitle?: string;
   /** Wall-clock ms when the binding last had inbound or outbound activity. */

@@ -2048,7 +2048,7 @@ function DiscordThreadPermissionsField(props: {
         <>
           <div className="settings-inline-actions">
             <select
-              aria-label="Discord server for thread reply permissions"
+              aria-label="Discord server for permission check"
               className="settings-select"
               disabled={props.disabled || props.authorizedGuilds.length === 0}
               value={selectedGuildId}
@@ -2070,7 +2070,7 @@ function DiscordThreadPermissionsField(props: {
               ))}
             </select>
             <select
-              aria-label="Discord channel for thread reply permissions"
+              aria-label="Discord channel for permission check"
               className="settings-select"
               disabled={props.disabled || loadingChannels || channels.length === 0}
               value={selectedChannelId}

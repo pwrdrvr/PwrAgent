@@ -1890,6 +1890,72 @@ describe("discord adapter", () => {
       await adapter.stop();
     });
 
+    it("keeps the guild name above a categorized Discord channel", async () => {
+      const BOT_ID = "1480556454498009352";
+      const categoryId = "1480556454498009357";
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi({
+          getChannel: async (id) => id === TEST_CHANNEL_ID
+            ? {
+                id,
+                name: "general",
+                parentId: categoryId,
+              }
+            : {
+                id,
+                name: "Text Channels",
+              },
+          getGuild: async (id) => ({
+            id,
+            name: "PwrDrvr",
+          }),
+        }),
+        config: {
+          applicationId: BOT_ID,
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: {
+          ...messageDispatch({
+            authorBot: false,
+            content: `<@${BOT_ID}> investigate this`,
+            id: "categorized-channel-message",
+          }),
+          channel_type: 0,
+          is_thread: false,
+        },
+      });
+
+      expect(events[0]).toMatchObject({
+        channel: {
+          channel: "discord",
+          conversation: {
+            ancestorTitle: "PwrDrvr",
+            id: TEST_CHANNEL_ID,
+            kind: "channel",
+            parentTitle: "Text Channels",
+            title: "general",
+            workspaceId: TEST_GUILD_ID,
+          },
+        },
+      });
+      await adapter.stop();
+    });
+
     it("normalizes addressed Discord threads as bindable child conversations", async () => {
       const BOT_ID = "1480556454498009352";
       const parentChannelId = "1480556454498009357";

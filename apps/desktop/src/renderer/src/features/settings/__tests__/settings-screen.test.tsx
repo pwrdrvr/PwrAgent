@@ -4448,11 +4448,16 @@ describe("SettingsScreen", () => {
     );
 
     const channelSelect = await screen.findByRole("combobox", {
-      name: "Discord channel for thread reply permissions",
+      name: "Discord channel for permission check",
     });
     await waitFor(() => {
       expect(channelSelect).toHaveValue("1480556454498009352");
     });
+    const serverSelect = screen.getByRole("combobox", {
+      name: "Discord server for permission check",
+    });
+    expect(serverSelect).not.toHaveAccessibleName(/reply/i);
+    expect(channelSelect).not.toHaveAccessibleName(/reply/i);
     expect(screen.getByRole("option", { name: "huntharo-claw" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Chat / #general" })).toBeInTheDocument();
     expect(listDiscordThreadPermissionChannels).toHaveBeenCalledWith({
@@ -4498,7 +4503,7 @@ describe("SettingsScreen", () => {
 
     expect(
       screen.getByRole("combobox", {
-        name: "Discord server for thread reply permissions",
+        name: "Discord server for permission check",
       }),
     ).toHaveValue("");
 
@@ -4517,7 +4522,7 @@ describe("SettingsScreen", () => {
     );
     expect(
       screen.getByRole("combobox", {
-        name: "Discord server for thread reply permissions",
+        name: "Discord server for permission check",
       }),
     ).toHaveValue(firstGuildId);
 
@@ -4536,7 +4541,7 @@ describe("SettingsScreen", () => {
     );
     expect(
       screen.getByRole("combobox", {
-        name: "Discord server for thread reply permissions",
+        name: "Discord server for permission check",
       }),
     ).toHaveValue(replacementGuildId);
 
@@ -4594,7 +4599,7 @@ describe("SettingsScreen", () => {
       />,
     );
     const channelSelect = await screen.findByRole("combobox", {
-      name: "Discord channel for thread reply permissions",
+      name: "Discord channel for permission check",
     });
 
     await waitFor(() => expect(channelSelect).toHaveValue(firstChannelId));

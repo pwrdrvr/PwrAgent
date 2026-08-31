@@ -1896,7 +1896,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           : {}),
         title: breadcrumbs.channelName,
         parentTitle: breadcrumbs.parentChannelName ?? breadcrumbs.guildName,
-        ancestorTitle: options?.isThread && breadcrumbs.parentChannelName
+        ancestorTitle: breadcrumbs.parentChannelName
           ? breadcrumbs.guildName
           : undefined,
       },

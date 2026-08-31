@@ -771,7 +771,8 @@ describe("messaging status ipc", () => {
         id: "1480556454498009352",
         kind: "channel",
         title: "general",
-        parentTitle: "huntharo-claw",
+        parentTitle: "Text Channels",
+        ancestorTitle: "huntharo-claw",
         bucketId: "1480556454498009353",
       },
     };
