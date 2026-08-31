@@ -4,10 +4,14 @@ import type {
   ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
   StarMapArrangementEntry,
+  StarMapIntakeRequest,
   StarMapIntakeResponse,
   WriteStarMapWorkspaceRequest,
 } from "@pwragent/shared";
-import type { StarMapIntakeDispatchRequest } from "../../shared/star-map-intake";
+import {
+  MAX_STAR_MAP_INTAKE_IMAGE_UPLOADS,
+  type StarMapIntakeDispatchRequest,
+} from "../../shared/star-map-intake";
 import {
   isRemoteFederationTarget,
   isStarMapArrangementEntry,
@@ -27,6 +31,11 @@ import {
 import type { WindowShowThreadRequest } from "../../shared/window-show-thread";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
 import { dispatchStarMapIntake } from "../app-server/star-map-intake";
+import {
+  MAX_TURN_INPUT_ATTACHMENT_BYTES,
+  stageTurnInputAttachments,
+  type TurnInputAttachmentUpload,
+} from "../app-server/turn-input-attachment-files";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
@@ -43,6 +52,66 @@ function primaryMainWindowWebContents(): WebContents | undefined {
   return subscribersForChannel(WINDOW_SHOW_THREAD_CHANNEL).find(
     (subscriber) => !isFederationWindowWebContents(subscriber),
   );
+}
+
+function normalizeStarMapIntakeImageUploads(
+  value: unknown,
+): TurnInputAttachmentUpload[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error("Invalid Star Map image uploads");
+  }
+  if (value.length > MAX_STAR_MAP_INTAKE_IMAGE_UPLOADS) {
+    throw new Error(
+      `Star Map intake accepts at most ${MAX_STAR_MAP_INTAKE_IMAGE_UPLOADS} images.`,
+    );
+  }
+  return value.map((candidate) => {
+    if (!candidate || typeof candidate !== "object") {
+      throw new Error("Invalid Star Map image upload");
+    }
+    const upload = candidate as {
+      bytes?: unknown;
+      mimeType?: unknown;
+      name?: unknown;
+    };
+    if (
+      !(upload.bytes instanceof Uint8Array)
+      || upload.bytes.byteLength === 0
+      || upload.bytes.byteLength > MAX_TURN_INPUT_ATTACHMENT_BYTES
+      || typeof upload.mimeType !== "string"
+      || !/^image\/[a-z0-9.+-]+$/iu.test(upload.mimeType)
+      || upload.mimeType.length > 100
+      || typeof upload.name !== "string"
+      || upload.name.trim().length === 0
+      || upload.name.length > 200
+    ) {
+      throw new Error("Invalid Star Map image upload");
+    }
+    return {
+      type: "localImage" as const,
+      data: upload.bytes,
+      mimeType: upload.mimeType,
+      name: upload.name.trim(),
+    };
+  });
+}
+
+async function stageStarMapIntakeRequest(
+  request: StarMapIntakeDispatchRequest,
+): Promise<StarMapIntakeRequest> {
+  const uploads = normalizeStarMapIntakeImageUploads(request.imageUploads);
+  const attachments = uploads.length > 0
+    ? await stageTurnInputAttachments(uploads)
+    : [];
+  return {
+    requestId: request.requestId,
+    request: request.request,
+    ...(request.directoryKey !== undefined
+      ? { directoryKey: request.directoryKey }
+      : {}),
+    ...(attachments.length > 0 ? { attachments } : {}),
+  };
 }
 
 export function registerStarMapIpcHandlers(): void {
@@ -93,7 +162,8 @@ export function registerStarMapIpcHandlers(): void {
       _event,
       request: StarMapIntakeDispatchRequest,
     ): Promise<StarMapIntakeResponse> => {
-      const { federationTarget, ...intake } = request;
+      const intake = await stageStarMapIntakeRequest(request);
+      const { federationTarget } = request;
       if (federationTarget && isRemoteFederationTarget(federationTarget)) {
         // Execute on the owning instance: its directory registry, defaults,
         // and AGENTS.md preferences are the ones the intake must consult.
