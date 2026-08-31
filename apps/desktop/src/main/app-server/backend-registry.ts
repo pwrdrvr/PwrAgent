@@ -556,6 +556,7 @@ import {
 } from "./thread-turn-queue";
 import { materializeLocalImageInputs } from "./image-input-files";
 import { enrichLocalFileInputs } from "./local-file-input";
+import { stageTurnInputAttachmentsForRetention } from "./turn-input-attachment-files";
 import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import {
   PdfAttachmentStore,
@@ -7478,6 +7479,10 @@ export class DesktopBackendRegistry {
     string,
     AppServerTurnInputItem[]
   >();
+  private readonly turnInputAttachments = new Map<
+    string,
+    { input: AppServerTurnInputItem[] }
+  >();
   private readonly pendingThreadMessageContexts = new Map<
     string,
     PendingThreadMessageContext
@@ -14074,6 +14079,12 @@ export class DesktopBackendRegistry {
           messageId: buildTurnUserMessageOriginId(result.turnId),
           origin: resolveThreadMessageOrigin(params),
         });
+        await this.rememberTurnInputAttachments({
+          backend: params.backend,
+          threadId: result.threadId,
+          turnId: result.turnId,
+          input: userInput,
+        });
         this.forgetPendingThreadMessageContext(pendingMessageContextId);
         return result;
       } catch (error) {
@@ -14440,6 +14451,12 @@ export class DesktopBackendRegistry {
       threadId: result.threadId,
       turnId: result.turnId,
     };
+    await this.rememberTurnInputAttachments({
+      backend: params.backend,
+      threadId: result.threadId,
+      turnId: result.turnId,
+      input,
+    });
     this.scheduleCompletedTurnFromReplay({
       backend: params.backend,
       threadId: result.threadId,
@@ -28608,6 +28625,47 @@ export class DesktopBackendRegistry {
     return this.localFilePrivateStorageRoots;
   }
 
+  getTurnInputAttachments(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+  }): AppServerTurnInputItem[] {
+    return (
+      this.turnInputAttachments.get(
+        buildActiveTurnKey(params.backend, params.threadId, params.turnId),
+      )?.input ?? []
+    ).map((item) => ({ ...item }));
+  }
+
+  private async rememberTurnInputAttachments(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+    input: readonly AppServerTurnInputItem[];
+  }): Promise<void> {
+    const attachments = await stageTurnInputAttachmentsForRetention(
+      params.input,
+      { privateStorageRoots: this.localFilePrivateStorageRoots },
+    );
+    if (attachments.length === 0) {
+      return;
+    }
+    const key = buildActiveTurnKey(
+      params.backend,
+      params.threadId,
+      params.turnId,
+    );
+    this.turnInputAttachments.delete(key);
+    this.turnInputAttachments.set(key, {
+      input: attachments,
+    });
+    while (this.turnInputAttachments.size > 256) {
+      const oldestKey = this.turnInputAttachments.keys().next().value;
+      if (!oldestKey) break;
+      this.turnInputAttachments.delete(oldestKey);
+    }
+  }
+
   private async handleThreadOrchestrationRequest(
     request: PwrAgentThreadOrchestrationRequest,
   ): Promise<PwrAgentThreadOrchestrationResponse> {
@@ -29791,7 +29849,14 @@ export class DesktopBackendRegistry {
           : {}),
         ...(request.args.sandbox ? { sandbox: request.args.sandbox } : {}),
       };
-      const input = [{ type: "text" as const, text: prompt }];
+      const input = [
+        { type: "text" as const, text: prompt },
+        ...this.getTurnInputAttachments({
+          backend: request.context.backend,
+          threadId: request.context.threadId,
+          turnId: sourceTurnId,
+        }),
+      ];
       const messageOrigin = await this.buildAgentMessageOrigin({
         backend: request.context.backend,
         threadId: request.context.threadId,
@@ -30135,7 +30200,14 @@ export class DesktopBackendRegistry {
         : {}),
       ...(request.operation === "steer_thread"
         ? {
-            input: [{ type: "text" as const, text: request.args.prompt }],
+            input: [
+              { type: "text" as const, text: request.args.prompt },
+              ...this.getTurnInputAttachments({
+                backend: request.context.backend,
+                threadId: request.context.threadId,
+                turnId: sourceTurnId,
+              }),
+            ],
           }
         : {}),
       messageOrigin,
@@ -30817,7 +30889,14 @@ export class DesktopBackendRegistry {
       const turn = await this.startTurn({
         backend,
         threadId,
-        input: [{ type: "text", text: prompt }],
+        input: [
+          { type: "text", text: prompt },
+          ...this.getTurnInputAttachments({
+            backend: sourceBackend,
+            threadId: sourceThreadId,
+            turnId: sourceTurnId,
+          }),
+        ],
         messageOrigin: {
           kind: "agent",
           sourceThread: {

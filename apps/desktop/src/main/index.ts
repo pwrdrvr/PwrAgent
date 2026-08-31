@@ -1237,6 +1237,16 @@ export function bootstrapApp(): void {
     getDesktopBackendRegistry().setPwrAgentFederationHandler(
       createFederationAgentToolsHandler({
         targetStore: getDesktopOverlayStore(),
+        resolveSourceTurnAttachments: (context) => {
+          const turnId = context.turnId?.trim();
+          return turnId
+            ? getDesktopBackendRegistry().getTurnInputAttachments({
+                backend: context.backend,
+                threadId: context.threadId,
+                turnId,
+              })
+            : [];
+        },
         onRemoteChildMounted: async ({ backend, instanceId, threadId }) => {
           await getDesktopBackendRegistry().publishLocalEvent({
             backend,

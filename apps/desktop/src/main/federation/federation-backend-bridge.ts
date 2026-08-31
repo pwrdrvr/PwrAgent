@@ -7,7 +7,10 @@ import type {
   AppServerListThreadsResponse,
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  AppServerLocalFileInputItem,
+  AppServerLocalImageInputItem,
   AppServerThreadMessageOrigin,
+  AppServerTurnInputItem,
   AgentEvent,
   ArchiveThreadRequest,
   ArchiveThreadResponse,
@@ -179,6 +182,70 @@ export type FederationStartTurnRequest = StartTurnRequest & {
   messageOrigin?: AppServerThreadMessageOrigin;
 };
 
+export type FederationTurnInputBlobReference = {
+  type: "federationBlob";
+  transferId: string;
+};
+
+export type FederationWireTurnInputItem =
+  | AppServerTurnInputItem
+  | FederationTurnInputBlobReference;
+
+export type FederationStarMapIntakeAttachment =
+  | Pick<AppServerLocalImageInputItem, "type" | "name" | "path">
+  | Pick<AppServerLocalFileInputItem, "type" | "name" | "path">;
+
+export type FederationStarMapIntakeRequest =
+  Omit<StarMapIntakeRequest, "attachments"> & {
+    attachments?: FederationStarMapIntakeAttachment[];
+  };
+
+type FederationWireStarMapIntakeRequest =
+  Omit<FederationStarMapIntakeRequest, "attachments"> & {
+    attachments?: FederationWireTurnInputItem[];
+  };
+
+type FederationWireControlActiveTurnRequest =
+  Omit<ControlActiveTurnRequest, "input"> & {
+    input?: FederationWireTurnInputItem[];
+  };
+
+export type PrepareOutgoingFederationTurnInput = (
+  input: readonly AppServerTurnInputItem[],
+) => Promise<FederationWireTurnInputItem[]>;
+
+export type ResolveIncomingFederationTurnInput = (
+  input: readonly FederationWireTurnInputItem[],
+  sourceInstanceId: FederationInstanceId,
+) => Promise<AppServerTurnInputItem[]>;
+
+async function resolveFederationTurnInput(
+  resolver: ResolveIncomingFederationTurnInput | undefined,
+  input: readonly FederationWireTurnInputItem[],
+  sourceInstanceId: FederationInstanceId,
+): Promise<AppServerTurnInputItem[]> {
+  if (resolver) {
+    return await resolver(input, sourceInstanceId);
+  }
+  for (const item of input) {
+    if (
+      item.type === "federationBlob"
+      || item.type === "localImage"
+      || item.type === "localFile"
+      || item.type === "file"
+      || (
+        item.type === "image"
+        && (item.url.startsWith("data:") || item.url.startsWith("file:"))
+      )
+    ) {
+      throw new Error(
+        "Federation attachment references require the staged-input resolver.",
+      );
+    }
+  }
+  return input as AppServerTurnInputItem[];
+}
+
 export type FederationRefreshThreadPullRequestsRequest =
   RefreshOwnedThreadPullRequestsRequest;
 
@@ -194,7 +261,8 @@ function localizeRefreshThreadPullRequestsRequest(
 }
 
 type FederationMaterializeDirectoryLaunchpadRequest =
-  MaterializeDirectoryLaunchpadRequest & {
+  Omit<MaterializeDirectoryLaunchpadRequest, "input"> & {
+    input?: FederationWireTurnInputItem[];
     messageOrigin?: AppServerThreadMessageOrigin;
   };
 
@@ -661,7 +729,9 @@ export type FederationBackendOperations = {
   setCelestialIcon(
     request: SetCelestialIconRequest,
   ): Promise<SetCelestialIconResponse>;
-  starMapIntake(request: StarMapIntakeRequest): Promise<StarMapIntakeResponse>;
+  starMapIntake(
+    request: FederationStarMapIntakeRequest,
+  ): Promise<StarMapIntakeResponse>;
 };
 
 export function registerFederationBackendHandlers(params: {
@@ -674,6 +744,7 @@ export function registerFederationBackendHandlers(params: {
     event: CodexEnvironmentSetupProgressEvent,
     targetInstanceId: string,
   ) => void;
+  resolveTurnInput?: ResolveIncomingFederationTurnInput;
 }): NavigationSnapshotTransport {
   const navigationSnapshotTransport = new NavigationSnapshotTransport({
     // Federation has one owner collection and one resource-version history.
@@ -934,14 +1005,23 @@ export function registerFederationBackendHandlers(params: {
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.startTurn,
     async (envelope) => {
-      const request = envelope.params as FederationStartTurnRequest;
+      const request = envelope.params as Omit<
+        FederationStartTurnRequest,
+        "input"
+      > & { input: FederationWireTurnInputItem[] };
       const messageOrigin = authenticateMessageOrigin({
         messageOrigin: request.messageOrigin,
         resolveSourceInstance: params.resolveSourceInstance,
         sourceInstanceId: envelope.sourceInstanceId,
       });
+      const input = await resolveFederationTurnInput(
+        params.resolveTurnInput,
+        request.input,
+        envelope.sourceInstanceId,
+      );
       return await params.backend.startTurn({
         ...request,
+        input,
         ...(messageOrigin ? { messageOrigin } : {}),
       });
     },
@@ -1032,14 +1112,25 @@ export function registerFederationBackendHandlers(params: {
     params.router.registerHandler(
       FEDERATION_BACKEND_METHODS.controlActiveTurn,
       async (envelope) => {
-        const request = envelope.params as ControlActiveTurnRequest;
+        const {
+          input: wireInput,
+          ...request
+        } = envelope.params as FederationWireControlActiveTurnRequest;
         const messageOrigin = authenticateMessageOrigin({
           messageOrigin: request.messageOrigin,
           resolveSourceInstance: params.resolveSourceInstance,
           sourceInstanceId: envelope.sourceInstanceId,
         });
+        const input = wireInput
+          ? await resolveFederationTurnInput(
+              params.resolveTurnInput,
+              wireInput,
+              envelope.sourceInstanceId,
+            )
+          : undefined;
         return await params.backend.controlActiveTurn!({
           ...request,
+          ...(input ? { input } : {}),
           ...(messageOrigin ? { messageOrigin } : {}),
         });
       },
@@ -1231,6 +1322,7 @@ export function registerFederationBackendHandlers(params: {
     async (envelope) => {
       const {
         messageOrigin: claimedMessageOrigin,
+        input: wireInput,
         ...request
       } = envelope.params as FederationMaterializeDirectoryLaunchpadRequest;
       const messageOrigin = authenticateMessageOrigin({
@@ -1238,8 +1330,18 @@ export function registerFederationBackendHandlers(params: {
         resolveSourceInstance: params.resolveSourceInstance,
         sourceInstanceId: envelope.sourceInstanceId,
       });
+      const input = wireInput
+        ? await resolveFederationTurnInput(
+            params.resolveTurnInput,
+            wireInput,
+            envelope.sourceInstanceId,
+          )
+        : undefined;
       return await params.backend.materializeDirectoryLaunchpad(
-        request,
+        {
+          ...request,
+          ...(input ? { input } : {}),
+        },
         {
           ...(messageOrigin ? { messageOrigin } : {}),
           sourceInstanceId: envelope.sourceInstanceId,
@@ -1306,10 +1408,37 @@ export function registerFederationBackendHandlers(params: {
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.starMapIntake,
-    async (envelope) =>
-      await params.backend.starMapIntake(
-        envelope.params as StarMapIntakeRequest,
-      ),
+    async (envelope) => {
+      const {
+        attachments: wireAttachments,
+        ...request
+      } = envelope.params as FederationWireStarMapIntakeRequest;
+      const attachments = wireAttachments
+        ? await resolveFederationTurnInput(
+            params.resolveTurnInput,
+            wireAttachments,
+            envelope.sourceInstanceId,
+          )
+        : undefined;
+      if (
+        attachments?.some(
+          (item) => item.type !== "localImage" && item.type !== "localFile",
+        )
+      ) {
+        throw new Error(
+          "Star Map intake attachments must resolve to staged local inputs.",
+        );
+      }
+      return await params.backend.starMapIntake({
+        ...request,
+        ...(attachments
+          ? {
+              attachments:
+                attachments as FederationStarMapIntakeAttachment[],
+            }
+          : {}),
+      });
+    },
   );
   return navigationSnapshotTransport;
 }
@@ -1322,6 +1451,7 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     ) =>
       | AppServerReadThreadResponse
       | Promise<AppServerReadThreadResponse> = (response) => response,
+    private readonly prepareTurnInput?: PrepareOutgoingFederationTurnInput,
   ) {}
 
   async getNavigationSnapshot(
@@ -1544,9 +1674,12 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async startTurn(
     request: FederationStartTurnRequest,
   ): Promise<StartTurnResponse> {
+    const input = this.prepareTurnInput
+      ? await this.prepareTurnInput(request.input)
+      : request.input;
     return await this.rpc.request<StartTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.startTurn,
-      params: request,
+      params: { ...request, input },
     });
   }
 
@@ -1641,9 +1774,12 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   async controlActiveTurn(
     request: ControlActiveTurnRequest,
   ): Promise<ControlActiveTurnResponse> {
+    const input = request.input && this.prepareTurnInput
+      ? await this.prepareTurnInput(request.input)
+      : request.input;
     return await this.rpc.request<ControlActiveTurnResponse>({
       method: FEDERATION_BACKEND_METHODS.controlActiveTurn,
-      params: request,
+      params: { ...request, ...(input ? { input } : {}) },
     });
   }
 
@@ -1881,10 +2017,14 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
     request: MaterializeDirectoryLaunchpadRequest,
     options?: MaterializeDirectoryLaunchpadOptions,
   ): Promise<MaterializeDirectoryLaunchpadResponse> {
+    const input = request.input && this.prepareTurnInput
+      ? await this.prepareTurnInput(request.input)
+      : request.input;
     return await this.rpc.request<MaterializeDirectoryLaunchpadResponse>({
       method: FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad,
       params: {
         ...request,
+        ...(input ? { input } : {}),
         ...(options?.messageOrigin
           ? { messageOrigin: options.messageOrigin }
           : {}),
@@ -1967,11 +2107,19 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   }
 
   async starMapIntake(
-    request: StarMapIntakeRequest,
+    request: FederationStarMapIntakeRequest,
   ): Promise<StarMapIntakeResponse> {
+    const attachments = request.attachments && this.prepareTurnInput
+      ? await this.prepareTurnInput(
+          request.attachments as AppServerTurnInputItem[],
+        )
+      : request.attachments;
     return await this.rpc.request<StarMapIntakeResponse>({
       method: FEDERATION_BACKEND_METHODS.starMapIntake,
-      params: request,
+      params: {
+        ...request,
+        ...(attachments ? { attachments } : {}),
+      } satisfies FederationWireStarMapIntakeRequest,
       // Resolution + thread materialization can outlive the default 30s
       // (Grok call + worktree preparation), so give intake a longer leash.
       timeoutMs: 120_000,
