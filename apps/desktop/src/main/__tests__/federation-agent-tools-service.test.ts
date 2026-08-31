@@ -463,6 +463,14 @@ describe("federation agent tools service", () => {
             threadKeys: [],
             needsAttentionCount: 0,
           },
+          {
+            key: "dir:/Users/op/pwrgit",
+            kind: "directory",
+            label: "PwrGit",
+            path: "/Users/op/pwrgit",
+            threadKeys: [],
+            needsAttentionCount: 0,
+          },
         ] as NavigationSnapshot["directories"],
       }),
     );
@@ -510,6 +518,14 @@ describe("federation agent tools service", () => {
         workMode: "worktree",
         model: "gpt-5.5-codex",
         executionMode: "default",
+      },
+      {
+        key: "dir:/Users/op/pwrgit",
+        label: "PwrGit",
+        kind: "directory",
+        path: "/Users/op/pwrgit",
+        hasLaunchpad: false,
+        backend: "codex",
       },
     ]);
   });
@@ -652,6 +668,150 @@ describe("federation agent tools service", () => {
       turnId: "turn-9",
     });
     expect(data.threadLink).toContain("pwragent://thread/thread-9");
+  });
+
+  it("rejects a Token Miser override for ACP-backed projects", async () => {
+    const variants: Array<{
+      name: string;
+      snapshot: NavigationSnapshot;
+    }> = [
+      {
+        name: "saved launchpad",
+        snapshot: buildSnapshot({
+          directories: [{
+            key: "dir:/repo",
+            kind: "directory",
+            label: "ACP project",
+            path: "/repo",
+            threadKeys: [],
+            needsAttentionCount: 0,
+            launchpad: {
+              backend: "acp:grok",
+              executionMode: "default",
+              workMode: "local",
+              directoryKey: "dir:/repo",
+              directoryKind: "directory",
+              directoryLabel: "ACP project",
+              prompt: "",
+              createdAt: 1,
+              updatedAt: 2,
+            },
+          }] as NavigationSnapshot["directories"],
+        }),
+      },
+      {
+        name: "instance default",
+        snapshot: buildSnapshot({
+          directories: [{
+            key: "dir:/repo",
+            kind: "directory",
+            label: "Default ACP project",
+            path: "/repo",
+            threadKeys: [],
+            needsAttentionCount: 0,
+          }] as NavigationSnapshot["directories"],
+          launchpadDefaults: {
+            backend: "acp:grok",
+            executionMode: "default",
+            workMode: "local",
+          },
+        }),
+      },
+    ];
+
+    for (const variant of variants) {
+      const materializeDirectoryLaunchpad = vi.fn();
+      const handler = createFederationAgentToolsHandler({
+        collectHostInfo: async () => localHostInfo,
+        runtime: buildRuntime({
+          health: async () => buildHealth(),
+          localBackend: (() => ({
+            getNavigationSnapshot: async () => variant.snapshot,
+            materializeDirectoryLaunchpad,
+          })) as never,
+        }),
+      });
+
+      const response = await handler({
+        operation: "create_instance_thread",
+        context,
+        args: {
+          instanceId: "pwr_local",
+          projectKey: "dir:/repo",
+          tokenMiserEnabled: true,
+        },
+      });
+
+      expect(response, variant.name).toMatchObject({
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message: expect.stringContaining("supported only for Codex projects"),
+        },
+      });
+      expect(materializeDirectoryLaunchpad, variant.name).not.toHaveBeenCalled();
+    }
+  });
+
+  it("does not carry a stale inherited Token Miser setting into an ACP draft", async () => {
+    let materializedRequest: MaterializeDirectoryLaunchpadRequest | undefined;
+    const materializeDirectoryLaunchpad = vi.fn(
+      async (request: MaterializeDirectoryLaunchpadRequest) => {
+        materializedRequest = request;
+        return {
+          backend: "acp:grok" as const,
+          threadId: "acp-thread",
+          executionMode: "default" as const,
+          workMode: "local" as const,
+        };
+      },
+    );
+    const handler = createFederationAgentToolsHandler({
+      collectHostInfo: async () => localHostInfo,
+      runtime: buildRuntime({
+        health: async () => buildHealth(),
+        localBackend: (() => ({
+          getNavigationSnapshot: async () => buildSnapshot({
+            directories: [{
+              key: "dir:/repo",
+              kind: "directory",
+              label: "ACP project",
+              path: "/repo",
+              threadKeys: [],
+              needsAttentionCount: 0,
+              launchpad: {
+                backend: "acp:grok",
+                executionMode: "default",
+                workMode: "local",
+                tokenMiserEnabled: true,
+                directoryKey: "dir:/repo",
+                directoryKind: "directory",
+                directoryLabel: "ACP project",
+                prompt: "",
+                createdAt: 1,
+                updatedAt: 2,
+              },
+            }] as NavigationSnapshot["directories"],
+          }),
+          materializeDirectoryLaunchpad,
+        })) as never,
+      }),
+    });
+
+    const response = await handler({
+      operation: "create_instance_thread",
+      context,
+      args: {
+        instanceId: "pwr_local",
+        projectKey: "dir:/repo",
+      },
+    });
+
+    expect(response).toMatchObject({ ok: true });
+    expect(materializedRequest).toBeDefined();
+    expect(materializedRequest?.launchpad).not.toHaveProperty(
+      "tokenMiserEnabled",
+    );
   });
 
   it("remembers a remotely created thread and returns an addressed link", async () => {

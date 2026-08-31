@@ -6,6 +6,13 @@
     "rowsChanged": 6,
     "statements": 6
   },
+  "agent-created-codex-thread-token-miser-override": {
+    "commits": 4,
+    "note": "one agent-command Codex thread creation with an explicit Token Miser override; the override adds one commit to ordinary creation",
+    "observedWalBytes": 65920,
+    "rowsChanged": 4,
+    "statements": 4
+  },
   "automation-run-transcript-burst": {
     "commits": 1,
     "note": "2,500 completed tool items across 50 windows, one shutdown-boundary artifact write",

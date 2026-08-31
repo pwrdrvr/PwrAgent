@@ -176,7 +176,7 @@ function inputSchemaForOperation(
           tokenMiserEnabled: {
             type: "boolean",
             description:
-              "Explicitly enable or disable Token Miser for the created thread before its first turn. The target profile's experiment gate must also be enabled.",
+              "Explicitly enable or disable Token Miser for a Codex thread before its first turn. Unsupported for ACP-backed projects. The target profile's experiment gate must also be enabled.",
           },
           workMode: {
             type: "string",

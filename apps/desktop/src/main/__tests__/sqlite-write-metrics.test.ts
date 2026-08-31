@@ -459,6 +459,44 @@ describe("sqlite write metrics", () => {
     }
   });
 
+  it("budgets a Codex thread creation with a Token Miser override", async () => {
+    const registry = new DesktopBackendRegistry({
+      codexClient: createStubBackendClient(),
+      overlayStore: store as never,
+    });
+
+    try {
+      const baseline = await measureSqliteWrites(async () => {
+        await registry.startThread({
+          backend: "codex",
+          cwd: tempDir,
+        });
+      });
+      const withOverride = await measureSqliteWrites(async () => {
+        await registry.startThread({
+          backend: "codex",
+          cwd: tempDir,
+          tokenMiserEnabled: true,
+        });
+      });
+
+      // This is one write per explicit thread-creation command, never a timer
+      // or streamed-event path. At an intentionally heavy 100 creations/day,
+      // the measured 65,920-byte total projects to 6.6 MB/day. The one-commit
+      // Token Miser increment is about 1.65 MB/day at that same rate.
+      expect(withOverride.writes.commits).toBe(baseline.writes.commits + 1);
+      expectSqliteWriteBudget({
+        note:
+          "one agent-command Codex thread creation with an explicit Token "
+          + "Miser override; the override adds one commit to ordinary creation",
+        scenario: "agent-created-codex-thread-token-miser-override",
+        writes: withOverride.writes,
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("holds streamed command output to one commit per flush window", async () => {
     // The regression guard for PR #1406. Tool accounting used to run one
     // implicit transaction per streamed 8 KiB chunk — 3,693 commits and 58 MB
@@ -2249,6 +2287,7 @@ function createStubBackendClient(options?: {
   replay?: AppServerThreadReplay;
   threads?: AppServerThreadSummary[];
 }) {
+  let startedThreadSequence = 0;
   return {
     close: async () => {},
     getInitializeResult: async () => ({
@@ -2270,5 +2309,9 @@ function createStubBackendClient(options?: {
           supportsPagination: false,
         },
       },
+    startThread: async () => {
+      startedThreadSequence += 1;
+      return { threadId: `thread-write-budget-${startedThreadSequence}` };
+    },
   } as never;
 }
