@@ -78,11 +78,17 @@ import type {
   SkillsListParams as CodexSkillsListParams,
   ThreadForkParams as CodexThreadForkParams,
   ThreadInjectItemsParams as CodexThreadInjectItemsParams,
+  ThreadItem as CodexThreadItem,
+  ThreadItemsListParams as CodexThreadItemsListParams,
+  ThreadItemsListResponse as CodexThreadItemsListResponse,
   ThreadListParams as CodexThreadListParams,
   ThreadReadParams as CodexThreadReadParams,
   ThreadResumeParams as CodexThreadResumeParams,
   ThreadSettingsUpdateParams as CodexThreadSettingsUpdateParams,
   ThreadStartParams as CodexThreadStartParams,
+  ThreadTurnsListParams as CodexThreadTurnsListParams,
+  ThreadTurnsListResponse as CodexThreadTurnsListResponse,
+  Turn as CodexTurn,
   TurnInterruptParams as CodexTurnInterruptParams,
   TurnStartParams as CodexTurnStartParams,
   TurnSteerParams as CodexTurnSteerParams,
@@ -5770,8 +5776,15 @@ function isMethodUnavailableError(error: unknown, method?: string): boolean {
   const text = error instanceof Error ? error.message : String(error);
   const normalized = text.toLowerCase();
 
-  if (normalized.includes("method not found") || normalized.includes("unknown method")) {
+  if (
+    normalized.includes("method not found")
+    || normalized.includes("unknown method")
+  ) {
     return true;
+  }
+
+  if (normalized.includes("is not supported yet")) {
+    return !method || normalized.includes(method.toLowerCase());
   }
 
   if (!normalized.includes("unknown variant")) {
@@ -5794,8 +5807,11 @@ function isUnmaterializedThreadError(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   const normalized = text.toLowerCase();
   return (
-    normalized.includes("not materialized yet") &&
-    normalized.includes("includeturns is unavailable before first user message")
+    normalized.includes("unavailable before first user message")
+    && (
+      normalized.includes("includeturns")
+      || normalized.includes("thread/turns/list")
+    )
   );
 }
 
@@ -6911,31 +6927,178 @@ function buildThreadSettingsUpdatePayload(params: {
     : undefined;
 }
 
-type CodexThreadReadPayload = CodexThreadReadParams & {
-  before?: string;
-  limit?: number;
-};
+const CODEX_THREAD_HISTORY_PAGE_SIZE = 100;
+const CODEX_THREAD_ITEM_HYDRATION_CONCURRENCY = 8;
 
 function buildThreadReadPayload(params: {
   threadId: string;
-  includeTurns?: boolean;
-  before?: string;
-  limit?: number;
-}): CodexThreadReadPayload {
-  const payload: CodexThreadReadPayload = {
+}): CodexThreadReadParams {
+  return {
     threadId: params.threadId,
-    includeTurns: params.includeTurns ?? true,
+    includeTurns: false,
   };
+}
 
-  if (params.before) {
-    payload.before = params.before;
+function threadReadResultIncludesTurns(value: unknown): boolean {
+  const record = asRecord(value);
+  const thread = asRecord(record?.thread);
+  return Array.isArray(thread?.turns) && thread.turns.length > 0;
+}
+
+async function requestCodexThreadItemsPage(params: {
+  client: JsonRpcConnection;
+  payload: CodexThreadItemsListParams;
+  timeoutMs: number;
+}): Promise<CodexThreadItemsListResponse> {
+  try {
+    return await requestWithThreadMetadataReadRetry(async () => {
+      return await requestWithFallbacks({
+        client: params.client,
+        methods: ["thread/items/list"],
+        payloads: [params.payload],
+        timeoutMs: params.timeoutMs,
+      }) as CodexThreadItemsListResponse;
+    });
+  } catch (error) {
+    if (!isMethodUnavailableError(error, "thread/items/list")) {
+      throw error;
+    }
   }
 
-  if (params.limit !== undefined) {
-    payload.limit = params.limit;
+  return await requestWithThreadMetadataReadRetry(async () => {
+    return await requestWithFallbacks({
+      client: params.client,
+      methods: ["thread/turns/items/list"],
+      payloads: [params.payload],
+      timeoutMs: params.timeoutMs,
+    }) as CodexThreadItemsListResponse;
+  });
+}
+
+async function listCodexThreadItems(params: {
+  client: JsonRpcConnection;
+  threadId: string;
+  timeoutMs: number;
+  turnId: string;
+}): Promise<CodexThreadItem[]> {
+  const items: CodexThreadItem[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | undefined;
+
+  while (true) {
+    const payload = {
+      threadId: params.threadId,
+      turnId: params.turnId,
+      ...(cursor ? { cursor } : {}),
+      limit: CODEX_THREAD_HISTORY_PAGE_SIZE,
+      sortDirection: "asc",
+    } satisfies CodexThreadItemsListParams;
+    const page = await requestCodexThreadItemsPage({
+      client: params.client,
+      payload,
+      timeoutMs: params.timeoutMs,
+    });
+    items.push(...page.data);
+    const nextCursor = page.nextCursor ?? undefined;
+    if (!nextCursor || seenCursors.has(nextCursor)) {
+      break;
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
   }
 
-  return payload;
+  return items;
+}
+
+async function hydrateCodexThreadHistory(params: {
+  before?: string;
+  client: JsonRpcConnection;
+  limit?: number;
+  readResult: unknown;
+  threadId: string;
+  timeoutMs: number;
+}): Promise<unknown> {
+  const turns: CodexTurn[] = [];
+  const seenCursors = new Set<string>();
+  const requestedLimit = params.limit === undefined
+    ? undefined
+    : Math.max(0, Math.floor(params.limit));
+  let cursor = params.before;
+  let nextCursor: string | undefined;
+
+  while (requestedLimit === undefined || turns.length < requestedLimit) {
+    const remaining = requestedLimit === undefined
+      ? CODEX_THREAD_HISTORY_PAGE_SIZE
+      : requestedLimit - turns.length;
+    if (remaining <= 0) {
+      break;
+    }
+    const payload = {
+      threadId: params.threadId,
+      ...(cursor ? { cursor } : {}),
+      limit: Math.min(CODEX_THREAD_HISTORY_PAGE_SIZE, remaining),
+      sortDirection: "desc",
+      itemsView: "full",
+    } satisfies CodexThreadTurnsListParams;
+    const page = await requestWithThreadMetadataReadRetry(async () => {
+      return await requestWithFallbacks({
+        client: params.client,
+        methods: ["thread/turns/list"],
+        payloads: [payload],
+        timeoutMs: params.timeoutMs,
+      });
+    }) as CodexThreadTurnsListResponse;
+    turns.push(...page.data);
+    nextCursor = page.nextCursor ?? undefined;
+    if (!nextCursor || seenCursors.has(nextCursor)) {
+      break;
+    }
+    seenCursors.add(nextCursor);
+    cursor = nextCursor;
+  }
+
+  const hydratedTurns: Array<CodexTurn | undefined> = [];
+  for await (const hydrated of new IterableMapper(
+    turns.map((turn, index) => ({ index, turn })),
+    async ({ index, turn }) => {
+      if (turn.itemsView === "full") {
+        return { index, turn };
+      }
+      return {
+        index,
+        turn: {
+          ...turn,
+          items: await listCodexThreadItems({
+            client: params.client,
+            threadId: params.threadId,
+            timeoutMs: params.timeoutMs,
+            turnId: turn.id,
+          }),
+          itemsView: "full" as const,
+        },
+      };
+    },
+    {
+      concurrency: CODEX_THREAD_ITEM_HYDRATION_CONCURRENCY,
+      maxUnread: CODEX_THREAD_ITEM_HYDRATION_CONCURRENCY,
+    },
+  )) {
+    hydratedTurns[hydrated.index] = hydrated.turn;
+  }
+  const record = asRecord(params.readResult) ?? {};
+  const thread = asRecord(record.thread) ?? {};
+  return {
+    ...record,
+    thread: {
+      ...thread,
+      turns: hydratedTurns
+        .filter((turn): turn is CodexTurn => Boolean(turn))
+        .reverse(),
+    },
+    supportsPagination: true,
+    hasPreviousPage: Boolean(nextCursor),
+    ...(nextCursor ? { previousCursor: nextCursor } : {}),
+  };
 }
 
 async function requestWithFallbacks(params: {
@@ -8293,6 +8456,9 @@ export class CodexAppServerClient {
 
     let result: unknown;
     try {
+      // Full-history hydration on thread/read is deprecated for paginated
+      // threads. Read metadata first, then hydrate turns and items through
+      // their cursor-based list methods.
       const payload = buildThreadReadPayload(params);
       result = await requestWithThreadMetadataReadRetry(async () => {
         return await requestWithFallbacks({
@@ -8302,6 +8468,26 @@ export class CodexAppServerClient {
           timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
         });
       });
+      if (params.includeTurns === false) {
+        const record = asRecord(result) ?? {};
+        const thread = asRecord(record.thread) ?? {};
+        result = {
+          ...record,
+          thread: {
+            ...thread,
+            turns: [],
+          },
+        };
+      } else if (!threadReadResultIncludesTurns(result)) {
+        result = await hydrateCodexThreadHistory({
+          before: params.before,
+          client: this.connection,
+          limit: params.limit,
+          readResult: result,
+          threadId: params.threadId,
+          timeoutMs: this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        });
+      }
     } catch (error) {
       if (!isUnmaterializedThreadError(error)) {
         throw error;

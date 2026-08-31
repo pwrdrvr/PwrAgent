@@ -89,6 +89,16 @@ class MockTransport implements JsonRpcTransport {
     Array<{ code: number; message: string }>
   >();
   static readThreadResultByThreadId = new Map<string, unknown>();
+  static threadTurnsListResultByRequest = new Map<string, unknown>();
+  static threadTurnsListTransientErrorsByRequest = new Map<
+    string,
+    Array<{ code: number; message: string }>
+  >();
+  static threadItemsListResultByRequest = new Map<string, unknown>();
+  static threadItemsListTransientErrorsByRequest = new Map<
+    string,
+    Array<{ code: number; message: string }>
+  >();
   static threadStartResult: unknown = {
     thread: {
       id: "thread-3",
@@ -795,6 +805,70 @@ class MockTransport implements JsonRpcTransport {
       return;
     }
 
+    if (payload.method === "thread/turns/list") {
+      const threadId = String(payload.params?.threadId ?? "");
+      const cursor = String(payload.params?.cursor ?? "");
+      const transientError =
+        MockTransport.threadTurnsListTransientErrorsByRequest
+          .get(`${threadId}:${cursor}`)
+          ?.shift();
+      if (transientError) {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            error: transientError,
+          }),
+        );
+        return;
+      }
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result:
+            MockTransport.threadTurnsListResultByRequest.get(
+              `${threadId}:${cursor}`,
+            ) ?? { data: [], nextCursor: null, backwardsCursor: null },
+        }),
+      );
+      return;
+    }
+
+    if (
+      payload.method === "thread/items/list"
+      || payload.method === "thread/turns/items/list"
+    ) {
+      const threadId = String(payload.params?.threadId ?? "");
+      const turnId = String(payload.params?.turnId ?? "");
+      const cursor = String(payload.params?.cursor ?? "");
+      const transientError =
+        MockTransport.threadItemsListTransientErrorsByRequest
+          .get(`${threadId}:${turnId}:${cursor}`)
+          ?.shift();
+      if (transientError) {
+        this.messageHandler(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: payload.id,
+            error: transientError,
+          }),
+        );
+        return;
+      }
+      this.messageHandler(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: payload.id,
+          result:
+            MockTransport.threadItemsListResultByRequest.get(
+              `${threadId}:${turnId}:${cursor}`,
+            ) ?? { data: [], nextCursor: null, backwardsCursor: null },
+        }),
+      );
+      return;
+    }
+
     if (payload.method === "thread/read") {
       const threadId = (JSON.parse(message) as { params?: { threadId?: string } }).params?.threadId;
       const transientErrors = threadId
@@ -1214,6 +1288,10 @@ describe("CodexAppServerClient", () => {
     MockTransport.readThreadErrorByThreadId.clear();
     MockTransport.readThreadTransientErrorsByThreadId.clear();
     MockTransport.readThreadResultByThreadId.clear();
+    MockTransport.threadTurnsListResultByRequest.clear();
+    MockTransport.threadTurnsListTransientErrorsByRequest.clear();
+    MockTransport.threadItemsListResultByRequest.clear();
+    MockTransport.threadItemsListTransientErrorsByRequest.clear();
     MockTransport.threadStartResult = {
       thread: {
         id: "thread-3",
@@ -4123,33 +4201,373 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
-  it("forwards pagination params when reading older Codex transcript pages", async () => {
+  it("hydrates paginated Codex transcripts through turn and item list requests", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
 
+    MockTransport.readThreadResultByThreadId.set("thread-paginated", {
+      thread: {
+        id: "thread-paginated",
+        status: { type: "idle" },
+        turns: [],
+      },
+    });
+    MockTransport.threadTurnsListResultByRequest.set("thread-paginated:", {
+      data: [
+        {
+          id: "turn-2",
+          status: "completed",
+          items: [
+            {
+              type: "userMessage",
+              id: "user-2",
+              clientId: null,
+              content: [{ type: "text", text: "Second question" }],
+            },
+            {
+              type: "agentMessage",
+              id: "assistant-2",
+              text: "Second answer",
+              phase: "final",
+              memoryCitation: null,
+            },
+          ],
+          itemsView: "full",
+          startedAt: 200,
+          completedAt: 201,
+        },
+      ],
+      nextCursor: "older-turns",
+      backwardsCursor: null,
+    });
+    MockTransport.threadTurnsListResultByRequest.set(
+      "thread-paginated:older-turns",
+      {
+        data: [
+          {
+            id: "turn-1",
+            status: "completed",
+            items: [],
+            itemsView: "notLoaded",
+            startedAt: 100,
+            completedAt: 101,
+          },
+        ],
+        nextCursor: null,
+        backwardsCursor: null,
+      },
+    );
+    MockTransport.threadItemsListResultByRequest.set(
+      "thread-paginated:turn-1:",
+      {
+        data: [
+          {
+            type: "userMessage",
+            id: "user-1",
+            clientId: null,
+            content: [{ type: "text", text: "First question" }],
+          },
+        ],
+        nextCursor: "turn-1-more-items",
+        backwardsCursor: null,
+      },
+    );
+    MockTransport.threadItemsListResultByRequest.set(
+      "thread-paginated:turn-1:turn-1-more-items",
+      {
+        data: [
+          {
+            type: "agentMessage",
+            id: "assistant-1",
+            text: "First answer",
+            phase: "final",
+            memoryCitation: null,
+          },
+        ],
+        nextCursor: null,
+        backwardsCursor: null,
+      },
+    );
     const client = new CodexAppServerClient({
       command: "codex",
       directoryResolver: async () => []
     });
 
-    await client.readThread({
-      threadId: "thread-2",
-      before: "cursor-before-1",
-      limit: 25
+    const replay = await client.readThread({
+      threadId: "thread-paginated",
     });
 
     const transport = MockTransport.instances.at(-1);
     expect(transport).toBeDefined();
 
-    const readRequest = transport!.sentMessages
-      .map((message) => JSON.parse(message) as { method?: string; params?: unknown })
-      .find((message) => message.method === "thread/read");
+    const requests = transport!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    const readRequest = requests.find((message) => message.method === "thread/read");
+    const turnRequests = requests.filter(
+      (message) => message.method === "thread/turns/list",
+    );
+    const itemRequests = requests.filter(
+      (message) => message.method === "thread/items/list",
+    );
 
-    expect(readRequest?.params).toMatchObject({
-      threadId: "thread-2",
-      includeTurns: true,
-      before: "cursor-before-1",
-      limit: 25
+    expect(readRequest?.params).toEqual({
+      threadId: "thread-paginated",
+      includeTurns: false,
     });
+    expect(turnRequests.map((request) => request.params)).toEqual([
+      {
+        threadId: "thread-paginated",
+        limit: 100,
+        sortDirection: "desc",
+        itemsView: "full",
+      },
+      {
+        threadId: "thread-paginated",
+        cursor: "older-turns",
+        limit: 100,
+        sortDirection: "desc",
+        itemsView: "full",
+      },
+    ]);
+    expect(itemRequests.map((request) => request.params)).toEqual([
+      {
+        threadId: "thread-paginated",
+        turnId: "turn-1",
+        limit: 100,
+        sortDirection: "asc",
+      },
+      {
+        threadId: "thread-paginated",
+        turnId: "turn-1",
+        cursor: "turn-1-more-items",
+        limit: 100,
+        sortDirection: "asc",
+      },
+    ]);
+    expect(replay.messages.map((message) => message.text)).toEqual([
+      "First question",
+      "First answer",
+      "Second question",
+      "Second answer",
+    ]);
+
+    await client.close();
+  });
+
+  it("falls back to the legacy Codex turn item list method", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadId = "thread-legacy-item-list";
+    const turnId = "turn-legacy-item-list";
+    MockTransport.readThreadResultByThreadId.set(threadId, {
+      thread: { id: threadId, turns: [] },
+    });
+    MockTransport.threadTurnsListResultByRequest.set(`${threadId}:`, {
+      data: [
+        {
+          id: turnId,
+          status: "completed",
+          items: [],
+          itemsView: "notLoaded",
+          startedAt: 100,
+          completedAt: 101,
+        },
+      ],
+      nextCursor: null,
+      backwardsCursor: null,
+    });
+    MockTransport.threadItemsListTransientErrorsByRequest.set(
+      `${threadId}:${turnId}:`,
+      [{ code: -32601, message: "thread/items/list is not supported yet" }],
+    );
+    MockTransport.threadItemsListResultByRequest.set(`${threadId}:${turnId}:`, {
+      data: [
+        {
+          type: "agentMessage",
+          id: "assistant-legacy-item-list",
+          text: "Hydrated through the legacy method",
+          phase: "final",
+          memoryCitation: null,
+        },
+      ],
+      nextCursor: null,
+      backwardsCursor: null,
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({ threadId });
+    const itemMethods = MockTransport.instances.at(-1)!.sentMessages
+      .map((message) => (JSON.parse(message) as { method?: string }).method)
+      .filter(
+        (method) =>
+          method === "thread/items/list"
+          || method === "thread/turns/items/list",
+      );
+
+    expect(itemMethods).toEqual([
+      "thread/items/list",
+      "thread/turns/items/list",
+    ]);
+    expect(replay.messages.map((message) => message.text)).toEqual([
+      "Hydrated through the legacy method",
+    ]);
+
+    await client.close();
+  });
+
+  it("uses Codex turn cursors for bounded older transcript pages", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+
+    MockTransport.readThreadResultByThreadId.set("thread-older-page", {
+      thread: { id: "thread-older-page", turns: [] },
+    });
+    MockTransport.threadTurnsListResultByRequest.set(
+      "thread-older-page:cursor-before-1",
+      {
+        data: [
+          {
+            id: "turn-older",
+            status: "completed",
+            items: [],
+            itemsView: "notLoaded",
+            startedAt: 100,
+            completedAt: 101,
+          },
+        ],
+        nextCursor: "cursor-before-2",
+        backwardsCursor: null,
+      },
+    );
+    MockTransport.threadItemsListResultByRequest.set(
+      "thread-older-page:turn-older:",
+      {
+        data: [
+          {
+            type: "agentMessage",
+            id: "assistant-older",
+            text: "Older answer",
+            phase: "final",
+            memoryCitation: null,
+          },
+        ],
+        nextCursor: null,
+        backwardsCursor: null,
+      },
+    );
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({
+      threadId: "thread-older-page",
+      before: "cursor-before-1",
+      limit: 1,
+    });
+
+    const requests = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => JSON.parse(message) as {
+        method?: string;
+        params?: Record<string, unknown>;
+      },
+    );
+    expect(
+      requests.find((request) => request.method === "thread/read")?.params,
+    ).toEqual({
+      threadId: "thread-older-page",
+      includeTurns: false,
+    });
+    expect(
+      requests.find((request) => request.method === "thread/turns/list")?.params,
+    ).toEqual({
+      threadId: "thread-older-page",
+      cursor: "cursor-before-1",
+      limit: 1,
+      sortDirection: "desc",
+      itemsView: "full",
+    });
+    expect(replay.messages.map((message) => message.text)).toEqual([
+      "Older answer",
+    ]);
+    expect(replay.pagination).toEqual({
+      supportsPagination: true,
+      hasPreviousPage: true,
+      previousCursor: "cursor-before-2",
+    });
+
+    await client.close();
+  });
+
+  it("retries transient session metadata failures while paging Codex history", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadId = "thread-transient-paginated-history";
+    const turnId = "turn-transient-paginated-history";
+    const transientError = {
+      code: -32603,
+      message:
+        `thread-store internal error: failed to read session metadata /tmp/rollout-${threadId}.jsonl`,
+    };
+    MockTransport.readThreadResultByThreadId.set(threadId, {
+      thread: { id: threadId, turns: [] },
+    });
+    MockTransport.threadTurnsListTransientErrorsByRequest.set(`${threadId}:`, [
+      transientError,
+    ]);
+    MockTransport.threadTurnsListResultByRequest.set(`${threadId}:`, {
+      data: [
+        {
+          id: turnId,
+          status: "completed",
+          items: [],
+          itemsView: "notLoaded",
+          startedAt: 100,
+          completedAt: 101,
+        },
+      ],
+      nextCursor: null,
+      backwardsCursor: null,
+    });
+    MockTransport.threadItemsListTransientErrorsByRequest.set(
+      `${threadId}:${turnId}:`,
+      [transientError],
+    );
+    MockTransport.threadItemsListResultByRequest.set(`${threadId}:${turnId}:`, {
+      data: [
+        {
+          type: "agentMessage",
+          id: "assistant-transient-history",
+          text: "Hydrated after retry",
+          phase: "final",
+          memoryCitation: null,
+        },
+      ],
+      nextCursor: null,
+      backwardsCursor: null,
+    });
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({ threadId });
+    const methods = MockTransport.instances.at(-1)!.sentMessages.map(
+      (message) => (JSON.parse(message) as { method?: string }).method,
+    );
+
+    expect(methods.filter((method) => method === "thread/read")).toHaveLength(1);
+    expect(methods.filter((method) => method === "thread/turns/list")).toHaveLength(2);
+    expect(methods.filter((method) => method === "thread/items/list")).toHaveLength(2);
+    expect(replay.messages.map((message) => message.text)).toEqual([
+      "Hydrated after retry",
+    ]);
 
     await client.close();
   });
@@ -4162,7 +4580,7 @@ describe("CodexAppServerClient", () => {
       directoryResolver: async () => []
     });
 
-    await client.readThread({
+    const replay = await client.readThread({
       threadId: "thread-2",
       includeTurns: false
     });
@@ -4178,6 +4596,13 @@ describe("CodexAppServerClient", () => {
       threadId: "thread-2",
       includeTurns: false
     });
+    expect(replay.entries).toEqual([]);
+    expect(
+      transport!.sentMessages.some((message) => {
+        const method = (JSON.parse(message) as { method?: string }).method;
+        return method === "thread/turns/list" || method === "thread/items/list";
+      }),
+    ).toBe(false);
 
     await client.close();
   });
@@ -9975,6 +10400,38 @@ describe("CodexAppServerClient", () => {
         supportsPagination: false,
         hasPreviousPage: false
       }
+    });
+
+    await client.close();
+  });
+
+  it("treats unmaterialized turns-list reads as empty transcripts", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    const threadId = "thread-empty-turns-list";
+    MockTransport.readThreadResultByThreadId.set(threadId, {
+      thread: { id: threadId, turns: [] },
+    });
+    MockTransport.threadTurnsListTransientErrorsByRequest.set(`${threadId}:`, [
+      {
+        code: -32600,
+        message: "thread/turns/list is unavailable before first user message",
+      },
+    ]);
+
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    const replay = await client.readThread({ threadId });
+
+    expect(replay).toEqual({
+      entries: [],
+      messages: [],
+      pagination: {
+        supportsPagination: false,
+        hasPreviousPage: false,
+      },
     });
 
     await client.close();
