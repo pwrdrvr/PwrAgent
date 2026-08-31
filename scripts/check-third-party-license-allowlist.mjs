@@ -36,14 +36,21 @@
  *    variants of a package (`@esbuild/win32-x64` and friends) that this
  *    machine's install does not materialize. Those synthesized records COPY
  *    `declaredLicense` from the parent record in surface 1, so they introduce
- *    no license string of their own and gating surface 1 gates them. This gate
- *    is in fact slightly stricter than the notice here: where the production
- *    report already contains the current platform's variant, the expansion
- *    replaces it with the parent's license, while this gate still judges the
- *    variant's own declared license.
+ *    no license string of their own and gating surface 1 gates them. Note what
+ *    that does and does not buy: every string the notice PRINTS for a variant
+ *    is judged, but no variant's own package metadata is ever read — by either
+ *    script. See the platform caveat below.
  *
  * NOT covered, and deliberately so:
  *
+ * - **Optional dependencies that this machine did not install.** The generator
+ *   does not pass `--no-optional`, so the production report lists whichever
+ *   optional packages the current platform resolved — and the CI Lint job runs
+ *   on ubuntu-latest only. A dependency that installs solely on macOS or
+ *   Windows is therefore never evaluated by CI. Surface 3 above narrows this
+ *   but does not close it: the synthesized variants carry the PARENT's license,
+ *   so a real variant declaring terms of its own is invisible to the notice and
+ *   to this gate alike.
  * - **devDependencies other than `NOTICE_DEV_DEPENDENCIES`.** They do not ship
  *   and the notice does not disclose them, so a GPL build-time tool is not a
  *   distribution problem. A dev tool that starts shipping must be added to
@@ -57,12 +64,15 @@
  *   Codex App Server rather than vendoring those crates, so they are neither in
  *   this npm tree nor in the notice.
  *
- * Strong copyleft (GPL, AGPL), weak copyleft that imposes a source offer
- * (LGPL), and source-available terms (BSL, SSPL, Commons Clause) are permitted
- * nowhere. Neither is an unresolvable string like "UNLICENSED" or "SEE LICENSE
- * IN ...", which fails to parse and is reported.
+ * Strong copyleft (GPL, AGPL), copyleft that imposes a source offer (LGPL), and
+ * source-available terms (BSL, SSPL, Commons Clause) are permitted nowhere.
+ * `MPL-2.0` is the single copyleft id on the allowlist, because its copyleft is
+ * scoped to the MPL-licensed files and imposes nothing on the larger work.
+ * Neither is an unresolvable string like "UNLICENSED" or "SEE LICENSE IN ...",
+ * which fails to parse and is reported.
  */
 
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -254,7 +264,7 @@ export function disallowedIdentifiers(expression, isAllowed) {
  * from — an offender named without that context sends the reader looking in the
  * production tree for a devDependency.
  */
-function checkRecords(records, { subject = "" } = {}) {
+export function checkNpmDependencyLicenses(records, { subject = "" } = {}) {
   const failures = [];
 
   for (const record of records) {
@@ -288,10 +298,6 @@ function checkRecords(records, { subject = "" } = {}) {
   return failures;
 }
 
-export function checkNpmDependencyLicenses(records) {
-  return checkRecords(records);
-}
-
 /**
  * The devDependencies the notice discloses because they ship — Electron today.
  *
@@ -299,10 +305,49 @@ export function checkNpmDependencyLicenses(records) {
  * with, so the gate's coverage tracks the notice's contents.
  */
 export function checkNoticeDevDependencyLicenses(allRecords) {
-  return checkRecords(
+  return checkNpmDependencyLicenses(
     allRecords.filter((record) => NOTICE_DEV_DEPENDENCIES.has(record.name)),
     { subject: "shipped devDependency " },
   );
+}
+
+/**
+ * Assert each surface actually produced something to judge.
+ *
+ * Without this, an empty report is indistinguishable from a clean tree: zero
+ * records yield zero failures and the gate prints a pass having judged nothing.
+ * That is the same silent-success shape the gate exists to eliminate, so it is
+ * reported as a failure rather than as a warning.
+ *
+ * Kept out of `checkThirdPartyLicenseAllowlist` on purpose. "Is what we looked
+ * at allowed" and "did we look at anything" are different questions, and the
+ * former stays a pure function over records the caller supplies.
+ */
+export function checkSurfaceCoverage({ productionRecords = [], allRecords = [] } = {}) {
+  const failures = [];
+
+  if (productionRecords.length === 0) {
+    failures.push(
+      "the production license report contained no packages, so this gate judged nothing. "
+        + "Run `pnpm install`, and check that `--filter @pwragent/desktop` in "
+        + "generate-third-party-licenses.mjs still names a real workspace package.",
+    );
+  }
+
+  // Electron is the entire reason the `all` surface exists. If it stops
+  // appearing under this name — renamed, moved, or hidden by a filter change —
+  // the filter yields nothing and every remaining check still passes.
+  for (const name of NOTICE_DEV_DEPENDENCIES) {
+    if (allRecords.some((record) => record.name === name)) continue;
+    failures.push(
+      `${name} is listed in NOTICE_DEV_DEPENDENCIES as a devDependency the notice ships, `
+        + `but the \`all\` license report does not contain it. Either it is no longer a `
+        + `dependency, in which case drop it from that set and from the notice, or it is `
+        + `installed under another name and is now shipping ungated.`,
+    );
+  }
+
+  return failures;
 }
 
 export function checkThirdPartyLicenseAllowlist({ productionRecords = [], allRecords = [] } = {}) {
@@ -318,19 +363,43 @@ function main() {
   // only visible in.
   const productionRecords = flattenLicenseReport(runPnpmLicenses(NOTICE_PNPM_ARGS.production));
   const allRecords = flattenLicenseReport(runPnpmLicenses(NOTICE_PNPM_ARGS.all));
-  const failures = checkThirdPartyLicenseAllowlist({ productionRecords, allRecords });
+  // Coverage first: it explains why the allowlist half may have found nothing.
+  const failures = [
+    ...checkSurfaceCoverage({ productionRecords, allRecords }),
+    ...checkThirdPartyLicenseAllowlist({ productionRecords, allRecords }),
+  ];
 
   if (failures.length > 0) {
     console.error("third-party license allowlist check failed:");
     for (const failure of failures) {
       console.error(`- ${failure}`);
     }
-    process.exit(1);
+    // `process.exitCode` rather than `process.exit`, which discards queued
+    // asynchronous stderr writes. This list runs to hundreds of lines on a real
+    // failure, and CI captures stderr through a pipe, where writes are async on
+    // Linux — exiting here can truncate the one thing that makes the gate
+    // actionable. Same reason check-electron-version-policy.mjs does it.
+    process.exitCode = 1;
+    return;
   }
 
-  console.log("third-party license allowlist check passed");
+  console.log(
+    `third-party license allowlist check passed (${productionRecords.length} production `
+      + `packages, ${NOTICE_DEV_DEPENDENCIES.size} shipped devDependencies)`,
+  );
 }
 
-if (process.argv[1] === fileURLToPath(import.meta.url)) {
+/**
+ * Matches `check-electron-version-policy.mjs`: normalize before comparing, and
+ * treat a missing argv[1] as "not the entrypoint". A guard that compares raw
+ * strings goes false for a symlinked or differently-normalized invocation path,
+ * and a gate that silently no-ops exits 0 and reads exactly like a pass.
+ */
+function isMainModule() {
+  const entry = process.argv[1];
+  return entry !== undefined && resolve(entry) === fileURLToPath(import.meta.url);
+}
+
+if (isMainModule()) {
   main();
 }

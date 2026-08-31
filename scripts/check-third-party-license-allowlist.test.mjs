@@ -1,6 +1,7 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -8,6 +9,7 @@ import {
   SpdxParseError,
   checkNoticeDevDependencyLicenses,
   checkNpmDependencyLicenses,
+  checkSurfaceCoverage,
   checkThirdPartyLicenseAllowlist,
   evaluateSpdxExpression,
   isPermissive,
@@ -36,6 +38,27 @@ function records(licenseToPackages) {
     }));
   }
   return flattenLicenseReport(report);
+}
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+/**
+ * The license headings of the committed notice's Dependency Summary.
+ *
+ * The generator underlines each heading with a run of `~` exactly as long as
+ * the heading, which is the only thing distinguishing a heading from the `- `
+ * package lines around it.
+ */
+function readCommittedNoticeLicenses() {
+  const notice = readFileSync(join(repoRoot, "THIRD_PARTY_LICENSES"), "utf8");
+  const summary = notice.split("\nDependency Summary\n")[1]?.split("\nLicense Texts\n")[0];
+  if (summary === undefined) {
+    throw new Error("THIRD_PARTY_LICENSES has no Dependency Summary section");
+  }
+  const lines = summary.split("\n");
+  return lines.filter(
+    (line, index) => line.length > 0 && lines[index + 1] === "~".repeat(line.length),
+  );
 }
 
 const temporaryDirectories = [];
@@ -280,6 +303,23 @@ describe("notice coverage", () => {
     expect(NOTICE_PNPM_ARGS.all).toEqual([]);
   });
 
+  it("allows every license the committed notice actually discloses", () => {
+    // Closes the loop against the artifact rather than against the tree. The
+    // gate's input set is meant to match what the notice contains, but that is
+    // a claim about the generator's sources — if a future change adds a fourth
+    // one, the notice gains a heading this gate never judged and `--check`
+    // still passes because committed matches generated. This reads the
+    // committed file, so it catches that with no install and no pnpm run.
+    const disclosed = readCommittedNoticeLicenses();
+    expect(disclosed.length).toBeGreaterThan(0);
+    for (const declaredLicense of disclosed) {
+      expect(
+        evaluateSpdxExpression(declaredLicense, isPermissive),
+        `THIRD_PARTY_LICENSES discloses ${declaredLicense}, which the gate does not allow`,
+      ).toBe(true);
+    }
+  });
+
   it("gates the synthesized platform variants through their parent record", () => {
     // expandOptionalPlatformVariants adds the per-platform packages this
     // machine's install does not materialize. They copy declaredLicense from
@@ -309,6 +349,44 @@ describe("notice coverage", () => {
 
     expect(expanded.map((record) => record.name)).toContain("example-native-win32-x64");
     expect(new Set(expanded.map((record) => record.declaredLicense))).toEqual(new Set(["GPL-3.0"]));
+  });
+});
+
+describe("surface coverage", () => {
+  const present = {
+    productionRecords: records({ MIT: ["react"] }),
+    allRecords: records({ MIT: ["electron"] }),
+  };
+
+  it("passes when every surface produced records", () => {
+    expect(checkSurfaceCoverage(present)).toEqual([]);
+  });
+
+  it("fails an empty production report instead of reporting a clean tree", () => {
+    // Zero records yield zero allowlist failures, so without this the gate
+    // prints a pass having judged nothing at all.
+    const [failure] = checkSurfaceCoverage({ ...present, productionRecords: [] });
+    expect(failure).toMatch(/judged nothing/);
+    expect(failure).toMatch(/pnpm install/);
+  });
+
+  it("fails when a NOTICE_DEV_DEPENDENCIES name is missing from the all report", () => {
+    // Electron is the entire reason that surface exists. A filter or rename
+    // that hides it would otherwise leave the largest shipped component ungated
+    // while the gate kept printing an unqualified pass.
+    const [failure] = checkSurfaceCoverage({ ...present, allRecords: records({ MIT: ["react"] }) });
+    expect(failure).toMatch(/electron/);
+    expect(failure).toMatch(/NOTICE_DEV_DEPENDENCIES/);
+  });
+
+  it("reports each missing surface separately", () => {
+    expect(checkSurfaceCoverage({ productionRecords: [], allRecords: [] })).toHaveLength(
+      1 + NOTICE_DEV_DEPENDENCIES.size,
+    );
+  });
+
+  it("treats omitted surfaces as missing rather than as satisfied", () => {
+    expect(checkSurfaceCoverage()).toHaveLength(1 + NOTICE_DEV_DEPENDENCIES.size);
   });
 });
 

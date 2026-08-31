@@ -268,7 +268,11 @@
 - Add a name to `NOTICE_DEV_DEPENDENCIES` when a devDependency starts shipping.
 - The synthesized platform variants copy `declaredLicense` from their parent record.
 - Gating the production tree therefore gates them.
+- The gate reports a failure when a surface produced no records at all.
+- An empty report is otherwise indistinguishable from a clean tree.
 - The gate does **not** cover these sources:
+  - Optional dependencies that the running machine did not install. The generator does not pass `--no-optional`, and the CI `Lint` job runs on `ubuntu-latest` only.
+  - A platform variant's own package metadata. The notice prints the parent's license for every variant, so neither script ever reads one.
   - devDependencies outside `NOTICE_DEV_DEPENDENCIES`. They do not ship and the notice does not disclose them.
   - Chromium and Node.js components inside Electron. The notice points at Electron's upstream generated credits.
   - Codex App Server Rust crates. PwrAgent invokes a locally installed Codex App Server and vendors no crate.
@@ -278,11 +282,18 @@
 - Adding an id to `ALLOWED_LICENSE_IDS` is a legal decision.
 - Make that decision in a commit that says why.
 - Never add an id to make CI green.
-- Strong copyleft, weak copyleft, and source-available terms are permitted nowhere.
-- Those terms include GPL, AGPL, LGPL, BSL, SSPL, and Commons Clause.
+- Strong copyleft and source-available terms are permitted nowhere.
+- Those terms include GPL, AGPL, BSL, SSPL, and Commons Clause.
+- LGPL is also permitted nowhere.
+- PwrAgent ships no LGPL component, and the notice carries no FSF text and no written source offer.
+- An LGPL arrival would therefore have nothing to disclose with.
+- `MPL-2.0` is the one copyleft id on the allowlist.
+- Its copyleft binds the MPL-licensed files themselves.
+- It places no condition on the larger work that includes them.
+- Do not read that entry as permission for file-scoped copyleft in general.
 - The seeded list records drift that existed before any policy was enforced.
 - `BlueOak-1.0.0` and `Python-2.0` were already in the shipped tree and documented nowhere.
-- `0BSD`, `CC0-1.0`, `MPL-2.0`, and `Unlicense` are permissive policy ids that the production tree does not use today.
+- `0BSD`, `CC0-1.0`, `MPL-2.0`, and `Unlicense` are approved ids that the production tree does not use today.
 
 ## Runtime Configuration
 
