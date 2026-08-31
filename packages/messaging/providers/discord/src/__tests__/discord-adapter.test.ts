@@ -2115,6 +2115,7 @@ describe("discord adapter", () => {
       const BOT_ID = "1480556454498009352";
       const categoryId = "1480556454498009357";
       const events: MessagingInboundEvent[] = [];
+      const metadataUpdates: MessagingInboundChannelMetadataUpdate[] = [];
       const gateway = new TestDiscordGateway();
       const adapter = new DiscordAdapter({
         api: createApi({
@@ -2146,6 +2147,9 @@ describe("discord adapter", () => {
       await adapter.start(async (event) => {
         events.push(event);
       });
+      adapter.onInboundChannelMetadata((update) => {
+        metadataUpdates.push(update);
+      });
 
       await gateway.emit({
         op: 0,
@@ -2162,6 +2166,19 @@ describe("discord adapter", () => {
       });
 
       expect(events[0]).toMatchObject({
+        channel: {
+          channel: "discord",
+          conversation: {
+            id: TEST_CHANNEL_ID,
+            kind: "channel",
+            workspaceId: TEST_GUILD_ID,
+          },
+        },
+      });
+      await vi.waitFor(() => {
+        expect(metadataUpdates).toHaveLength(1);
+      });
+      expect(metadataUpdates[0]).toMatchObject({
         channel: {
           channel: "discord",
           conversation: {
