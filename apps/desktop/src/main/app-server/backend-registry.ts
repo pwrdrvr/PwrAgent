@@ -6065,6 +6065,7 @@ function buildPromptHash(prompt: string): string {
 function isEligibleForGeneratedTitle(
   thread: AppServerThreadSummary | undefined,
   prompt: string,
+  options?: { systemPlaceholder?: boolean },
 ): boolean {
   if (!thread) {
     return true;
@@ -6072,11 +6073,11 @@ function isEligibleForGeneratedTitle(
   if (isPromptPlaceholderTitle(thread.title, prompt)) {
     return true;
   }
-  if (isGenericPlaceholderTitle(thread.title)) {
-    return true;
-  }
   if (thread.titleSource === "explicit") {
-    return false;
+    return Boolean(
+      options?.systemPlaceholder
+      && isGenericPlaceholderTitle(thread.title),
+    );
   }
   if (isInjectedContextPlaceholderTitle(thread.title)) {
     return true;
@@ -7717,6 +7718,8 @@ export class DesktopBackendRegistry {
    */
   private readonly codexEnvironmentRuntimeLocks = new PerKeyAsyncLock();
   private readonly attemptedTitleGenerations = new Set<string>();
+  /** Launch placeholders stay helper-eligible until renamed or attempted. */
+  private readonly systemPlaceholderTitleThreadKeys = new Set<string>();
   private readonly repairedDirectoryThreadKeys = new Set<string>();
   private readonly failedDirectoryRelationshipLogKeys = new Set<string>();
   private readonly pendingCodexWorkspaceCwdSyncs = new Map<
@@ -11288,6 +11291,12 @@ export class DesktopBackendRegistry {
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> {
     const backend = request.backend ?? "codex";
+    // A rename supersedes PwrAgent's launch placeholder. Clear this before the
+    // provider round trip so an in-flight title helper's late eligibility
+    // check cannot overwrite an operator rename that is still being accepted.
+    this.systemPlaceholderTitleThreadKeys.delete(
+      buildThreadIdentityKey(backend, request.threadId),
+    );
     let result: { threadId: string };
     if (isAcpBackendId(backend)) {
       result = await this.renameAcpSession(backend, request.threadId, request.name);
@@ -12759,6 +12768,9 @@ export class DesktopBackendRegistry {
           : {}),
       },
     );
+    if (!agentName) {
+      this.systemPlaceholderTitleThreadKeys.add(pendingThreadKey);
+    }
     if (effectiveWorkMode === "worktree") {
       await this.recordCodexWorktreeOwnerThread({
         backend,
@@ -26344,7 +26356,11 @@ export class DesktopBackendRegistry {
         callerReason: "title-generation",
         threadId: params.threadId,
       });
-      if (!isEligibleForGeneratedTitle(currentThread, params.prompt)) {
+      if (
+        !isEligibleForGeneratedTitle(currentThread, params.prompt, {
+          systemPlaceholder: this.systemPlaceholderTitleThreadKeys.has(params.key),
+        })
+      ) {
         this.logThreadTitleGeneration(
           "skipped",
           params,
@@ -26429,7 +26445,12 @@ export class DesktopBackendRegistry {
         callerReason: "title-generation",
         threadId: params.threadId,
       });
-      if (latestThread && !isEligibleForGeneratedTitle(latestThread, params.prompt)) {
+      if (
+        latestThread
+        && !isEligibleForGeneratedTitle(latestThread, params.prompt, {
+          systemPlaceholder: this.systemPlaceholderTitleThreadKeys.has(params.key),
+        })
+      ) {
         this.logThreadTitleGeneration(
           "skipped",
           params,
@@ -26491,6 +26512,7 @@ export class DesktopBackendRegistry {
       if (pending?.token === params.token) {
         this.pendingTitleGenerations.delete(params.key);
       }
+      this.systemPlaceholderTitleThreadKeys.delete(params.key);
     }
   }
 
@@ -26561,7 +26583,14 @@ export class DesktopBackendRegistry {
       callerReason: "title-generation",
       threadId: params.threadId,
     });
-    if (latestThread && !isEligibleForGeneratedTitle(latestThread, params.prompt)) {
+    if (
+      latestThread
+      && !isEligibleForGeneratedTitle(latestThread, params.prompt, {
+        systemPlaceholder: this.systemPlaceholderTitleThreadKeys.has(
+          buildTitleGenerationKey(params.backend, params.threadId),
+        ),
+      })
+    ) {
       return;
     }
     await this.renameAcpSession(params.backend, params.threadId, title, {
