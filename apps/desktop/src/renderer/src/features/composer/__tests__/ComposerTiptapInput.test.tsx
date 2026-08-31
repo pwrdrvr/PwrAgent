@@ -138,6 +138,18 @@ const canonicalHandoffPrefixWithCodeBlock = [
   "```",
 ].join("\n");
 
+const nestedOrderedMarkdown = [
+  "1. Discord-specific fixes",
+  "   1. Timestamp inbound immediately",
+  "   2. Move breadcrumb lookups off the critical path",
+  "   3. Add stage timings through startTurn",
+  "2. Busted thread info cache",
+  "   1. Resolve occupancy from cached thread state",
+  "      1. Change the admission path as described",
+  "   2. Keep Git enrichment out of reply admission",
+  "      1. Do not wait on a 3 second full cache refresh",
+].join("\n");
+
 const pastedCatalogSql = [
   "SELECT s.item_code, m.category, aisle, SUM(units) AS _units",
   "",
@@ -1155,6 +1167,262 @@ describe("ComposerTiptapInput", () => {
     expect(container.querySelector("hr")).toBeNull();
     expect(container.querySelectorAll("li")).toHaveLength(4);
     expect(inputRef.current?.value).toBe(original);
+  });
+
+  it("serializes every nested ordered-list sibling with indent", async () => {
+    const inputRef = createRef<ComposerInputHandle>();
+
+    render(
+      <ComposerTiptapInput
+        ref={inputRef}
+        editorDocument={{
+          type: "doc",
+          content: [
+            {
+              type: "orderedList",
+              attrs: { start: 1 },
+              content: [
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "Discord-specific fixes" }],
+                    },
+                    {
+                      type: "orderedList",
+                      attrs: { start: 1 },
+                      content: [
+                        {
+                          type: "listItem",
+                          content: [{
+                            type: "paragraph",
+                            content: [{ type: "text", text: "Timestamp inbound immediately" }],
+                          }],
+                        },
+                        {
+                          type: "listItem",
+                          content: [{
+                            type: "paragraph",
+                            content: [{
+                              type: "text",
+                              text: "Move breadcrumb lookups off the critical path",
+                            }],
+                          }],
+                        },
+                        {
+                          type: "listItem",
+                          content: [{
+                            type: "paragraph",
+                            content: [{
+                              type: "text",
+                              text: "Add stage timings through startTurn",
+                            }],
+                          }],
+                        },
+                      ],
+                    },
+                  ],
+                },
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "Busted thread info cache" }],
+                    },
+                    {
+                      type: "orderedList",
+                      attrs: { start: 1 },
+                      content: [
+                        {
+                          type: "listItem",
+                          content: [
+                            {
+                              type: "paragraph",
+                              content: [{
+                                type: "text",
+                                text: "Resolve occupancy from cached thread state",
+                              }],
+                            },
+                            {
+                              type: "orderedList",
+                              attrs: { start: 1 },
+                              content: [{
+                                type: "listItem",
+                                content: [{
+                                  type: "paragraph",
+                                  content: [{
+                                    type: "text",
+                                    text: "Change the admission path as described",
+                                  }],
+                                }],
+                              }],
+                            },
+                          ],
+                        },
+                        {
+                          type: "listItem",
+                          content: [
+                            {
+                              type: "paragraph",
+                              content: [{
+                                type: "text",
+                                text: "Keep Git enrichment out of reply admission",
+                              }],
+                            },
+                            {
+                              type: "orderedList",
+                              attrs: { start: 1 },
+                              content: [{
+                                type: "listItem",
+                                content: [{
+                                  type: "paragraph",
+                                  content: [{
+                                    type: "text",
+                                    text: "Do not wait on a 3 second full cache refresh",
+                                  }],
+                                }],
+                              }],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        }}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        onChange={() => undefined}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value={nestedOrderedMarkdown}
+      />,
+    );
+
+    await screen.findByRole("textbox", { name: "Reply" });
+
+    await waitFor(() => {
+      expect(inputRef.current?.value).toBe(nestedOrderedMarkdown);
+    });
+  });
+
+  it("parses an indented three-level numbered list instead of flattening it", async () => {
+    const inputRef = createRef<ComposerInputHandle>();
+    const { container } = render(
+      <ComposerTiptapInput
+        ref={inputRef}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        onChange={() => undefined}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value={nestedOrderedMarkdown}
+      />,
+    );
+
+    await screen.findByRole("textbox", { name: "Reply" });
+
+    const editor = container.querySelector(".composer-tiptap-input__editor");
+    expect(editor).not.toBeNull();
+    await waitFor(() => {
+      expect(editor?.querySelectorAll(":scope > ol")).toHaveLength(1);
+      expect(editor?.querySelectorAll(":scope > ol > li")).toHaveLength(2);
+      expect(editor?.querySelectorAll(":scope > ol > li:first-child > ol > li")).toHaveLength(3);
+      expect(editor?.querySelectorAll(":scope > ol > li:last-child > ol > li")).toHaveLength(2);
+      expect(
+        editor?.querySelectorAll(":scope > ol > li:last-child > ol > li:first-child > ol > li"),
+      ).toHaveLength(1);
+      expect(
+        editor?.querySelectorAll(":scope > ol > li:last-child > ol > li:last-child > ol > li"),
+      ).toHaveLength(1);
+      expect(inputRef.current?.value).toBe(nestedOrderedMarkdown);
+    });
+  });
+
+  it("serializes every nested bullet sibling with indent", async () => {
+    const inputRef = createRef<ComposerInputHandle>();
+    const nestedBulletMarkdown = [
+      "- Parent task",
+      "  - Nested one",
+      "  - Nested two",
+      "    - Grandchild",
+    ].join("\n");
+
+    render(
+      <ComposerTiptapInput
+        ref={inputRef}
+        editorDocument={{
+          type: "doc",
+          content: [
+            {
+              type: "bulletList",
+              content: [
+                {
+                  type: "listItem",
+                  content: [
+                    {
+                      type: "paragraph",
+                      content: [{ type: "text", text: "Parent task" }],
+                    },
+                    {
+                      type: "bulletList",
+                      content: [
+                        {
+                          type: "listItem",
+                          content: [{
+                            type: "paragraph",
+                            content: [{ type: "text", text: "Nested one" }],
+                          }],
+                        },
+                        {
+                          type: "listItem",
+                          content: [
+                            {
+                              type: "paragraph",
+                              content: [{ type: "text", text: "Nested two" }],
+                            },
+                            {
+                              type: "bulletList",
+                              content: [{
+                                type: "listItem",
+                                content: [{
+                                  type: "paragraph",
+                                  content: [{ type: "text", text: "Grandchild" }],
+                                }],
+                              }],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        }}
+        id="reply"
+        label="Reply"
+        markdownConversion
+        onChange={() => undefined}
+        placeholder="Ask anything"
+        skillTokens={[]}
+        value={nestedBulletMarkdown}
+      />,
+    );
+
+    await screen.findByRole("textbox", { name: "Reply" });
+
+    await waitFor(() => {
+      expect(inputRef.current?.value).toBe(nestedBulletMarkdown);
+    });
   });
 
   it("serializes marked trailing spaces outside delimiters before plain text", async () => {
