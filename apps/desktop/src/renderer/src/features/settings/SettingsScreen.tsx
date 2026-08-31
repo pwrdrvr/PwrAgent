@@ -20,7 +20,12 @@ import { ExperimentalSettings } from "./ExperimentalSettings";
 import { FederationSettings } from "./FederationSettings";
 import { GeneralSettings } from "./GeneralSettings";
 import { GitSettings } from "./GitSettings";
-import { MessagingSettings } from "./MessagingSettings";
+import {
+  MESSAGING_SETTINGS_PLATFORMS,
+  MessagingSettings,
+  type MessagingSettingsFocus,
+} from "./MessagingSettings";
+import { formatMessagingPlatformName } from "../../lib/messaging-platform-branding";
 import { ModelsSettings } from "./ModelsSettings";
 import { ProfilesSettings } from "./ProfilesSettings";
 import { PricingSettings } from "./PricingSettings";
@@ -111,36 +116,10 @@ const SETTINGS_NAV_GROUPS = new Set<SettingsSection>([
   "messaging",
 ]);
 
-/** The platforms the desktop Settings screen configures — the keys of
- *  the messaging settings snapshot, a subset of MessagingChannelKind. */
-type MessagingNavPlatformKind =
-  | "telegram"
-  | "discord"
-  | "mattermost"
-  | "slack"
-  | "feishu"
-  | "line";
-
-/** Messaging platforms in Settings → Messaging section order. Labels
- *  mirror the platform SettingsSection titles so the nav, the hub
- *  index, and the focused screen all name a platform identically. */
-const MESSAGING_NAV_PLATFORMS: Array<{
-  kind: MessagingNavPlatformKind;
-  label: string;
-}> = [
-  { kind: "telegram", label: "Telegram" },
-  { kind: "discord", label: "Discord" },
-  { kind: "mattermost", label: "Mattermost" },
-  { kind: "slack", label: "Slack" },
-  { kind: "feishu", label: "Feishu / Lark" },
-  { kind: "line", label: "LINE" },
-];
-
 function messagingPlatformFromSub(
   sub: string | undefined,
-): MessagingNavPlatformKind | undefined {
-  return MESSAGING_NAV_PLATFORMS.find((platform) => platform.kind === sub)
-    ?.kind;
+): MessagingSettingsFocus | undefined {
+  return MESSAGING_SETTINGS_PLATFORMS.find((platform) => platform === sub);
 }
 
 type SettingsNavChild = {
@@ -338,12 +317,12 @@ export function SettingsScreen(props: {
       ];
     }
     if (target === "messaging") {
-      return MESSAGING_NAV_PLATFORMS.map((platform) => ({
-        key: platform.kind,
-        label: platform.label,
-        sub: platform.kind,
+      return MESSAGING_SETTINGS_PLATFORMS.map((platform) => ({
+        key: platform,
+        label: formatMessagingPlatformName(platform),
+        sub: platform,
         dot: snapshot
-          ? snapshot.messaging[platform.kind].enabled.value
+          ? snapshot.messaging[platform].enabled.value
             ? "ok"
             : "off"
           : undefined,
@@ -351,14 +330,11 @@ export function SettingsScreen(props: {
     }
     return [];
   };
+  // Crumb label from the same catalog the nav renders. An unknown sub
+  // gets no crumb rather than leaking the raw route id into the
+  // breadcrumb.
   const activeSubLabel = route.sub
-    ? section === "models"
-      ? route.sub === "codex"
-        ? "Codex"
-        : acpCatalog.entries.find((entry) => entry.registryId === route.sub)
-          ?.name ?? route.sub
-      : MESSAGING_NAV_PLATFORMS.find((platform) => platform.kind === route.sub)
-        ?.label ?? route.sub
+    ? navChildren(section).find((child) => child.sub === route.sub)?.label
     : undefined;
   // Platform-chip clicks in the title-bar strip route to the top-level
   // Messaging Activity overlay (NOT a settings section). The App-level
@@ -407,15 +383,22 @@ export function SettingsScreen(props: {
           // Plugins keeps its long-standing contract: the MCPs child —
           // the pane's whole content — carries the active state, not
           // the parent row.
+          const groupHoldsRoute = section === item.id;
           const parentActive =
-            section === item.id
+            groupHoldsRoute
             && route.sub === undefined
             && item.id !== "plugins";
+          // A collapsed group hides its aria-current child inside an
+          // aria-hidden, inert sublist, so the parent row takes over
+          // the marker — the nav must always show where the operator
+          // is (this also covers collapsed Plugins).
+          const parentMarksRoute =
+            parentActive || (isGroup && !open && groupHoldsRoute);
           const children = isGroup ? navChildren(item.id) : [];
           return (
             <Fragment key={item.id}>
               <div
-                className={`settings-nav__row${parentActive ? " is-active" : ""}`}
+                className={`settings-nav__row${parentMarksRoute ? " is-active" : ""}`}
               >
                 {isGroup ? (
                   <button
@@ -438,8 +421,8 @@ export function SettingsScreen(props: {
                   />
                 )}
                 <button
-                  aria-current={parentActive ? "page" : undefined}
-                  className={`settings-nav__button${parentActive ? " is-active" : ""}`}
+                  aria-current={parentMarksRoute ? "page" : undefined}
+                  className={`settings-nav__button${parentMarksRoute ? " is-active" : ""}`}
                   type="button"
                   onClick={() => openRoute(item.id)}
                 >

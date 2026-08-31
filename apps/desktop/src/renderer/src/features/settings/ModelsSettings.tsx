@@ -177,11 +177,13 @@ export function ModelsSettings(props: {
     }
     setRefreshingCatalog(true);
     try {
+      let acpRegistryRefreshed = false;
       if (force && props.desktopApi.listAcpAgents) {
         await props.desktopApi.listAcpAgents({
           refresh: true,
           force: true,
         });
+        acpRegistryRefreshed = true;
       }
       const response = await props.desktopApi.listBackends({
         includeUnavailable: true,
@@ -189,6 +191,12 @@ export function ModelsSettings(props: {
       });
       setBackends(response.backends);
       setCatalogError(undefined);
+      if (acpRegistryRefreshed) {
+        // Announce the registry refresh so every catalog consumer (the
+        // hub index, the nav sub-items, other panes) re-reads — the
+        // catalog has no push channel of its own.
+        window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+      }
     } catch (error) {
       setCatalogError(error instanceof Error ? error.message : String(error));
     } finally {
@@ -226,10 +234,11 @@ export function ModelsSettings(props: {
   };
 
   // Names and status for the hub index + focused-screen titles. The
-  // registry probe runs from the hub; focused ACP screens probe via
-  // their own AcpAgentsSettings mount.
+  // registry probe runs from the hub and the Codex screen (which mounts
+  // no AcpAgentsSettings); focused ACP screens probe via their own
+  // AcpAgentsSettings mount.
   const acpCatalog = useAcpAgentCatalog(props.desktopApi, {
-    probe: props.focus === undefined,
+    probe: props.focus === undefined || props.focus === "codex",
   });
   const orderedAcpEntries = displayOrderedAcpEntries(acpCatalog.entries);
   const focusedAcpEntry =
@@ -413,6 +422,7 @@ export function ModelsSettings(props: {
           backends={backends}
           codexFastAllowed={props.snapshot.models.codex.allowFast?.value ?? true}
           defaults={props.snapshot.models.providerDefaults ?? {}}
+          error={catalogError}
           onEditDefaults={editDefaults}
         />
         {codexSection}
@@ -435,6 +445,7 @@ export function ModelsSettings(props: {
           backendKind={focusedAcpEntry?.backendId}
           backends={backends}
           defaults={props.snapshot.models.providerDefaults ?? {}}
+          error={catalogError}
           onEditDefaults={editDefaults}
         />
         <AcpAgentsSettings
@@ -493,20 +504,40 @@ export function ModelsSettings(props: {
               props.snapshot,
               entry.registryId,
             );
+            // Only a legacy CLI on disk: the operator must act, and the
+            // remediation card lives on the focused screen — the hub
+            // chip is their only hint anything is wrong.
+            const legacyOnly =
+              !entry.installed && Boolean(entry.incompatibleInstances?.length);
             return (
               <SettingsIndexRow
                 key={entry.registryId}
                 name={entry.name}
                 meta={entry.version ? `v${entry.version}` : undefined}
                 chip={enabled ? acpStatusLabel(entry) : "Disabled"}
-                chipKind={enabled ? (entry.installed ? "ok" : "muted") : "muted"}
+                chipKind={
+                  enabled
+                    ? entry.installed
+                      ? "ok"
+                      : legacyOnly
+                        ? "warn"
+                        : "muted"
+                    : "muted"
+                }
                 off={!enabled}
                 onOpen={() => props.onFocusChange?.(entry.registryId)}
               />
             );
           })}
           {orderedAcpEntries.length === 0 ? (
-            <p className="settings-empty">Discovering AI providers…</p>
+            <p className="settings-empty">
+              {acpCatalog.unavailable
+                ? "ACP registry controls are unavailable in this build."
+                : acpCatalog.error
+                  ?? (acpCatalog.loaded
+                    ? "No AI providers are available right now."
+                    : "Discovering AI providers…")}
+            </p>
           ) : null}
         </div>
       </SettingsSection>
@@ -526,6 +557,9 @@ function ProviderDefaultsStrip(props: {
   /** Codex only: surface the Fast-mode master switch state. */
   codexFastAllowed?: boolean;
   defaults: Record<string, DesktopProviderModelDefaults>;
+  /** Model-catalog load failure — without it the strip silently falls
+   *  back to "Catalog default model" as if nothing went wrong. */
+  error?: string;
   onEditDefaults: () => void;
 }) {
   const backend = props.backends.find(
@@ -550,13 +584,20 @@ function ProviderDefaultsStrip(props: {
     items.push(props.codexFastAllowed ? "Fast mode allowed" : "Fast mode off");
   }
   return (
-    <SettingsContextStrip
-      actionLabel="Edit defaults"
-      eyebrow="Defaults"
-      items={items}
-      label="New thread defaults"
-      onAction={props.onEditDefaults}
-    />
+    <>
+      <SettingsContextStrip
+        actionLabel="Edit defaults"
+        eyebrow="Defaults"
+        items={items}
+        label="New thread defaults"
+        onAction={props.onEditDefaults}
+      />
+      {props.error ? (
+        <p className="settings-row__error" role="alert">
+          Last refresh failed: {props.error}
+        </p>
+      ) : null}
+    </>
   );
 }
 

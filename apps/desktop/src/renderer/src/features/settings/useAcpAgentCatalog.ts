@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   AcpAgentSettingsEntry,
   DesktopSettingsSnapshot,
@@ -32,23 +32,44 @@ export function acpAgentEnabledInSnapshot(
   return agents?.[registryId]?.enabled !== false;
 }
 
+export type AcpAgentCatalogState = {
+  entries: AcpAgentSettingsEntry[];
+  /** True once a read has settled, successfully or not. */
+  loaded: boolean;
+  /** Message from the most recent failed read, cleared on success. */
+  error?: string;
+  /** True when this build exposes no ACP registry IPC at all. */
+  unavailable: boolean;
+};
+
 /**
  * Light read of the ACP agent catalog for surfaces that need names and
  * status but do not own the full per-agent editing flow: the settings
  * nav sub-items and the AI Providers hub index. Reads the cached
  * catalog immediately; with `probe` it then asks the registry to
- * refresh stale agents (the main process coalesces concurrent
- * refreshes) and re-reads when any surface announces new summaries.
+ * refresh stale agents once per mount (the main process coalesces
+ * concurrent refreshes) and re-reads when any surface announces new
+ * summaries.
  */
 export function useAcpAgentCatalog(
   desktopApi: DesktopApi | undefined,
   options?: { probe?: boolean },
-): { entries: AcpAgentSettingsEntry[] } {
+): AcpAgentCatalogState {
   const [entries, setEntries] = useState<AcpAgentSettingsEntry[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<string | undefined>();
   const probe = options?.probe === true;
+  // The probe runs once per mounted consumer, not once per effect run —
+  // `probe` flips with hub↔focused navigation and re-probing (plus the
+  // event fan-out it triggers) on every hop is pure churn.
+  const probedRef = useRef(false);
+  // Set just before this instance dispatches the refresh event so its
+  // own listener can skip the echo — the dispatching read already holds
+  // the fresh response.
+  const selfAnnouncedRef = useRef(false);
+  const listAcpAgents = desktopApi?.listAcpAgents;
 
   useEffect(() => {
-    const listAcpAgents = desktopApi?.listAcpAgents;
     if (!listAcpAgents) {
       return;
     }
@@ -56,25 +77,45 @@ export function useAcpAgentCatalog(
     const read = async (refresh: boolean): Promise<void> => {
       try {
         const response = await listAcpAgents({ refresh });
+        if (refresh) {
+          // The main-process cache refreshed even if this consumer was
+          // cleaned up mid-flight (hub→focused navigation), so always
+          // announce — other catalog consumers have no push channel.
+          if (!disposed) {
+            selfAnnouncedRef.current = true;
+          }
+          window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+        }
         if (disposed) {
           return;
         }
         setEntries(response.entries);
-        if (refresh) {
-          window.dispatchEvent(new Event(BACKEND_SUMMARIES_REFRESH_EVENT));
+        setError(response.error);
+        setLoaded(true);
+      } catch (cause) {
+        if (disposed) {
+          return;
         }
-      } catch {
-        // Status decoration only — keep whatever entries we last saw.
+        // Keep whatever entries we last saw, but surface the failure —
+        // an empty catalog behind a swallowed error reads as "still
+        // discovering" forever.
+        setError(cause instanceof Error ? cause.message : String(cause));
+        setLoaded(true);
       }
     };
     const onSummariesRefreshed = (): void => {
+      if (selfAnnouncedRef.current) {
+        selfAnnouncedRef.current = false;
+        return;
+      }
       void read(false);
     };
     window.addEventListener(
       BACKEND_SUMMARIES_REFRESH_EVENT,
       onSummariesRefreshed,
     );
-    if (probe) {
+    if (probe && !probedRef.current) {
+      probedRef.current = true;
       void read(false).then(() => read(true));
     } else {
       void read(false);
@@ -86,7 +127,7 @@ export function useAcpAgentCatalog(
         onSummariesRefreshed,
       );
     };
-  }, [desktopApi, probe]);
+  }, [listAcpAgents, probe]);
 
-  return { entries };
+  return { entries, loaded, error, unavailable: listAcpAgents === undefined };
 }

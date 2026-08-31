@@ -213,6 +213,19 @@ test("settings-models — Settings → AI Providers panel", async () => {
       regionLabel: "Model settings",
     });
 
+    // The provider index populates asynchronously (cached catalog read,
+    // then the mount probe's re-read mutating status chips). Wait for
+    // the discovery placeholder to clear and give the probe the same
+    // settle window the messaging shots use, so regens don't capture a
+    // different intermediate frame each run.
+    await expect(
+      app.window.getByRole("button", { name: "Open Codex settings" }),
+    ).toBeVisible();
+    await expect(
+      app.window.getByText("Discovering AI providers…"),
+    ).toHaveCount(0);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+
     await bringToFront(app.electronApp);
     captureNative("settings-models.png");
   } finally {

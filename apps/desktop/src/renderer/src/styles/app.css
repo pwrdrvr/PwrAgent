@@ -8345,7 +8345,7 @@ textarea,
 }
 
 .settings-nav__subdot--ok {
-  background: var(--success-text);
+  background: var(--status-ok);
 }
 
 .settings-nav__subdot--off {
@@ -8402,6 +8402,12 @@ textarea,
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+/* Programmatic focus target for hub↔focused pane swaps (tabindex="-1").
+   The pane is a landing spot, not an interactive control — no ring. */
+.settings-stack:focus {
+  outline: none;
 }
 
 /* Per-pane head: editorial preamble at the top of every settings pane.

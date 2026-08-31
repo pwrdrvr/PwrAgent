@@ -92,6 +92,21 @@ export function SettingsSectionStack(props: {
     Record<string, boolean>
   >(() => savedCollapsedSectionsByPane.get(props.paneId) ?? {});
   const didRestoreFocusRef = useRef(false);
+  const stackRef = useRef<HTMLElement | null>(null);
+  const paneChangedRef = useRef(false);
+  const [seededPaneId, setSeededPaneId] = useState(props.paneId);
+  if (seededPaneId !== props.paneId) {
+    // The stack instance survives hub↔focused pane swaps (same component
+    // type at the same tree position), so per-pane state must be
+    // re-seeded by hand: the initializer read the saved map for the old
+    // pane, and carrying that state over would restore nothing for the
+    // new pane and save the old pane's map under the new id.
+    setSeededPaneId(props.paneId);
+    setCollapsedSections(savedCollapsedSectionsByPane.get(props.paneId) ?? {});
+    setRegisteredSections([]);
+    didRestoreFocusRef.current = false;
+    paneChangedRef.current = true;
+  }
 
   const updateCollapsedSections = useCallback(
     (
@@ -186,14 +201,23 @@ export function SettingsSectionStack(props: {
       return;
     }
     didRestoreFocusRef.current = true;
+    const paneChanged = paneChangedRef.current;
+    paneChangedRef.current = false;
     const visitedSectionId = savedVisitedSectionByPane.get(props.paneId);
-    if (!visitedSectionId) {
+    const visitedSection = visitedSectionId
+      ? registeredSections.find((section) => section.id === visitedSectionId)
+      : undefined;
+    if (visitedSection) {
+      visitedSection.element.focus();
       return;
     }
-    const visitedSection = registeredSections.find(
-      (section) => section.id === visitedSectionId,
-    );
-    visitedSection?.element.focus();
+    // A pane swap unmounts the control that had focus (an index row, a
+    // strip action, a breadcrumb crumb); without a programmatic target
+    // the browser drops focus to <body> and Tab restarts at the top of
+    // the overlay. Land on the pane itself instead.
+    if (paneChanged && document.activeElement === document.body) {
+      stackRef.current?.focus();
+    }
   }, [props.paneId, registeredSections]);
 
   const value = useMemo<SettingsSectionPaneContextValue>(
@@ -225,7 +249,12 @@ export function SettingsSectionStack(props: {
 
   return (
     <SettingsSectionPaneContext.Provider value={value}>
-      <section className="settings-stack" aria-label={props["aria-label"]}>
+      <section
+        ref={stackRef}
+        className="settings-stack"
+        aria-label={props["aria-label"]}
+        tabIndex={-1}
+      >
         {props.children}
       </section>
     </SettingsSectionPaneContext.Provider>
@@ -633,8 +662,17 @@ export function SettingsIndexRow(props: {
   off?: boolean;
   onOpen: () => void;
 }) {
+  // The aria-label wins the accname computation, which silences the
+  // meta and chip text inside the button — re-expose them as the
+  // button's description instead of stuffing them into the label.
+  const descriptionId = useId();
+  const metaId = props.meta ? `${descriptionId}-meta` : undefined;
+  const chipId = props.chip ? `${descriptionId}-chip` : undefined;
+  const describedBy =
+    [metaId, chipId].filter(Boolean).join(" ") || undefined;
   return (
     <button
+      aria-describedby={describedBy}
       aria-label={`Open ${props.name} settings`}
       className={`settings-index__row${props.off ? " is-off" : ""}`}
       type="button"
@@ -648,11 +686,13 @@ export function SettingsIndexRow(props: {
       <span className="settings-index__main">
         <span className="settings-index__name">{props.name}</span>
         {props.meta ? (
-          <span className="settings-index__meta">{props.meta}</span>
+          <span id={metaId} className="settings-index__meta">
+            {props.meta}
+          </span>
         ) : null}
       </span>
       {props.chip ? (
-        <span className={settingsChipClassName(props.chipKind)}>
+        <span id={chipId} className={settingsChipClassName(props.chipKind)}>
           {props.chip}
         </span>
       ) : null}

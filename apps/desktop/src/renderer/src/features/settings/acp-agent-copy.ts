@@ -7,6 +7,12 @@ export function acpStatusLabel(entry: AcpAgentSettingsEntry): string {
   if (entry.installed) {
     return "Discovered";
   }
+  // Only an incompatible legacy CLI is on disk (e.g. the retired
+  // Python kimi-cli). Plain "Not installed" copy would hide that the
+  // operator has something to remediate.
+  if (entry.incompatibleInstances?.length) {
+    return "Legacy CLI - action required";
+  }
   if (entry.installStatus === "install-failed") {
     return "Discovery failed";
   }

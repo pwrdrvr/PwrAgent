@@ -1315,6 +1315,13 @@ describe("SettingsScreen", () => {
         },
       });
     });
+    // Turning on a provider's streaming arms the thread-card nudge, and
+    // the panel renders on the focused screen where it was earned — it
+    // used to render only inside the hub's General section, which the
+    // focused screens never show.
+    expect(
+      screen.getByRole("button", { name: "Show it on thread cards" }),
+    ).toBeInTheDocument();
     // The focused screen's General strip leads back to the hub.
     fireEvent.click(screen.getByRole("button", { name: "Edit general" }));
     fireEvent.click(screen.getByRole("button", { name: "Open Slack settings" }));
@@ -1335,6 +1342,44 @@ describe("SettingsScreen", () => {
         },
       });
     });
+    // Slack's streaming toggle carries its own label (no "(Advanced)"
+    // suffix) and writes a Slack-scoped delta.
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Streaming responses" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        messaging: {
+          slack: {
+            streamingResponses: true,
+          },
+        },
+      });
+    });
+    // Discord, Mattermost, and Feishu each carry the advanced streaming
+    // toggle on their focused screens and write per-platform deltas.
+    for (const [platform, label] of [
+      ["discord", "Discord"],
+      ["mattermost", "Mattermost"],
+      ["feishu", "Feishu / Lark"],
+    ] as const) {
+      fireEvent.click(screen.getByRole("button", { name: "Edit general" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: `Open ${label} settings` }),
+      );
+      fireEvent.click(
+        screen.getByRole("switch", { name: "Streaming Responses (Advanced)" }),
+      );
+      await waitFor(() => {
+        expect(settings.writeConfig).toHaveBeenCalledWith({
+          messaging: {
+            [platform]: {
+              streamingResponses: true,
+            },
+          },
+        });
+      });
+    }
     // LINE has no message-edit API, so its screen deliberately has no
     // streaming toggle.
     fireEvent.click(screen.getByRole("button", { name: "Edit general" }));
@@ -2387,8 +2432,9 @@ describe("SettingsScreen", () => {
     );
 
     // Providers live under the "AI Providers" pane (no separate "ACP
-    // Agents" nav item). The hub's index always lists Codex, and holds
-    // the discovery empty state until ACP agents arrive.
+    // Agents" nav item). The hub's index always lists Codex, and once
+    // the catalog read settles with no agents it reports the settled
+    // empty state — not the transient "Discovering…" copy.
     expect(
       screen.getByRole("button", { name: "AI Providers" }),
     ).toHaveAttribute("aria-current", "page");
@@ -2399,8 +2445,11 @@ describe("SettingsScreen", () => {
       screen.getByRole("button", { name: "Open Codex settings" }),
     ).toBeInTheDocument();
     expect(
-      await screen.findByText("Discovering AI providers…"),
+      await screen.findByText("No AI providers are available right now."),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Discovering AI providers…"),
+    ).not.toBeInTheDocument();
   });
 
   it("saves defaults and confirms launchpad, thread, and Fast bulk actions", async () => {

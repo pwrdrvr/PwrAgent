@@ -48,6 +48,7 @@ import {
 } from "@pwragent/shared";
 import { DiscordIcon, FeishuIcon, LineIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
+import { formatMessagingPlatformName } from "../../lib/messaging-platform-branding";
 import {
   SLACK_APPROVAL_TARGET_LABELS,
   slackApplicableApprovalTargets,
@@ -88,14 +89,17 @@ export type MessagingSettingsFocus =
   | "feishu"
   | "line";
 
-const MESSAGING_PLATFORM_LABELS: Record<MessagingSettingsFocus, string> = {
-  telegram: "Telegram",
-  discord: "Discord",
-  mattermost: "Mattermost",
-  slack: "Slack",
-  feishu: "Feishu / Lark",
-  line: "LINE",
-};
+/** Settings-order list of the focused-screen platforms. The nav and
+ *  the hub index both derive from this, and labels come from
+ *  `formatMessagingPlatformName`, so the surfaces can never drift. */
+export const MESSAGING_SETTINGS_PLATFORMS: readonly MessagingSettingsFocus[] = [
+  "telegram",
+  "discord",
+  "mattermost",
+  "slack",
+  "feishu",
+  "line",
+];
 
 export function MessagingSettings(props: {
   desktopApi?: DesktopApi;
@@ -250,8 +254,55 @@ export function MessagingSettings(props: {
     props.snapshot,
   );
   const focusedPlatformLabel = props.focus
-    ? MESSAGING_PLATFORM_LABELS[props.focus]
+    ? formatMessagingPlatformName(props.focus)
     : undefined;
+  // Hub index descriptors — the one place a platform's glyph and
+  // credential secret are chosen. Discord uses the blurple mark: the
+  // brand-kit white variant disappears against the light theme's
+  // panel-elevated glyph backdrop.
+  const platformIndex: Array<{
+    kind: MessagingSettingsFocus;
+    glyph: ReactNode;
+    enabled: boolean;
+    secret: DesktopSettingsSnapshot["messaging"]["telegram"]["botToken"];
+  }> = [
+    {
+      kind: "telegram",
+      glyph: <TelegramIcon size={16} variant="color" />,
+      enabled: telegram.enabled.value,
+      secret: telegram.botToken,
+    },
+    {
+      kind: "discord",
+      glyph: <DiscordIcon size={16} variant="blurple" />,
+      enabled: discord.enabled.value,
+      secret: discord.botToken,
+    },
+    {
+      kind: "mattermost",
+      glyph: <MattermostIcon size={16} />,
+      enabled: mattermost.enabled.value,
+      secret: mattermost.botToken,
+    },
+    {
+      kind: "slack",
+      glyph: <SlackIcon size={16} />,
+      enabled: slack.enabled.value,
+      secret: slack.botToken,
+    },
+    {
+      kind: "feishu",
+      glyph: <FeishuIcon size={16} />,
+      enabled: feishu.enabled.value,
+      secret: feishu.appSecret,
+    },
+    {
+      kind: "line",
+      glyph: <LineIcon size={16} />,
+      enabled: line.enabled.value,
+      secret: line.channelAccessToken,
+    },
+  ];
 
   const previewToolUpdateBindingReset = async (
     targetKind: "thread" | "agent_thread",
@@ -364,6 +415,49 @@ export function MessagingSettings(props: {
           <p className="settings-row__description">
             {runtimeWarningBody}
           </p>
+        </section>
+      ) : null}
+
+      {/* Armed by the per-platform streaming toggles on the focused
+          screens, so it must render on every messaging pane — hub and
+          focused alike — or the offer is invisible where it was earned. */}
+      {streamingNudgeProvider ? (
+        <section
+          className="settings-panel settings-panel--warning"
+          role="status"
+        >
+          <div className="settings-panel__header">
+            <div>
+              <p className="eyebrow">Streaming enabled</p>
+              <h2>Show the streaming option on thread cards?</h2>
+            </div>
+          </div>
+          <p className="settings-row__description">
+            You turned on streaming for {streamingNudgeProvider}. Show the
+            per-thread streaming toggle in chat status cards and the New
+            Thread menu so you can pick it per thread? It stays an advanced
+            option — most people leave it off.
+          </p>
+          <div className="settings-inline-actions">
+            <button
+              className="button button--secondary"
+              disabled={props.saving}
+              onClick={() => {
+                setStreamingNudgeProvider(null);
+                void props.onShowStreamingOptionChange(true);
+              }}
+              type="button"
+            >
+              Show it on thread cards
+            </button>
+            <button
+              className="button button--ghost"
+              onClick={() => setStreamingNudgeProvider(null)}
+              type="button"
+            >
+              Not now
+            </button>
+          </div>
         </section>
       ) : null}
 
@@ -528,45 +622,6 @@ export function MessagingSettings(props: {
               void props.onShowStreamingOptionChange(enabled);
             }}
           />
-          {streamingNudgeProvider ? (
-            <section
-              className="settings-panel settings-panel--warning"
-              role="status"
-            >
-              <div className="settings-panel__header">
-                <div>
-                  <p className="eyebrow">Streaming enabled</p>
-                  <h2>Show the streaming option on thread cards?</h2>
-                </div>
-              </div>
-              <p className="settings-row__description">
-                You turned on streaming for {streamingNudgeProvider}. Show the
-                per-thread streaming toggle in chat status cards and the New
-                Thread menu so you can pick it per thread? It stays an advanced
-                option — most people leave it off.
-              </p>
-              <div className="settings-inline-actions">
-                <button
-                  className="button button--secondary"
-                  disabled={props.saving}
-                  onClick={() => {
-                    setStreamingNudgeProvider(null);
-                    void props.onShowStreamingOptionChange(true);
-                  }}
-                  type="button"
-                >
-                  Show it on thread cards
-                </button>
-                <button
-                  className="button button--ghost"
-                  onClick={() => setStreamingNudgeProvider(null)}
-                  type="button"
-                >
-                  Not now
-                </button>
-              </div>
-            </section>
-          ) : null}
         </div>
       </SettingsSection>
       ) : null}
@@ -588,62 +643,18 @@ export function MessagingSettings(props: {
           description="Each platform has its own screen for tokens, pairing, and access controls."
         >
           <div className="settings-index" aria-label="Platform index">
-            <SettingsIndexRow
-              glyph={<TelegramIcon size={16} variant="color" />}
-              name="Telegram"
-              meta={telegram.enabled.value ? "Adapter enabled" : "Adapter off"}
-              chip={chipLabelForBotToken(telegram.botToken)}
-              chipKind={chipKindForBotToken(telegram.botToken)}
-              off={!telegram.enabled.value}
-              onOpen={() => props.onFocusChange?.("telegram")}
-            />
-            <SettingsIndexRow
-              glyph={<DiscordIcon size={16} variant="white" />}
-              name="Discord"
-              meta={discord.enabled.value ? "Adapter enabled" : "Adapter off"}
-              chip={chipLabelForBotToken(discord.botToken)}
-              chipKind={chipKindForBotToken(discord.botToken)}
-              off={!discord.enabled.value}
-              onOpen={() => props.onFocusChange?.("discord")}
-            />
-            <SettingsIndexRow
-              glyph={<MattermostIcon size={16} />}
-              name="Mattermost"
-              meta={
-                mattermost.enabled.value ? "Adapter enabled" : "Adapter off"
-              }
-              chip={chipLabelForBotToken(mattermost.botToken)}
-              chipKind={chipKindForBotToken(mattermost.botToken)}
-              off={!mattermost.enabled.value}
-              onOpen={() => props.onFocusChange?.("mattermost")}
-            />
-            <SettingsIndexRow
-              glyph={<SlackIcon size={16} />}
-              name="Slack"
-              meta={slack.enabled.value ? "Adapter enabled" : "Adapter off"}
-              chip={chipLabelForBotToken(slack.botToken)}
-              chipKind={chipKindForBotToken(slack.botToken)}
-              off={!slack.enabled.value}
-              onOpen={() => props.onFocusChange?.("slack")}
-            />
-            <SettingsIndexRow
-              glyph={<FeishuIcon size={16} />}
-              name="Feishu / Lark"
-              meta={feishu.enabled.value ? "Adapter enabled" : "Adapter off"}
-              chip={chipLabelForBotToken(feishu.appSecret)}
-              chipKind={chipKindForBotToken(feishu.appSecret)}
-              off={!feishu.enabled.value}
-              onOpen={() => props.onFocusChange?.("feishu")}
-            />
-            <SettingsIndexRow
-              glyph={<LineIcon size={16} />}
-              name="LINE"
-              meta={line.enabled.value ? "Adapter enabled" : "Adapter off"}
-              chip={chipLabelForBotToken(line.channelAccessToken)}
-              chipKind={chipKindForBotToken(line.channelAccessToken)}
-              off={!line.enabled.value}
-              onOpen={() => props.onFocusChange?.("line")}
-            />
+            {platformIndex.map((platform) => (
+              <SettingsIndexRow
+                key={platform.kind}
+                glyph={platform.glyph}
+                name={formatMessagingPlatformName(platform.kind)}
+                meta={platform.enabled ? "Adapter enabled" : "Adapter off"}
+                chip={chipLabelForBotToken(platform.secret)}
+                chipKind={chipKindForBotToken(platform.secret)}
+                off={!platform.enabled}
+                onOpen={() => props.onFocusChange?.(platform.kind)}
+              />
+            ))}
           </div>
         </SettingsSection>
       ) : null}
