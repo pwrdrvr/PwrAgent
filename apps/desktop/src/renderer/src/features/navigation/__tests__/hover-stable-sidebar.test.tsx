@@ -248,6 +248,78 @@ describe("Sidebar hover-stable thread ordering", () => {
     ]);
   });
 
+  it("updates an inline Inbox pin without releasing deferred ordering", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    const view = render(renderSidebar({
+      browseMode: "inbox",
+      threads: [alpha, bravo],
+      onSetThreadPin,
+    }));
+    const alphaRow = threadRow("Alpha thread");
+    fireEvent.pointerOver(alphaRow, { pointerType: "mouse" });
+    view.rerender(renderSidebar({
+      browseMode: "inbox",
+      threads: [bravo, alpha],
+      onSetThreadPin,
+    }));
+
+    fireEvent.click(
+      within(alphaRow).getByRole("button", { name: "Pin thread" }),
+    );
+    expect(onSetThreadPin).toHaveBeenCalledWith(alpha, true);
+
+    view.rerender(renderSidebar({
+      browseMode: "inbox",
+      threads: [bravo, { ...alpha, pinnedRank: "1024" }],
+      onSetThreadPin,
+    }));
+
+    expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread"]);
+    expect(
+      within(threadRow("Alpha thread")).getByRole("button", {
+        name: "Unpin thread",
+      }),
+    ).toBeInTheDocument();
+    leaveThreadBrowser();
+    expect(threadTitles()).toEqual(["Bravo thread", "Alpha thread"]);
+  });
+
+  it("updates a context-menu Inbox unpin without releasing deferred ordering", () => {
+    const onSetThreadPin = vi.fn(async () => undefined);
+    const pinnedAlpha = { ...alpha, pinnedRank: "1024" };
+    const view = render(renderSidebar({
+      browseMode: "inbox",
+      threads: [pinnedAlpha, bravo],
+      onSetThreadPin,
+    }));
+    const alphaRow = threadRow("Alpha thread");
+    fireEvent.pointerOver(alphaRow, { pointerType: "mouse" });
+    view.rerender(renderSidebar({
+      browseMode: "inbox",
+      threads: [bravo, pinnedAlpha],
+      onSetThreadPin,
+    }));
+
+    fireEvent.contextMenu(
+      within(alphaRow).getByRole("button", { name: /^Alpha thread/ }),
+    );
+    fireEvent.click(screen.getByRole("menuitem", { name: "Unpin Thread" }));
+    expect(onSetThreadPin).toHaveBeenCalledWith(pinnedAlpha, false);
+
+    view.rerender(renderSidebar({
+      browseMode: "inbox",
+      threads: [bravo, alpha],
+      onSetThreadPin,
+    }));
+
+    expect(threadTitles()).toEqual(["Alpha thread", "Bravo thread"]);
+    expect(
+      within(threadRow("Alpha thread")).getByRole("button", {
+        name: "Pin thread",
+      }),
+    ).toBeInTheDocument();
+  });
+
   it("removes an archived Attention row without resorting the survivors", () => {
     const activeAlpha = { ...alpha, threadStatus: "active" as const };
     const unreadBravo = {

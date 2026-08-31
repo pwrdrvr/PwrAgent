@@ -106,7 +106,10 @@ type HoverStableSidebarSnapshot = {
 function hydrateHoverStableSidebarSnapshot(
   frozen: HoverStableSidebarSnapshot,
   latest: HoverStableSidebarSnapshot,
-  options?: { removeMissingThreads?: boolean },
+  options?: {
+    refreshThreadPinRanks?: boolean;
+    removeMissingThreads?: boolean;
+  },
 ): HoverStableSidebarSnapshot {
   const latestDirectoriesByKey = new Map(
     latest.directories.map((directory) => [directory.key, directory]),
@@ -162,7 +165,9 @@ function hydrateHoverStableSidebarSnapshot(
             parentThreadBackend: thread.parentThreadBackend,
             parentThreadId: thread.parentThreadId,
             parentThreadInstanceId: thread.parentThreadInstanceId,
-            pinnedRank: thread.pinnedRank,
+            pinnedRank: options?.refreshThreadPinRanks
+              ? latestThread.pinnedRank
+              : thread.pinnedRank,
             codexNativeSubAgents: thread.codexNativeSubAgents,
             subthreadsCollapsed: thread.subthreadsCollapsed,
             subthreadOrder: thread.subthreadOrder,
@@ -179,7 +184,9 @@ function hydrateHoverStableSidebarSnapshot(
           parentThreadBackend: undefined,
           parentThreadId: undefined,
           parentThreadInstanceId: undefined,
-          pinnedRank: undefined,
+          pinnedRank: options?.refreshThreadPinRanks
+            ? thread.pinnedRank
+            : undefined,
         })),
     ],
   };
@@ -602,6 +609,7 @@ export function Sidebar(props: SidebarProps) {
   const hoverStableSnapshot = useHoverStableSnapshot({
     hydrateFrozenValue: (frozen, latest) =>
       hydrateHoverStableSidebarSnapshot(frozen, latest, {
+        refreshThreadPinRanks: props.browseMode !== "directories",
         removeMissingThreads: props.browseMode === "attention",
       }),
     scope: props.browseMode,
@@ -654,12 +662,13 @@ export function Sidebar(props: SidebarProps) {
             props.onSetSubthreadsCollapsed,
           )
         : undefined,
-      setThreadPin: props.onSetThreadPin
-        ? releaseBeforeListChange(
-            releaseHoverStableSnapshot,
-            props.onSetThreadPin,
-          )
-        : undefined,
+      setThreadPin:
+        props.onSetThreadPin && props.browseMode === "directories"
+          ? releaseBeforeListChange(
+              releaseHoverStableSnapshot,
+              props.onSetThreadPin,
+            )
+          : props.onSetThreadPin,
       updateSubthreadOrder: props.onUpdateSubthreadOrder
         ? releaseBeforeListChange(
             releaseHoverStableSnapshot,
@@ -676,6 +685,7 @@ export function Sidebar(props: SidebarProps) {
       props.onSetSubthreadsCollapsed,
       props.onSetThreadPin,
       props.onUpdateSubthreadOrder,
+      props.browseMode,
       releaseHoverStableSnapshot,
     ],
   );
@@ -1525,7 +1535,9 @@ export function Sidebar(props: SidebarProps) {
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
-    hoverStableSnapshot.release();
+    if (props.browseMode === "directories") {
+      hoverStableSnapshot.release();
+    }
     const threadKeys = threads.map((thread) =>
       threadSummaryIdentityKey(thread),
     );
@@ -1547,7 +1559,9 @@ export function Sidebar(props: SidebarProps) {
     threads: NavigationThreadSummary[],
   ): void => {
     setContextMenu(undefined);
-    hoverStableSnapshot.release();
+    if (props.browseMode === "directories") {
+      hoverStableSnapshot.release();
+    }
     void Promise.all(
       threads.map((thread) => props.onSetThreadPin?.(thread, false)),
     );
