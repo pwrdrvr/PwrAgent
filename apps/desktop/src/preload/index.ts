@@ -369,6 +369,12 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  InspectDiscordThreadPermissionsRequest,
+  InspectDiscordThreadPermissionsResponse,
+  ListDiscordThreadPermissionChannelsRequest,
+  ListDiscordThreadPermissionChannelsResponse,
+  OpenDiscordThreadPermissionRequest,
+  OpenDiscordThreadPermissionResponse,
   SlackCreateAppRequest,
   SlackCreateAppResponse,
   DesktopBootInfo,
@@ -702,6 +708,9 @@ import {
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
+  SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
+  SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL,
+  SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL,
   SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
@@ -1213,6 +1222,27 @@ const desktopApi = Object.freeze({
     request?: SlackCreateAppRequest,
   ): Promise<SlackCreateAppResponse> =>
     await ipcRenderer.invoke(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL, request),
+  listDiscordThreadPermissionChannels: async (
+    request: ListDiscordThreadPermissionChannelsRequest,
+  ): Promise<ListDiscordThreadPermissionChannelsResponse> =>
+    await ipcRenderer.invoke(
+      SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL,
+      request,
+    ),
+  inspectDiscordThreadPermissions: async (
+    request: InspectDiscordThreadPermissionsRequest,
+  ): Promise<InspectDiscordThreadPermissionsResponse> =>
+    await ipcRenderer.invoke(
+      SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
+      request,
+    ),
+  openDiscordThreadPermissionRequest: async (
+    request?: OpenDiscordThreadPermissionRequest,
+  ): Promise<OpenDiscordThreadPermissionResponse> =>
+    await ipcRenderer.invoke(
+      SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL,
+      request,
+    ),
   readLastSettingsCredentialTest: async (
     request: { kind: SettingsCredentialTestKind },
   ): Promise<SettingsCredentialTestResult | undefined> =>

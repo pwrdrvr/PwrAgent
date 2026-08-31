@@ -356,9 +356,12 @@ function contactForPairing(
       return { id, displayName: slackChannelDisplayName(entry.observedChat) };
     }
     const id = entry.observedChat.bucketId ?? entry.observedChat.parentId ?? entry.observedChat.id;
+    const displayName = entry.platform === "discord"
+      ? entry.observedChat.ancestorTitle ?? entry.observedChat.parentTitle ?? ""
+      : entry.observedChat.title ?? entry.observedChat.parentTitle ?? "";
     return {
       id,
-      displayName: entry.observedChat.title ?? entry.observedChat.parentTitle ?? "",
+      displayName,
     };
   }
   if (isSlack && !validateSlackUserId(entry.observedActor.id).ok) {

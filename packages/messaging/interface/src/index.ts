@@ -344,7 +344,8 @@ export type MessagingConversationRef = {
    */
   parentTitle?: string;
   /**
-   * Two levels up. Today: Discord threads — the guild name.
+   * Two levels up. Today: Discord threads and categorized channels — the
+   * guild name.
    */
   ancestorTitle?: string;
 };
@@ -434,6 +435,11 @@ export type MessagingManagedConversationRightsRequest = {
   actor?: MessagingActorIdentity;
   channel: MessagingChannelRef;
   routingState?: MessagingAdapterState;
+  /**
+   * Ephemeral platform surface that triggered the request. Unlike routing
+   * state, hosts do not persist this reference on conversation bindings.
+   */
+  sourceSurface?: MessagingSurfaceRef;
 };
 
 export type MessagingManagedConversationRightsResult = {
@@ -449,6 +455,8 @@ export type MessagingManagedConversationCreateRequest = {
   actor?: MessagingActorIdentity;
   parent: MessagingChannelRef;
   routingState?: MessagingAdapterState;
+  /** Ephemeral source message used when the child must be created from it. */
+  sourceSurface?: MessagingSurfaceRef;
   title: string;
 };
 
@@ -1371,6 +1379,12 @@ export type MessagingInboundBaseEvent = {
    */
   botMention?: boolean;
   routingState?: MessagingAdapterState;
+  /**
+   * The platform message that produced this inbound event. This is distinct
+   * from stable conversation routing state and must not be persisted as part
+   * of a binding refresh.
+   */
+  sourceSurface?: MessagingSurfaceRef;
 };
 
 export type MessagingInboundRejectionReason =
@@ -1426,12 +1440,6 @@ export type MessagingInboundCommandEvent = MessagingInboundBaseEvent & {
 export type MessagingInboundCallbackEvent = MessagingInboundBaseEvent & {
   kind: "callback";
   interaction: MessagingInteractionRef;
-  /**
-   * The message surface that contained the clicked control, when the provider
-   * supplies an editable message reference. This is distinct from
-   * `interaction`, whose id/state identify the callback itself.
-   */
-  sourceSurface?: MessagingSurfaceRef;
   actionId?: string;
   value?: MessagingJsonValue;
 };

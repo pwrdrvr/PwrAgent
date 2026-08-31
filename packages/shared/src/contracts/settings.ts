@@ -1860,3 +1860,96 @@ export type SlackCreateAppResponse = {
   manifestJson: string;
   opened: boolean;
 };
+
+/**
+ * Permissions PwrAgent commonly needs to post rich replies and turn a
+ * user-selected Discord message into a public thread.
+ */
+export const DISCORD_THREAD_REPLY_PERMISSIONS = [
+  {
+    id: "view_channel",
+    label: "View Channel",
+  },
+  {
+    id: "send_messages",
+    label: "Send Messages",
+  },
+  {
+    id: "embed_links",
+    label: "Embed Links",
+  },
+  {
+    id: "attach_files",
+    label: "Attach Files",
+  },
+  {
+    id: "read_message_history",
+    label: "Read Message History",
+  },
+  {
+    id: "create_public_threads",
+    label: "Create Public Threads",
+  },
+  {
+    id: "send_messages_in_threads",
+    label: "Send Messages in Threads",
+  },
+] as const;
+
+export type DiscordThreadReplyPermissionId =
+  (typeof DISCORD_THREAD_REPLY_PERMISSIONS)[number]["id"];
+
+export type DiscordThreadPermissionStatus = "ok" | "failed" | "unset";
+
+export type ListDiscordThreadPermissionChannelsRequest = {
+  guildId: string;
+};
+
+export type ListDiscordThreadPermissionChannelsResponse = {
+  channels: Array<{
+    categoryName?: string;
+    id: string;
+    kind: "announcement" | "text";
+    name: string;
+  }>;
+  errorMessage?: string;
+  guildId: string;
+  guildName?: string;
+  status: DiscordThreadPermissionStatus;
+};
+
+export type InspectDiscordThreadPermissionsRequest = {
+  channelId: string;
+  guildId: string;
+};
+
+export type InspectDiscordThreadPermissionsResponse = {
+  botId?: string;
+  channelId: string;
+  checkedAt: number;
+  durationMs: number;
+  errorMessage?: string;
+  guildId: string;
+  permissions: Array<{
+    granted: boolean;
+    id: DiscordThreadReplyPermissionId;
+    label: string;
+  }>;
+  status: DiscordThreadPermissionStatus;
+};
+
+/**
+ * Open an OAuth authorization request that includes PwrAgent's suggested
+ * least-privilege Discord permissions. Discord still requires an administrator
+ * to approve the request.
+ */
+export type OpenDiscordThreadPermissionRequest = {
+  guildId?: string;
+  /** When false, return the URL without opening it. */
+  open?: boolean;
+};
+
+export type OpenDiscordThreadPermissionResponse = {
+  opened: boolean;
+  url: string;
+};

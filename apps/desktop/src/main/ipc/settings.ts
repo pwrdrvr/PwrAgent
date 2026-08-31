@@ -19,6 +19,10 @@ import type {
   DesktopSettingsSecretName,
   DesktopSettingsWriteResponse,
   DesktopSettingsSnapshot,
+  InspectDiscordThreadPermissionsRequest,
+  InspectDiscordThreadPermissionsResponse,
+  ListDiscordThreadPermissionChannelsRequest,
+  ListDiscordThreadPermissionChannelsResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
   ReadDesktopSettingsRequest,
@@ -29,6 +33,8 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  OpenDiscordThreadPermissionRequest,
+  OpenDiscordThreadPermissionResponse,
   SlackCreateAppRequest,
   SlackCreateAppResponse,
   StartDesktopCodexAuthProfileLoginRequest,
@@ -49,6 +55,9 @@ import {
   SETTINGS_CLEAR_SECRET_CHANNEL,
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
+  SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
+  SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL,
+  SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL,
   SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
@@ -1412,6 +1421,78 @@ export function registerSettingsIpcHandlers(
     },
   );
 
+  ipcMain.removeHandler(SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL,
+    async (
+      _event,
+      request: ListDiscordThreadPermissionChannelsRequest,
+    ): Promise<ListDiscordThreadPermissionChannelsResponse> => {
+      const config = await loadDesktopMessagingConfigFromSettings(
+        getService(service),
+        process.env,
+      );
+      const discordProvider = await import("@pwragent/messaging-provider-discord");
+      return await discordProvider.listDiscordThreadPermissionChannels({
+        botToken: config.discord?.botToken ?? "",
+        guildId: request.guildId,
+      });
+    },
+  );
+
+  ipcMain.removeHandler(SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
+    async (
+      _event,
+      request: InspectDiscordThreadPermissionsRequest,
+    ): Promise<InspectDiscordThreadPermissionsResponse> => {
+      const config = await loadDesktopMessagingConfigFromSettings(
+        getService(service),
+        process.env,
+      );
+      const discordProvider = await import("@pwragent/messaging-provider-discord");
+      return await discordProvider.inspectDiscordThreadPermissions({
+        botToken: config.discord?.botToken ?? "",
+        channelId: request.channelId,
+        guildId: request.guildId,
+      });
+    },
+  );
+
+  ipcMain.removeHandler(SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL,
+    async (
+      _event,
+      request: OpenDiscordThreadPermissionRequest = {},
+    ): Promise<OpenDiscordThreadPermissionResponse> => {
+      const config = await loadDesktopMessagingConfigFromSettings(
+        getService(service),
+        process.env,
+      );
+      const applicationId = config.discord?.applicationId;
+      if (!applicationId) {
+        throw new Error("Configure the Discord application ID before requesting permissions.");
+      }
+      const discordProvider = await import("@pwragent/messaging-provider-discord");
+      const url = discordProvider.buildDiscordThreadPermissionRequestUrl({
+        applicationId,
+        ...(request.guildId ? { guildId: request.guildId } : {}),
+      });
+      const shouldOpen = request.open !== false;
+      let opened = false;
+      if (shouldOpen) {
+        if (!isSafeExternalOpenUrl(url)) {
+          throw new Error("Refused to open an unsafe Discord permission URL.");
+        }
+        await shell.openExternal(url);
+        opened = true;
+      }
+      return { opened, url };
+    },
+  );
+
   ipcMain.removeHandler(SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL);
   ipcMain.handle(
     SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
@@ -1487,6 +1568,9 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL);
   ipcMain.removeHandler(SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL);
   ipcMain.removeHandler(ONBOARDING_COMPLETE_CODEX_BOOTSTRAP_CHANNEL);
   disposeCredentialTester();

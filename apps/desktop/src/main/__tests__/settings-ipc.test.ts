@@ -31,6 +31,11 @@ const electronMocks = vi.hoisted(() => ({
 const providerMocks = vi.hoisted(() => ({
   resolveTelegramContact: vi.fn(),
   resolveDiscordContact: vi.fn(),
+  inspectDiscordThreadPermissions: vi.fn(),
+  listDiscordThreadPermissionChannels: vi.fn(),
+  buildDiscordThreadPermissionRequestUrl: vi.fn(
+    () => "https://discord.com/oauth2/authorize?client_id=1480556454498009351",
+  ),
   resolveMattermostContact: vi.fn(),
   resolveSlackContact: vi.fn(),
   buildSlackCreateAppUrl: vi.fn(() => ({
@@ -167,6 +172,11 @@ vi.mock("@pwragent/messaging-provider-telegram", () => ({
 
 vi.mock("@pwragent/messaging-provider-discord", () => ({
   resolveContact: providerMocks.resolveDiscordContact,
+  inspectDiscordThreadPermissions: providerMocks.inspectDiscordThreadPermissions,
+  listDiscordThreadPermissionChannels:
+    providerMocks.listDiscordThreadPermissionChannels,
+  buildDiscordThreadPermissionRequestUrl:
+    providerMocks.buildDiscordThreadPermissionRequestUrl,
 }));
 
 vi.mock("@pwragent/messaging-provider-mattermost", () => ({
@@ -196,6 +206,9 @@ describe("settings ipc", () => {
     getDesktopBackendRegistryMock.mockClear();
     providerMocks.resolveTelegramContact.mockReset();
     providerMocks.resolveDiscordContact.mockReset();
+    providerMocks.inspectDiscordThreadPermissions.mockReset();
+    providerMocks.listDiscordThreadPermissionChannels.mockReset();
+    providerMocks.buildDiscordThreadPermissionRequestUrl.mockClear();
     providerMocks.resolveMattermostContact.mockReset();
     providerMocks.resolveSlackContact.mockReset();
     providerMocks.buildSlackCreateAppUrl.mockClear();
@@ -493,6 +506,98 @@ describe("settings ipc", () => {
     expect(providerMocks.buildSlackCreateAppUrl).toHaveBeenCalledTimes(1);
     expect(electronMocks.openExternal).toHaveBeenCalledExactlyOnceWith(
       "https://api.slack.com/apps?new_app=1&manifest_json=%7B%7D",
+    );
+
+    disposeSettingsIpcHandlers();
+  });
+
+  it("checks and opens Discord's suggested thread-reply permission request", async () => {
+    const service = {
+      readSettings: vi.fn(),
+    } as unknown as DesktopSettingsService;
+    const discordConfig = {
+      discord: {
+        applicationId: "1480556454498009351",
+        botToken: "discord-token",
+      },
+    };
+    messagingConfigMocks.loadDesktopMessagingConfigFromSettings
+      .mockResolvedValueOnce(discordConfig)
+      .mockResolvedValueOnce(discordConfig)
+      .mockResolvedValueOnce(discordConfig);
+    providerMocks.listDiscordThreadPermissionChannels.mockResolvedValue({
+      channels: [
+        {
+          id: "1480556454498009352",
+          kind: "text",
+          name: "general",
+        },
+      ],
+      guildId: "1480556454498009353",
+      guildName: "PwrAgent test guild",
+      status: "ok",
+    });
+    providerMocks.inspectDiscordThreadPermissions.mockResolvedValue({
+      channelId: "1480556454498009352",
+      checkedAt: 1,
+      durationMs: 1,
+      guildId: "1480556454498009353",
+      permissions: [],
+      status: "ok",
+    });
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
+      "../ipc/settings"
+    );
+    const {
+      SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
+      SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL,
+      SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL,
+    } = await import("../../shared/ipc");
+
+    disposeSettingsIpcHandlers();
+    registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL)?.(
+        {},
+        { guildId: "1480556454498009353" },
+      ),
+    ).resolves.toMatchObject({
+      channels: [expect.objectContaining({ name: "general" })],
+      status: "ok",
+    });
+    expect(providerMocks.listDiscordThreadPermissionChannels).toHaveBeenCalledWith({
+      botToken: "discord-token",
+      guildId: "1480556454498009353",
+    });
+
+    await expect(
+      handlers.get(SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL)?.(
+        {},
+        {
+          channelId: "1480556454498009352",
+          guildId: "1480556454498009353",
+        },
+      ),
+    ).resolves.toMatchObject({ status: "ok" });
+    expect(providerMocks.inspectDiscordThreadPermissions).toHaveBeenCalledWith({
+      botToken: "discord-token",
+      channelId: "1480556454498009352",
+      guildId: "1480556454498009353",
+    });
+
+    await expect(
+      handlers.get(SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL)?.(
+        {},
+        { guildId: "1480556454498009353", open: true },
+      ),
+    ).resolves.toMatchObject({ opened: true });
+    expect(providerMocks.buildDiscordThreadPermissionRequestUrl).toHaveBeenCalledWith({
+      applicationId: "1480556454498009351",
+      guildId: "1480556454498009353",
+    });
+    expect(electronMocks.openExternal).toHaveBeenCalledWith(
+      "https://discord.com/oauth2/authorize?client_id=1480556454498009351",
     );
 
     disposeSettingsIpcHandlers();

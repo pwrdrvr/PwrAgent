@@ -398,6 +398,12 @@ import type {
   SettingsCredentialTestKind,
   SettingsCredentialTestRequest,
   SettingsCredentialTestResult,
+  InspectDiscordThreadPermissionsRequest,
+  InspectDiscordThreadPermissionsResponse,
+  ListDiscordThreadPermissionChannelsRequest,
+  ListDiscordThreadPermissionChannelsResponse,
+  OpenDiscordThreadPermissionRequest,
+  OpenDiscordThreadPermissionResponse,
   SlackCreateAppRequest,
   SlackCreateAppResponse,
   DesktopBootInfo,
@@ -858,6 +864,15 @@ export type DesktopApi = {
   openSlackCreateApp?: (
     request?: SlackCreateAppRequest,
   ) => Promise<SlackCreateAppResponse>;
+  listDiscordThreadPermissionChannels?: (
+    request: ListDiscordThreadPermissionChannelsRequest,
+  ) => Promise<ListDiscordThreadPermissionChannelsResponse>;
+  inspectDiscordThreadPermissions?: (
+    request: InspectDiscordThreadPermissionsRequest,
+  ) => Promise<InspectDiscordThreadPermissionsResponse>;
+  openDiscordThreadPermissionRequest?: (
+    request?: OpenDiscordThreadPermissionRequest,
+  ) => Promise<OpenDiscordThreadPermissionResponse>;
   /** Read the last-known credential-test result without firing a new
    *  probe. Used by the test-block primitive to render the previous
    *  status on settings-pane mount. */

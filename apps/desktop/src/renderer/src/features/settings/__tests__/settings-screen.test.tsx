@@ -17,6 +17,7 @@ import type {
   AppServerThreadSummary,
   BackendSummary,
   DesktopSettingsSnapshot,
+  InspectDiscordThreadPermissionsResponse,
   ListMessagingRoutesResponse,
   MessagingPairingEntry,
   WorktreeSnapshotSummary,
@@ -4493,6 +4494,279 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(openSlackCreateApp).toHaveBeenCalledWith({ open: true });
     });
+  });
+
+  it("checks and requests the suggested Discord thread-reply permissions", async () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.discord.applicationId.value = "1480556454498009351";
+    snapshot.messaging.discord.authorizedGuilds.value = [
+      { id: "1480556454498009353", displayName: "general" },
+    ];
+    const listDiscordThreadPermissionChannels = vi.fn(async () => ({
+      channels: [
+        {
+          categoryName: "Chat",
+          id: "1480556454498009352",
+          kind: "text" as const,
+          name: "general",
+        },
+      ],
+      guildId: "1480556454498009353",
+      guildName: "huntharo-claw",
+      status: "ok" as const,
+    }));
+    const inspectDiscordThreadPermissions = vi.fn(async () => ({
+      botId: "1480556454498009351",
+      channelId: "1480556454498009352",
+      checkedAt: 1,
+      durationMs: 1,
+      guildId: "1480556454498009353",
+      permissions: [
+        {
+          granted: true,
+          id: "create_public_threads" as const,
+          label: "Create Public Threads",
+        },
+        {
+          granted: false,
+          id: "send_messages_in_threads" as const,
+          label: "Send Messages in Threads",
+        },
+      ],
+      status: "ok" as const,
+    }));
+    const openDiscordThreadPermissionRequest = vi.fn(async () => ({
+      opened: true,
+      url: "https://discord.com/oauth2/authorize",
+    }));
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        desktopApi={{
+          inspectDiscordThreadPermissions,
+          listDiscordThreadPermissionChannels,
+          openDiscordThreadPermissionRequest,
+        }}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const channelSelect = await screen.findByRole("combobox", {
+      name: "Discord channel for permission check",
+    });
+    await waitFor(() => {
+      expect(channelSelect).toHaveValue("1480556454498009352");
+    });
+    const serverSelect = screen.getByRole("combobox", {
+      name: "Discord server for permission check",
+    });
+    expect(serverSelect).not.toHaveAccessibleName(/reply/i);
+    expect(channelSelect).not.toHaveAccessibleName(/reply/i);
+    expect(screen.getByRole("option", { name: "huntharo-claw" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Chat / #general" })).toBeInTheDocument();
+    expect(listDiscordThreadPermissionChannels).toHaveBeenCalledWith({
+      guildId: "1480556454498009353",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check permissions" }));
+    await waitFor(() => {
+      expect(inspectDiscordThreadPermissions).toHaveBeenCalledWith({
+        channelId: "1480556454498009352",
+        guildId: "1480556454498009353",
+      });
+    });
+    const permissionResult = screen.getByRole("alert", {
+      name: "Discord permission check result",
+    });
+    expect(permissionResult).toHaveTextContent(
+      "1 of 2 suggested permissions is missing.",
+    );
+    const permissionRows = within(permissionResult).getAllByRole("listitem");
+    expect(permissionRows).toHaveLength(2);
+    expect(permissionRows[0]).toHaveTextContent("Send Messages in ThreadsMissing");
+    expect(permissionRows[1]).toHaveTextContent("Create Public ThreadsGranted");
+
+    inspectDiscordThreadPermissions.mockResolvedValueOnce({
+      botId: "1480556454498009351",
+      channelId: "1480556454498009352",
+      checkedAt: 2,
+      durationMs: 1,
+      guildId: "1480556454498009353",
+      permissions: [
+        {
+          granted: true,
+          id: "create_public_threads",
+          label: "Create Public Threads",
+        },
+        {
+          granted: true,
+          id: "send_messages_in_threads",
+          label: "Send Messages in Threads",
+        },
+      ],
+      status: "ok",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check permissions" }));
+    expect(
+      await screen.findByRole("status", { name: "Discord permission check result" }),
+    ).toHaveTextContent("All 2 suggested permissions are granted.");
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Request suggested permissions" }),
+    );
+    await waitFor(() => {
+      expect(openDiscordThreadPermissionRequest).toHaveBeenCalledWith({
+        guildId: "1480556454498009353",
+      });
+    });
+  });
+
+  it("reconciles the Discord permission server after authorized guilds change", () => {
+    const applicationId = "1480556454498009351";
+    const firstGuildId = "1480556454498009353";
+    const replacementGuildId = "1480556454498009354";
+    const initialSnapshot = createSnapshot();
+    initialSnapshot.messaging.discord.applicationId.value = applicationId;
+    const openDiscordThreadPermissionRequest = vi.fn(async () => ({
+      opened: true,
+      url: "https://discord.com/oauth2/authorize",
+    }));
+    const view = render(
+      <SettingsScreen
+        settings={createSettingsState(initialSnapshot)}
+        desktopApi={{ openDiscordThreadPermissionRequest }}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("combobox", {
+        name: "Discord server for permission check",
+      }),
+    ).toHaveValue("");
+
+    const firstSnapshot = createSnapshot();
+    firstSnapshot.messaging.discord.applicationId.value = applicationId;
+    firstSnapshot.messaging.discord.authorizedGuilds.value = [
+      { id: firstGuildId, displayName: "First guild" },
+    ];
+    view.rerender(
+      <SettingsScreen
+        settings={createSettingsState(firstSnapshot)}
+        desktopApi={{ openDiscordThreadPermissionRequest }}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+    expect(
+      screen.getByRole("combobox", {
+        name: "Discord server for permission check",
+      }),
+    ).toHaveValue(firstGuildId);
+
+    const replacementSnapshot = createSnapshot();
+    replacementSnapshot.messaging.discord.applicationId.value = applicationId;
+    replacementSnapshot.messaging.discord.authorizedGuilds.value = [
+      { id: replacementGuildId, displayName: "Replacement guild" },
+    ];
+    view.rerender(
+      <SettingsScreen
+        settings={createSettingsState(replacementSnapshot)}
+        desktopApi={{ openDiscordThreadPermissionRequest }}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+    expect(
+      screen.getByRole("combobox", {
+        name: "Discord server for permission check",
+      }),
+    ).toHaveValue(replacementGuildId);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Request suggested permissions" }),
+    );
+    expect(openDiscordThreadPermissionRequest).toHaveBeenCalledWith({
+      guildId: replacementGuildId,
+    });
+  });
+
+  it("discards a Discord permission result after the channel selection changes", async () => {
+    const firstChannelId = "1480556454498009352";
+    const secondChannelId = "1480556454498009355";
+    const guildId = "1480556454498009353";
+    let resolveInspection!: (
+      value: InspectDiscordThreadPermissionsResponse,
+    ) => void;
+    const inspectDiscordThreadPermissions = vi.fn(
+      async (): Promise<InspectDiscordThreadPermissionsResponse> =>
+        await new Promise<InspectDiscordThreadPermissionsResponse>((resolve) => {
+          resolveInspection = resolve;
+        }),
+    );
+    const listDiscordThreadPermissionChannels = vi.fn(async () => ({
+      channels: [
+        {
+          id: firstChannelId,
+          kind: "text" as const,
+          name: "general",
+        },
+        {
+          id: secondChannelId,
+          kind: "text" as const,
+          name: "coding",
+        },
+      ],
+      guildId,
+      guildName: "PwrAgent test guild",
+      status: "ok" as const,
+    }));
+    const snapshot = createSnapshot();
+    snapshot.messaging.discord.authorizedGuilds.value = [
+      { id: guildId, displayName: "PwrAgent test guild" },
+    ];
+    render(
+      <SettingsScreen
+        settings={createSettingsState(snapshot)}
+        desktopApi={{
+          inspectDiscordThreadPermissions,
+          listDiscordThreadPermissionChannels,
+        }}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+    const channelSelect = await screen.findByRole("combobox", {
+      name: "Discord channel for permission check",
+    });
+
+    await waitFor(() => expect(channelSelect).toHaveValue(firstChannelId));
+    fireEvent.click(screen.getByRole("button", { name: "Check permissions" }));
+    fireEvent.change(channelSelect, { target: { value: secondChannelId } });
+    await act(async () => {
+      resolveInspection({
+        channelId: firstChannelId,
+        checkedAt: 1,
+        durationMs: 1,
+        guildId,
+        permissions: [
+          {
+            granted: false,
+            id: "create_public_threads",
+            label: "Create Public Threads",
+          },
+        ],
+        status: "ok",
+      });
+    });
+    fireEvent.change(channelSelect, { target: { value: firstChannelId } });
+
+    expect(
+      screen.queryByRole("alert", { name: "Discord permission check result" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows a leftover Events API notice and persists Socket Mode", async () => {
