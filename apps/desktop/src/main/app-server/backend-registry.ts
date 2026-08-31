@@ -201,6 +201,8 @@ import {
   type RestoreThreadWorktreeResult,
   type SetThreadExecutionModeRequest,
   type SetThreadExecutionModeResponse,
+  type SetThreadMcpConnectionsRequest,
+  type SetThreadMcpConnectionsResponse,
   type SetThreadModelSettingsRequest,
   type SetThreadModelSettingsResponse,
   type SetThreadPrAutoDispatchRequest,
@@ -7387,15 +7389,43 @@ function buildCodexConnectionMcpServerName(
   return `${PWRAGENT_CONNECTION_MCP_SERVER_PREFIX}${server.name}_${identity}`;
 }
 
+/**
+ * Thrown when a thread asked for PwrAgent-only MCP access and PwrAgent cannot
+ * prove it delivered it.
+ *
+ * Isolation is expressed as `{ enabled: false }` overrides for the servers
+ * Codex inherited, which requires reading that inventory. When the running
+ * Codex build cannot report it, continuing would run the turn with the
+ * operator's other MCP servers still live while the UI claimed otherwise.
+ * Refusing is the honest failure.
+ */
+function codexMcpIsolationUnavailableError(): Error {
+  return new Error(
+    "This thread is set to use PwrAgent connections only, but the installed Codex build cannot report its configured MCP servers, so PwrAgent cannot turn them off. Update Codex, or allow the agent's own MCP servers for this thread.",
+  );
+}
+
 function buildCodexConnectionMcpConfig(
   registrations: McpConnectionBridgeRegistration[],
   inheritedServerNames?: readonly string[],
+  options: { isolateFromInherited?: boolean } = {},
 ): CodexThreadStartParams["config"] | undefined {
-  if (registrations.length === 0) return undefined;
+  if (registrations.length === 0 && !options.isolateFromInherited) {
+    return undefined;
+  }
   const inheritedNames = new Set(inheritedServerNames ?? []);
+  // "PwrAgent connections only" is expressed the same way a collision is:
+  // an `{ enabled: false }` override for a server Codex actually inherited.
+  // Naming a server Codex does not have would create a transport-less entry
+  // that Codex rejects, so an unavailable inventory yields no overrides at
+  // all -- which is why the caller refuses the turn instead of pretending.
+  const isolationOverrides = options.isolateFromInherited
+    ? [...inheritedNames].map((name) => [name, { enabled: false }] as const)
+    : [];
   return {
-    mcp_servers: Object.fromEntries(
-      registrations.flatMap(({ server }) => {
+    mcp_servers: Object.fromEntries([
+      ...isolationOverrides,
+      ...registrations.flatMap(({ server }) => {
         // Codex recursively merges thread config over the operator's global
         // config. Disable only aliases that were actually inherited: a new
         // `{ enabled: false }` entry has no command or URL, which Codex
@@ -7420,7 +7450,7 @@ function buildCodexConnectionMcpConfig(
           ] as const,
         ];
       }),
-    ),
+    ]),
   } as CodexThreadStartParams["config"];
 }
 
@@ -14403,6 +14433,7 @@ export class DesktopBackendRegistry {
     reasoningEffort?: string;
     fastMode?: boolean;
     mcpConnectionIds?: string[];
+    mcpProviderServersEnabled?: boolean;
     agent?: StartThreadRequest["agent"];
     acpRuntime?: BackendAcpSessionRuntimeState;
     workMode?: NavigationLaunchpadDraft["workMode"];
@@ -14431,6 +14462,7 @@ export class DesktopBackendRegistry {
       prAutoDispatchEnabled,
       tokenMiserEnabled: tokenMiserOverride,
       mcpConnectionIds,
+      mcpProviderServersEnabled,
       ...request
     } = params;
     const modelSettings = await this.resolveModelSettings(backend, request);
@@ -14588,11 +14620,20 @@ export class DesktopBackendRegistry {
       backend === "codex" || isAcpBackendId(backend)
         ? await this.registerMcpConnections(mcpConnectionIds)
         : [];
+    const isolateFromInherited =
+      backend === "codex" && mcpProviderServersEnabled === false;
+    const inheritedCodexMcpServerNames =
+      backend === "codex"
+      && (mcpConnectionRegistrations.length > 0 || isolateFromInherited)
+        ? await this.readConfiguredCodexMcpServerNames(cwd)
+        : undefined;
+    if (isolateFromInherited && inheritedCodexMcpServerNames === undefined) {
+      throw codexMcpIsolationUnavailableError();
+    }
     const connectionMcpConfig = buildCodexConnectionMcpConfig(
       mcpConnectionRegistrations,
-      backend === "codex" && mcpConnectionRegistrations.length > 0
-        ? await this.readConfiguredCodexMcpServerNames(cwd)
-        : undefined,
+      inheritedCodexMcpServerNames,
+      { isolateFromInherited },
     );
     const tokenMiserConfig = client
       ? await this.buildSupportedCodexTokenMiserConfig({
@@ -14786,11 +14827,12 @@ export class DesktopBackendRegistry {
       enabled:
         prAutoDispatchEnabled ?? this.resolveDefaultPrAutoDispatchEnabledFn(),
     });
-    if (mcpConnectionIds?.length) {
+    if (mcpConnectionIds?.length || mcpProviderServersEnabled === false) {
       await this.overlayStore.setThreadMcpConnectionIds({
         backend,
         threadId: result.threadId,
-        connectionIds: mcpConnectionIds,
+        connectionIds: mcpConnectionIds ?? [],
+        providerServersEnabled: mcpProviderServersEnabled,
       });
     }
     if (request.agent) {
@@ -16031,17 +16073,29 @@ export class DesktopBackendRegistry {
           ? buildCodexPdfMcpConfig(registration)
           : buildCodexPdfMcpDisabledConfig();
       }
-      if (params.backend === "codex" && overlay?.mcpConnectionIds?.length) {
+      // Re-read per turn so a mid-thread change to the selection or the
+      // provider policy lands on the operator's next message.
+      const isolateFromInherited =
+        params.backend === "codex"
+        && overlay?.mcpProviderServersEnabled === false;
+      if (
+        params.backend === "codex"
+        && (overlay?.mcpConnectionIds?.length || isolateFromInherited)
+      ) {
         const registrations = await this.registerMcpConnections(
-          overlay.mcpConnectionIds,
+          overlay?.mcpConnectionIds ?? [],
           params.threadId,
         );
+        const inheritedNames =
+          await this.readConfiguredCodexMcpServerNames(cwd);
+        if (isolateFromInherited && inheritedNames === undefined) {
+          throw codexMcpIsolationUnavailableError();
+        }
         codexThreadConfig = mergeCodexThreadConfigs(
           codexThreadConfig,
-          buildCodexConnectionMcpConfig(
-            registrations,
-            await this.readConfiguredCodexMcpServerNames(cwd),
-          ),
+          buildCodexConnectionMcpConfig(registrations, inheritedNames, {
+            isolateFromInherited,
+          }),
         );
       }
       const preparedPdfInput = await preparePdfTurnInput({
@@ -19566,6 +19620,40 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Change a live thread's MCP selection.
+   *
+   * Codex re-reads this overlay while starting each turn, so the change
+   * reaches the agent on the operator's next message. ACP resolves MCP
+   * servers only at `session/new` and `session/load`, so there the change
+   * waits for the thread's next session load. Callers surface which of those
+   * applies rather than reporting a bare "saved".
+   */
+  async setThreadMcpConnections(
+    request: SetThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse> {
+    const state = await this.overlayStore.setThreadMcpConnectionIds({
+      backend: request.backend,
+      threadId: request.threadId,
+      connectionIds: request.connectionIds,
+      providerServersEnabled: request.providerServersEnabled,
+    });
+    const connectionIds = state.mcpConnectionIds ?? [];
+    const providerServersEnabled = state.mcpProviderServersEnabled !== false;
+    await this.emit({
+      backend: request.backend,
+      notification: {
+        method: "thread/mcpConnections/updated",
+        params: {
+          threadId: request.threadId,
+          connectionIds,
+          providerServersEnabled,
+        },
+      },
+    });
+    return { connectionIds, providerServersEnabled };
+  }
+
   async setThreadModelSettings(
     params: SetThreadModelSettingsRequest
   ): Promise<SetThreadModelSettingsResponse> {
@@ -21384,6 +21472,7 @@ export class DesktopBackendRegistry {
       serviceTier: launchpad.serviceTier,
       fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
       mcpConnectionIds: launchpad.mcpConnectionIds,
+      mcpProviderServersEnabled: launchpad.mcpProviderServersEnabled,
       prAutoDispatchEnabled:
         launchpad.prAutoDispatchEnabled ?? this.resolveDefaultPrAutoDispatchEnabledFn(),
       tokenMiserEnabled: launchpad.tokenMiserEnabled,

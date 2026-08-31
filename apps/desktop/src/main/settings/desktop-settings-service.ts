@@ -824,6 +824,14 @@ export class DesktopSettingsService {
           config.general?.attentionPromoteOnTurnEnd,
           true,
         ),
+        // Default on: the gateway only does work for connections the
+        // operator explicitly added and authorized, so an empty registry
+        // costs nothing. The switch exists to revoke thread access
+        // profile-wide without discarding credentials.
+        mcpGatewayEnabled: this.resolveConfigBoolean(
+          config.general?.mcpGatewayEnabled,
+          true,
+        ),
         pdfAnalysisEnabled: this.resolveConfigBoolean(
           config.general?.pdfAnalysisEnabled,
           true,
@@ -1740,6 +1748,13 @@ export class DesktopSettingsService {
   resolveConfirmQuitWithInProgressThreads(): boolean {
     return this.resolveConfigBoolean(
       this.readGeneralConfig().confirmQuitWithInProgressThreads,
+      true,
+    ).value;
+  }
+
+  resolveMcpGatewayEnabled(): boolean {
+    return this.resolveConfigBoolean(
+      this.readConfig().config.general?.mcpGatewayEnabled,
       true,
     ).value;
   }

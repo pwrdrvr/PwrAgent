@@ -170,6 +170,10 @@ export const MCP_CONNECTION_CREATE_CHANNEL = "mcp-connection:create";
 export const MCP_CONNECTION_AUTHORIZE_CHANNEL = "mcp-connection:authorize";
 export const MCP_CONNECTION_DISCONNECT_CHANNEL = "mcp-connection:disconnect";
 export const MCP_CONNECTION_REMOVE_CHANNEL = "mcp-connection:remove";
+export const MCP_CONNECTION_SET_ENABLED_CHANNEL =
+  "mcp-connection:set-enabled";
+export const MCP_CONNECTION_SET_THREAD_CHANNEL =
+  "mcp-connection:set-thread";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
 export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
   "navigation:set-browse-mode";

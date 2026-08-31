@@ -1338,7 +1338,13 @@ export function bootstrapApp(): void {
     registerImageNormalizationIpcHandlers();
     registerIntegratedTerminalIpcHandlers();
     registerMcpConnectionIpcHandlers();
-    if (bootMode === "active-profile") {
+    // Only pre-start the bridge for a profile that actually uses it. Settings
+    // still reaches the gateway on demand, so turning the switch back on does
+    // not require a restart.
+    if (
+      bootMode === "active-profile"
+      && getDesktopSettingsService().resolveMcpGatewayEnabled()
+    ) {
       void getMcpConnectionGatewayService().start().catch((error) => {
         mainLog.error("MCP connection gateway failed during startup", {
           error: error instanceof Error ? error.message : String(error),

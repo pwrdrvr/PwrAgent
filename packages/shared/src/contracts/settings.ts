@@ -668,6 +668,15 @@ export type DesktopGeneralSettingsSnapshot = {
    */
   attentionPromoteOnTurnEnd: DesktopSettingsValue<boolean>;
   /**
+   * Whether the profile runs the PwrAgent-managed MCP connection gateway.
+   *
+   * Off stops the gateway, withholds every managed connection from new
+   * turns, and leaves credentials encrypted at rest. Codex-managed MCP
+   * servers are unaffected: they are the agent's own configuration, not
+   * PwrAgent's to switch off.
+   */
+  mcpGatewayEnabled: DesktopSettingsValue<boolean>;
+  /**
    * Prefer PwrAgent's bounded, visual PDF analysis flow over handing a raw
    * local PDF reference to the model.
    */
@@ -1266,6 +1275,7 @@ export type DesktopSettingsConfigPatch = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
+    mcpGatewayEnabled?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;

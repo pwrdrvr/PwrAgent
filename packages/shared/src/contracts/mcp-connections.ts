@@ -1,3 +1,4 @@
+import type { AppServerBackendKind } from "./normalized-app-server";
 import type { FederationRemoteTarget } from "./federation";
 
 export const PWRSNAP_MCP_CONNECTION_ID = "pwrsnap" as const;
@@ -58,6 +59,19 @@ export type DisconnectMcpConnectionRequest = {
   connectionId: McpConnectionId;
 };
 
+/**
+ * Whether a connection may be offered to threads at all.
+ *
+ * This is the profile-wide availability switch, not a per-thread selection.
+ * A connection can be authorized and healthy yet withheld from every thread,
+ * which is how an operator parks a connection without discarding its
+ * credentials.
+ */
+export type SetMcpConnectionEnabledRequest = {
+  connectionId: McpConnectionId;
+  enabled: boolean;
+};
+
 export type RemoveMcpConnectionRequest = {
   connectionId: McpConnectionId;
 };
@@ -94,3 +108,42 @@ export type OpenPwrSnapResponse = {
   opened: boolean;
   error?: string;
 };
+
+/**
+ * A thread's MCP selection, editable for the life of the thread.
+ *
+ * `providerServersEnabled` controls whether the backend's own configured MCP
+ * servers stay available alongside the selected connections. Only Codex can
+ * honor `false`: its per-thread config accepts `{ enabled: false }` overrides
+ * for inherited servers, while ACP gives PwrAgent no way to suppress servers
+ * the agent loads for itself. Callers must not offer the control for backends
+ * that cannot enforce it.
+ */
+export type SetThreadMcpConnectionsRequest = {
+  backend: AppServerBackendKind;
+  threadId: string;
+  connectionIds: McpConnectionId[];
+  providerServersEnabled?: boolean;
+};
+
+export type SetThreadMcpConnectionsResponse = {
+  connectionIds: McpConnectionId[];
+  providerServersEnabled: boolean;
+};
+
+/**
+ * When a change to a thread's MCP selection actually reaches the agent.
+ *
+ * Codex re-reads the thread overlay while starting each turn, so a change
+ * lands on the next message. ACP resolves MCP servers only during
+ * `session/new` and `session/load`, so a change lands when the thread's
+ * session is next loaded. Telling the operator "saved" without saying which
+ * of these applies would be a lie in the common case.
+ */
+export type McpSelectionApplyTiming = "next_turn" | "next_session_load";
+
+export function mcpSelectionApplyTiming(
+  backend: AppServerBackendKind,
+): McpSelectionApplyTiming {
+  return backend === "codex" ? "next_turn" : "next_session_load";
+}

@@ -839,6 +839,12 @@ export type NavigationLaunchpadDraft = NavigationLaunchpadDefaults & {
   agent?: NavigationLaunchpadAgent;
   /** MCP connections selected for the thread created from this launchpad. */
   mcpConnectionIds?: string[];
+  /**
+   * Whether the backend's own configured MCP servers stay available to the
+   * thread. Undefined means yes. Only Codex can honor `false`; see
+   * `SetThreadMcpConnectionsRequest`.
+   */
+  mcpProviderServersEnabled?: boolean;
   prompt: string;
   registeredAt?: number;
   settingsTouchedAt?: number;
@@ -1974,6 +1980,12 @@ export type ThreadOverlayState = {
   fastMode?: boolean;
   /** MCP connections supplied to this thread's harness. */
   mcpConnectionIds?: string[];
+  /**
+   * Whether the backend's own configured MCP servers stay available to the
+   * thread. Undefined means yes. Only Codex can honor `false`; see
+   * `SetThreadMcpConnectionsRequest`.
+   */
+  mcpProviderServersEnabled?: boolean;
   /** Saved operator preference; global PR polling and Auto-fix gates control its effect. */
   prAutoDispatchEnabled?: boolean;
   /** Joined from the durable dispatch table for navigation; never stored in overlay JSON. */

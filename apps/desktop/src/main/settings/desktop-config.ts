@@ -94,6 +94,7 @@ export type DesktopSettingsConfig = {
   general?: {
     confirmQuitWithInProgressThreads?: boolean;
     attentionPromoteOnTurnEnd?: boolean;
+    mcpGatewayEnabled?: boolean;
     pdfAnalysisEnabled?: boolean;
     developerMode?: boolean;
     hotCpuProfilingEnabled?: boolean;
@@ -604,6 +605,9 @@ export function desktopSettingsPatchToEdits(
       ["general", "attention_promote_on_turn_end"],
       patch.general.attentionPromoteOnTurnEnd,
     );
+  }
+  if (patch.general?.mcpGatewayEnabled !== undefined) {
+    set(["general", "mcp_gateway_enabled"], patch.general.mcpGatewayEnabled);
   }
   if (patch.general?.pdfAnalysisEnabled !== undefined) {
     if (patch.general.pdfAnalysisEnabled) {
@@ -1684,6 +1688,7 @@ function normalizeDesktopConfig(
       attentionPromoteOnTurnEnd: readBoolean(
         general?.attention_promote_on_turn_end,
       ),
+      mcpGatewayEnabled: readBoolean(general?.mcp_gateway_enabled),
       pdfAnalysisEnabled: readBoolean(general?.pdf_analysis_enabled),
       developerMode: readBoolean(general?.developer_mode),
       hotCpuProfilingEnabled: readBoolean(general?.hot_cpu_profiling_enabled),

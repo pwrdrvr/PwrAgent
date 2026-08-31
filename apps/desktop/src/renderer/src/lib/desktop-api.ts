@@ -264,6 +264,9 @@ import type {
   DisconnectMcpConnectionRequest,
   MutateMcpConnectionResponse,
   RemoveMcpConnectionRequest,
+  SetMcpConnectionEnabledRequest,
+  SetThreadMcpConnectionsRequest,
+  SetThreadMcpConnectionsResponse,
   InspectPdfReferencePathsRequest,
   InspectPdfReferencePathsResponse,
   RenderComposerPdfPreviewRequest,
@@ -489,6 +492,12 @@ export type DesktopApi = {
   removeMcpConnection?: (
     request: RemoveMcpConnectionRequest,
   ) => Promise<MutateMcpConnectionResponse>;
+  setMcpConnectionEnabled?: (
+    request: SetMcpConnectionEnabledRequest,
+  ) => Promise<MutateMcpConnectionResponse>;
+  setThreadMcpConnections?: (
+    request: SetThreadMcpConnectionsRequest,
+  ) => Promise<SetThreadMcpConnectionsResponse>;
   readPwrSnapConnectionStatus?: (
     request?: ReadPwrSnapConnectionStatusRequest,
   ) => Promise<PwrSnapConnectionStatus>;
