@@ -357,6 +357,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private static readonly BREADCRUMB_CACHE_CAP = 500;
   private readonly channelCache = new Map<string, DiscordChannelInfo>();
   private readonly guildCache = new Map<string, DiscordGuildInfo>();
+  private applicationId?: string;
   private readonly unauthorizedGuildLogKeys = new Set<string>();
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
   private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
@@ -377,6 +378,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   constructor(options: DiscordAdapterOptions) {
     this.options = options;
     if (validateDiscordSnowflake(options.config.applicationId).ok) {
+      this.applicationId = options.config.applicationId;
       this.capabilityProfile.conversationInput = {
         reportsBotMention: true,
       };
@@ -431,7 +433,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     if (lifecycleGeneration !== this.lifecycleGeneration) {
       return;
     }
-    this.options.config.applicationId = applicationId;
+    this.applicationId = applicationId;
     this.capabilityProfile.conversationInput = {
       reportsBotMention: true,
     };
@@ -1066,7 +1068,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       message.content !== undefined
         ? stripDiscordBotMention(
             message.content,
-            this.options.config.applicationId,
+            this.applicationId,
           )
         : undefined;
     const isPairingMessage = message.content !== undefined
@@ -1360,10 +1362,10 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         interaction.token,
         validateDiscordInteractionToken,
       )
-      && (this.options.config.applicationId === undefined
+      && (this.applicationId === undefined
         || this.validateIdentifier(
           "application_id",
-          this.options.config.applicationId,
+          this.applicationId,
           validateDiscordSnowflake,
         ))
       && (interaction.guild_id === undefined
@@ -2112,7 +2114,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     return {
       opaque: {
         applicationId: options?.interactionToken
-          ? (this.options.config.applicationId ?? null)
+          ? (this.applicationId ?? null)
           : null,
         channelId,
         channelType: options?.channelType ?? null,

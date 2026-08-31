@@ -214,13 +214,14 @@ describe("discord adapter", () => {
       onEvent: vi.fn(() => () => undefined),
       start: vi.fn(async () => undefined),
     };
+    const config = {
+      authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+      botToken: "token",
+      channel: "discord" as const,
+    };
     const adapter = new DiscordAdapter({
       api: createApi({ getCurrentApplicationId, listApplicationCommands }),
-      config: {
-        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
-        botToken: "token",
-        channel: "discord",
-      },
+      config,
       gateway,
     });
 
@@ -232,6 +233,7 @@ describe("discord adapter", () => {
     expect(adapter.capabilityProfile.conversationInput).toEqual({
       reportsBotMention: true,
     });
+    expect(config).not.toHaveProperty("applicationId");
     expect(gateway.start).toHaveBeenCalledOnce();
   });
 
