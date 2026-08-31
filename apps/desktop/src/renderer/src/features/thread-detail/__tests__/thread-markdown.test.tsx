@@ -848,6 +848,36 @@ describe("ThreadMarkdown", () => {
     expect(screen.getByText("Second List - One")).toBeInTheDocument();
   });
 
+  it("renders nested numbered lists instead of flattening them", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={[
+          "1. Discord-specific fixes",
+          "   1. Timestamp inbound immediately",
+          "   2. Move breadcrumb lookups off the critical path",
+          "   3. Add stage timings through startTurn",
+          "2. Busted thread info cache",
+          "   1. Resolve occupancy from cached thread state",
+          "      1. Change the admission path as described",
+          "   2. Keep Git enrichment out of reply admission",
+          "      1. Do not wait on a 3 second full cache refresh",
+        ].join("\n")}
+      />
+    );
+
+    const rootList = container.querySelector(".thread-markdown > ol.transcript-message__list");
+    expect(rootList).not.toBeNull();
+    expect(rootList?.querySelectorAll(":scope > li")).toHaveLength(2);
+    expect(rootList?.querySelectorAll(":scope > li:first-child > ol > li")).toHaveLength(3);
+    expect(rootList?.querySelectorAll(":scope > li:last-child > ol > li")).toHaveLength(2);
+    expect(
+      rootList?.querySelectorAll(":scope > li:last-child > ol > li:first-child > ol > li"),
+    ).toHaveLength(1);
+    expect(container.querySelectorAll(".thread-markdown > ol > li")).toHaveLength(2);
+    expect(screen.getByText("Discord-specific fixes")).toBeInTheDocument();
+    expect(screen.getByText("Change the admission path as described")).toBeInTheDocument();
+  });
+
   it("keeps composer-style hyphen-only bullet items visible", () => {
     const { container } = render(
       <ThreadMarkdown

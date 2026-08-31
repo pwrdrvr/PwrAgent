@@ -454,12 +454,82 @@ function parseInlineMarkdownWithMarks(
   return nodes;
 }
 
+type MarkdownListKind = "bullet" | "ordered";
+
+type MarkdownListItemLine = {
+  indent: number;
+  kind: MarkdownListKind;
+  start?: number;
+  text: string;
+};
+
+function markdownLineIndent(line: string): { content: string; indent: number } {
+  let indent = 0;
+  let index = 0;
+  while (index < line.length) {
+    const character = line[index];
+    if (character === " ") {
+      indent += 1;
+      index += 1;
+      continue;
+    }
+    if (character === "\t") {
+      indent += 4 - (indent % 4);
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  return {
+    content: line.slice(index),
+    indent,
+  };
+}
+
+function matchMarkdownListItemLine(line: string): MarkdownListItemLine | null {
+  const { content, indent } = markdownLineIndent(line);
+  const ordered = content.match(/^(\d+)\.\s+(.*)$/);
+  if (ordered) {
+    return {
+      indent,
+      kind: "ordered",
+      start: Number.parseInt(ordered[1] ?? "1", 10),
+      text: ordered[2] ?? "",
+    };
+  }
+  const bullet = content.match(/^[-*]\s+(.*)$/);
+  if (bullet) {
+    return {
+      indent,
+      kind: "bullet",
+      text: bullet[1] ?? "",
+    };
+  }
+  return null;
+}
+
 function matchMarkdownOrderedListItem(line: string): RegExpMatchArray | null {
+  const item = matchMarkdownListItemLine(line);
+  if (!item || item.kind !== "ordered" || item.indent > 3) {
+    return null;
+  }
   return line.match(/^\s{0,3}(\d+)\.\s+(.+)$/);
 }
 
 function matchMarkdownBulletListItem(line: string): RegExpMatchArray | null {
+  const item = matchMarkdownListItemLine(line);
+  if (!item || item.kind !== "bullet" || item.indent > 3) {
+    return null;
+  }
   return line.match(/^\s{0,3}[-*]\s+(.+)$/);
+}
+
+function markdownListMarker(
+  kind: MarkdownListKind,
+  index: number,
+  start = 1,
+): string {
+  return kind === "bullet" ? "- " : `${start + index}. `;
 }
 
 function isMarkdownThematicBreak(line: string): boolean {
@@ -557,15 +627,94 @@ function nextNonBlankLineIndex(lines: string[], index: number): number {
   return cursor;
 }
 
-function buildMarkdownListItem(text: string): JSONContent {
-  return {
-    type: "listItem",
-    content: [
+function tryParseMarkdownList(
+  lines: string[],
+  startIndex: number,
+  minIndent: number,
+): { nextIndex: number; node: JSONContent } | undefined {
+  const firstItem = matchMarkdownListItemLine(lines[startIndex] ?? "");
+  if (!firstItem || firstItem.indent < minIndent || firstItem.indent > minIndent + 3) {
+    return undefined;
+  }
+
+  const listIndent = firstItem.indent;
+  const kind = firstItem.kind;
+  const items: JSONContent[] = [];
+  let index = startIndex;
+
+  while (index < lines.length) {
+    const item = matchMarkdownListItemLine(lines[index] ?? "");
+    if (!item) {
+      const nextIndex = nextNonBlankLineIndex(lines, index);
+      if (nextIndex === index || nextIndex >= lines.length) {
+        break;
+      }
+      const peeked = matchMarkdownListItemLine(lines[nextIndex] ?? "");
+      if (peeked && peeked.kind === kind && peeked.indent === listIndent) {
+        index = nextIndex;
+        continue;
+      }
+      break;
+    }
+
+    if (item.indent !== listIndent || item.kind !== kind) {
+      break;
+    }
+
+    const itemContent: JSONContent[] = [
       {
         type: "paragraph",
-        content: parseInlineMarkdown(text),
+        content: parseInlineMarkdown(item.text),
       },
-    ],
+    ];
+    index += 1;
+
+    while (index < lines.length) {
+      let nested = tryParseMarkdownList(lines, index, listIndent + 1);
+      if (!nested) {
+        const nextIndex = nextNonBlankLineIndex(lines, index);
+        if (nextIndex === index || nextIndex >= lines.length) {
+          break;
+        }
+        nested = tryParseMarkdownList(lines, nextIndex, listIndent + 1);
+        if (!nested) {
+          break;
+        }
+      }
+      if (nested.nextIndex <= index) {
+        break;
+      }
+      itemContent.push(nested.node);
+      index = nested.nextIndex;
+    }
+
+    items.push({
+      type: "listItem",
+      content: itemContent,
+    });
+  }
+
+  if (items.length === 0) {
+    return undefined;
+  }
+
+  if (kind === "ordered") {
+    return {
+      nextIndex: index,
+      node: {
+        type: "orderedList",
+        attrs: { start: firstItem.start ?? 1 },
+        content: items,
+      },
+    };
+  }
+
+  return {
+    nextIndex: index,
+    node: {
+      type: "bulletList",
+      content: items,
+    },
   };
 }
 
@@ -944,59 +1093,10 @@ function buildMarkdownTiptapContent(value: string): JSONContent {
       continue;
     }
 
-    const orderedListItem = matchMarkdownOrderedListItem(line);
-    if (orderedListItem) {
-      const start = Number.parseInt(orderedListItem[1] ?? "1", 10);
-      const items: JSONContent[] = [];
-      while (index < lines.length) {
-        const currentLine = lines[index] ?? "";
-        const currentItem = matchMarkdownOrderedListItem(currentLine);
-        if (!currentItem) {
-          const nextIndex = nextNonBlankLineIndex(lines, index);
-          if (
-            nextIndex !== index &&
-            matchMarkdownOrderedListItem(lines[nextIndex] ?? "") !== null
-          ) {
-            index = nextIndex;
-            continue;
-          }
-          break;
-        }
-        items.push(buildMarkdownListItem(currentItem[2] ?? ""));
-        index += 1;
-      }
-      content.push({
-        type: "orderedList",
-        attrs: { start },
-        content: items,
-      });
-      continue;
-    }
-
-    const bulletListItem = matchMarkdownBulletListItem(line);
-    if (bulletListItem) {
-      const items: JSONContent[] = [];
-      while (index < lines.length) {
-        const currentLine = lines[index] ?? "";
-        const currentItem = matchMarkdownBulletListItem(currentLine);
-        if (!currentItem) {
-          const nextIndex = nextNonBlankLineIndex(lines, index);
-          if (
-            nextIndex !== index &&
-            matchMarkdownBulletListItem(lines[nextIndex] ?? "") !== null
-          ) {
-            index = nextIndex;
-            continue;
-          }
-          break;
-        }
-        items.push(buildMarkdownListItem(currentItem[1] ?? ""));
-        index += 1;
-      }
-      content.push({
-        type: "bulletList",
-        content: items,
-      });
+    const parsedList = tryParseMarkdownList(lines, index, 0);
+    if (parsedList) {
+      content.push(parsedList.node);
+      index = parsedList.nextIndex;
       continue;
     }
 
@@ -1236,18 +1336,19 @@ function appendMarkdownInlineContent(
 function appendMarkdownListItem(
   node: ProseMirrorNode,
   state: TiptapReadState,
+  indent: string,
 ): void {
   let wroteFirstBlock = false;
   node.forEach((child) => {
     if (wroteFirstBlock) {
-      state.value += "\n  ";
+      state.value += `\n${indent}`;
     }
     wroteFirstBlock = true;
     if (child.type.name === "paragraph") {
       appendMarkdownInlineContent(child, state);
       return;
     }
-    appendMarkdownBlock(child, state, 0);
+    appendMarkdownBlock(child, state, 0, indent);
   });
 }
 
@@ -1255,9 +1356,10 @@ function appendMarkdownBlock(
   node: ProseMirrorNode,
   state: TiptapReadState,
   index: number,
+  indent = "",
 ): void {
   if (index > 0) {
-    state.value += "\n\n";
+    state.value += `\n\n${indent}`;
   }
 
   if (node.type.name === "paragraph") {
@@ -1286,10 +1388,11 @@ function appendMarkdownBlock(
   if (node.type.name === "bulletList") {
     node.forEach((child, _offset, listIndex) => {
       if (listIndex > 0) {
-        state.value += "\n";
+        state.value += `\n${indent}`;
       }
-      state.value += "- ";
-      appendMarkdownListItem(child, state);
+      const marker = markdownListMarker("bullet", listIndex);
+      state.value += marker;
+      appendMarkdownListItem(child, state, indent + " ".repeat(marker.length));
     });
     return;
   }
@@ -1298,10 +1401,11 @@ function appendMarkdownBlock(
     const start = typeof node.attrs.start === "number" ? node.attrs.start : 1;
     node.forEach((child, _offset, listIndex) => {
       if (listIndex > 0) {
-        state.value += "\n";
+        state.value += `\n${indent}`;
       }
-      state.value += `${start + listIndex}. `;
-      appendMarkdownListItem(child, state);
+      const marker = markdownListMarker("ordered", listIndex, start);
+      state.value += marker;
+      appendMarkdownListItem(child, state, indent + " ".repeat(marker.length));
     });
     return;
   }
@@ -1689,27 +1793,57 @@ function getCodeBlockMarkdownParts(node: ProseMirrorNode): {
   };
 }
 
+function getMarkdownListIndent(doc: ProseMirrorNode, pos: number): string {
+  const $pos = doc.resolve(pos);
+  let indent = "";
+  for (let depth = 1; depth <= $pos.depth; depth += 1) {
+    const ancestor = $pos.node(depth);
+    if (ancestor.type.name !== "listItem") {
+      continue;
+    }
+    const list = $pos.node(depth - 1);
+    if (list.type.name !== "bulletList" && list.type.name !== "orderedList") {
+      continue;
+    }
+    const start = typeof list.attrs.start === "number" ? list.attrs.start : 1;
+    indent += " ".repeat(
+      markdownListMarker(
+        list.type.name === "bulletList" ? "bullet" : "ordered",
+        $pos.index(depth - 1),
+        start,
+      ).length,
+    );
+  }
+  return indent;
+}
+
 function getMarkdownBlockPrefixLength(
   node: ProseMirrorNode,
   parent: ProseMirrorNode | null,
   childIndex: number,
+  doc: ProseMirrorNode,
+  pos: number,
 ): number {
   if (parent?.type.name === "doc" && node.type.name === "heading") {
     const level = typeof node.attrs.level === "number" ? node.attrs.level : 1;
     return `${"#".repeat(Math.min(Math.max(level, 1), 6))} `.length;
   }
 
+  const indent = getMarkdownListIndent(doc, pos);
+
   if (parent?.type.name === "bulletList" && node.type.name === "listItem") {
-    return `${childIndex > 0 ? "\n" : ""}- `.length;
+    const marker = markdownListMarker("bullet", childIndex);
+    return childIndex > 0 ? `\n${indent}${marker}`.length : marker.length;
   }
 
   if (parent?.type.name === "orderedList" && node.type.name === "listItem") {
     const start = typeof parent.attrs.start === "number" ? parent.attrs.start : 1;
-    return `${childIndex > 0 ? "\n" : ""}${start + childIndex}. `.length;
+    const marker = markdownListMarker("ordered", childIndex, start);
+    return childIndex > 0 ? `\n${indent}${marker}`.length : marker.length;
   }
 
   if (parent?.type.name === "listItem" && childIndex > 0) {
-    return "\n  ".length;
+    return `\n${indent}`.length;
   }
 
   return 0;
@@ -1763,7 +1897,13 @@ function getDraftIndexAtPosition(
     }
 
     if (mode === "markdown") {
-      const prefixLength = getMarkdownBlockPrefixLength(node, parent, childIndex);
+      const prefixLength = getMarkdownBlockPrefixLength(
+        node,
+        parent,
+        childIndex,
+        editor.state.doc,
+        pos,
+      );
       if (prefixLength > 0) {
         if (position <= pos + 1) {
           index += prefixLength;
@@ -1870,7 +2010,13 @@ function getPositionAtDraftIndex(
     }
 
     if (mode === "markdown") {
-      const prefixLength = getMarkdownBlockPrefixLength(node, parent, childIndex);
+      const prefixLength = getMarkdownBlockPrefixLength(
+        node,
+        parent,
+        childIndex,
+        editor.state.doc,
+        pos,
+      );
       if (prefixLength > 0) {
         if (draftIndex <= index + prefixLength) {
           position = pos + 1;
