@@ -6072,6 +6072,9 @@ function isEligibleForGeneratedTitle(
   if (isPromptPlaceholderTitle(thread.title, prompt)) {
     return true;
   }
+  if (isGenericPlaceholderTitle(thread.title)) {
+    return true;
+  }
   if (thread.titleSource === "explicit") {
     return false;
   }
@@ -6084,10 +6087,6 @@ function isEligibleForGeneratedTitle(
       isAcpFallbackPlaceholderTitle(thread.title)
     );
   }
-  if (isGenericPlaceholderTitle(thread.title)) {
-    return true;
-  }
-
   const derivedTitle = shortenDerivedThreadTitle(prompt) ?? prompt;
   return normalizeTitleForComparison(thread.title) === normalizeTitleForComparison(derivedTitle);
 }
