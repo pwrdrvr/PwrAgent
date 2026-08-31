@@ -6772,6 +6772,12 @@ function hasTokenMiserModelGuidance(
 const TOKEN_MISER_MANAGED_CAPABILITY_REASON =
   "Managed Codex runtime lacks the complete Token Miser activation and deferred-completion capability contract.";
 
+function hasTokenMiserActivationTransport(
+  capabilities: CodexServerCapabilities | undefined,
+): boolean {
+  return capabilities?.pwrdrvrTokenMiser?.version === 1;
+}
+
 function hasManagedTokenMiserCapabilityContract(
   capabilities: CodexServerCapabilities | undefined,
 ): boolean {
@@ -19898,10 +19904,15 @@ export class DesktopBackendRegistry {
     const capabilities = await this.readTokenMiserServerCapabilities(
       params.client,
     );
-    if (!hasManagedTokenMiserCapabilityContract(capabilities)) {
+    if (!hasTokenMiserActivationTransport(capabilities)) {
       return undefined;
     }
-    return params.enabled ? { version: 1, enabled: true } : null;
+    if (!params.enabled) {
+      return null;
+    }
+    return hasManagedTokenMiserCapabilityContract(capabilities)
+      ? { version: 1, enabled: true }
+      : undefined;
   }
 
   private buildCodexParentDynamicTools(

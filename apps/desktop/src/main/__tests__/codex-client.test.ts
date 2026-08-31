@@ -1483,7 +1483,6 @@ describe("CodexAppServerClient", () => {
         descriptorEnvironmentVariable:
           "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
         descriptorVersion: 1,
-        codeModeNestedPostToolUse: true,
       },
       codeModeOutputReducer: {
         deferredCompletion: {
@@ -1497,6 +1496,16 @@ describe("CodexAppServerClient", () => {
       },
     };
     await expect(client.readServerCapabilities()).resolves.toEqual({
+      pwrdrvrTokenMiser: {
+        version: 1,
+        identity: "pwrdrvr.pwragent.token-miser",
+        initializeCapabilityField: "pwrdrvrTokenMiser",
+        threadStartField: "pwrdrvrTokenMiser",
+        threadResumeField: "pwrdrvrTokenMiser",
+        descriptorEnvironmentVariable:
+          "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+        descriptorVersion: 1,
+      },
       codeModeOutputReducer: {
         deferredCompletion: {
           version: 1,

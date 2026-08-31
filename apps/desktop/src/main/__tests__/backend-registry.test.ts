@@ -3909,6 +3909,76 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("preserves explicit disable for incomplete native Token Miser runtimes", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: {
+        pwrdrvrTokenMiser: {
+          version: 1,
+          identity: "pwrdrvr.pwragent.token-miser",
+          initializeCapabilityField: "pwrdrvrTokenMiser",
+          threadStartField: "pwrdrvrTokenMiser",
+          threadResumeField: "pwrdrvrTokenMiser",
+          descriptorEnvironmentVariable:
+            "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+          descriptorVersion: 1,
+        },
+        codeModeOutputReducer: {
+          intentContextVersion: 1,
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
+          postToolUseField: "parent_intent",
+          protocolVersion: 1,
+          reducerRequestField: "parent_intent",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-off": {
+            backend: "codex",
+            threadId: "thread-off",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            tokenMiserEnabled: false,
+          },
+        },
+      }),
+      resolveManagedTokenMiserActivationRequired: () => true,
+    });
+    const internals = registry as unknown as {
+      prepareTokenMiserRuntime: () => Promise<void>;
+      resolveTokenMiserEnabledFn: () => boolean;
+    };
+    internals.resolveTokenMiserEnabledFn = () => true;
+    vi.spyOn(internals, "prepareTokenMiserRuntime").mockResolvedValue(undefined);
+
+    try {
+      await registry.startThread({ backend: "codex", cwd: process.cwd() });
+      expect(
+        codexClient.lastStartThreadParams?.pwrdrvrTokenMiser,
+      ).toBeUndefined();
+
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-off",
+        input: [{ type: "text", text: "Keep this thread opted out." }],
+      });
+      expect(codexClient.lastStartTurnParams?.pwrdrvrTokenMiser).toBeNull();
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("does not install the legacy plugin when native activation is negotiated", async () => {
     const codexClient = new MockBackendClient({
       threads: [],

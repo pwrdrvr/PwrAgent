@@ -298,7 +298,7 @@ export type CodexServerCapabilities = {
     descriptorEnvironmentVariable:
       "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH";
     descriptorVersion: 1;
-    codeModeNestedPostToolUse: false;
+    codeModeNestedPostToolUse?: false;
   };
   codeModeOutputReducer?: {
     actionableState?: {
@@ -7343,7 +7343,7 @@ export class CodexAppServerClient {
     const exactOutput = asRecord(outputReducer?.postToolUseExactOutput);
     const deferredCompletion = asRecord(outputReducer?.deferredCompletion);
     const managedTokenMiser = asRecord(result?.pwrdrvrTokenMiser);
-    const hasManagedTokenMiserContract =
+    const hasManagedTokenMiserActivationTransport =
       managedTokenMiser?.version === 1
       && managedTokenMiser.identity === "pwrdrvr.pwragent.token-miser"
       && managedTokenMiser.initializeCapabilityField === "pwrdrvrTokenMiser"
@@ -7351,14 +7351,13 @@ export class CodexAppServerClient {
       && managedTokenMiser.threadResumeField === "pwrdrvrTokenMiser"
       && managedTokenMiser.descriptorEnvironmentVariable
         === "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH"
-      && managedTokenMiser.descriptorVersion === 1
-      && managedTokenMiser.codeModeNestedPostToolUse === false;
+      && managedTokenMiser.descriptorVersion === 1;
     const dynamicToolsResumeField =
       outputReducer?.dynamicToolsResumeField === "dynamicTools"
         ? "dynamicTools"
         : undefined;
 
-    const managedCapability = hasManagedTokenMiserContract
+    const managedCapability = hasManagedTokenMiserActivationTransport
       ? {
           pwrdrvrTokenMiser: {
             version: 1 as const,
@@ -7369,7 +7368,9 @@ export class CodexAppServerClient {
             descriptorEnvironmentVariable:
               "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH" as const,
             descriptorVersion: 1 as const,
-            codeModeNestedPostToolUse: false as const,
+            ...(managedTokenMiser.codeModeNestedPostToolUse === false
+              ? { codeModeNestedPostToolUse: false as const }
+              : {}),
           },
         }
       : {};
