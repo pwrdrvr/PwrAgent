@@ -335,6 +335,18 @@ export const SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL =
 export const SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL =
   "settings:open-slack-create-app";
 /**
+ * Inspect the Discord bot's effective permissions for a selected guild channel.
+ * The main process reads the bot token and returns only permission booleans.
+ */
+export const SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL =
+  "settings:inspect-discord-thread-permissions";
+/**
+ * Build the Discord OAuth authorization request containing PwrAgent's
+ * suggested thread-reply permissions and optionally open it in the OS browser.
+ */
+export const SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL =
+  "settings:open-discord-thread-permission";
+/**
  * Fired main → renderer whenever the messaging store has had bindings or
  * default Agent assignments created, changed, or revoked. The
  * payload is intentionally minimal — receivers should refetch the

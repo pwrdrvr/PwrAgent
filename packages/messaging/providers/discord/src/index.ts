@@ -7,6 +7,7 @@ export type {
   DiscordInteractionResponseRequest,
   DiscordMessage,
   DiscordProviderLogger,
+  DiscordThreadChannel,
 } from "./discord-adapter.ts";
 export type {
   DiscordApplicationCommand,
@@ -24,3 +25,12 @@ export {
 } from "./discord-formatting.ts";
 export type { DiscordMessagingConfig } from "./discord-config.ts";
 export { validateCredentials } from "./validate-credentials.ts";
+export {
+  buildDiscordThreadPermissionRequestUrl,
+  DISCORD_THREAD_REPLY_PERMISSIONS,
+  inspectDiscordThreadPermissions,
+} from "./thread-permissions.ts";
+export type {
+  DiscordThreadPermissionInspection,
+  DiscordThreadReplyPermissionId,
+} from "./thread-permissions.ts";

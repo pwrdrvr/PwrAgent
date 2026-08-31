@@ -28,8 +28,13 @@ import type {
   MessagingImagePart,
   MessagingInboundEvent,
   MessagingInboundRejectedListener,
+  MessagingManagedConversationCreateRequest,
+  MessagingManagedConversationCreateResult,
+  MessagingManagedConversationRightsRequest,
+  MessagingManagedConversationRightsResult,
   MessagingRateLimitInfo,
   MessagingCallbackHandleStore,
+  MessagingChannelRef,
   MessagingRejectedInboundEvent,
   MessagingClientRateLimitStrategy,
   MessagingSurfaceAction,
@@ -64,6 +69,10 @@ import {
   validateDiscordSnowflake,
   type DiscordIdentifierField,
 } from "./validate-ids.ts";
+import {
+  inspectDiscordThreadPermissionsWithRest,
+  type DiscordThreadPermissionInspection,
+} from "./thread-permissions.ts";
 
 const DISCORD_DEFAULT_TYPING_SIGNAL_LEASE_MS = 15_000;
 const DISCORD_TYPING_SIGNAL_INTERVAL_MS = 4_000;
@@ -124,6 +133,12 @@ export type DiscordMessage = {
   content?: string;
   guild_id?: string;
   id: string;
+};
+
+export type DiscordThreadChannel = {
+  id: string;
+  name?: string;
+  parent_id?: string;
 };
 
 export type DiscordUser = {
@@ -209,8 +224,17 @@ export type DiscordGuildInfo = {
 };
 
 export type DiscordApi = DiscordApplicationCommandApi & {
+  createThreadFromMessage(
+    channelId: string,
+    messageId: string,
+    request: { name: string },
+  ): Promise<DiscordThreadChannel>;
   getChannel(channelId: string): Promise<DiscordChannelInfo>;
   getGuild(guildId: string): Promise<DiscordGuildInfo>;
+  getThreadPermissions(request: {
+    channelId: string;
+    guildId: string;
+  }): Promise<DiscordThreadPermissionInspection>;
   updateChannelName(channelId: string, request: { name: string }): Promise<void>;
   createInteractionResponse(
     interactionId: string,
@@ -264,6 +288,12 @@ export type DiscordProviderAdapter = {
   setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
+  getManagedConversationRights?(
+    request: MessagingManagedConversationRightsRequest,
+  ): Promise<MessagingManagedConversationRightsResult>;
+  createManagedConversation?(
+    request: MessagingManagedConversationCreateRequest,
+  ): Promise<MessagingManagedConversationCreateResult>;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
   start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop?(): Promise<void>;
@@ -783,6 +813,167 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
   }
 
+  async getManagedConversationRights(
+    request: MessagingManagedConversationRightsRequest,
+  ): Promise<MessagingManagedConversationRightsResult> {
+    const conversation = request.channel.conversation;
+    const target = discordManagedThreadTarget(request.channel, request.routingState);
+    if (!target) {
+      return {
+        channel: this.channel,
+        conversation,
+        operations: [
+          {
+            operation: "create_child",
+            reason: discordManagedThreadUnsupportedReason(request.channel),
+            supported: false,
+          },
+        ],
+        outcome: "unsupported",
+        updatedAt: this.now(),
+      };
+    }
+
+    try {
+      const inspection = await this.api.getThreadPermissions(target);
+      if (inspection.status !== "ok") {
+        return {
+          channel: this.channel,
+          conversation,
+          errorMessage: inspection.errorMessage
+            ?? "Discord could not inspect the bot's channel permissions.",
+          operations: [
+            {
+              operation: "create_child",
+              reason: inspection.errorMessage
+                ?? "Discord could not inspect the bot's channel permissions.",
+              supported: false,
+            },
+          ],
+          outcome: "failed",
+          updatedAt: this.now(),
+        };
+      }
+      const missingPermission = inspection.permissions.find(
+        (permission) =>
+          !permission.granted
+          && (
+            permission.id === "create_public_threads"
+            || permission.id === "send_messages"
+            || permission.id === "send_messages_in_threads"
+            || permission.id === "view_channel"
+          ),
+      );
+      return {
+        channel: this.channel,
+        conversation,
+        operations: [
+          {
+            operation: "create_child",
+            ...(missingPermission
+              ? { missingPermission: missingPermission.label }
+              : {}),
+            supported: !missingPermission,
+          },
+        ],
+        outcome: "ok",
+        updatedAt: this.now(),
+      };
+    } catch (error) {
+      const message = errorMessage(error);
+      return {
+        channel: this.channel,
+        conversation,
+        errorMessage: message,
+        operations: [
+          {
+            operation: "create_child",
+            reason: message,
+            supported: false,
+          },
+        ],
+        outcome: "failed",
+        updatedAt: this.now(),
+      };
+    }
+  }
+
+  async createManagedConversation(
+    request: MessagingManagedConversationCreateRequest,
+  ): Promise<MessagingManagedConversationCreateResult> {
+    const target = discordManagedThreadTarget(request.parent, request.routingState);
+    if (!target) {
+      return {
+        channel: this.channel,
+        errorMessage: discordManagedThreadUnsupportedReason(request.parent),
+        outcome: "unsupported",
+        updatedAt: this.now(),
+      };
+    }
+
+    const rights = await this.getManagedConversationRights({
+      actor: request.actor,
+      channel: request.parent,
+      routingState: request.routingState,
+    });
+    const createChild = rights.operations.find(
+      (operation) => operation.operation === "create_child",
+    );
+    if (!createChild?.supported) {
+      return {
+        channel: this.channel,
+        errorMessage: createChild?.missingPermission
+          ? `Discord bot is missing ${createChild.missingPermission} in this channel.`
+          : (rights.errorMessage ?? createChild?.reason ?? "Discord thread creation is unavailable."),
+        outcome: createChild?.missingPermission || rights.outcome === "failed"
+          ? "failed"
+          : "unsupported",
+        updatedAt: this.now(),
+      };
+    }
+
+    try {
+      const thread = await this.api.createThreadFromMessage(target.channelId, target.messageId, {
+        name: sanitizeDiscordThreadName(request.title),
+      });
+      return {
+        channel: this.channel,
+        conversation: {
+          id: thread.id,
+          kind: "thread",
+          parentId: target.guildId,
+          parentConversationId: request.parent.conversation.id,
+          parentConversationParentId: target.guildId,
+          ...(request.parent.conversation.workspaceId
+            ? { workspaceId: request.parent.conversation.workspaceId }
+            : {}),
+          ...(request.parent.conversation.title
+            ? { parentTitle: request.parent.conversation.title }
+            : {}),
+          title: thread.name ?? sanitizeDiscordThreadName(request.title),
+        },
+        outcome: "created",
+        routingState: {
+          opaque: {
+            channelId: thread.id,
+            guildId: target.guildId,
+            isThread: true,
+            parentChannelId: target.channelId,
+            parentMessageId: target.messageId,
+          },
+        },
+        updatedAt: this.now(),
+      };
+    } catch (error) {
+      return {
+        channel: this.channel,
+        errorMessage: errorMessage(error),
+        outcome: "failed",
+        updatedAt: this.now(),
+      };
+    }
+  }
+
   async handleGatewayEvent(event: DiscordGatewayEvent): Promise<void> {
     if (event.t === "MESSAGE_CREATE") {
       await this.handleMessageCreate(event.d);
@@ -840,6 +1031,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const routingState = this.routingStateFromDiscord(message.channel_id, message.guild_id, {
       channelType: message.channel_type,
       isThread: message.is_thread,
+      messageId: message.id,
     });
     const sourceUrl = discordConversationUrl({
       channelId: message.channel_id,
@@ -1827,6 +2019,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       channelType?: number;
       interactionToken?: string;
       isThread?: boolean;
+      messageId?: string;
     },
   ): MessagingAdapterState {
     return {
@@ -1839,6 +2032,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         guildId: guildId ?? null,
         interactionToken: options?.interactionToken ?? null,
         isThread: options?.isThread ?? null,
+        messageId: options?.messageId ?? null,
       },
     };
   }
@@ -2087,6 +2281,17 @@ class DiscordRestApi implements DiscordApi {
     return { id: raw.id, name: raw.name ?? undefined };
   }
 
+  async getThreadPermissions(request: {
+    channelId: string;
+    guildId: string;
+  }): Promise<DiscordThreadPermissionInspection> {
+    return inspectDiscordThreadPermissionsWithRest({
+      channelId: request.channelId,
+      guildId: request.guildId,
+      rest: this.rest,
+    });
+  }
+
   async createMessage(
     channelId: string,
     request: DiscordCreateMessageRequest,
@@ -2099,6 +2304,17 @@ class DiscordRestApi implements DiscordApi {
         name: file.name,
       })),
     })) as DiscordMessage;
+  }
+
+  async createThreadFromMessage(
+    channelId: string,
+    messageId: string,
+    request: { name: string },
+  ): Promise<DiscordThreadChannel> {
+    return (await this.rest.post(
+      `/channels/${channelId}/messages/${messageId}/threads`,
+      { body: request },
+    )) as DiscordThreadChannel;
   }
 
   async updateChannelName(
@@ -2460,24 +2676,63 @@ function discordConversationUrl(params: {
 function isDiscordThreadConversation(
   request: MessagingConversationTitleUpdateRequest,
 ): boolean {
-  if (request.channel.conversation.kind === "thread") {
+  return isDiscordThreadChannel(request.channel, request.routingState);
+}
+
+function discordManagedThreadTarget(
+  channel: MessagingChannelRef,
+  routingState: MessagingAdapterState | undefined,
+): { channelId: string; guildId: string; messageId: string } | undefined {
+  if (isDiscordThreadChannel(channel, routingState)) {
+    return undefined;
+  }
+  const opaque = discordRoutingOpaque(routingState);
+  const channelId = channel.conversation.id;
+  const guildId = channel.conversation.workspaceId;
+  const messageId = opaque?.messageId;
+  if (
+    typeof guildId !== "string"
+    || typeof messageId !== "string"
+    || !validateDiscordSnowflake(channelId).ok
+    || !validateDiscordSnowflake(guildId).ok
+    || !validateDiscordSnowflake(messageId).ok
+    || (typeof opaque?.channelId === "string" && opaque.channelId !== channelId)
+    || (typeof opaque?.guildId === "string" && opaque.guildId !== guildId)
+  ) {
+    return undefined;
+  }
+  return { channelId, guildId, messageId };
+}
+
+function discordManagedThreadUnsupportedReason(channel: MessagingChannelRef): string {
+  return channel.conversation.kind === "thread"
+    ? "Discord does not support nested threads."
+    : "Discord thread creation needs the source message in a guild text channel.";
+}
+
+function isDiscordThreadChannel(
+  channel: MessagingChannelRef,
+  routingState: MessagingAdapterState | undefined,
+): boolean {
+  if (channel.conversation.kind === "thread") {
     return true;
   }
-
-  const opaque = request.routingState?.opaque;
-  if (!opaque || typeof opaque !== "object" || Array.isArray(opaque)) {
-    return false;
-  }
-
-  if (opaque.isThread === true) {
-    return true;
-  }
-
+  const opaque = discordRoutingOpaque(routingState);
   return (
-    opaque.channelType === 10 ||
-    opaque.channelType === 11 ||
-    opaque.channelType === 12
+    opaque?.isThread === true
+    || opaque?.channelType === 10
+    || opaque?.channelType === 11
+    || opaque?.channelType === 12
   );
+}
+
+function discordRoutingOpaque(
+  routingState: MessagingAdapterState | undefined,
+): Record<string, unknown> | undefined {
+  const opaque = routingState?.opaque;
+  return opaque && typeof opaque === "object" && !Array.isArray(opaque)
+    ? opaque
+    : undefined;
 }
 
 function sanitizeDiscordThreadName(title: string): string {

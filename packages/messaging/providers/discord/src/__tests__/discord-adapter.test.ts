@@ -437,6 +437,169 @@ describe("discord adapter", () => {
     expect(updateChannelName).toHaveBeenCalledTimes(1);
   });
 
+  it("creates a public Discord thread from the inbound source message", async () => {
+    const createThreadFromMessage = vi.fn(async () => ({
+      id: "1480556454498009358",
+      name: "Investigate reply support",
+    }));
+    const getThreadPermissions = vi.fn(async () => ({
+      botId: "1480556454498009351",
+      channelId: TEST_CHANNEL_ID,
+      checkedAt: 0,
+      durationMs: 0,
+      guildId: TEST_GUILD_ID,
+      permissions: [
+        {
+          granted: true,
+          id: "view_channel" as const,
+          label: "View Channel",
+        },
+        {
+          granted: true,
+          id: "send_messages" as const,
+          label: "Send Messages",
+        },
+        {
+          granted: true,
+          id: "create_public_threads" as const,
+          label: "Create Public Threads",
+        },
+        {
+          granted: true,
+          id: "send_messages_in_threads" as const,
+          label: "Send Messages in Threads",
+        },
+      ],
+      status: "ok" as const,
+    }));
+    const adapter = new DiscordAdapter({
+      api: createApi({ createThreadFromMessage, getThreadPermissions }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      now: () => 1234,
+    });
+    const parent = {
+      channel: "discord" as const,
+      conversation: {
+        id: TEST_CHANNEL_ID,
+        kind: "channel" as const,
+        workspaceId: TEST_GUILD_ID,
+      },
+    };
+    const routingState = {
+      opaque: {
+        channelId: TEST_CHANNEL_ID,
+        guildId: TEST_GUILD_ID,
+        isThread: false,
+        messageId: TEST_MESSAGE_ID,
+      },
+    };
+
+    await expect(adapter.getManagedConversationRights({
+      channel: parent,
+      routingState,
+    })).resolves.toMatchObject({
+      operations: [{ operation: "create_child", supported: true }],
+      outcome: "ok",
+    });
+    await expect(adapter.createManagedConversation({
+      parent,
+      routingState,
+      title: "Investigate reply support",
+    })).resolves.toMatchObject({
+      conversation: {
+        id: "1480556454498009358",
+        kind: "thread",
+        parentConversationId: TEST_CHANNEL_ID,
+      },
+      outcome: "created",
+      routingState: {
+        opaque: {
+          channelId: "1480556454498009358",
+          guildId: TEST_GUILD_ID,
+          isThread: true,
+          parentChannelId: TEST_CHANNEL_ID,
+          parentMessageId: TEST_MESSAGE_ID,
+        },
+      },
+    });
+    expect(createThreadFromMessage).toHaveBeenCalledWith(
+      TEST_CHANNEL_ID,
+      TEST_MESSAGE_ID,
+      { name: "Investigate reply support" },
+    );
+  });
+
+  it("reports the missing Discord thread permission before creating a thread", async () => {
+    const createThreadFromMessage = vi.fn();
+    const adapter = new DiscordAdapter({
+      api: createApi({
+        createThreadFromMessage,
+        getThreadPermissions: async ({ channelId, guildId }) => ({
+          channelId,
+          checkedAt: 0,
+          durationMs: 0,
+          guildId,
+          permissions: [
+            {
+              granted: true,
+              id: "view_channel",
+              label: "View Channel",
+            },
+            {
+              granted: true,
+              id: "send_messages",
+              label: "Send Messages",
+            },
+            {
+              granted: false,
+              id: "create_public_threads",
+              label: "Create Public Threads",
+            },
+            {
+              granted: true,
+              id: "send_messages_in_threads",
+              label: "Send Messages in Threads",
+            },
+          ],
+          status: "ok",
+        }),
+      }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      now: () => 1234,
+    });
+
+    await expect(adapter.createManagedConversation({
+      parent: {
+        channel: "discord",
+        conversation: {
+          id: TEST_CHANNEL_ID,
+          kind: "channel",
+          workspaceId: TEST_GUILD_ID,
+        },
+      },
+      routingState: {
+        opaque: {
+          channelId: TEST_CHANNEL_ID,
+          guildId: TEST_GUILD_ID,
+          messageId: TEST_MESSAGE_ID,
+        },
+      },
+      title: "Investigate reply support",
+    })).resolves.toMatchObject({
+      errorMessage: "Discord bot is missing Create Public Threads in this channel.",
+      outcome: "failed",
+    });
+    expect(createThreadFromMessage).not.toHaveBeenCalled();
+  });
+
   it("sends file message intents as Discord upload files", async () => {
     const createMessage = vi.fn(async (channelId: string) => ({
       channel_id: channelId,
@@ -1145,14 +1308,15 @@ describe("discord adapter", () => {
       adapter.onInboundRejected((event) => {
         rejectedEvents.push(event);
       });
+      const inboundMessage = messageDispatch({
+        authorBot: false,
+        content: "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
+        id: "pairing-msg",
+      });
       await gateway.emit({
         op: 0,
         t: "MESSAGE_CREATE",
-        d: messageDispatch({
-          authorBot: false,
-          content: "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
-          id: "pairing-msg",
-        }),
+        d: inboundMessage,
       });
 
       expect(events).toEqual([
@@ -1165,6 +1329,11 @@ describe("discord adapter", () => {
             }),
           }),
           kind: "text",
+          routingState: expect.objectContaining({
+            opaque: expect.objectContaining({
+              messageId: inboundMessage.id,
+            }),
+          }),
           text: "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
         }),
       ]);
@@ -2047,9 +2216,42 @@ function createApi(overrides: Partial<DiscordApi> = {}): DiscordApi {
       channel_id: channelId,
       id: "message-2",
     }),
+    createThreadFromMessage: async () => ({
+      id: "thread-1",
+    }),
     deleteApplicationCommand: async () => {},
     getChannel: async (id: string) => ({ id }),
     getGuild: async (id: string) => ({ id }),
+    getThreadPermissions: async ({ channelId, guildId }) => ({
+      botId: "123456789012345678",
+      channelId,
+      checkedAt: 0,
+      durationMs: 0,
+      guildId,
+      permissions: [
+        {
+          granted: true,
+          id: "view_channel",
+          label: "View Channel",
+        },
+        {
+          granted: true,
+          id: "send_messages",
+          label: "Send Messages",
+        },
+        {
+          granted: true,
+          id: "create_public_threads",
+          label: "Create Public Threads",
+        },
+        {
+          granted: true,
+          id: "send_messages_in_threads",
+          label: "Send Messages in Threads",
+        },
+      ],
+      status: "ok",
+    }),
     listApplicationCommands: async () => [],
     pinMessage: async () => {},
     sendTyping: async () => {},

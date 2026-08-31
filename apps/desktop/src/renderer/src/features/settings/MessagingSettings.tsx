@@ -45,6 +45,7 @@ import {
   type MessagingPairingEntry,
   type MessagingPairingScope,
   type MessagingToolUpdateMode,
+  type InspectDiscordThreadPermissionsResponse,
 } from "@pwragent/shared";
 import { DiscordIcon, FeishuIcon, LineIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
 import { copyText } from "../../lib/copy-text";
@@ -699,6 +700,12 @@ export function MessagingSettings(props: {
                 defaultSub="discord.com/api/v10"
               />
             }
+          />
+          <DiscordThreadPermissionsField
+            applicationId={discord.applicationId.value}
+            authorizedGuilds={discord.authorizedGuilds.value}
+            desktopApi={props.desktopApi}
+            disabled={props.saving}
           />
           <PairingTokenField
             desktopApi={props.desktopApi}
@@ -1879,6 +1886,157 @@ function configuredMessagingRoutePlatforms(
     messaging.feishu.appSecret.configured ? "feishu" : undefined,
     messaging.line.channelAccessToken.configured ? "line" : undefined,
   ].filter((platform): platform is MessagingChannelKind => Boolean(platform));
+}
+
+function DiscordThreadPermissionsField(props: {
+  applicationId: string;
+  authorizedGuilds: DesktopAuthorizedContact[];
+  desktopApi?: DesktopApi;
+  disabled: boolean;
+}) {
+  const [guildId, setGuildId] = useState(props.authorizedGuilds[0]?.id ?? "");
+  const [channelId, setChannelId] = useState("");
+  const [checking, setChecking] = useState(false);
+  const [requesting, setRequesting] = useState(false);
+  const [result, setResult] = useState<InspectDiscordThreadPermissionsResponse>();
+  const [notice, setNotice] = useState<string>();
+  const validGuild = validateDiscordSnowflake(guildId).ok;
+  const validChannel = validateDiscordSnowflake(channelId.trim()).ok;
+  const canCheck =
+    Boolean(props.desktopApi?.inspectDiscordThreadPermissions)
+    && validGuild
+    && validChannel
+    && !props.disabled
+    && !checking;
+  const canRequest =
+    Boolean(props.desktopApi?.openDiscordThreadPermissionRequest)
+    && validateDiscordSnowflake(props.applicationId).ok
+    && !props.disabled
+    && !requesting;
+
+  const checkPermissions = async () => {
+    if (!canCheck || !props.desktopApi?.inspectDiscordThreadPermissions) return;
+    setChecking(true);
+    setNotice(undefined);
+    try {
+      setResult(await props.desktopApi.inspectDiscordThreadPermissions({
+        channelId: channelId.trim(),
+        guildId,
+      }));
+    } catch (error) {
+      setResult(undefined);
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const requestPermissions = async () => {
+    if (!canRequest || !props.desktopApi?.openDiscordThreadPermissionRequest) return;
+    setRequesting(true);
+    setNotice(undefined);
+    try {
+      const opened = await props.desktopApi.openDiscordThreadPermissionRequest({
+        ...(validGuild ? { guildId } : {}),
+      });
+      setNotice(
+        opened.opened
+          ? "Opened Discord’s administrator authorization request."
+          : "Prepared the Discord administrator authorization request.",
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : String(error));
+    } finally {
+      setRequesting(false);
+    }
+  };
+
+  return (
+    <SettingsField
+      label="Thread replies"
+      sub="Create a public Discord thread from a selected message, then attach the PwrAgent thread to it."
+      help="Suggested: View Channel, Send Messages, Embed Links, Attach Files, Read Message History, Create Public Threads, and Send Messages in Threads. The check includes category and channel overrides. The authorization request does not request Administrator or Manage Threads."
+      control={
+        <>
+          <div className="settings-inline-actions">
+            <select
+              aria-label="Discord server for thread reply permissions"
+              className="settings-input"
+              disabled={props.disabled || props.authorizedGuilds.length === 0}
+              value={guildId}
+              onChange={(event) => {
+                setGuildId(event.currentTarget.value);
+                setResult(undefined);
+                setNotice(undefined);
+              }}
+            >
+              {props.authorizedGuilds.length === 0 ? (
+                <option value="">Add an authorized server first</option>
+              ) : null}
+              {props.authorizedGuilds.map((guild) => (
+                <option key={guild.id} value={guild.id}>
+                  {guild.displayName || guild.id}
+                </option>
+              ))}
+            </select>
+            <input
+              aria-label="Discord channel ID for thread reply permissions"
+              className="settings-input"
+              disabled={props.disabled}
+              placeholder="Channel ID"
+              value={channelId}
+              onChange={(event) => {
+                setChannelId(event.currentTarget.value);
+                setResult(undefined);
+                setNotice(undefined);
+              }}
+            />
+          </div>
+          <div className="settings-inline-actions">
+            <button
+              className="button button--secondary"
+              disabled={!canCheck}
+              type="button"
+              onClick={() => void checkPermissions()}
+            >
+              {checking ? "Checking…" : "Check permissions"}
+            </button>
+            <button
+              className="button button--secondary"
+              disabled={!canRequest}
+              type="button"
+              onClick={() => void requestPermissions()}
+            >
+              {requesting ? "Opening…" : "Request suggested permissions"}
+            </button>
+          </div>
+          {result?.status === "ok" ? (
+            <div className="settings-field__help" role="status">
+              {result.permissions.map((permission) => (
+                <span key={permission.id}>
+                  {permission.granted ? "Granted" : "Missing"}: {permission.label}
+                  {" · "}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {result?.status === "failed" ? (
+            <div className="settings-field__help" role="alert">
+              {result.errorMessage ?? "Discord could not check these permissions."}
+            </div>
+          ) : null}
+          {result?.status === "unset" ? (
+            <div className="settings-field__help" role="status">
+              Configure a Discord bot token before checking permissions.
+            </div>
+          ) : null}
+          {notice ? (
+            <div className="settings-field__help" role="status">{notice}</div>
+          ) : null}
+        </>
+      }
+    />
+  );
 }
 
 const TOOL_UPDATE_MODE_OPTIONS: Array<{

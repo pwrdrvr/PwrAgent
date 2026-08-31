@@ -4388,6 +4388,75 @@ describe("SettingsScreen", () => {
     });
   });
 
+  it("checks and requests the suggested Discord thread-reply permissions", async () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.discord.applicationId.value = "1480556454498009351";
+    snapshot.messaging.discord.authorizedGuilds.value = [
+      { id: "1480556454498009353", displayName: "PwrAgent test guild" },
+    ];
+    const inspectDiscordThreadPermissions = vi.fn(async () => ({
+      botId: "1480556454498009351",
+      channelId: "1480556454498009352",
+      checkedAt: 1,
+      durationMs: 1,
+      guildId: "1480556454498009353",
+      permissions: [
+        {
+          granted: true,
+          id: "create_public_threads" as const,
+          label: "Create Public Threads",
+        },
+        {
+          granted: false,
+          id: "send_messages_in_threads" as const,
+          label: "Send Messages in Threads",
+        },
+      ],
+      status: "ok" as const,
+    }));
+    const openDiscordThreadPermissionRequest = vi.fn(async () => ({
+      opened: true,
+      url: "https://discord.com/oauth2/authorize",
+    }));
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        desktopApi={{
+          inspectDiscordThreadPermissions,
+          openDiscordThreadPermissionRequest,
+        }}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.change(
+      screen.getByRole("textbox", {
+        name: "Discord channel ID for thread reply permissions",
+      }),
+      { target: { value: "1480556454498009352" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Check permissions" }));
+    await waitFor(() => {
+      expect(inspectDiscordThreadPermissions).toHaveBeenCalledWith({
+        channelId: "1480556454498009352",
+        guildId: "1480556454498009353",
+      });
+    });
+    expect(screen.getByText("Missing: Send Messages in Threads ·")).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Request suggested permissions" }),
+    );
+    await waitFor(() => {
+      expect(openDiscordThreadPermissionRequest).toHaveBeenCalledWith({
+        guildId: "1480556454498009353",
+      });
+    });
+  });
+
   it("shows a leftover Events API notice and persists Socket Mode", async () => {
     const snapshot = createSnapshot();
     snapshot.messaging.slack.inboundMode = { value: "events", source: "config" };
