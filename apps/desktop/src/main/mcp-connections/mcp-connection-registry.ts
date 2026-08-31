@@ -13,6 +13,11 @@ import {
 } from "../settings/toml-editor";
 
 const CONNECTIONS_TABLE = ["mcp_connections", "connections"] as const;
+// PwrSnap is synthesized rather than stored, so it has no row to carry an
+// `enabled` flag. A scalar beside the table records the one piece of PwrSnap
+// state the operator owns, without a phantom row that `create` and `remove`
+// would have to preserve on every rewrite.
+const PWRSNAP_ENABLED_PATH = ["mcp_connections", "pwrsnap_enabled"] as const;
 const CONNECTION_ID_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
 const PWRSNAP_SERVER_URL = "http://127.0.0.1:51729/mcp";
 
@@ -40,14 +45,63 @@ export class McpConnectionRegistry {
   }
 
   list(): McpConnectionRecord[] {
-    return [builtInPwrSnapConnection(), ...this.readStoredConnections()];
+    return [this.pwrSnapConnection(), ...this.readStoredConnections()];
   }
 
   get(connectionId: string): McpConnectionRecord | undefined {
     if (connectionId === PWRSNAP_MCP_CONNECTION_ID) {
-      return builtInPwrSnapConnection();
+      return this.pwrSnapConnection();
     }
     return this.list().find((connection) => connection.id === connectionId);
+  }
+
+  /**
+   * Park or restore a connection profile-wide.
+   *
+   * A disabled connection keeps its credentials and its authorization state;
+   * it is simply withheld from threads. That is the difference between this
+   * and `remove`, which discards the connection outright.
+   */
+  setEnabled(connectionId: string, enabled: boolean): McpConnectionRecord {
+    if (connectionId === PWRSNAP_MCP_CONNECTION_ID) {
+      this.writeScalar(PWRSNAP_ENABLED_PATH, enabled);
+      return this.pwrSnapConnection();
+    }
+    const current = this.readStoredConnections();
+    const target = current.find((connection) => connection.id === connectionId);
+    if (!target) {
+      throw new Error("That MCP connection no longer exists.");
+    }
+    if (target.enabled === enabled) return target;
+    const updated: McpConnectionRecord = {
+      ...target,
+      enabled,
+      updatedAt: this.now(),
+    };
+    this.writeStoredConnections(
+      current.map((connection) =>
+        connection.id === connectionId ? updated : connection,
+      ),
+    );
+    return updated;
+  }
+
+  private pwrSnapConnection(): McpConnectionRecord {
+    return { ...builtInPwrSnapConnection(), enabled: this.readPwrSnapEnabled() };
+  }
+
+  private readPwrSnapEnabled(): boolean {
+    if (!fs.existsSync(this.configPath)) return true;
+    const source = fs.readFileSync(this.configPath, "utf8");
+    const table = parseTomlTables(source, this.configPath).mcp_connections;
+    return (table as Record<string, unknown> | undefined)?.pwrsnap_enabled
+      !== false;
+  }
+
+  private writeScalar(path: readonly string[], value: boolean): void {
+    this.writeConfig((source) =>
+      applyTomlEdits(source, [{ op: "set", path, value }]),
+    );
   }
 
   create(input: {
@@ -104,15 +158,21 @@ export class McpConnectionRegistry {
   }
 
   private writeStoredConnections(connections: McpConnectionRecord[]): void {
+    this.writeConfig((source) =>
+      applyTomlEdits(source, [{
+        op: "setTableArray",
+        path: CONNECTIONS_TABLE,
+        value: connections.map(connectionToRow),
+      }]),
+    );
+  }
+
+  private writeConfig(edit: (source: string) => string): void {
     fs.mkdirSync(path.dirname(this.configPath), { recursive: true });
     const source = fs.existsSync(this.configPath)
       ? fs.readFileSync(this.configPath, "utf8")
       : "";
-    const next = applyTomlEdits(source, [{
-      op: "setTableArray",
-      path: CONNECTIONS_TABLE,
-      value: connections.map(connectionToRow),
-    }]);
+    const next = edit(source);
     if (next === source) return;
     const temporaryPath = `${this.configPath}.${process.pid}.mcp.tmp`;
     fs.writeFileSync(temporaryPath, next, "utf8");

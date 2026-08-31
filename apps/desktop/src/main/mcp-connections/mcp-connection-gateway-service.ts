@@ -133,6 +133,8 @@ export type McpConnectionGatewayServiceOptions = {
     "acquire" | "id" | "release" | "snapshot"
   > | null;
   brokerDiscovery?: McpConnectionBrokerDiscovery;
+  /** Profile-wide gateway switch; defaults to the desktop setting. */
+  gatewayEnabled?: () => boolean;
 };
 
 function resolveDefaultPwrSnapInstallPaths(): string[] {
@@ -305,6 +307,7 @@ export class McpConnectionGatewayService {
   private readonly openPath: (path: string) => Promise<string>;
   private readonly resolveInstallPaths: () => string[];
   private readonly settings: PwrSnapSettings;
+  private readonly gatewayEnabled: () => boolean;
   private readonly registry: McpConnectionRegistry;
   private readonly credentialVault: McpCredentialVault;
   private readonly leaseManager:
@@ -338,6 +341,17 @@ export class McpConnectionGatewayService {
     this.resolveInstallPaths =
       options.resolveInstallPaths ?? resolveDefaultPwrSnapInstallPaths;
     this.settings = options.settings ?? getDesktopSettingsService();
+    this.gatewayEnabled =
+      options.gatewayEnabled
+      ?? (() => {
+        try {
+          return getDesktopSettingsService().resolveMcpGatewayEnabled();
+        } catch {
+          // An unreadable config must not strand threads that already
+          // depend on a connection; the default is on.
+          return true;
+        }
+      });
     this.registry = options.registry ?? new McpConnectionRegistry();
     this.credentialVault =
       options.credentialVault
@@ -508,6 +522,33 @@ export class McpConnectionGatewayService {
     await this.coordinatorFor(connection).disconnect();
     if (connection.id === PWRSNAP_MCP_CONNECTION_ID) {
       await this.settings.clearPwrSnapMcpCredential();
+    }
+    return await this.connectionStatus(connection);
+  }
+
+  /**
+   * Park or restore a connection profile-wide.
+   *
+   * Disabling closes live sessions so a thread mid-flight stops using a
+   * connection the operator just withdrew, but leaves credentials intact so
+   * re-enabling does not force another browser authorization.
+   */
+  async setConnectionEnabled(
+    connectionId: string,
+    enabled: boolean,
+  ): Promise<McpConnectionStatus> {
+    const ownership = await this.ensureOwnerBroker();
+    if (!ownership.owned) {
+      return await this.requestOwnerBroker<McpConnectionStatus>(
+        ownership.holder,
+        "broker/set-enabled",
+        { connectionId, enabled },
+      );
+    }
+    this.requireConnection(connectionId);
+    const connection = this.registry.setEnabled(connectionId, enabled);
+    if (!enabled) {
+      await this.closeConnectionSessions(connectionId);
     }
     return await this.connectionStatus(connection);
   }
@@ -1004,10 +1045,40 @@ export class McpConnectionGatewayService {
     return this.resolveInstallPaths().find((candidate) => existsSync(candidate));
   }
 
+  /**
+   * Resolve a connection for management.
+   *
+   * Existence is the only test here. Availability deliberately is not: an
+   * operator must be able to re-enable, reauthorize, or remove a connection
+   * they have parked, and folding the `enabled` check into this lookup would
+   * make a disabled connection permanently unmanageable.
+   */
   private requireConnection(connectionId: string): McpConnectionRecord {
     const connection = this.registry.get(connectionId);
-    if (!connection || !connection.enabled) {
-      throw new Error(`Unknown or disabled MCP connection: ${connectionId}`);
+    if (!connection) {
+      throw new Error(`Unknown MCP connection: ${connectionId}`);
+    }
+    return connection;
+  }
+
+  /**
+   * Resolve a connection that is allowed to serve a thread right now.
+   *
+   * This is the enforcement point for both the profile-wide gateway switch
+   * and a connection's own availability, so no bridge can be handed to a
+   * thread that the operator has switched off.
+   */
+  private requireAvailableConnection(connectionId: string): McpConnectionRecord {
+    if (!this.gatewayEnabled()) {
+      throw new Error(
+        "The PwrAgent MCP gateway is turned off. Turn it on in Settings → Plugins to use managed connections.",
+      );
+    }
+    const connection = this.requireConnection(connectionId);
+    if (!connection.enabled) {
+      throw new Error(
+        `${connection.displayName} is not available to threads. Turn it on in Settings → Plugins.`,
+      );
     }
     return connection;
   }
@@ -1062,7 +1133,7 @@ export class McpConnectionGatewayService {
   ): Promise<Client> {
     const existing = this.upstreamSessions.get(token);
     if (existing) return existing.client;
-    const connection = this.requireConnection(grant.connectionId);
+    const connection = this.requireAvailableConnection(grant.connectionId);
     const coordinator = this.coordinatorFor(connection);
     if (!(await coordinator.configured())) {
       throw new Error(
@@ -1274,6 +1345,18 @@ export class McpConnectionGatewayService {
         serverUrl: values.serverUrl,
       });
     }
+    if (operation === "broker/set-enabled") {
+      if (
+        typeof values.connectionId !== "string"
+        || typeof values.enabled !== "boolean"
+      ) {
+        throw new Error("Invalid MCP connection availability request.");
+      }
+      return await this.setConnectionEnabled(
+        values.connectionId,
+        values.enabled,
+      );
+    }
     if (
       operation === "broker/authorize"
       || operation === "broker/disconnect"
@@ -1294,7 +1377,7 @@ export class McpConnectionGatewayService {
       if (typeof values.connectionId !== "string") {
         throw new Error("Invalid MCP bridge registration request.");
       }
-      const connection = this.requireConnection(values.connectionId);
+      const connection = this.requireAvailableConnection(values.connectionId);
       if (!(await this.coordinatorFor(connection).configured())) {
         throw new Error(
           `${connection.displayName} is not connected to PwrAgent. Reauthorize it in Settings → Plugins.`,

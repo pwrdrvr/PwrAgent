@@ -51,6 +51,7 @@ export type StartThreadRequest = {
   reasoningEffort?: string;
   fastMode?: boolean;
   mcpConnectionIds?: string[];
+  mcpProviderServersEnabled?: boolean;
   workMode?: LaunchpadWorkMode;
   branchName?: string;
   codexEnvironmentRuntime?: CodexThreadEnvironmentRuntime;
@@ -906,6 +907,7 @@ export type UpdateDirectoryLaunchpadRequest = {
       | "imageAttachments"
       | "fileAttachments"
       | "mcpConnectionIds"
+      | "mcpProviderServersEnabled"
       | "prompt"
       | "editorDocument"
       | "backend"
