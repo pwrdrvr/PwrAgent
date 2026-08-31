@@ -1,8 +1,8 @@
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  PwrSnapConnectionService,
-} from "../mcp-connections/pwrsnap-connection-service";
+  McpConnectionGatewayService,
+} from "../mcp-connections/mcp-connection-gateway-service";
 
 function createSettings(initial?: string) {
   let credential = initial;
@@ -25,15 +25,15 @@ function createSettings(initial?: string) {
   };
 }
 
-const services: PwrSnapConnectionService[] = [];
+const services: McpConnectionGatewayService[] = [];
 
 afterEach(async () => {
   await Promise.all(services.splice(0).map(async (service) => await service.close()));
 });
 
-describe("PwrSnapConnectionService", () => {
+describe("McpConnectionGatewayService", () => {
   it("distinguishes an absent install from a running MCP endpoint", async () => {
-    const absent = new PwrSnapConnectionService({
+    const absent = new McpConnectionGatewayService({
       fetchFn: vi.fn(async () => {
         throw new Error("connection refused");
       }),
@@ -48,7 +48,7 @@ describe("PwrSnapConnectionService", () => {
       configured: false,
     });
 
-    const running = new PwrSnapConnectionService({
+    const running = new McpConnectionGatewayService({
       fetchFn: vi.fn(async () => new Response("unauthorized", { status: 401 })),
       resolveInstallPaths: () => [],
       settings: createSettings(JSON.stringify({
@@ -66,7 +66,7 @@ describe("PwrSnapConnectionService", () => {
 
   it("opens an installed PwrSnap and explains when Local Agent Access is off", async () => {
     const openPath = vi.fn(async () => "");
-    const service = new PwrSnapConnectionService({
+    const service = new McpConnectionGatewayService({
       fetchFn: vi.fn(async () => {
         throw new Error("connection refused");
       }),
@@ -86,7 +86,7 @@ describe("PwrSnapConnectionService", () => {
   });
 
   it("reuses one revocable stdio bridge grant for a configured thread", async () => {
-    const service = new PwrSnapConnectionService({
+    const service = new McpConnectionGatewayService({
       bridgeEntryPath: "/test/mcp-connection-bridge.js",
       settings: createSettings(JSON.stringify({
         tokens: { access_token: "secret", token_type: "bearer" },
@@ -114,7 +114,7 @@ describe("PwrSnapConnectionService", () => {
 
   it("keeps blocking upstream tool calls alive beyond the SDK default", async () => {
     const callTool = vi.fn(async () => ({ content: [] }));
-    const service = new PwrSnapConnectionService({
+    const service = new McpConnectionGatewayService({
       settings: createSettings(JSON.stringify({
         tokens: { access_token: "secret", token_type: "bearer" },
       })),

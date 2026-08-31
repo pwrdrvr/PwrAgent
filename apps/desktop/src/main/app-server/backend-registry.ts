@@ -49,10 +49,10 @@ import { PerKeyAsyncLock } from "../util/per-key-async-lock";
 import type { AcpMcpServerRegistration } from "../acp/acp-client";
 import { MCP_CONNECTION_TOOL_TIMEOUT_SECONDS } from "../mcp-connections/mcp-connection-timeouts";
 import {
-  getPwrSnapConnectionService,
+  getMcpConnectionGatewayService,
   type McpConnectionBridgeRegistration,
-  type PwrSnapConnectionService,
-} from "../mcp-connections/pwrsnap-connection-service";
+  type McpConnectionGatewayService,
+} from "../mcp-connections/mcp-connection-gateway-service";
 import {
   getPwrGitConnectionService,
   type PwrGitConnectionService,
@@ -8802,7 +8802,7 @@ export class DesktopBackendRegistry {
     version?: string;
   }>;
   private readonly mcpConnectionService?: Pick<
-    PwrSnapConnectionService,
+    McpConnectionGatewayService,
     "registerBridge"
   >;
   /**
@@ -8855,7 +8855,7 @@ export class DesktopBackendRegistry {
     agentToolMcpServer?: AgentToolMcpServerLike | null;
     pdfToolMcpServer?: AgentToolMcpServerLike | null;
     mcpConnectionService?: Pick<
-      PwrSnapConnectionService,
+      McpConnectionGatewayService,
       "registerBridge"
     > | null;
     pwrGitConnectionService?: Pick<
@@ -8928,7 +8928,7 @@ export class DesktopBackendRegistry {
       options?.mcpConnectionService === null
         ? undefined
         : options?.mcpConnectionService ??
-          (isAppStateInitialized() ? getPwrSnapConnectionService() : undefined);
+          (isAppStateInitialized() ? getMcpConnectionGatewayService() : undefined);
     this.pwrGitConnectionService =
       options?.pwrGitConnectionService === null
         ? undefined

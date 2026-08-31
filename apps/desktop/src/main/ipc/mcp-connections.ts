@@ -34,9 +34,9 @@ import {
   MCP_CONNECTION_REMOVE_CHANNEL,
 } from "../../shared/ipc";
 import {
-  getPwrSnapConnectionService,
-  type PwrSnapConnectionService,
-} from "../mcp-connections/pwrsnap-connection-service";
+  getMcpConnectionGatewayService,
+  type McpConnectionGatewayService,
+} from "../mcp-connections/mcp-connection-gateway-service";
 import {
   getPwrGitConnectionService,
   type PwrGitConnectionService,
@@ -45,7 +45,7 @@ import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { federationWindowTargetForWebContents } from "../window";
 
 export function registerMcpConnectionIpcHandlers(
-  service: PwrSnapConnectionService = getPwrSnapConnectionService(),
+  service: McpConnectionGatewayService = getMcpConnectionGatewayService(),
   pwrGit: PwrGitConnectionService = getPwrGitConnectionService(),
 ): void {
   registerPwrGitHandlers(pwrGit);

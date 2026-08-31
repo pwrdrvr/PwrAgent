@@ -117,7 +117,7 @@ type FetchLike = (
   init?: RequestInit,
 ) => Promise<Response>;
 
-export type PwrSnapConnectionServiceOptions = {
+export type McpConnectionGatewayServiceOptions = {
   bridgeEntryPath?: string;
   fetchFn?: FetchLike;
   openExternal?: (url: string) => Promise<void>;
@@ -298,7 +298,7 @@ function callbackHtmlHeaders(): Record<string, string> {
   };
 }
 
-export class PwrSnapConnectionService {
+export class McpConnectionGatewayService {
   private readonly bridgeEntryPath: string;
   private readonly fetchFn: FetchLike;
   private readonly openExternal: (url: string) => Promise<void>;
@@ -329,7 +329,7 @@ export class PwrSnapConnectionService {
   private brokerToken?: string;
   private nonOwnerHolder?: RuntimeLeaseHolder;
 
-  constructor(options: PwrSnapConnectionServiceOptions = {}) {
+  constructor(options: McpConnectionGatewayServiceOptions = {}) {
     this.bridgeEntryPath =
       options.bridgeEntryPath ?? join(__dirname, "mcp-connection-bridge.js");
     this.fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
@@ -1438,14 +1438,14 @@ function secureTokenEqual(candidate: string, expected: string | undefined): bool
     && timingSafeEqual(candidateBytes, expectedBytes);
 }
 
-let pwrSnapConnectionService: PwrSnapConnectionService | undefined;
+let mcpConnectionGatewayService: McpConnectionGatewayService | undefined;
 
-export function getPwrSnapConnectionService(): PwrSnapConnectionService {
-  pwrSnapConnectionService ??= new PwrSnapConnectionService();
-  return pwrSnapConnectionService;
+export function getMcpConnectionGatewayService(): McpConnectionGatewayService {
+  mcpConnectionGatewayService ??= new McpConnectionGatewayService();
+  return mcpConnectionGatewayService;
 }
 
-export async function resetPwrSnapConnectionServiceForTests(): Promise<void> {
-  await pwrSnapConnectionService?.close();
-  pwrSnapConnectionService = undefined;
+export async function resetMcpConnectionGatewayServiceForTests(): Promise<void> {
+  await mcpConnectionGatewayService?.close();
+  mcpConnectionGatewayService = undefined;
 }
