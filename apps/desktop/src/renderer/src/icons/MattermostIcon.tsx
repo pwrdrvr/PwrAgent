@@ -1,4 +1,4 @@
-import type { ImgHTMLAttributes } from "react";
+import { useSyncExternalStore, type ImgHTMLAttributes } from "react";
 import { DEFAULT_ICON_SIZE } from "./icon-types";
 import iconBlackUrl from "../assets/mattermost/icon-black.svg";
 import iconDenimUrl from "../assets/mattermost/icon-denim.svg";
@@ -16,6 +16,11 @@ import iconWhiteUrl from "../assets/mattermost/icon-white.svg";
  * - `black`  — pure black (#1b1d22). Best on light surfaces when denim
  *              would clash with the surrounding accent.
  * - `white`  — pure white. Required on dark surfaces; denim disappears.
+ *
+ * With no explicit variant, the icon follows PwrAgent's resolved theme:
+ * denim on light surfaces and white on dark surfaces. Explicit variants
+ * remain available for surfaces whose background is independent of the app
+ * theme.
  *
  * Renders as an `<img>` element rather than inline `<svg>` so the asset
  * stays a verbatim, unaltered file — Vite emits each URL as a static
@@ -40,18 +45,14 @@ export type MattermostIconProps = Omit<
 
 export function MattermostIcon({
   size = DEFAULT_ICON_SIZE,
-  // The PwrAgent desktop UI is dark-themed throughout, so white is the
-  // right default — denim (#1e325c) and black both disappear against
-  // near-black surfaces. Light-surface callers (any future light theme,
-  // exported reports, brand pages) override with `variant="denim"` or
-  // `variant="black"`.
-  variant = "white",
+  variant,
   alt = "",
   ...rest
 }: MattermostIconProps) {
+  const resolvedVariant = useMattermostVariant(variant);
   return (
     <img
-      src={VARIANT_URL[variant]}
+      src={VARIANT_URL[resolvedVariant]}
       width={size}
       height={size}
       alt={alt}
@@ -63,4 +64,62 @@ export function MattermostIcon({
       {...rest}
     />
   );
+}
+
+function useMattermostVariant(
+  variant: MattermostIconVariant | undefined,
+): MattermostIconVariant {
+  const themeVariant = useSyncExternalStore(
+    variant ? subscribeToNothing : subscribeToTheme,
+    resolveThemeVariant,
+    resolveDarkThemeVariant,
+  );
+
+  return variant ?? themeVariant;
+}
+
+const themeListeners = new Set<() => void>();
+let themeObserver: MutationObserver | undefined;
+
+function subscribeToTheme(listener: () => void): () => void {
+  if (
+    typeof document === "undefined"
+    || typeof MutationObserver === "undefined"
+  ) {
+    return subscribeToNothing(listener);
+  }
+
+  themeListeners.add(listener);
+  if (!themeObserver) {
+    themeObserver = new MutationObserver(() => {
+      for (const notify of themeListeners) notify();
+    });
+    themeObserver.observe(document.documentElement, {
+      attributeFilter: ["data-theme"],
+      attributes: true,
+    });
+  }
+
+  return () => {
+    themeListeners.delete(listener);
+    if (themeListeners.size === 0) {
+      themeObserver?.disconnect();
+      themeObserver = undefined;
+    }
+  };
+}
+
+function subscribeToNothing(_listener: () => void): () => void {
+  return () => undefined;
+}
+
+function resolveThemeVariant(): MattermostIconVariant {
+  return typeof document !== "undefined"
+    && document.documentElement.dataset.theme === "light"
+    ? "denim"
+    : "white";
+}
+
+function resolveDarkThemeVariant(): MattermostIconVariant {
+  return "white";
 }
