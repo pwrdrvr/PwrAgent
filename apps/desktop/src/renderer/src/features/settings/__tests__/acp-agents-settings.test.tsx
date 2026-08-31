@@ -800,4 +800,19 @@ describe("AcpAgentsSettings", () => {
       ),
     ).not.toBeInTheDocument();
   });
+
+  it("renders Gemini CLI last even though the catalog lists it first", async () => {
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1_000,
+      entries: [geminiEntry(), grokEntry()],
+    }));
+
+    render(<AcpAgentsSettings desktopApi={{ listAcpAgents } as DesktopApi} />);
+
+    await screen.findByText("Gemini CLI");
+    const headings = screen
+      .getAllByRole("heading", { level: 2 })
+      .map((heading) => heading.textContent);
+    expect(headings).toEqual(["Grok", "Gemini CLI"]);
+  });
 });

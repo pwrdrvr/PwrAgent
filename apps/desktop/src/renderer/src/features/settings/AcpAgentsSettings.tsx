@@ -55,6 +55,21 @@ function managedGrokBuildsSnapshot(
 }
 
 /**
+ * Settings-screen display order. Gemini CLI sorts last: Google withdrew CLI
+ * access for regular consumer accounts, so the section is unusable for most
+ * operators. Display-only — the IPC/catalog order from listAcpAgents is
+ * unchanged for other consumers.
+ */
+function displayOrderedEntries(
+  entries: AcpAgentSettingsEntry[],
+): AcpAgentSettingsEntry[] {
+  return [
+    ...entries.filter((entry) => entry.registryId !== "gemini"),
+    ...entries.filter((entry) => entry.registryId === "gemini"),
+  ];
+}
+
+/**
  * Renders each discovered ACP agent (Gemini / Grok / Kimi / Qwen) as its own
  * `SettingsSection`, styled identically to the Codex section (SettingsField
  * rows + the shared SettingsPathRow install list). Returns a FRAGMENT — no
@@ -133,7 +148,7 @@ export function AcpAgentsSettings(props: {
 
   return (
     <>
-      {entries.map((entry) => (
+      {displayOrderedEntries(entries).map((entry) => (
         <Fragment key={entry.backendId}>
           {entry.registryId === "kimi"
           && entry.incompatibleInstances?.length ? (
