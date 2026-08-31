@@ -63,6 +63,33 @@ describe("McpInventoryPanel", () => {
     });
   });
 
+  it("shows an unknown authentication status without hiding the inventory", async () => {
+    render(
+      <McpInventoryPanel
+        desktopApi={{
+          listThreadMcpServers: async () => ({
+            backend: "codex",
+            threadId: "thread-1",
+            detail: "toolsAndAuthOnly",
+            servers: [
+              {
+                name: "offline-local-server",
+                authStatus: "unknown",
+                tools: [],
+              },
+            ],
+          }),
+        }}
+        onDismiss={vi.fn()}
+        request={{ detail: "toolsAndAuthOnly", requestId: 1 }}
+        thread={thread}
+      />,
+    );
+
+    expect(await screen.findByText("offline-local-server")).toBeInTheDocument();
+    expect(screen.getByText("Authentication unknown")).toBeInTheDocument();
+  });
+
   it("holds confirmed reload feedback and explains the next-turn boundary", async () => {
     const reloadCodexMcpConfig = vi.fn(async () => ({
       backend: "codex" as const,

@@ -800,7 +800,8 @@ function readMcpServerInventoryPage(value: unknown): {
 
 function readMcpAuthStatus(value: unknown): CodexMcpServerSummary["authStatus"] {
   if (
-    value === "unsupported"
+    value === "unknown"
+    || value === "unsupported"
     || value === "notLoggedIn"
     || value === "bearerToken"
     || value === "oAuth"

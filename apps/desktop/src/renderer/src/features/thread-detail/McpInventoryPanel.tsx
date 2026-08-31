@@ -318,6 +318,8 @@ function InventoryLine(props: {
 
 function formatAuthStatus(status: CodexMcpAuthStatus): string {
   switch (status) {
+    case "unknown":
+      return "Authentication unknown";
     case "notLoggedIn":
       return "Sign-in required";
     case "bearerToken":

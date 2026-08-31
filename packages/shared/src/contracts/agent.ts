@@ -412,6 +412,7 @@ export type CompactThreadResponse = {
 export type CodexMcpInventoryDetail = "toolsAndAuthOnly" | "full";
 
 export type CodexMcpAuthStatus =
+  | "unknown"
   | "unsupported"
   | "notLoggedIn"
   | "bearerToken"
