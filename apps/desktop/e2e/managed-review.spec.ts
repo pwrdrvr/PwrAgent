@@ -2,7 +2,6 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { applyDesktopSettingsPatch } from "../src/main/settings/desktop-config";
 import { launchElectronApp } from "./fixtures/electron-app";
 
 async function createManagedReviewFixture(): Promise<{
@@ -104,12 +103,6 @@ async function launchManagedReviewFixture() {
   const fixture = await createManagedReviewFixture();
   const app = await launchElectronApp({
     fixturePath: fixture.fixturePath,
-    preLaunchHook: (homeRoot) => {
-      applyDesktopSettingsPatch(
-        path.join(homeRoot, ".pwragent/profiles/default/config.toml"),
-        { experimental: { managedReview: true } },
-      );
-    },
   });
   return {
     app,
@@ -127,8 +120,14 @@ test("managed review failure leaves one start marker and clears Stop state", asy
       .getByRole("button", { name: /Managed review failure/i })
       .first()
       .click();
-    await fixture.app.window.getByLabel("Reply").fill("/review main");
+    await fixture.app.window.getByLabel("Reply").fill("/review");
     await fixture.app.window.getByRole("button", { name: "Send" }).click();
+    await fixture.app.window
+      .getByRole("radio", { name: "Separate thread" })
+      .click();
+    await fixture.app.window
+      .getByRole("button", { name: "Start review" })
+      .click();
 
     const transcript = fixture.app.window.getByRole("region", { name: "Transcript" });
     await expect(transcript.getByText("Review changes against main")).toHaveCount(1);
