@@ -6769,6 +6769,31 @@ function hasTokenMiserModelGuidance(
   );
 }
 
+const TOKEN_MISER_MANAGED_CAPABILITY_REASON =
+  "Managed Codex runtime lacks the complete Token Miser activation and deferred-completion capability contract.";
+
+function hasManagedTokenMiserCapabilityContract(
+  capabilities: CodexServerCapabilities | undefined,
+): boolean {
+  const deferredCompletion =
+    capabilities?.codeModeOutputReducer?.deferredCompletion;
+  return (
+    capabilities?.pwrdrvrTokenMiser?.version === 1
+    && capabilities.pwrdrvrTokenMiser.codeModeNestedPostToolUse === false
+    && capabilities.codeModeOutputReducer?.protocolVersion === 1
+    && capabilities.codeModeOutputReducer.intentContextVersion === 1
+    && capabilities.codeModeOutputReducer.reducerRequestField
+      === "parent_intent"
+    && capabilities.codeModeOutputReducer.postToolUseField === "parent_intent"
+    && hasTokenMiserModelGuidance(capabilities.codeModeOutputReducer)
+    && deferredCompletion?.version === 1
+    && deferredCompletion.terminalOnly === true
+    && deferredCompletion.preservesOriginalCallId === true
+    && deferredCompletion.preservesCellId === true
+    && deferredCompletion.waitToolName === "wait"
+  );
+}
+
 function buildCodexTokenMiserConfig(
   reducerDescriptorPath: string,
 ): CodexThreadStartParams["config"] {
@@ -19761,9 +19786,20 @@ export class DesktopBackendRegistry {
       try {
         const capabilities = await client.readServerCapabilities();
         const reducerCapability = capabilities.codeModeOutputReducer;
-        const supported =
+        const reducerSupported =
           reducerCapability?.protocolVersion === 1
           && hasTokenMiserModelGuidance(reducerCapability);
+        const managedContractRequired =
+          this.resolveManagedTokenMiserActivationRequiredFn();
+        const managedContractSupported =
+          hasManagedTokenMiserCapabilityContract(capabilities);
+        const supported =
+          reducerSupported
+          && (!managedContractRequired || managedContractSupported);
+        const unsupportedReason =
+          managedContractRequired && !managedContractSupported
+            ? TOKEN_MISER_MANAGED_CAPABILITY_REASON
+            : "Codex runtime lacks Token Miser reducer model-guidance v1.";
         const grouping = capabilities.codeModeOutputReducer?.postToolUseGrouping;
         this.tokenMiserCodeModeGroupingVersion =
           supported
@@ -19792,7 +19828,7 @@ export class DesktopBackendRegistry {
             : {
                 reason:
                   this.tokenMiserRuntimePreparationFailure
-                  ?? "Codex runtime lacks Token Miser reducer model-guidance v1.",
+                  ?? unsupportedReason,
                 state: "unavailable",
               },
         );
@@ -19837,10 +19873,11 @@ export class DesktopBackendRegistry {
     client: BackendClient,
   ): Promise<boolean> {
     const capabilities = await this.readTokenMiserServerCapabilities(client);
-    return (
-      capabilities?.codeModeOutputReducer?.protocolVersion === 1
-      && hasTokenMiserModelGuidance(capabilities.codeModeOutputReducer)
-    );
+    if (this.resolveManagedTokenMiserActivationRequiredFn()) {
+      return hasManagedTokenMiserCapabilityContract(capabilities);
+    }
+    return capabilities?.codeModeOutputReducer?.protocolVersion === 1
+      && hasTokenMiserModelGuidance(capabilities.codeModeOutputReducer);
   }
 
   private async supportsTokenMiserDynamicToolsResume(
@@ -19861,7 +19898,7 @@ export class DesktopBackendRegistry {
     const capabilities = await this.readTokenMiserServerCapabilities(
       params.client,
     );
-    if (capabilities?.pwrdrvrTokenMiser?.version !== 1) {
+    if (!hasManagedTokenMiserCapabilityContract(capabilities)) {
       return undefined;
     }
     return params.enabled ? { version: 1, enabled: true } : null;
@@ -19940,13 +19977,13 @@ export class DesktopBackendRegistry {
         this.codexClient,
       );
       const managedActivation =
-        capabilities?.pwrdrvrTokenMiser?.version === 1;
+        hasManagedTokenMiserCapabilityContract(capabilities);
       if (
         this.resolveManagedTokenMiserActivationRequiredFn()
         && !managedActivation
       ) {
         throw new Error(
-          "Managed Codex runtime lacks native Token Miser activation capability v1.",
+          TOKEN_MISER_MANAGED_CAPABILITY_REASON,
         );
       }
       const codexRuntime = managedActivation
@@ -19971,7 +20008,9 @@ export class DesktopBackendRegistry {
           ? { state: "active" }
           : {
               reason: this.tokenMiserReducerCapabilityState === "unsupported"
-                ? "Codex runtime lacks Token Miser reducer model-guidance v1."
+                ? this.resolveManagedTokenMiserActivationRequiredFn()
+                  ? TOKEN_MISER_MANAGED_CAPABILITY_REASON
+                  : "Codex runtime lacks Token Miser reducer model-guidance v1."
                 : "Waiting for Codex to report Token Miser output reducer support.",
               state: "unavailable",
             },

@@ -3838,8 +3838,17 @@ describe("DesktopBackendRegistry", () => {
           descriptorEnvironmentVariable:
             "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
           descriptorVersion: 1,
+          codeModeNestedPostToolUse: false,
         },
         codeModeOutputReducer: {
+          deferredCompletion: {
+            version: 1,
+            terminalOnly: true,
+            preservesOriginalCallId: true,
+            preservesCellId: true,
+            waitToolName: "wait",
+          },
+          intentContextVersion: 1,
           modelGuidance: {
             version: 1,
             toolDescriptionConfigKey:
@@ -3849,7 +3858,9 @@ describe("DesktopBackendRegistry", () => {
             modelVisibleOverheadRequestField:
               "model_visible_overhead_characters",
           },
+          postToolUseField: "parent_intent",
           protocolVersion: 1,
+          reducerRequestField: "parent_intent",
         },
       },
     });
@@ -3911,8 +3922,17 @@ describe("DesktopBackendRegistry", () => {
           descriptorEnvironmentVariable:
             "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
           descriptorVersion: 1,
+          codeModeNestedPostToolUse: false,
         },
         codeModeOutputReducer: {
+          deferredCompletion: {
+            version: 1,
+            terminalOnly: true,
+            preservesOriginalCallId: true,
+            preservesCellId: true,
+            waitToolName: "wait",
+          },
+          intentContextVersion: 1,
           modelGuidance: {
             version: 1,
             toolDescriptionConfigKey:
@@ -3922,7 +3942,9 @@ describe("DesktopBackendRegistry", () => {
             modelVisibleOverheadRequestField:
               "model_visible_overhead_characters",
           },
+          postToolUseField: "parent_intent",
           protocolVersion: 1,
+          reducerRequestField: "parent_intent",
         },
       },
     });
@@ -3971,11 +3993,23 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("rejects managed runtimes that omit native Token Miser activation", async () => {
+  it("rejects managed runtimes that omit deferred Token Miser completion", async () => {
     const codexClient = new MockBackendClient({
       threads: [],
       serverCapabilities: {
+        pwrdrvrTokenMiser: {
+          version: 1,
+          identity: "pwrdrvr.pwragent.token-miser",
+          initializeCapabilityField: "pwrdrvrTokenMiser",
+          threadStartField: "pwrdrvrTokenMiser",
+          threadResumeField: "pwrdrvrTokenMiser",
+          descriptorEnvironmentVariable:
+            "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+          descriptorVersion: 1,
+          codeModeNestedPostToolUse: false,
+        },
         codeModeOutputReducer: {
+          intentContextVersion: 1,
           modelGuidance: {
             version: 1,
             toolDescriptionConfigKey:
@@ -3985,7 +4019,9 @@ describe("DesktopBackendRegistry", () => {
             modelVisibleOverheadRequestField:
               "model_visible_overhead_characters",
           },
+          postToolUseField: "parent_intent",
           protocolVersion: 1,
+          reducerRequestField: "parent_intent",
         },
       },
     });
@@ -4026,7 +4062,7 @@ describe("DesktopBackendRegistry", () => {
       await internals.prepareTokenMiserRuntime();
 
       expect(internals.tokenMiserRuntimePreparationFailure).toBe(
-        "Managed Codex runtime lacks native Token Miser activation capability v1.",
+        "Managed Codex runtime lacks the complete Token Miser activation and deferred-completion capability contract.",
       );
       expect(resolveRuntime).not.toHaveBeenCalled();
       expect(ensureInstalled).not.toHaveBeenCalled();
@@ -4118,22 +4154,9 @@ describe("DesktopBackendRegistry", () => {
 
   it("records truthful Token Miser activation from reducer capability", async () => {
     const readActivation = async (params: {
+      managedContractRequired?: boolean;
       runtimeFailure?: string;
-      serverCapabilities: {
-        codeModeOutputReducer?: {
-          dynamicToolsResumeField?: "dynamicTools";
-          modelGuidance?: {
-            version: 1;
-            toolDescriptionConfigKey:
-              "features.code_mode.output_reducer.tool_description_guidance";
-            continuationConfigKey:
-              "features.code_mode.output_reducer.continuation_guidance";
-            modelVisibleOverheadRequestField:
-              "model_visible_overhead_characters";
-          };
-          protocolVersion?: number;
-        };
-      };
+      serverCapabilities: CodexServerCapabilities;
     }) => {
       const tokenMiserStateDir = await mkdtemp(
         path.join(os.tmpdir(), "pwragent-token-miser-activation-"),
@@ -4145,6 +4168,8 @@ describe("DesktopBackendRegistry", () => {
       const registry = new DesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
+        resolveManagedTokenMiserActivationRequired: () =>
+          params.managedContractRequired ?? false,
       });
       const internals = registry as unknown as {
         prepareTokenMiserRuntime: (
@@ -4198,6 +4223,79 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     })).resolves.toMatchObject({ state: "active" });
+    await expect(readActivation({
+      managedContractRequired: true,
+      serverCapabilities: {
+        pwrdrvrTokenMiser: {
+          version: 1,
+          identity: "pwrdrvr.pwragent.token-miser",
+          initializeCapabilityField: "pwrdrvrTokenMiser",
+          threadStartField: "pwrdrvrTokenMiser",
+          threadResumeField: "pwrdrvrTokenMiser",
+          descriptorEnvironmentVariable:
+            "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+          descriptorVersion: 1,
+          codeModeNestedPostToolUse: false,
+        },
+        codeModeOutputReducer: {
+          deferredCompletion: {
+            version: 1,
+            terminalOnly: true,
+            preservesOriginalCallId: true,
+            preservesCellId: true,
+            waitToolName: "wait",
+          },
+          intentContextVersion: 1,
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
+          postToolUseField: "parent_intent",
+          protocolVersion: 1,
+          reducerRequestField: "parent_intent",
+        },
+      },
+    })).resolves.toMatchObject({ state: "active" });
+    await expect(readActivation({
+      managedContractRequired: true,
+      serverCapabilities: {
+        pwrdrvrTokenMiser: {
+          version: 1,
+          identity: "pwrdrvr.pwragent.token-miser",
+          initializeCapabilityField: "pwrdrvrTokenMiser",
+          threadStartField: "pwrdrvrTokenMiser",
+          threadResumeField: "pwrdrvrTokenMiser",
+          descriptorEnvironmentVariable:
+            "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+          descriptorVersion: 1,
+          codeModeNestedPostToolUse: false,
+        },
+        codeModeOutputReducer: {
+          intentContextVersion: 1,
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
+          postToolUseField: "parent_intent",
+          protocolVersion: 1,
+          reducerRequestField: "parent_intent",
+        },
+      },
+    })).resolves.toMatchObject({
+      reason:
+        "Managed Codex runtime lacks the complete Token Miser activation and deferred-completion capability contract.",
+      state: "unavailable",
+    });
     await expect(readActivation({
       serverCapabilities: {
         codeModeOutputReducer: {
