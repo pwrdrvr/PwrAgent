@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render } from "@testing-library/react";
+import { act, cleanup, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   BranchIcon,
@@ -28,6 +28,7 @@ import {
 
 afterEach(() => {
   cleanup();
+  document.documentElement.removeAttribute("data-theme");
 });
 
 const ALL_ICONS = [
@@ -164,6 +165,55 @@ describe("icon library", () => {
       }
       // Three variants → three distinct asset URLs.
       expect(sources.size).toBe(3);
+    });
+
+    it("uses the official denim asset on light-theme surfaces", () => {
+      const { container: denimContainer } = render(
+        <MattermostIcon variant="denim" />,
+      );
+      const denimSrc = denimContainer.querySelector("img")?.getAttribute("src");
+      cleanup();
+
+      document.documentElement.setAttribute("data-theme", "light");
+      const { container } = render(<MattermostIcon />);
+
+      expect(container.querySelector("img")).toHaveAttribute("src", denimSrc);
+    });
+
+    it("uses the official white asset on dark-theme surfaces", () => {
+      const { container: whiteContainer } = render(
+        <MattermostIcon variant="white" />,
+      );
+      const whiteSrc = whiteContainer.querySelector("img")?.getAttribute("src");
+      cleanup();
+
+      const { container } = render(<MattermostIcon />);
+
+      expect(container.querySelector("img")).toHaveAttribute("src", whiteSrc);
+    });
+
+    it("follows live theme changes", async () => {
+      const { container: denimContainer } = render(
+        <MattermostIcon variant="denim" />,
+      );
+      const denimSrc = denimContainer.querySelector("img")?.getAttribute("src");
+      cleanup();
+      const { container: whiteContainer } = render(
+        <MattermostIcon variant="white" />,
+      );
+      const whiteSrc = whiteContainer.querySelector("img")?.getAttribute("src");
+      cleanup();
+
+      const { container } = render(<MattermostIcon />);
+      expect(container.querySelector("img")).toHaveAttribute("src", whiteSrc);
+
+      act(() => {
+        document.documentElement.setAttribute("data-theme", "light");
+      });
+
+      await waitFor(() => {
+        expect(container.querySelector("img")).toHaveAttribute("src", denimSrc);
+      });
     });
   });
 
