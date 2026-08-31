@@ -23528,7 +23528,7 @@ command = "pnpm dev"
       inputTokens: 10_254_903,
       outputTokens: 10_356,
       reasoningOutputTokens: 3_023,
-      totalCostMicros: 6_699_501,
+      totalCostMicros: 5_306_085,
       totalTokens: 10_265_259,
       turnUsageAttributed: true,
       uncachedInputTokens: 260_151,
