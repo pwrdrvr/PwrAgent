@@ -11923,15 +11923,16 @@ export class DesktopBackendRegistry {
       backend,
       threadId: request.threadId,
     });
+    const tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
+      overlay?.tokenMiserEnabled,
+    );
 
     return {
       backend,
       fetchedAt: Date.now(),
       readDurationMs: Math.max(0, Math.round(performance.now() - readStartedAt)),
       threadId: request.threadId,
-      ...(overlay?.tokenMiserEnabled !== undefined
-        ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
-        : {}),
+      tokenMiserEnabled,
       pricing,
       ...(toolAccounting ? { toolAccounting } : {}),
       ...(pendingRequest ? { pendingRequest } : {}),
@@ -33608,6 +33609,9 @@ export class DesktopBackendRegistry {
           read: {
             backend: args.backend,
             threadId,
+            ...(response.tokenMiserEnabled !== undefined
+              ? { tokenMiserEnabled: response.tokenMiserEnabled }
+              : {}),
             ...(remote
               ? {
                   instanceId: remote.instanceId,

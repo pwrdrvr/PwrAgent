@@ -36409,6 +36409,12 @@ script = "printf setup"
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
+    const internals = registry as unknown as {
+      resolveTokenMiserDefaultEnabledFn: () => boolean;
+      resolveTokenMiserEnabledFn: () => boolean;
+    };
+    internals.resolveTokenMiserEnabledFn = () => true;
+    internals.resolveTokenMiserDefaultEnabledFn = () => true;
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -36447,6 +36453,7 @@ script = "printf setup"
       read: {
         backend: "codex",
         threadId: "target-thread",
+        tokenMiserEnabled: true,
         limit: 5,
         maxCharsPerEntry: 200,
         threadUrl: "pwragent://thread/target-thread?backend=codex",
