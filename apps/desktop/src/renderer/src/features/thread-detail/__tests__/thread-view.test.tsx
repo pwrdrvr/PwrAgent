@@ -782,9 +782,11 @@ describe("ThreadView", () => {
     await waitFor(() => {
       expect(startReview).toHaveBeenCalledWith({
         backend: "codex",
+        federationTarget: undefined,
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "origin/develop" },
         delivery: "inline",
+        runMode: "managed-child",
         cwd:
           "/Users/fixture-user/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       });
