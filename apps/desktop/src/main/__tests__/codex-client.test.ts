@@ -7226,6 +7226,40 @@ describe("CodexAppServerClient", () => {
     await client.close();
   });
 
+  it("preserves an unknown MCP authentication status", async () => {
+    const { CodexAppServerClient } = await import("../codex-app-server/client");
+    MockTransport.threadMcpServerStatusResult = {
+      data: [
+        {
+          name: "search-compare-local",
+          serverInfo: null,
+          authStatus: "unknown",
+          tools: {},
+          resources: [],
+          resourceTemplates: [],
+        },
+      ],
+      nextCursor: null,
+    };
+    const client = new CodexAppServerClient({
+      command: "codex",
+      directoryResolver: async () => [],
+    });
+
+    await expect(client.listMcpServers({
+      threadId: "thread-1",
+      detail: "toolsAndAuthOnly",
+    })).resolves.toEqual([
+      {
+        name: "search-compare-local",
+        authStatus: "unknown",
+        tools: [],
+      },
+    ]);
+
+    await client.close();
+  });
+
   it("falls back to global MCP inventory when the thread is not loaded", async () => {
     const { CodexAppServerClient } = await import("../codex-app-server/client");
     MockTransport.mcpServerStatusThreadError = {

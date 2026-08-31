@@ -571,5 +571,6 @@ function formatAuthStatus(status: CodexMcpAuthStatus): string {
   if (status === "oAuth") return "OAuth";
   if (status === "bearerToken") return "Bearer token";
   if (status === "notLoggedIn") return "Login required";
+  if (status === "unknown") return "Authentication unknown";
   return "No login";
 }
