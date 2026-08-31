@@ -429,15 +429,32 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   async start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void> {
     const lifecycleGeneration = ++this.lifecycleGeneration;
-    const applicationId = await this.resolveApplicationId();
+    let applicationId: string | undefined;
+    try {
+      applicationId = await this.resolveApplicationId();
+    } catch (error) {
+      this.options.logger?.warn?.(
+        "discord application ID discovery failed; continuing without mention-only response mode or slash commands",
+        { error: errorMessage(error) },
+      );
+    }
     if (lifecycleGeneration !== this.lifecycleGeneration) {
       return;
     }
-    this.applicationId = applicationId;
-    this.capabilityProfile.conversationInput = {
-      reportsBotMention: true,
-    };
-    await this.reconcileApplicationCommands(applicationId);
+    if (applicationId !== undefined) {
+      this.applicationId = applicationId;
+      this.capabilityProfile.conversationInput = {
+        reportsBotMention: true,
+      };
+      try {
+        await this.reconcileApplicationCommands(applicationId);
+      } catch (error) {
+        this.options.logger?.warn?.(
+          "discord slash command reconciliation failed; continuing with gateway startup",
+          { error: errorMessage(error) },
+        );
+      }
+    }
     if (lifecycleGeneration !== this.lifecycleGeneration) {
       return;
     }
@@ -2896,7 +2913,18 @@ function discordChannelIsThread(channel: unknown): boolean {
 }
 
 function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.trim().length > 0) {
+    return message;
+  }
+  const retryAfterMs = retryAfterMsFromError(error);
+  if (retryAfterMs !== undefined) {
+    return `Discord API rate limit (retry after ${retryAfterMs} ms).`;
+  }
+  if (error instanceof Error && error.name !== "Error") {
+    return error.name;
+  }
+  return "Unknown Discord error.";
 }
 
 function retryAfterMsFromError(error: unknown): number | undefined {

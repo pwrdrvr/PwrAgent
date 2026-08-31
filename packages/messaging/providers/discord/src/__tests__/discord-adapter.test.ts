@@ -237,6 +237,71 @@ describe("discord adapter", () => {
     expect(gateway.start).toHaveBeenCalledOnce();
   });
 
+  it("starts the gateway when application ID discovery fails", async () => {
+    const discoveryError = Object.assign(new Error(), { retryAfter: 750 });
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const gateway: DiscordGatewayConnection = {
+      close: vi.fn(async () => undefined),
+      onEvent: vi.fn(() => () => undefined),
+      start: vi.fn(async () => undefined),
+    };
+    const adapter = new DiscordAdapter({
+      api: createApi({
+        getCurrentApplicationId: vi.fn().mockRejectedValue(discoveryError),
+      }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      gateway,
+      logger,
+    });
+
+    await adapter.start(async () => undefined);
+
+    expect(gateway.start).toHaveBeenCalledOnce();
+    expect(adapter.capabilityProfile.conversationInput).toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("application ID discovery failed"),
+      { error: "Discord API rate limit (retry after 750 ms)." },
+    );
+  });
+
+  it("starts the gateway when slash command reconciliation fails", async () => {
+    const reconciliationError = Object.assign(new Error(), { retryAfter: 750 });
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const gateway: DiscordGatewayConnection = {
+      close: vi.fn(async () => undefined),
+      onEvent: vi.fn(() => () => undefined),
+      start: vi.fn(async () => undefined),
+    };
+    const adapter = new DiscordAdapter({
+      api: createApi({
+        getCurrentApplicationId: vi.fn(async () => TEST_APPLICATION_ID),
+        listApplicationCommands: vi.fn().mockRejectedValue(reconciliationError),
+      }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      gateway,
+      logger,
+    });
+
+    await adapter.start(async () => undefined);
+
+    expect(gateway.start).toHaveBeenCalledOnce();
+    expect(adapter.capabilityProfile.conversationInput).toEqual({
+      reportsBotMention: true,
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("slash command reconciliation failed"),
+      { error: "Discord API rate limit (retry after 750 ms)." },
+    );
+  });
+
   it("does not continue startup after application discovery is cancelled", async () => {
     let resolveApplicationId!: (value: string) => void;
     const applicationId = new Promise<string>((resolve) => {
