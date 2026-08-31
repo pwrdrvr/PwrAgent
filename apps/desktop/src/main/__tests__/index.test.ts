@@ -874,27 +874,13 @@ describe("bootstrapApp", () => {
     expect(setApplicationMenuMock).toHaveBeenCalledTimes(1);
   });
 
-  it("cancels the watchdog when the window shows before createMainWindow returns", async () => {
+  it("does not infer a boot failure when the main window is slow to show", async () => {
     vi.useFakeTimers();
     startupProfilerInstance.start.mockResolvedValue();
-    createMainWindowMock.mockImplementation(
-      (options?: { onShown?: () => void }) => {
-        options?.onShown?.();
-        return {
-          isVisible: () => false,
-          on: (event: string, handler: (...args: unknown[]) => void) => {
-            mainWindowHandlers.set(event, handler);
-          },
-          once: (event: string, handler: (...args: unknown[]) => void) => {
-            mainWindowHandlers.set(event, handler);
-          },
-        };
-      },
-    );
 
     await import("../index");
     await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(25_000);
+    await vi.advanceTimersByTimeAsync(60_000);
 
     expect(showMessageBoxSyncMock).not.toHaveBeenCalled();
     expect(mainLogErrorMock).not.toHaveBeenCalledWith(
@@ -903,22 +889,21 @@ describe("bootstrapApp", () => {
     );
   });
 
-  it("surfaces a boot failure when the main window never shows", async () => {
-    vi.useFakeTimers();
-    startupProfilerInstance.start.mockResolvedValue();
+  it("surfaces an actual startup rejection before the main window shows", async () => {
+    whenReadyMock.mockReturnValue(Promise.reject(new Error("startup exploded")));
 
     await import("../index");
     await flushMicrotasks();
-    await vi.advanceTimersByTimeAsync(25_000);
 
     expect(showMessageBoxSyncMock).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "PwrAgent failed to start",
+        detail: expect.stringContaining("startup exploded"),
       }),
     );
     expect(mainLogErrorMock).toHaveBeenCalledWith(
       "startup failed before the main window appeared",
-      expect.objectContaining({ reason: "watchdog-timeout" }),
+      expect.objectContaining({ reason: "whenReady" }),
     );
   });
 
