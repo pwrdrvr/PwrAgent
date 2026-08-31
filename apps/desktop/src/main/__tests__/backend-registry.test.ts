@@ -18469,11 +18469,11 @@ command = "pnpm dev"
   it("starts one Codex title helper for every concurrent explicit placeholder", async () => {
     const titleGenerationRelease = createDeferred<void>();
     const titleService = {
-      generateTitle: vi.fn(async ({ threadId }: { threadId: string }) => {
+      generateTitle: vi.fn(async ({ threadId }: { threadId?: string }) => {
         await titleGenerationRelease.promise;
         return {
           status: "generated" as const,
-          title: `Title for ${threadId}`,
+          title: `Title for ${threadId ?? "thread"}`,
         };
       }),
     };
