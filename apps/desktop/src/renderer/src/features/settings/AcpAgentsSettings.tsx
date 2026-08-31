@@ -11,6 +11,10 @@ import { SettingsCopyValue } from "./SettingsCopyValue";
 import { SettingsPathRow, type SettingsPathRowChip } from "./SettingsPathRow";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { acpStatusLabel } from "./acp-agent-copy";
+import {
+  acpAgentEnabledInSnapshot,
+  displayOrderedAcpEntries,
+} from "./useAcpAgentCatalog";
 
 const KIMI_CODE_INSTALL_GUIDE_URL =
   "https://www.kimi.com/help/kimi-code/cli-getting-started";
@@ -37,36 +41,10 @@ function cliPathSnapshotFor(
   return agents?.[registryId]?.cliPath;
 }
 
-/** Whether an agent is enabled per the snapshot (defaults to enabled). */
-function enabledSnapshotFor(
-  snapshot: DesktopSettingsSnapshot | undefined,
-  registryId: string,
-): boolean {
-  const agents = snapshot?.acpAgents as
-    | Record<string, { enabled?: boolean } | undefined>
-    | undefined;
-  return agents?.[registryId]?.enabled !== false;
-}
-
 function managedGrokBuildsSnapshot(
   snapshot: DesktopSettingsSnapshot | undefined,
 ): boolean {
   return snapshot?.acpAgents.grok?.managedBuilds !== false;
-}
-
-/**
- * Settings-screen display order. Gemini CLI sorts last: Google withdrew CLI
- * access for regular consumer accounts, so the section is unusable for most
- * operators. Display-only — the IPC/catalog order from listAcpAgents is
- * unchanged for other consumers.
- */
-function displayOrderedEntries(
-  entries: AcpAgentSettingsEntry[],
-): AcpAgentSettingsEntry[] {
-  return [
-    ...entries.filter((entry) => entry.registryId !== "gemini"),
-    ...entries.filter((entry) => entry.registryId === "gemini"),
-  ];
 }
 
 /**
@@ -79,6 +57,9 @@ function displayOrderedEntries(
 export function AcpAgentsSettings(props: {
   catalogRefreshing?: boolean;
   desktopApi?: DesktopApi;
+  /** Render only the agent with this registry id — the focused
+   *  per-provider screen. Omitted = every discovered agent. */
+  only?: string;
   saving?: boolean;
   snapshot?: DesktopSettingsSnapshot;
   /** Persist a per-agent CLI-path override (also used to "pin" a discovered
@@ -146,9 +127,13 @@ export function AcpAgentsSettings(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.desktopApi]);
 
+  const visibleEntries = props.only
+    ? entries.filter((entry) => entry.registryId === props.only)
+    : displayOrderedAcpEntries(entries);
+
   return (
     <>
-      {displayOrderedEntries(entries).map((entry) => (
+      {visibleEntries.map((entry) => (
         <Fragment key={entry.backendId}>
           {entry.registryId === "kimi"
           && entry.incompatibleInstances?.length ? (
@@ -160,7 +145,7 @@ export function AcpAgentsSettings(props: {
           <AcpAgentSection
             entry={entry}
             cliPathSnapshot={cliPathSnapshotFor(props.snapshot, entry.registryId)}
-            enabled={enabledSnapshotFor(props.snapshot, entry.registryId)}
+            enabled={acpAgentEnabledInSnapshot(props.snapshot, entry.registryId)}
             managedGrokBuilds={managedGrokBuildsSnapshot(props.snapshot)}
             saving={props.saving}
             refreshing={refreshing || loading || props.catalogRefreshing}
@@ -174,7 +159,7 @@ export function AcpAgentsSettings(props: {
                     if (!saved) {
                       return { saved: false };
                     }
-                    if (!enabledSnapshotFor(props.snapshot, registryId)) {
+                    if (!acpAgentEnabledInSnapshot(props.snapshot, registryId)) {
                       return { saved: true, verification: "deferred" };
                     }
                     return {
@@ -192,14 +177,17 @@ export function AcpAgentsSettings(props: {
           />
         </Fragment>
       ))}
-      {!loading && entries.length === 0 ? (
+      {!loading && visibleEntries.length === 0 ? (
         <SettingsSection
           eyebrow="Models"
           title="AI providers"
           sectionId="acp-unavailable"
         >
           <p className="settings-empty">
-            {error ?? "No AI providers are available right now."}
+            {error
+              ?? (props.only
+                ? "This provider is unavailable right now."
+                : "No AI providers are available right now.")}
           </p>
         </SettingsSection>
       ) : null}

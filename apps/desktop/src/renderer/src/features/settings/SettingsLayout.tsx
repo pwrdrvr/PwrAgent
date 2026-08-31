@@ -41,6 +41,12 @@ import {
  */
 export type SettingsChipTone = "default" | "muted" | "ok" | "err" | "warn";
 
+function settingsChipClassName(kind?: SettingsChipTone): string {
+  return kind && kind !== "default" && kind !== "muted"
+    ? `settings-card__chip settings-card__chip--${kind}`
+    : "settings-card__chip";
+}
+
 type SettingsSectionRegistration = {
   element: HTMLElement;
   id: string;
@@ -306,10 +312,7 @@ export function SettingsSection(props: {
   const bodyId = `settings-section-${sectionId}-body`;
   const collapsed = pane?.collapsedSections[sectionId] === true;
 
-  const chipClass =
-    props.chipKind && props.chipKind !== "default" && props.chipKind !== "muted"
-      ? `settings-card__chip settings-card__chip--${props.chipKind}`
-      : "settings-card__chip";
+  const chipClass = settingsChipClassName(props.chipKind);
 
   useLayoutEffect(() => {
     const element = headerRef.current;
@@ -456,10 +459,7 @@ export function SettingsSectionGroup(props: {
   const headingId = `settings-group-${props.groupId}-heading`;
   const bodyId = `settings-group-${props.groupId}-body`;
 
-  const chipClass =
-    props.chipKind && props.chipKind !== "default" && props.chipKind !== "muted"
-      ? `settings-card__chip settings-card__chip--${props.chipKind}`
-      : "settings-card__chip";
+  const chipClass = settingsChipClassName(props.chipKind);
 
   const toggle = () => {
     setCollapsed((current) => {
@@ -574,6 +574,92 @@ export function SettingsField(props: {
         ) : null}
       </div>
     </div>
+  );
+}
+
+/**
+ * Compact cross-link strip shown at the top of a focused sub-screen
+ * (per-provider, per-platform). Summarizes the parent hub's key state
+ * — "New thread defaults" on a provider screen, "Messaging general"
+ * on a platform screen — with one action back to the hub, so editing
+ * a provider never strands the operator away from the defaults.
+ */
+export function SettingsContextStrip(props: {
+  /** Tiny uppercase kicker, e.g. "Defaults" / "General". */
+  eyebrow: string;
+  /** Name of the summarized hub surface, e.g. "New thread defaults". */
+  label: string;
+  /** Summary chips (current model, effort, master switch state, …). */
+  items: ReactNode[];
+  actionLabel: string;
+  onAction: () => void;
+}) {
+  return (
+    <div aria-label={`${props.label} summary`} className="settings-strip" role="note">
+      <span className="settings-strip__eyebrow">{props.eyebrow}</span>
+      <span className="settings-strip__label">{props.label}</span>
+      <span className="settings-strip__meta">
+        {props.items.map((item, index) => (
+          <span key={index} className="settings-strip__chip">
+            {item}
+          </span>
+        ))}
+      </span>
+      <button
+        className="button button--ghost settings-strip__action"
+        type="button"
+        onClick={props.onAction}
+      >
+        {props.actionLabel}
+      </button>
+    </div>
+  );
+}
+
+/**
+ * One row of a hub index (AI Providers → provider list, Messaging →
+ * platform list). The whole row is the button that opens the entry's
+ * focused screen.
+ */
+export function SettingsIndexRow(props: {
+  name: string;
+  /** Optional leading mark (platform icon). */
+  glyph?: ReactNode;
+  /** Mono detail under the name (active path, version, adapter state). */
+  meta?: ReactNode;
+  chip?: ReactNode;
+  chipKind?: SettingsChipTone;
+  /** Renders the name muted — the entry is switched off. */
+  off?: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      aria-label={`Open ${props.name} settings`}
+      className={`settings-index__row${props.off ? " is-off" : ""}`}
+      type="button"
+      onClick={props.onOpen}
+    >
+      {props.glyph ? (
+        <span aria-hidden="true" className="settings-index__glyph">
+          {props.glyph}
+        </span>
+      ) : null}
+      <span className="settings-index__main">
+        <span className="settings-index__name">{props.name}</span>
+        {props.meta ? (
+          <span className="settings-index__meta">{props.meta}</span>
+        ) : null}
+      </span>
+      {props.chip ? (
+        <span className={settingsChipClassName(props.chipKind)}>
+          {props.chip}
+        </span>
+      ) : null}
+      <span aria-hidden="true" className="settings-index__open">
+        Configure ›
+      </span>
+    </button>
   );
 }
 

@@ -116,9 +116,10 @@ async function openSettingsSection(
   await expect(page.getByRole("button", { name: "Open settings" })).toBeVisible();
   await page.getByRole("button", { name: "Open settings" }).click();
 
+  // Exact, so a group's "Expand <label>" caret toggle doesn't also match.
   const navButton = page
     .getByRole("navigation", { name: "Settings sections" })
-    .getByRole("button", { name: params.navLabel });
+    .getByRole("button", { name: params.navLabel, exact: true });
   await expect(navButton).toBeVisible();
   await navButton.click();
 
@@ -126,26 +127,28 @@ async function openSettingsSection(
 }
 
 /**
- * Scroll the named platform section within Settings → Messaging into
- * the center of the viewport, then capture. Each per-platform section
- * is rendered with a heading containing the platform name (Telegram,
- * Discord, Slack, Mattermost, Feishu / Lark, LINE).
+ * From the Settings → Messaging hub, open the named platform's focused
+ * screen via its index row (Telegram, Discord, Slack, Mattermost,
+ * Feishu / Lark, LINE), then wait for the platform's own pane region.
  */
-async function scrollMessagingPlatformIntoView(
+async function openMessagingPlatformScreen(
   page: Page,
   platformLabel: string,
 ): Promise<void> {
-  const region = page.getByRole("region", { name: "Messaging settings" });
-  await expect(region).toBeVisible();
+  const hub = page.getByRole("region", { name: "Messaging settings" });
+  await expect(hub).toBeVisible();
+  await hub
+    .getByRole("button", { name: `Open ${platformLabel} settings` })
+    .click();
 
-  // The platform header is rendered as a heading within the messaging
-  // section stack. Use a text locator scoped to the region so we
-  // don't catch matches elsewhere on the page.
-  const platformHeading = region.getByText(platformLabel, { exact: true }).first();
-  await platformHeading.waitFor({ state: "visible", timeout: 10_000 });
-  await platformHeading.evaluate((node) => {
-    node.scrollIntoView({ behavior: "instant", block: "center" });
+  const region = page.getByRole("region", {
+    name: `${platformLabel} messaging settings`,
   });
+  await expect(region).toBeVisible();
+  const platformHeading = region
+    .getByRole("heading", { name: platformLabel })
+    .first();
+  await platformHeading.waitFor({ state: "visible", timeout: 10_000 });
   await new Promise((resolve) => setTimeout(resolve, 250));
 }
 
@@ -195,7 +198,7 @@ test("settings-worktrees — Settings → Worktrees panel", async () => {
   }
 });
 
-test("settings-models — Settings → Models panel", async () => {
+test("settings-models — Settings → AI Providers panel", async () => {
   test.setTimeout(120_000);
 
   const app = await launchDocsSiteApp({
@@ -206,7 +209,7 @@ test("settings-models — Settings → Models panel", async () => {
 
   try {
     await openSettingsSection(app.window, {
-      navLabel: "Models",
+      navLabel: "AI Providers",
       regionLabel: "Model settings",
     });
 
@@ -311,17 +314,17 @@ for (const shot of MESSAGING_PLATFORM_SHOTS) {
         regionLabel: "Messaging settings",
       });
 
-      const messagingRegion = app.window.getByRole("region", {
-        name: "Messaging settings",
+      await openMessagingPlatformScreen(app.window, shot.label);
+
+      const platformRegion = app.window.getByRole("region", {
+        name: `${shot.label} messaging settings`,
       });
       await expect(
-        messagingRegion.locator('input[type="password"]:disabled'),
+        platformRegion.locator('input[type="password"]:disabled'),
       ).toHaveCount(0);
       await expect(
-        messagingRegion.getByText(/Secret storage disabled via/i),
+        platformRegion.getByText(/Secret storage disabled via/i),
       ).toHaveCount(0);
-
-      await scrollMessagingPlatformIntoView(app.window, shot.label);
 
       await bringToFront(app.electronApp);
       captureNative(shot.filename);
@@ -354,10 +357,16 @@ async function navigateToTelegramPairing(page: Page): Promise<void> {
 
   const messagingNav = page
     .getByRole("navigation", { name: "Settings sections" })
-    .getByRole("button", { name: "Messaging" });
+    .getByRole("button", { name: "Messaging", exact: true });
   await messagingNav.click();
   await expect(
     page.getByRole("region", { name: "Messaging settings" }),
+  ).toBeVisible();
+
+  // Pairing lives on Telegram's focused screen behind the hub index.
+  await page.getByRole("button", { name: "Open Telegram settings" }).click();
+  await expect(
+    page.getByRole("region", { name: "Telegram messaging settings" }),
   ).toBeVisible();
 
   const pairingTarget = page

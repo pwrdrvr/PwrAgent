@@ -55,7 +55,9 @@ import {
 } from "../../lib/slack-pairing-approval";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
+  SettingsContextStrip,
   SettingsField,
+  SettingsIndexRow,
   SettingsPanelHead,
   SettingsSection,
   SettingsSectionStack,
@@ -77,8 +79,33 @@ import {
   sourceBadge,
 } from "./settings-fields";
 
+/** The six platforms that have a focused Settings screen. */
+export type MessagingSettingsFocus =
+  | "telegram"
+  | "discord"
+  | "mattermost"
+  | "slack"
+  | "feishu"
+  | "line";
+
+const MESSAGING_PLATFORM_LABELS: Record<MessagingSettingsFocus, string> = {
+  telegram: "Telegram",
+  discord: "Discord",
+  mattermost: "Mattermost",
+  slack: "Slack",
+  feishu: "Feishu / Lark",
+  line: "LINE",
+};
+
 export function MessagingSettings(props: {
   desktopApi?: DesktopApi;
+  /**
+   * Focused platform screen. Undefined renders the messaging hub —
+   * general defaults, routes, and the platform index.
+   */
+  focus?: MessagingSettingsFocus;
+  /** Navigate between the hub (undefined) and a focused platform screen. */
+  onFocusChange?: (focus?: MessagingSettingsFocus) => void;
   onOpenThread?: (target: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -222,6 +249,9 @@ export function MessagingSettings(props: {
   const configuredRoutePlatforms = configuredMessagingRoutePlatforms(
     props.snapshot,
   );
+  const focusedPlatformLabel = props.focus
+    ? MESSAGING_PLATFORM_LABELS[props.focus]
+    : undefined;
 
   const previewToolUpdateBindingReset = async (
     targetKind: "thread" | "agent_thread",
@@ -287,12 +317,41 @@ export function MessagingSettings(props: {
 
   return (
     <MessagingRoutesProvider desktopApi={props.desktopApi}>
-      <SettingsSectionStack paneId="messaging" aria-label="Messaging settings">
-      <SettingsPanelHead
-        eyebrow="Messaging"
-        title="Connected chat platforms"
-        help="Bridge PwrAgent threads to messaging platforms so you can drive runs from your phone. Tokens are stored in the system keychain. Authorization defaults closed: if no allowed IDs are configured, inbound messages are discarded but logged in Messaging Activity so you can copy IDs into the allowlist."
-      />
+      <SettingsSectionStack
+        paneId={props.focus ? `messaging-${props.focus}` : "messaging"}
+        aria-label={
+          focusedPlatformLabel
+            ? `${focusedPlatformLabel} messaging settings`
+            : "Messaging settings"
+        }
+      >
+      {focusedPlatformLabel ? (
+        <SettingsPanelHead
+          eyebrow="Messaging"
+          title={focusedPlatformLabel}
+          help={`Adapter switch, tokens, pairing, and access controls for the ${focusedPlatformLabel} bridge.`}
+        />
+      ) : (
+        <SettingsPanelHead
+          eyebrow="Messaging"
+          title="Connected chat platforms"
+          help="Bridge PwrAgent threads to messaging platforms so you can drive runs from your phone. Tokens are stored in the system keychain. Authorization defaults closed: if no allowed IDs are configured, inbound messages are discarded but logged in Messaging Activity so you can copy IDs into the allowlist."
+        />
+      )}
+
+      {focusedPlatformLabel ? (
+        <SettingsContextStrip
+          actionLabel="Edit general"
+          eyebrow="Messaging"
+          items={[
+            masterEnabled ? "Messaging on" : "Messaging off",
+            `${toolUpdateModeLabel(toolUpdateMode.value)} thread updates`,
+            `${inputDebounceMs.value} ms debounce`,
+          ]}
+          label="General"
+          onAction={() => props.onFocusChange?.(undefined)}
+        />
+      ) : null}
 
       {runtimeMessaging.overrideActive && runtimeMessaging.disabled ? (
         <section className="settings-panel settings-panel--warning" role="status">
@@ -308,6 +367,7 @@ export function MessagingSettings(props: {
         </section>
       ) : null}
 
+      {!props.focus ? (
       <SettingsSection eyebrow="Messaging" title="General">
         <div className="settings-fields">
           <ToggleField
@@ -509,14 +569,86 @@ export function MessagingSettings(props: {
           ) : null}
         </div>
       </SettingsSection>
+      ) : null}
 
-      <MessagingRoutesSettings
-        agentRouteToolUpdateMode={managerToolUpdateMode.value}
-        configuredPlatforms={configuredRoutePlatforms}
-        desktopApi={props.desktopApi}
-        onOpenThread={props.onOpenThread}
-      />
+      {!props.focus ? (
+        <MessagingRoutesSettings
+          agentRouteToolUpdateMode={managerToolUpdateMode.value}
+          configuredPlatforms={configuredRoutePlatforms}
+          desktopApi={props.desktopApi}
+          onOpenThread={props.onOpenThread}
+        />
+      ) : null}
 
+      {!props.focus ? (
+        <SettingsSection
+          eyebrow="Messaging"
+          title="Platforms"
+          sectionId="platform-index"
+          description="Each platform has its own screen for tokens, pairing, and access controls."
+        >
+          <div className="settings-index" aria-label="Platform index">
+            <SettingsIndexRow
+              glyph={<TelegramIcon size={16} variant="color" />}
+              name="Telegram"
+              meta={telegram.enabled.value ? "Adapter enabled" : "Adapter off"}
+              chip={chipLabelForBotToken(telegram.botToken)}
+              chipKind={chipKindForBotToken(telegram.botToken)}
+              off={!telegram.enabled.value}
+              onOpen={() => props.onFocusChange?.("telegram")}
+            />
+            <SettingsIndexRow
+              glyph={<DiscordIcon size={16} variant="white" />}
+              name="Discord"
+              meta={discord.enabled.value ? "Adapter enabled" : "Adapter off"}
+              chip={chipLabelForBotToken(discord.botToken)}
+              chipKind={chipKindForBotToken(discord.botToken)}
+              off={!discord.enabled.value}
+              onOpen={() => props.onFocusChange?.("discord")}
+            />
+            <SettingsIndexRow
+              glyph={<MattermostIcon size={16} />}
+              name="Mattermost"
+              meta={
+                mattermost.enabled.value ? "Adapter enabled" : "Adapter off"
+              }
+              chip={chipLabelForBotToken(mattermost.botToken)}
+              chipKind={chipKindForBotToken(mattermost.botToken)}
+              off={!mattermost.enabled.value}
+              onOpen={() => props.onFocusChange?.("mattermost")}
+            />
+            <SettingsIndexRow
+              glyph={<SlackIcon size={16} />}
+              name="Slack"
+              meta={slack.enabled.value ? "Adapter enabled" : "Adapter off"}
+              chip={chipLabelForBotToken(slack.botToken)}
+              chipKind={chipKindForBotToken(slack.botToken)}
+              off={!slack.enabled.value}
+              onOpen={() => props.onFocusChange?.("slack")}
+            />
+            <SettingsIndexRow
+              glyph={<FeishuIcon size={16} />}
+              name="Feishu / Lark"
+              meta={feishu.enabled.value ? "Adapter enabled" : "Adapter off"}
+              chip={chipLabelForBotToken(feishu.appSecret)}
+              chipKind={chipKindForBotToken(feishu.appSecret)}
+              off={!feishu.enabled.value}
+              onOpen={() => props.onFocusChange?.("feishu")}
+            />
+            <SettingsIndexRow
+              glyph={<LineIcon size={16} />}
+              name="LINE"
+              meta={line.enabled.value ? "Adapter enabled" : "Adapter off"}
+              chip={chipLabelForBotToken(line.channelAccessToken)}
+              chipKind={chipKindForBotToken(line.channelAccessToken)}
+              off={!line.enabled.value}
+              onOpen={() => props.onFocusChange?.("line")}
+            />
+          </div>
+        </SettingsSection>
+      ) : null}
+
+      {props.focus === "telegram" ? (
       <SettingsSection
         eyebrow="Messaging"
         title="Telegram"
@@ -657,7 +789,9 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+      ) : null}
 
+      {props.focus === "discord" ? (
       <SettingsSection
         eyebrow="Messaging"
         title="Discord"
@@ -795,7 +929,9 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+      ) : null}
 
+      {props.focus === "mattermost" ? (
       <SettingsSection
         eyebrow="Messaging"
         title="Mattermost"
@@ -1034,7 +1170,9 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+      ) : null}
 
+      {props.focus === "slack" ? (
       <SettingsSection
         eyebrow="Messaging"
         title="Slack"
@@ -1419,7 +1557,9 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+      ) : null}
 
+      {props.focus === "feishu" ? (
       <SettingsSection
         eyebrow="Messaging"
         title="Feishu / Lark"
@@ -1682,7 +1822,9 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+      ) : null}
 
+      {props.focus === "line" ? (
       <SettingsSection
         eyebrow="Messaging"
         title="LINE"
@@ -1862,6 +2004,7 @@ export function MessagingSettings(props: {
           />
         </div>
       </SettingsSection>
+      ) : null}
       </SettingsSectionStack>
     </MessagingRoutesProvider>
   );

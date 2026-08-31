@@ -591,6 +591,42 @@ describe("AcpAgentsSettings", () => {
     expect(screen.getByText("Not installed.")).toBeInTheDocument();
   });
 
+  it("renders only the requested agent on a focused provider screen", async () => {
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1000,
+      entries: [grokEntry(), geminiEntry()],
+    }));
+
+    render(
+      <AcpAgentsSettings
+        desktopApi={{ listAcpAgents } as DesktopApi}
+        only="gemini"
+      />,
+    );
+
+    expect(await screen.findByText("Gemini CLI")).toBeInTheDocument();
+    expect(screen.queryByText("Grok")).not.toBeInTheDocument();
+  });
+
+  it("says the provider is unavailable when the focused agent is missing", async () => {
+    const listAcpAgents = vi.fn(async () => ({
+      fetchedAt: 1000,
+      entries: [grokEntry()],
+    }));
+
+    render(
+      <AcpAgentsSettings
+        desktopApi={{ listAcpAgents } as DesktopApi}
+        only="qwen"
+      />,
+    );
+
+    expect(
+      await screen.findByText("This provider is unavailable right now."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Grok")).not.toBeInTheDocument();
+  });
+
   it("surfaces a detected CLI that failed ACP verification", async () => {
     const rejectedPath = "/usr/local/bin/qwen";
     const desktopApi = {
