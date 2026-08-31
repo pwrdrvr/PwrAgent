@@ -441,6 +441,7 @@ describe("discord adapter", () => {
     const createThreadFromMessage = vi.fn(async () => ({
       id: "1480556454498009358",
       name: "Investigate reply support",
+      parent_id: TEST_CHANNEL_ID,
     }));
     const getThreadPermissions = vi.fn(async () => ({
       botId: "1480556454498009351",
@@ -494,13 +495,24 @@ describe("discord adapter", () => {
         channelId: TEST_CHANNEL_ID,
         guildId: TEST_GUILD_ID,
         isThread: false,
-        messageId: TEST_MESSAGE_ID,
+      },
+    };
+    const sourceSurface = {
+      channel: "discord" as const,
+      id: TEST_MESSAGE_ID,
+      state: {
+        opaque: {
+          channelId: TEST_CHANNEL_ID,
+          guildId: TEST_GUILD_ID,
+          messageId: TEST_MESSAGE_ID,
+        },
       },
     };
 
     await expect(adapter.getManagedConversationRights({
       channel: parent,
       routingState,
+      sourceSurface,
     })).resolves.toMatchObject({
       operations: [{ operation: "create_child", supported: true }],
       outcome: "ok",
@@ -508,6 +520,7 @@ describe("discord adapter", () => {
     await expect(adapter.createManagedConversation({
       parent,
       routingState,
+      sourceSurface,
       title: "Investigate reply support",
     })).resolves.toMatchObject({
       conversation: {
@@ -531,6 +544,83 @@ describe("discord adapter", () => {
       TEST_MESSAGE_ID,
       { name: "Investigate reply support" },
     );
+  });
+
+  it.each([
+    {
+      errorMessage: "Discord returned an invalid created thread.",
+      name: "malformed thread ID",
+      thread: {
+        id: "not-a-snowflake",
+        parent_id: TEST_CHANNEL_ID,
+      },
+    },
+    {
+      errorMessage: "Discord returned a thread for an unexpected parent channel.",
+      name: "mismatched parent channel",
+      thread: {
+        id: "1480556454498009358",
+        parent_id: "1480556454498009359",
+      },
+    },
+    {
+      errorMessage: "Discord returned an invalid created thread parent.",
+      name: "malformed parent channel ID",
+      thread: {
+        id: "1480556454498009358",
+        parent_id: "not-a-snowflake",
+      },
+    },
+  ])("rejects a created Discord thread with a $name", async ({
+    errorMessage: expectedError,
+    thread,
+  }) => {
+    const logger = { debug: vi.fn(), warn: vi.fn() };
+    const adapter = new DiscordAdapter({
+      api: createApi({
+        createThreadFromMessage: async () => thread,
+      }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+      logger,
+      now: () => 1234,
+    });
+
+    await expect(adapter.createManagedConversation({
+      parent: {
+        channel: "discord",
+        conversation: {
+          id: TEST_CHANNEL_ID,
+          kind: "channel",
+          workspaceId: TEST_GUILD_ID,
+        },
+      },
+      routingState: {
+        opaque: {
+          channelId: TEST_CHANNEL_ID,
+          guildId: TEST_GUILD_ID,
+        },
+      },
+      sourceSurface: {
+        channel: "discord",
+        id: TEST_MESSAGE_ID,
+        state: {
+          opaque: {
+            channelId: TEST_CHANNEL_ID,
+            guildId: TEST_GUILD_ID,
+            messageId: TEST_MESSAGE_ID,
+          },
+        },
+      },
+      title: "Investigate reply support",
+    })).resolves.toMatchObject({
+      errorMessage: expectedError,
+      outcome: "failed",
+    });
+    expect(logger.warn).toHaveBeenCalledTimes(1);
   });
 
   it("reports the missing Discord thread permission before creating a thread", async () => {
@@ -589,7 +679,17 @@ describe("discord adapter", () => {
         opaque: {
           channelId: TEST_CHANNEL_ID,
           guildId: TEST_GUILD_ID,
-          messageId: TEST_MESSAGE_ID,
+        },
+      },
+      sourceSurface: {
+        channel: "discord",
+        id: TEST_MESSAGE_ID,
+        state: {
+          opaque: {
+            channelId: TEST_CHANNEL_ID,
+            guildId: TEST_GUILD_ID,
+            messageId: TEST_MESSAGE_ID,
+          },
         },
       },
       title: "Investigate reply support",
@@ -1331,12 +1431,25 @@ describe("discord adapter", () => {
           kind: "text",
           routingState: expect.objectContaining({
             opaque: expect.objectContaining({
-              messageId: inboundMessage.id,
+              channelId: TEST_CHANNEL_ID,
+              guildId: TEST_GUILD_ID,
             }),
           }),
+          sourceSurface: {
+            channel: "discord",
+            id: inboundMessage.id,
+            state: {
+              opaque: {
+                channelId: TEST_CHANNEL_ID,
+                guildId: TEST_GUILD_ID,
+                messageId: inboundMessage.id,
+              },
+            },
+          },
           text: "pair 123456789ABCDEFGHJKLMNPQRSTUVWXY",
         }),
       ]);
+      expect(events[0]?.routingState?.opaque).not.toHaveProperty("messageId");
       expect(rejectedEvents).toEqual([]);
       expect(logger.warn).not.toHaveBeenCalledWith(
         "discord inbound ignored unauthorized guild",
@@ -2216,8 +2329,9 @@ function createApi(overrides: Partial<DiscordApi> = {}): DiscordApi {
       channel_id: channelId,
       id: "message-2",
     }),
-    createThreadFromMessage: async () => ({
-      id: "thread-1",
+    createThreadFromMessage: async (channelId) => ({
+      id: "1480556454498009358",
+      parent_id: channelId,
     }),
     deleteApplicationCommand: async () => {},
     getChannel: async (id: string) => ({ id }),

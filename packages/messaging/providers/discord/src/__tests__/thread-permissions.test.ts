@@ -104,4 +104,28 @@ describe("Discord thread permissions", () => {
     expect(url.searchParams.get("guild_id")).toBe(GUILD_ID);
     expect(url.searchParams.get("disable_guild_select")).toBe("true");
   });
+
+  it("rejects a DM channel that has no selected guild", async () => {
+    const permissions = await inspectDiscordThreadPermissionsWithRest({
+      channelId: CHANNEL_ID,
+      guildId: GUILD_ID,
+      rest: {
+        get: async (route) => {
+          if (route === "/users/%40me") return { id: BOT_ID };
+          if (route === `/guilds/${GUILD_ID}`) return {};
+          if (route === `/channels/${CHANNEL_ID}`) return {};
+          if (route === `/guilds/${GUILD_ID}/members/${BOT_ID}`) {
+            return { roles: [] };
+          }
+          if (route === `/guilds/${GUILD_ID}/roles`) return [];
+          throw new Error(`unexpected route: ${route}`);
+        },
+      },
+    });
+
+    expect(permissions).toMatchObject({
+      errorMessage: "The selected Discord channel is not in the selected server.",
+      status: "failed",
+    });
+  });
 });

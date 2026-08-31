@@ -4208,6 +4208,10 @@ describe("MessagingController", () => {
     const event = buildTextEvent("attach it here", {
       channel: channelEvent.channel,
       routingState: channelEvent.routingState,
+      sourceSurface: {
+        channel: "telegram",
+        id: "source-message-1",
+      },
     });
     await harness.store.upsertBinding({
       id: "binding:telegram:channel::-1001:codex:thread-1",
@@ -4631,6 +4635,7 @@ describe("MessagingController", () => {
         actor: event.actor,
         parent: event.channel,
         routingState: event.routingState,
+        sourceSurface: event.sourceSurface,
         title: "Telegram thread naming issue",
       }),
     );
@@ -9194,6 +9199,60 @@ describe("MessagingController", () => {
         },
       },
     });
+  });
+
+  it("does not persist an ephemeral inbound source surface during binding refresh", async () => {
+    const harness = await createHarness();
+    const channel = {
+      channel: "discord" as const,
+      conversation: {
+        id: "1480556454498009352",
+        kind: "channel" as const,
+        workspaceId: "1480556454498009353",
+      },
+    };
+    const routingState = {
+      opaque: {
+        channelId: "1480556454498009352",
+        guildId: "1480556454498009353",
+        isThread: false,
+      },
+    };
+    await harness.store.upsertBinding({
+      id: "binding:discord:channel::1480556454498009352:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel,
+      createdAt: 1000,
+      routingState,
+      targetKind: "thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+    const upsertBinding = vi.spyOn(harness.store, "upsertBinding");
+    const event = buildTextEvent("attach this thread", {
+      channel,
+      routingState,
+      sourceSurface: {
+        channel: "discord",
+        id: "1480556454498009354",
+        state: {
+          opaque: {
+            channelId: "1480556454498009352",
+            guildId: "1480556454498009353",
+            messageId: "1480556454498009354",
+          },
+        },
+      },
+    });
+
+    await (
+      harness.controller as unknown as {
+        refreshBindingFromInbound(event: MessagingInboundEvent): Promise<void>;
+      }
+    ).refreshBindingFromInbound(event);
+
+    expect(upsertBinding).not.toHaveBeenCalled();
   });
 
   it("drops typing activity during provider cool-off without spending write budget", async () => {
@@ -24185,6 +24244,7 @@ function buildTextEvent(
     botMention?: boolean;
     channel?: MessagingInboundTextEvent["channel"];
     routingState?: MessagingInboundTextEvent["routingState"];
+    sourceSurface?: MessagingInboundTextEvent["sourceSurface"];
   } = {},
 ): MessagingInboundTextEvent {
   return {
@@ -24203,6 +24263,7 @@ function buildTextEvent(
     receivedAt: 1000,
     ...(params.botMention ? { botMention: true } : {}),
     routingState: params.routingState,
+    sourceSurface: params.sourceSurface,
     text,
   };
 }

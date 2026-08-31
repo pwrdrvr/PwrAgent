@@ -17,6 +17,7 @@ import type {
   AppServerThreadSummary,
   BackendSummary,
   DesktopSettingsSnapshot,
+  InspectDiscordThreadPermissionsResponse,
   ListMessagingRoutesResponse,
   MessagingPairingEntry,
   WorktreeSnapshotSummary,
@@ -4455,6 +4456,130 @@ describe("SettingsScreen", () => {
         guildId: "1480556454498009353",
       });
     });
+  });
+
+  it("reconciles the Discord permission server after authorized guilds change", () => {
+    const applicationId = "1480556454498009351";
+    const firstGuildId = "1480556454498009353";
+    const replacementGuildId = "1480556454498009354";
+    const initialSnapshot = createSnapshot();
+    initialSnapshot.messaging.discord.applicationId.value = applicationId;
+    const openDiscordThreadPermissionRequest = vi.fn(async () => ({
+      opened: true,
+      url: "https://discord.com/oauth2/authorize",
+    }));
+    const view = render(
+      <SettingsScreen
+        settings={createSettingsState(initialSnapshot)}
+        desktopApi={{ openDiscordThreadPermissionRequest }}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(
+      screen.getByRole("combobox", {
+        name: "Discord server for thread reply permissions",
+      }),
+    ).toHaveValue("");
+
+    const firstSnapshot = createSnapshot();
+    firstSnapshot.messaging.discord.applicationId.value = applicationId;
+    firstSnapshot.messaging.discord.authorizedGuilds.value = [
+      { id: firstGuildId, displayName: "First guild" },
+    ];
+    view.rerender(
+      <SettingsScreen
+        settings={createSettingsState(firstSnapshot)}
+        desktopApi={{ openDiscordThreadPermissionRequest }}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+    expect(
+      screen.getByRole("combobox", {
+        name: "Discord server for thread reply permissions",
+      }),
+    ).toHaveValue(firstGuildId);
+
+    const replacementSnapshot = createSnapshot();
+    replacementSnapshot.messaging.discord.applicationId.value = applicationId;
+    replacementSnapshot.messaging.discord.authorizedGuilds.value = [
+      { id: replacementGuildId, displayName: "Replacement guild" },
+    ];
+    view.rerender(
+      <SettingsScreen
+        settings={createSettingsState(replacementSnapshot)}
+        desktopApi={{ openDiscordThreadPermissionRequest }}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+    expect(
+      screen.getByRole("combobox", {
+        name: "Discord server for thread reply permissions",
+      }),
+    ).toHaveValue(replacementGuildId);
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "Request suggested permissions" }),
+    );
+    expect(openDiscordThreadPermissionRequest).toHaveBeenCalledWith({
+      guildId: replacementGuildId,
+    });
+  });
+
+  it("discards a Discord permission result after the channel selection changes", async () => {
+    const firstChannelId = "1480556454498009352";
+    const secondChannelId = "1480556454498009355";
+    const guildId = "1480556454498009353";
+    let resolveInspection!: (
+      value: InspectDiscordThreadPermissionsResponse,
+    ) => void;
+    const inspectDiscordThreadPermissions = vi.fn(
+      async (): Promise<InspectDiscordThreadPermissionsResponse> =>
+        await new Promise<InspectDiscordThreadPermissionsResponse>((resolve) => {
+          resolveInspection = resolve;
+        }),
+    );
+    const snapshot = createSnapshot();
+    snapshot.messaging.discord.authorizedGuilds.value = [
+      { id: guildId, displayName: "PwrAgent test guild" },
+    ];
+    render(
+      <SettingsScreen
+        settings={createSettingsState(snapshot)}
+        desktopApi={{ inspectDiscordThreadPermissions }}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+    const channelInput = screen.getByRole("textbox", {
+      name: "Discord channel ID for thread reply permissions",
+    });
+
+    fireEvent.change(channelInput, { target: { value: firstChannelId } });
+    fireEvent.click(screen.getByRole("button", { name: "Check permissions" }));
+    fireEvent.change(channelInput, { target: { value: secondChannelId } });
+    await act(async () => {
+      resolveInspection({
+        channelId: firstChannelId,
+        checkedAt: 1,
+        durationMs: 1,
+        guildId,
+        permissions: [
+          {
+            granted: false,
+            id: "create_public_threads",
+            label: "Create Public Threads",
+          },
+        ],
+        status: "ok",
+      });
+    });
+    fireEvent.change(channelInput, { target: { value: firstChannelId } });
+
+    expect(screen.queryByText(/Missing: Create Public Threads/)).not.toBeInTheDocument();
   });
 
   it("shows a leftover Events API notice and persists Socket Mode", async () => {

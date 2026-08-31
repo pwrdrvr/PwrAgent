@@ -162,7 +162,7 @@ export async function inspectDiscordThreadPermissionsWithRest(
       ) as Promise<DiscordGuildMemberPayload>,
       request.rest.get(`/guilds/${request.guildId}/roles`) as Promise<DiscordRolePayload[]>,
     ]);
-    if (channel.guild_id && channel.guild_id !== request.guildId) {
+    if (channel.guild_id !== request.guildId) {
       throw new Error("The selected Discord channel is not in the selected server.");
     }
 

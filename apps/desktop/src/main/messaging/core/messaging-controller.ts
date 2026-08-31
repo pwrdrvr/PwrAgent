@@ -16380,6 +16380,7 @@ export class MessagingController {
         actor: origin.origin.event.actor,
         parent: origin.origin.event.channel,
         routingState: origin.origin.event.routingState,
+        sourceSurface: origin.origin.event.sourceSurface,
         title: sanitizeMessagingChildTitle(args.title),
       });
       if (createResult.outcome !== "created" || !createResult.conversation) {
@@ -17487,6 +17488,7 @@ export class MessagingController {
       actor: origin.event.actor,
       channel: origin.event.channel,
       routingState: origin.event.routingState,
+      sourceSurface: origin.event.sourceSurface,
     });
     const operation = rights.operations.find(
       (candidate) => candidate.operation === "create_child",

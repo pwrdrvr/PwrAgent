@@ -39,6 +39,7 @@ import type {
   MessagingClientRateLimitStrategy,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
+  MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
 import {
   evictStaleStreamAnchors,
@@ -138,7 +139,7 @@ export type DiscordMessage = {
 export type DiscordThreadChannel = {
   id: string;
   name?: string;
-  parent_id?: string;
+  parent_id: string;
 };
 
 export type DiscordUser = {
@@ -817,7 +818,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     request: MessagingManagedConversationRightsRequest,
   ): Promise<MessagingManagedConversationRightsResult> {
     const conversation = request.channel.conversation;
-    const target = discordManagedThreadTarget(request.channel, request.routingState);
+    const target = discordManagedThreadTarget(
+      request.channel,
+      request.routingState,
+      request.sourceSurface,
+    );
     if (!target) {
       return {
         channel: this.channel,
@@ -901,7 +906,11 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   async createManagedConversation(
     request: MessagingManagedConversationCreateRequest,
   ): Promise<MessagingManagedConversationCreateResult> {
-    const target = discordManagedThreadTarget(request.parent, request.routingState);
+    const target = discordManagedThreadTarget(
+      request.parent,
+      request.routingState,
+      request.sourceSurface,
+    );
     if (!target) {
       return {
         channel: this.channel,
@@ -915,6 +924,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       actor: request.actor,
       channel: request.parent,
       routingState: request.routingState,
+      sourceSurface: request.sourceSurface,
     });
     const createChild = rights.operations.find(
       (operation) => operation.operation === "create_child",
@@ -936,6 +946,48 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       const thread = await this.api.createThreadFromMessage(target.channelId, target.messageId, {
         name: sanitizeDiscordThreadName(request.title),
       });
+      const threadIdValidation = validateDiscordSnowflake(thread.id);
+      if (!threadIdValidation.ok) {
+        logDiscordInvalidIdentifier({
+          field: "channel_id",
+          logger: this.options.logger,
+          reason: threadIdValidation.reason,
+          value: thread.id,
+        });
+        return {
+          channel: this.channel,
+          errorMessage: "Discord returned an invalid created thread.",
+          outcome: "failed",
+          updatedAt: this.now(),
+        };
+      }
+      const parentIdValidation = validateDiscordSnowflake(thread.parent_id);
+      if (!parentIdValidation.ok) {
+        logDiscordInvalidIdentifier({
+          field: "channel_id",
+          logger: this.options.logger,
+          reason: parentIdValidation.reason,
+          value: thread.parent_id,
+        });
+        return {
+          channel: this.channel,
+          errorMessage: "Discord returned an invalid created thread parent.",
+          outcome: "failed",
+          updatedAt: this.now(),
+        };
+      }
+      if (thread.parent_id !== target.channelId) {
+        this.options.logger?.warn?.("discord created thread response rejected", {
+          platform: this.channel,
+          reason: "parent_channel_mismatch",
+        });
+        return {
+          channel: this.channel,
+          errorMessage: "Discord returned a thread for an unexpected parent channel.",
+          outcome: "failed",
+          updatedAt: this.now(),
+        };
+      }
       return {
         channel: this.channel,
         conversation: {
@@ -1031,8 +1083,18 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const routingState = this.routingStateFromDiscord(message.channel_id, message.guild_id, {
       channelType: message.channel_type,
       isThread: message.is_thread,
-      messageId: message.id,
     });
+    const sourceSurface: MessagingSurfaceRef = {
+      channel: this.channel,
+      id: message.id,
+      state: {
+        opaque: {
+          channelId: message.channel_id,
+          guildId: message.guild_id ?? null,
+          messageId: message.id,
+        },
+      },
+    };
     const sourceUrl = discordConversationUrl({
       channelId: message.channel_id,
       guildId: message.guild_id,
@@ -1064,6 +1126,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         },
         receivedAt,
         routingState,
+        sourceSurface,
         sourceUrl,
         text: normalizedContent,
         ...(mentionRemainder !== undefined ? { botMention: true } : {}),
@@ -1097,6 +1160,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           }),
       receivedAt,
       routingState,
+      sourceSurface,
       sourceUrl,
     } as MessagingInboundEvent);
   }
@@ -2019,7 +2083,6 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       channelType?: number;
       interactionToken?: string;
       isThread?: boolean;
-      messageId?: string;
     },
   ): MessagingAdapterState {
     return {
@@ -2032,7 +2095,6 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         guildId: guildId ?? null,
         interactionToken: options?.interactionToken ?? null,
         isThread: options?.isThread ?? null,
-        messageId: options?.messageId ?? null,
       },
     };
   }
@@ -2682,22 +2744,28 @@ function isDiscordThreadConversation(
 function discordManagedThreadTarget(
   channel: MessagingChannelRef,
   routingState: MessagingAdapterState | undefined,
+  sourceSurface: MessagingSurfaceRef | undefined,
 ): { channelId: string; guildId: string; messageId: string } | undefined {
   if (isDiscordThreadChannel(channel, routingState)) {
     return undefined;
   }
   const opaque = discordRoutingOpaque(routingState);
+  const sourceOpaque = discordRoutingOpaque(sourceSurface?.state);
   const channelId = channel.conversation.id;
   const guildId = channel.conversation.workspaceId;
-  const messageId = opaque?.messageId;
+  const messageId = sourceSurface?.id;
   if (
-    typeof guildId !== "string"
+    sourceSurface?.channel !== "discord"
+    || typeof guildId !== "string"
     || typeof messageId !== "string"
     || !validateDiscordSnowflake(channelId).ok
     || !validateDiscordSnowflake(guildId).ok
     || !validateDiscordSnowflake(messageId).ok
     || (typeof opaque?.channelId === "string" && opaque.channelId !== channelId)
     || (typeof opaque?.guildId === "string" && opaque.guildId !== guildId)
+    || sourceOpaque?.channelId !== channelId
+    || sourceOpaque?.guildId !== guildId
+    || sourceOpaque?.messageId !== messageId
   ) {
     return undefined;
   }

@@ -1900,8 +1900,25 @@ function DiscordThreadPermissionsField(props: {
   const [requesting, setRequesting] = useState(false);
   const [result, setResult] = useState<InspectDiscordThreadPermissionsResponse>();
   const [notice, setNotice] = useState<string>();
-  const validGuild = validateDiscordSnowflake(guildId).ok;
-  const validChannel = validateDiscordSnowflake(channelId.trim()).ok;
+  const selectedGuildId = props.authorizedGuilds.some((guild) => guild.id === guildId)
+    ? guildId
+    : (props.authorizedGuilds[0]?.id ?? "");
+  const selectedChannelId = channelId.trim();
+  const permissionSelectionRef = useRef({
+    channelId: selectedChannelId,
+    guildId: selectedGuildId,
+  });
+  permissionSelectionRef.current = {
+    channelId: selectedChannelId,
+    guildId: selectedGuildId,
+  };
+  const visibleResult =
+    result?.guildId === selectedGuildId
+    && result.channelId === selectedChannelId
+      ? result
+      : undefined;
+  const validGuild = validateDiscordSnowflake(selectedGuildId).ok;
+  const validChannel = validateDiscordSnowflake(selectedChannelId).ok;
   const canCheck =
     Boolean(props.desktopApi?.inspectDiscordThreadPermissions)
     && validGuild
@@ -1916,16 +1933,28 @@ function DiscordThreadPermissionsField(props: {
 
   const checkPermissions = async () => {
     if (!canCheck || !props.desktopApi?.inspectDiscordThreadPermissions) return;
+    const request = {
+      channelId: selectedChannelId,
+      guildId: selectedGuildId,
+    };
     setChecking(true);
     setNotice(undefined);
     try {
-      setResult(await props.desktopApi.inspectDiscordThreadPermissions({
-        channelId: channelId.trim(),
-        guildId,
-      }));
+      const nextResult = await props.desktopApi.inspectDiscordThreadPermissions(request);
+      if (
+        permissionSelectionRef.current.channelId === request.channelId
+        && permissionSelectionRef.current.guildId === request.guildId
+      ) {
+        setResult(nextResult);
+      }
     } catch (error) {
-      setResult(undefined);
-      setNotice(error instanceof Error ? error.message : String(error));
+      if (
+        permissionSelectionRef.current.channelId === request.channelId
+        && permissionSelectionRef.current.guildId === request.guildId
+      ) {
+        setResult(undefined);
+        setNotice(error instanceof Error ? error.message : String(error));
+      }
     } finally {
       setChecking(false);
     }
@@ -1937,7 +1966,7 @@ function DiscordThreadPermissionsField(props: {
     setNotice(undefined);
     try {
       const opened = await props.desktopApi.openDiscordThreadPermissionRequest({
-        ...(validGuild ? { guildId } : {}),
+        ...(validGuild ? { guildId: selectedGuildId } : {}),
       });
       setNotice(
         opened.opened
@@ -1963,7 +1992,7 @@ function DiscordThreadPermissionsField(props: {
               aria-label="Discord server for thread reply permissions"
               className="settings-input"
               disabled={props.disabled || props.authorizedGuilds.length === 0}
-              value={guildId}
+              value={selectedGuildId}
               onChange={(event) => {
                 setGuildId(event.currentTarget.value);
                 setResult(undefined);
@@ -2010,9 +2039,9 @@ function DiscordThreadPermissionsField(props: {
               {requesting ? "Opening…" : "Request suggested permissions"}
             </button>
           </div>
-          {result?.status === "ok" ? (
+          {visibleResult?.status === "ok" ? (
             <div className="settings-field__help" role="status">
-              {result.permissions.map((permission) => (
+              {visibleResult.permissions.map((permission) => (
                 <span key={permission.id}>
                   {permission.granted ? "Granted" : "Missing"}: {permission.label}
                   {" · "}
@@ -2020,12 +2049,13 @@ function DiscordThreadPermissionsField(props: {
               ))}
             </div>
           ) : null}
-          {result?.status === "failed" ? (
+          {visibleResult?.status === "failed" ? (
             <div className="settings-field__help" role="alert">
-              {result.errorMessage ?? "Discord could not check these permissions."}
+              {visibleResult.errorMessage
+                ?? "Discord could not check these permissions."}
             </div>
           ) : null}
-          {result?.status === "unset" ? (
+          {visibleResult?.status === "unset" ? (
             <div className="settings-field__help" role="status">
               Configure a Discord bot token before checking permissions.
             </div>
