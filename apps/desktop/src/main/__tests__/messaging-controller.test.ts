@@ -4375,6 +4375,24 @@ describe("MessagingController", () => {
     });
   });
 
+  it("admits an ordinary bound reply without requesting a navigation snapshot", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.getNavigationSnapshot.mockClear();
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("Reply without walking the directory fleet"),
+    );
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    );
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
   it("preserves the messaging location for queued Agent-thread turns", async () => {
     const harness = await createHarness();
     harness.startTurn.mockImplementation(async (request: StartTurnRequest) => {

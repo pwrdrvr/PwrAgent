@@ -15,7 +15,8 @@ import {
   type DesktopMessagingFederationBridge,
 } from "../messaging/desktop-backend-bridge";
 
-const { reconcileNavigationSnapshot } = vi.hoisted(() => ({
+const { readDirectoryGitStatusCache, reconcileNavigationSnapshot } = vi.hoisted(() => ({
+  readDirectoryGitStatusCache: vi.fn(async () => ({})),
   reconcileNavigationSnapshot: vi.fn(async (params: {
     backend: NavigationSnapshot["backend"];
     fetchedAt: number;
@@ -38,7 +39,10 @@ const { reconcileNavigationSnapshot } = vi.hoisted(() => ({
 }));
 
 vi.mock("../app-server/desktop-overlay-store", () => ({
-  getDesktopOverlayStore: () => ({ reconcileNavigationSnapshot }),
+  getDesktopOverlayStore: () => ({
+    readDirectoryGitStatusCache,
+    reconcileNavigationSnapshot,
+  }),
 }));
 
 const { hydrateLaunchpadCodexEnvironmentOptions } = vi.hoisted(() => ({
@@ -62,6 +66,64 @@ vi.mock("../app-server/codex-environment-config", () => ({
 }));
 
 describe("DesktopMessagingBackendBridge", () => {
+  it("serves cached directory status without awaiting a fleet refresh", async () => {
+    const cachedGitStatus = {
+      currentBranch: "main",
+      syncState: "in-sync" as const,
+    };
+    reconcileNavigationSnapshot.mockResolvedValueOnce({
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [],
+      inboxThreadKeys: [],
+      directories: [
+        {
+          key: "directory:/repos/PwrAgnt",
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/repos/PwrAgnt",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
+    readDirectoryGitStatusCache.mockResolvedValueOnce({
+      "directory:/repos/PwrAgnt": {
+        directoryKey: "directory:/repos/PwrAgnt",
+        directoryPath: "/repos/PwrAgnt",
+        fetchedAt: Date.now(),
+        gitStatus: cachedGitStatus,
+      },
+    });
+    const readDirectoryStatuses = vi.fn(async () => ({}));
+    const refreshDirectoryGitStatuses = vi.fn(async () => ({ scheduledCount: 0 }));
+    const registry = {
+      canonicalizeNavigationThreadPullRequests: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      hydrateThreadGitWorkingStates: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
+      listThreads: vi.fn(async () => []),
+      readDirectoryStatuses,
+      refreshDirectoryGitStatuses,
+      rememberCompleteNavigationSnapshot: vi.fn(),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    const snapshot = await bridge.getNavigationSnapshot({});
+
+    expect(snapshot.directories[0]?.gitStatus).toEqual(cachedGitStatus);
+    expect(readDirectoryStatuses).not.toHaveBeenCalled();
+  });
+
   it("hydrates review working state before the messenger chooses a project", async () => {
     const pwrAgentWorktree = "/worktrees/PwrAgnt";
     const listedThread: AppServerThreadSummary = {
