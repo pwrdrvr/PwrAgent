@@ -279,7 +279,15 @@ Whenever the platform reports something the user did, normalize it to a `Messagi
 | `media` | User uploaded a file. | Attachment descriptors (each with `id`, `kind`, `name`, `disposition: "available"` if it's downloadable, optional MIME/size/dimensions, and `state.opaque` for download metadata) + a top-level `disposition` on the event itself. |
 | `lifecycle` | Bot was added/removed from a channel; rare. | The fixed `lifecycle` enum: `"bound" \| "detached" \| "revoked" \| "adapter_started" \| "adapter_stopped"` — **not** a free-form reason. |
 
-**Required fields you'll forget:** every inbound event needs `receivedAt: this.now()` (not `occurredAt`). Every `media` event needs **both** a per-attachment `disposition` *and* a top-level `disposition` on the event. Every attachment descriptor needs `id` (the platform's stable file id, used by `downloadAttachment` to look up bytes).
+**Required fields you'll forget:** capture
+`captureMessagingInboundReceipt(this.now(), providerSentAt?)` as the first line
+of the provider handler, before validation or any `await`, and spread it into
+every dispatched event. `receivedAt` is PwrAgent receipt time, not the
+provider's original message time. Preserve the latter separately as
+`providerSentAt` only when the payload supplies it; never invent one. Every
+`media` event also needs **both** a per-attachment `disposition` and a top-level
+`disposition` on the event. Every attachment descriptor needs `id` (the
+platform's stable file id, used by `downloadAttachment` to look up bytes).
 
 For each event, **always**:
 
@@ -288,6 +296,11 @@ For each event, **always**:
 - In group/server surfaces, enforce the platform's configured conversation allowlist too (Telegram supergroups, Discord guilds, etc.) before dispatch. Unauthorized general chatter should drop silently; log only actionable attempts such as DMs, slash commands, button clicks, or bot mentions, and rate-limit repeated unauthorized conversation logs.
 - Mutable usernames / display names belong in `actor.displayName` / `actor.username` for audit, never as the authorization key.
 - Provider-specific routing (channel id, supergroup id, post id) goes inside `MessagingAdapterState.opaque`. The controller may persist and echo this state but **must not parse it** — only your adapter knows the schema.
+- Dispatch the normalized event before optional REST breadcrumb/permalink
+  enrichment. If the first event cannot carry full channel ancestry without a
+  lookup, emit the eventual channel metadata through
+  `onInboundChannelMetadata`; never make visibility or turn admission wait for
+  cosmetic enrichment.
 
 If your platform supports threads (Discord, Mattermost, Slack), set `conversation.kind: "thread"` and put the parent post / message id in `parentId`. See `MessagingConversationRef` in the interface.
 
@@ -641,7 +654,13 @@ Telegram's 4096 limit is bytes, not characters — a 2000-char Cyrillic message 
 If your platform uses out-of-band HTTP callbacks, you cannot rely on users' devices being publicly reachable. Document Cloudflare Tunnel / Tailscale Funnel / ngrok in the operator guide. Don't ship without that.
 
 ### `MessagingInboundEvent` field names
-The base event timestamp is `receivedAt`, not `occurredAt`. The lifecycle event uses a fixed `lifecycle` enum, not a free-form `reason`. The callback event echoes `actionId` (string) and `value` (separately) — there is no `action` field carrying the full `MessagingSurfaceAction` you persisted. Look up the resolved handle's `actionId` and `value` and pass those.
+The required local timestamp is `receivedAt`, not `occurredAt`, and it is not
+the provider's sent time. Capture it at the first handler boundary; preserve a
+provider timestamp separately as optional `providerSentAt`. The lifecycle
+event uses a fixed `lifecycle` enum, not a free-form `reason`. The callback
+event echoes `actionId` (string) and `value` (separately) — there is no `action`
+field carrying the full `MessagingSurfaceAction` you persisted. Look up the
+resolved handle's `actionId` and `value` and pass those.
 
 ### `MessagingAdapterState.opaque` is `MessagingJsonValue`
 Not `Record<string, unknown>`. Plain `Record<string, string>` works because every leaf is JSON-serializable; `Record<string, unknown>` does not satisfy the type. Same for any nested object you stuff into adapter state.

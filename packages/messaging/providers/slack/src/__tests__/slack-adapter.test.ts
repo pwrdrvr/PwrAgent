@@ -1513,7 +1513,7 @@ describe("SlackAdapter", () => {
         channel_type: "channel",
         team: "T012ABCDEF0",
         bot_id: "B012SPINNKR",
-        ts: "1712023032.000600",
+        ts: "1699999999.500000",
         text: "",
         attachments: [
           {
@@ -1530,6 +1530,10 @@ describe("SlackAdapter", () => {
     expect(event?.actor.platformUserId).toBe("B012SPINNKR");
     expect(event?.actor.isBot).toBe(true);
     expect(event?.observedOnly).toBe(true);
+    expect(event).toMatchObject({
+      providerSentAt: 1_699_999_999_500,
+      receivedAt: 1_700_000_000_000,
+    });
     if (event?.kind === "text") {
       expect(event.text).toContain("Pipeline failed for CATALOGAPI");
       expect(event.text).toContain("catalog-api-prod pipeline has failed");

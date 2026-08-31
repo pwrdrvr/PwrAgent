@@ -90,8 +90,9 @@ sequenceDiagram
 
     User->>Platform: types message / taps button
     Platform->>Adapter: webhook / gateway event
-    Note over Adapter: normalize to<br/>MessagingInboundEvent<br/>(text/command/callback/media/lifecycle)
+    Note over Adapter: capture PwrAgent receipt time,<br/>normalize and dispatch immediately<br/>(text/command/callback/media/lifecycle)
     Adapter->>Controller: handleInboundEvent(event)
+    Note over Adapter: optional REST breadcrumb<br/>enrichment runs off admission path
     Controller->>Automation: match inbound automation triggers
     Automation-->>Controller: matched or not matched
     Note over Controller: authorize actor,<br/>resolve binding,<br/>turn admission

@@ -26,6 +26,7 @@ import type {
   MessagingDeliveryResult,
   MessagingDeliveryScope,
   MessagingInboundEvent,
+  MessagingInboundReceipt,
   MessagingInboundRejectedListener,
   MessagingJsonValue,
   MessagingManagedConversationCreateRequest,
@@ -42,6 +43,7 @@ import type {
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
 import {
+  captureMessagingInboundReceipt,
   evictStaleStreamAnchors,
   extractMessagingPairingToken,
   MessagingRateLimitGate,
@@ -1134,12 +1136,18 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   private readonly handleSlackEvent = async (payload: unknown): Promise<void> => {
     const envelope = payload as SlackSocketEnvelope;
-    await envelope.ack?.();
     const body = envelope.body as SlackEventsApiBody | undefined;
     const event = (envelope.event ?? body?.event) as
       | SlackMessageEvent
       | SlackAppHomeOpenedEvent
       | undefined;
+    const receipt = captureMessagingInboundReceipt(
+      this.now(),
+      event && (event.type === "message" || event.type === "app_mention")
+        ? slackTimestampToMs(event.ts ?? event.event_ts)
+        : undefined,
+    );
+    await envelope.ack?.();
     if (event?.type === "app_home_opened") {
       if (!event.tab || event.tab === "home") {
         await this.publishAppHome(event.user);
@@ -1149,7 +1157,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     if (!event || (event.type !== "message" && event.type !== "app_mention")) {
       return;
     }
-    await this.handleMessageEvent(event, body?.team_id ?? event.team);
+    await this.handleMessageEvent(event, body?.team_id ?? event.team, receipt);
   };
 
   private async publishAppHomes(userIds: readonly string[]): Promise<void> {
@@ -1191,20 +1199,23 @@ export class SlackAdapter implements SlackProviderAdapter {
   }
 
   private readonly handleInteractive = async (payload: unknown): Promise<void> => {
+    const receipt = captureMessagingInboundReceipt(this.now());
     const envelope = payload as SlackSocketEnvelope;
     await envelope.ack?.();
-    await this.handleBlockAction(envelope.body as SlackBlockActionPayload);
+    await this.handleBlockAction(envelope.body as SlackBlockActionPayload, receipt);
   };
 
   private readonly handleSlashCommand = async (payload: unknown): Promise<void> => {
+    const receipt = captureMessagingInboundReceipt(this.now());
     const envelope = payload as SlackSocketEnvelope;
     await envelope.ack?.();
-    await this.handleSlashPayload(envelope.body as SlackSlashCommandPayload);
+    await this.handleSlashPayload(envelope.body as SlackSlashCommandPayload, receipt);
   };
 
   private async handleMessageEvent(
     event: SlackMessageEvent,
     teamId?: unknown,
+    receipt: MessagingInboundReceipt = captureMessagingInboundReceipt(this.now()),
   ): Promise<void> {
     if (!this.listener) return;
     if (
@@ -1313,7 +1324,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         kind: "media",
         actor,
         channel,
-        receivedAt: this.now(),
+        ...receipt,
         routingState,
         sourceUrl,
         ...(isMention ? { botMention: true } : {}),
@@ -1331,7 +1342,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         kind: "command",
         actor,
         channel,
-        receivedAt: this.now(),
+        ...receipt,
         routingState,
         sourceUrl,
         ...(isMention ? { botMention: true } : {}),
@@ -1348,7 +1359,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       kind: "text",
       actor,
       channel,
-      receivedAt: this.now(),
+      ...receipt,
       routingState,
       sourceUrl,
       ...(isMention ? { botMention: true } : {}),
@@ -1379,7 +1390,10 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
   }
 
-  private async handleBlockAction(body: SlackBlockActionPayload): Promise<void> {
+  private async handleBlockAction(
+    body: SlackBlockActionPayload,
+    receipt: MessagingInboundReceipt,
+  ): Promise<void> {
     if (!this.listener) return;
     const action = body.actions?.[0];
     const ids = this.validateInboundIds({
@@ -1453,7 +1467,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       kind: "callback",
       actor,
       channel,
-      receivedAt: this.now(),
+      ...receipt,
       routingState,
       interaction: {
         channel: this.channel,
@@ -1471,7 +1485,10 @@ export class SlackAdapter implements SlackProviderAdapter {
     });
   }
 
-  private async handleSlashPayload(body: SlackSlashCommandPayload): Promise<void> {
+  private async handleSlashPayload(
+    body: SlackSlashCommandPayload,
+    receipt: MessagingInboundReceipt,
+  ): Promise<void> {
     if (!this.listener) return;
     const ids = this.validateInboundIds({
       channelId: body.channel_id,
@@ -1516,7 +1533,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       kind: "command",
       actor,
       channel,
-      receivedAt: this.now(),
+      ...receipt,
       routingState,
       sourceUrl: slackConversationUrl(ids.channelId, ids.teamId),
       command,

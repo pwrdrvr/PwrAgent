@@ -26,6 +26,7 @@ import type {
   MessagingDeliveryScope,
   MessagingInboundCallbackEvent,
   MessagingInboundEvent,
+  MessagingInboundReceipt,
   MessagingInboundRejectedListener,
   MessagingRateLimitInfo,
   MessagingRejectedInboundEvent,
@@ -33,6 +34,7 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import {
+  captureMessagingInboundReceipt,
   evictStaleStreamAnchors,
   extractMessagingPairingToken,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
@@ -914,6 +916,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   }
 
   private async handleMessageEvent(payload: FeishuEventEnvelope): Promise<void> {
+    const receivedAt = this.now();
     const event = payload.event as FeishuReceiveMessageEvent | undefined;
     const message = event?.message;
     const senderId = event?.sender?.sender_id?.open_id;
@@ -922,6 +925,10 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     const tenantKey = payload.header?.tenant_key ?? event?.sender?.tenant_key;
     const ids = this.validateInboundIds({ chatId, messageId, openId: senderId, tenantKey });
     if (!ids || !message) return;
+    const receipt = captureMessagingInboundReceipt(
+      receivedAt,
+      feishuTimestampToMs(message.create_time),
+    );
     const dedupKey = buildFeishuInboundDedupKey(payload, ids.messageId);
     // Feishu/Lark retries webhook deliveries after slow or failed ACKs. Once
     // the adapter has received a well-formed message, transport retries must
@@ -976,7 +983,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
       id: payload.header?.event_id ?? ids.messageId,
       actor,
       channel: channelRef,
-      receivedAt: this.now(),
+      ...receipt,
       routingState,
     };
     const command = parseFeishuCommandText(messageText);
@@ -1118,6 +1125,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
   private async handleCardActionEvent(
     payload: FeishuEventEnvelope,
   ): Promise<FeishuCardActionResponse> {
+    const receipt: MessagingInboundReceipt = captureMessagingInboundReceipt(this.now());
     const event = payload.event as FeishuCardActionEvent | undefined;
     const openId = event?.operator?.open_id;
     const tenantKey = payload.header?.tenant_key ?? event?.tenant_key;
@@ -1240,7 +1248,7 @@ export class FeishuAdapter implements FeishuProviderAdapter {
         : {}),
       actionId: record.actionId,
       ...(record.value !== undefined ? { value: record.value } : {}),
-      receivedAt: this.now(),
+      ...receipt,
       ...(record.surface?.state ? { routingState: record.surface.state } : {}),
     });
     return FEISHU_CARD_ACTION_ACK;
@@ -1814,6 +1822,12 @@ export class FeishuAdapter implements FeishuProviderAdapter {
     if (!this.config.verificationToken) return true;
     return typeof token === "string" && safeEqual(token, this.config.verificationToken);
   }
+}
+
+function feishuTimestampToMs(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 export function createFeishuAdapter(

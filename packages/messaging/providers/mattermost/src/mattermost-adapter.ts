@@ -28,6 +28,7 @@ import type {
   MessagingDeliveryScope,
   MessagingDeliveryResult,
   MessagingInboundEvent,
+  MessagingInboundReceipt,
   MessagingInboundRejectedListener,
   MessagingJsonValue,
   MessagingFilePart,
@@ -39,6 +40,7 @@ import type {
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
 import {
+  captureMessagingInboundReceipt,
   evictStaleStreamAnchors,
   extractMessagingPairingToken,
   messagingInlineImageBytes,
@@ -812,15 +814,19 @@ export class MattermostAdapter implements MattermostProviderAdapter {
   private async handleWebsocketMessage(
     message: WebSocketMessage,
   ): Promise<void> {
+    const receivedAt = this.now();
     if (!this.listener) {
       return;
     }
     switch (message.event) {
       case "posted":
-        await this.handlePostedEvent(message);
+        await this.handlePostedEvent(message, receivedAt);
         return;
       case "direct_added":
-        await this.handleDirectAddedEvent(message);
+        await this.handleDirectAddedEvent(
+          message,
+          captureMessagingInboundReceipt(receivedAt),
+        );
         return;
       // post_edited, post_deleted, channel_updated, typing — not surfaced
       // to the controller today; reactions to them belong in follow-up
@@ -830,7 +836,10 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     }
   }
 
-  private async handlePostedEvent(message: WebSocketMessage): Promise<void> {
+  private async handlePostedEvent(
+    message: WebSocketMessage,
+    receivedAt: number,
+  ): Promise<void> {
     const data = (message.data ?? {}) as {
       post?: string;
       sender_name?: string;
@@ -843,6 +852,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     if (!post) {
       return;
     }
+    const receipt = captureMessagingInboundReceipt(receivedAt, post.create_at);
     if (!this.validatePostIdentifiers(post)) {
       return;
     }
@@ -919,6 +929,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         eventId: post.id,
         fileIds,
         messageText,
+        receipt,
       });
       return;
     }
@@ -929,6 +940,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
         channel: channelRef,
         eventId: post.id,
         rawText: messageText,
+        receipt,
       });
       return;
     }
@@ -948,6 +960,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
           channel: channelRef,
           eventId: post.id,
           rawText: "/help",
+          receipt,
         });
       } else {
         await this.dispatchTextEvent({
@@ -956,6 +969,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
           channel: channelRef,
           eventId: post.id,
           text: stripped,
+          receipt,
         });
       }
       return;
@@ -966,11 +980,13 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       channel: channelRef,
       eventId: post.id,
       text: messageText,
+      receipt,
     });
   }
 
   private async handleDirectAddedEvent(
     message: WebSocketMessage,
+    receipt: MessagingInboundReceipt,
   ): Promise<void> {
     if (!this.listener) {
       return;
@@ -986,7 +1002,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     await this.listener({
       kind: "lifecycle",
       id: this.newEventId("lifecycle"),
-      receivedAt: this.now(),
+      ...receipt,
       actor: {
         platformUserId: this.botUserId ?? "bot",
         isBot: true,
@@ -1093,6 +1109,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     body: MattermostInteractiveCallbackBody,
     rawBody: string,
   ): Promise<MattermostCallbackHandlerResult | void> {
+    const receipt = captureMessagingInboundReceipt(this.now());
     if (!this.listener) {
       return;
     }
@@ -1131,7 +1148,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
             ...(body.channel_name ? { title: body.channel_name } : {}),
           },
         },
-        receivedAt: this.now(),
+        ...receipt,
         reason: "unauthorized-actor",
       });
       return;
@@ -1246,7 +1263,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     await this.listener({
       kind: "callback",
       id: this.newEventId("callback"),
-      receivedAt: this.now(),
+      ...receipt,
       actor,
       channel: channelRef,
       actionId: resolvedHandle.actionId,
@@ -1289,6 +1306,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     botMention?: boolean;
     channel: MessagingChannelRef;
     eventId: string;
+    receipt: MessagingInboundReceipt;
     text: string;
   }): Promise<void> {
     if (!this.listener) {
@@ -1297,7 +1315,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     await this.listener({
       kind: "text",
       id: params.eventId,
-      receivedAt: this.now(),
+      ...params.receipt,
       actor: params.actor,
       channel: params.channel,
       ...(params.botMention ? { botMention: true } : {}),
@@ -1399,6 +1417,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     body: MattermostSlashCommandBody,
     rawBody: string,
   ): Promise<MattermostSlashCommandResult | void> {
+    const receipt = captureMessagingInboundReceipt(this.now());
     void rawBody;
     if (!this.listener) {
       return;
@@ -1459,7 +1478,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
             ...(body.channel_name ? { title: body.channel_name } : {}),
           },
         },
-        receivedAt: this.now(),
+        ...receipt,
         reason: "unauthorized-actor",
       });
       return undefined;
@@ -1556,6 +1575,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
       channel: channelRef,
       eventId: this.newEventId("slashcmd"),
       rawText,
+      receipt,
       ...(routingState ? { routingState } : {}),
     });
     return undefined;
@@ -1605,6 +1625,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     channel: MessagingChannelRef;
     eventId: string;
     rawText: string;
+    receipt: MessagingInboundReceipt;
     routingState?: MessagingAdapterState;
   }): Promise<void> {
     if (!this.listener) {
@@ -1616,7 +1637,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     await this.listener({
       kind: "command",
       id: params.eventId,
-      receivedAt: this.now(),
+      ...params.receipt,
       actor: params.actor,
       channel: params.channel,
       command,
@@ -1632,6 +1653,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     eventId: string;
     fileIds: string[];
     messageText: string;
+    receipt: MessagingInboundReceipt;
   }): Promise<void> {
     if (!this.listener) {
       return;
@@ -1645,7 +1667,7 @@ export class MattermostAdapter implements MattermostProviderAdapter {
     await this.listener({
       kind: "media",
       id: params.eventId,
-      receivedAt: this.now(),
+      ...params.receipt,
       actor: params.actor,
       channel: params.channel,
       text: params.messageText || undefined,
@@ -2772,7 +2794,7 @@ function requiresOutboundAttachments(intent: MessagingSurfaceIntent): boolean {
 
 function parseEmbeddedPost(
   raw: string | undefined,
-): { id: string; channel_id: string; user_id: string; message: string; root_id?: string; file_ids?: string[]; props?: Record<string, unknown> } | undefined {
+): { id: string; channel_id: string; user_id: string; message: string; create_at?: number; root_id?: string; file_ids?: string[]; props?: Record<string, unknown> } | undefined {
   if (!raw) {
     return undefined;
   }
@@ -2782,6 +2804,7 @@ function parseEmbeddedPost(
       channel_id?: string;
       user_id?: string;
       message?: string;
+      create_at?: number;
       root_id?: string;
       file_ids?: string[];
       props?: Record<string, unknown>;
@@ -2794,6 +2817,7 @@ function parseEmbeddedPost(
       channel_id: parsed.channel_id,
       user_id: parsed.user_id,
       message: parsed.message ?? "",
+      ...(typeof parsed.create_at === "number" ? { create_at: parsed.create_at } : {}),
       ...(parsed.root_id ? { root_id: parsed.root_id } : {}),
       ...(parsed.file_ids ? { file_ids: parsed.file_ids } : {}),
       ...(parsed.props ? { props: parsed.props } : {}),

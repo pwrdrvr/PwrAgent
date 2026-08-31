@@ -654,6 +654,8 @@ describe("TelegramAdapter callback persistence", () => {
     expect(events[0]).toMatchObject({
       kind: "text",
       text: "before",
+      providerSentAt: 1_700_000_000_000,
+      receivedAt: 1_700_000_000_000,
     });
     expect(rejected).toEqual(["unauthorized-conversation"]);
   });
