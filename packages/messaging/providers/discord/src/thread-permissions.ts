@@ -1,5 +1,8 @@
 import { PermissionFlagsBits, REST, Routes } from "discord.js";
-import { clipMessagingValidationError } from "@pwragent/messaging-interface";
+import {
+  clipMessagingValidationError,
+  sanitizeMessagingContactLabel,
+} from "@pwragent/messaging-interface";
 import { validateDiscordSnowflake } from "./validate-ids.ts";
 
 export const DISCORD_THREAD_REPLY_PERMISSIONS = [
@@ -58,6 +61,19 @@ export type DiscordThreadPermissionInspection = {
   status: "ok" | "failed" | "unset";
 };
 
+export type DiscordThreadPermissionChannelListing = {
+  channels: Array<{
+    categoryName?: string;
+    id: string;
+    kind: "announcement" | "text";
+    name: string;
+  }>;
+  errorMessage?: string;
+  guildId: string;
+  guildName?: string;
+  status: "ok" | "failed" | "unset";
+};
+
 export type DiscordPermissionRest = {
   get(route: string): Promise<unknown>;
 };
@@ -67,6 +83,8 @@ type DiscordUserPayload = {
 };
 
 type DiscordGuildPayload = {
+  id?: unknown;
+  name?: unknown;
   owner_id?: string;
 };
 
@@ -90,6 +108,19 @@ type DiscordChannelPayload = {
   guild_id?: string;
   permission_overwrites?: DiscordPermissionOverwritePayload[];
 };
+
+type DiscordListedChannelPayload = {
+  guild_id?: unknown;
+  id?: unknown;
+  name?: unknown;
+  parent_id?: unknown;
+  position?: unknown;
+  type?: unknown;
+};
+
+const DISCORD_GUILD_TEXT_CHANNEL = 0;
+const DISCORD_GUILD_CATEGORY_CHANNEL = 4;
+const DISCORD_GUILD_ANNOUNCEMENT_CHANNEL = 5;
 
 const DISCORD_ADMINISTRATOR = PermissionFlagsBits.Administrator;
 const DISCORD_THREAD_REPLY_PERMISSION_BITS = DISCORD_THREAD_REPLY_PERMISSIONS
@@ -125,6 +156,135 @@ export async function inspectDiscordThreadPermissions(
     rest,
     startedAt,
   });
+}
+
+/**
+ * List the named guild channels where Discord can create a thread from an
+ * existing message. This keeps platform snowflakes out of the Settings UI.
+ */
+export async function listDiscordThreadPermissionChannels(
+  request: {
+    botToken: string;
+    guildId: string;
+  },
+): Promise<DiscordThreadPermissionChannelListing> {
+  if (!request.botToken) {
+    return {
+      channels: [],
+      guildId: request.guildId,
+      status: "unset",
+    };
+  }
+  const rest = new REST({ version: "10" }).setToken(request.botToken);
+  return listDiscordThreadPermissionChannelsWithRest({
+    guildId: request.guildId,
+    rest,
+  });
+}
+
+export async function listDiscordThreadPermissionChannelsWithRest(
+  request: {
+    guildId: string;
+    rest: DiscordPermissionRest;
+  },
+): Promise<DiscordThreadPermissionChannelListing> {
+  if (!validateDiscordSnowflake(request.guildId).ok) {
+    return {
+      channels: [],
+      errorMessage: "The Discord server ID is invalid.",
+      guildId: request.guildId,
+      status: "failed",
+    };
+  }
+
+  try {
+    const [guild, rawChannels] = await Promise.all([
+      request.rest.get(Routes.guild(request.guildId)) as Promise<DiscordGuildPayload>,
+      request.rest.get(`/guilds/${request.guildId}/channels`) as Promise<unknown>,
+    ]);
+    if (guild.id !== request.guildId) {
+      throw new Error("Discord returned an unexpected server.");
+    }
+    if (!Array.isArray(rawChannels)) {
+      throw new Error("Discord did not return a channel list.");
+    }
+
+    const listedChannels = rawChannels as DiscordListedChannelPayload[];
+    const categories = new Map<string, { name: string; position: number }>();
+    for (const channel of listedChannels) {
+      const name = sanitizeMessagingContactLabel(channel.name);
+      if (
+        channel.type === DISCORD_GUILD_CATEGORY_CHANNEL
+        && channel.guild_id === request.guildId
+        && typeof channel.id === "string"
+        && validateDiscordSnowflake(channel.id).ok
+        && name
+      ) {
+        categories.set(channel.id, {
+          name,
+          position: validDiscordChannelPosition(channel.position),
+        });
+      }
+    }
+
+    const channels = listedChannels.flatMap((channel) => {
+      const name = sanitizeMessagingContactLabel(channel.name);
+      const validKind =
+        channel.type === DISCORD_GUILD_TEXT_CHANNEL
+        || channel.type === DISCORD_GUILD_ANNOUNCEMENT_CHANNEL;
+      if (
+        !validKind
+        || channel.guild_id !== request.guildId
+        || typeof channel.id !== "string"
+        || !validateDiscordSnowflake(channel.id).ok
+        || !name
+      ) {
+        return [];
+      }
+      const category =
+        typeof channel.parent_id === "string"
+        && validateDiscordSnowflake(channel.parent_id).ok
+          ? categories.get(channel.parent_id)
+          : undefined;
+      return [{
+        categoryName: category?.name,
+        categoryPosition: category?.position ?? -1,
+        id: channel.id,
+        kind: channel.type === DISCORD_GUILD_ANNOUNCEMENT_CHANNEL
+          ? "announcement" as const
+          : "text" as const,
+        name,
+        position: validDiscordChannelPosition(channel.position),
+      }];
+    });
+    channels.sort((left, right) =>
+      left.categoryPosition - right.categoryPosition
+      || left.position - right.position
+      || left.name.localeCompare(right.name)
+      || left.id.localeCompare(right.id),
+    );
+
+    const guildName = sanitizeMessagingContactLabel(guild.name);
+    return {
+      channels: channels.map(({
+        categoryPosition: _categoryPosition,
+        position: _position,
+        ...channel
+      }) => channel),
+      guildId: request.guildId,
+      guildName: guildName || undefined,
+      status: "ok",
+    };
+  } catch (error) {
+    return {
+      channels: [],
+      errorMessage: clipMessagingValidationError(
+        error instanceof Error ? error.message : String(error),
+      ),
+      guildId: request.guildId,
+      status: "failed",
+    };
+  }
 }
 
 export async function inspectDiscordThreadPermissionsWithRest(
@@ -301,6 +461,13 @@ function invalidThreadPermissionIdentifier(request: {
     return "The Discord server ID is invalid.";
   }
   return undefined;
+}
+
+function validDiscordChannelPosition(value: unknown): number {
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    return value;
+  }
+  return Number.MAX_SAFE_INTEGER;
 }
 
 function permissionBits(value: string | undefined): bigint {

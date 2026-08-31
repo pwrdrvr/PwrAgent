@@ -3,12 +3,15 @@ import { describe, expect, it } from "vitest";
 import {
   buildDiscordThreadPermissionRequestUrl,
   inspectDiscordThreadPermissionsWithRest,
+  listDiscordThreadPermissionChannelsWithRest,
 } from "../thread-permissions.ts";
 
 const BOT_ID = "1480556454498009351";
 const CHANNEL_ID = "1480556454498009352";
 const GUILD_ID = "1480556454498009353";
 const BOT_ROLE_ID = "1480556454498009354";
+const ANNOUNCEMENT_CHANNEL_ID = "1480556454498009355";
+const CATEGORY_ID = "1480556454498009356";
 
 describe("Discord thread permissions", () => {
   it("applies role and member channel overwrites before reporting effective permissions", async () => {
@@ -125,6 +128,110 @@ describe("Discord thread permissions", () => {
 
     expect(permissions).toMatchObject({
       errorMessage: "The selected Discord channel is not in the selected server.",
+      status: "failed",
+    });
+  });
+
+  it("lists named text channels and their categories for the selected server", async () => {
+    const listing = await listDiscordThreadPermissionChannelsWithRest({
+      guildId: GUILD_ID,
+      rest: {
+        get: async (route) => {
+          if (route === `/guilds/${GUILD_ID}`) {
+            return { id: GUILD_ID, name: "huntharo-claw" };
+          }
+          if (route === `/guilds/${GUILD_ID}/channels`) {
+            return [
+              {
+                guild_id: GUILD_ID,
+                id: CATEGORY_ID,
+                name: "Chat",
+                position: 1,
+                type: 4,
+              },
+              {
+                guild_id: GUILD_ID,
+                id: CHANNEL_ID,
+                name: "general",
+                parent_id: CATEGORY_ID,
+                position: 2,
+                type: 0,
+              },
+              {
+                guild_id: GUILD_ID,
+                id: ANNOUNCEMENT_CHANNEL_ID,
+                name: "announcements",
+                parent_id: CATEGORY_ID,
+                position: 3,
+                type: 5,
+              },
+              {
+                guild_id: GUILD_ID,
+                id: "1480556454498009357",
+                name: "Voice",
+                position: 4,
+                type: 2,
+              },
+              {
+                guild_id: "1480556454498009358",
+                id: "1480556454498009359",
+                name: "wrong-server",
+                position: 5,
+                type: 0,
+              },
+              {
+                guild_id: GUILD_ID,
+                id: "not-a-snowflake",
+                name: "invalid",
+                position: 6,
+                type: 0,
+              },
+            ];
+          }
+          throw new Error(`unexpected route: ${route}`);
+        },
+      },
+    });
+
+    expect(listing).toEqual({
+      channels: [
+        {
+          categoryName: "Chat",
+          id: CHANNEL_ID,
+          kind: "text",
+          name: "general",
+        },
+        {
+          categoryName: "Chat",
+          id: ANNOUNCEMENT_CHANNEL_ID,
+          kind: "announcement",
+          name: "announcements",
+        },
+      ],
+      guildId: GUILD_ID,
+      guildName: "huntharo-claw",
+      status: "ok",
+    });
+  });
+
+  it("rejects a malformed server response when listing channels", async () => {
+    const listing = await listDiscordThreadPermissionChannelsWithRest({
+      guildId: GUILD_ID,
+      rest: {
+        get: async (route) => {
+          if (route === `/guilds/${GUILD_ID}`) {
+            return { id: "1480556454498009358", name: "Another server" };
+          }
+          if (route === `/guilds/${GUILD_ID}/channels`) return [];
+          throw new Error(`unexpected route: ${route}`);
+        },
+      },
+    });
+
+    expect(listing).toMatchObject({
+      channels: [],
+      errorMessage: "Discord returned an unexpected server.",
+      guildId: GUILD_ID,
       status: "failed",
     });
   });

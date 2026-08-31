@@ -1901,6 +1901,23 @@ export type DiscordThreadReplyPermissionId =
 
 export type DiscordThreadPermissionStatus = "ok" | "failed" | "unset";
 
+export type ListDiscordThreadPermissionChannelsRequest = {
+  guildId: string;
+};
+
+export type ListDiscordThreadPermissionChannelsResponse = {
+  channels: Array<{
+    categoryName?: string;
+    id: string;
+    kind: "announcement" | "text";
+    name: string;
+  }>;
+  errorMessage?: string;
+  guildId: string;
+  guildName?: string;
+  status: DiscordThreadPermissionStatus;
+};
+
 export type InspectDiscordThreadPermissionsRequest = {
   channelId: string;
   guildId: string;

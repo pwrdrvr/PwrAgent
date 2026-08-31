@@ -4393,8 +4393,21 @@ describe("SettingsScreen", () => {
     const snapshot = createSnapshot();
     snapshot.messaging.discord.applicationId.value = "1480556454498009351";
     snapshot.messaging.discord.authorizedGuilds.value = [
-      { id: "1480556454498009353", displayName: "PwrAgent test guild" },
+      { id: "1480556454498009353", displayName: "general" },
     ];
+    const listDiscordThreadPermissionChannels = vi.fn(async () => ({
+      channels: [
+        {
+          categoryName: "Chat",
+          id: "1480556454498009352",
+          kind: "text" as const,
+          name: "general",
+        },
+      ],
+      guildId: "1480556454498009353",
+      guildName: "huntharo-claw",
+      status: "ok" as const,
+    }));
     const inspectDiscordThreadPermissions = vi.fn(async () => ({
       botId: "1480556454498009351",
       channelId: "1480556454498009352",
@@ -4426,6 +4439,7 @@ describe("SettingsScreen", () => {
         settings={settings}
         desktopApi={{
           inspectDiscordThreadPermissions,
+          listDiscordThreadPermissionChannels,
           openDiscordThreadPermissionRequest,
         }}
         initialSection="messaging"
@@ -4433,12 +4447,17 @@ describe("SettingsScreen", () => {
       />,
     );
 
-    fireEvent.change(
-      screen.getByRole("textbox", {
-        name: "Discord channel ID for thread reply permissions",
-      }),
-      { target: { value: "1480556454498009352" } },
-    );
+    const channelSelect = await screen.findByRole("combobox", {
+      name: "Discord channel for thread reply permissions",
+    });
+    await waitFor(() => {
+      expect(channelSelect).toHaveValue("1480556454498009352");
+    });
+    expect(screen.getByRole("option", { name: "huntharo-claw" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Chat / #general" })).toBeInTheDocument();
+    expect(listDiscordThreadPermissionChannels).toHaveBeenCalledWith({
+      guildId: "1480556454498009353",
+    });
     fireEvent.click(screen.getByRole("button", { name: "Check permissions" }));
     await waitFor(() => {
       expect(inspectDiscordThreadPermissions).toHaveBeenCalledWith({
@@ -4542,6 +4561,23 @@ describe("SettingsScreen", () => {
           resolveInspection = resolve;
         }),
     );
+    const listDiscordThreadPermissionChannels = vi.fn(async () => ({
+      channels: [
+        {
+          id: firstChannelId,
+          kind: "text" as const,
+          name: "general",
+        },
+        {
+          id: secondChannelId,
+          kind: "text" as const,
+          name: "coding",
+        },
+      ],
+      guildId,
+      guildName: "PwrAgent test guild",
+      status: "ok" as const,
+    }));
     const snapshot = createSnapshot();
     snapshot.messaging.discord.authorizedGuilds.value = [
       { id: guildId, displayName: "PwrAgent test guild" },
@@ -4549,18 +4585,21 @@ describe("SettingsScreen", () => {
     render(
       <SettingsScreen
         settings={createSettingsState(snapshot)}
-        desktopApi={{ inspectDiscordThreadPermissions }}
+        desktopApi={{
+          inspectDiscordThreadPermissions,
+          listDiscordThreadPermissionChannels,
+        }}
         initialSection="messaging"
         onClose={() => undefined}
       />,
     );
-    const channelInput = screen.getByRole("textbox", {
-      name: "Discord channel ID for thread reply permissions",
+    const channelSelect = await screen.findByRole("combobox", {
+      name: "Discord channel for thread reply permissions",
     });
 
-    fireEvent.change(channelInput, { target: { value: firstChannelId } });
+    await waitFor(() => expect(channelSelect).toHaveValue(firstChannelId));
     fireEvent.click(screen.getByRole("button", { name: "Check permissions" }));
-    fireEvent.change(channelInput, { target: { value: secondChannelId } });
+    fireEvent.change(channelSelect, { target: { value: secondChannelId } });
     await act(async () => {
       resolveInspection({
         channelId: firstChannelId,
@@ -4577,7 +4616,7 @@ describe("SettingsScreen", () => {
         status: "ok",
       });
     });
-    fireEvent.change(channelInput, { target: { value: firstChannelId } });
+    fireEvent.change(channelSelect, { target: { value: firstChannelId } });
 
     expect(screen.queryByText(/Missing: Create Public Threads/)).not.toBeInTheDocument();
   });

@@ -402,6 +402,8 @@ import type {
   SettingsCredentialTestResult,
   InspectDiscordThreadPermissionsRequest,
   InspectDiscordThreadPermissionsResponse,
+  ListDiscordThreadPermissionChannelsRequest,
+  ListDiscordThreadPermissionChannelsResponse,
   OpenDiscordThreadPermissionRequest,
   OpenDiscordThreadPermissionResponse,
   SlackCreateAppRequest,
@@ -863,6 +865,9 @@ export type DesktopApi = {
   openSlackCreateApp?: (
     request?: SlackCreateAppRequest,
   ) => Promise<SlackCreateAppResponse>;
+  listDiscordThreadPermissionChannels?: (
+    request: ListDiscordThreadPermissionChannelsRequest,
+  ) => Promise<ListDiscordThreadPermissionChannelsResponse>;
   inspectDiscordThreadPermissions?: (
     request: InspectDiscordThreadPermissionsRequest,
   ) => Promise<InspectDiscordThreadPermissionsResponse>;

@@ -335,6 +335,13 @@ export const SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL =
 export const SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL =
   "settings:open-slack-create-app";
 /**
+ * List Discord text channels available for the selected authorized server.
+ * The main process owns the bot token; the renderer receives display labels
+ * and validated channel IDs only.
+ */
+export const SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL =
+  "settings:list-discord-thread-permission-channels";
+/**
  * Inspect the Discord bot's effective permissions for a selected guild channel.
  * The main process reads the bot token and returns only permission booleans.
  */

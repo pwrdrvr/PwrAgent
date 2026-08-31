@@ -474,6 +474,7 @@ export type MessagingPairingObservedChat = {
   title?: string;
   parentId?: string;
   parentTitle?: string;
+  ancestorTitle?: string;
   bucketId?: string;
 };
 

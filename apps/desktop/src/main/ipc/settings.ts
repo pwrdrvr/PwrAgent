@@ -21,6 +21,8 @@ import type {
   DesktopSettingsSnapshot,
   InspectDiscordThreadPermissionsRequest,
   InspectDiscordThreadPermissionsResponse,
+  ListDiscordThreadPermissionChannelsRequest,
+  ListDiscordThreadPermissionChannelsResponse,
   ListAcpAgentSettingsRequest,
   ListAcpAgentSettingsResponse,
   ReadDesktopSettingsRequest,
@@ -54,6 +56,7 @@ import {
   SETTINGS_CREATE_CODEX_AUTH_PROFILE_CHANNEL,
   SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL,
   SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
+  SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL,
   SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL,
   SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
@@ -1418,6 +1421,25 @@ export function registerSettingsIpcHandlers(
     },
   );
 
+  ipcMain.removeHandler(SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL,
+    async (
+      _event,
+      request: ListDiscordThreadPermissionChannelsRequest,
+    ): Promise<ListDiscordThreadPermissionChannelsResponse> => {
+      const config = await loadDesktopMessagingConfigFromSettings(
+        getService(service),
+        process.env,
+      );
+      const discordProvider = await import("@pwragent/messaging-provider-discord");
+      return await discordProvider.listDiscordThreadPermissionChannels({
+        botToken: config.discord?.botToken ?? "",
+        guildId: request.guildId,
+      });
+    },
+  );
+
   ipcMain.removeHandler(SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL);
   ipcMain.handle(
     SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL,
@@ -1546,6 +1568,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(SETTINGS_TEST_CREDENTIALS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_LIST_DISCORD_THREAD_PERMISSION_CHANNELS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_INSPECT_DISCORD_THREAD_PERMISSIONS_CHANNEL);
   ipcMain.removeHandler(SETTINGS_OPEN_DISCORD_THREAD_PERMISSION_CHANNEL);
   ipcMain.removeHandler(SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL);

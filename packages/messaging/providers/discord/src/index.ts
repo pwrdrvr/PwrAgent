@@ -29,8 +29,10 @@ export {
   buildDiscordThreadPermissionRequestUrl,
   DISCORD_THREAD_REPLY_PERMISSIONS,
   inspectDiscordThreadPermissions,
+  listDiscordThreadPermissionChannels,
 } from "./thread-permissions.ts";
 export type {
+  DiscordThreadPermissionChannelListing,
   DiscordThreadPermissionInspection,
   DiscordThreadReplyPermissionId,
 } from "./thread-permissions.ts";

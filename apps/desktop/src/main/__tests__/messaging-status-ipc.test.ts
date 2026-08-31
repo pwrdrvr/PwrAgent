@@ -756,6 +756,48 @@ describe("messaging status ipc", () => {
     });
   });
 
+  it("labels an approved Discord guild with the server name, not the channel", async () => {
+    const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
+    const entry = {
+      id: "pairing-discord-guild",
+      platform: "discord",
+      instanceId: "default",
+      scope: "bucket",
+      status: "observed",
+      generatedAt: 1_000,
+      expiresAt: 2_000,
+      observedActor: { id: "1480556454498009351", displayName: "Harold" },
+      observedChat: {
+        id: "1480556454498009352",
+        kind: "channel",
+        title: "general",
+        parentTitle: "huntharo-claw",
+        bucketId: "1480556454498009353",
+      },
+    };
+    const consumed = { ...entry, status: "consumed" };
+    runtimeMock.listPairingRequests.mockReturnValue({ entries: [entry] });
+    settingsServiceMock.readSettings.mockResolvedValue(discordSettingsSnapshot());
+    pairingStoreMock.markStatus.mockReturnValue(consumed);
+
+    registerMessagingStatusIpcHandlers();
+
+    await handlers.get(MESSAGING_APPROVE_PAIRING_CHANNEL)?.(
+      {},
+      { entryId: entry.id },
+    );
+
+    expect(settingsServiceMock.writeConfigPatch).toHaveBeenCalledWith({
+      messaging: {
+        discord: {
+          authorizedGuilds: [
+            { id: "1480556454498009353", displayName: "huntharo-claw" },
+          ],
+        },
+      },
+    });
+  });
+
   it("maps a Slack channel-level pairing (no thread) to the channel name", async () => {
     const { MESSAGING_APPROVE_PAIRING_CHANNEL } = await import("../../shared/ipc");
     // Pairing sent directly in #signals-chat (not a thread): the channel name
@@ -1033,6 +1075,17 @@ function feishuSettingsSnapshot() {
         authorizedUserIds: { value: [], source: "default" },
         authorizedChats: { value: [], source: "default" },
         authorizedTenants: { value: [], source: "default" },
+      },
+    },
+  };
+}
+
+function discordSettingsSnapshot() {
+  return {
+    messaging: {
+      discord: {
+        authorizedUserIds: { value: [], source: "default" },
+        authorizedGuilds: { value: [], source: "default" },
       },
     },
   };

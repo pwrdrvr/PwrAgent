@@ -3024,6 +3024,7 @@ function observedChatFromEvent(event: MessagingInboundEvent): MessagingPairingOb
     title: conversation.title,
     parentId: conversation.parentId,
     parentTitle: conversation.parentTitle,
+    ancestorTitle: conversation.ancestorTitle,
     bucketId: bucketIdFromEvent(event),
   };
 }
