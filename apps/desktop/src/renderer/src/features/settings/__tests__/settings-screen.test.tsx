@@ -4556,6 +4556,7 @@ describe("SettingsScreen", () => {
           openDiscordThreadPermissionRequest,
         }}
         initialSection="messaging"
+        initialSubsection="discord"
         onClose={() => undefined}
       />,
     );
@@ -4644,6 +4645,7 @@ describe("SettingsScreen", () => {
         settings={createSettingsState(initialSnapshot)}
         desktopApi={{ openDiscordThreadPermissionRequest }}
         initialSection="messaging"
+        initialSubsection="discord"
         onClose={() => undefined}
       />,
     );
@@ -4664,6 +4666,7 @@ describe("SettingsScreen", () => {
         settings={createSettingsState(firstSnapshot)}
         desktopApi={{ openDiscordThreadPermissionRequest }}
         initialSection="messaging"
+        initialSubsection="discord"
         onClose={() => undefined}
       />,
     );
@@ -4683,6 +4686,7 @@ describe("SettingsScreen", () => {
         settings={createSettingsState(replacementSnapshot)}
         desktopApi={{ openDiscordThreadPermissionRequest }}
         initialSection="messaging"
+        initialSubsection="discord"
         onClose={() => undefined}
       />,
     );
@@ -4742,6 +4746,7 @@ describe("SettingsScreen", () => {
           listDiscordThreadPermissionChannels,
         }}
         initialSection="messaging"
+        initialSubsection="discord"
         onClose={() => undefined}
       />,
     );
