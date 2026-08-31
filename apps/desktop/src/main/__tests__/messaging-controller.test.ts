@@ -4868,6 +4868,11 @@ describe("MessagingController", () => {
       channel: "slack",
       createManagedConversation,
       getNavigationSnapshot,
+      getThreadAdmissionState: async (request) => ({
+        thread: request.federationTarget?.scope === "remote"
+          ? remoteNavigation.threads[0]
+          : localNavigation.threads[0],
+      }),
       navigation: localNavigation,
       resolveThreadTarget,
     });
@@ -4939,6 +4944,7 @@ describe("MessagingController", () => {
     );
 
     getNavigationSnapshot.mockClear();
+    harness.getThreadAdmissionState.mockClear();
     await harness.controller.handleBackendEvent({
       backend: "codex",
       federationTarget: { scope: "remote", instanceId: "pwr_remote" },
@@ -4950,12 +4956,15 @@ describe("MessagingController", () => {
         },
       },
     });
-    expect(getNavigationSnapshot).toHaveBeenCalledWith({
-      backend: "all",
+    expect(getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.getThreadAdmissionState).toHaveBeenCalledWith({
+      backend: "codex",
       federationTarget: { scope: "remote", instanceId: "pwr_remote" },
+      threadId: "remote-thread",
     });
 
     getNavigationSnapshot.mockClear();
+    harness.getThreadAdmissionState.mockClear();
     await harness.controller.handleBackendEvent({
       backend: "codex",
       federationTarget: { scope: "remote", instanceId: "pwr_remote" },
@@ -4968,12 +4977,15 @@ describe("MessagingController", () => {
         },
       },
     });
-    expect(getNavigationSnapshot).toHaveBeenCalledWith({
-      backend: "all",
+    expect(getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.getThreadAdmissionState).toHaveBeenCalledWith({
+      backend: "codex",
       federationTarget: { scope: "remote", instanceId: "pwr_remote" },
+      threadId: "remote-thread",
     });
 
     getNavigationSnapshot.mockClear();
+    harness.getThreadAdmissionState.mockClear();
     await harness.controller.handleBackendEvent({
       backend: "codex",
       federationTarget: { scope: "remote", instanceId: "pwr_remote" },
@@ -4982,9 +4994,11 @@ describe("MessagingController", () => {
         params: {},
       },
     });
-    expect(getNavigationSnapshot).toHaveBeenCalledWith({
-      backend: "all",
+    expect(getNavigationSnapshot).not.toHaveBeenCalled();
+    expect(harness.getThreadAdmissionState).toHaveBeenCalledWith({
+      backend: "codex",
       federationTarget: { scope: "remote", instanceId: "pwr_remote" },
+      threadId: "remote-thread",
     });
 
     harness.startTurn.mockClear();
@@ -14084,10 +14098,12 @@ describe("MessagingController", () => {
     });
   });
 
-  it("clears starting state when navigation lookup fails before retrying", async () => {
+  it("clears starting state when admission-state lookup fails before retrying", async () => {
     const harness = await createHarness();
     await bindThread(harness);
-    harness.getNavigationSnapshot.mockRejectedValueOnce(new Error("navigation unavailable"));
+    harness.getThreadAdmissionState.mockRejectedValueOnce(
+      new Error("admission state unavailable"),
+    );
 
     await harness.controller.handleInboundEvent(buildTextEvent("first turn"));
 
@@ -14095,7 +14111,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "error",
       title: "Turn could not start",
-      body: "navigation unavailable",
+      body: "admission state unavailable",
     });
 
     await harness.controller.handleInboundEvent(buildTextEvent("retry turn"));
@@ -21392,6 +21408,9 @@ describe("MessagingController", () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0]!.executionMode = "default";
     harness.getNavigationSnapshot.mockResolvedValue(navigation);
+    harness.getThreadAdmissionState.mockResolvedValue({
+      thread: navigation.threads[0],
+    });
     await bindThread(harness);
     const binding = await harness.store.findActiveBindingForChannel(buildTextEvent("").channel);
     expect(binding).toBeDefined();
@@ -23112,6 +23131,7 @@ async function createHarness(options?: {
   responseModeForConversation?: MessagingControllerOptions["responseModeForConversation"];
   getManagedConversationRights?: MessagingAdapter["getManagedConversationRights"];
   getNavigationSnapshot?: NonNullable<MessagingBackendBridge["getNavigationSnapshot"]>;
+  getThreadAdmissionState?: NonNullable<MessagingBackendBridge["getThreadAdmissionState"]>;
   createManagedConversation?: MessagingAdapter["createManagedConversation"];
   closeManagedConversation?: MessagingAdapter["closeManagedConversation"];
   deleteManagedConversation?: MessagingAdapter["deleteManagedConversation"];
@@ -23178,6 +23198,7 @@ async function createHarness(options?: {
   delivered: MessagingSurfaceIntent[];
   ensureDirectoryLaunchpad: ReturnType<typeof vi.fn>;
   getNavigationSnapshot: ReturnType<typeof vi.fn>;
+  getThreadAdmissionState: ReturnType<typeof vi.fn>;
   handoffThreadWorkspace: ReturnType<typeof vi.fn> | undefined;
   interruptTurn: ReturnType<typeof vi.fn>;
   listSkills: ReturnType<typeof vi.fn> | undefined;
@@ -23257,6 +23278,29 @@ async function createHarness(options?: {
   const getNavigationSnapshot = vi.fn(
     options?.getNavigationSnapshot
       ?? (async () => options?.navigation ?? buildNavigationSnapshot()),
+  );
+  const getThreadAdmissionState = vi.fn(
+    options?.getThreadAdmissionState
+      ?? (async (request) => {
+        const navigation = options?.navigation ?? buildNavigationSnapshot();
+        const thread = navigation.threads.find(
+          (candidate) =>
+            candidate.source === request.backend
+            && candidate.id === request.threadId,
+        );
+        const activeTurn = options?.readActiveTurn
+          ? await options.readActiveTurn(request)
+          : undefined;
+        return {
+          ...(activeTurn ? { activeTurn } : {}),
+          ...(thread ? { thread } : {}),
+          ...(activeTurn
+            ? { threadStatus: "active" as const }
+            : thread?.threadStatus
+              ? { threadStatus: thread.threadStatus }
+              : {}),
+        };
+      }),
   );
   const ensureDirectoryLaunchpad = vi.fn(
     options?.ensureDirectoryLaunchpad ??
@@ -23611,6 +23655,7 @@ async function createHarness(options?: {
     cancelThreadExecutionModeQueue,
     ensureDirectoryLaunchpad,
     getNavigationSnapshot,
+    getThreadAdmissionState,
     ...(handoffThreadWorkspace ? { handoffThreadWorkspace } : {}),
     interruptTurn,
     createScheduledThreadAction,
@@ -23692,6 +23737,7 @@ async function createHarness(options?: {
     delivered,
     ensureDirectoryLaunchpad,
     getNavigationSnapshot,
+    getThreadAdmissionState,
     handoffThreadWorkspace,
     interruptTurn,
     listSkills,

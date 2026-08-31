@@ -7821,6 +7821,7 @@ export class DesktopBackendRegistry {
     | ThreadPullRequestWatchToolHandler
     | undefined;
   private directoryGitStatusWriter: DirectoryGitStatusWriter | undefined;
+  private readonly pendingDirectoryGitStatusKeys = new Set<string>();
   private threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
   private threadPullRequestDetachHandler:
     | ThreadPullRequestDetachHandler
@@ -9512,6 +9513,37 @@ export class DesktopBackendRegistry {
     if (!threadId) {
       return undefined;
     }
+    const cached = this.getCachedThreadSummary({
+      backend: params.backend,
+      threadId,
+    });
+    if (cached) {
+      return cached;
+    }
+    const threads = await this.listThreads({
+      backend: params.backend,
+      archived: false,
+      callerReason: "thread-id-lookup",
+      enrichDirectories: false,
+      forceRefresh: true,
+    });
+    return threads.find((thread) => thread.id === threadId);
+  }
+
+  /**
+   * Read one already-observed thread without starting or awaiting a provider
+   * thread-list walk. Hot-path consumers such as messaging admission combine
+   * this volatile summary with the durable per-thread overlay instead of
+   * asking navigation to rebuild every thread and directory.
+   */
+  getCachedThreadSummary(params: {
+    backend?: AppServerBackendKind;
+    threadId: string;
+  }): AppServerThreadSummary | undefined {
+    const threadId = params.threadId.trim();
+    if (!threadId) {
+      return undefined;
+    }
     for (const state of this.threadListCache.values()) {
       const cached = state.threads?.find(
         (thread) =>
@@ -9522,14 +9554,7 @@ export class DesktopBackendRegistry {
         return cached;
       }
     }
-    const threads = await this.listThreads({
-      backend: params.backend,
-      archived: false,
-      callerReason: "thread-id-lookup",
-      enrichDirectories: false,
-      forceRefresh: true,
-    });
-    return threads.find((thread) => thread.id === threadId);
+    return undefined;
   }
 
   async getThreadAgentMetadata(params: {
@@ -11579,40 +11604,61 @@ export class DesktopBackendRegistry {
       .map((key) => this.navigationDirectoriesByKey.get(key))
       .filter((directory): directory is NavigationDirectorySummary =>
         Boolean(directory?.path?.trim()),
-      );
+      )
+      .filter((directory) => !this.pendingDirectoryGitStatusKeys.has(directory.key));
+    for (const directory of directories) {
+      this.pendingDirectoryGitStatusKeys.add(directory.key);
+    }
     if (request.force !== false) {
       for (const directory of directories) {
         this.gitDirectoryService.invalidateDirectoryStatus(directory.path);
       }
     }
-    for await (const entry of this.gitDirectoryService.readDirectoryStatusEntries(
-      directories,
-    )) {
-      const fetchedAt = Date.now();
-      const directory = this.navigationDirectoriesByKey.get(entry.directoryKey);
-      if (this.directoryGitStatusWriter) {
-        await this.directoryGitStatusWriter({
-          directory,
-          directoryKey: entry.directoryKey,
-          fetchedAt,
-          gitStatus: entry.gitStatus,
-        });
-        continue;
-      }
-      const notification: NavigationDirectoryGitStatusUpdatedNotification = {
-        method: "navigation/directoryGitStatus/updated",
-        params: {
-          directoryKey: entry.directoryKey,
-          gitStatus: entry.gitStatus ?? null,
-          fetchedAt,
-        },
-      };
-      await this.emit({
-        backend: "codex",
-        notification,
-      } as unknown as AgentEvent);
-    }
+    void this.refreshDirectoryGitStatusesInBackground(directories);
     return { scheduledCount: directories.length };
+  }
+
+  private async refreshDirectoryGitStatusesInBackground(
+    directories: NavigationDirectorySummary[],
+  ): Promise<void> {
+    try {
+      for await (const entry of this.gitDirectoryService.readDirectoryStatusEntries(
+        directories,
+      )) {
+        const fetchedAt = Date.now();
+        const directory = this.navigationDirectoriesByKey.get(entry.directoryKey);
+        if (this.directoryGitStatusWriter) {
+          await this.directoryGitStatusWriter({
+            directory,
+            directoryKey: entry.directoryKey,
+            fetchedAt,
+            gitStatus: entry.gitStatus,
+          });
+          continue;
+        }
+        const notification: NavigationDirectoryGitStatusUpdatedNotification = {
+          method: "navigation/directoryGitStatus/updated",
+          params: {
+            directoryKey: entry.directoryKey,
+            gitStatus: entry.gitStatus ?? null,
+            fetchedAt,
+          },
+        };
+        await this.emit({
+          backend: "codex",
+          notification,
+        } as unknown as AgentEvent);
+      }
+    } catch (error) {
+      backendRegistryLog.warn("directory Git status refresh failed", {
+        directoryKeys: directories.map((directory) => directory.key),
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      for (const directory of directories) {
+        this.pendingDirectoryGitStatusKeys.delete(directory.key);
+      }
+    }
   }
 
   readWorktreeWorkingStateEntries(
@@ -13561,6 +13607,13 @@ export class DesktopBackendRegistry {
       }
     }
     return undefined;
+  }
+
+  isThreadTurnOccupied(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): boolean {
+    return this.threadHasActiveTurn(params.threadId, params.backend);
   }
 
   private getPendingTurnForThread(params: {

@@ -48,6 +48,7 @@ import type {
   SubmitServerRequestRequest,
   SubmitServerRequestResponse,
   ThreadAgentMetadata,
+  ThreadAdmissionState,
   ThreadMessagingBindingTransition,
   UpdateScheduledThreadActionRequest,
   UpdateDirectoryLaunchpadRequest,
@@ -110,6 +111,13 @@ export type MessagingActiveBackendTurn = {
   turnId: string;
 };
 
+/**
+ * Targeted state needed to admit one bound-thread reply. This projection must
+ * stay independent of navigation-wide Git, PR, launchpad, directory, and
+ * federation enrichment.
+ */
+export type MessagingThreadAdmissionState = ThreadAdmissionState;
+
 export type MessagingAdapter = {
   capabilityProfile: MessagingCapabilityProfile;
   clientRateLimitStrategy?: MessagingClientRateLimitStrategy;
@@ -160,6 +168,11 @@ export type MessagingBackendBridge = {
   getNavigationSnapshot(
     request?: GetNavigationSnapshotRequest,
   ): Promise<NavigationSnapshot>;
+  getThreadAdmissionState(request: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+  }): Promise<MessagingThreadAdmissionState>;
   /**
    * Storage roots no local-file read may reach. Read through the bridge rather
    * than the backend-registry singleton: that getter constructs a registry with

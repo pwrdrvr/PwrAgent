@@ -200,6 +200,11 @@ import {
 import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
+import {
+  DIRECTORY_GIT_STATUS_BACKGROUND_BATCH_SIZE,
+  DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS,
+  isFreshDirectoryGitStatusCacheEntry,
+} from "../app-server/directory-git-status-refresh-policy";
 import { getAppStateDb } from "../state/app-state";
 import {
   listModelSettingsRecents,
@@ -350,15 +355,8 @@ const USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 10_000;
 const TERMINAL_USER_THREAD_PR_REFRESH_MIN_INTERVAL_MS = 60_000;
 const PR_STATUS_TOKEN_BUCKET_CAPACITY = 20;
 const PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE = 20;
-const STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT = 4;
-const DIRECTORY_GIT_STATUS_CACHE_MAX_AGE_MS = 5 * 60_000;
-// Collapse rapid forced directory-git-status re-enqueues for the same key
-// (e.g. flipping between two threads in the same repo) that land within a
-// few seconds of the previous probe completing. Concurrent same-key
-// requests already coalesce via `pendingDirectoryGitStatusKeys`; this
-// closes the sequential post-completion gap so "747, 732, 747, 747, 732,
-// 747" collapses to "747, 732".
-const DIRECTORY_GIT_STATUS_FORCE_COALESCE_WINDOW_MS = 3_000;
+const STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT =
+  DIRECTORY_GIT_STATUS_BACKGROUND_BATCH_SIZE;
 const BACKGROUND_WORKTREE_WORKING_STATE_REFRESH_BATCH_SIZE = 8;
 // PR discovery (Layer B): a slow branch-lookup rotation across ALL open threads
 // to catch newly opened PRs on projects the operator is not looking at. Tick
@@ -7476,12 +7474,6 @@ class DesktopAppServerService {
     });
     return this.focusedDiffService;
   }
-}
-
-function isFreshDirectoryGitStatusCacheEntry(
-  entry: DirectoryGitStatusCacheEntry,
-): boolean {
-  return Date.now() - entry.fetchedAt < DIRECTORY_GIT_STATUS_CACHE_MAX_AGE_MS;
 }
 
 function isFreshWorktreeWorkingStateCacheEntry(

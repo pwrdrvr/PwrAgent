@@ -219,6 +219,64 @@ describe("federation backend bridge", () => {
     ).toBe("launchpad_metadata");
   });
 
+  it("routes targeted admission state through messaging_route", async () => {
+    const resolveThreadAdmissionState = vi.fn(async () => ({
+      threadStatus: "active" as const,
+      activeTurn: {
+        backend: "codex" as const,
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+    }));
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["messaging_route"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({
+      router,
+      backend: {
+        resolveThreadAdmissionState,
+      } as unknown as FederationBackendOperations,
+    });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "admission-state",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState,
+        params: { backend: "codex", threadId: "thread-1" },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+
+    expect(
+      FEDERATION_BACKEND_METHOD_CAPABILITIES[
+        FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState
+      ],
+    ).toBe("messaging_route");
+    expect(resolveThreadAdmissionState).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(replies).toContainEqual(
+      expect.objectContaining({
+        kind: "response",
+        requestId: "admission-state",
+        result: expect.objectContaining({ threadStatus: "active" }),
+      }),
+    );
+  });
+
   it("does not expose profile-local thread model migrations over federation", () => {
     expect(FEDERATION_BACKEND_METHODS).not.toHaveProperty(
       "applyThreadModelMigration",

@@ -2912,6 +2912,76 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("coalesces targeted directory refreshes while the first probe is pending", async () => {
+    let finishProbe: (() => void) | undefined;
+    const probeGate = new Promise<void>((resolve) => {
+      finishProbe = resolve;
+    });
+    const readDirectoryStatusEntries = vi.fn(
+      (directories: Array<{ key: string }>) =>
+        (async function* () {
+          await probeGate;
+          yield {
+            directoryKey: directories[0]!.key,
+            gitStatus: {
+              currentBranch: "main",
+              syncState: "in-sync" as const,
+            },
+          };
+        })(),
+    );
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore: createOverlayStoreMock(),
+      gitDirectoryService: {
+        invalidateDirectoryStatus: vi.fn(),
+        readDirectoryStatusEntries,
+      } as never,
+    });
+    const writeDirectoryGitStatus = vi.fn(async () => undefined);
+    registry.setDirectoryGitStatusWriter(writeDirectoryGitStatus);
+    registry.rememberCompleteNavigationSnapshot({
+      backend: "all",
+      directories: [
+        {
+          key: "directory:/owner/repo",
+          kind: "directory",
+          label: "repo",
+          path: "/owner/repo",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+      fetchedAt: 1_000,
+      inboxThreadKeys: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+      threads: [],
+      unchanged: false,
+    });
+
+    try {
+      await expect(registry.refreshDirectoryGitStatuses({
+        directoryKeys: ["directory:/owner/repo"],
+        force: true,
+      })).resolves.toEqual({ scheduledCount: 1 });
+      await expect(registry.refreshDirectoryGitStatuses({
+        directoryKeys: ["directory:/owner/repo"],
+        force: true,
+      })).resolves.toEqual({ scheduledCount: 0 });
+      expect(writeDirectoryGitStatus).not.toHaveBeenCalled();
+
+      finishProbe?.();
+      await vi.waitFor(() => {
+        expect(writeDirectoryGitStatus).toHaveBeenCalledOnce();
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("hydrates review working state from the shared navigation cache", async () => {
     const worktreePath = "/worktrees/PwrAgnt";
     const gitWorkingState = {
