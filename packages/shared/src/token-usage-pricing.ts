@@ -265,6 +265,9 @@ const OPENAI_GPT56_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 6, 9);
 // https://openai.com/index/advancing-the-price-performance-frontier-with-gpt-5-6/
 const OPENAI_GPT56_REPRICING_CATALOG_VERSION = "2026-07-30";
 const OPENAI_GPT56_REPRICING_EFFECTIVE_FROM = Date.UTC(2026, 6, 30);
+// https://developers.openai.com/api/docs/models/gpt-5.6-sol
+const OPENAI_GPT56_SOL_REPRICING_CATALOG_VERSION = "2026-08-21";
+const OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM = Date.UTC(2026, 7, 21);
 const OPENAI_CODEX_CREDITS_CATALOG_ID = "openai-codex-credits";
 const OPENAI_CODEX_CREDITS_CATALOG_VERSION = "2026-06-16";
 const OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION = "2026-07-27";
@@ -292,6 +295,32 @@ const QWEN_PRICING_CATALOG_VERSION = "2026-07-15";
 const QWEN37_PLUS_PRICING_EFFECTIVE_FROM = Date.UTC(2026, 4, 26);
 
 const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT56_SOL_REPRICING_CATALOG_VERSION,
+    model: "gpt-5.6-sol",
+    displayModel: "GPT-5.6 Sol",
+    displayTier: "Standard",
+    effectiveFrom: OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "standard",
+    inputUsdPerMillion: 4,
+    cachedInputUsdPerMillion: 0.4,
+    outputUsdPerMillion: 20,
+  },
+  {
+    catalogId: OPENAI_PRICING_CATALOG_ID,
+    catalogVersion: OPENAI_GPT56_SOL_REPRICING_CATALOG_VERSION,
+    model: "gpt-5.6-sol",
+    displayModel: "GPT-5.6 Sol",
+    displayTier: "Fast",
+    effectiveFrom: OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM,
+    provider: "openai",
+    serviceTier: "priority",
+    inputUsdPerMillion: 8,
+    cachedInputUsdPerMillion: 0.8,
+    outputUsdPerMillion: 40,
+  },
   {
     catalogId: OPENAI_PRICING_CATALOG_ID,
     catalogVersion: OPENAI_GPT56_REPRICING_CATALOG_VERSION,
@@ -351,6 +380,7 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     displayModel: "GPT-5.6 Sol",
     displayTier: "Standard",
     effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
+    effectiveTo: OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM,
     provider: "openai",
     serviceTier: "standard",
     inputUsdPerMillion: 5,
@@ -364,6 +394,7 @@ const OPENAI_PRICING_CATALOG: readonly PricingCatalogEntry[] = [
     displayModel: "GPT-5.6 Sol",
     displayTier: "Fast (Priority)",
     effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
+    effectiveTo: OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM,
     provider: "openai",
     serviceTier: "priority",
     inputUsdPerMillion: 10,
@@ -627,10 +658,23 @@ function buildCodexCreditsCatalogEntries(params: {
 
 const OPENAI_CODEX_CREDITS_CATALOG: readonly CodexCreditsCatalogEntry[] = [
   ...buildCodexCreditsCatalogEntries({
+    catalogVersion: OPENAI_GPT56_SOL_REPRICING_CATALOG_VERSION,
+    model: "gpt-5.6-sol",
+    displayModel: "GPT-5.6 Sol",
+    effectiveFrom: OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM,
+    fastRateMultiplier: OPENAI_CODEX_FAST_RATE_MULTIPLIERS["gpt-5.6"],
+    standardRates: {
+      inputCreditsPerMillion: 100,
+      cachedInputCreditsPerMillion: 10,
+      outputCreditsPerMillion: 500,
+    },
+  }),
+  ...buildCodexCreditsCatalogEntries({
     catalogVersion: OPENAI_GPT56_CODEX_CREDITS_CATALOG_VERSION,
     model: "gpt-5.6-sol",
     displayModel: "GPT-5.6 Sol",
     effectiveFrom: OPENAI_GPT56_PRICING_EFFECTIVE_FROM,
+    effectiveTo: OPENAI_GPT56_SOL_REPRICING_EFFECTIVE_FROM,
     fastRateMultiplier: OPENAI_CODEX_FAST_RATE_MULTIPLIERS["gpt-5.6"],
     standardRates: {
       inputCreditsPerMillion: 125,

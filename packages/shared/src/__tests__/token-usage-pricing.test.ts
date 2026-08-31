@@ -244,6 +244,60 @@ describe("token usage pricing", () => {
     }
   });
 
+  it("prices GPT-5.6 Sol at the reduced August 21 rates", () => {
+    const cases = [
+      ["gpt-5.6-sol", false, 24_400_000, 4, 0.4, 20],
+      ["gpt-5.6-sol", true, 48_800_000, 8, 0.8, 40],
+    ] as const;
+
+    for (const [
+      model,
+      fastMode,
+      totalCostMicros,
+      inputUsdPerMillion,
+      cachedInputUsdPerMillion,
+      outputUsdPerMillion,
+    ] of cases) {
+      const cost = estimateOpenAiTokenUsageCost({
+        at: Date.UTC(2026, 7, 21),
+        cachedInputTokens: 1_000_000,
+        fastMode,
+        model,
+        outputTokens: 1_000_000,
+        uncachedInputTokens: 1_000_000,
+      });
+
+      expect(cost).toMatchObject({
+        catalogVersion: "2026-08-21",
+        cachedInputUsdPerMillion,
+        inputUsdPerMillion,
+        outputUsdPerMillion,
+        rateId: `openai:2026-08-21:${model}:${fastMode ? "priority" : "standard"}`,
+        serviceTier: fastMode ? "priority" : "standard",
+        totalCostMicros,
+      });
+    }
+  });
+
+  it("keeps GPT-5.6 Sol on the July 9 rates until August 21", () => {
+    const cost = estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 7, 20, 23, 59, 59),
+      cachedInputTokens: 1_000_000,
+      model: "gpt-5.6-sol",
+      outputTokens: 1_000_000,
+      uncachedInputTokens: 1_000_000,
+    });
+
+    expect(cost).toMatchObject({
+      catalogVersion: "2026-07-09",
+      inputUsdPerMillion: 5,
+      cachedInputUsdPerMillion: 0.5,
+      outputUsdPerMillion: 30,
+      rateId: "openai:2026-07-09:gpt-5.6-sol:standard",
+      totalCostMicros: 35_500_000,
+    });
+  });
+
   it("does not price GPT-5.6 usage before its catalog effective date", () => {
     expect(
       estimateOpenAiTokenUsageCost({
@@ -487,6 +541,21 @@ describe("token usage pricing", () => {
         serviceTier: "priority",
       }),
     );
+    expect(listOpenAiTokenUsagePricingRates()).toContainEqual(
+      expect.objectContaining({
+        catalogId: "openai-api",
+        catalogVersion: "2026-08-21",
+        currency: "USD",
+        displayName: "GPT-5.6 Sol Standard",
+        inputMicrosPerMillion: 4_000_000,
+        cachedInputMicrosPerMillion: 400_000,
+        outputMicrosPerMillion: 20_000_000,
+        model: "gpt-5.6-sol",
+        provider: "openai",
+        rateId: "openai:2026-08-21:gpt-5.6-sol:standard",
+        serviceTier: "standard",
+      }),
+    );
     expect(listTokenUsagePricingRates()).toContainEqual(
       expect.objectContaining({
         cachedInputUsdPerMillion: 0.5,
@@ -658,6 +727,46 @@ describe("token usage pricing", () => {
         provider: "openai",
         rateId: `openai:2026-07-30:codex-credits:${model}:priority`,
         serviceTier: "priority",
+        totalCreditMicros,
+        totalCredits: totalCreditMicros / 1_000_000,
+      });
+    }
+  });
+
+  it("estimates reduced GPT-5.6 Sol Codex Credits from August 21", () => {
+    const cases = [
+      ["gpt-5.6-sol", false, "GPT-5.6 Sol Standard", 100, 10, 500, 610_000_000],
+      ["gpt-5.6-sol", true, "GPT-5.6 Sol Fast", 250, 25, 1250, 1_525_000_000],
+    ] as const;
+
+    for (const [
+      model,
+      fastMode,
+      displayName,
+      inputCreditsPerMillion,
+      cachedInputCreditsPerMillion,
+      outputCreditsPerMillion,
+      totalCreditMicros,
+    ] of cases) {
+      const credits = estimateOpenAiCodexCreditUsage({
+        at: Date.UTC(2026, 7, 21),
+        cachedInputTokens: 1_000_000,
+        fastMode,
+        model,
+        outputTokens: 1_000_000,
+        uncachedInputTokens: 1_000_000,
+      });
+
+      expect(credits).toMatchObject({
+        catalogId: "openai-codex-credits",
+        catalogVersion: "2026-08-21",
+        displayName,
+        inputCreditsPerMillion,
+        cachedInputCreditsPerMillion,
+        outputCreditsPerMillion,
+        provider: "openai",
+        rateId: `openai:2026-08-21:codex-credits:${model}:${fastMode ? "priority" : "standard"}`,
+        serviceTier: fastMode ? "priority" : "standard",
         totalCreditMicros,
         totalCredits: totalCreditMicros / 1_000_000,
       });
