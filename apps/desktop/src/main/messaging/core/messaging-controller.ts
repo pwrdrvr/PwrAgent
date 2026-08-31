@@ -3166,6 +3166,9 @@ export class MessagingController {
   }
 
   private async handleText(event: MessagingInboundTextEvent): Promise<void> {
+    if (this.isSharedMessageAddressedElsewhere(event)) {
+      return;
+    }
     const command = parseTextCommand(event.text);
     if (command) {
       await this.handleCommand({
@@ -3448,6 +3451,9 @@ export class MessagingController {
   }
 
   private async handleMedia(event: MessagingInboundMediaEvent): Promise<void> {
+    if (this.isSharedMessageAddressedElsewhere(event)) {
+      return;
+    }
     const command = event.text ? parseTextCommand(event.text) : undefined;
     if (command) {
       await this.handleCommand({
@@ -3542,6 +3548,9 @@ export class MessagingController {
     ) {
       return true;
     }
+    if (this.isSharedMessageAddressedElsewhere(event)) {
+      return false;
+    }
     if (
       this.capabilityProfile.conversationInput?.reportsBotMention !== true
     ) {
@@ -3552,6 +3561,16 @@ export class MessagingController {
       await this.responseModeForConversation(event.channel),
     );
     return responseMode === "every_message" || event.botMention === true;
+  }
+
+  private isSharedMessageAddressedElsewhere(
+    event: MessagingInboundTextEvent | MessagingInboundMediaEvent,
+  ): boolean {
+    return (
+      event.addressedToOtherParticipant === true
+      && event.channel.conversation.kind !== "dm"
+      && event.channel.conversation.isDirectMessage !== true
+    );
   }
 
   private async responseModeForConversation(

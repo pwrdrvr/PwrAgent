@@ -49,6 +49,13 @@ turn admission policy that coalesces split input, prevents overlapping
 `turn/start` calls, queues follow-ups during active turns, and maps queued
 input to `turn/steer` or a later `turn/start`.
 
+When a shared-conversation message begins with a platform-native mention of a
+different participant, adapters that can identify that target should set
+`addressedToOtherParticipant: true`. Desktop routing then treats the message as
+explicitly addressed elsewhere instead of ambient input, including when the
+conversation's response mode is `every_message`. Compare stable platform IDs;
+never infer this signal from display-name text.
+
 The `actor.platformUserId` must be the stable platform ID used for
 authorization. Mutable usernames and display names may be included for audit or
 operator visibility only.

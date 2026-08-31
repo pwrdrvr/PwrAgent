@@ -812,6 +812,12 @@ export class DiscordAdapter implements DiscordProviderAdapter {
             this.options.config.applicationId,
           )
         : undefined;
+    const addressedToOtherParticipant =
+      message.content !== undefined
+      && isDiscordMessageAddressedToOtherParticipant(
+        message.content,
+        this.options.config.applicationId,
+      );
     const isPairingMessage = message.content !== undefined
       ? Boolean(extractMessagingPairingToken(message.content))
       : false;
@@ -874,6 +880,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         routingState,
         sourceUrl,
         text: normalizedContent,
+        ...(addressedToOtherParticipant
+          ? { addressedToOtherParticipant: true }
+          : {}),
         ...(mentionRemainder !== undefined ? { botMention: true } : {}),
       });
       return;
@@ -901,6 +910,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           }
         : {
             text: normalizedContent ?? "",
+            ...(addressedToOtherParticipant
+              ? { addressedToOtherParticipant: true }
+              : {}),
             ...(mentionRemainder !== undefined ? { botMention: true } : {}),
           }),
       receivedAt,
@@ -2339,6 +2351,22 @@ export function stripDiscordBotMention(
   }
   const remainder = trimmedStart.slice(mention.length).trim();
   return remainder;
+}
+
+/**
+ * Return true when a message begins with a Discord user mention whose exact
+ * snowflake differs from the configured bot identity. This lets shared-channel
+ * routing distinguish ambient chatter from a message explicitly addressed to
+ * someone else, including when the channel accepts every ambient message.
+ */
+export function isDiscordMessageAddressedToOtherParticipant(
+  text: string,
+  botUserId: string | undefined,
+): boolean {
+  const trimmedStart = text.replace(/^\s+/, "");
+  const match = /^<@!?([0-9]{1,20})>/.exec(trimmedStart);
+  const mentionedUserId = match?.[1];
+  return mentionedUserId !== undefined && mentionedUserId !== botUserId;
 }
 
 function messageToDispatch(message: Message): DiscordMessageCreateDispatch {
