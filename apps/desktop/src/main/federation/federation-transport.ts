@@ -78,6 +78,8 @@ const FEDERATION_BLOB_FRAME_MAGIC = Buffer.from("PWRBLOB1", "ascii");
 const FEDERATION_BLOB_FRAME_PREFIX_BYTES =
   FEDERATION_BLOB_FRAME_MAGIC.byteLength + 4;
 const FEDERATION_BLOB_FRAME_MAX_HEADER_BYTES = 64 * 1024;
+export const FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES = 2 * 1024 * 1024;
+const FEDERATION_SEND_BUFFER_POLL_MS = 5;
 
 /**
  * The socket surface the keepalive watchdog needs. Structural (rather than
@@ -237,6 +239,9 @@ export type FederationGatewayConnection = {
   sessionId: FederationSessionId;
   capabilities: FederationCapability[];
   sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
+  sendEnvelopeWithBackpressure?: (
+    envelope: FederationProtocolEnvelope,
+  ) => Promise<void>;
   close: (code?: number, reason?: string) => void;
   /** Hard socket teardown for peers already presumed dead (stale sweep):
    *  a graceful close queues a frame a wedged socket may never deliver. */
@@ -578,6 +583,20 @@ export class FederationGatewayWebSocketServer {
           });
         }
       },
+      sendEnvelopeWithBackpressure: async (envelope) => {
+        const byteCount = await sendFrameWithBackpressure(
+          socket,
+          { kind: "envelope", envelope },
+          transport,
+        );
+        if (byteCount > 0) {
+          this.options.onEnvelopeTransfer?.({
+            peerId: decision.peer.id,
+            direction: "sent",
+            byteCount,
+          });
+        }
+      },
       close: (code?: number, reason?: string) => socket.close(code, reason),
       terminate: () => socket.terminate(),
     };
@@ -774,6 +793,9 @@ export type FederationClientWebSocketClient = {
   sessionId: FederationSessionId;
   capabilities: FederationCapability[];
   sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
+  sendEnvelopeWithBackpressure?: (
+    envelope: FederationProtocolEnvelope,
+  ) => Promise<void>;
   close: () => void;
 };
 
@@ -1111,6 +1133,16 @@ async function establishFederationClient(
         params.onEnvelopeTransfer?.({ direction: "sent", byteCount });
       }
     },
+    sendEnvelopeWithBackpressure: async (envelope) => {
+      const byteCount = await sendFrameWithBackpressure(
+        socket,
+        { kind: "envelope", envelope },
+        transport,
+      );
+      if (byteCount > 0) {
+        params.onEnvelopeTransfer?.({ direction: "sent", byteCount });
+      }
+    },
     close: () => socket.close(),
   };
 }
@@ -1216,6 +1248,32 @@ function sendFrame(
   const wire = transport ? transport.encrypt(payload) : payload;
   socket.send(wire);
   return wire.byteLength;
+}
+
+async function sendFrameWithBackpressure(
+  socket: WebSocket,
+  message: FederationSocketMessage,
+  transport?: NoiseTransport,
+): Promise<number> {
+  await waitForFederationSendCapacity(socket);
+  if (socket.readyState !== WebSocket.OPEN) {
+    throw new Error("Federation connection closed while sending an attachment.");
+  }
+  return sendFrame(socket, message, transport);
+}
+
+export async function waitForFederationSendCapacity(
+  socket: Pick<WebSocket, "bufferedAmount" | "readyState">,
+): Promise<void> {
+  while (
+    socket.readyState === WebSocket.OPEN
+    && socket.bufferedAmount > FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES
+  ) {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, FEDERATION_SEND_BUFFER_POLL_MS);
+      timer.unref?.();
+    });
+  }
 }
 
 function closeAfterFrameAuthenticationFailure(socket: WebSocket): void {

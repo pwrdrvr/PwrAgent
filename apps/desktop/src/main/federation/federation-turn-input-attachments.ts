@@ -1,5 +1,17 @@
 import { createHash, randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, stat, unlink, writeFile } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import {
+  mkdir,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  unlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type {
@@ -20,8 +32,9 @@ import {
 import { resolveActiveProfilePath } from "../profile";
 
 export const FEDERATION_BLOB_CHUNK_BYTES = 512 * 1024;
-const FEDERATION_BLOB_WAIT_TIMEOUT_MS = 30_000;
+export const FEDERATION_BLOB_WAIT_TIMEOUT_MS = 30_000;
 const FEDERATION_BLOB_COMPLETED_RETENTION_MS = 10 * 60_000;
+export const FEDERATION_TURN_INPUT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_INCOMPLETE_FEDERATION_BLOBS_PER_SOURCE = 8;
 export const MAX_BUFFERED_FEDERATION_BLOB_BYTES = 256 * 1024 * 1024;
 
@@ -60,7 +73,9 @@ export async function prepareOutgoingFederationTurnInput(params: {
   input: readonly AppServerTurnInputItem[];
   localInstanceId: FederationInstanceId;
   targetInstanceId: FederationInstanceId;
-  sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
+  sendEnvelope: (
+    envelope: FederationProtocolEnvelope,
+  ) => Promise<void> | void;
   privateStorageRoots?: readonly string[];
 }): Promise<FederationWireTurnInputItem[]> {
   const prepared: FederationWireTurnInputItem[] = [];
@@ -178,17 +193,25 @@ async function sendStagedAttachment(params: {
   attachment: StagedTurnInputAttachment;
   localInstanceId: FederationInstanceId;
   targetInstanceId: FederationInstanceId;
-  sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
+  sendEnvelope: (
+    envelope: FederationProtocolEnvelope,
+  ) => Promise<void> | void;
 }): Promise<FederationTurnInputBlobReference> {
-  const data = await readFile(params.attachment.path);
-  if (data.byteLength > MAX_TURN_INPUT_ATTACHMENT_BYTES) {
+  const fileInfo = await stat(params.attachment.path);
+  if (!fileInfo.isFile()) {
+    throw new Error("Turn attachment path is not a regular file.");
+  }
+  if (fileInfo.size > MAX_TURN_INPUT_ATTACHMENT_BYTES) {
     throw new Error(
       `Turn attachment exceeds the ${MAX_TURN_INPUT_ATTACHMENT_BYTES}-byte limit.`,
     );
   }
   const transferId = randomUUID();
-  const chunkCount = Math.max(1, Math.ceil(data.byteLength / FEDERATION_BLOB_CHUNK_BYTES));
-  const sha256 = createHash("sha256").update(data).digest("hex");
+  const chunkCount = Math.max(
+    1,
+    Math.ceil(fileInfo.size / FEDERATION_BLOB_CHUNK_BYTES),
+  );
+  const sha256 = await hashFile(params.attachment.path);
   const name = sanitizeTurnAttachmentName(
     params.attachment.name,
     path.basename(params.attachment.path),
@@ -197,32 +220,52 @@ async function sendStagedAttachment(params: {
     ? params.attachment.mimeType
     : undefined;
 
-  for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
-    const offset = chunkIndex * FEDERATION_BLOB_CHUNK_BYTES;
-    const chunk = data.subarray(
-      offset,
-      Math.min(data.byteLength, offset + FEDERATION_BLOB_CHUNK_BYTES),
-    );
-    params.sendEnvelope({
-      id: `federation-blob:${transferId}:${chunkIndex}`,
-      kind: "blob_chunk",
-      protocolVersion: FEDERATION_PROTOCOL_VERSION,
-      sourceInstanceId: params.localInstanceId,
-      targetInstanceId: params.targetInstanceId,
-      createdAt: Date.now(),
-      transferId,
-      chunkIndex,
-      chunkCount,
-      totalSize: data.byteLength,
-      sha256,
-      name,
-      ...(mimeType ? { mimeType } : {}),
-      inputType: params.attachment.type,
-      data: chunk,
-    });
+  const file = await open(params.attachment.path, "r");
+  try {
+    for (let chunkIndex = 0; chunkIndex < chunkCount; chunkIndex += 1) {
+      const remaining = fileInfo.size - chunkIndex * FEDERATION_BLOB_CHUNK_BYTES;
+      const chunk = Buffer.allocUnsafe(
+        Math.max(0, Math.min(FEDERATION_BLOB_CHUNK_BYTES, remaining)),
+      );
+      if (chunk.byteLength > 0) {
+        const result = await file.read(chunk, 0, chunk.byteLength, null);
+        if (result.bytesRead !== chunk.byteLength) {
+          throw new Error(
+            "Turn attachment changed while it was being transferred.",
+          );
+        }
+      }
+      await params.sendEnvelope({
+        id: `federation-blob:${transferId}:${chunkIndex}`,
+        kind: "blob_chunk",
+        protocolVersion: FEDERATION_PROTOCOL_VERSION,
+        sourceInstanceId: params.localInstanceId,
+        targetInstanceId: params.targetInstanceId,
+        createdAt: Date.now(),
+        transferId,
+        chunkIndex,
+        chunkCount,
+        totalSize: fileInfo.size,
+        sha256,
+        name,
+        ...(mimeType ? { mimeType } : {}),
+        inputType: params.attachment.type,
+        data: chunk,
+      });
+    }
+  } finally {
+    await file.close();
   }
 
   return { type: "federationBlob", transferId };
+}
+
+async function hashFile(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(filePath)) {
+    hash.update(chunk as Buffer);
+  }
+  return hash.digest("hex");
 }
 
 export class FederationTurnInputAttachmentReceiver {
@@ -278,8 +321,10 @@ export class FederationTurnInputAttachmentReceiver {
       throw new Error("Federation blob exceeded its declared size.");
     }
     if (transfer.chunks.size !== metadata.chunkCount) {
+      this.armTransferTimeout(key, transfer);
       return;
     }
+    clearTimeout(transfer.timeout);
 
     try {
       const attachment = await this.persistCompletedTransfer(
@@ -363,6 +408,16 @@ export class FederationTurnInputAttachmentReceiver {
       timeout: setTimeout(() => undefined, 0),
     } satisfies IncomingTransfer;
     clearTimeout(transfer.timeout);
+    this.armTransferTimeout(key, transfer);
+    this.transfers.set(key, transfer);
+    return transfer;
+  }
+
+  private armTransferTimeout(
+    key: string,
+    transfer: IncomingTransfer,
+  ): void {
+    clearTimeout(transfer.timeout);
     transfer.timeout = setTimeout(() => {
       this.failTransfer(
         key,
@@ -371,8 +426,6 @@ export class FederationTurnInputAttachmentReceiver {
       );
     }, FEDERATION_BLOB_WAIT_TIMEOUT_MS);
     transfer.timeout.unref?.();
-    this.transfers.set(key, transfer);
-    return transfer;
   }
 
   private failTransfer(
@@ -431,6 +484,8 @@ export class FederationTurnInputAttachmentReceiver {
       sanitizeTurnAttachmentName(metadata.name),
     );
     await mkdir(path.dirname(filePath), { recursive: true });
+    const persistedAt = new Date();
+    await utimes(path.dirname(filePath), persistedAt, persistedAt);
     const existing = await stat(filePath).catch(() => undefined);
     let reusable = false;
     if (existing?.isFile() && existing.size === metadata.totalSize) {
@@ -448,7 +503,16 @@ export class FederationTurnInputAttachmentReceiver {
       } finally {
         await unlink(temporaryPath).catch(() => undefined);
       }
+    } else {
+      await Promise.all([
+        utimes(filePath, persistedAt, persistedAt),
+        utimes(path.dirname(filePath), persistedAt, persistedAt),
+      ]);
     }
+
+    void cleanupOldFederationTurnInputs(root, new Set([filePath])).catch(
+      () => undefined,
+    );
 
     return metadata.inputType === "localImage"
       ? { type: "localImage", name: metadata.name, path: filePath }
@@ -460,6 +524,39 @@ export class FederationTurnInputAttachmentReceiver {
           sizeBytes: metadata.totalSize,
         };
   }
+}
+
+async function cleanupOldFederationTurnInputs(
+  root: string,
+  excludedFiles: ReadonlySet<string>,
+): Promise<void> {
+  const cutoff = Date.now() - FEDERATION_TURN_INPUT_MAX_AGE_MS;
+  const peerEntries = await readdir(root).catch(() => []);
+  await Promise.all(
+    peerEntries.map(async (peerEntry) => {
+      const peerPath = path.join(root, peerEntry);
+      const digestEntries = await readdir(peerPath).catch(() => []);
+      await Promise.all(
+        digestEntries.map(async (digestEntry) => {
+          const digestPath = path.join(peerPath, digestEntry);
+          const children = await readdir(digestPath).catch(() => []);
+          if (
+            children.some((child) =>
+              excludedFiles.has(path.join(digestPath, child))
+            )
+          ) {
+            return;
+          }
+          const info = await stat(digestPath).catch(() => undefined);
+          if (info?.isDirectory() && info.mtimeMs < cutoff) {
+            await rm(digestPath, { recursive: true, force: true }).catch(
+              () => undefined,
+            );
+          }
+        }),
+      );
+    }),
+  );
 }
 
 function assertSafeFederationInlineInput(item: AppServerTurnInputItem): void {

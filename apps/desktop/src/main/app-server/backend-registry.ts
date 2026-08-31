@@ -2418,6 +2418,19 @@ function buildActiveTurnKey(
   return `${backend}:${threadId}:${turnId}`;
 }
 
+function turnInputAttachmentCacheKey(item: AppServerTurnInputItem): string {
+  if (item.type === "localImage" || item.type === "localFile") {
+    return `${item.type}:${item.path}`;
+  }
+  if (item.type === "image") {
+    return `${item.type}:${item.url}`;
+  }
+  if (item.type === "file") {
+    return `${item.type}:${item.name}:${item.data}`;
+  }
+  return `${item.type}:${item.text}`;
+}
+
 function buildReviewSubAgentKey(
   backend: AppServerBackendKind,
   threadId: string,
@@ -7103,6 +7116,7 @@ type PendingThreadMessageContext = {
   createdAt: number;
   id: string;
   imageParts?: AppServerThreadImagePart[];
+  retainedInput?: AppServerTurnInputItem[];
   origin?: AppServerThreadMessageOrigin;
   text?: string;
   threadId: string;
@@ -10352,7 +10366,7 @@ export class DesktopBackendRegistry {
     model?: string;
     reasoningEffort?: string;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
-    const promptPayload = inputToAcpPrompt(params.input);
+    const promptPayload = await inputToAcpPrompt(params.input);
     if (!promptPayload) {
       throw new Error("ACP turns require text or image input");
     }
@@ -14481,9 +14495,20 @@ export class DesktopBackendRegistry {
     origin?: AppServerThreadMessageOrigin;
     text?: string;
     turnId?: string;
+    retainAttachments?: boolean;
   }): Promise<string | undefined> {
     const imageParts = await pendingThreadMessageImageParts(params.input);
-    if (!params.origin && imageParts.length === 0) {
+    const retainedInput = params.retainAttachments
+      ? await stageTurnInputAttachmentsForRetention(
+          params.input ?? [],
+          { privateStorageRoots: this.localFilePrivateStorageRoots },
+        )
+      : [];
+    if (
+      !params.origin
+      && imageParts.length === 0
+      && retainedInput.length === 0
+    ) {
       return undefined;
     }
     const oldestAllowed = Date.now() - 10 * 60 * 1000;
@@ -14498,6 +14523,7 @@ export class DesktopBackendRegistry {
       createdAt: Date.now(),
       id,
       ...(imageParts.length > 0 ? { imageParts } : {}),
+      ...(retainedInput.length > 0 ? { retainedInput } : {}),
       ...(params.origin ? { origin: params.origin } : {}),
       ...(params.text ? { text: params.text } : {}),
       threadId: params.threadId,
@@ -14516,6 +14542,12 @@ export class DesktopBackendRegistry {
     const pending = this.pendingThreadMessageContexts.get(id);
     if (pending) {
       pending.turnId = turnId;
+      this.mergeTurnInputAttachments({
+        backend: pending.backend,
+        threadId: pending.threadId,
+        turnId,
+        input: pending.retainedInput ?? [],
+      });
     }
   }
 
@@ -14575,9 +14607,16 @@ export class DesktopBackendRegistry {
           ?? notification.params.turn.id,
       });
       if (pending && !pending.turnId) {
-        pending.turnId =
+        const turnId =
           notification.params.turnId
           ?? notification.params.turn.id;
+        pending.turnId = turnId;
+        this.mergeTurnInputAttachments({
+          backend: pending.backend,
+          threadId: pending.threadId,
+          turnId,
+          input: pending.retainedInput ?? [],
+        });
       }
       return event;
     }
@@ -16378,7 +16417,7 @@ export class DesktopBackendRegistry {
     });
     if (isAcpBackendId(params.backend)) {
       const acpBackend = params.backend;
-      const promptPayload = inputToAcpPrompt(input);
+      const promptPayload = await inputToAcpPrompt(input);
       if (!promptPayload) {
         throw new Error("ACP steering requires text or image input");
       }
@@ -16388,6 +16427,7 @@ export class DesktopBackendRegistry {
         threadId: params.threadId,
         origin: messageOrigin,
         text: extractFirstMeaningfulTextInput(params.input),
+        retainAttachments: true,
       });
       const text = promptPayload.prompt
         || promptPayload.promptContent.flatMap((block) =>
@@ -16465,6 +16505,13 @@ export class DesktopBackendRegistry {
       this.forgetPendingThreadMessageContext(pendingMessageContextId);
       throw error;
     }
+
+    await this.rememberTurnInputAttachments({
+      backend: params.backend,
+      threadId: result.threadId,
+      turnId: result.turnId,
+      input,
+    });
 
     return {
       backend: params.backend,
@@ -28650,14 +28697,40 @@ export class DesktopBackendRegistry {
     if (attachments.length === 0) {
       return;
     }
+    this.mergeTurnInputAttachments({
+      ...params,
+      input: attachments,
+    });
+  }
+
+  private mergeTurnInputAttachments(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+    turnId: string;
+    input: readonly AppServerTurnInputItem[];
+  }): void {
+    if (params.input.length === 0) {
+      return;
+    }
     const key = buildActiveTurnKey(
       params.backend,
       params.threadId,
       params.turnId,
     );
+    const existing = this.turnInputAttachments.get(key)?.input ?? [];
+    const attachmentKeys = new Set(existing.map(turnInputAttachmentCacheKey));
+    const merged = [...existing];
+    for (const item of params.input) {
+      const attachmentKey = turnInputAttachmentCacheKey(item);
+      if (attachmentKeys.has(attachmentKey)) {
+        continue;
+      }
+      attachmentKeys.add(attachmentKey);
+      merged.push(item);
+    }
     this.turnInputAttachments.delete(key);
     this.turnInputAttachments.set(key, {
-      input: attachments,
+      input: merged,
     });
     while (this.turnInputAttachments.size > 256) {
       const oldestKey = this.turnInputAttachments.keys().next().value;

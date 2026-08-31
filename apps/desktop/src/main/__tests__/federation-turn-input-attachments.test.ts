@@ -5,6 +5,7 @@ import {
   readFile,
   rm,
   stat,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -17,10 +18,13 @@ import type {
 import { imageInputFileRoot } from "../app-server/image-input-files";
 import {
   stageTurnInputAttachment,
+  TURN_INPUT_ATTACHMENT_MAX_AGE_MS,
   turnInputAttachmentRoot,
 } from "../app-server/turn-input-attachment-files";
 import {
   FEDERATION_BLOB_CHUNK_BYTES,
+  FEDERATION_BLOB_WAIT_TIMEOUT_MS,
+  FEDERATION_TURN_INPUT_MAX_AGE_MS,
   FederationTurnInputAttachmentReceiver,
   MAX_INCOMPLETE_FEDERATION_BLOBS_PER_SOURCE,
   prepareOutgoingFederationTurnInput,
@@ -111,6 +115,86 @@ describe("federation turn input attachments", () => {
     expect(envelopes).toHaveLength(2);
     expect(envelopes[0]?.data).toHaveLength(FEDERATION_BLOB_CHUNK_BYTES);
     expect(envelopes[1]?.data).toHaveLength(3);
+  });
+
+  it("awaits each asynchronous chunk writer before reading the next chunk", async () => {
+    await createTestRoot();
+    const sourcePath = path.join(turnInputAttachmentRoot(), "slow-source.bin");
+    await mkdir(path.dirname(sourcePath), { recursive: true });
+    await writeFile(
+      sourcePath,
+      Buffer.alloc(FEDERATION_BLOB_CHUNK_BYTES + 1, 0x5a),
+    );
+    let releaseFirst!: () => void;
+    const firstReleased = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let sendCount = 0;
+    const preparing = prepareOutgoingFederationTurnInput({
+      input: [{ type: "localFile", name: "slow-source.bin", path: sourcePath }],
+      localInstanceId: "source_one",
+      targetInstanceId: "owner_one",
+      sendEnvelope: async () => {
+        sendCount += 1;
+        if (sendCount === 1) {
+          await firstReleased;
+        }
+      },
+    });
+
+    await vi.waitFor(() => expect(sendCount).toBe(1));
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+    expect(sendCount).toBe(1);
+    releaseFirst();
+    await preparing;
+    expect(sendCount).toBe(2);
+  });
+
+  it("treats the receive deadline as an inactivity timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const root = await createTestRoot();
+      const data = Buffer.alloc(FEDERATION_BLOB_CHUNK_BYTES * 2 + 1, 0x2a);
+      const transferId = "progressing-transfer";
+      const receiver = new FederationTurnInputAttachmentReceiver({
+        resolveRoot: () => path.join(root, "receiver"),
+      });
+      const resolved = receiver.resolveInput(
+        [{ type: "federationBlob", transferId }],
+        "source_one",
+      );
+      const metadata = {
+        chunkCount: 3,
+        sha256: sha256(data),
+        totalSize: data.byteLength,
+        transferId,
+      };
+
+      await receiver.receive(blobEnvelope({
+        ...metadata,
+        chunkIndex: 0,
+        data: data.subarray(0, FEDERATION_BLOB_CHUNK_BYTES),
+      }), "source_one");
+      await vi.advanceTimersByTimeAsync(FEDERATION_BLOB_WAIT_TIMEOUT_MS - 1);
+      await receiver.receive(blobEnvelope({
+        ...metadata,
+        chunkIndex: 1,
+        data: data.subarray(
+          FEDERATION_BLOB_CHUNK_BYTES,
+          FEDERATION_BLOB_CHUNK_BYTES * 2,
+        ),
+      }), "source_one");
+      await vi.advanceTimersByTimeAsync(FEDERATION_BLOB_WAIT_TIMEOUT_MS - 1);
+      await receiver.receive(blobEnvelope({
+        ...metadata,
+        chunkIndex: 2,
+        data: data.subarray(FEDERATION_BLOB_CHUNK_BYTES * 2),
+      }), "source_one");
+
+      await expect(resolved).resolves.toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("rejects peer paths and malformed chunk geometry", async () => {
@@ -219,6 +303,30 @@ describe("federation turn input attachments", () => {
     expect((await stat(destination)).ino).toBe(verifiedInode);
   });
 
+  it("expires old receiver-owned blob files after a later transfer", async () => {
+    const root = await createTestRoot();
+    const receiverRoot = path.join(root, "receiver");
+    const stalePath = path.join(
+      receiverRoot,
+      "source_one",
+      "a".repeat(64),
+      "stale.png",
+    );
+    await mkdir(path.dirname(stalePath), { recursive: true });
+    await writeFile(stalePath, Buffer.from([1]));
+    const staleDate = new Date(Date.now() - FEDERATION_TURN_INPUT_MAX_AGE_MS - 1);
+    await utimes(path.dirname(stalePath), staleDate, staleDate);
+
+    const receiver = new FederationTurnInputAttachmentReceiver({
+      resolveRoot: () => receiverRoot,
+    });
+    await receiver.receive(blobEnvelope({ transferId: "cleanup-trigger" }), "source_one");
+
+    await vi.waitFor(async () => {
+      expect(await stat(stalePath).catch(() => undefined)).toBeUndefined();
+    });
+  });
+
   it("atomically replaces corrupt local staged content and reuses verified content", async () => {
     await createTestRoot();
     const data = Uint8Array.from([4, 5, 6]);
@@ -245,6 +353,36 @@ describe("federation turn input attachments", () => {
       name: "paste.png",
     });
     expect((await stat(replaced.path)).ino).toBe(verifiedInode);
+  });
+
+  it("refreshes reused local staging directories before age cleanup", async () => {
+    await createTestRoot();
+    const data = Uint8Array.from([7, 8, 9]);
+    const staged = await stageTurnInputAttachment({
+      type: "localImage",
+      data,
+      name: "reused.png",
+    });
+    const staleDate = new Date(Date.now() - TURN_INPUT_ATTACHMENT_MAX_AGE_MS - 1);
+    await utimes(staged.path, staleDate, staleDate);
+    await utimes(path.dirname(staged.path), staleDate, staleDate);
+
+    const reused = await stageTurnInputAttachment({
+      type: "localImage",
+      data,
+      name: "reused.png",
+    });
+    expect((await stat(path.dirname(reused.path))).mtimeMs)
+      .toBeGreaterThan(staleDate.getTime());
+    await stageTurnInputAttachment({
+      type: "localImage",
+      data: Uint8Array.from([1, 2, 3]),
+      name: "cleanup-trigger.png",
+    });
+
+    await vi.waitFor(async () => {
+      await expect(readFile(reused.path)).resolves.toEqual(Buffer.from(data));
+    });
   });
 });
 

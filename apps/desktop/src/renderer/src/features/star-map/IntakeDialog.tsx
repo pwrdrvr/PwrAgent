@@ -15,12 +15,17 @@ import type {
 } from "@pwragent/shared";
 import { MAX_STAR_MAP_INTAKE_IMAGE_UPLOADS } from "../../../../shared/star-map-intake";
 import type { DesktopApi } from "../../lib/desktop-api";
+import {
+  imageDataUrlToBytes,
+  normalizeImageFile,
+} from "../../lib/image-normalization";
 import { CelestialIcon, CloseIcon } from "../../icons";
 import {
   formatPastedImageAlt,
   formatPastedImageName,
   getImageFilesFromDataTransfer,
   hasAnyFiles,
+  isGifFile,
 } from "../composer/composer-image-files";
 
 export type IntakeDialogTarget = {
@@ -49,6 +54,16 @@ function imageFileKey(file: File, mimeType: string): string {
   return [file.name, mimeType, file.size, file.lastModified].join(":");
 }
 
+function normalizedImageName(
+  originalName: string,
+  fallbackName: string,
+  mimeType: "image/jpeg" | "image/png",
+): string {
+  const source = originalName || fallbackName;
+  const baseName = source.replace(/\.[^.]*$/u, "") || "pasted-image";
+  return `${baseName}.${mimeType === "image/jpeg" ? "jpg" : "png"}`;
+}
+
 /**
  * The Star Map [+] intake chat: describe a task in natural language and the
  * owning instance resolves the project (its registry + AGENTS.md
@@ -63,6 +78,7 @@ export function IntakeDialog(props: {
     backend: string;
     threadId: string;
   }) => void;
+  pastedImageMaxPatches?: number;
 }) {
   const [text, setText] = useState("");
   const [phase, setPhase] = useState<StarMapIntakePhase | "idle">("idle");
@@ -143,24 +159,73 @@ export function IntakeDialog(props: {
     setPreparingImageCount((current) => current + accepted.length);
     void Promise.all(
       accepted.map(async ({ file, type }, index) => {
-        const bytes = new Uint8Array(await file.arrayBuffer());
+        const fallbackName = formatPastedImageName(
+          type,
+          imageAttachments.length + index,
+        );
+        if (isGifFile(file, type)) {
+          const bytes = new Uint8Array(await file.arrayBuffer());
+          if (bytes.byteLength === 0) {
+            throw new Error("The pasted image was empty.");
+          }
+          return {
+            bytes,
+            key: imageFileKey(file, type),
+            mimeType: "image/gif",
+            name: file.name || fallbackName,
+          };
+        }
+
+        const normalized = await normalizeImageFile(file, {
+          fallback: props.desktopApi?.normalizeImageForUpload,
+          maxPatchCount: props.pastedImageMaxPatches,
+          sourceMimeType: type,
+        });
+        const bytes = await imageDataUrlToBytes(
+          normalized.dataUrl,
+          normalized.mimeType,
+        );
         if (bytes.byteLength === 0) {
           throw new Error("The pasted image was empty.");
         }
+        void props.desktopApi?.recordImageUploadNormalization?.({
+          fileName: file.name || fallbackName,
+          original: {
+            height: normalized.original.height,
+            mimeType: normalized.original.mimeType,
+            size: normalized.original.size,
+            width: normalized.original.width,
+          },
+          normalized: {
+            height: normalized.height,
+            mimeType: normalized.mimeType,
+            size: normalized.size,
+            width: normalized.width,
+          },
+          path: normalized.conversionPath,
+          resized:
+            normalized.original.width !== normalized.width
+            || normalized.original.height !== normalized.height,
+        });
         return {
           bytes,
-          file,
           key: imageFileKey(file, type),
-          mimeType: type,
-          name:
-            file.name
-            || formatPastedImageName(type, imageAttachments.length + index),
+          mimeType: normalized.mimeType,
+          name: normalizedImageName(
+            file.name,
+            fallbackName,
+            normalized.mimeType,
+          ),
         };
       }),
     )
       .then((loaded) => {
         const attachments = loaded.map((image) => {
-          const previewUrl = URL.createObjectURL(image.file);
+          const previewBytes = new Uint8Array(image.bytes.byteLength);
+          previewBytes.set(image.bytes);
+          const previewUrl = URL.createObjectURL(
+            new Blob([previewBytes.buffer], { type: image.mimeType }),
+          );
           previewUrlsRef.current.add(previewUrl);
           return {
             bytes: image.bytes,
@@ -202,7 +267,12 @@ export function IntakeDialog(props: {
         );
       });
     return true;
-  }, [imageAttachments, preparingImageCount]);
+  }, [
+    imageAttachments,
+    preparingImageCount,
+    props.desktopApi,
+    props.pastedImageMaxPatches,
+  ]);
 
   const onPaste = useCallback((event: ClipboardEvent<HTMLTextAreaElement>) => {
     if (attachTransferredImages(event.clipboardData)) {

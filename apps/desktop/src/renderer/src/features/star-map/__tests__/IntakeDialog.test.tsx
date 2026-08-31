@@ -3,6 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DesktopApi } from "../../../lib/desktop-api";
 import { IntakeDialog } from "../IntakeDialog";
 
+const normalizeImageFileMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../../../lib/image-normalization", async (importOriginal) => ({
+  ...await importOriginal<typeof import("../../../lib/image-normalization")>(),
+  normalizeImageFile: normalizeImageFileMock,
+}));
+
 const target = {
   instanceId: "pwr_local",
   label: "Mac-Mini-M4",
@@ -12,6 +19,7 @@ const target = {
 function setup(
   dispatchResult: unknown,
   intakeTarget: Parameters<typeof IntakeDialog>[0]["target"] = target,
+  pastedImageMaxPatches?: number,
 ) {
   const dispatchStarMapIntake = vi.fn(
     async (_request: { requestId: string; directoryKey?: string }) =>
@@ -26,6 +34,7 @@ function setup(
   render(
     <IntakeDialog
       desktopApi={desktopApi}
+      pastedImageMaxPatches={pastedImageMaxPatches}
       target={intakeTarget}
       onClose={onClose}
       onCreated={onCreated}
@@ -55,6 +64,21 @@ function pastePng(bytes = new Uint8Array([137, 80, 78, 71])) {
   return { bytes, file };
 }
 
+function pasteImage(file: File, type: string): void {
+  fireEvent.paste(screen.getByPlaceholderText(/Give me a task/), {
+    clipboardData: {
+      files: [file],
+      items: [
+        {
+          getAsFile: () => file,
+          kind: "file",
+          type,
+        },
+      ],
+    },
+  });
+}
+
 function submitText(text: string) {
   fireEvent.change(screen.getByPlaceholderText(/Give me a task/), {
     target: { value: text },
@@ -64,6 +88,22 @@ function submitText(text: string) {
 
 describe("IntakeDialog", () => {
   beforeEach(() => {
+    normalizeImageFileMock.mockReset();
+    normalizeImageFileMock.mockImplementation(async (file: File) => ({
+      conversionPath: "renderer",
+      dataUrl: "data:image/png;base64,iVBORw==",
+      height: 1,
+      mimeType: "image/png",
+      original: {
+        height: 1,
+        mimeType: file.type || "image/png",
+        name: file.name,
+        size: file.size,
+        width: 1,
+      },
+      size: 4,
+      width: 1,
+    }));
     Object.defineProperty(URL, "createObjectURL", {
       configurable: true,
       value: vi.fn(() => "blob:intake-image"),
@@ -247,6 +287,61 @@ describe("IntakeDialog", () => {
         }),
       );
     });
+  });
+
+  it("normalizes non-GIF images before dispatching renderer bytes", async () => {
+    const { dispatchStarMapIntake } = setup(undefined, target, 321);
+    dispatchStarMapIntake.mockImplementation(
+      async (request: { requestId: string }) => ({
+        status: "created",
+        requestId: request.requestId,
+        backend: "codex",
+        threadId: "thread-normalized-image",
+      }) as never,
+    );
+    normalizeImageFileMock.mockResolvedValueOnce({
+      conversionPath: "heic-fallback",
+      dataUrl: "data:image/jpeg;base64,/9j/",
+      height: 480,
+      mimeType: "image/jpeg",
+      original: {
+        height: 3_000,
+        mimeType: "image/heic",
+        name: "camera.heic",
+        size: 12,
+        width: 4_000,
+      },
+      size: 3,
+      width: 640,
+    });
+    const file = new File([Uint8Array.from([1, 2, 3])], "camera.heic", {
+      type: "image/heic",
+    });
+    pasteImage(file, "image/heic");
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Remove camera.jpg" }))
+        .toBeTruthy();
+    });
+    submitText("Inspect this camera image");
+
+    await waitFor(() => expect(dispatchStarMapIntake).toHaveBeenCalled());
+    expect(normalizeImageFileMock).toHaveBeenCalledWith(
+      file,
+      expect.objectContaining({
+        maxPatchCount: 321,
+        sourceMimeType: "image/heic",
+      }),
+    );
+    expect(dispatchStarMapIntake).toHaveBeenCalledWith(
+      expect.objectContaining({
+        imageUploads: [{
+          bytes: expect.any(Uint8Array),
+          mimeType: "image/jpeg",
+          name: "camera.jpg",
+        }],
+      }),
+    );
   });
 
   it("removes a pasted image before dispatch", async () => {

@@ -19526,6 +19526,59 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("merges accepted Codex steer attachments into the source turn cache", async () => {
+    const tempHome = await mkdtemp(path.join(os.tmpdir(), "pwragent-steer-images-"));
+    const previousHome = process.env.PWRAGENT_HOME;
+    process.env.PWRAGENT_HOME = tempHome;
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ executionMode: "full-access" }),
+    });
+
+    try {
+      const turn = await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-steer-images",
+        input: [{
+          type: "image",
+          name: "initial.png",
+          url: "data:image/png;base64,AQID",
+        }],
+      });
+      await registry.steerTurn({
+        backend: "codex",
+        threadId: turn.threadId,
+        expectedTurnId: turn.turnId,
+        input: [{
+          type: "image",
+          name: "steered.png",
+          url: "data:image/png;base64,BAUG",
+        }],
+        requestId: "steer-image-1",
+      });
+
+      const retained = registry.getTurnInputAttachments({
+        backend: "codex",
+        threadId: turn.threadId,
+        turnId: turn.turnId,
+      });
+      expect(retained).toHaveLength(2);
+      expect(retained.map((item) => item.type === "localImage" && item.name))
+        .toEqual(["initial.png", "steered.png"]);
+    } finally {
+      await registry.close();
+      await rm(tempHome, { recursive: true, force: true });
+      if (previousHome === undefined) {
+        delete process.env.PWRAGENT_HOME;
+      } else {
+        process.env.PWRAGENT_HOME = previousHome;
+      }
+    }
+  });
+
   it("steers an active Grok turn through its ACP extension", async () => {
     const backend = "acp:grok" as AcpBackendId;
     const sessions: AcpSessionMetadata[] = [
@@ -19616,6 +19669,17 @@ command = "pnpm dev"
   });
 
   it("projects Grok next-turn steering and leaves its message context unbound", async () => {
+    const tempHome = await mkdtemp(path.join(os.tmpdir(), "pwragent-grok-steer-image-"));
+    const previousHome = process.env.PWRAGENT_HOME;
+    process.env.PWRAGENT_HOME = tempHome;
+    onTestFinished(async () => {
+      if (previousHome === undefined) {
+        delete process.env.PWRAGENT_HOME;
+      } else {
+        process.env.PWRAGENT_HOME = previousHome;
+      }
+      await rm(tempHome, { recursive: true, force: true });
+    });
     const backend = "acp:grok" as AcpBackendId;
     const sessions: AcpSessionMetadata[] = [{
       backendId: backend,
@@ -19648,7 +19712,14 @@ command = "pnpm dev"
         backend,
         threadId: "grok-session-next",
         expectedTurnId: "turn-a",
-        input: [{ type: "text", text: "Add blueberries" }],
+        input: [
+          { type: "text", text: "Add blueberries" },
+          {
+            type: "image",
+            name: "blueberries.png",
+            url: "data:image/png;base64,iVBORw0KGgo=",
+          },
+        ],
         requestId: "grok-steer-next",
       },
       { kind: "pwragent" },
@@ -19659,6 +19730,16 @@ command = "pnpm dev"
 
     await emitCompletedTurn(registry, backend, "grok-session-next", "turn-a");
     await emitStartedTurn(registry, backend, "grok-session-next", "turn-b");
+    expect(registry.getTurnInputAttachments({
+      backend,
+      threadId: "grok-session-next",
+      turnId: "turn-b",
+    })).toEqual([
+      expect.objectContaining({
+        type: "localImage",
+        name: "blueberries.png",
+      }),
+    ]);
     await (
       registry as unknown as { emit(event: AgentEvent): Promise<void> }
     ).emit({

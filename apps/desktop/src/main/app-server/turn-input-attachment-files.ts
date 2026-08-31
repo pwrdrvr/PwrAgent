@@ -8,6 +8,7 @@ import {
   rm,
   stat,
   unlink,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import path from "node:path";
@@ -21,7 +22,7 @@ import { resolveActiveProfilePath } from "../profile";
 import { imageInputFileRoot } from "./image-input-files";
 import { resolveReadableLocalFilePath } from "./local-file-input";
 
-const TURN_INPUT_ATTACHMENT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+export const TURN_INPUT_ATTACHMENT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 export const MAX_TURN_INPUT_ATTACHMENT_BYTES = 128 * 1024 * 1024;
 
 export type TurnInputAttachmentUpload = {
@@ -64,6 +65,8 @@ export async function stageTurnInputAttachment(
   );
   const filePath = path.join(root, digest, name);
   await mkdir(path.dirname(filePath), { recursive: true });
+  const stagedAt = new Date();
+  await utimes(path.dirname(filePath), stagedAt, stagedAt);
   const existing = await stat(filePath).catch(() => undefined);
   let reusable = false;
   if (existing?.isFile() && existing.size === data.byteLength) {
@@ -81,6 +84,11 @@ export async function stageTurnInputAttachment(
     } finally {
       await unlink(temporaryPath).catch(() => undefined);
     }
+  } else {
+    await Promise.all([
+      utimes(filePath, stagedAt, stagedAt),
+      utimes(path.dirname(filePath), stagedAt, stagedAt),
+    ]);
   }
 
   void cleanupOldTurnInputAttachments(root, new Set([filePath])).catch(

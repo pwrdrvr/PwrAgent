@@ -495,6 +495,14 @@ function dataUrlToBlob(dataUrl: string, fallbackMimeType: string): Blob {
   return new Blob([bytes], { type: mimeType });
 }
 
+export async function imageDataUrlToBytes(
+  dataUrl: string,
+  fallbackMimeType: string,
+): Promise<Uint8Array> {
+  const blob = dataUrlToBlob(dataUrl, fallbackMimeType);
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
 const defaultImageNormalizationDependencies: ImageNormalizationDependencies = {
   createCanvas: (width, height) => {
     const canvas = document.createElement("canvas");

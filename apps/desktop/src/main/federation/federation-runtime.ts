@@ -1647,8 +1647,11 @@ export class DesktopFederationRuntime {
           targetInstanceId: target.instanceId,
           privateStorageRoots:
             getDesktopBackendRegistry().getLocalFilePrivateStorageRoots(),
-          sendEnvelope: (envelope) =>
-            this.sendEnvelopeToTarget(target.instanceId, envelope),
+          sendEnvelope: async (envelope) =>
+            await this.sendEnvelopeToTargetWithBackpressure(
+              target.instanceId,
+              envelope,
+            ),
         });
       },
     );
@@ -2791,7 +2794,14 @@ export class DesktopFederationRuntime {
     this.router?.registerConnection({
       peerId: gatewayInstanceId,
       capabilities: client.capabilities,
-      sendEnvelope: (envelope) => this.client?.sendEnvelope(envelope),
+      sendEnvelope: (envelope) => client.sendEnvelope(envelope),
+      sendEnvelopeWithBackpressure: async (envelope) => {
+        if (client.sendEnvelopeWithBackpressure) {
+          await client.sendEnvelopeWithBackpressure(envelope);
+          return;
+        }
+        client.sendEnvelope(envelope);
+      },
     });
     // This instance can also be the OWNER of remote PTY sessions the gateway
     // is viewing; a reconnect inside the grace keeps those alive.
@@ -2922,6 +2932,7 @@ export class DesktopFederationRuntime {
       peerId: connection.peerId,
       capabilities: connection.capabilities,
       sendEnvelope: connection.sendEnvelope,
+      sendEnvelopeWithBackpressure: connection.sendEnvelopeWithBackpressure,
     });
     // A transport blip that healed inside the reap grace keeps the peer's
     // remote PTY sessions alive.
@@ -3210,6 +3221,32 @@ export class DesktopFederationRuntime {
       gatewayInstanceId &&
       gatewayInstanceId !== targetInstanceId &&
       this.router?.sendToPeer(gatewayInstanceId, envelope)
+    ) {
+      return;
+    }
+
+    throw new FederationPeerUnavailableError(targetInstanceId);
+  }
+
+  private async sendEnvelopeToTargetWithBackpressure(
+    targetInstanceId: FederationInstanceId,
+    envelope: FederationProtocolEnvelope,
+  ): Promise<void> {
+    if (
+      await this.router?.sendToPeerWithBackpressure(
+        targetInstanceId,
+        envelope,
+      )
+    ) {
+      return;
+    }
+
+    const gatewayInstanceId = this.gatewayInstanceId
+      ?? getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY);
+    if (
+      gatewayInstanceId
+      && gatewayInstanceId !== targetInstanceId
+      && await this.router?.sendToPeerWithBackpressure(gatewayInstanceId, envelope)
     ) {
       return;
     }

@@ -5189,6 +5189,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
       {intakeTarget ? (
         <IntakeDialog
           desktopApi={props.desktopApi}
+          pastedImageMaxPatches={props.pastedImageMaxPatches}
           target={intakeTarget}
           onClose={() => setIntakeTarget(undefined)}
           onCreated={(created) => {

@@ -13,6 +13,9 @@ export type FederationRouterConnection = {
   peerId: FederationInstanceId;
   capabilities: readonly FederationCapability[];
   sendEnvelope: (envelope: FederationProtocolEnvelope) => void;
+  sendEnvelopeWithBackpressure?: (
+    envelope: FederationProtocolEnvelope,
+  ) => Promise<void>;
 };
 
 export type FederationRequestHandler = (
@@ -78,6 +81,20 @@ export class FederationRouter {
     const connection = this.connections.get(peerId);
     if (!connection) return false;
     connection.sendEnvelope(envelope);
+    return true;
+  }
+
+  async sendToPeerWithBackpressure(
+    peerId: FederationInstanceId,
+    envelope: FederationProtocolEnvelope,
+  ): Promise<boolean> {
+    const connection = this.connections.get(peerId);
+    if (!connection) return false;
+    if (connection.sendEnvelopeWithBackpressure) {
+      await connection.sendEnvelopeWithBackpressure(envelope);
+    } else {
+      connection.sendEnvelope(envelope);
+    }
     return true;
   }
 

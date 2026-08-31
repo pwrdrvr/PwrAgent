@@ -27,9 +27,11 @@ import { FederationSessionRegistry } from "../federation/federation-session-stat
 import { FederationStore } from "../federation/federation-store";
 import {
   connectFederationClient,
+  FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES,
   federationTransportCodecForTest,
   FederationGatewayWebSocketServer,
   FederationSocketKeepalive,
+  waitForFederationSendCapacity,
   type FederationKeepaliveSocket,
 } from "../federation/federation-transport";
 import { StateDb } from "../state/state-db";
@@ -1404,6 +1406,34 @@ describe("federation transport liveness", () => {
       closeReason: "timeout",
     });
     expect(registry.getSession("session-live")?.status).toBe("active");
+  });
+});
+
+describe("federation send backpressure", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("waits for the WebSocket buffer to drain below the high-water mark", async () => {
+    const socket = {
+      bufferedAmount: FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES + 1,
+      readyState: WebSocket.OPEN,
+    };
+    let resolved = false;
+    const waiting = waitForFederationSendCapacity(socket).then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    socket.bufferedAmount = FEDERATION_SEND_BUFFER_HIGH_WATER_BYTES;
+    await vi.advanceTimersByTimeAsync(5);
+    await waiting;
+    expect(resolved).toBe(true);
   });
 });
 
