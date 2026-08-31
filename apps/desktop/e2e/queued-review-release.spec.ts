@@ -68,7 +68,6 @@ async function createQueuedReviewReleaseFixture(): Promise<{
                 "thread/list",
                 "thread/read",
                 "turn/start",
-                "review/start",
               ],
             },
           },
@@ -147,12 +146,11 @@ async function createQueuedReviewReleaseFixture(): Promise<{
             },
           },
           {
-            id: "review-start-1",
+            id: "review-turn-start-1",
             kind: "response",
-            method: "review/start",
+            method: "turn/start",
             result: {
               threadId: "thread-active",
-              reviewThreadId: "thread-active",
               turnId: "turn-review",
             },
           },
@@ -313,14 +311,15 @@ test("background queued review releases after active turn branch adoption", asyn
     await app.advance({ stepId: "turn-completed-1" });
 
     await expect
-      .poll(async () => await app.getLastStartReview())
+      .poll(async () => await app.getLastStartTurn())
       .toMatchObject({
         threadId: "thread-active",
-        target: {
-          type: "baseBranch",
-          branch: "main",
-        },
-        delivery: "inline",
+        input: [{
+          type: "text",
+          text: expect.stringMatching(
+            /<user_action><action>review<\/action><\/user_action>[\s\S]*base branch 'main'/,
+          ),
+        }],
       });
   } finally {
     await app.close();

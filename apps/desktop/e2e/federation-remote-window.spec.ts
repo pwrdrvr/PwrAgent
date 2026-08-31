@@ -2042,25 +2042,33 @@ test.describe("federation remote window", () => {
       const setupMtimeMs = statSync(setupMarkerPath).mtimeMs;
       expect(setupMtimeMs).toBeLessThanOrEqual(threadStart!.at + 5_000);
 
-      // Starting a native review continues asynchronously after child
+      // Starting the inline review turn continues asynchronously after child
       // materialization. Wait for the durable request instead of assuming it
       // has arrived as soon as thread/start is observable on a slower VM.
       await expect
         .poll(async () => {
           const entries = await readFakeCodexRequestLog(requestLogPath);
-          return findAllFakeCodexRequests(entries, "review/start").length;
+          return findAllFakeCodexRequests(entries, "turn/start").length;
         }, { timeout: 30_000 })
         .toBeGreaterThan(0);
 
       protocol = await readFakeCodexRequestLog(requestLogPath);
       const initialize = findFakeCodexRequest(protocol, "initialize");
       threadStart = findFakeCodexRequest(protocol, "thread/start");
-      const reviewStart = findFakeCodexRequest(protocol, "review/start");
+      const reviewTurnStart = findFakeCodexRequest(protocol, "turn/start");
       expect(initialize).toBeTruthy();
       expect(threadStart).toBeTruthy();
-      expect(reviewStart).toBeTruthy();
+      expect(reviewTurnStart).toBeTruthy();
+      expect(reviewTurnStart!.params).toMatchObject({
+        input: [{
+          type: "text",
+          text: expect.stringMatching(
+            /<user_action><action>review<\/action><\/user_action>[\s\S]*base branch 'main'/,
+          ),
+        }],
+      });
       expect(initialize!.at).toBeLessThanOrEqual(threadStart!.at);
-      expect(threadStart!.at).toBeLessThanOrEqual(reviewStart!.at);
+      expect(threadStart!.at).toBeLessThanOrEqual(reviewTurnStart!.at);
     } finally {
       if (existsSync(requestLogPath)) {
         await testInfo.attach("fake-codex-protocol", {

@@ -19,7 +19,7 @@
           "thread/list",
           "thread/read",
           "skills/list",
-          "review/start"
+          "turn/start"
         ]
       }
     },
@@ -73,12 +73,11 @@
       }
     },
     {
-      "id": "review-start-1",
+      "id": "review-turn-start-1",
       "kind": "response",
-      "method": "review/start",
+      "method": "turn/start",
       "result": {
         "threadId": "019dd4ce-4fec-76c0-8ede-5e65d7377417",
-        "reviewThreadId": "019dd4ce-4fec-76c0-8ede-5e65d7377417",
         "turnId": "019dd6fe-485f-7f73-bf6e-16ff7911fadb"
       }
     },
