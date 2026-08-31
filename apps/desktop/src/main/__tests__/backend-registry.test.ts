@@ -1702,6 +1702,7 @@ class MockBackendClient {
       initializeError?: Error;
       serverCapabilities?: CodexServerCapabilities;
       serverCapabilitiesError?: Error;
+      serverCapabilitiesErrors?: Array<Error | undefined>;
       threads?: AppServerThreadSummary[];
       nativeSubAgentThreads?: AppServerThreadSummary[];
       replay?: AppServerThreadReplay;
@@ -1765,6 +1766,10 @@ class MockBackendClient {
 
   async readServerCapabilities() {
     this.readServerCapabilitiesCallCount += 1;
+    const sequencedError = this.options.serverCapabilitiesErrors?.shift();
+    if (sequencedError) {
+      throw sequencedError;
+    }
     if (this.options.serverCapabilitiesError) {
       throw this.options.serverCapabilitiesError;
     }
@@ -4218,6 +4223,56 @@ describe("DesktopBackendRegistry", () => {
       expect(codexClient.startTurnCalls[0]?.config).toBeUndefined();
       expect(codexClient.startTurnCalls[1]?.config).toBeUndefined();
       expect(codexClient.readServerCapabilitiesCallCount).toBe(1);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("retries a transient reducer capability failure on the next turn", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilitiesErrors: [
+        new Error("codex app server connection cancelled"),
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    const internals = registry as unknown as {
+      resolveTokenMiserEnabledFn: () => boolean;
+      tokenMiserCodeModeReducerDescriptorPath?: string;
+    };
+    internals.tokenMiserCodeModeReducerDescriptorPath = path.join(
+      "/tmp",
+      "token-miser-transient-capability",
+      "code-mode-reducer.test.json",
+    );
+    internals.resolveTokenMiserEnabledFn = () => true;
+
+    try {
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-transient-1",
+        input: [{ type: "text", text: "first attempt" }],
+      });
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-transient-2",
+        input: [{ type: "text", text: "retry after reconnect" }],
+      });
+
+      expect(codexClient.startTurnCalls[0]?.config).toBeUndefined();
+      expect(codexClient.startTurnCalls[1]?.config).toMatchObject({
+        features: {
+          code_mode: {
+            output_reducer: {
+              descriptor_path: internals.tokenMiserCodeModeReducerDescriptorPath,
+            },
+          },
+        },
+      });
+      expect(codexClient.readServerCapabilitiesCallCount).toBe(2);
     } finally {
       await registry.close();
     }

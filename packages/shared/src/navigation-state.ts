@@ -271,6 +271,7 @@ export function materializeNavigationThreads(params: {
         : {}),
       serviceTier: overlay?.serviceTier ?? thread.serviceTier,
       fastMode: overlay?.fastMode ?? thread.fastMode,
+      tokenMiserEnabled: overlay?.tokenMiserEnabled,
       prAutoDispatchEnabled: overlay?.prAutoDispatchEnabled ?? false,
       prAutoDispatchPending: overlay?.prAutoDispatchPending,
       codexEnvironmentRuntime:
@@ -506,6 +507,7 @@ export function buildNavigationSnapshotHash(params: {
       reasoningEffort: thread.reasoningEffort ?? null,
       serviceTier: thread.serviceTier ?? null,
       fastMode: thread.fastMode ?? null,
+      tokenMiserEnabled: thread.tokenMiserEnabled ?? null,
       scheduledStart: thread.scheduledStart
         ? {
             actionId: thread.scheduledStart.actionId,

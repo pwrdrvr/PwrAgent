@@ -19988,6 +19988,7 @@ export class DesktopBackendRegistry {
       return await cached;
     }
 
+    let cacheResult = true;
     const probe = (async () => {
       if (!client.readServerCapabilities) {
         this.tokenMiserReducerCapabilityState = "unsupported";
@@ -20052,13 +20053,14 @@ export class DesktopBackendRegistry {
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         const normalized = message.toLowerCase();
-        if (
+        const permanentlyUnsupported =
           normalized.includes("method not found")
           || normalized.includes("unknown method")
           || normalized.includes(
             "unknown variant `server/capabilities/read`",
-          )
-        ) {
+          );
+        cacheResult = permanentlyUnsupported;
+        if (permanentlyUnsupported) {
           backendRegistryLog.debug(
             "Codex code-mode output reducer capability is unavailable",
             { reason: message },
@@ -20069,7 +20071,9 @@ export class DesktopBackendRegistry {
             { error: message },
           );
         }
-        this.tokenMiserReducerCapabilityState = "unsupported";
+        this.tokenMiserReducerCapabilityState = permanentlyUnsupported
+          ? "unsupported"
+          : undefined;
         this.tokenMiserCodeModeGroupingVersion = undefined;
         this.tokenMiserPostToolUseExactOutputVersion = undefined;
         await this.recordTokenMiserActivation({
@@ -20082,7 +20086,20 @@ export class DesktopBackendRegistry {
       }
     })();
     this.tokenMiserServerCapabilities.set(client, probe);
-    return await probe;
+    try {
+      return await probe;
+    } finally {
+      // Capability support is immutable for one live app-server, but a
+      // reconnect cancellation says nothing about the replacement process.
+      // Keeping that transient result poisoned every later turn until the
+      // whole desktop app restarted.
+      if (
+        !cacheResult
+        && this.tokenMiserServerCapabilities.get(client) === probe
+      ) {
+        this.tokenMiserServerCapabilities.delete(client);
+      }
+    }
   }
 
   private async supportsTokenMiserCodeModeReducer(
