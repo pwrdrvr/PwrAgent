@@ -3726,7 +3726,7 @@ describe("DesktopSettingsService", () => {
     );
   });
 
-  it("defaults managed review to false and persists the additive flag", async () => {
+  it("keeps the retired managed-review flag readable and writable", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     fs.writeFileSync(configPath, [

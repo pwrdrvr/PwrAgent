@@ -136,6 +136,7 @@ function reviewCapabilities(startReview: boolean): BackendCapabilities {
     renameThread: true,
     resumeThread: true,
     startReview,
+    reviewRunner: startReview,
     startTurn: true,
     steerTurn: false,
     toolUse: true,
@@ -1032,6 +1033,7 @@ describe("StarMapChatCard slash commands", () => {
           threadId: "t-local",
           target: { type: "uncommittedChanges" },
           delivery: "inline",
+          runMode: backend === "codex" ? "inline" : "managed-child",
         });
       });
       await waitFor(() => {
@@ -1166,6 +1168,7 @@ describe("StarMapChatCard slash commands", () => {
         threadId: "t-local",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
     expect(
@@ -1200,6 +1203,7 @@ describe("StarMapChatCard slash commands", () => {
         threadId: "t-local",
         target: { type: "uncommittedChanges" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
     expect(

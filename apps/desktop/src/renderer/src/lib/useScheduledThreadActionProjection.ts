@@ -263,6 +263,7 @@ function projectionFromAction(action: ScheduledThreadAction) {
           reviewCommand: {
             cwd: action.review.cwd,
             displayText: action.displayText,
+            runMode: action.review.runMode,
             target: action.review.target,
             // A scheduled review can also be released client-side, so the
             // picked reviewer has to survive the round trip through this

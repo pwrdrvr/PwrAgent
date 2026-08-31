@@ -288,12 +288,22 @@ export type CancelQueuedTurnResponse = {
   turnId?: string;
 };
 
+export type ReviewRunMode = "inline" | "managed-child";
+
 export type StartReviewRequest = {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
   threadId: ThreadIdentifier;
   target: AppServerReviewTarget;
   delivery?: AppServerReviewDelivery;
+  /**
+   * Where PwrAgent runs the review. `inline` uses a turn on the reviewed
+   * thread; `managed-child` creates a first-class PwrAgent review child.
+   * Optional for wire compatibility with clients that predate this choice;
+   * owners treat an omitted value as inline unless a provider or workspace
+   * constraint requires a managed child.
+   */
+  runMode?: ReviewRunMode;
   cwd?: string;
   /**
    * Backend that should actually run the review, when the operator overrode it

@@ -2147,9 +2147,9 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
     startReview: supported.has("turn/start") || assumeCodexAppServerSurface,
     startDetachedReview: nativeReview || reviewRunner,
-    // A managed review child is an ephemeral thread plus one turn, so Codex
-    // can review for another provider's thread even on builds whose native
-    // review/start is absent.
+    // A managed review child is a durable PwrAgent subagent thread plus one
+    // turn, so Codex can review for another provider's thread even on builds
+    // whose native review/start is absent.
     reviewRunner,
     interruptTurn: supported.has("turn/interrupt"),
     steerTurn: backend === "codex" || supported.has("turn/steer"),
@@ -8233,7 +8233,6 @@ export class DesktopBackendRegistry {
    */
   private readonly isCodexBootstrapDeferredFn: () => boolean;
   private readonly resolveCodexDefaultModeRequestUserInputFn: () => boolean;
-  private readonly resolveManagedReviewEnabledFn: () => boolean;
   private readonly resolveDefaultPrAutoDispatchEnabledFn: () => boolean;
   private readonly resolveProviderModelDefaultsFn: () => Record<
     string,
@@ -8343,7 +8342,6 @@ export class DesktopBackendRegistry {
     isCodexBootstrapDeferred?: () => boolean;
     isBootstrapMode?: () => boolean;
     resolveCodexDefaultModeRequestUserInput?: () => boolean;
-    resolveManagedReviewEnabled?: () => boolean;
     resolveDefaultPrAutoDispatchEnabled?: () => boolean;
     resolveProviderModelDefaults?: () => Record<
       string,
@@ -8444,23 +8442,6 @@ export class DesktopBackendRegistry {
         } catch (error) {
           backendRegistryLog.warn(
             "failed to resolve Codex default-mode request_user_input setting",
-            {
-              error: error instanceof Error ? error.message : String(error),
-            },
-          );
-          return false;
-        }
-      });
-    this.resolveManagedReviewEnabledFn =
-      options?.resolveManagedReviewEnabled ??
-      (() => {
-        try {
-          return (
-            settingsService ?? getDesktopSettingsService()
-          ).resolveManagedReviewEnabled();
-        } catch (error) {
-          backendRegistryLog.warn(
-            "failed to resolve managed review experiment setting",
             {
               error: error instanceof Error ? error.message : String(error),
             },
@@ -15815,10 +15796,10 @@ export class DesktopBackendRegistry {
     if (reviewBackendDiffers) {
       this.assertReviewBackendSupported(reviewBackend);
     }
-    const managedReviewExperiment =
-      params.backend === "codex" && this.resolveManagedReviewEnabledFn();
     let managedMode =
-      acpManagedMode || managedReviewExperiment || reviewBackendDiffers;
+      acpManagedMode
+      || params.runMode === "managed-child"
+      || reviewBackendDiffers;
     const reserveCodexReviewStart = params.backend === "codex";
     const acpReviewReservationKey = isAcpBackendId(params.backend)
       ? buildTurnStartReservationKey(params.backend, params.threadId)
@@ -15924,7 +15905,7 @@ export class DesktopBackendRegistry {
       }
       inlineParentMode =
         params.backend === "codex"
-        && delivery === "inline"
+        && (params.runMode === "inline" || delivery === "inline")
         && !managedMode;
       if (tokenMiserEnabled && !inlineParentMode) {
         await this.prepareTokenMiserRuntime();
@@ -20723,6 +20704,7 @@ export class DesktopBackendRegistry {
                     target: request.reviewTarget,
                     draftText: formatReviewCommand(request.reviewTarget),
                     delivery: "inline" as const,
+                    runMode: "inline" as const,
                     model: launchpad.model,
                     reasoningEffort: launchpad.reasoningEffort,
                     serviceTier: launchpad.serviceTier,
@@ -20784,6 +20766,7 @@ export class DesktopBackendRegistry {
           threadId: startThreadResponse.threadId,
           target: request.reviewTarget,
           delivery: "inline",
+          runMode: "inline",
           model: launchpad.model,
           reasoningEffort: launchpad.reasoningEffort,
           serviceTier: launchpad.serviceTier,
@@ -23783,14 +23766,6 @@ export class DesktopBackendRegistry {
       );
     }
     const capabilities = buildCapabilities(methods, "codex");
-    if (
-      this.resolveManagedReviewEnabledFn()
-      && capabilities.createThread
-      && capabilities.startTurn
-    ) {
-      capabilities.startReview = true;
-    }
-
     const summary: BackendSummary = {
       kind: "codex",
       label: BACKEND_LABELS.codex,

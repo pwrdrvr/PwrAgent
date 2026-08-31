@@ -5679,6 +5679,16 @@ describe("Composer", () => {
         name: "Reset reviewer to thread settings",
       })
     ).toBeInTheDocument();
+    const location = within(reviewTarget).getByRole("radiogroup", {
+      name: "Review location",
+    });
+    expect(location).toHaveAttribute("aria-disabled", "true");
+    expect(
+      within(location).getByRole("radio", { name: "Separate thread" }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(location.parentElement?.getAttribute("data-tooltip")).toMatch(
+      /Grok, a different provider/,
+    );
 
     await act(async () => {
       fireEvent.click(
@@ -5692,6 +5702,7 @@ describe("Composer", () => {
         reviewBackend: "acp:grok",
         model: "grok-4",
         reasoningEffort: "high",
+        runMode: "managed-child",
       })
     );
     // A reviewer override is for one review; it must not repoint the thread.
@@ -9877,10 +9888,122 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
     expect(addOptimisticReviewEntry).toHaveBeenCalledWith("Review changes against main");
     expect(startTurn).not.toHaveBeenCalled();
+  });
+
+  it("lets the review card choose a managed child for this review", async () => {
+    const startReview = vi.fn(async (request: StartReviewRequest) => ({
+      backend: request.backend,
+      threadId: request.threadId,
+      reviewThreadId: "review-child",
+      turnId: "turn-review-1",
+    }));
+    const codexBackend = backendSummary("codex");
+    codexBackend.capabilities.startReview = true;
+    codexBackend.capabilities.reviewRunner = true;
+
+    render(
+      <Composer
+        backends={[codexBackend]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review location",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+    const location = screen.getByRole("radiogroup", {
+      name: "Review location",
+    });
+    expect(
+      within(location).getByRole("radio", { name: "This thread" }),
+    ).toHaveAttribute("aria-checked", "true");
+    const separate = within(location).getByRole("radio", {
+      name: "Separate thread",
+    });
+    expect(separate).toBeEnabled();
+    fireEvent.click(separate);
+    expect(separate).toHaveAttribute("aria-checked", "true");
+
+    await clickButton("Start review");
+
+    expect(startReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        backend: "codex",
+        runMode: "managed-child",
+        threadId: "thread-1",
+      }),
+    );
+  });
+
+  it("disables Separate thread with accessible help when no review child can run", () => {
+    const codexBackend = backendSummary("codex");
+    codexBackend.label = "Codex";
+    codexBackend.capabilities.startReview = true;
+    codexBackend.capabilities.reviewRunner = false;
+
+    render(
+      <Composer
+        backends={[codexBackend]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review location",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+    const location = screen.getByRole("radiogroup", {
+      name: "Review location",
+    });
+    const separate = within(location).getByRole("radio", {
+      name: "Separate thread",
+    });
+    expect(separate).toBeDisabled();
+    const helpId = location.getAttribute("aria-describedby");
+    expect(helpId).toBeTruthy();
+    expect(document.getElementById(helpId!)).toHaveTextContent(
+      "Codex cannot run a managed review in a separate thread.",
+    );
+    expect(location.parentElement).toHaveAttribute(
+      "data-tooltip",
+      "Codex cannot run a managed review in a separate thread.",
+    );
   });
 
   it("requires a project choice before reviewing a thread with multiple worktrees", async () => {
@@ -9891,8 +10014,13 @@ describe("Composer", () => {
       turnId: "turn-review-1",
     }));
 
+    const codexBackend = backendSummary("codex");
+    codexBackend.capabilities.startReview = true;
+    codexBackend.capabilities.reviewRunner = true;
+
     render(
       <Composer
+        backends={[codexBackend]}
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startReview,
@@ -9943,6 +10071,16 @@ describe("Composer", () => {
           "/Users/example/.codex/profiles/sample/worktrees/tree-gamma/tea-recommendations",
       },
     });
+    const location = screen.getByRole("radiogroup", {
+      name: "Review location",
+    });
+    expect(location).toHaveAttribute("aria-disabled", "true");
+    expect(
+      within(location).getByRole("radio", { name: "Separate thread" }),
+    ).toHaveAttribute("aria-checked", "true");
+    expect(location.parentElement?.getAttribute("data-tooltip")).toMatch(
+      /not this thread's primary workspace/,
+    );
     await clickButton("Start review");
 
     await waitFor(() => {
@@ -9951,6 +10089,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
+        runMode: "managed-child",
         cwd: "/Users/example/.codex/profiles/sample/worktrees/tree-gamma/tea-recommendations",
       });
     });
@@ -10058,6 +10197,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "release" },
         delivery: "inline",
+        runMode: "inline",
         cwd: "/worktrees/app",
       });
     });
@@ -10183,6 +10323,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "origin/develop" },
         delivery: "inline",
+        runMode: "managed-child",
         cwd:
           "/Users/fixture-user/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       });
@@ -10312,6 +10453,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "commit", sha: kubeCommit.sha, title: null },
         delivery: "inline",
+        runMode: "managed-child",
         cwd:
           "/Users/fixture-user/.codex/profiles/work/worktrees/mrctwp7f/kube-manifests",
       });
@@ -10381,6 +10523,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
+        runMode: "inline",
         model: "gpt-5.5",
         reasoningEffort: "high",
         serviceTier: "priority",
@@ -11025,6 +11168,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
   });
@@ -11095,6 +11239,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "uncommittedChanges" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
   });
@@ -11149,6 +11294,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "uncommittedChanges" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
   });
@@ -11294,6 +11440,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "release" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
   });
@@ -11473,6 +11620,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "origin/releases/2026.07" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
   });
@@ -11700,6 +11848,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "origin/develop" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
   });
@@ -11778,6 +11927,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "origin/develop" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
   });
@@ -11936,6 +12086,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "origin/develop" },
         delivery: "inline",
+        runMode: "inline",
         cwd:
           "/Users/example/.codex/profiles/sample/worktrees/tree-alpha/catalog-service",
       });
@@ -12099,6 +12250,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "commit", sha: recentCommits[3]!.sha, title: null },
         delivery: "inline",
+        runMode: "inline",
       });
     });
   });
@@ -12214,6 +12366,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "commit", sha: "abc123def456", title: null },
         delivery: "inline",
+        runMode: "inline",
       });
     });
   });
@@ -12288,6 +12441,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "origin/main" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
   });
@@ -12366,6 +12520,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
   });
@@ -12411,6 +12566,7 @@ describe("Composer", () => {
         threadId: "thread-1",
         target: { type: "uncommittedChanges" },
         delivery: "inline",
+        runMode: "inline",
       });
     });
   });

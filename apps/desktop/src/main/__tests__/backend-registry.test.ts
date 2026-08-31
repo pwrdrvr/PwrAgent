@@ -5223,7 +5223,6 @@ describe("DesktopBackendRegistry", () => {
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
     });
     const tokenMiserStateDir = path.join(
       "/tmp",
@@ -5263,6 +5262,7 @@ describe("DesktopBackendRegistry", () => {
         backend: "codex",
         threadId: "thread-1",
         target: { type: "custom", instructions: "Review the current change." },
+        runMode: "managed-child",
       });
 
       expect(prepare).toHaveBeenCalledTimes(1);
@@ -5365,7 +5365,6 @@ describe("DesktopBackendRegistry", () => {
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: createOverlayStoreMock(),
-      resolveManagedReviewEnabled: () => true,
     });
     const tokenMiserStateDir = path.join(
       "/tmp",
@@ -5391,6 +5390,7 @@ describe("DesktopBackendRegistry", () => {
         backend: "codex",
         threadId: "thread-1",
         target: { type: "custom", instructions: "Review the current change." },
+        runMode: "managed-child",
       });
 
       expect(codexClient.lastStartThreadParams?.config).toBeUndefined();
@@ -23046,6 +23046,7 @@ command = "pnpm dev"
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      runMode: "inline",
       model: "gpt-5.2",
       reasoningEffort: "high",
     });
@@ -23055,6 +23056,7 @@ command = "pnpm dev"
       model: "gpt-5.2",
       reasoningEffort: "high",
     });
+    expect(codexClient.lastStartThreadParams).toBeUndefined();
     // ...but the thread keeps answering as it did before.
     const overlay = await overlayStore.getThreadOverlayState({
       backend: "codex",
@@ -23485,13 +23487,13 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
     });
     await registry.startReview({
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      runMode: "managed-child",
     });
 
     const events: AgentEvent[] = [];
@@ -23552,13 +23554,13 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore: overlayStore as never,
-      resolveManagedReviewEnabled: () => true,
     });
     await registry.startReview({
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      runMode: "managed-child",
     });
 
     const events: AgentEvent[] = [];
@@ -24266,13 +24268,13 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
     });
     await registry.startReview({
       backend: "codex",
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      runMode: "managed-child",
     });
 
     const events: AgentEvent[] = [];
@@ -24311,7 +24313,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("runs the managed review experiment as one child turn and attributes usage to it", async () => {
+  it("runs an explicitly selected managed review as one child turn and attributes usage to it", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["thread/start", "turn/start"] },
       models: [
@@ -24355,7 +24357,6 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
     });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
@@ -24372,6 +24373,7 @@ command = "pnpm dev"
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      runMode: "managed-child",
     });
 
     expect(response).toEqual({
@@ -24579,7 +24581,6 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
     });
 
     const response = await registry.startReview({
@@ -24587,6 +24588,7 @@ command = "pnpm dev"
       threadId: "thread-parent",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      runMode: "managed-child",
     });
     expect(codexClient.lastStartThreadParams?.model).toBeUndefined();
 
@@ -24664,7 +24666,6 @@ command = "pnpm dev"
     const registry = new DesktopBackendRegistry({
       codexClient,
       overlayStore,
-      resolveManagedReviewEnabled: () => true,
     });
     const events: AgentEvent[] = [];
     registry.onEvent((event) => {
@@ -24676,6 +24677,7 @@ command = "pnpm dev"
       threadId: "thread-parent",
       target: { type: "uncommittedChanges" },
       delivery: "inline",
+      runMode: "managed-child",
     });
     const queuedTurn = await registry.submitTurn({
       backend: "codex",
@@ -24774,7 +24776,6 @@ command = "pnpm dev"
           },
         },
       }),
-      resolveManagedReviewEnabled: () => false,
     });
 
     const response = await registry.startReview({
@@ -24853,7 +24854,6 @@ command = "pnpm dev"
           },
         },
       }),
-      resolveManagedReviewEnabled: () => false,
     });
 
     await registry.startReview({
@@ -25394,7 +25394,7 @@ command = "pnpm dev"
     await registry.close();
   });
 
-  it("starts inline Codex reviews as turns on the parent thread", async () => {
+  it("keeps legacy review requests without runMode inline on the parent thread", async () => {
     const codexClient = new MockBackendClient({
       initializeResult: { methods: ["turn/start"] },
       startReviewResult: {

@@ -351,6 +351,7 @@ describe("scheduled thread action projections", () => {
       review: {
         target: { type: "baseBranch", branch: "main" },
         draftText: "/review main",
+        runMode: "managed-child",
         reviewBackend: "acp:grok",
         model: "grok-4",
         reasoningEffort: "high",
@@ -362,6 +363,7 @@ describe("scheduled thread action projections", () => {
     expect(store.getQueuedTurns(scopeKey)).toEqual([
       expect.objectContaining({
         reviewCommand: expect.objectContaining({
+          runMode: "managed-child",
           reviewer: {
             backend: "acp:grok",
             model: "grok-4",

@@ -724,6 +724,7 @@ describe("useQueuedTurnRelease", () => {
           branch: "main",
         },
         delivery: "inline",
+        runMode: "inline",
         cwd: "/repo/selected-worktree",
         model: "gpt-5.5",
         reasoningEffort: "high",
@@ -761,6 +762,7 @@ describe("useQueuedTurnRelease", () => {
       fileAttachments: [],
       reviewCommand: {
         displayText: "Review changes against main",
+        runMode: "managed-child",
         target: { type: "baseBranch", branch: "main" },
         reviewer: {
           backend: "acp:grok",
@@ -814,6 +816,7 @@ describe("useQueuedTurnRelease", () => {
           reviewBackend: "acp:grok",
           model: "grok-4",
           reasoningEffort: "high",
+          runMode: "managed-child",
         })
       );
     });
@@ -1134,6 +1137,7 @@ describe("useQueuedTurnRelease", () => {
         threadId: "thread-a",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
+        runMode: "inline",
         cwd: "/repo/background-worktree",
       });
     });
@@ -1394,6 +1398,7 @@ describe("useQueuedTurnRelease", () => {
         threadId: "thread-a",
         target: { type: "baseBranch", branch: "main" },
         delivery: "inline",
+        runMode: "inline",
         cwd: "/repo/retained-worktree",
       });
     });
@@ -2018,6 +2023,7 @@ describe("useQueuedTurnRelease", () => {
       threadId: "thread-a",
       target: { type: "baseBranch", branch: "main" },
       delivery: "inline",
+      runMode: "inline",
       cwd: "/repo/polled-worktree",
     });
     expect(

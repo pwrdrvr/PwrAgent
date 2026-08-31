@@ -815,11 +815,6 @@ function SettingsSectionBody(props: {
             experimental: { codexDefaultModeRequestUserInput: enabled },
           });
         }}
-        onManagedReviewChange={async (enabled: boolean) => {
-          await props.settings.writeConfig({
-            experimental: { managedReview: enabled },
-          });
-        }}
       />
     );
   }

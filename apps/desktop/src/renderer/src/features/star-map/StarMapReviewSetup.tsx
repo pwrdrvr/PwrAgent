@@ -10,19 +10,24 @@ import {
   buildReviewBranchOptions,
   findPreferredReviewWorkspaceCwd,
   type AppServerReviewTarget,
+  type BackendSummary,
   type NavigationDirectorySummary,
   type NavigationThreadSummary,
+  type ReviewRunMode,
 } from "@pwragent/shared";
+import { resolveReviewRunMode } from "../../lib/review-run-mode";
 
 type ReviewTargetChoice = AppServerReviewTarget["type"];
 
 export type StarMapReviewRequest = {
   cwd?: string;
+  runMode: ReviewRunMode;
   target: AppServerReviewTarget;
 };
 
 type StarMapReviewSetupProps = {
   busy: boolean;
+  backend?: BackendSummary;
   directories: readonly NavigationDirectorySummary[];
   error?: string;
   onCancel: () => void;
@@ -123,6 +128,7 @@ function buildReviewRequest(params: {
   branch: string;
   commit: string;
   customInstructions: string;
+  runMode: ReviewRunMode;
   target: ReviewTargetChoice;
   workspaceCwd?: string;
 }): StarMapReviewRequest | undefined {
@@ -130,6 +136,7 @@ function buildReviewRequest(params: {
   if (params.target === "uncommittedChanges") {
     return {
       ...(cwd ? { cwd } : {}),
+      runMode: params.runMode,
       target: { type: "uncommittedChanges" },
     };
   }
@@ -138,6 +145,7 @@ function buildReviewRequest(params: {
     return branch
       ? {
           ...(cwd ? { cwd } : {}),
+          runMode: params.runMode,
           target: { type: "baseBranch", branch },
         }
       : undefined;
@@ -147,6 +155,7 @@ function buildReviewRequest(params: {
     return sha
       ? {
           ...(cwd ? { cwd } : {}),
+          runMode: params.runMode,
           target: { type: "commit", sha, title: null },
         }
       : undefined;
@@ -155,6 +164,7 @@ function buildReviewRequest(params: {
   return instructions
     ? {
         ...(cwd ? { cwd } : {}),
+        runMode: params.runMode,
         target: { type: "custom", instructions },
       }
     : undefined;
@@ -184,10 +194,12 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
   const [branchEdited, setBranchEdited] = useState(false);
   const [commit, setCommit] = useState("");
   const [customInstructions, setCustomInstructions] = useState("");
+  const [runMode, setRunMode] = useState<ReviewRunMode>("inline");
   const targetRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const dialogRef = useRef<HTMLElement | null>(null);
   const branchListId = useId();
   const commitListId = useId();
+  const reviewLocationHelpId = useId();
 
   useEffect(() => {
     // The compact editor also synchronizes editability when this mounts and
@@ -205,22 +217,41 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
     }
   }, [branchEdited, branchOptions]);
 
+  const reviewRunModeDecision = resolveReviewRunMode({
+    requestedRunMode: runMode,
+    reviewerBackend: props.thread.source,
+    reviewerSummary: props.backend,
+    thread: props.thread,
+    workspaceCwd,
+  });
   const request = useMemo(
     () => buildReviewRequest({
       branch,
       commit,
       customInstructions,
+      runMode: reviewRunModeDecision.runMode,
       target,
       workspaceCwd,
     }),
-    [branch, commit, customInstructions, target, workspaceCwd],
+    [
+      branch,
+      commit,
+      customInstructions,
+      reviewRunModeDecision.runMode,
+      target,
+      workspaceCwd,
+    ],
   );
   const workspaceSelectionRequired = workspaceOptions.length > 1;
   const canSubmit = Boolean(
     request
     && (!workspaceSelectionRequired || workspaceCwd)
     && !busy
-    && !submitting,
+    && !submitting
+    && (
+      reviewRunModeDecision.runMode === "inline"
+      || !reviewRunModeDecision.separateThreadDisabled
+    )
   );
 
   const submit = (event: FormEvent<HTMLFormElement>): void => {
@@ -274,6 +305,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
             branch,
             commit,
             customInstructions,
+            runMode: reviewRunModeDecision.runMode,
             target: requestedTarget,
             workspaceCwd,
           })
@@ -283,6 +315,10 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
         || (workspaceSelectionRequired && !workspaceCwd)
         || busy
         || submitting
+        || (
+          reviewRunModeDecision.runMode === "managed-child"
+          && reviewRunModeDecision.separateThreadDisabled
+        )
       ) {
         return;
       }
@@ -303,6 +339,8 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
     onCancel,
     onSubmit,
     request,
+    reviewRunModeDecision.runMode,
+    reviewRunModeDecision.separateThreadDisabled,
     submitting,
     workspaceCwd,
     workspaceSelectionRequired,
@@ -432,6 +470,71 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
               />
             </label>
           ) : null}
+
+          <div className="composer__review-field composer__review-location">
+            <span>Review location</span>
+            <div
+              className={`composer__review-location-control${
+                reviewRunModeDecision.helpText ? " tooltip-target" : ""
+              }`}
+              data-tooltip={reviewRunModeDecision.helpText}
+              tabIndex={reviewRunModeDecision.helpText ? 0 : undefined}
+            >
+              <div
+                aria-describedby={
+                  reviewRunModeDecision.helpText
+                    ? reviewLocationHelpId
+                    : undefined
+                }
+                aria-disabled={reviewRunModeDecision.controlDisabled}
+                aria-label="Review location"
+                className="settings-segmented"
+                role="radiogroup"
+              >
+                <button
+                  aria-checked={reviewRunModeDecision.runMode === "inline"}
+                  className={`settings-segmented__button${
+                    reviewRunModeDecision.runMode === "inline"
+                      ? " is-active"
+                      : ""
+                  }`}
+                  disabled={reviewRunModeDecision.controlDisabled}
+                  onClick={() => setRunMode("inline")}
+                  role="radio"
+                  type="button"
+                >
+                  This thread
+                </button>
+                <button
+                  aria-checked={
+                    reviewRunModeDecision.runMode === "managed-child"
+                  }
+                  className={`settings-segmented__button${
+                    reviewRunModeDecision.runMode === "managed-child"
+                      ? " is-active"
+                      : ""
+                  }`}
+                  disabled={
+                    reviewRunModeDecision.controlDisabled
+                    || reviewRunModeDecision.separateThreadDisabled
+                  }
+                  onClick={() => setRunMode("managed-child")}
+                  role="radio"
+                  type="button"
+                >
+                  Separate thread
+                </button>
+              </div>
+              {reviewRunModeDecision.helpText ? (
+                <small
+                  className="composer__review-location-help"
+                  id={reviewLocationHelpId}
+                >
+                  {reviewRunModeDecision.helpText}
+                </small>
+              ) : null}
+            </div>
+          </div>
 
           {props.busy ? (
             <p className="star-map-review-setup__message" role="status">

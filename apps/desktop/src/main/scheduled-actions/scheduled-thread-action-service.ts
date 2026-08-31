@@ -273,6 +273,7 @@ export class ScheduledThreadActionService {
           idempotencyKey: action.id,
           target: action.review.target,
           delivery: action.review.delivery ?? "inline",
+          runMode: action.review.runMode,
           cwd: action.review.cwd,
           reviewBackend: action.review.reviewBackend,
           model: action.review.model,

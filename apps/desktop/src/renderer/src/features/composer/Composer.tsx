@@ -43,6 +43,7 @@ import type {
   NavigationThreadSummary,
   PrSummary,
   RenderComposerPdfPreviewResponse,
+  ReviewRunMode,
   ThreadWorkspaceHandoffStrategy,
   ThreadExecutionMode,
 } from "@pwragent/shared";
@@ -81,6 +82,7 @@ import type { AppNoticeToastNotice } from "../notifications/AppNoticeToast";
 import { formatBackendLabel } from "../../lib/backend-label";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
+import { resolveReviewRunMode } from "../../lib/review-run-mode";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 import { agentEventMatchesThread } from "../../lib/federated-thread-events";
 import {
@@ -510,6 +512,7 @@ type QueuedTurnDraft = {
   reviewCommand?: {
     cwd?: string;
     displayText: string;
+    runMode?: ReviewRunMode;
     target: AppServerReviewTarget;
   };
   text: string;
@@ -601,6 +604,7 @@ type ReviewConfigState = {
    * applies to one review, never to the thread.
    */
   reviewer?: ModelSettingsRecent;
+  runMode: ReviewRunMode;
   target?: ReviewTargetChoice;
   workspaceCwd?: string;
 };
@@ -953,6 +957,7 @@ function createReviewConfig(params: {
     branchSource: "auto",
     commit: "",
     customInstructions: "",
+    runMode: "inline",
     target: "baseBranch",
     workspaceCwd: params.reviewCommand?.cwd ?? (
       preferredWorkspaceCwd ??
@@ -1086,7 +1091,12 @@ function findReviewDirectoryForWorkspace(params: {
 
 function buildConfiguredReviewCommand(
   config: ReviewConfigState | undefined
-): { cwd?: string; displayText: string; target: AppServerReviewTarget } | undefined {
+): {
+  cwd?: string;
+  displayText: string;
+  runMode: ReviewRunMode;
+  target: AppServerReviewTarget;
+} | undefined {
   if (!config?.target) {
     return undefined;
   }
@@ -1095,6 +1105,7 @@ function buildConfiguredReviewCommand(
   if (config.target === "uncommittedChanges") {
     return {
       ...(cwd ? { cwd } : {}),
+      runMode: config.runMode,
       target: { type: "uncommittedChanges" },
       displayText: "Review current changes",
     };
@@ -1105,6 +1116,7 @@ function buildConfiguredReviewCommand(
     return branch
       ? {
           ...(cwd ? { cwd } : {}),
+          runMode: config.runMode,
           target: { type: "baseBranch", branch },
           displayText: `Review changes against ${branch}`,
         }
@@ -1116,6 +1128,7 @@ function buildConfiguredReviewCommand(
     return sha
       ? {
           ...(cwd ? { cwd } : {}),
+          runMode: config.runMode,
           target: { type: "commit", sha, title: null },
           displayText: `Review commit ${sha}`,
         }
@@ -1126,6 +1139,7 @@ function buildConfiguredReviewCommand(
   return instructions
     ? {
         ...(cwd ? { cwd } : {}),
+        runMode: config.runMode,
         target: { type: "custom", instructions },
         displayText: "Review custom instructions",
       }
@@ -3134,6 +3148,7 @@ export function Composer(props: ComposerProps) {
   }>({ maxHeight: 320, placement: "above" });
   const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
   const [reviewConfig, setReviewConfig] = useState<ReviewConfigState>();
+  const reviewLocationHelpId = useId();
   // Tagged with the owning instance the same way recent file references are:
   // a combination remembered on another instance names models that instance
   // has, so a response that lands after the thread changed must not paint.
@@ -5499,6 +5514,7 @@ export function Composer(props: ComposerProps) {
   const submitReviewCommand = async (reviewCommand: {
     cwd?: string;
     displayText: string;
+    runMode?: ReviewRunMode;
     target: AppServerReviewTarget;
     reviewer?: ModelSettingsRecent;
   }, options?: {
@@ -5632,6 +5648,7 @@ export function Composer(props: ComposerProps) {
         threadId: props.thread.id,
         target: reviewCommand.target,
         delivery: "inline",
+        runMode: reviewCommand.runMode ?? "inline",
         ...(reviewCommand.cwd ? { cwd: reviewCommand.cwd } : {}),
         ...(submittedReviewer
           ? {
@@ -5907,21 +5924,25 @@ export function Composer(props: ComposerProps) {
     if (!configuredReviewCommand) {
       return;
     }
+    const routedReviewCommand = {
+      ...configuredReviewCommand,
+      runMode: reviewRunModeDecision.runMode,
+    };
     if (futureScheduledDraftSendAt) {
       if (props.launchpad) {
         await scheduleLaunchpadMaterialization(
           futureScheduledDraftSendAt,
-          configuredReviewCommand.target,
+          routedReviewCommand.target,
         );
         return;
       }
-      queueReviewCommand(configuredReviewCommand, {
+      queueReviewCommand(routedReviewCommand, {
         scheduledSendAt: futureScheduledDraftSendAt,
       });
       return;
     }
 
-    await submitReviewCommand(configuredReviewCommand);
+    await submitReviewCommand(routedReviewCommand);
   };
 
   const focusReviewOption = (index: number): void => {
@@ -6624,6 +6645,7 @@ export function Composer(props: ComposerProps) {
     reviewCommand: {
       cwd?: string;
       displayText: string;
+      runMode?: ReviewRunMode;
       target: AppServerReviewTarget;
     },
     options?: { scheduledSendAt?: number },
@@ -6646,6 +6668,7 @@ export function Composer(props: ComposerProps) {
           target: reviewCommand.target,
           draftText: text,
           delivery: "inline",
+          runMode: reviewCommand.runMode ?? "inline",
           cwd: reviewCommand.cwd,
           // Carry the picked reviewer through the queue so releasing it later
           // does not silently fall back to the thread's own provider.
@@ -9021,6 +9044,19 @@ export function Composer(props: ComposerProps) {
     reviewerSelection.model,
   );
   const reviewerOverridden = Boolean(reviewConfig?.reviewer);
+  const reviewRunModeDecision = props.thread
+    ? resolveReviewRunMode({
+        requestedRunMode: reviewConfig?.runMode,
+        reviewerBackend: reviewerSelection.backend,
+        reviewerSummary: reviewerSelection.summary,
+        thread: props.thread,
+        workspaceCwd: reviewConfig?.workspaceCwd,
+      })
+    : {
+        controlDisabled: false,
+        runMode: "inline" as const,
+        separateThreadDisabled: true,
+      };
   // A remembered combination is only offered while it still resolves against
   // the owner's current catalog. Recents are disposable, so a dead row is
   // noise rather than a preference worth preserving.
@@ -10722,6 +10758,91 @@ export function Composer(props: ComposerProps) {
               </label>
             ) : null}
 
+            {props.thread ? (
+              <div className="composer__review-field composer__review-location">
+                <span>Review location</span>
+                <div
+                  className={`composer__review-location-control${
+                    reviewRunModeDecision.helpText ? " tooltip-target" : ""
+                  }`}
+                  data-tooltip={reviewRunModeDecision.helpText}
+                  tabIndex={reviewRunModeDecision.helpText ? 0 : undefined}
+                >
+                  <div
+                    aria-describedby={
+                      reviewRunModeDecision.helpText
+                        ? reviewLocationHelpId
+                        : undefined
+                    }
+                    aria-disabled={reviewRunModeDecision.controlDisabled}
+                    aria-label="Review location"
+                    className="settings-segmented"
+                    role="radiogroup"
+                  >
+                    <button
+                      aria-checked={reviewRunModeDecision.runMode === "inline"}
+                      className={`settings-segmented__button${
+                        reviewRunModeDecision.runMode === "inline"
+                          ? " is-active"
+                          : ""
+                      }`}
+                      disabled={reviewRunModeDecision.controlDisabled}
+                      onClick={() => {
+                        setReviewConfig((current) => ({
+                          ...(current ?? createReviewConfig({
+                            directory: props.directory,
+                            thread: props.thread,
+                          })),
+                          runMode: "inline",
+                        }));
+                        setSendError(undefined);
+                      }}
+                      role="radio"
+                      type="button"
+                    >
+                      This thread
+                    </button>
+                    <button
+                      aria-checked={
+                        reviewRunModeDecision.runMode === "managed-child"
+                      }
+                      className={`settings-segmented__button${
+                        reviewRunModeDecision.runMode === "managed-child"
+                          ? " is-active"
+                          : ""
+                      }`}
+                      disabled={
+                        reviewRunModeDecision.controlDisabled
+                        || reviewRunModeDecision.separateThreadDisabled
+                      }
+                      onClick={() => {
+                        setReviewConfig((current) => ({
+                          ...(current ?? createReviewConfig({
+                            directory: props.directory,
+                            thread: props.thread,
+                          })),
+                          runMode: "managed-child",
+                        }));
+                        setSendError(undefined);
+                      }}
+                      role="radio"
+                      type="button"
+                    >
+                      Separate thread
+                    </button>
+                  </div>
+                  {reviewRunModeDecision.helpText ? (
+                    <small
+                      className="composer__review-location-help"
+                      id={reviewLocationHelpId}
+                    >
+                      {reviewRunModeDecision.helpText}
+                    </small>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+
             {reviewerOverridesSupported ? (
               <div className="composer__review-field composer__review-reviewer">
                 <span>Reviewer</span>
@@ -10847,7 +10968,11 @@ export function Composer(props: ComposerProps) {
                 className="composer__primary-action"
                 disabled={
                   !buildConfiguredReviewCommand(reviewConfig) ||
-                  (reviewWorkspaceSelectionRequired && !reviewConfig?.workspaceCwd)
+                  (reviewWorkspaceSelectionRequired && !reviewConfig?.workspaceCwd) ||
+                  (
+                    reviewRunModeDecision.runMode === "managed-child"
+                    && reviewRunModeDecision.separateThreadDisabled
+                  )
                 }
                 onClick={() => {
                   void submitConfiguredReviewComposer();
