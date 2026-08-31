@@ -244,6 +244,99 @@ describe("token usage pricing", () => {
     }
   });
 
+  it("prices GPT-5.6 Sol at the reduced August 21 rates", () => {
+    const cases = [
+      ["gpt-5.6-sol", false, 24_400_000, 4, 0.4, 20],
+      ["gpt-5.6-sol", true, 48_800_000, 8, 0.8, 40],
+    ] as const;
+
+    for (const [
+      model,
+      fastMode,
+      totalCostMicros,
+      inputUsdPerMillion,
+      cachedInputUsdPerMillion,
+      outputUsdPerMillion,
+    ] of cases) {
+      const cost = estimateOpenAiTokenUsageCost({
+        at: Date.UTC(2026, 7, 21),
+        cachedInputTokens: 1_000_000,
+        fastMode,
+        model,
+        outputTokens: 1_000_000,
+        uncachedInputTokens: 1_000_000,
+      });
+
+      expect(cost).toMatchObject({
+        catalogVersion: "2026-08-21",
+        cachedInputUsdPerMillion,
+        inputUsdPerMillion,
+        outputUsdPerMillion,
+        rateId: `openai:2026-08-21:${model}:${fastMode ? "priority" : "standard"}`,
+        serviceTier: fastMode ? "priority" : "standard",
+        totalCostMicros,
+      });
+    }
+  });
+
+  it("keeps GPT-5.6 Sol on the July 9 rates until August 21", () => {
+    const cost = estimateOpenAiTokenUsageCost({
+      at: Date.UTC(2026, 7, 20, 23, 59, 59),
+      cachedInputTokens: 1_000_000,
+      model: "gpt-5.6-sol",
+      outputTokens: 1_000_000,
+      uncachedInputTokens: 1_000_000,
+    });
+
+    expect(cost).toMatchObject({
+      catalogVersion: "2026-07-09",
+      inputUsdPerMillion: 5,
+      cachedInputUsdPerMillion: 0.5,
+      outputUsdPerMillion: 30,
+      rateId: "openai:2026-07-09:gpt-5.6-sol:standard",
+      totalCostMicros: 35_500_000,
+    });
+  });
+
+  it("prices current GPT-5.6 Sol, Terra, and Luna at the published list rates", () => {
+    const cases = [
+      ["gpt-5.6-sol", false, "2026-08-21", 24_400_000, 4, 0.4, 20],
+      ["gpt-5.6-sol", true, "2026-08-21", 48_800_000, 8, 0.8, 40],
+      ["gpt-5.6-terra", false, "2026-07-30", 14_200_000, 2, 0.2, 12],
+      ["gpt-5.6-terra", true, "2026-07-30", 28_400_000, 4, 0.4, 24],
+      ["gpt-5.6-luna", false, "2026-07-30", 1_420_000, 0.2, 0.02, 1.2],
+      ["gpt-5.6-luna", true, "2026-07-30", 2_840_000, 0.4, 0.04, 2.4],
+    ] as const;
+
+    for (const [
+      model,
+      fastMode,
+      catalogVersion,
+      totalCostMicros,
+      inputUsdPerMillion,
+      cachedInputUsdPerMillion,
+      outputUsdPerMillion,
+    ] of cases) {
+      const cost = estimateOpenAiTokenUsageCost({
+        cachedInputTokens: 1_000_000,
+        fastMode,
+        model,
+        outputTokens: 1_000_000,
+        uncachedInputTokens: 1_000_000,
+      });
+
+      expect(cost).toMatchObject({
+        catalogVersion,
+        cachedInputUsdPerMillion,
+        inputUsdPerMillion,
+        outputUsdPerMillion,
+        rateId: `openai:${catalogVersion}:${model}:${fastMode ? "priority" : "standard"}`,
+        serviceTier: fastMode ? "priority" : "standard",
+        totalCostMicros,
+      });
+    }
+  });
+
   it("does not price GPT-5.6 usage before its catalog effective date", () => {
     expect(
       estimateOpenAiTokenUsageCost({
@@ -487,6 +580,36 @@ describe("token usage pricing", () => {
         serviceTier: "priority",
       }),
     );
+    expect(listOpenAiTokenUsagePricingRates()).toContainEqual(
+      expect.objectContaining({
+        catalogId: "openai-api",
+        catalogVersion: "2026-07-30",
+        currency: "USD",
+        displayName: "GPT-5.6 Terra Standard",
+        inputMicrosPerMillion: 2_000_000,
+        cachedInputMicrosPerMillion: 200_000,
+        outputMicrosPerMillion: 12_000_000,
+        model: "gpt-5.6-terra",
+        provider: "openai",
+        rateId: "openai:2026-07-30:gpt-5.6-terra:standard",
+        serviceTier: "standard",
+      }),
+    );
+    expect(listOpenAiTokenUsagePricingRates()).toContainEqual(
+      expect.objectContaining({
+        catalogId: "openai-api",
+        catalogVersion: "2026-08-21",
+        currency: "USD",
+        displayName: "GPT-5.6 Sol Standard",
+        inputMicrosPerMillion: 4_000_000,
+        cachedInputMicrosPerMillion: 400_000,
+        outputMicrosPerMillion: 20_000_000,
+        model: "gpt-5.6-sol",
+        provider: "openai",
+        rateId: "openai:2026-08-21:gpt-5.6-sol:standard",
+        serviceTier: "standard",
+      }),
+    );
     expect(listTokenUsagePricingRates()).toContainEqual(
       expect.objectContaining({
         cachedInputUsdPerMillion: 0.5,
@@ -658,6 +781,90 @@ describe("token usage pricing", () => {
         provider: "openai",
         rateId: `openai:2026-07-30:codex-credits:${model}:priority`,
         serviceTier: "priority",
+        totalCreditMicros,
+        totalCredits: totalCreditMicros / 1_000_000,
+      });
+    }
+  });
+
+  it("estimates reduced GPT-5.6 Sol Codex Credits from August 21", () => {
+    const cases = [
+      ["gpt-5.6-sol", false, "GPT-5.6 Sol Standard", 100, 10, 500, 610_000_000],
+      ["gpt-5.6-sol", true, "GPT-5.6 Sol Fast", 250, 25, 1250, 1_525_000_000],
+    ] as const;
+
+    for (const [
+      model,
+      fastMode,
+      displayName,
+      inputCreditsPerMillion,
+      cachedInputCreditsPerMillion,
+      outputCreditsPerMillion,
+      totalCreditMicros,
+    ] of cases) {
+      const credits = estimateOpenAiCodexCreditUsage({
+        at: Date.UTC(2026, 7, 21),
+        cachedInputTokens: 1_000_000,
+        fastMode,
+        model,
+        outputTokens: 1_000_000,
+        uncachedInputTokens: 1_000_000,
+      });
+
+      expect(credits).toMatchObject({
+        catalogId: "openai-codex-credits",
+        catalogVersion: "2026-08-21",
+        displayName,
+        inputCreditsPerMillion,
+        cachedInputCreditsPerMillion,
+        outputCreditsPerMillion,
+        provider: "openai",
+        rateId: `openai:2026-08-21:codex-credits:${model}:${fastMode ? "priority" : "standard"}`,
+        serviceTier: fastMode ? "priority" : "standard",
+        totalCreditMicros,
+        totalCredits: totalCreditMicros / 1_000_000,
+      });
+    }
+  });
+
+  it("estimates current GPT-5.6 Codex Credits at the published list rates", () => {
+    const cases = [
+      ["gpt-5.6-sol", false, "2026-08-21", "GPT-5.6 Sol Standard", 100, 10, 500, 610_000_000],
+      ["gpt-5.6-sol", true, "2026-08-21", "GPT-5.6 Sol Fast", 250, 25, 1250, 1_525_000_000],
+      ["gpt-5.6-terra", false, "2026-07-30", "GPT-5.6 Terra Standard", 50, 5, 300, 355_000_000],
+      ["gpt-5.6-terra", true, "2026-07-30", "GPT-5.6 Terra Fast", 125, 12.5, 750, 887_500_000],
+      ["gpt-5.6-luna", false, "2026-07-30", "GPT-5.6 Luna Standard", 5, 0.5, 30, 35_500_000],
+      ["gpt-5.6-luna", true, "2026-07-30", "GPT-5.6 Luna Fast", 12.5, 1.25, 75, 88_750_000],
+    ] as const;
+
+    for (const [
+      model,
+      fastMode,
+      catalogVersion,
+      displayName,
+      inputCreditsPerMillion,
+      cachedInputCreditsPerMillion,
+      outputCreditsPerMillion,
+      totalCreditMicros,
+    ] of cases) {
+      const credits = estimateOpenAiCodexCreditUsage({
+        cachedInputTokens: 1_000_000,
+        fastMode,
+        model,
+        outputTokens: 1_000_000,
+        uncachedInputTokens: 1_000_000,
+      });
+
+      expect(credits).toMatchObject({
+        catalogId: "openai-codex-credits",
+        catalogVersion,
+        displayName,
+        inputCreditsPerMillion,
+        cachedInputCreditsPerMillion,
+        outputCreditsPerMillion,
+        provider: "openai",
+        rateId: `openai:${catalogVersion}:codex-credits:${model}:${fastMode ? "priority" : "standard"}`,
+        serviceTier: fastMode ? "priority" : "standard",
         totalCreditMicros,
         totalCredits: totalCreditMicros / 1_000_000,
       });

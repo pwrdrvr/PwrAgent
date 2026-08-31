@@ -3839,8 +3839,17 @@ describe("DesktopBackendRegistry", () => {
           descriptorEnvironmentVariable:
             "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
           descriptorVersion: 1,
+          codeModeNestedPostToolUse: false,
         },
         codeModeOutputReducer: {
+          deferredCompletion: {
+            version: 1,
+            terminalOnly: true,
+            preservesOriginalCallId: true,
+            preservesCellId: true,
+            waitToolName: "wait",
+          },
+          intentContextVersion: 1,
           modelGuidance: {
             version: 1,
             toolDescriptionConfigKey:
@@ -3850,7 +3859,9 @@ describe("DesktopBackendRegistry", () => {
             modelVisibleOverheadRequestField:
               "model_visible_overhead_characters",
           },
+          postToolUseField: "parent_intent",
           protocolVersion: 1,
+          reducerRequestField: "parent_intent",
         },
       },
     });
@@ -3899,7 +3910,7 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("does not install the legacy plugin when native activation is negotiated", async () => {
+  it("preserves explicit disable for incomplete native Token Miser runtimes", async () => {
     const codexClient = new MockBackendClient({
       threads: [],
       serverCapabilities: {
@@ -3914,6 +3925,7 @@ describe("DesktopBackendRegistry", () => {
           descriptorVersion: 1,
         },
         codeModeOutputReducer: {
+          intentContextVersion: 1,
           modelGuidance: {
             version: 1,
             toolDescriptionConfigKey:
@@ -3923,7 +3935,87 @@ describe("DesktopBackendRegistry", () => {
             modelVisibleOverheadRequestField:
               "model_visible_overhead_characters",
           },
+          postToolUseField: "parent_intent",
           protocolVersion: 1,
+          reducerRequestField: "parent_intent",
+        },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-off": {
+            backend: "codex",
+            threadId: "thread-off",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            tokenMiserEnabled: false,
+          },
+        },
+      }),
+      resolveManagedTokenMiserActivationRequired: () => true,
+    });
+    const internals = registry as unknown as {
+      prepareTokenMiserRuntime: () => Promise<void>;
+      resolveTokenMiserEnabledFn: () => boolean;
+    };
+    internals.resolveTokenMiserEnabledFn = () => true;
+    vi.spyOn(internals, "prepareTokenMiserRuntime").mockResolvedValue(undefined);
+
+    try {
+      await registry.startThread({ backend: "codex", cwd: process.cwd() });
+      expect(
+        codexClient.lastStartThreadParams?.pwrdrvrTokenMiser,
+      ).toBeUndefined();
+
+      await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-off",
+        input: [{ type: "text", text: "Keep this thread opted out." }],
+      });
+      expect(codexClient.lastStartTurnParams?.pwrdrvrTokenMiser).toBeNull();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("does not install the legacy plugin when native activation is negotiated", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [],
+      serverCapabilities: {
+        pwrdrvrTokenMiser: {
+          version: 1,
+          identity: "pwrdrvr.pwragent.token-miser",
+          initializeCapabilityField: "pwrdrvrTokenMiser",
+          threadStartField: "pwrdrvrTokenMiser",
+          threadResumeField: "pwrdrvrTokenMiser",
+          descriptorEnvironmentVariable:
+            "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+          descriptorVersion: 1,
+          codeModeNestedPostToolUse: false,
+        },
+        codeModeOutputReducer: {
+          deferredCompletion: {
+            version: 1,
+            terminalOnly: true,
+            preservesOriginalCallId: true,
+            preservesCellId: true,
+            waitToolName: "wait",
+          },
+          intentContextVersion: 1,
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
+          postToolUseField: "parent_intent",
+          protocolVersion: 1,
+          reducerRequestField: "parent_intent",
         },
       },
     });
@@ -3972,11 +4064,23 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
-  it("rejects managed runtimes that omit native Token Miser activation", async () => {
+  it("rejects managed runtimes that omit deferred Token Miser completion", async () => {
     const codexClient = new MockBackendClient({
       threads: [],
       serverCapabilities: {
+        pwrdrvrTokenMiser: {
+          version: 1,
+          identity: "pwrdrvr.pwragent.token-miser",
+          initializeCapabilityField: "pwrdrvrTokenMiser",
+          threadStartField: "pwrdrvrTokenMiser",
+          threadResumeField: "pwrdrvrTokenMiser",
+          descriptorEnvironmentVariable:
+            "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+          descriptorVersion: 1,
+          codeModeNestedPostToolUse: false,
+        },
         codeModeOutputReducer: {
+          intentContextVersion: 1,
           modelGuidance: {
             version: 1,
             toolDescriptionConfigKey:
@@ -3986,7 +4090,9 @@ describe("DesktopBackendRegistry", () => {
             modelVisibleOverheadRequestField:
               "model_visible_overhead_characters",
           },
+          postToolUseField: "parent_intent",
           protocolVersion: 1,
+          reducerRequestField: "parent_intent",
         },
       },
     });
@@ -4027,7 +4133,7 @@ describe("DesktopBackendRegistry", () => {
       await internals.prepareTokenMiserRuntime();
 
       expect(internals.tokenMiserRuntimePreparationFailure).toBe(
-        "Managed Codex runtime lacks native Token Miser activation capability v1.",
+        "Managed Codex runtime lacks the complete Token Miser activation and deferred-completion capability contract.",
       );
       expect(resolveRuntime).not.toHaveBeenCalled();
       expect(ensureInstalled).not.toHaveBeenCalled();
@@ -4119,22 +4225,9 @@ describe("DesktopBackendRegistry", () => {
 
   it("records truthful Token Miser activation from reducer capability", async () => {
     const readActivation = async (params: {
+      managedContractRequired?: boolean;
       runtimeFailure?: string;
-      serverCapabilities: {
-        codeModeOutputReducer?: {
-          dynamicToolsResumeField?: "dynamicTools";
-          modelGuidance?: {
-            version: 1;
-            toolDescriptionConfigKey:
-              "features.code_mode.output_reducer.tool_description_guidance";
-            continuationConfigKey:
-              "features.code_mode.output_reducer.continuation_guidance";
-            modelVisibleOverheadRequestField:
-              "model_visible_overhead_characters";
-          };
-          protocolVersion?: number;
-        };
-      };
+      serverCapabilities: CodexServerCapabilities;
     }) => {
       const tokenMiserStateDir = await mkdtemp(
         path.join(os.tmpdir(), "pwragent-token-miser-activation-"),
@@ -4146,6 +4239,8 @@ describe("DesktopBackendRegistry", () => {
       const registry = new DesktopBackendRegistry({
         codexClient,
         overlayStore: createOverlayStoreMock(),
+        resolveManagedTokenMiserActivationRequired: () =>
+          params.managedContractRequired ?? false,
       });
       const internals = registry as unknown as {
         prepareTokenMiserRuntime: (
@@ -4199,6 +4294,79 @@ describe("DesktopBackendRegistry", () => {
         },
       },
     })).resolves.toMatchObject({ state: "active" });
+    await expect(readActivation({
+      managedContractRequired: true,
+      serverCapabilities: {
+        pwrdrvrTokenMiser: {
+          version: 1,
+          identity: "pwrdrvr.pwragent.token-miser",
+          initializeCapabilityField: "pwrdrvrTokenMiser",
+          threadStartField: "pwrdrvrTokenMiser",
+          threadResumeField: "pwrdrvrTokenMiser",
+          descriptorEnvironmentVariable:
+            "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+          descriptorVersion: 1,
+          codeModeNestedPostToolUse: false,
+        },
+        codeModeOutputReducer: {
+          deferredCompletion: {
+            version: 1,
+            terminalOnly: true,
+            preservesOriginalCallId: true,
+            preservesCellId: true,
+            waitToolName: "wait",
+          },
+          intentContextVersion: 1,
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
+          postToolUseField: "parent_intent",
+          protocolVersion: 1,
+          reducerRequestField: "parent_intent",
+        },
+      },
+    })).resolves.toMatchObject({ state: "active" });
+    await expect(readActivation({
+      managedContractRequired: true,
+      serverCapabilities: {
+        pwrdrvrTokenMiser: {
+          version: 1,
+          identity: "pwrdrvr.pwragent.token-miser",
+          initializeCapabilityField: "pwrdrvrTokenMiser",
+          threadStartField: "pwrdrvrTokenMiser",
+          threadResumeField: "pwrdrvrTokenMiser",
+          descriptorEnvironmentVariable:
+            "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+          descriptorVersion: 1,
+          codeModeNestedPostToolUse: false,
+        },
+        codeModeOutputReducer: {
+          intentContextVersion: 1,
+          modelGuidance: {
+            version: 1,
+            toolDescriptionConfigKey:
+              "features.code_mode.output_reducer.tool_description_guidance",
+            continuationConfigKey:
+              "features.code_mode.output_reducer.continuation_guidance",
+            modelVisibleOverheadRequestField:
+              "model_visible_overhead_characters",
+          },
+          postToolUseField: "parent_intent",
+          protocolVersion: 1,
+          reducerRequestField: "parent_intent",
+        },
+      },
+    })).resolves.toMatchObject({
+      reason:
+        "Managed Codex runtime lacks the complete Token Miser activation and deferred-completion capability contract.",
+      state: "unavailable",
+    });
     await expect(readActivation({
       serverCapabilities: {
         codeModeOutputReducer: {
@@ -4507,8 +4675,8 @@ describe("DesktopBackendRegistry", () => {
         backend: "codex",
         threadId: "managed-review-child",
       });
-      expect(enabledChild.tokenMiserEffectiveEnabled).toBe(true);
-      expect(enabledChild).not.toHaveProperty("tokenMiserEnabled");
+      expect(enabledChild.tokenMiserEnabled).toBe(true);
+      expect(enabledChild).not.toHaveProperty("tokenMiserOverride");
       await overlayStore.setThreadTokenMiser?.({
         backend: "codex",
         threadId: "thread-1",
@@ -4524,8 +4692,8 @@ describe("DesktopBackendRegistry", () => {
         backend: "codex",
         threadId: "managed-review-child",
       });
-      expect(disabledChild.tokenMiserEffectiveEnabled).toBe(false);
-      expect(disabledChild).not.toHaveProperty("tokenMiserEnabled");
+      expect(disabledChild.tokenMiserEnabled).toBe(false);
+      expect(disabledChild).not.toHaveProperty("tokenMiserOverride");
       const staleToolResponse = await codexClient.emitRequest({
         method: "item/tool/call",
         params: {
@@ -18479,6 +18647,152 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("starts one Codex title helper for every concurrent explicit placeholder", async () => {
+    const titleGenerationRelease = createDeferred<void>();
+    const titleService = {
+      generateTitle: vi.fn(async ({ threadId }: { threadId?: string }) => {
+        await titleGenerationRelease.promise;
+        return {
+          status: "generated" as const,
+          title: `Title for ${threadId ?? "thread"}`,
+        };
+      }),
+    };
+    const threadIds = [
+      "thread-parallel-1",
+      "thread-parallel-2",
+      "thread-parallel-3",
+    ];
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: threadIds.map((threadId) => ({
+        id: threadId,
+        // Codex reports PwrAgent's initial placeholder rename as explicit. If
+        // the prompt-derived rename then loses a parallel session-metadata
+        // race, this is the title state the helper eligibility check sees.
+        title: "Untitled thread",
+        titleSource: "explicit",
+        linkedDirectories: [],
+        source: "codex",
+      })),
+    });
+    const pendingThreadIds = [...threadIds];
+    vi.spyOn(codexClient, "startThread").mockImplementation(async () => ({
+      threadId: pendingThreadIds.shift() ?? "unexpected-thread",
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+
+    await Promise.all(
+      threadIds.map((threadId) =>
+        registry.startThread({
+          backend: "codex",
+          cwd: `/repo/${threadId}`,
+        }),
+      ),
+    );
+    const starts = threadIds.map((threadId) =>
+      registry.startTurn({
+        backend: "codex",
+        threadId,
+        input: [{ type: "text", text: `Prompt for ${threadId}` }],
+      }),
+    );
+
+    await waitForCondition(
+      () => titleService.generateTitle.mock.calls.length === threadIds.length,
+    );
+    for (const threadId of threadIds) {
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId,
+        }),
+      ).resolves.toMatchObject({
+        subAgents: [
+          expect.objectContaining({
+            monitorId: `system:title-helper:codex:${threadId}`,
+            status: "running",
+          }),
+        ],
+      });
+    }
+
+    titleGenerationRelease.resolve();
+    await Promise.all(starts);
+    await registry.close();
+  });
+
+  it("preserves an explicit Untitled thread rename while its title helper finishes", async () => {
+    const titleGenerationRelease = createDeferred<void>();
+    const titleService = {
+      generateTitle: vi.fn(async () => {
+        await titleGenerationRelease.promise;
+        return {
+          status: "generated" as const,
+          title: "Generated replacement",
+        };
+      }),
+    };
+    const threadId = "thread-explicit-placeholder";
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgent = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      startThreadResult: { threadId },
+      threads: [
+        {
+          id: threadId,
+          title: "Untitled thread",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const renameThread = vi.spyOn(codexClient, "renameThread");
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startThread({
+      backend: "codex",
+      cwd: "/repo/explicit-placeholder",
+    });
+    await registry.startTurn({
+      backend: "codex",
+      threadId,
+      input: [{ type: "text", text: "Name this work" }],
+    });
+    await waitForCondition(() => titleService.generateTitle.mock.calls.length === 1);
+
+    await registry.renameThread({
+      backend: "codex",
+      threadId,
+      name: "Untitled thread",
+    });
+    titleGenerationRelease.resolve();
+    await waitForCondition(() =>
+      upsertSubAgent.mock.calls.some(
+        ([params]) => params.subAgent.status === "success",
+      ),
+    );
+
+    expect(renameThread).toHaveBeenCalledTimes(1);
+    expect(renameThread).toHaveBeenCalledWith({
+      threadId,
+      name: "Untitled thread",
+    });
+
+    await registry.close();
+  });
+
   it("logs Codex title generation failures to the main log", async () => {
     mainLoggerMock.warn.mockClear();
     const titleService = {
@@ -23395,7 +23709,7 @@ command = "pnpm dev"
       inputTokens: 10_254_903,
       outputTokens: 10_356,
       reasoningOutputTokens: 3_023,
-      totalCostMicros: 6_699_501,
+      totalCostMicros: 5_306_085,
       totalTokens: 10_265_259,
       turnUsageAttributed: true,
       uncachedInputTokens: 260_151,
@@ -36125,7 +36439,7 @@ script = "printf setup"
         fetchedAt: 2_000,
         threadId: "remote-thread",
         tokenMiserEnabled: true,
-        tokenMiserEffectiveEnabled: true,
+        tokenMiserOverride: true,
         pricing: {
           compactions: [{
             backend: "codex" as const,
@@ -36417,6 +36731,12 @@ script = "printf setup"
       codexClient,
       overlayStore: createOverlayStoreMock(),
     });
+    const internals = registry as unknown as {
+      resolveTokenMiserDefaultEnabledFn: () => boolean;
+      resolveTokenMiserEnabledFn: () => boolean;
+    };
+    internals.resolveTokenMiserEnabledFn = () => true;
+    internals.resolveTokenMiserDefaultEnabledFn = () => true;
     await registry.publishLocalEvent({
       backend: "codex",
       notification: {
@@ -36455,6 +36775,7 @@ script = "printf setup"
       read: {
         backend: "codex",
         threadId: "target-thread",
+        tokenMiserEnabled: true,
         limit: 5,
         maxCharsPerEntry: 200,
         threadUrl: "pwragent://thread/target-thread?backend=codex",
@@ -39458,7 +39779,7 @@ script = "printf setup"
       backend: "codex",
       threadId: "thread-1",
       tokenMiserEnabled: false,
-      tokenMiserEffectiveEnabled: false,
+      tokenMiserOverride: false,
     });
 
     const defaulted = await registry.readThread({
@@ -39468,9 +39789,9 @@ script = "printf setup"
     expect(defaulted).toMatchObject({
       backend: "codex",
       threadId: "thread-default",
-      tokenMiserEffectiveEnabled: true,
+      tokenMiserEnabled: true,
     });
-    expect(defaulted).not.toHaveProperty("tokenMiserEnabled");
+    expect(defaulted).not.toHaveProperty("tokenMiserOverride");
 
     await registry.close();
   });

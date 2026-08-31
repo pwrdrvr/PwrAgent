@@ -298,6 +298,7 @@ export type CodexServerCapabilities = {
     descriptorEnvironmentVariable:
       "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH";
     descriptorVersion: 1;
+    codeModeNestedPostToolUse?: false;
   };
   codeModeOutputReducer?: {
     actionableState?: {
@@ -307,6 +308,13 @@ export type CodexServerCapabilities = {
       modelOutputTag: "codex_actionable_state";
     };
     continuationGuidanceVersion?: number;
+    deferredCompletion?: {
+      version: 1;
+      terminalOnly: true;
+      preservesOriginalCallId: true;
+      preservesCellId: true;
+      waitToolName: "wait";
+    };
     dynamicToolsResumeField?: "dynamicTools";
     intentContextVersion?: 1;
     modelGuidance?: {
@@ -3852,10 +3860,15 @@ function extractMcpToolResultImagePartsFromReplayItem(
       const signedImagePart = structuredContent
         ? buildMcpSignedImagePart(structuredContent)
         : undefined;
+      const toolName =
+        pickString(candidate, ["tool", "toolName", "tool_name"])
+        ?? "Tool";
+      const contentImageParts = extractMcpToolResultContentImageParts(candidate, toolName);
       const resourceLinkImageParts = extractMcpResourceLinkImageParts(result?.content);
       const resourceImageParts = extractMcpResourceImageParts(result?.content);
       return [
         ...structuredImageParts,
+        ...contentImageParts,
         ...resourceLinkImageParts,
         ...(signedImagePart ? [signedImagePart] : []),
         ...resourceImageParts,
@@ -3864,7 +3877,7 @@ function extractMcpToolResultImagePartsFromReplayItem(
   );
 }
 
-function extractDirectMcpToolResultImageParts(
+function extractMcpToolResultContentImageParts(
   item: Record<string, unknown>,
   toolName: string,
 ): AppServerThreadImagePart[] {
@@ -3875,29 +3888,57 @@ function extractDirectMcpToolResultImageParts(
     toolName,
   );
   return dedupeImageParts(content.flatMap((value): AppServerThreadImagePart[] => {
-    const block = asRecord(value);
-    const type = normalizeItemType(pickString(block ?? {}, ["type"]));
-    const mimeType = pickString(block ?? {}, ["mimeType", "mime_type"])
-      ?.trim()
-      .toLowerCase();
-    const data = pickString(block ?? {}, ["data"]);
-    if (
-      type !== "image"
-      || !mimeType
-      || !MCP_RESOURCE_IMAGE_MIME_TYPES.has(mimeType)
-      || !data
-      || data.length > MAX_MCP_RESOURCE_IMAGE_BASE64_CHARS
-      || data.length % 4 === 1
-      || !BASE64_IMAGE_BLOB_PATTERN.test(data)
-    ) {
-      return [];
-    }
-    return [{
-      type: "image",
-      url: `data:${mimeType};base64,${data}`,
-      alt: `${identifier} result`,
-    }];
+    const directImagePart = buildMcpContentImagePart(asRecord(value) ?? undefined, identifier);
+    const contentRecord = asRecord(value);
+    // Some MCP adapters accidentally serialize a complete CallToolResult into
+    // one text block. Accept one wrapper layer while retaining the normal
+    // MIME, size, and base64 validation for the nested image content.
+    const parsedText = parseStructuredValue(
+      typeof value === "string"
+        ? value
+        : pickString(contentRecord ?? {}, ["text"]),
+    );
+    const nestedResult = asRecord(parsedText);
+    const nestedContent = Array.isArray(nestedResult?.content)
+      ? nestedResult.content
+      : [];
+    const nestedImageParts = nestedContent.flatMap((nestedValue) => {
+      const imagePart = buildMcpContentImagePart(asRecord(nestedValue) ?? undefined, identifier);
+      return imagePart ? [imagePart] : [];
+    });
+    return [
+      ...(directImagePart ? [directImagePart] : []),
+      ...nestedImageParts,
+    ];
   }));
+}
+
+function buildMcpContentImagePart(
+  block: Record<string, unknown> | undefined,
+  identifier: string,
+): AppServerThreadImagePart | undefined {
+  const type = normalizeItemType(pickString(block ?? {}, ["type"]));
+  const mimeType = pickString(block ?? {}, ["mimeType", "mime_type"])
+    ?.trim()
+    .toLowerCase();
+  const data = pickString(block ?? {}, ["data"]);
+  if (
+    type !== "image"
+    || !mimeType
+    || !MCP_RESOURCE_IMAGE_MIME_TYPES.has(mimeType)
+    || !data
+    || data.length > MAX_MCP_RESOURCE_IMAGE_BASE64_CHARS
+    || data.length % 4 === 1
+    || !BASE64_IMAGE_BLOB_PATTERN.test(data)
+  ) {
+    return undefined;
+  }
+
+  return {
+    type: "image",
+    url: `data:${mimeType};base64,${data}`,
+    alt: `${identifier} result`,
+  };
 }
 
 function buildMcpSignedImagePart(
@@ -4519,7 +4560,7 @@ function summarizeActivityItems(
         normalizedItemType === "dynamictoolcall"
           ? extractDynamicToolCallImageParts(item, toolName ?? "Tool")
           : normalizedItemType === "mcptoolcall"
-            ? extractDirectMcpToolResultImageParts(item, toolName ?? "Tool")
+            ? extractMcpToolResultContentImageParts(item, toolName ?? "Tool")
           : [];
       const label =
         (normalizedItemType === "mcptoolcall" || normalizedItemType === "dynamictoolcall")
@@ -7333,8 +7374,9 @@ export class CodexAppServerClient {
     const grouping = asRecord(outputReducer?.postToolUseGrouping);
     const modelGuidance = asRecord(outputReducer?.modelGuidance);
     const exactOutput = asRecord(outputReducer?.postToolUseExactOutput);
+    const deferredCompletion = asRecord(outputReducer?.deferredCompletion);
     const managedTokenMiser = asRecord(result?.pwrdrvrTokenMiser);
-    const hasManagedTokenMiserContract =
+    const hasManagedTokenMiserActivationTransport =
       managedTokenMiser?.version === 1
       && managedTokenMiser.identity === "pwrdrvr.pwragent.token-miser"
       && managedTokenMiser.initializeCapabilityField === "pwrdrvrTokenMiser"
@@ -7348,7 +7390,7 @@ export class CodexAppServerClient {
         ? "dynamicTools"
         : undefined;
 
-    const managedCapability = hasManagedTokenMiserContract
+    const managedCapability = hasManagedTokenMiserActivationTransport
       ? {
           pwrdrvrTokenMiser: {
             version: 1 as const,
@@ -7359,6 +7401,9 @@ export class CodexAppServerClient {
             descriptorEnvironmentVariable:
               "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH" as const,
             descriptorVersion: 1 as const,
+            ...(managedTokenMiser.codeModeNestedPostToolUse === false
+              ? { codeModeNestedPostToolUse: false as const }
+              : {}),
           },
         }
       : {};
@@ -7382,6 +7427,21 @@ export class CodexAppServerClient {
               : {}),
             ...(typeof continuationGuidanceVersion === "number"
               ? { continuationGuidanceVersion }
+              : {}),
+            ...(deferredCompletion?.version === 1
+              && deferredCompletion.terminalOnly === true
+              && deferredCompletion.preservesOriginalCallId === true
+              && deferredCompletion.preservesCellId === true
+              && deferredCompletion.waitToolName === "wait"
+              ? {
+                  deferredCompletion: {
+                    version: 1 as const,
+                    terminalOnly: true as const,
+                    preservesOriginalCallId: true as const,
+                    preservesCellId: true as const,
+                    waitToolName: "wait" as const,
+                  },
+                }
               : {}),
             ...(dynamicToolsResumeField
               ? { dynamicToolsResumeField }

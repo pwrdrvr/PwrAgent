@@ -516,6 +516,8 @@ export type ThreadReadEntrySummary =
 export type ThreadReadResult = {
   backend: AppServerBackendKind;
   threadId: ThreadIdentifier;
+  /** Effective Token Miser state when the owning backend is Codex. */
+  tokenMiserEnabled?: boolean;
   instanceId?: FederationInstanceId;
   instanceLabel?: string;
   title?: string;

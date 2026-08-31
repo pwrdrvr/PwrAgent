@@ -6192,6 +6192,7 @@ function buildPromptHash(prompt: string): string {
 function isEligibleForGeneratedTitle(
   thread: AppServerThreadSummary | undefined,
   prompt: string,
+  options?: { systemPlaceholder?: boolean },
 ): boolean {
   if (!thread) {
     return true;
@@ -6200,7 +6201,10 @@ function isEligibleForGeneratedTitle(
     return true;
   }
   if (thread.titleSource === "explicit") {
-    return false;
+    return Boolean(
+      options?.systemPlaceholder
+      && isGenericPlaceholderTitle(thread.title),
+    );
   }
   if (isInjectedContextPlaceholderTitle(thread.title)) {
     return true;
@@ -6211,10 +6215,6 @@ function isEligibleForGeneratedTitle(
       isAcpFallbackPlaceholderTitle(thread.title)
     );
   }
-  if (isGenericPlaceholderTitle(thread.title)) {
-    return true;
-  }
-
   const derivedTitle = shortenDerivedThreadTitle(prompt) ?? prompt;
   return normalizeTitleForComparison(thread.title) === normalizeTitleForComparison(derivedTitle);
 }
@@ -6893,6 +6893,37 @@ function hasTokenMiserModelGuidance(
       === "features.code_mode.output_reducer.continuation_guidance"
     && guidance.modelVisibleOverheadRequestField
       === "model_visible_overhead_characters"
+  );
+}
+
+const TOKEN_MISER_MANAGED_CAPABILITY_REASON =
+  "Managed Codex runtime lacks the complete Token Miser activation and deferred-completion capability contract.";
+
+function hasTokenMiserActivationTransport(
+  capabilities: CodexServerCapabilities | undefined,
+): boolean {
+  return capabilities?.pwrdrvrTokenMiser?.version === 1;
+}
+
+function hasManagedTokenMiserCapabilityContract(
+  capabilities: CodexServerCapabilities | undefined,
+): boolean {
+  const deferredCompletion =
+    capabilities?.codeModeOutputReducer?.deferredCompletion;
+  return (
+    capabilities?.pwrdrvrTokenMiser?.version === 1
+    && capabilities.pwrdrvrTokenMiser.codeModeNestedPostToolUse === false
+    && capabilities.codeModeOutputReducer?.protocolVersion === 1
+    && capabilities.codeModeOutputReducer.intentContextVersion === 1
+    && capabilities.codeModeOutputReducer.reducerRequestField
+      === "parent_intent"
+    && capabilities.codeModeOutputReducer.postToolUseField === "parent_intent"
+    && hasTokenMiserModelGuidance(capabilities.codeModeOutputReducer)
+    && deferredCompletion?.version === 1
+    && deferredCompletion.terminalOnly === true
+    && deferredCompletion.preservesOriginalCallId === true
+    && deferredCompletion.preservesCellId === true
+    && deferredCompletion.waitToolName === "wait"
   );
 }
 
@@ -7845,6 +7876,8 @@ export class DesktopBackendRegistry {
    */
   private readonly codexEnvironmentRuntimeLocks = new PerKeyAsyncLock();
   private readonly attemptedTitleGenerations = new Set<string>();
+  /** Launch placeholders stay helper-eligible until renamed or attempted. */
+  private readonly systemPlaceholderTitleThreadKeys = new Set<string>();
   private readonly repairedDirectoryThreadKeys = new Set<string>();
   private readonly failedDirectoryRelationshipLogKeys = new Set<string>();
   private readonly pendingCodexWorkspaceCwdSyncs = new Map<
@@ -11416,6 +11449,12 @@ export class DesktopBackendRegistry {
     request: RenameThreadRequest,
   ): Promise<RenameThreadResponse> {
     const backend = request.backend ?? "codex";
+    // A rename supersedes PwrAgent's launch placeholder. Clear this before the
+    // provider round trip so an in-flight title helper's late eligibility
+    // check cannot overwrite an operator rename that is still being accepted.
+    this.systemPlaceholderTitleThreadKeys.delete(
+      buildThreadIdentityKey(backend, request.threadId),
+    );
     let result: { threadId: string };
     if (isAcpBackendId(backend)) {
       result = await this.renameAcpSession(backend, request.threadId, request.name);
@@ -12023,17 +12062,18 @@ export class DesktopBackendRegistry {
       backend,
       threadId: request.threadId,
     });
+    const tokenMiserEnabled = this.resolveTokenMiserEnabledForOverride(
+      tokenMiserOverride,
+    );
 
     return {
       backend,
       fetchedAt: Date.now(),
       readDurationMs: Math.max(0, Math.round(performance.now() - readStartedAt)),
       threadId: request.threadId,
-      tokenMiserEffectiveEnabled: this.resolveTokenMiserEnabledForOverride(
-        tokenMiserOverride,
-      ),
+      tokenMiserEnabled,
       ...(overlay?.tokenMiserEnabled !== undefined
-        ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+        ? { tokenMiserOverride: overlay.tokenMiserEnabled }
         : {}),
       pricing,
       ...(toolAccounting ? { toolAccounting } : {}),
@@ -12894,6 +12934,9 @@ export class DesktopBackendRegistry {
           : {}),
       },
     );
+    if (!agentName) {
+      this.systemPlaceholderTitleThreadKeys.add(pendingThreadKey);
+    }
     if (effectiveWorkMode === "worktree") {
       await this.recordCodexWorktreeOwnerThread({
         backend,
@@ -19895,9 +19938,20 @@ export class DesktopBackendRegistry {
       try {
         const capabilities = await client.readServerCapabilities();
         const reducerCapability = capabilities.codeModeOutputReducer;
-        const supported =
+        const reducerSupported =
           reducerCapability?.protocolVersion === 1
           && hasTokenMiserModelGuidance(reducerCapability);
+        const managedContractRequired =
+          this.resolveManagedTokenMiserActivationRequiredFn();
+        const managedContractSupported =
+          hasManagedTokenMiserCapabilityContract(capabilities);
+        const supported =
+          reducerSupported
+          && (!managedContractRequired || managedContractSupported);
+        const unsupportedReason =
+          managedContractRequired && !managedContractSupported
+            ? TOKEN_MISER_MANAGED_CAPABILITY_REASON
+            : "Codex runtime lacks Token Miser reducer model-guidance v1.";
         const grouping = capabilities.codeModeOutputReducer?.postToolUseGrouping;
         this.tokenMiserCodeModeGroupingVersion =
           supported
@@ -19926,7 +19980,7 @@ export class DesktopBackendRegistry {
             : {
                 reason:
                   this.tokenMiserRuntimePreparationFailure
-                  ?? "Codex runtime lacks Token Miser reducer model-guidance v1.",
+                  ?? unsupportedReason,
                 state: "unavailable",
               },
         );
@@ -19971,10 +20025,11 @@ export class DesktopBackendRegistry {
     client: BackendClient,
   ): Promise<boolean> {
     const capabilities = await this.readTokenMiserServerCapabilities(client);
-    return (
-      capabilities?.codeModeOutputReducer?.protocolVersion === 1
-      && hasTokenMiserModelGuidance(capabilities.codeModeOutputReducer)
-    );
+    if (this.resolveManagedTokenMiserActivationRequiredFn()) {
+      return hasManagedTokenMiserCapabilityContract(capabilities);
+    }
+    return capabilities?.codeModeOutputReducer?.protocolVersion === 1
+      && hasTokenMiserModelGuidance(capabilities.codeModeOutputReducer);
   }
 
   private async supportsTokenMiserDynamicToolsResume(
@@ -19995,10 +20050,15 @@ export class DesktopBackendRegistry {
     const capabilities = await this.readTokenMiserServerCapabilities(
       params.client,
     );
-    if (capabilities?.pwrdrvrTokenMiser?.version !== 1) {
+    if (!hasTokenMiserActivationTransport(capabilities)) {
       return undefined;
     }
-    return params.enabled ? { version: 1, enabled: true } : null;
+    if (!params.enabled) {
+      return null;
+    }
+    return hasManagedTokenMiserCapabilityContract(capabilities)
+      ? { version: 1, enabled: true }
+      : undefined;
   }
 
   private buildCodexParentDynamicTools(
@@ -20074,13 +20134,13 @@ export class DesktopBackendRegistry {
         this.codexClient,
       );
       const managedActivation =
-        capabilities?.pwrdrvrTokenMiser?.version === 1;
+        hasManagedTokenMiserCapabilityContract(capabilities);
       if (
         this.resolveManagedTokenMiserActivationRequiredFn()
         && !managedActivation
       ) {
         throw new Error(
-          "Managed Codex runtime lacks native Token Miser activation capability v1.",
+          TOKEN_MISER_MANAGED_CAPABILITY_REASON,
         );
       }
       const codexRuntime = managedActivation
@@ -20105,7 +20165,9 @@ export class DesktopBackendRegistry {
           ? { state: "active" }
           : {
               reason: this.tokenMiserReducerCapabilityState === "unsupported"
-                ? "Codex runtime lacks Token Miser reducer model-guidance v1."
+                ? this.resolveManagedTokenMiserActivationRequiredFn()
+                  ? TOKEN_MISER_MANAGED_CAPABILITY_REASON
+                  : "Codex runtime lacks Token Miser reducer model-guidance v1."
                 : "Waiting for Codex to report Token Miser output reducer support.",
               state: "unavailable",
             },
@@ -26479,7 +26541,11 @@ export class DesktopBackendRegistry {
         callerReason: "title-generation",
         threadId: params.threadId,
       });
-      if (!isEligibleForGeneratedTitle(currentThread, params.prompt)) {
+      if (
+        !isEligibleForGeneratedTitle(currentThread, params.prompt, {
+          systemPlaceholder: this.systemPlaceholderTitleThreadKeys.has(params.key),
+        })
+      ) {
         this.logThreadTitleGeneration(
           "skipped",
           params,
@@ -26564,7 +26630,12 @@ export class DesktopBackendRegistry {
         callerReason: "title-generation",
         threadId: params.threadId,
       });
-      if (latestThread && !isEligibleForGeneratedTitle(latestThread, params.prompt)) {
+      if (
+        latestThread
+        && !isEligibleForGeneratedTitle(latestThread, params.prompt, {
+          systemPlaceholder: this.systemPlaceholderTitleThreadKeys.has(params.key),
+        })
+      ) {
         this.logThreadTitleGeneration(
           "skipped",
           params,
@@ -26626,6 +26697,7 @@ export class DesktopBackendRegistry {
       if (pending?.token === params.token) {
         this.pendingTitleGenerations.delete(params.key);
       }
+      this.systemPlaceholderTitleThreadKeys.delete(params.key);
     }
   }
 
@@ -26696,7 +26768,14 @@ export class DesktopBackendRegistry {
       callerReason: "title-generation",
       threadId: params.threadId,
     });
-    if (latestThread && !isEligibleForGeneratedTitle(latestThread, params.prompt)) {
+    if (
+      latestThread
+      && !isEligibleForGeneratedTitle(latestThread, params.prompt, {
+        systemPlaceholder: this.systemPlaceholderTitleThreadKeys.has(
+          buildTitleGenerationKey(params.backend, params.threadId),
+        ),
+      })
+    ) {
       return;
     }
     await this.renameAcpSession(params.backend, params.threadId, title, {
@@ -33692,6 +33771,9 @@ export class DesktopBackendRegistry {
           read: {
             backend: args.backend,
             threadId,
+            ...(response.tokenMiserEnabled !== undefined
+              ? { tokenMiserEnabled: response.tokenMiserEnabled }
+              : {}),
             ...(remote
               ? {
                   instanceId: remote.instanceId,
@@ -33760,14 +33842,13 @@ export class DesktopBackendRegistry {
             ...(args.includeEvaluation
               ? {
                   evaluation: {
-                    ...(response.tokenMiserEffectiveEnabled !== undefined
+                    ...(response.tokenMiserEnabled !== undefined
                       ? {
-                          tokenMiserEnabled:
-                            response.tokenMiserEffectiveEnabled,
+                          tokenMiserEnabled: response.tokenMiserEnabled,
                         }
                       : {}),
-                    ...(response.tokenMiserEnabled !== undefined
-                      ? { tokenMiserOverride: response.tokenMiserEnabled }
+                    ...(response.tokenMiserOverride !== undefined
+                      ? { tokenMiserOverride: response.tokenMiserOverride }
                       : {}),
                     ...(response.pricing
                       ? {
