@@ -162,10 +162,8 @@ import type {
   ReadStarMapArrangementResponse,
   ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
-  StarMapIntakeRequest,
   StarMapIntakeResponse,
   WriteStarMapWorkspaceRequest,
-  FederationTarget,
   ReorderDirectoryPinsRequest,
   ReorderDirectoryPinsResponse,
   ReorderThreadPinsRequest,
@@ -425,6 +423,7 @@ import type {
   UpdateThreadExpectedBranchResponse,
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared";
+import type { StarMapIntakeDispatchRequest } from "../../../shared/star-map-intake";
 import type { RuntimeIdentity } from "../../../shared/runtime-identity";
 import type { WindowPointerSnapshot } from "../../../shared/window-pointer";
 import type { WindowShowThreadRequest } from "../../../shared/window-show-thread";
@@ -625,7 +624,7 @@ export type DesktopApi = {
     request: WriteStarMapWorkspaceRequest,
   ) => Promise<ReadStarMapWorkspaceResponse>;
   dispatchStarMapIntake?: (
-    request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
+    request: StarMapIntakeDispatchRequest,
   ) => Promise<StarMapIntakeResponse>;
   /** Spawns or focuses the dedicated Federation Star Map window. */
   openStarMapWindow?: () => Promise<void>;

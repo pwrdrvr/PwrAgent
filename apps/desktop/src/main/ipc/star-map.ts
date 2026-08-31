@@ -1,14 +1,13 @@
 import { BrowserWindow, ipcMain, type WebContents } from "electron";
 import type {
-  FederationTarget,
   ReadStarMapArrangementResponse,
   ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
   StarMapArrangementEntry,
-  StarMapIntakeRequest,
   StarMapIntakeResponse,
   WriteStarMapWorkspaceRequest,
 } from "@pwragent/shared";
+import type { StarMapIntakeDispatchRequest } from "../../shared/star-map-intake";
 import {
   isRemoteFederationTarget,
   isStarMapArrangementEntry,
@@ -92,7 +91,7 @@ export function registerStarMapIpcHandlers(): void {
     STAR_MAP_INTAKE_CHANNEL,
     async (
       _event,
-      request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
+      request: StarMapIntakeDispatchRequest,
     ): Promise<StarMapIntakeResponse> => {
       const { federationTarget, ...intake } = request;
       if (federationTarget && isRemoteFederationTarget(federationTarget)) {

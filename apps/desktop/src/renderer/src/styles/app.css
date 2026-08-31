@@ -11814,6 +11814,55 @@ textarea,
   outline-offset: 1px;
 }
 
+.star-map-intake__attachments {
+  display: flex;
+  gap: 6px;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.star-map-intake__attachment {
+  position: relative;
+  flex: 0 0 48px;
+  width: 48px;
+  height: 48px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-input);
+}
+
+.star-map-intake__attachment-preview {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.star-map-intake__attachment-remove {
+  display: inline-flex;
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.star-map-intake__attachment-remove:hover,
+.star-map-intake__attachment-remove:focus-visible {
+  border-color: var(--accent-border);
+  color: var(--accent-bright);
+  outline: none;
+}
+
 .star-map-intake__hint {
   margin: 0;
   color: var(--text-muted);
