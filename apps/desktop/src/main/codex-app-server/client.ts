@@ -3852,10 +3852,15 @@ function extractMcpToolResultImagePartsFromReplayItem(
       const signedImagePart = structuredContent
         ? buildMcpSignedImagePart(structuredContent)
         : undefined;
+      const toolName =
+        pickString(candidate, ["tool", "toolName", "tool_name"])
+        ?? "Tool";
+      const contentImageParts = extractMcpToolResultContentImageParts(candidate, toolName);
       const resourceLinkImageParts = extractMcpResourceLinkImageParts(result?.content);
       const resourceImageParts = extractMcpResourceImageParts(result?.content);
       return [
         ...structuredImageParts,
+        ...contentImageParts,
         ...resourceLinkImageParts,
         ...(signedImagePart ? [signedImagePart] : []),
         ...resourceImageParts,
@@ -3864,7 +3869,7 @@ function extractMcpToolResultImagePartsFromReplayItem(
   );
 }
 
-function extractDirectMcpToolResultImageParts(
+function extractMcpToolResultContentImageParts(
   item: Record<string, unknown>,
   toolName: string,
 ): AppServerThreadImagePart[] {
@@ -3875,29 +3880,57 @@ function extractDirectMcpToolResultImageParts(
     toolName,
   );
   return dedupeImageParts(content.flatMap((value): AppServerThreadImagePart[] => {
-    const block = asRecord(value);
-    const type = normalizeItemType(pickString(block ?? {}, ["type"]));
-    const mimeType = pickString(block ?? {}, ["mimeType", "mime_type"])
-      ?.trim()
-      .toLowerCase();
-    const data = pickString(block ?? {}, ["data"]);
-    if (
-      type !== "image"
-      || !mimeType
-      || !MCP_RESOURCE_IMAGE_MIME_TYPES.has(mimeType)
-      || !data
-      || data.length > MAX_MCP_RESOURCE_IMAGE_BASE64_CHARS
-      || data.length % 4 === 1
-      || !BASE64_IMAGE_BLOB_PATTERN.test(data)
-    ) {
-      return [];
-    }
-    return [{
-      type: "image",
-      url: `data:${mimeType};base64,${data}`,
-      alt: `${identifier} result`,
-    }];
+    const directImagePart = buildMcpContentImagePart(asRecord(value) ?? undefined, identifier);
+    const contentRecord = asRecord(value);
+    // Some MCP adapters accidentally serialize a complete CallToolResult into
+    // one text block. Accept one wrapper layer while retaining the normal
+    // MIME, size, and base64 validation for the nested image content.
+    const parsedText = parseStructuredValue(
+      typeof value === "string"
+        ? value
+        : pickString(contentRecord ?? {}, ["text"]),
+    );
+    const nestedResult = asRecord(parsedText);
+    const nestedContent = Array.isArray(nestedResult?.content)
+      ? nestedResult.content
+      : [];
+    const nestedImageParts = nestedContent.flatMap((nestedValue) => {
+      const imagePart = buildMcpContentImagePart(asRecord(nestedValue) ?? undefined, identifier);
+      return imagePart ? [imagePart] : [];
+    });
+    return [
+      ...(directImagePart ? [directImagePart] : []),
+      ...nestedImageParts,
+    ];
   }));
+}
+
+function buildMcpContentImagePart(
+  block: Record<string, unknown> | undefined,
+  identifier: string,
+): AppServerThreadImagePart | undefined {
+  const type = normalizeItemType(pickString(block ?? {}, ["type"]));
+  const mimeType = pickString(block ?? {}, ["mimeType", "mime_type"])
+    ?.trim()
+    .toLowerCase();
+  const data = pickString(block ?? {}, ["data"]);
+  if (
+    type !== "image"
+    || !mimeType
+    || !MCP_RESOURCE_IMAGE_MIME_TYPES.has(mimeType)
+    || !data
+    || data.length > MAX_MCP_RESOURCE_IMAGE_BASE64_CHARS
+    || data.length % 4 === 1
+    || !BASE64_IMAGE_BLOB_PATTERN.test(data)
+  ) {
+    return undefined;
+  }
+
+  return {
+    type: "image",
+    url: `data:${mimeType};base64,${data}`,
+    alt: `${identifier} result`,
+  };
 }
 
 function buildMcpSignedImagePart(
@@ -4519,7 +4552,7 @@ function summarizeActivityItems(
         normalizedItemType === "dynamictoolcall"
           ? extractDynamicToolCallImageParts(item, toolName ?? "Tool")
           : normalizedItemType === "mcptoolcall"
-            ? extractDirectMcpToolResultImageParts(item, toolName ?? "Tool")
+            ? extractMcpToolResultContentImageParts(item, toolName ?? "Tool")
           : [];
       const label =
         (normalizedItemType === "mcptoolcall" || normalizedItemType === "dynamictoolcall")
