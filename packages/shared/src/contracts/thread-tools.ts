@@ -1,6 +1,5 @@
 import type {
   AppServerBackendKind,
-  AppServerReadThreadResponse,
   AppServerThreadActivityStatus,
   AppServerThreadMessage,
   AppServerThreadReplayPagination,
@@ -9,9 +8,11 @@ import type {
   AppServerThreadStatus,
   ThreadExecutionMode,
   ThreadIdentifier,
+  ThreadTokenMiserSavings,
   ThreadWorkspaceHandoffDirection,
   ThreadWorkspaceHandoffStrategy,
 } from "./normalized-app-server";
+import type { ThreadPricingSummary } from "../token-usage-pricing";
 import type {
   FederatedSearchInstanceSummary,
   FederatedSearchPeerFailure,
@@ -63,6 +64,7 @@ export type PwrAgentThreadInspectionOperationName =
 export const DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT = 10;
 export const DEFAULT_THREAD_INSPECTION_RECENT_LIMIT = 100;
 export const MAX_THREAD_INSPECTION_SEARCH_LIMIT = 100;
+export const MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES = 16;
 
 export const PWRAGENT_THREAD_INSPECTION_ERROR_CODES = [
   "invalid_arguments",
@@ -156,8 +158,8 @@ export type ReadThreadToolArgs = {
    */
   includeStatus?: boolean;
   /**
-   * Include the owning instance's effective Token Miser state, pricing rows,
-   * and Token Miser accounting. Defaults to false.
+   * Include the owning instance's effective Token Miser state and bounded
+   * aggregate pricing and Token Miser evidence. Defaults to false.
    */
   includeEvaluation?: boolean;
   /**
@@ -533,11 +535,56 @@ export type ThreadReadResult = {
     tokenMiserEnabled?: boolean;
     /** Persisted per-thread override; absent means the owning profile default. */
     tokenMiserOverride?: boolean;
-    pricing?: AppServerReadThreadResponse["pricing"];
-    tokenMiser?: NonNullable<
-      AppServerReadThreadResponse["toolAccounting"]
-    >["tokenMiser"];
+    pricing?: ThreadReadEvaluationPricing;
+    tokenMiser?: ThreadReadEvaluationTokenMiser;
   };
+};
+
+export type ThreadReadEvaluationPricing = {
+  summaries: ThreadPricingSummary[];
+  summaryCount: number;
+  usageLineCount: number;
+  compactionCount: number;
+  truncated: boolean;
+};
+
+export type ThreadReadEvaluationTokenMiserCodeMode = {
+  callCount: number;
+  commandCellCount: number;
+  directCommandCellCount: number;
+  dispatchClusterCount: number;
+  multiInvocationClusterCount: number;
+  largestDispatchCluster: number;
+  nestedCommandInvocationCount: number;
+  patchCellCount: number;
+  otherCellCount: number;
+  pollingCellCount: number;
+  directCount: number;
+  summarizedCount: number;
+  passThroughCount: number;
+  retrievalCount: number;
+  capturedNestedInvocationCount: number;
+  observationCount: number;
+};
+
+export type ThreadReadEvaluationTokenMiser = {
+  savings?: ThreadTokenMiserSavings;
+  interceptionCount: number;
+  passThroughCount?: number;
+  policyPassThroughCount?: number;
+  helperPassThroughCount?: number;
+  helperDecisionCount?: number;
+  originalCharacters: number;
+  baselineParentTokens: number;
+  replacementTokens: number;
+  retrievedTokens: number;
+  estimatedParentTokensSaved: number;
+  cachedReplayCount?: number;
+  cachedBaselineTokens?: number;
+  cachedRevealedTokens?: number;
+  estimatedCachedReplayTokensSaved?: number;
+  interceptionDetailCount: number;
+  codeMode?: ThreadReadEvaluationTokenMiserCodeMode;
 };
 
 export type PwrAgentThreadInspectionToolArgsByOperation = {

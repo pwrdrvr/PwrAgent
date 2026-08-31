@@ -271,6 +271,8 @@ import {
   type ThreadSubAgentSummary,
   type ThreadToolAccounting,
   type ThreadTokenMiserAccounting,
+  type ThreadReadEvaluationPricing,
+  type ThreadReadEvaluationTokenMiser,
   type ThreadToolInvocationAlert,
   type ThreadToolInvocationRecord,
   type ThreadCompactionRecord,
@@ -295,6 +297,7 @@ import {
   DEFAULT_THREAD_INSPECTION_RECENT_LIMIT,
   DEFAULT_THREAD_INSPECTION_SEARCH_LIMIT,
   MAX_THREAD_INSPECTION_SEARCH_LIMIT,
+  MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES,
   isThreadSearchContentMode,
   isThreadSearchSemanticMode,
   type PendingRequestDecision,
@@ -4402,6 +4405,130 @@ type ThreadPricingLedger = {
   lines: ThreadUsageLineRecord[];
   summaries: ThreadPricingSummary[];
 };
+
+function toThreadReadEvaluationPricing(
+  pricing: ThreadPricingLedger,
+): ThreadReadEvaluationPricing {
+  return {
+    summaries: pricing.summaries.slice(
+      0,
+      MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES,
+    ),
+    summaryCount: pricing.summaries.length,
+    usageLineCount: pricing.lines.length,
+    compactionCount: pricing.compactions?.length ?? 0,
+    truncated:
+      pricing.summaries.length
+      > MAX_THREAD_READ_EVALUATION_PRICING_SUMMARIES,
+  };
+}
+
+function toThreadReadEvaluationTokenMiser(
+  accounting: ThreadTokenMiserAccounting,
+): ThreadReadEvaluationTokenMiser {
+  return {
+    ...(accounting.savings
+      ? {
+          savings: {
+            currency: accounting.savings.currency,
+            pricedGateCount: accounting.savings.pricedGateCount,
+            gateCount: accounting.savings.gateCount,
+            ...(accounting.savings.passThroughCount !== undefined
+              ? { passThroughCount: accounting.savings.passThroughCount }
+              : {}),
+            ...(accounting.savings.policyPassThroughCount !== undefined
+              ? {
+                  policyPassThroughCount:
+                    accounting.savings.policyPassThroughCount,
+                }
+              : {}),
+            ...(accounting.savings.helperPassThroughCount !== undefined
+              ? {
+                  helperPassThroughCount:
+                    accounting.savings.helperPassThroughCount,
+                }
+              : {}),
+            ...(accounting.savings.helperDecisionCount !== undefined
+              ? { helperDecisionCount: accounting.savings.helperDecisionCount }
+              : {}),
+            withoutGateCostMicros: accounting.savings.withoutGateCostMicros,
+            gateCostMicros: accounting.savings.gateCostMicros,
+            revealedCostMicros: accounting.savings.revealedCostMicros,
+            savingsMicros: accounting.savings.savingsMicros,
+            directlyObservedReplayCount:
+              accounting.savings.directlyObservedReplayCount,
+            reconstructedReplayCount:
+              accounting.savings.reconstructedReplayCount,
+            ...(accounting.savings.gateModel
+              ? { gateModel: accounting.savings.gateModel }
+              : {}),
+            ...(accounting.savings.parentModel
+              ? { parentModel: accounting.savings.parentModel }
+              : {}),
+          },
+        }
+      : {}),
+    interceptionCount: accounting.interceptionCount,
+    ...(accounting.passThroughCount !== undefined
+      ? { passThroughCount: accounting.passThroughCount }
+      : {}),
+    ...(accounting.policyPassThroughCount !== undefined
+      ? { policyPassThroughCount: accounting.policyPassThroughCount }
+      : {}),
+    ...(accounting.helperPassThroughCount !== undefined
+      ? { helperPassThroughCount: accounting.helperPassThroughCount }
+      : {}),
+    ...(accounting.helperDecisionCount !== undefined
+      ? { helperDecisionCount: accounting.helperDecisionCount }
+      : {}),
+    originalCharacters: accounting.originalCharacters,
+    baselineParentTokens: accounting.baselineParentTokens,
+    replacementTokens: accounting.replacementTokens,
+    retrievedTokens: accounting.retrievedTokens,
+    estimatedParentTokensSaved: accounting.estimatedParentTokensSaved,
+    ...(accounting.cachedReplayCount !== undefined
+      ? { cachedReplayCount: accounting.cachedReplayCount }
+      : {}),
+    ...(accounting.cachedBaselineTokens !== undefined
+      ? { cachedBaselineTokens: accounting.cachedBaselineTokens }
+      : {}),
+    ...(accounting.cachedRevealedTokens !== undefined
+      ? { cachedRevealedTokens: accounting.cachedRevealedTokens }
+      : {}),
+    ...(accounting.estimatedCachedReplayTokensSaved !== undefined
+      ? {
+          estimatedCachedReplayTokensSaved:
+            accounting.estimatedCachedReplayTokensSaved,
+        }
+      : {}),
+    interceptionDetailCount: accounting.interceptions?.length ?? 0,
+    ...(accounting.codeMode
+      ? {
+          codeMode: {
+            callCount: accounting.codeMode.callCount,
+            commandCellCount: accounting.codeMode.commandCellCount,
+            directCommandCellCount: accounting.codeMode.directCommandCellCount,
+            dispatchClusterCount: accounting.codeMode.dispatchClusterCount,
+            multiInvocationClusterCount:
+              accounting.codeMode.multiInvocationClusterCount,
+            largestDispatchCluster: accounting.codeMode.largestDispatchCluster,
+            nestedCommandInvocationCount:
+              accounting.codeMode.nestedCommandInvocationCount,
+            patchCellCount: accounting.codeMode.patchCellCount,
+            otherCellCount: accounting.codeMode.otherCellCount,
+            pollingCellCount: accounting.codeMode.pollingCellCount,
+            directCount: accounting.codeMode.directCount,
+            summarizedCount: accounting.codeMode.summarizedCount,
+            passThroughCount: accounting.codeMode.passThroughCount,
+            retrievalCount: accounting.codeMode.retrievalCount,
+            capturedNestedInvocationCount:
+              accounting.codeMode.capturedNestedInvocationCount,
+            observationCount: accounting.codeMode.observations.length,
+          },
+        }
+      : {}),
+  };
+}
 
 function mergeThreadPricingLines(
   pricing: ThreadPricingLedger,
@@ -11888,6 +12015,10 @@ export class DesktopBackendRegistry {
           threadId: request.threadId,
         })
       : undefined;
+    const tokenMiserOverride = await this.resolveTokenMiserThreadOverride(
+      backend,
+      request.threadId,
+    );
     const pendingRequest = this.pendingServerRequestForThread({
       backend,
       threadId: request.threadId,
@@ -11899,7 +12030,7 @@ export class DesktopBackendRegistry {
       readDurationMs: Math.max(0, Math.round(performance.now() - readStartedAt)),
       threadId: request.threadId,
       tokenMiserEffectiveEnabled: this.resolveTokenMiserEnabledForOverride(
-        overlay?.tokenMiserEnabled,
+        tokenMiserOverride,
       ),
       ...(overlay?.tokenMiserEnabled !== undefined
         ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
@@ -33638,9 +33769,19 @@ export class DesktopBackendRegistry {
                     ...(response.tokenMiserEnabled !== undefined
                       ? { tokenMiserOverride: response.tokenMiserEnabled }
                       : {}),
-                    ...(response.pricing ? { pricing: response.pricing } : {}),
+                    ...(response.pricing
+                      ? {
+                          pricing: toThreadReadEvaluationPricing(
+                            response.pricing,
+                          ),
+                        }
+                      : {}),
                     ...(response.toolAccounting?.tokenMiser
-                      ? { tokenMiser: response.toolAccounting.tokenMiser }
+                      ? {
+                          tokenMiser: toThreadReadEvaluationTokenMiser(
+                            response.toolAccounting.tokenMiser,
+                          ),
+                        }
                       : {}),
                   },
                 }
