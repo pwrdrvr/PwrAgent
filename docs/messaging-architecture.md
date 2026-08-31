@@ -372,6 +372,55 @@ These rules exist to make adding the next ten messaging platforms a quiet, mecha
 - Provider adapters receive semantic intents and never import desktop
   thread-state modules.
 
+#### Bound-reply admission is targeted
+
+An ordinary reply to an existing binding does not build a navigation snapshot.
+`MessagingController` asks `DesktopMessagingBackendBridge` for one
+`MessagingThreadAdmissionState`, which combines:
+
+- the bound thread's durable overlay (execution mode, model, reasoning,
+  service tier, fast mode, Agent/handoff origin);
+- its already-observed thread-list summary, when one is cached;
+- the registry's per-thread active turn, queued permission mode, and queued
+  turn projections; and
+- the equivalent targeted owner read for a federated binding.
+
+That projection is sufficient for permission/full-access policy, message
+origin, occupancy, queue admission, and turn settings. It deliberately carries
+no PR lookup, Git working-state probe, launchpad hydration, directory-fleet
+walk, or connected-peer enumeration. The shared turn FIFO remains the final
+race-safe admission authority if activity changes after the targeted read.
+
+Full navigation remains appropriate for explicit browse, monitor, picker,
+handoff, review, and on-demand rich status workflows. Automatic status-card
+updates and thread-state bus fan-out reuse the targeted projection instead of
+turning a single-thread notification into a fleet refresh.
+
+#### Directory Git-status cache and refresh policy
+
+Directory status has two cache layers with different jobs:
+
+- `GitDirectoryService` keeps a 3-second in-memory per-path cache. It dedupes
+  concurrent/repeated Git probes and branch-inventory reads. It is not the
+  navigation freshness policy.
+- The overlay store keeps the last successful directory projection. Broad
+  snapshots serve this projection immediately and consider it fresh for five
+  minutes. Five minutes is based on the product interaction boundary: an
+  untouched directory is ambient navigation context, while focused and
+  mutation-sensitive actions have targeted refresh paths.
+
+A broad snapshot schedules at most four stale directories at once and never
+awaits that batch. Registry scheduling coalesces each directory while its probe
+is pending. Selecting a thread explicitly requests its directory keys; rapid
+forced requests for the same key coalesce inside a 3-second post-completion
+window. Launchpad materialization and branch-sensitive workspace operations
+perform their own targeted fresh read, while turn completion, branch updates,
+and Git-mutating commands refresh the affected thread/worktree/PR projections.
+
+This policy is interaction-driven. It adds no polling timer and no timer-driven
+SQLite writes; persistence changes only when a scheduled targeted or bounded
+background probe completes.
+
 ### Single platform-agnostic detach pipeline
 
 The detach flow — retire the channel's status surface, revoke the binding in the store, deliver a "Thread detached" confirmation — has exactly one implementation: `MessagingController.runDetachPipeline`. Every detach origin (Discord `/detach`, Telegram `/detach`, the desktop right-click "Unbind" chip, future archive-on-delete flows, future "Unbind all") routes through it.
