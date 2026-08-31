@@ -175,6 +175,21 @@ describe("discord adapter", () => {
     ]);
   });
 
+  it("advertises leading bot-mention reporting for response-mode controls", () => {
+    const adapter = new DiscordAdapter({
+      config: {
+        applicationId: TEST_CHANNEL_ID,
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        botToken: "token",
+        channel: "discord",
+      },
+    });
+
+    expect(adapter.capabilityProfile.conversationInput).toEqual({
+      reportsBotMention: true,
+    });
+  });
+
   it("returns a failed delivery when a stale channel rejects new messages", async () => {
     const logger = { debug: vi.fn(), warn: vi.fn() };
     const adapter = new DiscordAdapter({

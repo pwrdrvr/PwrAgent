@@ -304,6 +304,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   readonly channel = "discord" as const;
   readonly clientRateLimitStrategy: MessagingClientRateLimitStrategy = "externalized";
   readonly capabilityProfile: MessagingCapabilityProfile = {
+    conversationInput: {
+      reportsBotMention: true,
+    },
     actions: {
       maxActions: 25,
       maxActionsPerRow: 5,
