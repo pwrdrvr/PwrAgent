@@ -8306,6 +8306,18 @@ textarea,
   opacity: 1;
 }
 
+/* Every animation on an audited surface is disabled under reduced motion
+   so `a11y.spec.ts` measures contrast at rest. Navigating to a group
+   expands its sublist immediately before the scan, and mid-fade axe
+   blends the sublabels toward the sidebar: `--text-muted` reads 4.55:1
+   at rest but 4.21:1 at ~94% opacity, which fails AA in light theme. */
+@media (prefers-reduced-motion: reduce) {
+  .settings-nav__sublist,
+  .settings-nav__caret-mark {
+    transition: none;
+  }
+}
+
 .settings-nav__sublist-clip {
   min-height: 0;
   overflow: hidden;
