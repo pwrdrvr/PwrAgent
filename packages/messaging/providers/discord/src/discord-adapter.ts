@@ -27,6 +27,8 @@ import type {
   MessagingFilePart,
   MessagingImagePart,
   MessagingInboundEvent,
+  MessagingInboundChannelMetadataListener,
+  MessagingInboundReceipt,
   MessagingInboundRejectedListener,
   MessagingManagedConversationCreateRequest,
   MessagingManagedConversationCreateResult,
@@ -42,6 +44,7 @@ import type {
   MessagingSurfaceRef,
 } from "@pwragent/messaging-interface";
 import {
+  captureMessagingInboundReceipt,
   evictStaleStreamAnchors,
   extractMessagingPairingToken,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
@@ -165,6 +168,7 @@ export type DiscordMessageCreateDispatch = {
   guild_id?: string;
   id: string;
   is_thread?: boolean;
+  timestamp?: string;
 };
 
 export type DiscordInteractionCreateDispatch = {
@@ -297,6 +301,7 @@ export type DiscordProviderAdapter = {
     request: MessagingManagedConversationCreateRequest,
   ): Promise<MessagingManagedConversationCreateResult>;
   onInboundRejected?(listener: MessagingInboundRejectedListener): () => void;
+  onInboundChannelMetadata?(listener: MessagingInboundChannelMetadataListener): () => void;
   start?(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop?(): Promise<void>;
 };
@@ -360,6 +365,8 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private applicationId?: string;
   private readonly unauthorizedGuildLogKeys = new Set<string>();
   private readonly inboundRejectedListeners = new Set<MessagingInboundRejectedListener>();
+  private readonly inboundChannelMetadataListeners =
+    new Set<MessagingInboundChannelMetadataListener>();
   private readonly rateLimitListeners = new Set<(info: MessagingRateLimitInfo) => void>();
   private listener?: (event: MessagingInboundEvent) => Promise<void>;
   private readonly options: DiscordAdapterOptions;
@@ -412,6 +419,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     this.inboundRejectedListeners.add(listener);
     return () => {
       this.inboundRejectedListeners.delete(listener);
+    };
+  }
+
+  onInboundChannelMetadata(listener: MessagingInboundChannelMetadataListener): () => void {
+    this.inboundChannelMetadataListeners.add(listener);
+    return () => {
+      this.inboundChannelMetadataListeners.delete(listener);
     };
   }
 
@@ -1061,16 +1075,26 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   async handleGatewayEvent(event: DiscordGatewayEvent): Promise<void> {
     if (event.t === "MESSAGE_CREATE") {
-      await this.handleMessageCreate(event.d);
+      const receipt = captureMessagingInboundReceipt(
+        this.now(),
+        discordTimestampToMs(event.d.timestamp),
+      );
+      await this.handleMessageCreate(event.d, receipt);
       return;
     }
 
     if (event.t === "INTERACTION_CREATE") {
-      await this.handleInteractionCreate(event.d);
+      await this.handleInteractionCreate(
+        event.d,
+        captureMessagingInboundReceipt(this.now()),
+      );
     }
   }
 
-  private async handleMessageCreate(message: DiscordMessageCreateDispatch): Promise<void> {
+  private async handleMessageCreate(
+    message: DiscordMessageCreateDispatch,
+    receipt: MessagingInboundReceipt,
+  ): Promise<void> {
     const listener = this.listener;
     if (!listener) {
       return;
@@ -1098,21 +1122,19 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           isPairingMessage
           || mentionRemainder !== undefined
           || Boolean(message.content?.startsWith("/")),
+        receipt,
       })
     ) {
       return;
     }
 
-    const channel = await this.channelFromDiscord(message.channel_id, message.guild_id, {
-      // Best-effort DM peer name from the message author when the
-      // conversation is a DM (no guild). Channel + thread breadcrumbs
-      // are resolved via REST inside channelFromDiscord (cached).
+    const channel = this.immediateChannelFromDiscord(message.channel_id, message.guild_id, {
+      channelType: message.channel_type,
       dmPeerName: message.guild_id
         ? undefined
         : (message.author.global_name ?? message.author.username),
       isThread: message.is_thread,
     });
-    const receivedAt = this.now();
     const routingState = this.routingStateFromDiscord(message.channel_id, message.guild_id, {
       channelType: message.channel_type,
       isThread: message.is_thread,
@@ -1142,7 +1164,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       const attachments = message.attachments.map((attachment) =>
         this.attachmentFromDiscord(attachment),
       );
-      await listener({
+      const event: MessagingInboundEvent = {
         id: `discord:message:${message.id}`,
         kind: "media",
         attachments,
@@ -1157,13 +1179,14 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           mimeType: attachments[0]?.mimeType,
           sizeBytes: attachments[0]?.sizeBytes,
         },
-        receivedAt,
+        ...receipt,
         routingState,
         sourceSurface,
         sourceUrl,
         text: normalizedContent,
         ...(mentionRemainder !== undefined ? { botMention: true } : {}),
-      });
+      };
+      await this.dispatchMessageWithBackgroundEnrichment(message, event, listener);
       return;
     }
 
@@ -1176,7 +1199,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     const commandMatch = mentionRemainder === undefined
       ? /^\/([A-Za-z0-9_]+)(?:\s+(.*))?$/.exec(message.content)
       : undefined;
-    await listener({
+    const event = {
       id: `discord:message:${message.id}`,
       kind: commandMatch ? "command" : "text",
       actor: this.actorFromUser(message.author),
@@ -1191,15 +1214,51 @@ export class DiscordAdapter implements DiscordProviderAdapter {
             text: normalizedContent ?? "",
             ...(mentionRemainder !== undefined ? { botMention: true } : {}),
           }),
-      receivedAt,
+      ...receipt,
       routingState,
       sourceSurface,
       sourceUrl,
-    } as MessagingInboundEvent);
+    } as MessagingInboundEvent;
+    await this.dispatchMessageWithBackgroundEnrichment(message, event, listener);
+  }
+
+  private async dispatchMessageWithBackgroundEnrichment(
+    message: DiscordMessageCreateDispatch,
+    event: MessagingInboundEvent,
+    listener: (event: MessagingInboundEvent) => Promise<void>,
+  ): Promise<void> {
+    const dispatched = Promise.resolve(listener(event));
+    if (message.guild_id) {
+      const enrichment = Promise.resolve().then(async () =>
+        await this.channelFromDiscord(message.channel_id, message.guild_id, {
+          isThread: message.is_thread,
+        })
+      );
+      void dispatched.then(async () => {
+        const channel = await enrichment;
+        const update = {
+          channel,
+          eventId: event.id,
+          observedAt: this.now(),
+          routingState: event.routingState,
+        };
+        for (const metadataListener of this.inboundChannelMetadataListeners) {
+          await metadataListener(update);
+        }
+      }).catch((error) => {
+        this.options.logger?.debug("discord inbound breadcrumb enrichment failed", {
+          channelId: message.channel_id,
+          eventId: event.id,
+          error: errorMessage(error),
+        });
+      });
+    }
+    await dispatched;
   }
 
   private async handleInteractionCreate(
     interaction: DiscordInteractionCreateDispatch,
+    receipt: MessagingInboundReceipt,
   ): Promise<void> {
     const listener = this.listener;
     const actor = interaction.member?.user ?? interaction.user;
@@ -1212,7 +1271,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
     const customId = interaction.data?.custom_id ?? "";
     const commandName = interaction.data?.name?.toLowerCase();
-    if (!this.isAuthorizedInteractionSource(interaction, actor)) {
+    if (!this.isAuthorizedInteractionSource(interaction, actor, receipt)) {
       if (customId) {
         await this.api.createInteractionResponse(interaction.id, interaction.token, {
           type: 6,
@@ -1229,7 +1288,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       await this.api.createInteractionResponse(interaction.id, interaction.token, {
         type: 6,
       });
-      await this.handleComponentInteraction(interaction, actor, customId);
+      await this.handleComponentInteraction(interaction, actor, customId, receipt);
       return;
     }
 
@@ -1237,7 +1296,12 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       await this.api.createInteractionResponse(interaction.id, interaction.token, {
         type: 5,
       });
-      await this.handleApplicationCommandInteraction(interaction, actor, commandName);
+      await this.handleApplicationCommandInteraction(
+        interaction,
+        actor,
+        commandName,
+        receipt,
+      );
     }
   }
 
@@ -1245,6 +1309,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     interaction: DiscordInteractionCreateDispatch,
     actor: DiscordUser,
     customId: string,
+    receipt: MessagingInboundReceipt,
   ): Promise<void> {
     const listener = this.listener;
     if (!listener) {
@@ -1304,7 +1369,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         : {}),
       actionId: persistedBinding?.actionId,
       value: persistedBinding?.value,
-      receivedAt: this.now(),
+      ...receipt,
       routingState,
       sourceUrl: discordConversationUrl({
         channelId: interaction.channel_id,
@@ -1318,6 +1383,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     interaction: DiscordInteractionCreateDispatch,
     actor: DiscordUser,
     commandName: string,
+    receipt: MessagingInboundReceipt,
   ): Promise<void> {
     const listener = this.listener;
     if (!listener) {
@@ -1338,7 +1404,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       channel,
       command: commandName,
       rawText: [`/${commandName}`, ...args].join(" ").trim(),
-      receivedAt: this.now(),
+      ...receipt,
       sourceUrl: discordConversationUrl({
         channelId: interaction.channel_id,
         guildId: interaction.guild_id,
@@ -1440,7 +1506,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   private isAuthorizedMessageSource(
     message: DiscordMessageCreateDispatch,
-    options: { actionable: boolean },
+    options: { actionable: boolean; receipt: MessagingInboundReceipt },
   ): boolean {
     if (
       !this.isAuthorizedDiscordConversation({
@@ -1453,6 +1519,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         this.emitInboundRejected(this.rejectedEventFromMessage(message, {
           kind: "command",
           reason: "unauthorized-conversation",
+          receipt: options.receipt,
         }));
       }
       return false;
@@ -1468,6 +1535,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         this.emitInboundRejected(this.rejectedEventFromMessage(message, {
           kind: options.actionable ? "command" : "text",
           reason: "unauthorized-actor",
+          receipt: options.receipt,
         }));
       }
       return false;
@@ -1478,6 +1546,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private isAuthorizedInteractionSource(
     interaction: DiscordInteractionCreateDispatch,
     actor: DiscordUser,
+    receipt: MessagingInboundReceipt,
   ): boolean {
     if (
       !this.isAuthorizedDiscordConversation({
@@ -1488,6 +1557,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     ) {
       this.emitInboundRejected(this.rejectedEventFromInteraction(interaction, actor, {
         reason: "unauthorized-conversation",
+        receipt,
       }));
       return false;
     }
@@ -1500,6 +1570,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       });
       this.emitInboundRejected(this.rejectedEventFromInteraction(interaction, actor, {
         reason: "unauthorized-actor",
+        receipt,
       }));
       return false;
     }
@@ -1946,6 +2017,27 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     };
   }
 
+  private immediateChannelFromDiscord(
+    channelId: string,
+    guildId: string | undefined,
+    options?: { channelType?: number; dmPeerName?: string; isThread?: boolean },
+  ): MessagingInboundEvent["channel"] {
+    const channel = this.basicChannelRef(
+      channelId,
+      guildId,
+      this.discordConversationKind(guildId, options?.channelType, options?.isThread),
+    );
+    return !guildId && options?.dmPeerName
+      ? {
+          ...channel,
+          conversation: {
+            ...channel.conversation,
+            title: options.dmPeerName,
+          },
+        }
+      : channel;
+  }
+
   /**
    * Resolve channel + guild + (for threads) parent-channel names via
    * the Discord REST API, with an unbounded in-memory cache keyed by
@@ -2040,7 +2132,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
 
   private rejectedEventFromMessage(
     message: DiscordMessageCreateDispatch,
-    options: Pick<MessagingRejectedInboundEvent, "kind" | "reason">,
+    options: Pick<MessagingRejectedInboundEvent, "kind" | "reason"> & {
+      receipt: MessagingInboundReceipt;
+    },
   ): MessagingRejectedInboundEvent {
     return {
       id: `discord:message:${message.id}:rejected`,
@@ -2051,7 +2145,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         message.guild_id,
         this.discordConversationKind(message.guild_id, message.channel_type),
       ),
-      receivedAt: this.now(),
+      ...options.receipt,
       reason: options.reason,
       routingState: this.routingStateFromDiscord(message.channel_id, message.guild_id, {
         channelType: message.channel_type,
@@ -2063,7 +2157,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private rejectedEventFromInteraction(
     interaction: DiscordInteractionCreateDispatch,
     actor: DiscordUser,
-    options: Pick<MessagingRejectedInboundEvent, "reason">,
+    options: Pick<MessagingRejectedInboundEvent, "reason"> & {
+      receipt: MessagingInboundReceipt;
+    },
   ): MessagingRejectedInboundEvent {
     const kind = interaction.data?.custom_id ? "callback" : "command";
     return {
@@ -2075,7 +2171,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         interaction.guild_id,
         this.discordConversationKind(interaction.guild_id, interaction.channel_type),
       ),
-      receivedAt: this.now(),
+      ...options.receipt,
       reason: options.reason,
       routingState: this.routingStateFromDiscord(
         interaction.channel_id,
@@ -2107,7 +2203,9 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private discordConversationKind(
     guildId: string | undefined,
     channelType?: number,
-  ): "dm" | "channel" {
+    isThread?: boolean,
+  ): "dm" | "channel" | "thread" {
+    if (isThread) return "thread";
     return !guildId && channelType === DISCORD_CHANNEL_TYPE_DM
       ? "dm"
       : "channel";
@@ -2188,6 +2286,12 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private get fetch(): FetchLike {
     return this.options.fetch ?? fetch;
   }
+}
+
+function discordTimestampToMs(timestamp: string | undefined): number | undefined {
+  if (!timestamp) return undefined;
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }
 
 function uploadableFileParts(intent: MessagingSurfaceIntent): MessagingFilePart[] {
@@ -2685,6 +2789,7 @@ function messageToDispatch(message: Message): DiscordMessageCreateDispatch {
     guild_id: message.guildId ?? undefined,
     id: message.id,
     is_thread: discordChannelIsThread(message.channel),
+    timestamp: message.createdAt.toISOString(),
   };
 }
 

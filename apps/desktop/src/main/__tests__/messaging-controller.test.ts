@@ -116,6 +116,79 @@ afterEach(async () => {
 });
 
 describe("MessagingController", () => {
+  it("logs provider-neutral ingress stages through startTurn acceptance", async () => {
+    let clock = 2_000;
+    const info = vi.fn();
+    const harness = await createHarness({
+      logger: { info },
+      now: () => clock,
+      startTurn: async (request) => {
+        clock = 2_213;
+        return {
+          backend: request.backend,
+          threadId: request.threadId,
+          turnId: "turn-latency",
+        };
+      },
+    });
+    await bindThread(harness);
+    info.mockClear();
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("measure ingress"),
+      providerSentAt: 900,
+      receivedAt: 1_000,
+    });
+
+    expect(info).toHaveBeenCalledWith(
+      "messaging starting turn",
+      expect.objectContaining({
+        inboundEventId: "event-text",
+        providerSentAt: 900,
+        providerSentToPwragentReceivedMs: 100,
+        pwragentReceivedAt: 1_000,
+        pwragentReceivedToStartTurnIssueMs: 1_000,
+        startTurnIssuedAt: 2_000,
+      }),
+    );
+    expect(info).toHaveBeenCalledWith(
+      "messaging turn started",
+      expect.objectContaining({
+        pwragentReceivedToStartTurnAcceptedMs: 1_213,
+        startTurnAcceptedAt: 2_213,
+        startTurnIssueToAcceptedMs: 213,
+      }),
+    );
+  });
+
+  it("merges eventual provider channel metadata without replaying inbound", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundChannelMetadata({
+      eventId: "event-text",
+      observedAt: 1_500,
+      channel: {
+        channel: "telegram",
+        conversation: {
+          id: "chat-1",
+          kind: "dm",
+          title: "Harold",
+        },
+      },
+    });
+
+    await expect(
+      harness.store.findActiveBindingForChannel(buildTextEvent("").channel),
+    ).resolves.toMatchObject({
+      channel: {
+        conversation: { title: "Harold" },
+      },
+    });
+    expect(harness.onBindingChanged).toHaveBeenCalled();
+    expect(harness.startTurn).not.toHaveBeenCalled();
+  });
+
   it("creates, edits, sends, and cancels scheduled messages through the backend", async () => {
     const harness = await createHarness();
     await bindThread(harness);
