@@ -17,7 +17,30 @@ const outputPath = join(repoRoot, "THIRD_PARTY_LICENSES");
 const desktopFilter = "@pwragent/desktop";
 const PLATFORM_VARIANT_SUFFIX = /-(?:android|darwin|freebsd|linux|openbsd|sunos|win32)(?:-|$)/;
 
-function runPnpmLicenses(args) {
+/**
+ * The two `pnpm licenses list` invocations the notice is built from.
+ *
+ * Exported so `check-third-party-license-allowlist.mjs` reads the same trees
+ * this file transcribes. A gate that queried a different surface than the
+ * generator would report a pass for records the notice never contained.
+ */
+export const NOTICE_PNPM_ARGS = {
+  production: ["--prod"],
+  all: [],
+};
+
+/**
+ * devDependencies the notice covers anyway, because they ship.
+ *
+ * Electron is a devDependency of @pwragent/desktop, so `--prod` never reports
+ * it, yet it is the largest single component of the packaged application. The
+ * notice merges it in from the `all` report; the allowlist gate imports this
+ * same set so the two cannot drift. A name disclosed here but missing from the
+ * gate's input would be a shipped component with an unchecked license.
+ */
+export const NOTICE_DEV_DEPENDENCIES = new Set(["electron"]);
+
+export function runPnpmLicenses(args) {
   const result = spawnSync(
     "pnpm",
     ["licenses", "list", "--json", "--filter", desktopFilter, ...args],
@@ -41,7 +64,7 @@ function runPnpmLicenses(args) {
   return JSON.parse(result.stdout);
 }
 
-function flattenLicenseReport(report) {
+export function flattenLicenseReport(report) {
   const records = [];
   for (const [declaredLicense, entries] of Object.entries(report)) {
     for (const entry of entries) {
@@ -255,8 +278,8 @@ function compareRecords(a, b) {
 
 function main() {
   const check = process.argv.includes("--check");
-  const productionRecords = flattenLicenseReport(runPnpmLicenses(["--prod"]));
-  const allRecords = flattenLicenseReport(runPnpmLicenses([]));
+  const productionRecords = flattenLicenseReport(runPnpmLicenses(NOTICE_PNPM_ARGS.production));
+  const allRecords = flattenLicenseReport(runPnpmLicenses(NOTICE_PNPM_ARGS.all));
   const recordsByKey = new Map();
 
   for (const record of productionRecords) {
@@ -264,7 +287,7 @@ function main() {
   }
 
   for (const record of allRecords) {
-    if (record.name === "electron") {
+    if (NOTICE_DEV_DEPENDENCIES.has(record.name)) {
       recordsByKey.set(stableRecordKey(record), record);
     }
   }

@@ -231,6 +231,70 @@
 - Do not change the first-party license without an explicit PwrDrvr LLC policy change.
 - Do not remove license disclosures without an explicit PwrDrvr LLC policy change.
 
+### Third-party dependency licenses
+
+- Three scripts cover licensing. They check different things.
+
+| Script | Checks |
+|---|---|
+| [`check-package-licenses.mjs`](scripts/check-package-licenses.mjs) | Our own workspace `package.json` files declare MIT. Never looks at a dependency. |
+| [`check-third-party-license-allowlist.mjs`](scripts/check-third-party-license-allowlist.mjs) | Every declared license the notice covers is on an allowlist. |
+| [`generate-third-party-licenses.mjs`](scripts/generate-third-party-licenses.mjs) | Transcribes the tree into `THIRD_PARTY_LICENSES`. Judges nothing. |
+
+- That last row is the reason the allowlist gate exists.
+- The generator groups records by whatever license string pnpm reports.
+- Before the gate, a dependency that flipped MIT to GPL-3.0 wrote a new `GPL-3.0` section into the notice.
+- `generate-third-party-licenses.mjs --check` then passed, because the committed file matched the generated file.
+- CI went green and shipped copyleft.
+- The only safety was that a reviewer might notice a new license heading in the diff.
+- `pnpm licenses:check` runs the allowlist gate before the notice check.
+- A bad license then reports as a licensing problem, not as a stale notice.
+- Run the gate alone with `pnpm licenses:allowlist`.
+- The gate evaluates each declared license as an SPDX expression, not as a string match.
+- `OR` is satisfied by either side. `(MIT OR WTFPL)` passes on its MIT half, so WTFPL needs no allowlist entry.
+- `AND` requires both sides. `Apache-2.0 AND GPL-3.0` fails.
+- `AND` binds tighter than `OR`.
+- Identifier comparison folds case, because SPDX short identifiers are case-insensitive.
+- An unparseable string fails. Examples are `UNLICENSED`, `SEE LICENSE IN LICENSE.md`, and a `WITH` exception.
+- Refusing to guess is the safe direction for a legal gate.
+
+#### Gate coverage
+
+- The gate covers the records the notice is built from.
+- It reads the npm production tree for `@pwragent/desktop`.
+- It reads `NOTICE_DEV_DEPENDENCIES` from the `all` report.
+- That set holds Electron, a devDependency that ships and that `--prod` never reports.
+- The generator and the gate import that one set, so the two cannot drift.
+- Add a name to `NOTICE_DEV_DEPENDENCIES` when a devDependency starts shipping.
+- The synthesized platform variants copy `declaredLicense` from their parent record.
+- Gating the production tree therefore gates them.
+- The gate reports a failure when a surface produced no records at all.
+- An empty report is otherwise indistinguishable from a clean tree.
+- The gate does **not** cover these sources:
+  - Optional dependencies that the running machine did not install. The generator does not pass `--no-optional`, and the CI `Lint` job runs on `ubuntu-latest` only.
+  - A platform variant's own package metadata. The notice prints the parent's license for every variant, so neither script ever reads one.
+  - devDependencies outside `NOTICE_DEV_DEPENDENCIES`. They do not ship and the notice does not disclose them.
+  - Chromium and Node.js components inside Electron. The notice points at Electron's upstream generated credits.
+  - Codex App Server Rust crates. PwrAgent invokes a locally installed Codex App Server and vendors no crate.
+
+#### Changing the allowlist
+
+- Adding an id to `ALLOWED_LICENSE_IDS` is a legal decision.
+- Make that decision in a commit that says why.
+- Never add an id to make CI green.
+- Strong copyleft and source-available terms are permitted nowhere.
+- Those terms include GPL, AGPL, BSL, SSPL, and Commons Clause.
+- LGPL is also permitted nowhere.
+- PwrAgent ships no LGPL component, and the notice carries no FSF text and no written source offer.
+- An LGPL arrival would therefore have nothing to disclose with.
+- `MPL-2.0` is the one copyleft id on the allowlist.
+- Its copyleft binds the MPL-licensed files themselves.
+- It places no condition on the larger work that includes them.
+- Do not read that entry as permission for file-scoped copyleft in general.
+- The seeded list records drift that existed before any policy was enforced.
+- `BlueOak-1.0.0` and `Python-2.0` were already in the shipped tree and documented nowhere.
+- `0BSD`, `CC0-1.0`, `MPL-2.0`, and `Unlicense` are approved ids that the production tree does not use today.
+
 ## Runtime Configuration
 
 - Store all desktop configuration and state under `~/.pwragent/`.
