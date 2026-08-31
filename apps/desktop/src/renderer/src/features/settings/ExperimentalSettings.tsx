@@ -1,4 +1,5 @@
 import type { DesktopSettingsSnapshot } from "@pwragent/shared";
+import { useState } from "react";
 import {
   SettingsField,
   SettingsPanelHead,
@@ -64,6 +65,9 @@ export function ExperimentalSettings(props: {
   ) => Promise<void>;
   onManagedReviewChange: (enabled: boolean) => Promise<void>;
 }) {
+  const [tokenMiserWriteTarget, setTokenMiserWriteTarget] = useState<
+    boolean | undefined
+  >();
   const condensation = props.snapshot.experimental.diffCondensation;
   const liveTranscriptEventFiltering =
     props.snapshot.experimental.liveTranscriptEventFiltering ??
@@ -85,10 +89,27 @@ export function ExperimentalSettings(props: {
     DEFAULT_TOKEN_MISER_DEFAULT_ENABLED;
   const tokenMiserUsage = props.snapshot.runtime.tokenMiser;
   const tokenMiserActivation = tokenMiserUsage?.activation;
+  const managedCodex = tokenMiserUsage?.managedCodex;
+  const tokenMiserSwitchPending =
+    tokenMiserEnabled.value
+    && managedCodex?.state === "pending-switch";
   // Only a contradiction is worth reporting: switched on, but the Codex side
   // never loaded. Off-and-unavailable is just off.
   const tokenMiserInert =
-    tokenMiserEnabled.value && tokenMiserActivation?.state === "unavailable";
+    tokenMiserEnabled.value
+    && tokenMiserWriteTarget === undefined
+    && !tokenMiserSwitchPending
+    && (
+      managedCodex?.state === "unavailable"
+      || tokenMiserActivation?.state === "unavailable"
+    );
+  const tokenMiserStarting =
+    tokenMiserEnabled.value
+    && !tokenMiserInert
+    && (
+      tokenMiserSwitchPending
+      || tokenMiserActivation?.state !== "active"
+    );
   const codexDefaultModeRequestUserInput =
     props.snapshot.experimental.codexDefaultModeRequestUserInput ??
     DEFAULT_CODEX_DEFAULT_MODE_REQUEST_USER_INPUT;
@@ -111,31 +132,44 @@ export function ExperimentalSettings(props: {
         title="Token Miser"
         description="Keep accidental walls of Codex tool output out of the parent thread while preserving the exact result for targeted retrieval."
         chip={
-          tokenMiserInert
-            ? "Not running"
-            : !tokenMiserEnabled.value
-              ? "Off"
-              : tokenMiserDefaultEnabled.value ? "Default on" : "Opt-in"
+          tokenMiserWriteTarget === true
+            ? "Installing"
+            : tokenMiserWriteTarget === false
+              ? "Turning off"
+              : tokenMiserInert
+                ? "Not running"
+                : !tokenMiserEnabled.value
+                  ? "Off"
+                  : tokenMiserSwitchPending
+                    ? "Waiting for idle"
+                    : tokenMiserStarting
+                      ? "Starting"
+                      : tokenMiserDefaultEnabled.value ? "Default on" : "Opt-in"
         }
         chipKind={
-          tokenMiserInert
+          tokenMiserWriteTarget === undefined && tokenMiserInert
             ? "warn"
-            : tokenMiserEnabled.value ? "ok" : "default"
+            : tokenMiserEnabled.value && !tokenMiserStarting ? "ok" : "default"
         }
       >
         <div className="settings-fields">
           <SettingsField
             label="Make Token Miser available"
-            sub="Load the Token Miser runtime and expose per-thread controls."
-            help="Off by default. Requires a separately installed Token Miser-compatible Codex; PwrAgent does not download or update that executable. Codex also requires you to approve the exact PwrAgent hook with /hooks before it can run. New or reloaded Codex threads pick up the hook after approval. If the bridge or summarizer is unavailable, the original result passes through unchanged."
+            sub="Download and activate PwrAgent's verified Codex build, then expose per-thread controls."
+            help="Off by default. PwrAgent downloads, verifies, and durably selects its Token Miser-compatible Codex build; no path selection or hook approval is required. Update checks run only while this switch is on, and a new build takes over after active Codex turns finish. If activation or summarization is unavailable, the original result passes through unchanged."
             source={sourceBadge(tokenMiserEnabled)}
             control={
               <SettingsSwitch
-                checked={tokenMiserEnabled.value}
-                disabled={props.saving}
+                checked={tokenMiserWriteTarget ?? tokenMiserEnabled.value}
+                disabled={
+                  props.saving || tokenMiserWriteTarget !== undefined
+                }
                 label="Make Token Miser available"
                 onChange={(enabled) => {
-                  void props.onTokenMiserEnabledChange(enabled);
+                  setTokenMiserWriteTarget(enabled);
+                  void props.onTokenMiserEnabledChange(enabled).finally(() => {
+                    setTokenMiserWriteTarget(undefined);
+                  });
                 }}
               />
             }
@@ -159,9 +193,10 @@ export function ExperimentalSettings(props: {
           {tokenMiserInert ? (
             <SettingsField
               label="Codex could not load the gate"
-              sub={tokenMiserActivation?.reason
-                ?? "Codex plugin activation did not complete."}
-              help="Token Miser fails open, so turns keep running with tool output unchanged — nothing is gated until this clears. PwrAgent retries activation each time a Codex backend starts, so relaunching after fixing the cause is usually enough."
+              sub={managedCodex?.reason
+                ?? tokenMiserActivation?.reason
+                ?? "Managed Codex activation did not complete."}
+              help="Token Miser fails open, so turns keep running with tool output unchanged — nothing is gated until this clears. Toggle availability off and on to retry the verified download and activation."
               control={
                 <span className="settings-field__value settings-field__value--warn">
                   Enabled, not running

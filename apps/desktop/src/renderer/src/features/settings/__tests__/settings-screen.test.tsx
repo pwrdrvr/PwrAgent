@@ -2901,6 +2901,15 @@ describe("SettingsScreen", () => {
       value: false,
       source: "config",
     };
+    snapshot.runtime.tokenMiser = {
+      activation: { observedAt: 1_800_000_000_000, state: "active" },
+      interceptionCount: 0,
+      originalCharacters: 0,
+      baselineParentTokens: 0,
+      replacementTokens: 0,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+    };
     const settings = createSettingsState(snapshot);
 
     render(
@@ -2922,6 +2931,104 @@ describe("SettingsScreen", () => {
     await waitFor(() => {
       expect(settings.writeConfig).toHaveBeenCalledWith({
         experimental: { tokenMiserDefaultEnabled: true },
+      });
+    });
+  });
+
+  it("shows when the managed Codex switch is waiting for idle", async () => {
+    const snapshot = createSnapshot();
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      activation: { observedAt: 1_800_000_000_000, state: "active" },
+      managedCodex: {
+        state: "pending-switch",
+        version: "0.201.0-pwragent.1",
+      },
+      interceptionCount: 0,
+      originalCharacters: 0,
+      baselineParentTokens: 0,
+      replacementTokens: 0,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+    };
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        desktopApi={{} as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+        initialSection="experimental"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Waiting for idle")).toBeInTheDocument();
+    expect(screen.queryByText("Default on")).not.toBeInTheDocument();
+  });
+
+  it("keeps stale activation failures hidden while a managed switch is pending", async () => {
+    const snapshot = createSnapshot();
+    snapshot.experimental.tokenMiserEnabled = { value: true, source: "config" };
+    snapshot.runtime.tokenMiser = {
+      activation: {
+        observedAt: 1_800_000_000_000,
+        reason: "The previous Codex runtime lacked native activation.",
+        state: "unavailable",
+      },
+      managedCodex: {
+        state: "pending-switch",
+        version: "0.201.0-pwragent.1",
+      },
+      interceptionCount: 0,
+      originalCharacters: 0,
+      baselineParentTokens: 0,
+      replacementTokens: 0,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 0,
+    };
+
+    render(
+      <SettingsScreen
+        desktopApi={{} as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+        initialSection="experimental"
+        settings={createSettingsState(snapshot)}
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(screen.getByText("Waiting for idle")).toBeInTheDocument();
+    expect(screen.queryByText("Codex could not load the gate")).not.toBeInTheDocument();
+  });
+
+  it("shows Token Miser as installing while one-click enablement is running", async () => {
+    const snapshot = createSnapshot();
+    let finishWrite: (() => void) | undefined;
+    const settings = createSettingsState(snapshot);
+    settings.writeConfig = vi.fn(() => new Promise<boolean>((resolve) => {
+      finishWrite = () => resolve(true);
+    }));
+
+    render(
+      <SettingsScreen
+        desktopApi={{} as unknown as Parameters<typeof SettingsScreen>[0]["desktopApi"]}
+        initialSection="experimental"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    const availabilitySwitch = screen.getByRole("switch", {
+      name: "Make Token Miser available",
+    });
+    fireEvent.click(availabilitySwitch);
+
+    expect(screen.getByText("Installing")).toBeInTheDocument();
+    expect(availabilitySwitch).toHaveAttribute("aria-checked", "true");
+    expect(availabilitySwitch).toBeDisabled();
+    finishWrite?.();
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        experimental: { tokenMiserEnabled: true },
       });
     });
   });

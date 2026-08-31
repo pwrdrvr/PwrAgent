@@ -558,6 +558,8 @@ export const HOT_CPU_PROFILE_CAPTURED_EVENT_CHANNEL =
  *  live. Payload is `{ theme: DesktopAppearanceTheme; density:
  *  DesktopAppearanceDensity }`. */
 export const APPEARANCE_CHANGED_EVENT_CHANNEL = "appearance:changed";
+export const SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL =
+  "settings:runtime-changed";
 export const APP_UPDATE_INSTALL_CHANNEL = "app:install-update";
 export const APP_UPDATE_RELEASES_READ_CHANNEL = "app:read-update-releases";
 export const PROFILES_LIST_CHANNEL = "profiles:list";

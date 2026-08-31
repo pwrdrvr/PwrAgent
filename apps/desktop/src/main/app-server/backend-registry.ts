@@ -1,6 +1,6 @@
 import { app } from "electron";
 import { execFile as execFileCallback } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -350,6 +350,7 @@ import {
 import {
   CodexAppServerClient,
   DEFAULT_CODEX_THREAD_TITLE_MODEL,
+  type CodexPwrdrvrTokenMiserActivation,
   type CodexServerCapabilities,
 } from "../codex-app-server/client";
 import {
@@ -515,6 +516,7 @@ import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
 import { buildMinimalGrokHelperSessionPolicy } from "../acp/minimal-helper-session";
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
+import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
 import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
 import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 import {
@@ -741,6 +743,7 @@ type BackendClient = {
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
     threadSource?: CodexThreadSource;
+    pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
   }): Promise<{ threadId: string }>;
   forkThread?(params: {
     threadId: string;
@@ -769,6 +772,7 @@ type BackendClient = {
     config?: CodexThreadStartParams["config"];
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
+    pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
   }): Promise<{
     threadId: string;
     turnId: string;
@@ -7750,6 +7754,8 @@ export class DesktopBackendRegistry {
   private readonly resolvePdfAnalysisEnabledFn: () => boolean;
   private readonly resolveTokenMiserEnabledFn: () => boolean;
   private readonly resolveTokenMiserDefaultEnabledFn: () => boolean;
+  private readonly resolveManagedTokenMiserActivationRequiredFn: () => boolean;
+  private readonly markManagedCodexRuntimeSwitchCompleteFn: () => void;
   private readonly resolveSpendAlertPolicyFn: () => DesktopSpendAlertPolicy;
   private readonly resolveToolOutputAlertPolicyFn: () => DesktopToolOutputAlertPolicy;
   private spendAlertPolicy = DESKTOP_SPEND_ALERT_POLICY_DEFAULT;
@@ -7768,6 +7774,8 @@ export class DesktopBackendRegistry {
   private tokenMiserCodeModeGroupingVersion?: number;
   private tokenMiserPostToolUseExactOutputVersion?: number;
   private tokenMiserRuntimePreparationFailure?: string;
+  private codexRuntimeRestartPending = false;
+  private codexRuntimeRestartPromise?: Promise<boolean>;
   private readonly tokenMiserPluginManager?: TokenMiserPluginManager;
   private tokenMiserStateDir?: string;
   private readonly resolveTokenMiserCodexRuntimeFn?: () => Promise<{
@@ -7850,6 +7858,13 @@ export class DesktopBackendRegistry {
     resolvePdfAnalysisEnabled?: () => boolean;
     resolveSpendAlertPolicy?: () => DesktopSpendAlertPolicy;
     resolveToolOutputAlertPolicy?: () => DesktopToolOutputAlertPolicy;
+    resolveManagedTokenMiserActivationRequired?: () => boolean;
+    markManagedCodexRuntimeSwitchComplete?: () => void;
+    watchManagedCodexRuntime?: (
+      listener: (
+        change: ManagedCodexSelectionChange,
+      ) => Promise<unknown> | unknown,
+    ) => () => void;
     runtimeInstanceId?: string;
     registrySessionId?: string;
     resolveLiveProfileRuntimeInstanceIds?: () => string[];
@@ -7907,6 +7922,9 @@ export class DesktopBackendRegistry {
           tokenMiserStateDir,
           this.runtimeInstanceId,
         )
+      : undefined;
+    const tokenMiserActivationNonce = tokenMiserStateDir
+      ? randomBytes(32).toString("base64url")
       : undefined;
     this.resolveCodexDefaultModeRequestUserInputFn =
       options?.resolveCodexDefaultModeRequestUserInput ??
@@ -8010,6 +8028,12 @@ export class DesktopBackendRegistry {
         return true;
       }
     };
+    this.resolveManagedTokenMiserActivationRequiredFn =
+      options?.resolveManagedTokenMiserActivationRequired
+      ?? (() => settingsService?.requiresManagedTokenMiserActivation() ?? false);
+    this.markManagedCodexRuntimeSwitchCompleteFn =
+      options?.markManagedCodexRuntimeSwitchComplete
+      ?? (() => settingsService?.markManagedCodexRuntimeSwitchComplete());
     this.resolveToolOutputAlertPolicyFn =
       options?.resolveToolOutputAlertPolicy ??
       (() => {
@@ -8054,9 +8078,6 @@ export class DesktopBackendRegistry {
         settingsService.onConfigWritten(() => {
           this.spendAlertPolicy = this.resolveSpendAlertPolicyFn();
           this.toolOutputAlertPolicy = this.resolveToolOutputAlertPolicyFn();
-          if (this.resolveTokenMiserEnabledFn()) {
-            void this.prepareTokenMiserRuntime({ prune: true });
-          }
         }),
       );
     }
@@ -8114,6 +8135,10 @@ export class DesktopBackendRegistry {
             )
           : undefined,
         clientVersion,
+        resolvePwrdrvrTokenMiserActivationNonce: () =>
+          this.resolveTokenMiserEnabledFn()
+            ? tokenMiserActivationNonce
+            : undefined,
         // Fire the gate at the client level too, not just the
         // listThreads layer. Without this, `describeCodexBackend`
         // (called by `listBackends` on app startup) would call
@@ -8125,6 +8150,24 @@ export class DesktopBackendRegistry {
         // surfaces as `available: false` with a clean reason.
         isCodexBootstrapDeferred: () => this.isCodexBootstrapDeferredFn(),
       });
+    const watchManagedCodexRuntime =
+      options?.watchManagedCodexRuntime
+      ?? (typeof settingsService?.watchManagedCodexRuntime === "function"
+        ? settingsService.watchManagedCodexRuntime.bind(settingsService)
+        : undefined);
+    if (watchManagedCodexRuntime) {
+      this.unsubscribers.push(
+        watchManagedCodexRuntime((change) => {
+          backendRegistryLog.info("managed Codex selection changed", {
+            enabled: change.enabled,
+            reason: change.reason,
+            version: change.runtime?.metadata.version,
+          });
+          this.codexRuntimeRestartPending = true;
+          return this.maybeRestartCodexForManagedRuntimeChange();
+        }),
+      );
+    }
     if (tokenMiserStateDir) {
       this.tokenMiserStore = new TokenMiserStore(
         path.join(tokenMiserStateDir, "objects"),
@@ -8215,6 +8258,7 @@ export class DesktopBackendRegistry {
         stateDir: tokenMiserStateDir,
         service: tokenMiserService,
         instanceId: this.runtimeInstanceId,
+        activationNonce: tokenMiserActivationNonce,
       });
       this.tokenMiserCodeModeReducerDescriptorPath =
         this.tokenMiserHookBridge.codeModeReducerDescriptorPath;
@@ -10070,6 +10114,9 @@ export class DesktopBackendRegistry {
       fetchedAt: Date.now(),
       pricing,
       threadId: request.threadId,
+      ...(overlay?.tokenMiserEnabled !== undefined
+        ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+        : {}),
       ...(toolAccounting ? { toolAccounting } : {}),
       ...(pendingRequest ? { pendingRequest } : {}),
       ...(replayWithReviewers.threadStatus
@@ -11851,6 +11898,9 @@ export class DesktopBackendRegistry {
       fetchedAt: Date.now(),
       readDurationMs: Math.max(0, Math.round(performance.now() - readStartedAt)),
       threadId: request.threadId,
+      ...(overlay?.tokenMiserEnabled !== undefined
+        ? { tokenMiserEnabled: overlay.tokenMiserEnabled }
+        : {}),
       pricing,
       ...(toolAccounting ? { toolAccounting } : {}),
       ...(pendingRequest ? { pendingRequest } : {}),
@@ -12571,6 +12621,12 @@ export class DesktopBackendRegistry {
           enabled: tokenMiserEnabled,
         })
       : undefined;
+    const pwrdrvrTokenMiser = client
+      ? await this.buildSupportedPwrdrvrTokenMiserActivation({
+          client,
+          enabled: tokenMiserEnabled,
+        })
+      : undefined;
     const codexThreadConfig = mergeCodexThreadConfigs(
       pdfMcpConfig,
       connectionMcpConfig,
@@ -12634,6 +12690,9 @@ export class DesktopBackendRegistry {
                     this.resolveCodexDefaultModeRequestUserInputFn(),
                   threadSource: "user" as CodexThreadSource,
                   ...(codexThreadConfig ? { config: codexThreadConfig } : {}),
+                  ...(pwrdrvrTokenMiser
+                    ? { pwrdrvrTokenMiser }
+                    : {}),
                 }
               : {}),
             dynamicTools,
@@ -14043,6 +14102,11 @@ export class DesktopBackendRegistry {
               client,
               tokenMiserEnabled: tokenMiserEnabledForThread,
             });
+          const pwrdrvrTokenMiser =
+            await this.buildSupportedPwrdrvrTokenMiserActivation({
+              client,
+              enabled: tokenMiserEnabledForThread,
+            });
           const supportedCodexThreadConfig = mergeCodexThreadConfigs(
             codexThreadConfig,
             tokenMiserConfig,
@@ -14064,6 +14128,9 @@ export class DesktopBackendRegistry {
             defaultModeRequestUserInput:
               this.resolveCodexDefaultModeRequestUserInputFn(),
             ...(dynamicTools !== undefined ? { dynamicTools } : {}),
+            ...(pwrdrvrTokenMiser !== undefined
+              ? { pwrdrvrTokenMiser }
+              : {}),
           });
           activeTurnMode = effectiveMode;
           return started;
@@ -14831,6 +14898,11 @@ export class DesktopBackendRegistry {
       client,
       enabled: params.tokenMiserEnabled,
     });
+    const pwrdrvrTokenMiser =
+      await this.buildSupportedPwrdrvrTokenMiserActivation({
+        client,
+        enabled: params.tokenMiserEnabled,
+      });
     const tokenMiserDynamicTools = params.tokenMiserEnabled
       ? buildCodexTokenMiserDynamicToolSpecs(this.tokenMiserStore)
       : [];
@@ -14852,6 +14924,7 @@ export class DesktopBackendRegistry {
         ? { codexEnvironmentRuntime: params.codexEnvironmentRuntime }
         : {}),
       ...(tokenMiserConfig ? { config: tokenMiserConfig } : {}),
+      ...(pwrdrvrTokenMiser ? { pwrdrvrTokenMiser } : {}),
       ...(tokenMiserDynamicTools.length > 0
         ? { dynamicTools: tokenMiserDynamicTools }
         : {}),
@@ -14879,6 +14952,7 @@ export class DesktopBackendRegistry {
         ...(dynamicToolsResumeSupported
           ? { dynamicTools: tokenMiserDynamicTools }
           : {}),
+        ...(pwrdrvrTokenMiser !== undefined ? { pwrdrvrTokenMiser } : {}),
       });
       const startedReviewChildKey = buildThreadIdentityKey(
         "codex",
@@ -19780,6 +19854,19 @@ export class DesktopBackendRegistry {
     );
   }
 
+  private async buildSupportedPwrdrvrTokenMiserActivation(params: {
+    client: BackendClient;
+    enabled: boolean;
+  }): Promise<CodexPwrdrvrTokenMiserActivation | null | undefined> {
+    const capabilities = await this.readTokenMiserServerCapabilities(
+      params.client,
+    );
+    if (capabilities?.pwrdrvrTokenMiser?.version !== 1) {
+      return undefined;
+    }
+    return params.enabled ? { version: 1, enabled: true } : null;
+  }
+
   private buildCodexParentDynamicTools(
     tokenMiserEnabled: boolean,
   ): CodexDynamicToolSpec[] {
@@ -19848,12 +19935,29 @@ export class DesktopBackendRegistry {
       return;
     }
     try {
-      const codexRuntime = await this.resolveTokenMiserCodexRuntimeFn?.();
+      await this.tokenMiserHookBridge.start();
+      const capabilities = await this.readTokenMiserServerCapabilities(
+        this.codexClient,
+      );
+      const managedActivation =
+        capabilities?.pwrdrvrTokenMiser?.version === 1;
+      if (
+        this.resolveManagedTokenMiserActivationRequiredFn()
+        && !managedActivation
+      ) {
+        throw new Error(
+          "Managed Codex runtime lacks native Token Miser activation capability v1.",
+        );
+      }
+      const codexRuntime = managedActivation
+        ? undefined
+        : await this.resolveTokenMiserCodexRuntimeFn?.();
       await Promise.all([
-        this.tokenMiserHookBridge.start(),
-        codexRuntime
-          ? this.tokenMiserPluginManager.ensureInstalled(codexRuntime)
-          : this.tokenMiserPluginManager.ensurePluginSource(),
+        managedActivation
+          ? Promise.resolve()
+          : codexRuntime
+            ? this.tokenMiserPluginManager.ensureInstalled(codexRuntime)
+            : this.tokenMiserPluginManager.ensurePluginSource(),
         options.prune
           ? this.tokenMiserStore.prune({
               maxAgeMs: 7 * 24 * 60 * 60 * 1_000,
@@ -24970,6 +25074,12 @@ export class DesktopBackendRegistry {
     // security cross-check in messaging-controller relies on it).
     logRouting = true,
   ): Promise<T> {
+    if (
+      this.codexRuntimeRestartPending
+      || this.codexRuntimeRestartPromise
+    ) {
+      await this.maybeRestartCodexForManagedRuntimeChange();
+    }
     // Single-client passthrough. The mode passed to the operation is no
     // longer a routing decision — it's documentation for callers that
     // want to forward it to codex's per-turn approvalPolicy/sandboxPolicy
@@ -25002,6 +25112,69 @@ export class DesktopBackendRegistry {
       });
     }
     return await operation(this.codexClient, mode);
+  }
+
+  private hasActiveCodexRuntimeWork(): boolean {
+    if (
+      this.reservedCodexStartThreadIds.size > 0
+      || this.backendActiveCodexThreadIds.size > 0
+      || this.activeCodexTurnModes.size > 0
+    ) {
+      return true;
+    }
+    for (const key of this.activeTurnKeys) {
+      if (key.startsWith("codex:")) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Switch binaries only at an idle Codex boundary. Enabling, disabling, and
+   * installing an update all close the reconnectable client; its next request
+   * resolves the currently selected command from Settings. Active turns keep
+   * their original process until their terminal notification has settled.
+   */
+  private async maybeRestartCodexForManagedRuntimeChange(): Promise<boolean> {
+    if (
+      this.closed
+      || !this.codexRuntimeRestartPending
+      || this.hasActiveCodexRuntimeWork()
+    ) {
+      return false;
+    }
+    if (this.codexRuntimeRestartPromise) {
+      return await this.codexRuntimeRestartPromise;
+    }
+
+    const restart = (async () => {
+      if (this.hasActiveCodexRuntimeWork()) return false;
+      this.codexRuntimeRestartPending = false;
+      await this.codexClient.close();
+      this.tokenMiserServerCapabilities.delete(this.codexClient);
+      this.tokenMiserReducerCapabilityState = undefined;
+      this.tokenMiserCodeModeGroupingVersion = undefined;
+      this.tokenMiserPostToolUseExactOutputVersion = undefined;
+      this.tokenMiserRuntimePreparationFailure = undefined;
+      if (this.resolveTokenMiserEnabledFn()) {
+        await this.prepareTokenMiserRuntime({ prune: true });
+      }
+      this.markManagedCodexRuntimeSwitchCompleteFn();
+      return true;
+    })();
+    this.codexRuntimeRestartPromise = restart;
+    try {
+      return await restart;
+    } catch (error) {
+      this.codexRuntimeRestartPending = true;
+      backendRegistryLog.warn("managed Codex restart failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    } finally {
+      if (this.codexRuntimeRestartPromise === restart) {
+        this.codexRuntimeRestartPromise = undefined;
+      }
+    }
   }
 
   private async withActiveCodexThreadClient<T>(
@@ -34554,6 +34727,7 @@ export class DesktopBackendRegistry {
         void this.flushQueuedExecutionModeIfPresent(
           notification.params.threadId,
         );
+        void this.maybeRestartCodexForManagedRuntimeChange();
       } else if (isAcpBackendId(event.backend)) {
         if (this.usesSlashControlledAcpExecutionModes(event.backend)) {
           await this.flushQueuedExecutionModeIfPresent(

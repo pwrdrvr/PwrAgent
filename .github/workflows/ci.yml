@@ -103,6 +103,7 @@ jobs:
             **/package.json
             .npmrc
             .pnpmfile.cjs
+            patches/**
             pnpm-lock.yaml
             pnpm-workspace.yaml
             apps/desktop/scripts/ensure-electron-runtime.mjs
@@ -245,6 +246,7 @@ jobs:
             **/package.json
             .npmrc
             .pnpmfile.cjs
+            patches/**
             pnpm-lock.yaml
             pnpm-workspace.yaml
             apps/desktop/scripts/ensure-electron-runtime.mjs

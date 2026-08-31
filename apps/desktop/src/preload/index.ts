@@ -706,6 +706,7 @@ import {
   SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
+  SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
   SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
@@ -2184,6 +2185,13 @@ const desktopApi = Object.freeze({
     ipcRenderer.on(APPEARANCE_CHANGED_EVENT_CHANNEL, listener);
     return () => {
       ipcRenderer.off(APPEARANCE_CHANGED_EVENT_CHANNEL, listener);
+    };
+  },
+  onSettingsRuntimeChanged: (callback: () => void): (() => void) => {
+    const listener = () => callback();
+    ipcRenderer.on(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL, listener);
+    return () => {
+      ipcRenderer.off(SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL, listener);
     };
   },
   onCodexEnvironmentSetupProgress: (

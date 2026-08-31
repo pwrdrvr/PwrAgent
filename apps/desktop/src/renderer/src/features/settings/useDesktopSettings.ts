@@ -66,6 +66,12 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
     void read();
   }, [read]);
 
+  useEffect(() => {
+    return desktopApi?.onSettingsRuntimeChanged?.(() => {
+      void read(true);
+    });
+  }, [desktopApi, read]);
+
   const writeConfig = useCallback(
     async (patch: DesktopSettingsConfigPatch): Promise<boolean> => {
       if (!desktopApi?.writeSettingsConfig) {

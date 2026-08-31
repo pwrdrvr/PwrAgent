@@ -25,6 +25,12 @@ import { promisify } from "node:util";
 import type { ManagedGrokSignatureRejectedEvent } from "../../shared/managed-grok-signature.js";
 import { resolvePwragentRoot } from "../profile.js";
 import { getMainLogger } from "../log.js";
+import { verifyMatchingPlatformSignature } from "../managed-runtime-signature.js";
+
+export {
+  WINDOWS_SIGNATURE_PRELUDE,
+  windowsSignatureVerification,
+} from "../managed-runtime-signature.js";
 
 const execFile = promisify(execFileCallback);
 const managedGrokLog = getMainLogger("pwragent:grok-managed-runtime");
@@ -723,94 +729,6 @@ async function validateExtractedBundle(
     throw new Error("Managed Grok executable returned an invalid version banner");
   }
   return command;
-}
-
-// Windows PowerShell 5.1 inherits the parent process's PSModulePath. When that
-// value is PowerShell 7-oriented, autoloading Windows PowerShell's own
-// Microsoft.PowerShell.Security fails ("the module could not be loaded") and
-// Get-AuthenticodeSignature never runs. Pin the Windows PowerShell module
-// locations and import the module explicitly so a failure names its own cause.
-export const WINDOWS_SIGNATURE_PRELUDE = [
-  "$ErrorActionPreference = 'Stop'",
-  "if ($PSVersionTable.PSEdition -ne 'Core') { $env:PSModulePath = \"$PSHOME\\Modules;$env:ProgramFiles\\WindowsPowerShell\\Modules\" }",
-  "Import-Module Microsoft.PowerShell.Security",
-];
-
-// `powershell.exe -Command <string>` does NOT bind trailing arguments to
-// $args — the docs are explicit that a string command must come last because
-// everything after it is appended to the command text. ($args binding needs
-// -File, or -CommandWithArgs, which Windows PowerShell 5.1 does not have.) So
-// the two paths travel in the child environment instead, the way
-// scripts/release.mjs already passes PWRAGENT_VERIFY_EXECUTABLE.
-export function windowsSignatureVerification(
-  applicationCommand: string,
-  runtimeCommand: string,
-): { args: string[]; env: Record<string, string> } {
-  return {
-    args: [
-      "-NoLogo",
-      "-NoProfile",
-      "-NonInteractive",
-      "-Command",
-      [
-        ...WINDOWS_SIGNATURE_PRELUDE,
-        "$application = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_APPLICATION",
-        "$runtime = Get-AuthenticodeSignature -LiteralPath $env:PWRAGENT_VERIFY_RUNTIME",
-        "if ($application.Status -ne 'Valid' -or $runtime.Status -ne 'Valid') { exit 1 }",
-        "if ($null -eq $application.SignerCertificate -or $null -eq $runtime.SignerCertificate) { exit 1 }",
-        "if ($runtime.SignerCertificate.Subject -cne $application.SignerCertificate.Subject) { exit 1 }",
-        "if ($runtime.SignerCertificate.Issuer -cne $application.SignerCertificate.Issuer) { exit 1 }",
-      ].join("; "),
-    ],
-    env: {
-      PWRAGENT_VERIFY_APPLICATION: applicationCommand,
-      PWRAGENT_VERIFY_RUNTIME: runtimeCommand,
-    },
-  };
-}
-
-async function verifyMatchingPlatformSignature(
-  command: string,
-  applicationCommand: string,
-  platform: NodeJS.Platform,
-): Promise<void> {
-  if (platform === "darwin") {
-    await execFile("codesign", [
-      "--verify",
-      "--strict",
-      "--verbose=2",
-      applicationCommand,
-    ]);
-    const applicationSignature = await execFile("codesign", [
-      "--display",
-      "--verbose=4",
-      applicationCommand,
-    ]);
-    const signatureDetails =
-      `${applicationSignature.stdout ?? ""}\n${applicationSignature.stderr ?? ""}`;
-    const teamIdentifier = /^TeamIdentifier=([A-Z0-9]+)$/mu.exec(
-      signatureDetails,
-    )?.[1];
-    if (!teamIdentifier) {
-      throw new Error("Signed PwrAgent executable has no Apple team identifier");
-    }
-    await execFile("codesign", [
-      "--verify",
-      "--strict",
-      "--verbose=2",
-      "--test-requirement",
-      `=anchor apple generic and certificate leaf[subject.OU] = "${teamIdentifier}"`,
-      command,
-    ]);
-    return;
-  }
-
-  if (platform === "win32") {
-    const verification = windowsSignatureVerification(applicationCommand, command);
-    await execFile("powershell.exe", verification.args, {
-      env: { ...process.env, ...verification.env },
-    });
-  }
 }
 
 function bundleValidationOptions(

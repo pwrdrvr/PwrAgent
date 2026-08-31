@@ -1184,6 +1184,7 @@ export type DesktopApi = {
       transcriptTextSize: DesktopTextSize;
     }) => void,
   ) => () => void;
+  onSettingsRuntimeChanged?: (callback: () => void) => () => void;
   onCodexEnvironmentSetupProgress?: (
     callback: (event: CodexEnvironmentSetupProgressEvent) => void,
   ) => () => void;

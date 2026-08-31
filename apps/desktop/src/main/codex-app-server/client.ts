@@ -257,6 +257,7 @@ type CodexClientOptions = {
   connectionObserver?: JsonRpcObserver;
   requestTimeoutMs?: number;
   clientVersion?: string;
+  resolvePwrdrvrTokenMiserActivationNonce?: () => string | undefined;
   /**
    * Gate predicate consulted on every `ensureInitialized` call. When it
    * returns true, the client refuses to spawn / connect the Codex CLI
@@ -288,6 +289,16 @@ export class CodexBootstrapDeferredError extends Error {
 type InitializeResult = Partial<CodexInitializeResponse>;
 
 export type CodexServerCapabilities = {
+  pwrdrvrTokenMiser?: {
+    version: 1;
+    identity: "pwrdrvr.pwragent.token-miser";
+    initializeCapabilityField: "pwrdrvrTokenMiser";
+    threadStartField: "pwrdrvrTokenMiser";
+    threadResumeField: "pwrdrvrTokenMiser";
+    descriptorEnvironmentVariable:
+      "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH";
+    descriptorVersion: 1;
+  };
   codeModeOutputReducer?: {
     actionableState?: {
       version: 1;
@@ -324,6 +335,11 @@ export type CodexServerCapabilities = {
   };
 };
 
+export type CodexPwrdrvrTokenMiserActivation = {
+  version: 1;
+  enabled: true;
+};
+
 type RawCodexThreadSummary = Omit<
   AppServerThreadSummary,
   "source" | "linkedDirectories"
@@ -351,6 +367,7 @@ type CodexThreadStartPayload = Omit<
   approvalPolicy?: CompatibleApprovalPolicy;
   dynamicTools?: CompatibleDynamicToolSpec[] | null;
   persistExtendedHistory?: boolean;
+  pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
 };
 
 type CodexThreadResumePayload = Omit<
@@ -360,6 +377,7 @@ type CodexThreadResumePayload = Omit<
   approvalPolicy?: CompatibleApprovalPolicy;
   dynamicTools?: CompatibleDynamicToolSpec[] | null;
   persistExtendedHistory?: boolean;
+  pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
 };
 
 type CodexThreadForkPayload = Omit<
@@ -6243,6 +6261,7 @@ function buildThreadStartPayload(params: {
   dynamicTools?: CodexDynamicToolSpec[];
   threadSource?: CodexThreadStartParams["threadSource"];
   bundledToolsDirectory?: string;
+  pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
 }, compatibility: CodexProtocolCompatibility): CodexThreadStartPayload {
   const base: CodexThreadStartPayload = {
     experimentalRawEvents: false,
@@ -6289,6 +6308,9 @@ function buildThreadStartPayload(params: {
   }
   if (params.threadSource) {
     base.threadSource = params.threadSource;
+  }
+  if (params.pwrdrvrTokenMiser) {
+    base.pwrdrvrTokenMiser = params.pwrdrvrTokenMiser;
   }
   const config = mergeCodexShellEnvironmentPolicyConfig(
     mergeCodexDefaultModeRequestUserInputConfig(
@@ -6492,6 +6514,7 @@ function buildThreadResumePayloads(params: {
   defaultModeRequestUserInput?: boolean;
   bundledToolsDirectory?: string;
   dynamicTools?: CodexDynamicToolSpec[];
+  pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
 }, compatibility: CodexProtocolCompatibility): CodexThreadResumePayload[] {
   const base: CodexThreadResumePayload = {
     threadId: params.threadId,
@@ -6541,6 +6564,9 @@ function buildThreadResumePayloads(params: {
       params.dynamicTools,
       compatibility,
     );
+  }
+  if (params.pwrdrvrTokenMiser !== undefined) {
+    base.pwrdrvrTokenMiser = params.pwrdrvrTokenMiser;
   }
 
   return [base];
@@ -7307,13 +7333,39 @@ export class CodexAppServerClient {
     const grouping = asRecord(outputReducer?.postToolUseGrouping);
     const modelGuidance = asRecord(outputReducer?.modelGuidance);
     const exactOutput = asRecord(outputReducer?.postToolUseExactOutput);
+    const managedTokenMiser = asRecord(result?.pwrdrvrTokenMiser);
+    const hasManagedTokenMiserContract =
+      managedTokenMiser?.version === 1
+      && managedTokenMiser.identity === "pwrdrvr.pwragent.token-miser"
+      && managedTokenMiser.initializeCapabilityField === "pwrdrvrTokenMiser"
+      && managedTokenMiser.threadStartField === "pwrdrvrTokenMiser"
+      && managedTokenMiser.threadResumeField === "pwrdrvrTokenMiser"
+      && managedTokenMiser.descriptorEnvironmentVariable
+        === "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH"
+      && managedTokenMiser.descriptorVersion === 1;
     const dynamicToolsResumeField =
       outputReducer?.dynamicToolsResumeField === "dynamicTools"
         ? "dynamicTools"
         : undefined;
 
+    const managedCapability = hasManagedTokenMiserContract
+      ? {
+          pwrdrvrTokenMiser: {
+            version: 1 as const,
+            identity: "pwrdrvr.pwragent.token-miser" as const,
+            initializeCapabilityField: "pwrdrvrTokenMiser" as const,
+            threadStartField: "pwrdrvrTokenMiser" as const,
+            threadResumeField: "pwrdrvrTokenMiser" as const,
+            descriptorEnvironmentVariable:
+              "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH" as const,
+            descriptorVersion: 1 as const,
+          },
+        }
+      : {};
+
     return typeof protocolVersion === "number"
       ? {
+          ...managedCapability,
           codeModeOutputReducer: {
             ...(actionableState?.version === 1
               && actionableState.reducerRequestField === "actionable_state"
@@ -7391,7 +7443,7 @@ export class CodexAppServerClient {
             protocolVersion,
           },
         }
-      : {};
+      : managedCapability;
   }
 
   async readCodexHome(): Promise<string> {
@@ -8207,6 +8259,7 @@ export class CodexAppServerClient {
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
     threadSource?: CodexThreadStartParams["threadSource"];
+    pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation;
   }): Promise<{ threadId: string }> {
     await this.ensureInitialized();
 
@@ -8295,6 +8348,7 @@ export class CodexAppServerClient {
     config?: CodexThreadResumeParams["config"];
     defaultModeRequestUserInput?: boolean;
     dynamicTools?: CodexDynamicToolSpec[];
+    pwrdrvrTokenMiser?: CodexPwrdrvrTokenMiserActivation | null;
   }): Promise<{
     threadId: string;
     turnId: string;
@@ -8331,6 +8385,7 @@ export class CodexAppServerClient {
             defaultModeRequestUserInput: params.defaultModeRequestUserInput,
             bundledToolsDirectory: this.options.bundledToolsDirectory,
             dynamicTools: params.dynamicTools,
+            pwrdrvrTokenMiser: params.pwrdrvrTokenMiser,
           },
           this.getProtocolCompatibility(),
         ),
@@ -9059,13 +9114,33 @@ export class CodexAppServerClient {
       await this.connection.connect();
 
       try {
-        const initializeParams: CodexInitializeParams = {
+        const activationNonce =
+          this.options.resolvePwrdrvrTokenMiserActivationNonce?.();
+        const initializeParams: CodexInitializeParams & {
+          capabilities: CodexInitializeParams["capabilities"] & {
+            pwrdrvrTokenMiser?: {
+              version: 1;
+              activationNonce: string;
+            };
+          };
+        } = {
           clientInfo: {
             name: "pwragent-desktop",
             title: "PwrAgent",
             version: this.options.clientVersion ?? "0.0.0",
           },
-          capabilities: { experimentalApi: true, requestAttestation: false }
+          capabilities: {
+            experimentalApi: true,
+            requestAttestation: false,
+            ...(activationNonce
+              ? {
+                  pwrdrvrTokenMiser: {
+                    version: 1,
+                    activationNonce,
+                  },
+                }
+              : {}),
+          },
         };
         const result = await this.connection.request("initialize", initializeParams);
         this.initializeResult = parseInitializeResponse(result);
