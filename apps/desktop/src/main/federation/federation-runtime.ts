@@ -244,6 +244,11 @@ import {
   type FederationStartTurnRequest,
 } from "./federation-backend-bridge";
 import {
+  FederationTurnInputAttachmentReceiver,
+  hasFederationTurnInputAttachments,
+  prepareOutgoingFederationTurnInput,
+} from "./federation-turn-input-attachments";
+import {
   applyFederationLeaseSnapshot,
   buildFederationHealthStatus,
   publicPeerSummary,
@@ -397,6 +402,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   // granted — but stays a dedicated capability so it is revocable on its own.
   "remote_pty",
   "event_subscriptions",
+  "turn_input_blobs",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -778,6 +784,8 @@ export class DesktopFederationRuntime {
     }
   >();
   private ownedNavigationSnapshotTransport?: NavigationSnapshotTransport;
+  private readonly turnInputAttachmentReceiver =
+    new FederationTurnInputAttachmentReceiver();
   private readonly remotePeerDirectory = new Map<
     FederationInstanceId,
     FederationPeerSummary
@@ -1619,6 +1627,33 @@ export class DesktopFederationRuntime {
           ),
           target.instanceId,
         ),
+      async (input) => {
+        if (!hasFederationTurnInputAttachments(input)) {
+          return [...input];
+        }
+        if (
+          !this.remotePeerAdvertisesCapability(
+            target.instanceId,
+            "turn_input_blobs",
+          )
+        ) {
+          throw new Error(
+            `Federation instance ${target.instanceId} does not support binary turn attachments.`,
+          );
+        }
+        return await prepareOutgoingFederationTurnInput({
+          input,
+          localInstanceId: this.ensureLocalInstanceId(),
+          targetInstanceId: target.instanceId,
+          privateStorageRoots:
+            getDesktopBackendRegistry().getLocalFilePrivateStorageRoots(),
+          sendEnvelope: async (envelope) =>
+            await this.sendEnvelopeToTargetWithBackpressure(
+              target.instanceId,
+              envelope,
+            ),
+        });
+      },
     );
   }
 
@@ -2320,9 +2355,20 @@ export class DesktopFederationRuntime {
       },
       additionalRequiredCapabilities: additionalFederationBackendCapabilities,
     });
+    router.registerBlobChunkHandler(async (envelope) => {
+      await this.turnInputAttachmentReceiver.receive(
+        envelope,
+        envelope.sourceInstanceId,
+      );
+    });
     this.ownedNavigationSnapshotTransport = registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),
+      resolveTurnInput: async (input, sourceInstanceId) =>
+        await this.turnInputAttachmentReceiver.resolveInput(
+          input,
+          sourceInstanceId,
+        ),
       resolveSourceInstance: (instanceId) =>
         this.resolveThreadMessageOriginInstance(instanceId),
       onEnvironmentSetupProgress: (event, targetInstanceId) => {
@@ -2748,7 +2794,14 @@ export class DesktopFederationRuntime {
     this.router?.registerConnection({
       peerId: gatewayInstanceId,
       capabilities: client.capabilities,
-      sendEnvelope: (envelope) => this.client?.sendEnvelope(envelope),
+      sendEnvelope: (envelope) => client.sendEnvelope(envelope),
+      sendEnvelopeWithBackpressure: async (envelope) => {
+        if (client.sendEnvelopeWithBackpressure) {
+          await client.sendEnvelopeWithBackpressure(envelope);
+          return;
+        }
+        client.sendEnvelope(envelope);
+      },
     });
     // This instance can also be the OWNER of remote PTY sessions the gateway
     // is viewing; a reconnect inside the grace keeps those alive.
@@ -2879,6 +2932,7 @@ export class DesktopFederationRuntime {
       peerId: connection.peerId,
       capabilities: connection.capabilities,
       sendEnvelope: connection.sendEnvelope,
+      sendEnvelopeWithBackpressure: connection.sendEnvelopeWithBackpressure,
     });
     // A transport blip that healed inside the reap grace keeps the peer's
     // remote PTY sessions alive.
@@ -3167,6 +3221,32 @@ export class DesktopFederationRuntime {
       gatewayInstanceId &&
       gatewayInstanceId !== targetInstanceId &&
       this.router?.sendToPeer(gatewayInstanceId, envelope)
+    ) {
+      return;
+    }
+
+    throw new FederationPeerUnavailableError(targetInstanceId);
+  }
+
+  private async sendEnvelopeToTargetWithBackpressure(
+    targetInstanceId: FederationInstanceId,
+    envelope: FederationProtocolEnvelope,
+  ): Promise<void> {
+    if (
+      await this.router?.sendToPeerWithBackpressure(
+        targetInstanceId,
+        envelope,
+      )
+    ) {
+      return;
+    }
+
+    const gatewayInstanceId = this.gatewayInstanceId
+      ?? getAppStateDb().getMeta(GATEWAY_INSTANCE_ID_META_KEY);
+    if (
+      gatewayInstanceId
+      && gatewayInstanceId !== targetInstanceId
+      && await this.router?.sendToPeerWithBackpressure(gatewayInstanceId, envelope)
     ) {
       return;
     }

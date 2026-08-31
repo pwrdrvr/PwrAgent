@@ -611,6 +611,11 @@ describe("federation agent tools service", () => {
     const handler = createFederationAgentToolsHandler({
       // Never let unit tests mint a machine-id in the real PwrAgent root.
       collectHostInfo: async () => localHostInfo,
+      resolveSourceTurnAttachments: async () => [{
+        type: "localImage",
+        name: "source.png",
+        path: "/pwragent/staged/source.png",
+      }],
       runtime: buildRuntime({
         health: async () => buildHealth(),
         localBackend: (() => ({
@@ -646,7 +651,14 @@ describe("federation agent tools service", () => {
           directoryLabel: "PwrAgent",
           prompt: "",
         }),
-        input: [{ type: "text", text: "Fix the recorder crash" }],
+        input: [
+          { type: "text", text: "Fix the recorder crash" },
+          {
+            type: "localImage",
+            name: "source.png",
+            path: "/pwragent/staged/source.png",
+          },
+        ],
       },
       {
         messageOrigin: {

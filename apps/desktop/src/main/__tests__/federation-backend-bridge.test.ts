@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   AppServerReadThreadRequest,
   AppServerReadThreadResponse,
+  AppServerTurnInputItem,
   FederationProtocolEnvelope,
   NavigationSnapshotTransportResponse,
   NavigationThreadSummary,
@@ -21,6 +22,195 @@ import { FederationRpcEndpoint } from "../federation/federation-rpc";
 import { FEDERATION_MAX_FRAME_BYTES } from "../federation/federation-transport";
 
 describe("federation backend bridge", () => {
+  it("prepares start, steer, handoff, and Star Map attachments before remote RPC", async () => {
+    const request = vi.fn(async ({ method }: { method: string }) => {
+      if (method === FEDERATION_BACKEND_METHODS.startTurn) {
+        return { backend: "codex", threadId: "thread-1", turnId: "turn-1" };
+      }
+      if (method === FEDERATION_BACKEND_METHODS.controlActiveTurn) {
+        return {
+          ok: true,
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-live",
+          requestId: "steer-1",
+          disposition: "steered",
+        };
+      }
+      return { accepted: true, threadId: "manager-1" };
+    });
+    const prepare = vi.fn(async (input: readonly AppServerTurnInputItem[]) =>
+      input.map((item, index) => item.type === "text"
+        ? item
+        : { type: "federationBlob" as const, transferId: `blob-${index}` }),
+    );
+    const client = new FederationRemoteBackendClient(
+      { request } as unknown as FederationRpcEndpoint,
+      (response) => response,
+      prepare,
+    );
+    const image = {
+      type: "localImage" as const,
+      name: "screen.png",
+      path: "/sender/staged/screen.png",
+    };
+
+    await client.startTurn({
+      backend: "codex",
+      threadId: "thread-1",
+      input: [{ type: "text", text: "Inspect" }, image],
+    });
+    await client.controlActiveTurn({
+      operation: "steer",
+      backend: "codex",
+      threadId: "thread-1",
+      requestId: "steer-1",
+      input: [{ type: "text", text: "Also inspect" }, image],
+    });
+    await client.materializeDirectoryLaunchpad({
+      directoryKey: "dir:/repo",
+      input: [{ type: "text", text: "Delegate" }, image],
+    });
+    await client.starMapIntake({
+      requestId: "intake-1",
+      request: "Create a manager",
+      attachments: [image],
+    });
+
+    expect(request).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      method: FEDERATION_BACKEND_METHODS.startTurn,
+      params: expect.objectContaining({
+        input: [
+          { type: "text", text: "Inspect" },
+          { type: "federationBlob", transferId: "blob-1" },
+        ],
+      }),
+    }));
+    expect(request).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      method: FEDERATION_BACKEND_METHODS.controlActiveTurn,
+      params: expect.objectContaining({
+        input: [
+          { type: "text", text: "Also inspect" },
+          { type: "federationBlob", transferId: "blob-1" },
+        ],
+      }),
+    }));
+    expect(request).toHaveBeenNthCalledWith(3, expect.objectContaining({
+      method: FEDERATION_BACKEND_METHODS.materializeDirectoryLaunchpad,
+      params: expect.objectContaining({
+        directoryKey: "dir:/repo",
+        input: [
+          { type: "text", text: "Delegate" },
+          { type: "federationBlob", transferId: "blob-1" },
+        ],
+      }),
+    }));
+    expect(request).toHaveBeenNthCalledWith(4, expect.objectContaining({
+      method: FEDERATION_BACKEND_METHODS.starMapIntake,
+      params: {
+        requestId: "intake-1",
+        request: "Create a manager",
+        attachments: [{ type: "federationBlob", transferId: "blob-0" }],
+      },
+    }));
+    expect(JSON.stringify(request.mock.calls)).not.toContain(image.path);
+  });
+
+  it("resolves verified steer refs and rejects raw peer Star Map paths", async () => {
+    const controlActiveTurn = vi.fn(async (request) => ({
+      ok: true as const,
+      backend: request.backend,
+      threadId: request.threadId,
+      requestId: request.requestId,
+      turnId: "turn-live",
+      disposition: "steered" as const,
+    }));
+    const starMapIntake = vi.fn(async () => ({
+      accepted: true,
+      threadId: "manager-1",
+    }));
+    const replies: FederationProtocolEnvelope[] = [];
+    const router = new FederationRouter({
+      localInstanceId: "owner_one",
+      methodCapabilities: FEDERATION_BACKEND_METHOD_CAPABILITIES,
+    });
+    router.registerConnection({
+      peerId: "viewer_one",
+      capabilities: ["turn_control", "environment_actions"],
+      sendEnvelope: (envelope) => replies.push(envelope),
+    });
+    registerFederationBackendHandlers({
+      router,
+      backend: {
+        controlActiveTurn,
+        starMapIntake,
+      } as unknown as FederationBackendOperations,
+      resolveTurnInput: async (input) => {
+        if (input.some((item) => item.type !== "federationBlob")) {
+          throw new Error("Peer paths are forbidden.");
+        }
+        return [{
+          type: "localImage",
+          name: "screen.png",
+          path: "/receiver/staged/screen.png",
+        }];
+      },
+    });
+
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "steer-with-blob",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.controlActiveTurn,
+        params: {
+          operation: "steer",
+          backend: "codex",
+          threadId: "thread-1",
+          requestId: "steer-1",
+          input: [{ type: "federationBlob", transferId: "blob-1" }],
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_000,
+      },
+    });
+    await router.routeEnvelope({
+      sourcePeerId: "viewer_one",
+      envelope: {
+        id: "star-map-with-path",
+        kind: "request",
+        method: FEDERATION_BACKEND_METHODS.starMapIntake,
+        params: {
+          requestId: "intake-1",
+          request: "Create a manager",
+          attachments: [{
+            type: "localImage",
+            path: "/peer/controlled/screen.png",
+          }],
+        },
+        protocolVersion: 1,
+        sourceInstanceId: "viewer_one",
+        targetInstanceId: "owner_one",
+        createdAt: 1_001,
+      },
+    });
+
+    expect(controlActiveTurn).toHaveBeenCalledWith(expect.objectContaining({
+      input: [{
+        type: "localImage",
+        name: "screen.png",
+        path: "/receiver/staged/screen.png",
+      }],
+    }));
+    expect(starMapIntake).not.toHaveBeenCalled();
+    expect(replies).toContainEqual(expect.objectContaining({
+      kind: "error",
+      requestId: "star-map-with-path",
+    }));
+  });
+
   it("negotiates launchpad metadata separately from environment actions", () => {
     expect(
       FEDERATION_BACKEND_METHOD_CAPABILITIES[

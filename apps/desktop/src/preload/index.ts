@@ -356,10 +356,8 @@ import type {
   ReadStarMapArrangementResponse,
   ReadStarMapWorkspaceResponse,
   SetStarMapCardPositionRequest,
-  StarMapIntakeRequest,
   StarMapIntakeResponse,
   WriteStarMapWorkspaceRequest,
-  FederationTarget,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
   RefreshDesktopCodexDiscoveryRequest,
@@ -396,6 +394,7 @@ import type {
   UpdateThreadExpectedBranchResponse,
   WriteDesktopSettingsConfigRequest,
 } from "@pwragent/shared";
+import type { StarMapIntakeDispatchRequest } from "../shared/star-map-intake";
 import type { RendererErrorReport } from "../shared/renderer-error";
 import type { RendererDiagnosticLogRequest } from "../shared/renderer-diagnostic";
 import {
@@ -1099,7 +1098,7 @@ const desktopApi = Object.freeze({
   ): Promise<ReadStarMapWorkspaceResponse> =>
     await ipcRenderer.invoke(STAR_MAP_WRITE_WORKSPACE_CHANNEL, request),
   dispatchStarMapIntake: async (
-    request: StarMapIntakeRequest & { federationTarget?: FederationTarget },
+    request: StarMapIntakeDispatchRequest,
   ): Promise<StarMapIntakeResponse> =>
     await ipcRenderer.invoke(STAR_MAP_INTAKE_CHANNEL, request),
   openStarMapWindow: async (): Promise<void> => {

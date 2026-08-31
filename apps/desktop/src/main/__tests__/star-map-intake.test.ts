@@ -141,6 +141,37 @@ describe("dispatchStarMapIntake", () => {
     );
   });
 
+  it("includes staged image attachments in the created thread's first turn", async () => {
+    const response = await dispatchStarMapIntake({
+      requestId: "req-image",
+      request: "Fix the screenshot issue in PwrAgent",
+      directoryKey: "dir-agent",
+      attachments: [
+        {
+          type: "localImage",
+          name: "screenshot.png",
+          path: "/pwragent/image-inputs/screenshot.png",
+        },
+      ],
+    });
+
+    expect(response.status).toBe("created");
+    expect(materializeDirectoryLaunchpad).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directoryKey: "dir-agent",
+        input: [
+          { type: "text", text: "Fix the screenshot issue in PwrAgent" },
+          {
+            type: "localImage",
+            name: "screenshot.png",
+            path: "/pwragent/image-inputs/screenshot.png",
+          },
+        ],
+      }),
+      { messageOrigin: { kind: "pwragent" } },
+    );
+  });
+
   it("asks for disambiguation when no directory clearly matches", async () => {
     generateStructuredObject.mockResolvedValue({
       status: "ok",

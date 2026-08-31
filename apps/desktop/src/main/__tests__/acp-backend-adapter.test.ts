@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -11,6 +13,7 @@ import type {
 import {
   AcpBackendAdapter,
   describeInstalledAcpBackend,
+  inputToAcpPrompt,
   isAcpSessionMissingForProjectError,
   withAcpModelRuntimeSelection,
   type AcpBackendAdapterOptions,
@@ -23,6 +26,36 @@ const fixtureDir = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
   "fixtures/acp-transcripts",
 );
+
+describe("inputToAcpPrompt", () => {
+  it("embeds trusted local image bytes for ACP providers", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "pwragent-acp-image-"));
+    const imagePath = path.join(root, "normalized.heic");
+    const imageBytes = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3,
+    ]);
+    try {
+      await writeFile(imagePath, imageBytes);
+
+      await expect(inputToAcpPrompt([{
+        type: "localImage",
+        name: "original.heic",
+        path: imagePath,
+      }])).resolves.toMatchObject({
+        promptContent: [
+          { type: "text", text: "[Local image: original.heic]" },
+          {
+            type: "image",
+            mimeType: "image/png",
+            data: imageBytes.toString("base64"),
+          },
+        ],
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("describeInstalledAcpBackend", () => {
   it("does not advertise session/load when the agent reports it is unsupported", () => {

@@ -27,6 +27,7 @@ export const FEDERATION_CAPABILITIES = [
   "gateway_relay",
   "remote_pty",
   "event_subscriptions",
+  "turn_input_blobs",
 ] as const;
 
 export type FederationCapability = (typeof FEDERATION_CAPABILITIES)[number];
@@ -678,11 +679,30 @@ export type FederationNotificationEnvelope<
   params: Params;
 };
 
+/**
+ * One binary chunk of a content-addressed turn attachment. The transport
+ * encodes `data` after a small JSON metadata header in a binary WebSocket
+ * frame; it must never pass this envelope through JSON.stringify directly.
+ */
+export type FederationBlobChunkEnvelope = FederationEnvelopeBase & {
+  kind: "blob_chunk";
+  transferId: string;
+  chunkIndex: number;
+  chunkCount: number;
+  totalSize: number;
+  sha256: string;
+  name: string;
+  mimeType?: string;
+  inputType: "localFile" | "localImage";
+  data: Uint8Array;
+};
+
 export type FederationProtocolEnvelope =
   | FederationRequestEnvelope
   | FederationResponseEnvelope
   | FederationErrorEnvelope
-  | FederationNotificationEnvelope;
+  | FederationNotificationEnvelope
+  | FederationBlobChunkEnvelope;
 
 export function isFederationCapability(
   value: unknown,

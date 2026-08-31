@@ -15,7 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   applyNavigationLaunchpadProviderSettingsPatch,
   buildFederatedThreadRef,
@@ -19526,6 +19526,59 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("merges accepted Codex steer attachments into the source turn cache", async () => {
+    const tempHome = await mkdtemp(path.join(os.tmpdir(), "pwragent-steer-images-"));
+    const previousHome = process.env.PWRAGENT_HOME;
+    process.env.PWRAGENT_HOME = tempHome;
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "turn/steer"] },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({ executionMode: "full-access" }),
+    });
+
+    try {
+      const turn = await registry.startTurn({
+        backend: "codex",
+        threadId: "thread-steer-images",
+        input: [{
+          type: "image",
+          name: "initial.png",
+          url: "data:image/png;base64,AQID",
+        }],
+      });
+      await registry.steerTurn({
+        backend: "codex",
+        threadId: turn.threadId,
+        expectedTurnId: turn.turnId,
+        input: [{
+          type: "image",
+          name: "steered.png",
+          url: "data:image/png;base64,BAUG",
+        }],
+        requestId: "steer-image-1",
+      });
+
+      const retained = registry.getTurnInputAttachments({
+        backend: "codex",
+        threadId: turn.threadId,
+        turnId: turn.turnId,
+      });
+      expect(retained).toHaveLength(2);
+      expect(retained.map((item) => item.type === "localImage" && item.name))
+        .toEqual(["initial.png", "steered.png"]);
+    } finally {
+      await registry.close();
+      await rm(tempHome, { recursive: true, force: true });
+      if (previousHome === undefined) {
+        delete process.env.PWRAGENT_HOME;
+      } else {
+        process.env.PWRAGENT_HOME = previousHome;
+      }
+    }
+  });
+
   it("steers an active Grok turn through its ACP extension", async () => {
     const backend = "acp:grok" as AcpBackendId;
     const sessions: AcpSessionMetadata[] = [
@@ -19616,6 +19669,17 @@ command = "pnpm dev"
   });
 
   it("projects Grok next-turn steering and leaves its message context unbound", async () => {
+    const tempHome = await mkdtemp(path.join(os.tmpdir(), "pwragent-grok-steer-image-"));
+    const previousHome = process.env.PWRAGENT_HOME;
+    process.env.PWRAGENT_HOME = tempHome;
+    onTestFinished(async () => {
+      if (previousHome === undefined) {
+        delete process.env.PWRAGENT_HOME;
+      } else {
+        process.env.PWRAGENT_HOME = previousHome;
+      }
+      await rm(tempHome, { recursive: true, force: true });
+    });
     const backend = "acp:grok" as AcpBackendId;
     const sessions: AcpSessionMetadata[] = [{
       backendId: backend,
@@ -19648,7 +19712,14 @@ command = "pnpm dev"
         backend,
         threadId: "grok-session-next",
         expectedTurnId: "turn-a",
-        input: [{ type: "text", text: "Add blueberries" }],
+        input: [
+          { type: "text", text: "Add blueberries" },
+          {
+            type: "image",
+            name: "blueberries.png",
+            url: "data:image/png;base64,iVBORw0KGgo=",
+          },
+        ],
         requestId: "grok-steer-next",
       },
       { kind: "pwragent" },
@@ -19659,6 +19730,16 @@ command = "pnpm dev"
 
     await emitCompletedTurn(registry, backend, "grok-session-next", "turn-a");
     await emitStartedTurn(registry, backend, "grok-session-next", "turn-b");
+    expect(registry.getTurnInputAttachments({
+      backend,
+      threadId: "grok-session-next",
+      turnId: "turn-b",
+    })).toEqual([
+      expect.objectContaining({
+        type: "localImage",
+        name: "blueberries.png",
+      }),
+    ]);
     await (
       registry as unknown as { emit(event: AgentEvent): Promise<void> }
     ).emit({
@@ -27283,6 +27364,18 @@ command = "pnpm dev"
 
   it("groups a Codex handoff under its Kimi parent", async () => {
     const acpBackendId = "acp:kimi" as AcpBackendId;
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-handoff-image-"));
+    const previousHome = process.env.PWRAGENT_HOME;
+    const previousProfile = process.env.PWRAGENT_PROFILE;
+    process.env.PWRAGENT_HOME = tempRoot;
+    process.env.PWRAGENT_PROFILE = "test";
+    onTestFinished(async () => {
+      if (previousHome === undefined) delete process.env.PWRAGENT_HOME;
+      else process.env.PWRAGENT_HOME = previousHome;
+      if (previousProfile === undefined) delete process.env.PWRAGENT_PROFILE;
+      else process.env.PWRAGENT_PROFILE = previousProfile;
+      await rm(tempRoot, { recursive: true, force: true });
+    });
     const parentDirectory = {
       id: expectedDir("/repo/app"),
       kind: "local" as const,
@@ -27316,13 +27409,32 @@ command = "pnpm dev"
       acpBackendId,
       codexClient,
       overlayStore,
+      sessionId: "kimi-parent",
       sessions: [parentSession],
     });
     const turn = await registry.startTurn({
       backend: acpBackendId,
       threadId: "kimi-parent",
-      input: [{ type: "text", text: "Delegate the migration lock fix." }],
+      input: [
+        { type: "text", text: "Delegate the migration lock fix." },
+        {
+          type: "image",
+          name: "migration.png",
+          url: "data:image/png;base64,AQID",
+        },
+      ],
     });
+    const remembered = registry.getTurnInputAttachments({
+      backend: acpBackendId,
+      threadId: "kimi-parent",
+      turnId: turn.turnId,
+    });
+    expect(remembered).toEqual([expect.objectContaining({
+      type: "localImage",
+      name: "migration.png",
+      path: expect.stringContaining("turn-input-attachments"),
+    })]);
+    expect(JSON.stringify(remembered)).not.toContain("base64");
     await registry.publishLocalEvent({
       backend: acpBackendId,
       notification: {
@@ -27358,6 +27470,27 @@ command = "pnpm dev"
         groupedUnderThreadId: "kimi-parent",
       },
     });
+    expect(codexClient.lastStartTurnParams).toMatchObject({
+      threadId: "thread-1",
+      input: [
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("Fix the migration lock race."),
+        }),
+        expect.objectContaining({
+          type: "localImage",
+          name: "migration.png",
+          path: expect.stringContaining("image-inputs"),
+        }),
+      ],
+    });
+    const childImage = codexClient.lastStartTurnParams?.input[1];
+    expect(childImage?.type).toBe("localImage");
+    if (childImage?.type === "localImage") {
+      await expect(readFile(childImage.path)).resolves.toEqual(
+        Buffer.from([1, 2, 3]),
+      );
+    }
     await expect(
       overlayStore.getThreadOverlayState({
         backend: "codex",
@@ -32185,6 +32318,103 @@ script = "printf setup"
     });
 
     await registry.close();
+  });
+
+  it("forwards remembered source images as staged paths to send_message_to_thread", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "pwragent-source-image-"));
+    const previousHome = process.env.PWRAGENT_HOME;
+    const previousProfile = process.env.PWRAGENT_PROFILE;
+    process.env.PWRAGENT_HOME = tempRoot;
+    process.env.PWRAGENT_PROFILE = "test";
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start"] },
+      threads: [{
+        id: "source-thread",
+        title: "Source",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+      }, {
+        id: "target-thread",
+        title: "Target",
+        titleSource: "explicit",
+        source: "codex",
+        linkedDirectories: [],
+      }],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      threadTitleGenerationService: null,
+    });
+    try {
+      const source = await registry.startTurn({
+        backend: "codex",
+        threadId: "source-thread",
+        input: [
+          { type: "text", text: "Inspect this screenshot." },
+          {
+            type: "image",
+            name: "screen.png",
+            url: "data:image/png;base64,AQID",
+          },
+        ],
+      });
+      await registry.publishLocalEvent({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "source-thread",
+            turnId: source.turnId,
+            turn: { id: source.turnId },
+          },
+        },
+      });
+      const remembered = registry.getTurnInputAttachments({
+        backend: "codex",
+        threadId: "source-thread",
+        turnId: source.turnId,
+      });
+      expect(remembered).toEqual([expect.objectContaining({
+        type: "localImage",
+        name: "screen.png",
+        path: expect.stringContaining("turn-input-attachments"),
+      })]);
+      expect(JSON.stringify(remembered)).not.toContain("base64");
+
+      await callRegistryMcpTool({
+        registry,
+        backend: "codex",
+        threadId: "source-thread",
+        turnId: source.turnId,
+        tool: "send_message_to_thread",
+        args: {
+          backend: "codex",
+          threadId: "target-thread",
+          prompt: "Use the source screenshot.",
+        },
+      });
+
+      expect(codexClient.lastStartTurnParams).toMatchObject({
+        threadId: "target-thread",
+        input: [
+          { type: "text", text: "Use the source screenshot." },
+          expect.objectContaining({
+            type: "localImage",
+            name: "screen.png",
+            path: expect.stringContaining("image-inputs"),
+          }),
+        ],
+      });
+    } finally {
+      await registry.close();
+      if (previousHome === undefined) delete process.env.PWRAGENT_HOME;
+      else process.env.PWRAGENT_HOME = previousHome;
+      if (previousProfile === undefined) delete process.env.PWRAGENT_PROFILE;
+      else process.env.PWRAGENT_PROFILE = previousProfile;
+      await rm(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("queues a follow-up prompt while the target thread has an active turn", async () => {

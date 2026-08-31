@@ -270,7 +270,10 @@ export async function dispatchStarMapIntake(
       {
         directoryKey,
         launchpad,
-        input: [{ type: "text", text }],
+        input: [
+          { type: "text", text },
+          ...(request.attachments ?? []),
+        ],
       },
       { messageOrigin: { kind: "pwragent" } },
     );

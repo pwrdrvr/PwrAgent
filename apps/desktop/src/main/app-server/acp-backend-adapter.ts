@@ -1,3 +1,4 @@
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
 import {
@@ -40,6 +41,7 @@ import {
   type AcpPromptContentBlock,
 } from "../acp/acp-client";
 import type { AcpProviderStatus } from "../acp/acp-provider-status";
+import { MAX_TURN_INPUT_ATTACHMENT_BYTES } from "./turn-input-attachment-files";
 import {
   acpRuntimeSupportsHttpMcp,
   buildAutomationInspectionAcpMcpServers,
@@ -867,9 +869,9 @@ export function acpSessionHasConversationHistory(
   return session.hasConversationHistory === true;
 }
 
-export function inputToAcpPrompt(
+export async function inputToAcpPrompt(
   input: AppServerTurnInputItem[],
-): AcpPromptPayload | undefined {
+): Promise<AcpPromptPayload | undefined> {
   const promptContent: AcpPromptContentBlock[] = [];
   const parts: AppServerThreadMessagePart[] = [];
 
@@ -925,6 +927,23 @@ export function inputToAcpPrompt(
     const text = `[Local image: ${fileName}]`;
     promptContent.push({ type: "text", text });
     parts.push({ type: "text", text });
+    const fileInfo = await stat(item.path);
+    if (
+      !fileInfo.isFile()
+      || fileInfo.size > MAX_TURN_INPUT_ATTACHMENT_BYTES
+    ) {
+      throw new Error(`Invalid local image attachment: ${fileName}`);
+    }
+    const data = await readFile(item.path);
+    const mimeType = detectLocalImageMimeType(data);
+    if (!mimeType) {
+      throw new Error(`Unsupported local image attachment: ${fileName}`);
+    }
+    promptContent.push({
+      type: "image",
+      mimeType,
+      data: data.toString("base64"),
+    });
   }
 
   if (promptContent.length === 0 && parts.length === 0) {
@@ -941,6 +960,40 @@ export function inputToAcpPrompt(
     promptContent,
     parts,
   };
+}
+
+function detectLocalImageMimeType(data: Buffer): string | undefined {
+  if (
+    data.byteLength >= 8
+    && data.subarray(0, 8).equals(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    )
+  ) {
+    return "image/png";
+  }
+  if (
+    data.byteLength >= 3
+    && data[0] === 0xff
+    && data[1] === 0xd8
+    && data[2] === 0xff
+  ) {
+    return "image/jpeg";
+  }
+  if (
+    data.byteLength >= 6
+    && (data.subarray(0, 6).toString("ascii") === "GIF87a"
+      || data.subarray(0, 6).toString("ascii") === "GIF89a")
+  ) {
+    return "image/gif";
+  }
+  if (
+    data.byteLength >= 12
+    && data.subarray(0, 4).toString("ascii") === "RIFF"
+    && data.subarray(8, 12).toString("ascii") === "WEBP"
+  ) {
+    return "image/webp";
+  }
+  return undefined;
 }
 
 function formatAcpLocalFileReference(

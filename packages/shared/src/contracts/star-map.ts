@@ -471,6 +471,17 @@ export type StarMapIntakeCandidate = {
 };
 
 /**
+ * A PwrAgent-owned staged attachment supplied with a Star Map intake task.
+ * Federation replaces the sender-local path with a receiver-local path after
+ * transferring the binary payload outside the JSON-RPC envelope.
+ */
+export type StarMapIntakeAttachment = {
+  type: "localImage" | "localFile";
+  name?: string;
+  path: string;
+};
+
+/**
  * Intake dispatch, executed ON the owning instance so its directory
  * registry, launchpad defaults, and ~/.pwragent/AGENTS.md preferences are
  * the ones consulted. `directoryKey` is set on a disambiguation resubmit.
@@ -482,6 +493,7 @@ export type StarMapIntakeRequest = {
   requestId: string;
   request: string;
   directoryKey?: string;
+  attachments?: StarMapIntakeAttachment[];
 };
 
 export type StarMapIntakeResponse =

@@ -8,10 +8,14 @@ import type { WebContents } from "electron";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL,
+  STAR_MAP_INTAKE_CHANNEL,
   STAR_MAP_OPEN_THREAD_IN_MAIN_CHANNEL,
   STAR_MAP_OPEN_WINDOW_CHANNEL,
   WINDOW_SHOW_THREAD_CHANNEL,
 } from "../../shared/ipc";
+import { dispatchStarMapIntake } from "../app-server/star-map-intake";
+import { stageTurnInputAttachments } from "../app-server/turn-input-attachment-files";
+import { getDesktopFederationRuntime } from "../federation/federation-runtime";
 import { registerStarMapIpcHandlers } from "../ipc/star-map";
 import { isFederationWindowWebContents } from "../window";
 import { subscribersForChannel } from "../window-channels";
@@ -49,6 +53,10 @@ vi.mock("../app-server/desktop-overlay-store", () => ({
 vi.mock("../app-server/star-map-intake", () => ({
   dispatchStarMapIntake: vi.fn(),
 }));
+vi.mock("../app-server/turn-input-attachment-files", () => ({
+  MAX_TURN_INPUT_ATTACHMENT_BYTES: 128 * 1024 * 1024,
+  stageTurnInputAttachments: vi.fn(),
+}));
 vi.mock("../federation/federation-runtime", () => ({
   getDesktopFederationRuntime: vi.fn(),
 }));
@@ -78,6 +86,10 @@ describe("star map window IPC", () => {
     handlers.clear();
     fromWebContentsMock.mockReset();
     vi.mocked(isFederationWindowWebContents).mockReset();
+    vi.mocked(dispatchStarMapIntake).mockReset();
+    vi.mocked(stageTurnInputAttachments).mockReset();
+    vi.mocked(stageTurnInputAttachments).mockResolvedValue([]);
+    vi.mocked(getDesktopFederationRuntime).mockReset();
     vi.mocked(subscribersForChannel).mockReset();
     vi.mocked(requestShowThread).mockReset();
     vi.mocked(showStarMapWindow).mockReset();
@@ -170,5 +182,117 @@ describe("star map window IPC", () => {
       handlerFor(STAR_MAP_FOCUS_MAIN_WINDOW_CHANNEL)({}),
     ).resolves.toBeUndefined();
     expect(fromWebContentsMock).not.toHaveBeenCalled();
+  });
+
+  it("stages renderer image bytes before local Star Map intake", async () => {
+    const bytes = Uint8Array.from([1, 2, 3]);
+    const attachment = {
+      type: "localImage" as const,
+      name: "screen.png",
+      path: "/pwragent/turn-input-attachments/screen.png",
+    };
+    vi.mocked(stageTurnInputAttachments).mockResolvedValue([attachment]);
+    vi.mocked(dispatchStarMapIntake).mockResolvedValue({
+      status: "created",
+      requestId: "request-1",
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    await handlerFor(STAR_MAP_INTAKE_CHANNEL)({}, {
+      requestId: "request-1",
+      request: "Fix the screenshot issue",
+      imageUploads: [{ bytes, mimeType: "image/png", name: "screen.png" }],
+    });
+
+    expect(stageTurnInputAttachments).toHaveBeenCalledWith([{
+      type: "localImage",
+      data: bytes,
+      mimeType: "image/png",
+      name: "screen.png",
+    }]);
+    expect(dispatchStarMapIntake).toHaveBeenCalledWith({
+      requestId: "request-1",
+      request: "Fix the screenshot issue",
+      attachments: [attachment],
+    });
+  });
+
+  it("sends only staged attachment inputs to remote Star Map intake", async () => {
+    const bytes = Uint8Array.from([4, 5, 6]);
+    const attachment = {
+      type: "localImage" as const,
+      name: "remote.png",
+      path: "/pwragent/turn-input-attachments/remote.png",
+    };
+    const starMapIntake = vi.fn().mockResolvedValue({
+      status: "created",
+      requestId: "request-remote",
+      backend: "codex",
+      threadId: "remote-thread",
+    });
+    const remoteBackend = vi.fn().mockReturnValue({ starMapIntake });
+    vi.mocked(stageTurnInputAttachments).mockResolvedValue([attachment]);
+    vi.mocked(getDesktopFederationRuntime).mockReturnValue({
+      remoteBackend,
+    } as never);
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "peer-one",
+    };
+
+    await handlerFor(STAR_MAP_INTAKE_CHANNEL)({}, {
+      requestId: "request-remote",
+      request: "Investigate this image",
+      federationTarget,
+      imageUploads: [{ bytes, mimeType: "image/png", name: "remote.png" }],
+    });
+
+    expect(remoteBackend).toHaveBeenCalledWith(federationTarget);
+    expect(starMapIntake).toHaveBeenCalledWith({
+      requestId: "request-remote",
+      request: "Investigate this image",
+      attachments: [attachment],
+    });
+    expect(starMapIntake.mock.calls[0]?.[0]).not.toHaveProperty("imageUploads");
+  });
+
+  it("ignores renderer-nominated attachment paths", async () => {
+    vi.mocked(dispatchStarMapIntake).mockResolvedValue({
+      status: "needs_disambiguation",
+      requestId: "request-forged",
+      candidates: [],
+    });
+
+    await handlerFor(STAR_MAP_INTAKE_CHANNEL)({}, {
+      requestId: "request-forged",
+      request: "Use this path",
+      attachments: [{
+        type: "localImage",
+        path: "/private/peer-controlled.png",
+      }],
+    });
+
+    expect(stageTurnInputAttachments).not.toHaveBeenCalled();
+    expect(dispatchStarMapIntake).toHaveBeenCalledWith({
+      requestId: "request-forged",
+      request: "Use this path",
+    });
+  });
+
+  it("rejects image batches that bypass the renderer cap", async () => {
+    const imageUploads = Array.from({ length: 6 }, (_, index) => ({
+      bytes: Uint8Array.from([index + 1]),
+      mimeType: "image/png",
+      name: `screen-${index}.png`,
+    }));
+
+    await expect(handlerFor(STAR_MAP_INTAKE_CHANNEL)({}, {
+      requestId: "request-too-many",
+      request: "Too many images",
+      imageUploads,
+    })).rejects.toThrow(/at most 5 images/u);
+    expect(stageTurnInputAttachments).not.toHaveBeenCalled();
+    expect(dispatchStarMapIntake).not.toHaveBeenCalled();
   });
 });
