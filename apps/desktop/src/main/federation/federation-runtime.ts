@@ -244,6 +244,11 @@ import {
   type FederationStartTurnRequest,
 } from "./federation-backend-bridge";
 import {
+  FederationTurnInputAttachmentReceiver,
+  hasFederationTurnInputAttachments,
+  prepareOutgoingFederationTurnInput,
+} from "./federation-turn-input-attachments";
+import {
   applyFederationLeaseSnapshot,
   buildFederationHealthStatus,
   publicPeerSummary,
@@ -397,6 +402,7 @@ const DEFAULT_CAPABILITIES: FederationCapability[] = [
   // granted — but stays a dedicated capability so it is revocable on its own.
   "remote_pty",
   "event_subscriptions",
+  "turn_input_blobs",
 ];
 
 const REMOTE_THREAD_SUMMARY_EVENT_CONSUMER_ID =
@@ -778,6 +784,8 @@ export class DesktopFederationRuntime {
     }
   >();
   private ownedNavigationSnapshotTransport?: NavigationSnapshotTransport;
+  private readonly turnInputAttachmentReceiver =
+    new FederationTurnInputAttachmentReceiver();
   private readonly remotePeerDirectory = new Map<
     FederationInstanceId,
     FederationPeerSummary
@@ -1619,6 +1627,30 @@ export class DesktopFederationRuntime {
           ),
           target.instanceId,
         ),
+      async (input) => {
+        if (!hasFederationTurnInputAttachments(input)) {
+          return [...input];
+        }
+        if (
+          !this.remotePeerAdvertisesCapability(
+            target.instanceId,
+            "turn_input_blobs",
+          )
+        ) {
+          throw new Error(
+            `Federation instance ${target.instanceId} does not support binary turn attachments.`,
+          );
+        }
+        return await prepareOutgoingFederationTurnInput({
+          input,
+          localInstanceId: this.ensureLocalInstanceId(),
+          targetInstanceId: target.instanceId,
+          privateStorageRoots:
+            getDesktopBackendRegistry().getLocalFilePrivateStorageRoots(),
+          sendEnvelope: (envelope) =>
+            this.sendEnvelopeToTarget(target.instanceId, envelope),
+        });
+      },
     );
   }
 
@@ -2320,9 +2352,20 @@ export class DesktopFederationRuntime {
       },
       additionalRequiredCapabilities: additionalFederationBackendCapabilities,
     });
+    router.registerBlobChunkHandler(async (envelope) => {
+      await this.turnInputAttachmentReceiver.receive(
+        envelope,
+        envelope.sourceInstanceId,
+      );
+    });
     this.ownedNavigationSnapshotTransport = registerFederationBackendHandlers({
       router,
       backend: localBackendOperations(),
+      resolveTurnInput: async (input, sourceInstanceId) =>
+        await this.turnInputAttachmentReceiver.resolveInput(
+          input,
+          sourceInstanceId,
+        ),
       resolveSourceInstance: (instanceId) =>
         this.resolveThreadMessageOriginInstance(instanceId),
       onEnvironmentSetupProgress: (event, targetInstanceId) => {

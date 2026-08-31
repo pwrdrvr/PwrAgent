@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
   AppServerThreadMessageOrigin,
+  AppServerTurnInputItem,
   CreateInstanceThreadResult,
   CreateInstanceThreadToolArgs,
   FederationHealthStatus,
@@ -111,6 +112,9 @@ export function createFederationAgentToolsHandler(
       backend: CreateInstanceThreadResult["backend"];
       threadId: string;
     }) => Promise<void> | void;
+    resolveSourceTurnAttachments?: (
+      context: PwrAgentFederationContext,
+    ) => AppServerTurnInputItem[] | Promise<AppServerTurnInputItem[]>;
   } = {},
 ): PwrAgentFederationHandler {
   const runtime = options.runtime ?? getDesktopFederationRuntime;
@@ -140,6 +144,7 @@ export function createFederationAgentToolsHandler(
           collectHostInfo,
           options.targetStore,
           options.onRemoteChildMounted,
+          options.resolveSourceTurnAttachments,
         );
       }
       return await searchFederationThreads(
@@ -379,6 +384,9 @@ async function createInstanceThread(
     backend: CreateInstanceThreadResult["backend"];
     threadId: string;
   }) => Promise<void> | void) | undefined,
+  resolveSourceTurnAttachments: ((
+    context: PwrAgentFederationContext,
+  ) => AppServerTurnInputItem[] | Promise<AppServerTurnInputItem[]>) | undefined,
 ): Promise<PwrAgentFederationResponse> {
   const resolved = await resolveInstance(runtime, args.instanceId, collectHostInfo);
   if (!resolved.ok) {
@@ -428,6 +436,13 @@ async function createInstanceThread(
       threadId: context.threadId,
     },
   };
+  const attachmentInput = resolveSourceTurnAttachments
+    ? await resolveSourceTurnAttachments(context)
+    : [];
+  const input = [
+    ...(args.input ? [{ type: "text" as const, text: args.input }] : []),
+    ...attachmentInput,
+  ];
   const response = await backend.materializeDirectoryLaunchpad(
     {
       directoryKey: args.projectKey,
@@ -441,7 +456,7 @@ async function createInstanceThread(
               : {}),
           }
         : {}),
-      ...(args.input ? { input: [{ type: "text", text: args.input }] } : {}),
+      ...(input.length > 0 ? { input } : {}),
     },
     { messageOrigin },
   );

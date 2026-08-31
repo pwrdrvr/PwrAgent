@@ -1698,6 +1698,7 @@ const FEDERATION_CAPABILITY_LABELS: Record<FederationCapability, string> = {
   gateway_relay: "reach sibling instances",
   remote_pty: "open a remote terminal",
   event_subscriptions: "stream explicitly subscribed events",
+  turn_input_blobs: "transfer turn attachments",
 };
 
 function formatFederationCapabilities(

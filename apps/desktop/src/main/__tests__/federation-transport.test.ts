@@ -27,6 +27,7 @@ import { FederationSessionRegistry } from "../federation/federation-session-stat
 import { FederationStore } from "../federation/federation-store";
 import {
   connectFederationClient,
+  federationTransportCodecForTest,
   FederationGatewayWebSocketServer,
   FederationSocketKeepalive,
   type FederationKeepaliveSocket,
@@ -60,6 +61,41 @@ afterEach(async () => {
 });
 
 describe("federation transport", () => {
+  it("encodes blob bytes as a binary tail and rejects blob JSON envelopes", () => {
+    const data = Buffer.from([0, 1, 2, 0xff]);
+    const envelope = {
+      id: "blob-codec",
+      kind: "blob_chunk" as const,
+      protocolVersion: 1,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "gateway_one",
+      createdAt: 1_000,
+      transferId: "transfer-1",
+      chunkIndex: 0,
+      chunkCount: 1,
+      totalSize: data.byteLength,
+      sha256: "0".repeat(64),
+      name: "screen.png",
+      inputType: "localImage" as const,
+      data,
+    };
+
+    const wire = federationTransportCodecForTest.encodeEnvelope(envelope);
+    expect(wire.subarray(0, 8).toString("ascii")).toBe("PWRBLOB1");
+    const headerLength = wire.readUInt32BE(8);
+    const header = JSON.parse(wire.subarray(12, 12 + headerLength).toString("utf8"));
+    expect(header.envelope).not.toHaveProperty("data");
+    expect(JSON.stringify(header)).not.toContain(data.toString("base64"));
+    expect(wire.subarray(12 + headerLength)).toEqual(data);
+    expect(federationTransportCodecForTest.decodeEnvelope(wire)).toEqual(envelope);
+
+    const jsonWire = Buffer.from(JSON.stringify({
+      kind: "envelope",
+      envelope,
+    }), "utf8");
+    expect(federationTransportCodecForTest.decodeEnvelope(jsonWire)).toBeUndefined();
+  });
+
   it("authenticates a client and carries protocol envelopes", async () => {
     const clientKeyPair = generateFederationIdentityKeyPair();
     let closeCount = 0;
@@ -164,6 +200,67 @@ describe("federation transport", () => {
     // report "re-pair needed" instead of a generic connection loss.
     expect(lastCloseInfo).toMatchObject({ code: 4002, reason: "revoked" });
     expect(server?.closePeer("client_one")).toBe(false);
+  });
+
+  it("carries attachment bytes in the binary blob frame instead of JSON", async () => {
+    const clientKeyPair = generateFederationIdentityKeyPair();
+    const invite = createFederationEnrollmentInvite({
+      store,
+      token: "invite-token-binary-blob",
+      gatewayInstanceId: "gateway_one",
+      generatedAt: Date.now() - 1_000,
+      expiresAt: Date.now() + 60_000,
+    });
+    const received = new Promise<FederationProtocolEnvelope>((resolve) => {
+      server = new FederationGatewayWebSocketServer({
+        gatewayInstanceId: "gateway_one",
+        gatewayPrivateKeyPem: gatewayKeyPair.privateKeyPem,
+        gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+        host: "127.0.0.1",
+        port: 0,
+        store,
+        onEnvelope: resolve,
+      });
+    });
+    const { url } = await server!.start();
+    const client = await connectFederationClient({
+      url,
+      mode: "enroll",
+      gatewayInstanceId: "gateway_one",
+      gatewayPublicKeyPem: gatewayKeyPair.publicKeyPem,
+      peerInstanceId: "client_one",
+      privateKeyPem: clientKeyPair.privateKeyPem,
+      publicKeyPem: clientKeyPair.publicKeyPem,
+      capabilities: ["turn_input_blobs"],
+      inviteToken: invite.token,
+      label: "Client",
+      role: "client",
+    });
+    const bytes = Buffer.from([0, 1, 2, 0xff]);
+
+    client.sendEnvelope({
+      id: "blob-1",
+      kind: "blob_chunk",
+      protocolVersion: 1,
+      sourceInstanceId: "client_one",
+      targetInstanceId: "gateway_one",
+      createdAt: 1_000,
+      transferId: "transfer-1",
+      chunkIndex: 0,
+      chunkCount: 1,
+      totalSize: bytes.byteLength,
+      sha256: "0".repeat(64),
+      name: "screen.png",
+      inputType: "localImage",
+      data: bytes,
+    });
+
+    await expect(received).resolves.toMatchObject({
+      kind: "blob_chunk",
+      transferId: "transfer-1",
+      data: bytes,
+    });
+    client.close();
   });
 
   it("reports envelope wire bytes to both ends' transfer taps", async () => {

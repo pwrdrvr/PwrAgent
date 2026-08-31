@@ -29,7 +29,7 @@ export type ImageInputFileDependencies = {
 const defaultDependencies: ImageInputFileDependencies = {
   now: () => Date.now(),
   readFile,
-  resolveRoot: () => resolveActiveProfilePath(path.join("state", "image-inputs")),
+  resolveRoot: imageInputFileRoot,
   writeFile,
   mkdir,
   readdir,
@@ -37,6 +37,10 @@ const defaultDependencies: ImageInputFileDependencies = {
   unlink,
   rm,
 };
+
+export function imageInputFileRoot(): string {
+  return resolveActiveProfilePath(path.join("state", "image-inputs"));
+}
 
 export async function materializeLocalImageInputs(
   input: AppServerTurnInputItem[],

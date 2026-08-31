@@ -1,4 +1,5 @@
 import type {
+  FederationBlobChunkEnvelope,
   FederationCapability,
   FederationErrorEnvelope,
   FederationInstanceId,
@@ -26,6 +27,11 @@ export type FederationRequestHandler = (
   sourcePeerId?: FederationInstanceId,
 ) => Promise<unknown> | unknown;
 
+export type FederationBlobChunkHandler = (
+  envelope: FederationBlobChunkEnvelope,
+  sourcePeerId?: FederationInstanceId,
+) => Promise<void> | void;
+
 export type FederationRouteResult =
   | { status: "handled"; response?: FederationResponseEnvelope }
   | { status: "relayed"; targetInstanceId: FederationInstanceId }
@@ -34,6 +40,7 @@ export type FederationRouteResult =
 export class FederationRouter {
   private readonly connections = new Map<FederationInstanceId, FederationRouterConnection>();
   private readonly handlers = new Map<string, FederationRequestHandler>();
+  private blobChunkHandler?: FederationBlobChunkHandler;
 
   constructor(
     private readonly options: {
@@ -80,6 +87,10 @@ export class FederationRouter {
 
   registerHandler(method: string, handler: FederationRequestHandler): void {
     this.handlers.set(method, handler);
+  }
+
+  registerBlobChunkHandler(handler: FederationBlobChunkHandler): void {
+    this.blobChunkHandler = handler;
   }
 
   async routeEnvelope(params: {
@@ -134,12 +145,46 @@ export class FederationRouter {
         };
       }
     }
+    if (params.envelope.kind === "blob_chunk") {
+      const capabilityFailure = this.checkBlobChunkCapability(
+        params.envelope,
+        params.sourcePeerId,
+      );
+      if (capabilityFailure) {
+        this.replyToSource(params.sourcePeerId, capabilityFailure);
+        return {
+          status: "rejected",
+          code: capabilityFailure.error.code,
+          message: capabilityFailure.error.message,
+        };
+      }
+    }
 
     if (
       params.envelope.targetInstanceId &&
       params.envelope.targetInstanceId !== this.options.localInstanceId
     ) {
       return this.relayEnvelope(params);
+    }
+
+    if (params.envelope.kind === "blob_chunk") {
+      if (!this.blobChunkHandler) {
+        return {
+          status: "rejected",
+          code: "blob_handler_unavailable",
+          message: "Federation blob transfer is unavailable.",
+        };
+      }
+      try {
+        await this.blobChunkHandler(params.envelope, params.sourcePeerId);
+        return { status: "handled" };
+      } catch (error) {
+        return {
+          status: "rejected",
+          code: "blob_transfer_failed",
+          message: error instanceof Error ? error.message : String(error),
+        };
+      }
     }
 
     if (params.envelope.kind !== "request") {
@@ -281,6 +326,19 @@ export class FederationRouter {
     return this.errorEnvelope(envelope, {
       code: "capability_denied",
       message: `Method ${envelope.method} requires ${requiredCapability}.`,
+    });
+  }
+
+  private checkBlobChunkCapability(
+    envelope: FederationBlobChunkEnvelope,
+    sourcePeerId: FederationInstanceId | undefined,
+  ): FederationErrorEnvelope | undefined {
+    if (!sourcePeerId) return undefined;
+    const source = this.connections.get(sourcePeerId);
+    if (source?.capabilities.includes("turn_input_blobs")) return undefined;
+    return this.errorEnvelope(envelope, {
+      code: "capability_denied",
+      message: "Federation blob transfer requires turn_input_blobs.",
     });
   }
 

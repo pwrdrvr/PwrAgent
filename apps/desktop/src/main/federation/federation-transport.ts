@@ -74,6 +74,10 @@ export const FEDERATION_KEEPALIVE_INTERVAL_MS = 15_000;
  * peer can force that allocation per frame.
  */
 export const FEDERATION_MAX_FRAME_BYTES = 16 * 1024 * 1024;
+const FEDERATION_BLOB_FRAME_MAGIC = Buffer.from("PWRBLOB1", "ascii");
+const FEDERATION_BLOB_FRAME_PREFIX_BYTES =
+  FEDERATION_BLOB_FRAME_MAGIC.byteLength + 4;
+const FEDERATION_BLOB_FRAME_MAX_HEADER_BYTES = 64 * 1024;
 
 /**
  * The socket surface the keepalive watchdog needs. Structural (rather than
@@ -1208,8 +1212,8 @@ function sendFrame(
   transport?: NoiseTransport,
 ): number {
   if (socket.readyState !== WebSocket.OPEN) return 0;
-  const json = Buffer.from(JSON.stringify(message), "utf8");
-  const wire = transport ? transport.encrypt(json) : json;
+  const payload = encodeFederationSocketPayload(message);
+  const wire = transport ? transport.encrypt(payload) : payload;
   socket.send(wire);
   return wire.byteLength;
 }
@@ -1223,16 +1227,54 @@ function decodeFrame(
   frame: Buffer,
   transport?: NoiseTransport,
 ): FederationSocketMessage | undefined {
-  let json = frame;
+  let payload = frame;
   if (transport) {
     try {
-      json = transport.decrypt(frame);
+      payload = transport.decrypt(frame);
     } catch {
       throw new FederationFrameAuthenticationError();
     }
   }
+  return decodeFederationSocketPayload(payload);
+}
+
+function encodeFederationSocketPayload(
+  message: FederationSocketMessage,
+): Buffer {
+  if (
+    message.kind !== "envelope"
+    || message.envelope.kind !== "blob_chunk"
+  ) {
+    return Buffer.from(JSON.stringify(message), "utf8");
+  }
+  const { data, ...headerEnvelope } = message.envelope;
+  const header = Buffer.from(
+    JSON.stringify({ kind: "envelope", envelope: headerEnvelope }),
+    "utf8",
+  );
+  if (header.byteLength > FEDERATION_BLOB_FRAME_MAX_HEADER_BYTES) {
+    throw new Error("Federation blob frame header is too large.");
+  }
+  const prefix = Buffer.allocUnsafe(FEDERATION_BLOB_FRAME_PREFIX_BYTES);
+  FEDERATION_BLOB_FRAME_MAGIC.copy(prefix, 0);
+  prefix.writeUInt32BE(header.byteLength, FEDERATION_BLOB_FRAME_MAGIC.byteLength);
+  return Buffer.concat([prefix, header, Buffer.from(data)]);
+}
+
+function decodeFederationSocketPayload(
+  payload: Buffer,
+): FederationSocketMessage | undefined {
+  if (
+    payload.byteLength >= FEDERATION_BLOB_FRAME_PREFIX_BYTES
+    && payload.subarray(0, FEDERATION_BLOB_FRAME_MAGIC.byteLength)
+      .equals(FEDERATION_BLOB_FRAME_MAGIC)
+  ) {
+    return decodeFederationBlobSocketPayload(payload);
+  }
   try {
-    const parsed = JSON.parse(json.toString("utf8")) as Partial<FederationSocketMessage>;
+    const parsed = JSON.parse(
+      payload.toString("utf8"),
+    ) as Partial<FederationSocketMessage>;
     if (
       parsed.kind === "transport.hello"
       && isTransportHelloMessage(parsed)
@@ -1245,7 +1287,11 @@ function decodeFrame(
     if (parsed.kind === "auth.rejected" && parsed.failure) {
       return parsed as FederationSocketRejectedMessage;
     }
-    if (parsed.kind === "envelope" && parsed.envelope) {
+    if (
+      parsed.kind === "envelope"
+      && parsed.envelope
+      && parsed.envelope.kind !== "blob_chunk"
+    ) {
       return parsed as FederationSocketEnvelopeMessage;
     }
     return undefined;
@@ -1253,6 +1299,61 @@ function decodeFrame(
     return undefined;
   }
 }
+
+function decodeFederationBlobSocketPayload(
+  payload: Buffer,
+): FederationSocketMessage | undefined {
+  const headerLength = payload.readUInt32BE(
+    FEDERATION_BLOB_FRAME_MAGIC.byteLength,
+  );
+  if (
+    headerLength <= 0
+    || headerLength > FEDERATION_BLOB_FRAME_MAX_HEADER_BYTES
+    || FEDERATION_BLOB_FRAME_PREFIX_BYTES + headerLength > payload.byteLength
+  ) {
+    return undefined;
+  }
+  try {
+    const header = JSON.parse(
+      payload
+        .subarray(
+          FEDERATION_BLOB_FRAME_PREFIX_BYTES,
+          FEDERATION_BLOB_FRAME_PREFIX_BYTES + headerLength,
+        )
+        .toString("utf8"),
+    ) as Partial<FederationSocketEnvelopeMessage>;
+    if (
+      header.kind !== "envelope"
+      || !header.envelope
+      || header.envelope.kind !== "blob_chunk"
+      || Object.hasOwn(header.envelope, "data")
+    ) {
+      return undefined;
+    }
+    return {
+      kind: "envelope",
+      envelope: {
+        ...header.envelope,
+        data: payload.subarray(
+          FEDERATION_BLOB_FRAME_PREFIX_BYTES + headerLength,
+        ),
+      },
+    } as FederationSocketEnvelopeMessage;
+  } catch {
+    return undefined;
+  }
+}
+
+/** @internal Narrow wire-codec seam for protocol conformance tests. */
+export const federationTransportCodecForTest = {
+  encodeEnvelope(envelope: FederationProtocolEnvelope): Buffer {
+    return encodeFederationSocketPayload({ kind: "envelope", envelope });
+  },
+  decodeEnvelope(payload: Buffer): FederationProtocolEnvelope | undefined {
+    const decoded = decodeFederationSocketPayload(payload);
+    return decoded?.kind === "envelope" ? decoded.envelope : undefined;
+  },
+};
 
 class FederationFrameAuthenticationError extends Error {
   constructor() {
