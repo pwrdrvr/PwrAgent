@@ -8199,8 +8199,12 @@ textarea,
 }
 
 /* Section row: caret gutter + label button. Every row reserves the
-   22px gutter (caret button or spacer) so section labels align whether
-   or not the section expands into a sublist. */
+   24px gutter (caret button or spacer) so section labels align whether
+   or not the section expands into a sublist. The gutter is 24px rather
+   than the mark's visual width because the caret is a real click
+   target sitting flush against the label button: WCAG 2.2 target-size
+   (AA) wants 24x24, and adjacency rules out the spacing exception.
+   `a11y.spec.ts` gates this. */
 .settings-nav__row {
   display: flex;
   align-items: stretch;
@@ -8210,8 +8214,8 @@ textarea,
 .settings-nav__caret,
 .settings-nav__caret-spacer {
   display: inline-flex;
-  flex: 0 0 22px;
-  width: 22px;
+  flex: 0 0 24px;
+  width: 24px;
   align-items: center;
   justify-content: center;
 }
@@ -8307,14 +8311,17 @@ textarea,
   overflow: hidden;
 }
 
+/* Indent = the row's 24px caret gutter + the label button's 12px
+   padding, so the sublist's left rule lands under the section label's
+   first character. */
 .settings-nav__subbutton {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: calc(100% - 34px);
+  width: calc(100% - 36px);
   appearance: none;
   cursor: pointer;
-  margin: 0 0 2px 34px;
+  margin: 0 0 2px 36px;
   padding: 6px 10px;
   border: 0;
   border-left: 1px solid var(--border-subtle);
