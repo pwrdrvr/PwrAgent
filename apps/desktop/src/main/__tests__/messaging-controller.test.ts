@@ -16237,11 +16237,11 @@ describe("MessagingController", () => {
             output: [
               {
                 type: "text",
-                text: "First final fragment.",
+                text: "The build completed successfully and every signed release artifact is ready for publication.",
               },
               {
                 type: "text",
-                text: "Second final fragment.",
+                text: "The operator documentation was updated and the acceptance smoke passed from end to end.",
               },
             ],
           },
@@ -16257,7 +16257,70 @@ describe("MessagingController", () => {
       expect.objectContaining({
         parts: [
           expect.objectContaining({
-            text: "First final fragment.\n\nSecond final fragment.",
+            text: [
+              "The build completed successfully and every signed release artifact is ready for publication.",
+              "The operator documentation was updated and the acceptance smoke passed from end to end.",
+            ].join("\n\n"),
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it("keeps only the final completion fragment when terminal output nearly repeats itself", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    harness.delivered.length = 0;
+
+    await harness.controller.handleBackendEvent({
+      backend: "codex",
+      notification: {
+        method: "turn/completed",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          turn: {
+            id: "turn-1",
+            status: "completed",
+            output: [
+              {
+                type: "text",
+                text: [
+                  "I’ll check the current messaging/thread binding. This Discord thread is bound to a PwrAgent thread.",
+                  "",
+                  "- PwrAgent title: Token Miser release. acceptance smoke. Do not edit files...",
+                  "- Discord thread title: Token Miser release — acceptance smoke",
+                ].join("\n"),
+              },
+              {
+                type: "text",
+                text: [
+                  "Yes. This Discord thread is bound to a PwrAgent thread.",
+                  "",
+                  "- PwrAgent title: Token Miser release. acceptance smoke. Do not edit files...",
+                  "- Discord thread title: Token Miser release — acceptance smoke",
+                ].join("\n"),
+              },
+            ],
+          },
+        },
+      },
+    } satisfies AgentEvent);
+
+    expect(
+      harness.delivered.filter(
+        (intent) => intent.kind === "message" && intent.role === "assistant",
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        parts: [
+          expect.objectContaining({
+            text: [
+              "Yes. This Discord thread is bound to a PwrAgent thread.",
+              "",
+              "- PwrAgent title: Token Miser release. acceptance smoke. Do not edit files...",
+              "- Discord thread title: Token Miser release — acceptance smoke",
+            ].join("\n"),
           }),
         ],
       }),
