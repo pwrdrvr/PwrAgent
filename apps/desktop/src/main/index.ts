@@ -258,40 +258,17 @@ let startupCpuProfilerForNewWindows:
   | undefined;
 
 // --- Boot failure surfacing -------------------------------------------------
-// A failed startup must never leave the app "running but unusable" with no
-// explanation. We track whether the main window ever became visible; if boot
-// rejects (a throw anywhere in the whenReady chain) or simply never produces a
-// visible window within a grace period, we log it and put a native dialog in
-// front of the user with the actual error and a one-click path to the log
-// file. This is the backstop for the class of incident where an automation row
-// written by a newer build threw during startup reconciliation, rejected the
-// whenReady promise, and silently aborted the rest of boot — no window, no
-// dialog, not even a log line.
-const BOOT_WATCHDOG_MS = 25_000;
+// A rejected startup must never leave the app "running but unusable" with no
+// explanation. We track whether the main window ever became visible so an
+// actual startup error can be surfaced before first paint. Do not infer failure
+// from elapsed time: macOS can defer window visibility while the login session
+// is locked even though startup succeeded and the window will appear later.
 let mainWindowEverShown = false;
 let bootFailureSurfaced = false;
-let bootWatchdogTimer: NodeJS.Timeout | undefined;
 let lastBootError: unknown;
-
-function clearBootWatchdog(): void {
-  if (bootWatchdogTimer) {
-    clearTimeout(bootWatchdogTimer);
-    bootWatchdogTimer = undefined;
-  }
-}
-
-function startBootWatchdog(): void {
-  clearBootWatchdog();
-  bootWatchdogTimer = setTimeout(() => {
-    surfaceBootFailure("watchdog-timeout");
-  }, BOOT_WATCHDOG_MS);
-  // Never let the watchdog itself keep the process alive.
-  bootWatchdogTimer.unref?.();
-}
 
 function markMainWindowBooted(): void {
   mainWindowEverShown = true;
-  clearBootWatchdog();
 }
 
 function formatBootError(error: unknown): string {
@@ -309,7 +286,6 @@ function surfaceBootFailure(reason: string, error?: unknown): void {
     return;
   }
   bootFailureSurfaced = true;
-  clearBootWatchdog();
   const detail = error ?? lastBootError;
   const logFilePath = getMainLogFilePath();
   mainLog.error("startup failed before the main window appeared", {
@@ -367,10 +343,9 @@ function installBootErrorHandlers(): void {
   bootErrorHandlersInstalled = true;
   // We deliberately do NOT register an uncaughtException handler here: doing so
   // would change Node/Electron's crash semantics for *post*-boot exceptions.
-  // The watchdog above is the catch-all for "the window never appeared" no
-  // matter how boot failed; this handler just gives faster, more specific
-  // reporting for the common async-rejection case and ensures stray rejections
-  // are always logged (previously they produced no log line at all).
+  // This handler gives specific reporting for the common async-rejection case
+  // and ensures stray rejections are always logged (previously they produced no
+  // log line at all).
   process.on("unhandledRejection", (reason) => {
     mainLog.error("unhandled promise rejection", {
       bootCompleted: mainWindowEverShown,
@@ -1152,7 +1127,6 @@ export function bootstrapApp(): void {
   installBootErrorHandlers();
 
   app.whenReady().then(async () => {
-    startBootWatchdog();
     const startupCpuProfiler = new StartupCpuProfiler();
     startupCpuProfilerForNewWindows = startupCpuProfiler;
     await startupCpuProfiler.start();
