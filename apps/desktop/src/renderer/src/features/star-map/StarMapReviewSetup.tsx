@@ -16,6 +16,7 @@ import {
   type ReviewRunMode,
 } from "@pwragent/shared";
 import { resolveReviewRunMode } from "../../lib/review-run-mode";
+import { ReviewLocationDropdown } from "../composer/ReviewLocationDropdown";
 
 type ReviewTargetChoice = AppServerReviewTarget["type"];
 
@@ -199,7 +200,6 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
   const dialogRef = useRef<HTMLElement | null>(null);
   const branchListId = useId();
   const commitListId = useId();
-  const reviewLocationHelpId = useId();
 
   useEffect(() => {
     // The compact editor also synchronizes editability when this mounts and
@@ -266,8 +266,13 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
       if (!dialog || !(targetNode instanceof Node)) return;
       const ownerCard = dialog.closest(".star-map-chat-card");
       if (!ownerCard?.contains(targetNode)) return;
+      const targetElement =
+        targetNode instanceof HTMLElement ? targetNode : undefined;
 
       if (event.key === "Escape" && !submitting) {
+        if (targetElement?.closest(".composer-dropdown")) {
+          return;
+        }
         event.preventDefault();
         event.stopPropagation();
         onCancel();
@@ -283,8 +288,6 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
         return;
       }
 
-      const targetElement =
-        targetNode instanceof HTMLElement ? targetNode : undefined;
       const insideDialog = dialog.contains(targetNode);
       const insideDisabledComposer = Boolean(
         targetElement?.closest(".compact-composer"),
@@ -292,6 +295,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
       if (!insideDialog && !insideDisabledComposer) return;
       if (
         targetElement?.closest("textarea, select")
+        || targetElement?.closest(".composer-dropdown")
         || targetElement?.closest("[data-review-dismiss]")
       ) {
         return;
@@ -471,68 +475,13 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
             </label>
           ) : null}
 
-          <div className="composer__review-field composer__review-location">
-            <span>Review location</span>
-            <div
-              className={`composer__review-location-control${
-                reviewRunModeDecision.helpText ? " tooltip-target" : ""
-              }`}
-              data-tooltip={reviewRunModeDecision.helpText}
-              tabIndex={reviewRunModeDecision.helpText ? 0 : undefined}
-            >
-              <div
-                aria-describedby={
-                  reviewRunModeDecision.helpText
-                    ? reviewLocationHelpId
-                    : undefined
-                }
-                aria-disabled={reviewRunModeDecision.controlDisabled}
-                aria-label="Review location"
-                className="settings-segmented"
-                role="radiogroup"
-              >
-                <button
-                  aria-checked={reviewRunModeDecision.runMode === "inline"}
-                  className={`settings-segmented__button${
-                    reviewRunModeDecision.runMode === "inline"
-                      ? " is-active"
-                      : ""
-                  }`}
-                  disabled={reviewRunModeDecision.controlDisabled}
-                  onClick={() => setRunMode("inline")}
-                  role="radio"
-                  type="button"
-                >
-                  This thread
-                </button>
-                <button
-                  aria-checked={
-                    reviewRunModeDecision.runMode === "managed-child"
-                  }
-                  className={`settings-segmented__button${
-                    reviewRunModeDecision.runMode === "managed-child"
-                      ? " is-active"
-                      : ""
-                  }`}
-                  disabled={
-                    reviewRunModeDecision.controlDisabled
-                    || reviewRunModeDecision.separateThreadDisabled
-                  }
-                  onClick={() => setRunMode("managed-child")}
-                  role="radio"
-                  type="button"
-                >
-                  Separate thread
-                </button>
-              </div>
-              {reviewRunModeDecision.helpText ? (
-                <small
-                  className="composer__review-location-help"
-                  id={reviewLocationHelpId}
-                >
-                  {reviewRunModeDecision.helpText}
-                </small>
-              ) : null}
+          <div className="composer__review-field composer__review-reviewer">
+            <span>Reviewer</span>
+            <div className="composer__review-reviewer-chips">
+              <ReviewLocationDropdown
+                decision={reviewRunModeDecision}
+                onChange={setRunMode}
+              />
             </div>
           </div>
 

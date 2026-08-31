@@ -123,7 +123,10 @@ test("managed review failure leaves one start marker and clears Stop state", asy
     await fixture.app.window.getByLabel("Reply").fill("/review");
     await fixture.app.window.getByRole("button", { name: "Send" }).click();
     await fixture.app.window
-      .getByRole("radio", { name: "Separate thread" })
+      .getByRole("button", { name: "Review location" })
+      .press("Enter");
+    await fixture.app.window
+      .getByRole("option", { name: "Separate thread" })
       .click();
     await fixture.app.window
       .getByRole("button", { name: "Start review" })

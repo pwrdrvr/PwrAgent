@@ -190,6 +190,7 @@ import {
   useDismissableMenu,
 } from "./ComposerDropdown";
 import type { ComposerDropdownIcon, ComposerDropdownOption } from "./ComposerDropdown";
+import { ReviewLocationDropdown } from "./ReviewLocationDropdown";
 import { ReferencePicker, type ReferencePickerFile } from "./ReferencePicker";
 import { REMOTE_NATIVE_PICKER_TOOLTIP } from "./native-picker-boundary";
 import { TranscriptCopyButton } from "../thread-detail/TranscriptCopyButton";
@@ -3148,7 +3149,6 @@ export function Composer(props: ComposerProps) {
   }>({ maxHeight: 320, placement: "above" });
   const [activeOptimisticMessageId, setActiveOptimisticMessageId] = useState<string>();
   const [reviewConfig, setReviewConfig] = useState<ReviewConfigState>();
-  const reviewLocationHelpId = useId();
   // Tagged with the owning instance the same way recent file references are:
   // a combination remembered on another instance names models that instance
   // has, so a response that lands after the thread changed must not paint.
@@ -10759,198 +10759,130 @@ export function Composer(props: ComposerProps) {
             ) : null}
 
             {props.thread ? (
-              <div className="composer__review-field composer__review-location">
-                <span>Review location</span>
-                <div
-                  className={`composer__review-location-control${
-                    reviewRunModeDecision.helpText ? " tooltip-target" : ""
-                  }`}
-                  data-tooltip={reviewRunModeDecision.helpText}
-                  tabIndex={reviewRunModeDecision.helpText ? 0 : undefined}
-                >
-                  <div
-                    aria-describedby={
-                      reviewRunModeDecision.helpText
-                        ? reviewLocationHelpId
-                        : undefined
-                    }
-                    aria-disabled={reviewRunModeDecision.controlDisabled}
-                    aria-label="Review location"
-                    className="settings-segmented"
-                    role="radiogroup"
-                  >
-                    <button
-                      aria-checked={reviewRunModeDecision.runMode === "inline"}
-                      className={`settings-segmented__button${
-                        reviewRunModeDecision.runMode === "inline"
-                          ? " is-active"
-                          : ""
-                      }`}
-                      disabled={reviewRunModeDecision.controlDisabled}
-                      onClick={() => {
-                        setReviewConfig((current) => ({
-                          ...(current ?? createReviewConfig({
-                            directory: props.directory,
-                            thread: props.thread,
-                          })),
-                          runMode: "inline",
-                        }));
-                        setSendError(undefined);
-                      }}
-                      role="radio"
-                      type="button"
-                    >
-                      This thread
-                    </button>
-                    <button
-                      aria-checked={
-                        reviewRunModeDecision.runMode === "managed-child"
-                      }
-                      className={`settings-segmented__button${
-                        reviewRunModeDecision.runMode === "managed-child"
-                          ? " is-active"
-                          : ""
-                      }`}
-                      disabled={
-                        reviewRunModeDecision.controlDisabled
-                        || reviewRunModeDecision.separateThreadDisabled
-                      }
-                      onClick={() => {
-                        setReviewConfig((current) => ({
-                          ...(current ?? createReviewConfig({
-                            directory: props.directory,
-                            thread: props.thread,
-                          })),
-                          runMode: "managed-child",
-                        }));
-                        setSendError(undefined);
-                      }}
-                      role="radio"
-                      type="button"
-                    >
-                      Separate thread
-                    </button>
-                  </div>
-                  {reviewRunModeDecision.helpText ? (
-                    <small
-                      className="composer__review-location-help"
-                      id={reviewLocationHelpId}
-                    >
-                      {reviewRunModeDecision.helpText}
-                    </small>
-                  ) : null}
-                </div>
-              </div>
-            ) : null}
-
-            {reviewerOverridesSupported ? (
               <div className="composer__review-field composer__review-reviewer">
                 <span>Reviewer</span>
                 <div className="composer__review-reviewer-chips">
-                  <ComposerDropdown
-                    ariaLabel="Review provider"
-                    id="composer-review-provider"
-                    options={reviewerBackendOptions.map((candidate) => ({
-                      label: formatBackendLabel(candidate.kind, props.backends),
-                      value: candidate.kind,
-                    }))}
-                    value={reviewerSelection.backend ?? ""}
-                    onChange={(value) => {
-                      patchReviewer(() => ({
-                        backend: value as AppServerBackendKind,
+                  {reviewerOverridesSupported ? (
+                    <>
+                      <ComposerDropdown
+                        ariaLabel="Review provider"
+                        id="composer-review-provider"
+                        options={reviewerBackendOptions.map((candidate) => ({
+                          label: formatBackendLabel(candidate.kind, props.backends),
+                          value: candidate.kind,
+                        }))}
+                        value={reviewerSelection.backend ?? ""}
+                        onChange={(value) => {
+                          patchReviewer(() => ({
+                            backend: value as AppServerBackendKind,
+                          }));
+                        }}
+                      />
+                      {reviewerModelOptions.length > 0 ? (
+                        <ComposerDropdown
+                          ariaLabel="Review model"
+                          id="composer-review-model"
+                          options={reviewerModelOptions.map((option) => ({
+                            label: option.label ?? option.id,
+                            value: option.id,
+                          }))}
+                          value={reviewerSelection.model?.id ?? ""}
+                          onChange={(value) => {
+                            patchReviewer((current) => {
+                              const backend =
+                                current?.backend ?? reviewerSelection.backend;
+                              return backend ? { backend, model: value } : current;
+                            });
+                          }}
+                        />
+                      ) : null}
+                      {reviewerReasoningOptions.length > 0 ? (
+                        <ComposerDropdown
+                          ariaLabel="Review reasoning"
+                          id="composer-review-reasoning"
+                          options={reviewerReasoningOptions.map((effort) => ({
+                            label: effort,
+                            value: effort,
+                          }))}
+                          value={reviewerSelection.reasoningEffort ?? ""}
+                          onChange={(value) => {
+                            patchReviewer((current) => {
+                              const backend =
+                                current?.backend ?? reviewerSelection.backend;
+                              if (!backend) {
+                                return current;
+                              }
+                              return {
+                                backend,
+                                ...(reviewerSelection.model?.id
+                                  ? { model: reviewerSelection.model.id }
+                                  : {}),
+                                reasoningEffort: value,
+                              };
+                            });
+                          }}
+                        />
+                      ) : null}
+                      {resolvableReviewerRecents.length > 0 ? (
+                        <ComposerDropdown
+                          ariaLabel="Recent reviewer settings"
+                          id="composer-review-recents"
+                          options={[
+                            // Sentinel so the trigger reads "Recent" until a
+                            // remembered combination is actually applied; the
+                            // dropdown falls back to the first option whenever the
+                            // value matches nothing.
+                            { label: "Recent", value: "" },
+                            ...resolvableReviewerRecents.map((recent, index) => ({
+                              label: formatReviewerRecentLabel(
+                                recent,
+                                props.backends,
+                              ),
+                              value: String(index),
+                            })),
+                          ]}
+                          tooltip="Reuse a recent reviewer"
+                          value={
+                            activeReviewerRecentIndex >= 0
+                              ? String(activeReviewerRecentIndex)
+                              : ""
+                          }
+                          onChange={(value) => {
+                            const picked = resolvableReviewerRecents[Number(value)];
+                            if (picked) {
+                              patchReviewer(() => picked);
+                            }
+                          }}
+                        />
+                      ) : null}
+                      {reviewerOverridden ? (
+                        <button
+                          type="button"
+                          aria-label="Reset reviewer to thread settings"
+                          className="composer__toggle tooltip-target"
+                          data-tooltip="Reset the reviewer to this thread's provider, model, and reasoning"
+                          onClick={() => {
+                            patchReviewer(() => undefined);
+                          }}
+                        >
+                          ↺
+                        </button>
+                      ) : null}
+                    </>
+                  ) : null}
+                  <ReviewLocationDropdown
+                    decision={reviewRunModeDecision}
+                    onChange={(runMode) => {
+                      setReviewConfig((current) => ({
+                        ...(current ?? createReviewConfig({
+                          directory: props.directory,
+                          thread: props.thread,
+                        })),
+                        runMode,
                       }));
+                      setSendError(undefined);
                     }}
                   />
-                  {reviewerModelOptions.length > 0 ? (
-                    <ComposerDropdown
-                      ariaLabel="Review model"
-                      id="composer-review-model"
-                      options={reviewerModelOptions.map((option) => ({
-                        label: option.label ?? option.id,
-                        value: option.id,
-                      }))}
-                      value={reviewerSelection.model?.id ?? ""}
-                      onChange={(value) => {
-                        patchReviewer((current) => {
-                          const backend =
-                            current?.backend ?? reviewerSelection.backend;
-                          return backend ? { backend, model: value } : current;
-                        });
-                      }}
-                    />
-                  ) : null}
-                  {reviewerReasoningOptions.length > 0 ? (
-                    <ComposerDropdown
-                      ariaLabel="Review reasoning"
-                      id="composer-review-reasoning"
-                      options={reviewerReasoningOptions.map((effort) => ({
-                        label: effort,
-                        value: effort,
-                      }))}
-                      value={reviewerSelection.reasoningEffort ?? ""}
-                      onChange={(value) => {
-                        patchReviewer((current) => {
-                          const backend =
-                            current?.backend ?? reviewerSelection.backend;
-                          if (!backend) {
-                            return current;
-                          }
-                          return {
-                            backend,
-                            ...(reviewerSelection.model?.id
-                              ? { model: reviewerSelection.model.id }
-                              : {}),
-                            reasoningEffort: value,
-                          };
-                        });
-                      }}
-                    />
-                  ) : null}
-                  {resolvableReviewerRecents.length > 0 ? (
-                    <ComposerDropdown
-                      ariaLabel="Recent reviewer settings"
-                      id="composer-review-recents"
-                      options={[
-                        // Sentinel so the trigger reads "Recent" until a
-                        // remembered combination is actually applied; the
-                        // dropdown falls back to the first option whenever the
-                        // value matches nothing.
-                        { label: "Recent", value: "" },
-                        ...resolvableReviewerRecents.map((recent, index) => ({
-                          label: formatReviewerRecentLabel(
-                            recent,
-                            props.backends,
-                          ),
-                          value: String(index),
-                        })),
-                      ]}
-                      tooltip="Reuse a recent reviewer"
-                      value={
-                        activeReviewerRecentIndex >= 0
-                          ? String(activeReviewerRecentIndex)
-                          : ""
-                      }
-                      onChange={(value) => {
-                        const picked = resolvableReviewerRecents[Number(value)];
-                        if (picked) {
-                          patchReviewer(() => picked);
-                        }
-                      }}
-                    />
-                  ) : null}
-                  {reviewerOverridden ? (
-                    <button
-                      type="button"
-                      aria-label="Reset reviewer to thread settings"
-                      className="composer__toggle tooltip-target"
-                      data-tooltip="Reset the reviewer to this thread's provider, model, and reasoning"
-                      onClick={() => {
-                        patchReviewer(() => undefined);
-                      }}
-                    >
-                      ↺
-                    </button>
-                  ) : null}
                 </div>
               </div>
             ) : null}

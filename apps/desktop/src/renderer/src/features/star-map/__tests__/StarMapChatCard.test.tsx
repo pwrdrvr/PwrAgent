@@ -1146,6 +1146,32 @@ describe("StarMapChatCard slash commands", () => {
     expect(desktopApi.startReview).not.toHaveBeenCalled();
   });
 
+  it("lets Escape close the review location chip without cancelling setup", async () => {
+    const desktopApi = buildApi({ startReview: vi.fn() });
+    renderCard({ desktopApi, thread: localThread() });
+    const input = screen.getByRole("textbox", { name: "Message Local work" });
+    fireEvent.change(input, { target: { value: "/review" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    const dialog = await screen.findByRole("dialog", {
+      name: "Start review for Local work",
+    });
+    const location = within(dialog).getByRole("button", {
+      name: "Review location",
+    });
+    fireEvent.click(location);
+    expect(within(dialog).getByRole("listbox")).toBeTruthy();
+
+    fireEvent.keyDown(location, { key: "Escape" });
+
+    expect(
+      screen.getByRole("dialog", { name: "Start review for Local work" }),
+    ).toBeTruthy();
+    await waitFor(() => {
+      expect(within(dialog).queryByRole("listbox")).toBeNull();
+    });
+    expect(desktopApi.startReview).not.toHaveBeenCalled();
+  });
+
   it("starts the selected review on Enter even if the disabled editor kept focus", async () => {
     const startReview = vi.fn(async () => ({
       backend: "codex" as const,

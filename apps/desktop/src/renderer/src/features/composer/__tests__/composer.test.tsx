@@ -5679,14 +5679,15 @@ describe("Composer", () => {
         name: "Reset reviewer to thread settings",
       })
     ).toBeInTheDocument();
-    const location = within(reviewTarget).getByRole("radiogroup", {
+    const location = within(reviewTarget).getByRole("button", {
       name: "Review location",
     });
-    expect(location).toHaveAttribute("aria-disabled", "true");
+    expect(location).toBeDisabled();
+    expect(location).toHaveAttribute("data-value", "managed-child");
     expect(
-      within(location).getByRole("radio", { name: "Separate thread" }),
-    ).toHaveAttribute("aria-checked", "true");
-    expect(location.parentElement?.getAttribute("data-tooltip")).toMatch(
+      location.closest(".composer__review-location-chip")
+        ?.getAttribute("data-tooltip"),
+    ).toMatch(
       /Grok, a different provider/,
     );
 
@@ -9932,18 +9933,11 @@ describe("Composer", () => {
     });
     fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
 
-    const location = screen.getByRole("radiogroup", {
-      name: "Review location",
-    });
-    expect(
-      within(location).getByRole("radio", { name: "This thread" }),
-    ).toHaveAttribute("aria-checked", "true");
-    const separate = within(location).getByRole("radio", {
-      name: "Separate thread",
-    });
-    expect(separate).toBeEnabled();
-    fireEvent.click(separate);
-    expect(separate).toHaveAttribute("aria-checked", "true");
+    const location = screen.getByRole("button", { name: "Review location" });
+    expect(location).toHaveAttribute("data-value", "inline");
+    fireEvent.click(location);
+    fireEvent.click(screen.getByRole("option", { name: "Separate thread" }));
+    expect(location).toHaveAttribute("data-value", "managed-child");
 
     await clickButton("Start review");
 
@@ -9988,19 +9982,11 @@ describe("Composer", () => {
     });
     fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
 
-    const location = screen.getByRole("radiogroup", {
-      name: "Review location",
-    });
-    const separate = within(location).getByRole("radio", {
-      name: "Separate thread",
-    });
+    const location = screen.getByRole("button", { name: "Review location" });
+    fireEvent.click(location);
+    const separate = screen.getByRole("option", { name: "Separate thread" });
     expect(separate).toBeDisabled();
-    const helpId = location.getAttribute("aria-describedby");
-    expect(helpId).toBeTruthy();
-    expect(document.getElementById(helpId!)).toHaveTextContent(
-      "Codex cannot run a managed review in a separate thread.",
-    );
-    expect(location.parentElement).toHaveAttribute(
+    expect(location.closest(".composer__review-location-chip")).toHaveAttribute(
       "data-tooltip",
       "Codex cannot run a managed review in a separate thread.",
     );
@@ -10071,14 +10057,13 @@ describe("Composer", () => {
           "/Users/example/.codex/profiles/sample/worktrees/tree-gamma/tea-recommendations",
       },
     });
-    const location = screen.getByRole("radiogroup", {
-      name: "Review location",
-    });
-    expect(location).toHaveAttribute("aria-disabled", "true");
+    const location = screen.getByRole("button", { name: "Review location" });
+    expect(location).toBeDisabled();
+    expect(location).toHaveAttribute("data-value", "managed-child");
     expect(
-      within(location).getByRole("radio", { name: "Separate thread" }),
-    ).toHaveAttribute("aria-checked", "true");
-    expect(location.parentElement?.getAttribute("data-tooltip")).toMatch(
+      location.closest(".composer__review-location-chip")
+        ?.getAttribute("data-tooltip"),
+    ).toMatch(
       /not this thread's primary workspace/,
     );
     await clickButton("Start review");
