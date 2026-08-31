@@ -7231,7 +7231,7 @@ describe("CodexAppServerClient", () => {
     MockTransport.threadMcpServerStatusResult = {
       data: [
         {
-          name: "search-compare-local",
+          name: "offline-local-server",
           serverInfo: null,
           authStatus: "unknown",
           tools: {},
@@ -7251,7 +7251,7 @@ describe("CodexAppServerClient", () => {
       detail: "toolsAndAuthOnly",
     })).resolves.toEqual([
       {
-        name: "search-compare-local",
+        name: "offline-local-server",
         authStatus: "unknown",
         tools: [],
       },

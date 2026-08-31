@@ -73,7 +73,7 @@ describe("McpInventoryPanel", () => {
             detail: "toolsAndAuthOnly",
             servers: [
               {
-                name: "search-compare-local",
+                name: "offline-local-server",
                 authStatus: "unknown",
                 tools: [],
               },
@@ -86,7 +86,7 @@ describe("McpInventoryPanel", () => {
       />,
     );
 
-    expect(await screen.findByText("search-compare-local")).toBeInTheDocument();
+    expect(await screen.findByText("offline-local-server")).toBeInTheDocument();
     expect(screen.getByText("Authentication unknown")).toBeInTheDocument();
   });
 
