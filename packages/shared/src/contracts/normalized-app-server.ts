@@ -920,7 +920,7 @@ export type AppServerReadThreadResponse = {
    */
   readDurationMs?: number;
   threadId: ThreadIdentifier;
-  /** Persisted per-thread Token Miser override; absent follows the default. */
+  /** Effective Token Miser state for this thread. */
   tokenMiserEnabled?: boolean;
   replay: AppServerThreadReplay;
   /**

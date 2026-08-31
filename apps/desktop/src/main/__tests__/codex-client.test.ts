@@ -1349,6 +1349,7 @@ describe("CodexAppServerClient", () => {
         descriptorEnvironmentVariable:
           "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
         descriptorVersion: 1,
+        codeModeNestedPostToolUse: false,
       },
       codeModeOutputReducer: {
         actionableState: {
@@ -1358,6 +1359,13 @@ describe("CodexAppServerClient", () => {
           modelOutputTag: "codex_actionable_state",
         },
         continuationGuidanceVersion: 1,
+        deferredCompletion: {
+          version: 1,
+          terminalOnly: true,
+          preservesOriginalCallId: true,
+          preservesCellId: true,
+          waitToolName: "wait",
+        },
         dynamicToolsResumeField: "dynamicTools",
         intentContextVersion: 1,
         modelGuidance: {
@@ -1398,6 +1406,7 @@ describe("CodexAppServerClient", () => {
         descriptorEnvironmentVariable:
           "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
         descriptorVersion: 1,
+        codeModeNestedPostToolUse: false,
       },
       codeModeOutputReducer: {
         actionableState: {
@@ -1407,6 +1416,13 @@ describe("CodexAppServerClient", () => {
           modelOutputTag: "codex_actionable_state",
         },
         continuationGuidanceVersion: 1,
+        deferredCompletion: {
+          version: 1,
+          terminalOnly: true,
+          preservesOriginalCallId: true,
+          preservesCellId: true,
+          waitToolName: "wait",
+        },
         dynamicToolsResumeField: "dynamicTools",
         intentContextVersion: 1,
         modelGuidance: {
@@ -1452,6 +1468,91 @@ describe("CodexAppServerClient", () => {
       },
     };
     await expect(client.readServerCapabilities()).resolves.toEqual({
+      codeModeOutputReducer: {
+        protocolVersion: 1,
+      },
+    });
+
+    MockTransport.serverCapabilitiesResult = {
+      pwrdrvrTokenMiser: {
+        version: 1,
+        identity: "pwrdrvr.pwragent.token-miser",
+        initializeCapabilityField: "pwrdrvrTokenMiser",
+        threadStartField: "pwrdrvrTokenMiser",
+        threadResumeField: "pwrdrvrTokenMiser",
+        descriptorEnvironmentVariable:
+          "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+        descriptorVersion: 1,
+      },
+      codeModeOutputReducer: {
+        deferredCompletion: {
+          version: 1,
+          terminalOnly: true,
+          preservesOriginalCallId: true,
+          preservesCellId: true,
+          waitToolName: "wait",
+        },
+        protocolVersion: 1,
+      },
+    };
+    await expect(client.readServerCapabilities()).resolves.toEqual({
+      pwrdrvrTokenMiser: {
+        version: 1,
+        identity: "pwrdrvr.pwragent.token-miser",
+        initializeCapabilityField: "pwrdrvrTokenMiser",
+        threadStartField: "pwrdrvrTokenMiser",
+        threadResumeField: "pwrdrvrTokenMiser",
+        descriptorEnvironmentVariable:
+          "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+        descriptorVersion: 1,
+      },
+      codeModeOutputReducer: {
+        deferredCompletion: {
+          version: 1,
+          terminalOnly: true,
+          preservesOriginalCallId: true,
+          preservesCellId: true,
+          waitToolName: "wait",
+        },
+        protocolVersion: 1,
+      },
+    });
+
+    MockTransport.serverCapabilitiesResult = {
+      pwrdrvrTokenMiser: {
+        version: 1,
+        identity: "pwrdrvr.pwragent.token-miser",
+        initializeCapabilityField: "pwrdrvrTokenMiser",
+        threadStartField: "pwrdrvrTokenMiser",
+        threadResumeField: "pwrdrvrTokenMiser",
+        descriptorEnvironmentVariable:
+          "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+        descriptorVersion: 1,
+        codeModeNestedPostToolUse: false,
+      },
+      codeModeOutputReducer: {
+        deferredCompletion: {
+          version: 1,
+          terminalOnly: false,
+          preservesOriginalCallId: true,
+          preservesCellId: true,
+          waitToolName: "wait",
+        },
+        protocolVersion: 1,
+      },
+    };
+    await expect(client.readServerCapabilities()).resolves.toEqual({
+      pwrdrvrTokenMiser: {
+        version: 1,
+        identity: "pwrdrvr.pwragent.token-miser",
+        initializeCapabilityField: "pwrdrvrTokenMiser",
+        threadStartField: "pwrdrvrTokenMiser",
+        threadResumeField: "pwrdrvrTokenMiser",
+        descriptorEnvironmentVariable:
+          "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH",
+        descriptorVersion: 1,
+        codeModeNestedPostToolUse: false,
+      },
       codeModeOutputReducer: {
         protocolVersion: 1,
       },

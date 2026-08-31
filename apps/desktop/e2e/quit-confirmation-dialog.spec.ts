@@ -80,6 +80,17 @@ test("keeps running work reachable after cancelling and following a blocker", as
     await expect(
       app.window.locator(".integrated-terminal .xterm-rows"),
     ).toContainText("PWRAGENT_QUIT_BLOCKER_READY");
+    // Seeing the marker only proves that the shell completed `echo`. On a
+    // loaded guest, node-pty can still report the shell as the foreground
+    // process for the brief interval before `sleep` takes the terminal. Quit
+    // during that interval correctly sees no blocker and exits without a
+    // prompt. Wait on the exact main-process snapshot used by QuitManager so
+    // this test asks for quit only after the condition it intends to exercise.
+    await expect
+      .poll(async () =>
+        (await app.getIntegratedTerminalQuitSnapshot())?.count ?? 0
+      )
+      .toBe(1);
 
     const dialogPromise = app.electronApp.waitForEvent("window");
     // Not awaited: the modal holds the main process, so this round trip does

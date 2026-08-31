@@ -298,6 +298,7 @@ export type CodexServerCapabilities = {
     descriptorEnvironmentVariable:
       "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH";
     descriptorVersion: 1;
+    codeModeNestedPostToolUse?: false;
   };
   codeModeOutputReducer?: {
     actionableState?: {
@@ -307,6 +308,13 @@ export type CodexServerCapabilities = {
       modelOutputTag: "codex_actionable_state";
     };
     continuationGuidanceVersion?: number;
+    deferredCompletion?: {
+      version: 1;
+      terminalOnly: true;
+      preservesOriginalCallId: true;
+      preservesCellId: true;
+      waitToolName: "wait";
+    };
     dynamicToolsResumeField?: "dynamicTools";
     intentContextVersion?: 1;
     modelGuidance?: {
@@ -7366,8 +7374,9 @@ export class CodexAppServerClient {
     const grouping = asRecord(outputReducer?.postToolUseGrouping);
     const modelGuidance = asRecord(outputReducer?.modelGuidance);
     const exactOutput = asRecord(outputReducer?.postToolUseExactOutput);
+    const deferredCompletion = asRecord(outputReducer?.deferredCompletion);
     const managedTokenMiser = asRecord(result?.pwrdrvrTokenMiser);
-    const hasManagedTokenMiserContract =
+    const hasManagedTokenMiserActivationTransport =
       managedTokenMiser?.version === 1
       && managedTokenMiser.identity === "pwrdrvr.pwragent.token-miser"
       && managedTokenMiser.initializeCapabilityField === "pwrdrvrTokenMiser"
@@ -7381,7 +7390,7 @@ export class CodexAppServerClient {
         ? "dynamicTools"
         : undefined;
 
-    const managedCapability = hasManagedTokenMiserContract
+    const managedCapability = hasManagedTokenMiserActivationTransport
       ? {
           pwrdrvrTokenMiser: {
             version: 1 as const,
@@ -7392,6 +7401,9 @@ export class CodexAppServerClient {
             descriptorEnvironmentVariable:
               "PWRAGENT_TOKEN_MISER_BRIDGE_DESCRIPTOR_PATH" as const,
             descriptorVersion: 1 as const,
+            ...(managedTokenMiser.codeModeNestedPostToolUse === false
+              ? { codeModeNestedPostToolUse: false as const }
+              : {}),
           },
         }
       : {};
@@ -7415,6 +7427,21 @@ export class CodexAppServerClient {
               : {}),
             ...(typeof continuationGuidanceVersion === "number"
               ? { continuationGuidanceVersion }
+              : {}),
+            ...(deferredCompletion?.version === 1
+              && deferredCompletion.terminalOnly === true
+              && deferredCompletion.preservesOriginalCallId === true
+              && deferredCompletion.preservesCellId === true
+              && deferredCompletion.waitToolName === "wait"
+              ? {
+                  deferredCompletion: {
+                    version: 1 as const,
+                    terminalOnly: true as const,
+                    preservesOriginalCallId: true as const,
+                    preservesCellId: true as const,
+                    waitToolName: "wait" as const,
+                  },
+                }
               : {}),
             ...(dynamicToolsResumeField
               ? { dynamicToolsResumeField }
