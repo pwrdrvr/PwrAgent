@@ -4470,7 +4470,41 @@ describe("SettingsScreen", () => {
         guildId: "1480556454498009353",
       });
     });
-    expect(screen.getByText("Missing: Send Messages in Threads ·")).toBeInTheDocument();
+    const permissionResult = screen.getByRole("alert", {
+      name: "Discord permission check result",
+    });
+    expect(permissionResult).toHaveTextContent(
+      "1 of 2 suggested permissions is missing.",
+    );
+    const permissionRows = within(permissionResult).getAllByRole("listitem");
+    expect(permissionRows).toHaveLength(2);
+    expect(permissionRows[0]).toHaveTextContent("Send Messages in ThreadsMissing");
+    expect(permissionRows[1]).toHaveTextContent("Create Public ThreadsGranted");
+
+    inspectDiscordThreadPermissions.mockResolvedValueOnce({
+      botId: "1480556454498009351",
+      channelId: "1480556454498009352",
+      checkedAt: 2,
+      durationMs: 1,
+      guildId: "1480556454498009353",
+      permissions: [
+        {
+          granted: true,
+          id: "create_public_threads",
+          label: "Create Public Threads",
+        },
+        {
+          granted: true,
+          id: "send_messages_in_threads",
+          label: "Send Messages in Threads",
+        },
+      ],
+      status: "ok",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check permissions" }));
+    expect(
+      await screen.findByRole("status", { name: "Discord permission check result" }),
+    ).toHaveTextContent("All 2 suggested permissions are granted.");
 
     fireEvent.click(
       screen.getByRole("button", { name: "Request suggested permissions" }),
@@ -4623,7 +4657,9 @@ describe("SettingsScreen", () => {
     });
     fireEvent.change(channelSelect, { target: { value: firstChannelId } });
 
-    expect(screen.queryByText(/Missing: Create Public Threads/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("alert", { name: "Discord permission check result" }),
+    ).not.toBeInTheDocument();
   });
 
   it("shows a leftover Events API notice and persists Socket Mode", async () => {

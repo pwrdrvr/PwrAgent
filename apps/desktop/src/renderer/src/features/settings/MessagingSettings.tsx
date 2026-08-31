@@ -48,7 +48,16 @@ import {
   type InspectDiscordThreadPermissionsResponse,
   type ListDiscordThreadPermissionChannelsResponse,
 } from "@pwragent/shared";
-import { DiscordIcon, FeishuIcon, LineIcon, MattermostIcon, SlackIcon, TelegramIcon } from "../../icons";
+import {
+  CheckIcon,
+  CloseIcon,
+  DiscordIcon,
+  FeishuIcon,
+  LineIcon,
+  MattermostIcon,
+  SlackIcon,
+  TelegramIcon,
+} from "../../icons";
 import { copyText } from "../../lib/copy-text";
 import {
   SLACK_APPROVAL_TARGET_LABELS,
@@ -1932,6 +1941,15 @@ function DiscordThreadPermissionsField(props: {
     && result.channelId === selectedChannelId
       ? result
       : undefined;
+  const checkedPermissions = visibleResult?.status === "ok"
+    ? [
+        ...visibleResult.permissions.filter((permission) => !permission.granted),
+        ...visibleResult.permissions.filter((permission) => permission.granted),
+      ]
+    : [];
+  const missingPermissionCount = checkedPermissions.filter(
+    (permission) => !permission.granted,
+  ).length;
   const validChannel = validateDiscordSnowflake(selectedChannelId).ok;
   const canCheck =
     Boolean(props.desktopApi?.inspectDiscordThreadPermissions)
@@ -2043,7 +2061,7 @@ function DiscordThreadPermissionsField(props: {
     <SettingsField
       label="Thread replies"
       sub="Create a public Discord thread from a selected message, then attach the PwrAgent thread to it."
-      help="Suggested: View Channel, Send Messages, Embed Links, Attach Files, Read Message History, Create Public Threads, and Send Messages in Threads. The check includes category and channel overrides. The authorization request does not request Administrator or Manage Threads."
+      help="Checks PwrAgent’s suggested permissions, including category and channel overrides. The authorization request does not request Administrator or Manage Threads."
       control={
         <>
           <div className="settings-inline-actions">
@@ -2151,13 +2169,55 @@ function DiscordThreadPermissionsField(props: {
             </div>
           ) : null}
           {visibleResult?.status === "ok" ? (
-            <div className="settings-field__help" role="status">
-              {visibleResult.permissions.map((permission) => (
-                <span key={permission.id}>
-                  {permission.granted ? "Granted" : "Missing"}: {permission.label}
-                  {" · "}
-                </span>
-              ))}
+            <div
+              aria-label="Discord permission check result"
+              className="discord-permission-result"
+              role={missingPermissionCount > 0 ? "alert" : "status"}
+            >
+              <div className="discord-permission-result__summary">
+                <strong>
+                  {missingPermissionCount === 0
+                    ? `All ${checkedPermissions.length} suggested permissions are granted.`
+                    : `${missingPermissionCount} of ${checkedPermissions.length} suggested ${
+                        checkedPermissions.length === 1 ? "permission" : "permissions"
+                      } ${missingPermissionCount === 1 ? "is" : "are"} missing.`}
+                </strong>
+                {missingPermissionCount > 0 ? (
+                  <span>Missing permissions are listed first.</span>
+                ) : null}
+              </div>
+              <ul
+                aria-label="Discord permission check details"
+                className="discord-permission-result__list"
+              >
+                {checkedPermissions.map((permission) => (
+                  <li
+                    className={`discord-permission-result__item ${
+                      permission.granted
+                        ? "discord-permission-result__item--granted"
+                        : "discord-permission-result__item--missing"
+                    }`}
+                    key={permission.id}
+                  >
+                    <span
+                      aria-hidden="true"
+                      className="discord-permission-result__icon"
+                    >
+                      {permission.granted ? (
+                        <CheckIcon size={14} />
+                      ) : (
+                        <CloseIcon size={14} />
+                      )}
+                    </span>
+                    <span className="discord-permission-result__label">
+                      {permission.label}
+                    </span>
+                    <span className="discord-permission-result__state">
+                      {permission.granted ? "Granted" : "Missing"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
           ) : null}
           {visibleResult?.status === "failed" ? (
