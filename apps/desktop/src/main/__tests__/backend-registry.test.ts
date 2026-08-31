@@ -18466,6 +18466,152 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("starts one Codex title helper for every concurrent explicit placeholder", async () => {
+    const titleGenerationRelease = createDeferred<void>();
+    const titleService = {
+      generateTitle: vi.fn(async ({ threadId }: { threadId?: string }) => {
+        await titleGenerationRelease.promise;
+        return {
+          status: "generated" as const,
+          title: `Title for ${threadId ?? "thread"}`,
+        };
+      }),
+    };
+    const threadIds = [
+      "thread-parallel-1",
+      "thread-parallel-2",
+      "thread-parallel-3",
+    ];
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: threadIds.map((threadId) => ({
+        id: threadId,
+        // Codex reports PwrAgent's initial placeholder rename as explicit. If
+        // the prompt-derived rename then loses a parallel session-metadata
+        // race, this is the title state the helper eligibility check sees.
+        title: "Untitled thread",
+        titleSource: "explicit",
+        linkedDirectories: [],
+        source: "codex",
+      })),
+    });
+    const pendingThreadIds = [...threadIds];
+    vi.spyOn(codexClient, "startThread").mockImplementation(async () => ({
+      threadId: pendingThreadIds.shift() ?? "unexpected-thread",
+    }));
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+
+    await Promise.all(
+      threadIds.map((threadId) =>
+        registry.startThread({
+          backend: "codex",
+          cwd: `/repo/${threadId}`,
+        }),
+      ),
+    );
+    const starts = threadIds.map((threadId) =>
+      registry.startTurn({
+        backend: "codex",
+        threadId,
+        input: [{ type: "text", text: `Prompt for ${threadId}` }],
+      }),
+    );
+
+    await waitForCondition(
+      () => titleService.generateTitle.mock.calls.length === threadIds.length,
+    );
+    for (const threadId of threadIds) {
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId,
+        }),
+      ).resolves.toMatchObject({
+        subAgents: [
+          expect.objectContaining({
+            monitorId: `system:title-helper:codex:${threadId}`,
+            status: "running",
+          }),
+        ],
+      });
+    }
+
+    titleGenerationRelease.resolve();
+    await Promise.all(starts);
+    await registry.close();
+  });
+
+  it("preserves an explicit Untitled thread rename while its title helper finishes", async () => {
+    const titleGenerationRelease = createDeferred<void>();
+    const titleService = {
+      generateTitle: vi.fn(async () => {
+        await titleGenerationRelease.promise;
+        return {
+          status: "generated" as const,
+          title: "Generated replacement",
+        };
+      }),
+    };
+    const threadId = "thread-explicit-placeholder";
+    const overlayStore = createOverlayStoreMock();
+    const upsertSubAgent = vi.spyOn(overlayStore, "upsertThreadSubAgent");
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      startThreadResult: { threadId },
+      threads: [
+        {
+          id: threadId,
+          title: "Untitled thread",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const renameThread = vi.spyOn(codexClient, "renameThread");
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+
+    await registry.startThread({
+      backend: "codex",
+      cwd: "/repo/explicit-placeholder",
+    });
+    await registry.startTurn({
+      backend: "codex",
+      threadId,
+      input: [{ type: "text", text: "Name this work" }],
+    });
+    await waitForCondition(() => titleService.generateTitle.mock.calls.length === 1);
+
+    await registry.renameThread({
+      backend: "codex",
+      threadId,
+      name: "Untitled thread",
+    });
+    titleGenerationRelease.resolve();
+    await waitForCondition(() =>
+      upsertSubAgent.mock.calls.some(
+        ([params]) => params.subAgent.status === "success",
+      ),
+    );
+
+    expect(renameThread).toHaveBeenCalledTimes(1);
+    expect(renameThread).toHaveBeenCalledWith({
+      threadId,
+      name: "Untitled thread",
+    });
+
+    await registry.close();
+  });
+
   it("logs Codex title generation failures to the main log", async () => {
     mainLoggerMock.warn.mockClear();
     const titleService = {
