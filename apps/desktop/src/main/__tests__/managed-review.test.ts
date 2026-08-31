@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildInlineReviewPrompt,
   buildManagedReviewPrompt,
   formatManagedReviewOutput,
   parseManagedReviewOutput,
@@ -7,6 +8,19 @@ import {
 import grokReviewSession from "./fixtures/grok-managed-review-session.json";
 
 describe("managed review", () => {
+  it("builds a hidden Markdown prompt for inline parent reviews", () => {
+    const prompt = buildInlineReviewPrompt({
+      type: "baseBranch",
+      branch: "origin/main",
+    });
+
+    expect(prompt).toContain("<action>review</action>");
+    expect(prompt).toContain("against base branch 'origin/main'");
+    expect(prompt).toContain("prioritized findings");
+    expect(prompt).toContain("concise Markdown review");
+    expect(prompt).not.toContain("Return only one JSON object");
+  });
+
   it.each([
     [
       { type: "uncommittedChanges" as const },
