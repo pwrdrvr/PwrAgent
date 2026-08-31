@@ -4256,6 +4256,7 @@ describe("DesktopBackendRegistry", () => {
         threadId: "thread-transient-1",
         input: [{ type: "text", text: "first attempt" }],
       });
+      expect(codexClient.readServerCapabilitiesCallCount).toBe(1);
       await registry.startTurn({
         backend: "codex",
         threadId: "thread-transient-2",

@@ -1,4 +1,5 @@
 import { app } from "electron";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile as execFileCallback } from "node:child_process";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { mkdir, realpath, stat, writeFile } from "node:fs/promises";
@@ -7949,6 +7950,10 @@ export class DesktopBackendRegistry {
     BackendClient,
     Promise<CodexServerCapabilities | undefined>
   >();
+  private readonly tokenMiserServerCapabilitiesForTurn =
+    new AsyncLocalStorage<
+      WeakMap<BackendClient, Promise<CodexServerCapabilities | undefined>>
+    >();
   private tokenMiserReducerCapabilityState?: "supported" | "unsupported";
   private tokenMiserCodeModeGroupingVersion?: number;
   private tokenMiserPostToolUseExactOutputVersion?: number;
@@ -13966,6 +13971,12 @@ export class DesktopBackendRegistry {
     messageOrigin?: AppServerThreadMessageOrigin;
     invalidIdRecoveryAttempted?: boolean;
   }): Promise<{ backend: AppServerBackendKind; threadId: string; turnId: string }> {
+    if (!this.tokenMiserServerCapabilitiesForTurn.getStore()) {
+      return await this.tokenMiserServerCapabilitiesForTurn.run(
+        new WeakMap(),
+        async () => await this.startTurnNow(params),
+      );
+    }
     this.assertNotBootstrap("startTurn");
     if (this.closed) {
       throw new Error("Desktop backend registry is closed");
@@ -19983,8 +19994,14 @@ export class DesktopBackendRegistry {
   private async readTokenMiserServerCapabilities(
     client: BackendClient,
   ): Promise<CodexServerCapabilities | undefined> {
+    const turnCache = this.tokenMiserServerCapabilitiesForTurn.getStore();
+    const turnCached = turnCache?.get(client);
+    if (turnCached) {
+      return await turnCached;
+    }
     const cached = this.tokenMiserServerCapabilities.get(client);
     if (cached) {
+      turnCache?.set(client, cached);
       return await cached;
     }
 
@@ -20086,13 +20103,16 @@ export class DesktopBackendRegistry {
       }
     })();
     this.tokenMiserServerCapabilities.set(client, probe);
+    turnCache?.set(client, probe);
     try {
       return await probe;
     } finally {
       // Capability support is immutable for one live app-server, but a
       // reconnect cancellation says nothing about the replacement process.
-      // Keeping that transient result poisoned every later turn until the
-      // whole desktop app restarted.
+      // Remove transient failures from the client-wide cache so the next
+      // turn retries. The turn-local cache retains this promise until the
+      // current start finishes, keeping its capability-dependent fields
+      // consistent and preventing repeated timeout-length probes.
       if (
         !cacheResult
         && this.tokenMiserServerCapabilities.get(client) === probe
