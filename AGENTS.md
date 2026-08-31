@@ -295,6 +295,56 @@
 - `BlueOak-1.0.0` and `Python-2.0` were already in the shipped tree and documented nowhere.
 - `0BSD`, `CC0-1.0`, `MPL-2.0`, and `Unlicense` are approved ids that the production tree does not use today.
 
+#### Dependabot PRs regenerate the notice automatically
+
+- `licenses:check` compares the committed notice against the installed tree.
+- Any dependency change therefore makes the committed notice stale.
+- Dependabot cannot run `pnpm licenses:generate` itself.
+- Every Dependabot PR used to land with `Lint` red on that one line.
+- Each one needed a hand-pushed follow-up commit.
+- [dependabot-licenses.yml](.github/workflows/dependabot-licenses.yml) pushes that commit.
+- Read its header before you edit it.
+- Four controls keep a dependency bump from running its install scripts with a
+  token that can write to this repository:
+  - The `guard` job pins the actor to `dependabot[bot]` and the head to this repo.
+  - A file guard refuses any PR that touches more than dependency manifests.
+  - Only the `regenerate` job holds `contents: write`, reached through `needs: guard`.
+  - The install runs `--ignore-scripts`.
+- The workflow runs the allowlist gate first and pushes nothing if it fails.
+- That ordering is the reason unattended regeneration is safe.
+- A bad license stops the job instead of arriving as a bot commit with green CI.
+
+##### Editing the workflow
+
+- Keep the file guard's `allowed` regex in sync with `packages:` in `pnpm-workspace.yaml`.
+- A workspace directory missing from that regex blocks its own Dependabot PRs.
+- `packages/messaging/providers/*` is three levels deep, so a two-level regex is wrong here.
+- Keep the `paths:` trigger filter in sync with the same globs.
+- `pnpm-workspace.yaml` is deliberately absent from the allowed set.
+- It carries `onlyBuiltDependencies`, which decides whose install scripts may run.
+- The file guard fails closed. An unreadable file list is an error, not an empty violation list.
+- Do not fold the `gh api` call into a pipeline with `grep`.
+- That substitution lets `grep`'s exit status stand in for the API's and fails open.
+- Do not add a build, test, or typecheck step to the `regenerate` job.
+- The `--ignore-scripts` tree has no Electron binary and no rebuilt native addon.
+- The PR's own CI run covers those checks on a normal install with no privileged token.
+- The `secrets` context is not available in a step-level `if`.
+- An unavailable context reads as empty, so `if: secrets.FOO == ''` is true even when `FOO` is set.
+- Do the presence tests in job-level `env`, which can read secrets.
+
+##### Token
+
+- A push made with the default `GITHUB_TOKEN` does not trigger new workflow runs.
+- Without a different token the PR keeps showing its stale red checks.
+- The workflow prefers a GitHub App token, then `RELEASES_PAT`, then `GITHUB_TOKEN`.
+- `RELEASES_PAT` already exists here, so the fallback works with no provisioning.
+- Prefer a narrowly-scoped App anyway.
+- `RELEASES_PAT` is broad, and this job installs PR-controlled dependencies under `pull_request_target`.
+- To use the App path, set repository variable `LICENSES_BOT_APP_CLIENT_ID`.
+- Also set repository secret `LICENSES_BOT_APP_PRIVATE_KEY`.
+- Install that App on this repository with `contents: write`.
+- Both are required. Setting one alone falls back and warns.
+
 ## Runtime Configuration
 
 - Store all desktop configuration and state under `~/.pwragent/`.
