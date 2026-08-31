@@ -2737,6 +2737,10 @@ describe("ThreadContextPanel", () => {
     const summary = screen.getByRole("button", { name: /Token Miser/ });
     expect(summary).toHaveTextContent("2 gates");
     expect(summary).toHaveTextContent("$0.26 saved");
+    // A settled verdict is not pending, and says nothing about pricing.
+    expect(summary.querySelector(".pricing-token-miser__verdict"))
+      .toHaveAttribute("data-pending", "false");
+    expect(summary).not.toHaveTextContent("not priced yet");
     expect(summary).toHaveAttribute("aria-expanded", "false");
 
     fireEvent.click(summary);
@@ -2897,6 +2901,139 @@ describe("ThreadContextPanel", () => {
     expect(summary).not.toHaveTextContent("2 decisions");
     fireEvent.click(summary);
     expect(screen.getAllByLabelText("Token Miser savings")).toHaveLength(2);
+  });
+
+  // Early in a turn the gates have usage rows but no accounting yet, so the
+  // group knows how many decisions were made and what the helper cost, and
+  // nothing about savings. That state used to put a 41-character sentence in
+  // the verdict slot — a `nowrap` cell that neither shrinks nor wraps — which
+  // overflowed the card and clipped against the rail until pricing landed and
+  // the string collapsed to "$0.021 saved".
+  it("keeps the unpriced verdict to the money and moves the reason to the counts", () => {
+    const interception = (objectId: string, decisionSource: "helper" | "policy") => ({
+      objectId,
+      turnId: "turn-1",
+      toolUseId: `tool-${objectId}`,
+      toolName: "Code Mode",
+      createdAt: 1_800_000_010_000,
+      originalCharacters: 40_000,
+      baselineParentTokens: 10_000,
+      replacementTokens: 300,
+      retrievedTokens: 0,
+      estimatedParentTokensSaved: 9_700,
+      disposition: "passed_through" as const,
+      decisionSource,
+    });
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: {
+        ...baseThread,
+        // No `tokenMiserAccounting` on either sub-agent: the gate ran and was
+        // billed, the savings equation has not been computed yet.
+        subAgents: [
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_010_000,
+            monitorId: "system:token-miser:pending-a",
+            parentTurnId: "turn-1",
+            status: "success",
+            task: "Gate Code Mode output",
+            updatedAt: 1_800_000_010_000,
+          },
+          {
+            agentName: "Token Miser",
+            createdAt: 1_800_000_020_000,
+            monitorId: "system:token-miser:pending-b",
+            parentTurnId: "turn-1",
+            status: "success",
+            task: "Gate Code Mode output",
+            updatedAt: 1_800_000_020_000,
+          },
+        ],
+      },
+      pricing: {
+        lines: [
+          {
+            backend: "codex",
+            usageLineId: "turn-line-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            scope: "turn",
+            source: "live",
+            status: "finalized",
+            model: "gpt-5.6-sol",
+            inputTokens: 10_000,
+            uncachedInputTokens: 10_000,
+            cachedInputTokens: 0,
+            outputTokens: 100,
+            reasoningOutputTokens: 0,
+            totalTokens: 10_100,
+            priceStatus: "priced",
+            currency: "USD",
+            uncachedInputCostMicros: 50_000,
+            cachedInputCostMicros: 0,
+            outputCostMicros: 3_000,
+            totalCostMicros: 53_000,
+            provider: "openai",
+            createdAt: 1_800_000_000_000,
+          },
+          {
+            ...buildMonitorLine({
+              sourceItemId: "system:token-miser:pending-a",
+            }),
+            totalCostMicros: 1_000,
+            usageLineId: "gate-line-pending-a",
+          },
+          {
+            ...buildMonitorLine({
+              sourceItemId: "system:token-miser:pending-b",
+            }),
+            totalCostMicros: 1_000,
+            usageLineId: "gate-line-pending-b",
+          },
+        ],
+        summaries: [],
+      },
+      toolAccounting: {
+        alerts: [],
+        invocations: [],
+        summaries: [],
+        tokenMiser: {
+          interceptionCount: 3,
+          passThroughCount: 3,
+          policyPassThroughCount: 2,
+          helperPassThroughCount: 1,
+          helperDecisionCount: 1,
+          originalCharacters: 120_000,
+          baselineParentTokens: 30_000,
+          replacementTokens: 900,
+          retrievedTokens: 0,
+          estimatedParentTokensSaved: 0,
+          interceptions: [
+            interception("pending-a", "helper"),
+            interception("pending-b", "policy"),
+            interception("pending-c", "policy"),
+          ],
+        },
+      },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const summary = screen.getByRole("button", { name: /Token Miser/ });
+    const verdict = summary.querySelector(".pricing-token-miser__verdict");
+    // The verdict slot is one money phrase, whatever the state: it sits on the
+    // header row beside "Token Miser", where only a short string fits.
+    expect(verdict).toHaveTextContent("$0.002 evaluating");
+    expect(verdict).not.toHaveTextContent("not priced yet");
+    // Cost-so-far is not a savings verdict, and must not wear its colors.
+    expect(verdict).toHaveAttribute("data-pending", "true");
+    // The reason there is no savings figure is detail, and detail lives on the
+    // counts row, which has a full line to wrap into.
+    expect(summary.querySelector(".pricing-token-miser__count")).toHaveTextContent(
+      "3 decisions · 1 Luna evaluation · 3 pass-throughs (1 helper · 2 policy)"
+        + " · savings not priced yet",
+    );
   });
 
   // A group with nothing past the threshold has nothing to hold back, so

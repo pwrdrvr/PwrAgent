@@ -665,8 +665,15 @@ function TokenMiserTurnGroup(props: {
   const countLabel = props.decisions || passThroughCount > 0
     ? count === 1 ? "decision" : "decisions"
     : count === 1 ? "gate" : "gates";
-  const verdict = priced.length === 0
-    ? `${formatTokenUsageMicrosAsUsd(gateCostMicros)} evaluating · savings not priced yet`
+  // The verdict slot is one money phrase and nothing else. It shares the
+  // header row with the label, so only a short string fits there — and early
+  // in a turn, when every gate has a usage row but no accounting yet, the
+  // reason there is no savings figure is what made it long. That reason is
+  // detail: it goes on the counts row below, which has a full line to wrap
+  // into.
+  const awaitingPricing = priced.length === 0;
+  const verdict = awaitingPricing
+    ? `${formatTokenUsageMicrosAsUsd(gateCostMicros)} evaluating`
     : savingsMicros >= 0
       ? `${formatTokenUsageMicrosAsUsd(savingsMicros)} saved`
       : `${formatTokenUsageMicrosAsUsd(Math.abs(savingsMicros))} net overhead`;
@@ -691,8 +698,13 @@ function TokenMiserTurnGroup(props: {
           {props.decisions && passThroughCount > 0
             ? ` · ${passThroughCount.toLocaleString()} ${passThroughCount === 1 ? "pass-through" : "pass-throughs"} (${helperPassThroughCount.toLocaleString()} helper · ${policyPassThroughCount.toLocaleString()} policy)`
             : ""}
+          {awaitingPricing ? " · savings not priced yet" : ""}
         </span>
-        <span className="pricing-token-miser__verdict" data-negative={savingsMicros < 0}>
+        <span
+          className="pricing-token-miser__verdict"
+          data-negative={savingsMicros < 0}
+          data-pending={awaitingPricing}
+        >
           {verdict}
         </span>
       </button>

@@ -24028,10 +24028,26 @@ a.transcript-message__messaging-origin:focus-visible {
   background: var(--bg-panel);
 }
 
+/* Two rows, not one. As a single flex row the verdict — `nowrap`, pushed
+   right by `margin-left: auto` — could neither shrink nor wrap, so it took
+   its full intrinsic width first and squeezed the label and the counts to
+   min-content behind it: "Token Miser" broke into "Token / Miser", the counts
+   stacked into a 63px ragged column, and a long verdict still hung 76px past
+   the card and clipped against the rail. Measured at the default 380px rail;
+   the pathological string is the one shown while a turn's gates are billed
+   but not yet priced.
+
+   Row 1 is the header — chevron, label, verdict — and row 2 is the counts,
+   spanning to the end. Neither row competes with the other for width, so no
+   string in either can drive the other out of the card. Column 3 is
+   `minmax(0, 1fr)` so the verdict can shrink and take a second line rather
+   than overflow, and the counts (spanning a flexible track) never widen the
+   label column. */
 .pricing-token-miser__summary {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
   align-items: baseline;
-  gap: 7px;
+  gap: 2px 7px;
   width: 100%;
   padding: 5px 8px;
   border: 0;
@@ -24054,6 +24070,8 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .pricing-token-miser__chevron {
   display: inline-block;
+  grid-row: 1;
+  grid-column: 1;
   color: var(--text-muted);
   transition: transform 120ms ease;
 }
@@ -24063,29 +24081,53 @@ a.transcript-message__messaging-origin:focus-visible {
 }
 
 .pricing-token-miser__label {
+  grid-row: 1;
+  grid-column: 2;
   color: var(--text-primary);
   font-weight: 600;
+  white-space: nowrap;
 }
 
+/* Row 2, indented under the label so the chevron column still reads as the
+   fold control. It is the only part of the summary allowed to run long. */
 .pricing-token-miser__count {
+  grid-row: 2;
+  grid-column: 2 / -1;
+  min-width: 0;
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 10.5px;
   font-variant-numeric: tabular-nums;
+  line-height: 1.4;
 }
 
 .pricing-token-miser__verdict {
-  margin-left: auto;
+  grid-row: 1;
+  grid-column: 3;
+  justify-self: end;
+  min-width: 0;
   color: var(--accent);
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
-  white-space: nowrap;
+  /* Right-aligned and wrappable: the money phrase is short, but a narrowed
+     rail must fold it onto a second line rather than push it out of the
+     card. */
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .pricing-token-miser__verdict[data-negative="true"] {
   color: var(--status-warning);
+}
+
+/* Awaiting pricing is not a verdict. The figure there is what the gates have
+   cost so far, not what they saved — in the settled colors it would read as
+   good news that has not been measured yet, so it ranks as metadata until a
+   savings number exists. */
+.pricing-token-miser__verdict[data-pending="true"] {
+  color: var(--text-secondary);
 }
 
 /* The body scrolls inside a bounded height so a long list of gates moves
