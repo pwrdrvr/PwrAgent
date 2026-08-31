@@ -18466,6 +18466,74 @@ command = "pnpm dev"
     await registry.close();
   });
 
+  it("starts one Codex title helper for every concurrent explicit placeholder", async () => {
+    const titleGenerationRelease = createDeferred<void>();
+    const titleService = {
+      generateTitle: vi.fn(async ({ threadId }: { threadId: string }) => {
+        await titleGenerationRelease.promise;
+        return {
+          status: "generated" as const,
+          title: `Title for ${threadId}`,
+        };
+      }),
+    };
+    const threadIds = [
+      "thread-parallel-1",
+      "thread-parallel-2",
+      "thread-parallel-3",
+    ];
+    const overlayStore = createOverlayStoreMock();
+    const codexClient = new MockBackendClient({
+      initializeResult: { methods: ["turn/start", "thread/name/set"] },
+      threads: threadIds.map((threadId) => ({
+        id: threadId,
+        // Codex reports PwrAgent's initial placeholder rename as explicit. If
+        // the prompt-derived rename then loses a parallel session-metadata
+        // race, this is the title state the helper eligibility check sees.
+        title: "Untitled thread",
+        titleSource: "explicit",
+        linkedDirectories: [],
+        source: "codex",
+      })),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore,
+      threadTitleGenerationService: titleService,
+    });
+
+    const starts = threadIds.map((threadId) =>
+      registry.startTurn({
+        backend: "codex",
+        threadId,
+        input: [{ type: "text", text: `Prompt for ${threadId}` }],
+      }),
+    );
+
+    await waitForCondition(
+      () => titleService.generateTitle.mock.calls.length === threadIds.length,
+    );
+    for (const threadId of threadIds) {
+      await expect(
+        overlayStore.getThreadOverlayState({
+          backend: "codex",
+          threadId,
+        }),
+      ).resolves.toMatchObject({
+        subAgents: [
+          expect.objectContaining({
+            monitorId: `system:title-helper:codex:${threadId}`,
+            status: "running",
+          }),
+        ],
+      });
+    }
+
+    titleGenerationRelease.resolve();
+    await Promise.all(starts);
+    await registry.close();
+  });
+
   it("logs Codex title generation failures to the main log", async () => {
     mainLoggerMock.warn.mockClear();
     const titleService = {
