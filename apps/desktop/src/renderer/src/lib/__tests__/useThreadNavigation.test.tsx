@@ -362,6 +362,8 @@ describe("useThreadNavigation", () => {
       inboxThreadKeys: [],
       threads: [],
       directories: [],
+      partial: true,
+      providerRefresh: { state: "ready" },
       launchpadDefaults: {
         backend: "codex",
         executionMode: "default",
@@ -371,6 +373,7 @@ describe("useThreadNavigation", () => {
       ...emptySnapshot,
       fetchedAt: 2,
       inboxThreadKeys: ["codex:thread-1"],
+      partial: false,
       threads: [
         {
           id: "thread-1",
@@ -423,6 +426,7 @@ describe("useThreadNavigation", () => {
     await waitFor(() => {
       expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(2);
     });
+    expect(result.current.selectedThread).toBeUndefined();
 
     act(() => {
       fullResponse.resolve({

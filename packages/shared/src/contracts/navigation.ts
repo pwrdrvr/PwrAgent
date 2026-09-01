@@ -1300,6 +1300,8 @@ export type NavigationSnapshot = {
   inboxThreadKeys: string[];
   directories: NavigationDirectorySummary[];
   launchpadDefaults: NavigationLaunchpadDefaults;
+  /** One-page startup result that must not settle an empty initial selection. */
+  partial?: boolean;
   /** Background provider hydration after a durable startup publication. */
   providerRefresh?: {
     state: "checking" | "degraded" | "ready";

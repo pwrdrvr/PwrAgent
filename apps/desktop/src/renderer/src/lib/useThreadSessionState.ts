@@ -155,7 +155,8 @@ type ThreadSessionEntry = {
   contextWindow?: ThreadContextWindowState;
   error?: string;
   expectOwnUpdate: boolean;
-  failedHydrationVersion?: number | "unknown";
+  failedHydrationVersion?: string;
+  hydratedEnvironmentSetupVersion?: string;
   hydratedInitialHistoryLimit?: number;
   hydratedUpdatedAt?: number;
   initialLoadDurationMs?: number;
@@ -1245,10 +1246,33 @@ function buildEmptyResponse(params: {
   };
 }
 
+function getEnvironmentSetupHydrationVersion(
+  thread: Pick<NavigationThreadSummary, "codexEnvironmentRuntime">
+): string | undefined {
+  const runtime = thread.codexEnvironmentRuntime;
+  if (!runtime?.setupStatus || !runtime.setupCommand) {
+    return undefined;
+  }
+
+  return [
+    runtime.environmentId,
+    runtime.setupStatus,
+    runtime.setupExitCode ?? "",
+    runtime.setupDurationMs ?? "",
+    runtime.setupOutput?.length ?? "",
+  ].join(":");
+}
+
 function getThreadHydrationVersion(
-  thread: Pick<NavigationThreadSummary, "updatedAt">
-): number | "unknown" {
-  return typeof thread.updatedAt === "number" ? thread.updatedAt : "unknown";
+  thread: Pick<
+    NavigationThreadSummary,
+    "codexEnvironmentRuntime" | "updatedAt"
+  >
+): string {
+  return [
+    typeof thread.updatedAt === "number" ? thread.updatedAt : "unknown",
+    getEnvironmentSetupHydrationVersion(thread) ?? "no-setup",
+  ].join(":");
 }
 
 function pruneOptimisticEntries(
@@ -4660,6 +4684,8 @@ export function useThreadSessionState(params: {
             error: undefined,
             expectOwnUpdate: false,
             failedHydrationVersion: undefined,
+            hydratedEnvironmentSetupVersion:
+              getEnvironmentSetupHydrationVersion(targetThread),
             hydratedInitialHistoryLimit: initialHistoryLimit,
             hydratedUpdatedAt:
               needsHydrationAfterCompletion && completionHydrationRetries < 2
@@ -4955,6 +4981,16 @@ export function useThreadSessionState(params: {
     }
 
     if (session.loading) {
+      return;
+    }
+
+    if (
+      session.hydratedEnvironmentSetupVersion
+      !== getEnvironmentSetupHydrationVersion(thread)
+    ) {
+      if (session.failedHydrationVersion !== hydrationVersion) {
+        void loadLatest(thread);
+      }
       return;
     }
 

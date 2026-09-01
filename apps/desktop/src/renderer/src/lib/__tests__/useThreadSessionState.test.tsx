@@ -24,6 +24,7 @@ import {
 import { readRendererSequence } from "../../features/thread-detail/live-transcript-activity";
 
 function buildThread(params: {
+  codexEnvironmentRuntime?: NavigationThreadSummary["codexEnvironmentRuntime"];
   id: string;
   updatedAt: number;
 }): NavigationThreadSummary {
@@ -37,6 +38,7 @@ function buildThread(params: {
     inbox: {
       inInbox: false,
     },
+    codexEnvironmentRuntime: params.codexEnvironmentRuntime,
     updatedAt: params.updatedAt,
   };
 }
@@ -2576,6 +2578,71 @@ describe("useThreadSessionState", () => {
       backend: "codex",
       limit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
       threadId: "thread-1",
+    });
+  });
+
+  it("rehydrates setup activity when environment runtime arrives without a timestamp change", async () => {
+    const setupActivity: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "codex-environment-setup-environment",
+      summary: "Environment setup completed: Fixture Env",
+      status: "completed",
+      details: [],
+    };
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [],
+        hasPreviousPage: false,
+      }))
+      .mockResolvedValueOnce(readThreadResponse({
+        entries: [setupActivity],
+        hasPreviousPage: false,
+      }));
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const initialThread = buildThread({ id: "thread-1", updatedAt: 1_000 });
+    const hydratedEnvironmentThread = buildThread({
+      id: "thread-1",
+      updatedAt: 1_000,
+      codexEnvironmentRuntime: {
+        environmentId: "environment",
+        environmentName: "Fixture Env",
+        executionTarget: "local",
+        cwd: "/repo/worktree",
+        setupStatus: "completed",
+        setupCommand: "printf setup-output && sleep 2",
+        setupOutput: "setup-output",
+        setupExitCode: 0,
+        setupDurationMs: 2_000,
+      },
+    });
+
+    const { result, rerender } = renderHook(
+      ({ currentThread }) =>
+        useThreadSessionState({
+          desktopApi,
+          thread: currentThread,
+        }),
+      {
+        initialProps: {
+          currentThread: initialThread,
+        },
+      },
+    );
+
+    await waitForThreadHydration(result);
+    expect(readThread).toHaveBeenCalledTimes(1);
+
+    rerender({ currentThread: hydratedEnvironmentThread });
+
+    await waitFor(() => {
+      expect(readThread).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(result.current.entries).toContainEqual(setupActivity);
     });
   });
 

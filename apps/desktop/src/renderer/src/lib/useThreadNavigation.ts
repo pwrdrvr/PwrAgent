@@ -4982,6 +4982,9 @@ export function useThreadNavigation(
         threadSummaryIdentityKey(thread) === optimisticThreadKey
           ? {
               ...mergeHydratedThreadWithOptimisticTitle(thread, optimisticThread),
+              codexEnvironmentRuntime:
+                thread.codexEnvironmentRuntime
+                ?? optimisticThread.codexEnvironmentRuntime,
               optimisticActiveTurn:
                 thread.optimisticActiveTurn ?? optimisticThread.optimisticActiveTurn,
               optimisticUserMessage:
@@ -5106,11 +5109,15 @@ export function useThreadNavigation(
     if (!initialFallbackSelectionKey) {
       if (
         state.response
+        && state.response.partial !== true
         && state.response.providerRefresh?.state !== "checking"
       ) {
-        // An empty settled startup is still a completed selection decision.
-        // Do not let a later operator action that adds a directory turn into
-        // an implicit navigation to its launchpad.
+        // An empty settled full startup is still a completed selection
+        // decision. The progressive active-recent page is explicitly partial:
+        // even if provider refresh has already reached "ready", its empty row
+        // set cannot close the selection window before the queued full page.
+        // Once the full page settles, do not let a later operator action that
+        // adds a directory turn into implicit navigation to its launchpad.
         initialSelectionEstablishedRef.current = true;
       }
       return;
