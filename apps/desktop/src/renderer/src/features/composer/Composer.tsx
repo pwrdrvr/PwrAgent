@@ -10477,7 +10477,7 @@ export function Composer(props: ComposerProps) {
                       {previewState?.status === "loading" ? (
                         <span
                           aria-hidden="true"
-                          className="composer__pdf-preview-spinner"
+                          className="pending-spinner pending-spinner--lg"
                         />
                       ) : (
                         <FileCodeIcon size={22} aria-hidden="true" />
@@ -12035,7 +12035,7 @@ export function Composer(props: ComposerProps) {
                   {currentThreadEnvActionStarting ? (
                     <span
                       aria-hidden="true"
-                      className="composer__action-button-spinner"
+                      className="pending-spinner"
                     />
                   ) : (
                     <PlayIcon size={13} aria-hidden="true" />

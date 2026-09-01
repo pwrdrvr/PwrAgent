@@ -13,10 +13,15 @@ export function SettingsSwitch(props: {
   disabled?: boolean;
   /** Used for `aria-label` and the visible "On"/"Off" word. */
   label: string;
+  /** A write this switch started has not come back yet. The visible
+   *  affordance is the sibling `SettingsPendingIndicator`; this only marks
+   *  the control itself busy. */
+  pending?: boolean;
   onChange: (next: boolean) => void;
 }) {
   return (
     <button
+      aria-busy={props.pending ? true : undefined}
       aria-checked={props.checked}
       aria-label={props.label}
       className={`settings-switch${props.checked ? " is-on" : ""}`}

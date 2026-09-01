@@ -2212,7 +2212,7 @@ describe("Composer", () => {
     expect(runButton).toBeDisabled();
     expect(runButton).not.toHaveTextContent("Run");
     expect(
-      runButton.querySelector(".composer__action-button-spinner"),
+      runButton.querySelector(".pending-spinner"),
     ).toBeInTheDocument();
 
     await act(async () => {
@@ -2225,7 +2225,7 @@ describe("Composer", () => {
     });
     expect(runButton).not.toBeDisabled();
     expect(
-      runButton.querySelector(".composer__action-button-spinner"),
+      runButton.querySelector(".pending-spinner"),
     ).not.toBeInTheDocument();
   });
 
@@ -2293,7 +2293,7 @@ describe("Composer", () => {
     const secondRunButton = screen.getByRole("button", { name: "Run" });
     expect(secondRunButton).not.toBeDisabled();
     expect(
-      secondRunButton.querySelector(".composer__action-button-spinner"),
+      secondRunButton.querySelector(".pending-spinner"),
     ).toBeNull();
 
     await act(async () => {
