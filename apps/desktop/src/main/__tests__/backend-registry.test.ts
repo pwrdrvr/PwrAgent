@@ -38,6 +38,7 @@ import type {
   AppServerThreadEntry,
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
+  AppServerThreadTitleSource,
   AppServerReviewTarget,
   AppServerTurnInputItem,
   AttachThreadPullRequestToolArgs,
@@ -6803,6 +6804,285 @@ describe("DesktopBackendRegistry", () => {
     ]);
 
     await registry.close();
+  });
+
+  it("records a generated ACP title as derived", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessions: [
+        {
+          backendId: acpBackendId,
+          sessionId: "session-1",
+          title: "ACP session",
+          titleSource: "fallback",
+          cwd: "/repo/project",
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: "default",
+          status: "idle",
+        },
+      ],
+    });
+    onTestFinished(async () => {
+      await registry.close();
+    });
+
+    await registry.listThreads({ backend: acpBackendId });
+    await (registry as unknown as {
+      applyGeneratedThreadTitle(params: {
+        backend: AppServerBackendKind;
+        threadId: string;
+        title: string;
+      }): Promise<void>;
+    }).applyGeneratedThreadTitle({
+      backend: acpBackendId,
+      threadId: "session-1",
+      title: "Investigate the flaky federation handshake test",
+    });
+
+    // This reads the information store, not the thread-list cache: the
+    // rename's own notification empties that cache on the way out. Nothing
+    // lists again afterwards on purpose — a later listing row outranks the
+    // notification's own record, so the assertion would hold whatever the
+    // notification carried.
+    expect(
+      registry.getCachedThreadSummary({
+        backend: acpBackendId,
+        threadId: "session-1",
+      }),
+    ).toMatchObject({
+      title: "Investigate the flaky federation handshake test",
+      titleSource: "derived",
+    });
+  });
+
+  it("records a generated Codex title as derived", async () => {
+    // The same generated title on the other backend. Codex stores no
+    // provenance of its own, so PwrAgent's generator is the only thing that
+    // knows — and if it stays silent the recorders read the title as an
+    // operator rename, which is the defect this provenance exists to stop.
+    // Leaving that to the ACP branch alone would make the answer depend on
+    // which backend a thread happens to run.
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-1",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    onTestFinished(async () => {
+      await registry.close();
+    });
+
+    await registry.listThreads({ backend: "codex" });
+    await (registry as unknown as {
+      applyGeneratedThreadTitle(params: {
+        backend: AppServerBackendKind;
+        threadId: string;
+        title: string;
+      }): Promise<void>;
+    }).applyGeneratedThreadTitle({
+      backend: "codex",
+      threadId: "thread-1",
+      title: "Ship the release runbook",
+    });
+
+    expect(
+      registry.getCachedThreadSummary({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).toMatchObject({
+      title: "Ship the release runbook",
+      titleSource: "derived",
+    });
+    // This mock never echoes the rename, so the provider keeps serving the
+    // placeholder — the unacknowledged-rename state `withObservedThreadName`
+    // exists for. It must carry the rename's own provenance onto the row:
+    // stamping `explicit` here would leave a listing and a store read
+    // disagreeing about the same thread for the life of the process.
+    await expect(
+      registry.listThreads({ backend: "codex" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-1",
+        title: "Ship the release runbook",
+        titleSource: "derived",
+      }),
+    ]);
+  });
+
+  it("never announces a rename as a fallback title", async () => {
+    const acpBackendId = "acp:kimi" as AcpBackendId;
+    const events: AgentEvent[] = [];
+    const { registry } = createKimiAcpRegistry({
+      acpBackendId,
+      sessions: [
+        {
+          backendId: acpBackendId,
+          sessionId: "session-1",
+          title: "ACP session",
+          titleSource: "fallback",
+          cwd: "/repo/project",
+          createdAt: 1000,
+          updatedAt: 1000,
+          executionMode: "default",
+          status: "idle",
+        },
+      ],
+    });
+    onTestFinished(async () => {
+      await registry.close();
+    });
+
+    const unsubscribe = registry.onEvent((event) => {
+      events.push(event);
+    });
+    onTestFinished(() => {
+      unsubscribe();
+    });
+    await registry.listThreads({ backend: acpBackendId });
+    // The stopgap `applyPromptDerivedAcpThreadTitle` applies when no title
+    // generator is available: a real prompt-derived name stored against the
+    // session as "still replaceable by a better one". That marker answers a
+    // question only the session store asks. On the wire the same word means
+    // "this thread has no name", and every consumer — thread chips, the quit
+    // dialog, the federated summary cache — would discard the name being
+    // announced.
+    await (registry as unknown as {
+      renameAcpSession(
+        backend: AcpBackendId,
+        threadId: string,
+        name: string,
+        options?: { titleSource?: AppServerThreadTitleSource },
+      ): Promise<{ threadId: string }>;
+    }).renameAcpSession(
+      acpBackendId,
+      "session-1",
+      "Investigate the flaky federation handshake test",
+      { titleSource: "fallback" },
+    );
+
+    expect(
+      events.filter(
+        (event) => event.notification.method === "thread/name/updated",
+      ),
+    ).toEqual([
+      {
+        backend: acpBackendId,
+        notification: {
+          method: "thread/name/updated",
+          params: {
+            threadId: "session-1",
+            threadName: "Investigate the flaky federation handshake test",
+          },
+        },
+      },
+    ]);
+    // The session keeps the marker it was given; only the announcement drops
+    // it.
+    expect(
+      registry.getCachedThreadSummary({
+        backend: acpBackendId,
+        threadId: "session-1",
+      }),
+    ).toMatchObject({
+      title: "Investigate the flaky federation handshake test",
+      titleSource: "explicit",
+    });
+  });
+
+  it("treats a rename that states no source as an operator rename", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-1",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    onTestFinished(async () => {
+      await registry.close();
+    });
+
+    await registry.listThreads({ backend: "codex" });
+    // A Codex rename and a federated one both arrive with no provenance, and
+    // the default has to stay what every consumer assumed before the field
+    // existed.
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-1",
+          threadName: "Ship the release runbook",
+        },
+      },
+    });
+
+    expect(
+      registry.getCachedThreadSummary({
+        backend: "codex",
+        threadId: "thread-1",
+      }),
+    ).toMatchObject({
+      title: "Ship the release runbook",
+      titleSource: "explicit",
+    });
+  });
+
+  it("still reports an operator rename as an explicit title", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-1",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          linkedDirectories: [],
+          source: "codex",
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+    onTestFinished(async () => {
+      await registry.close();
+    });
+
+    await registry.listThreads({ backend: "codex" });
+    await registry.renameThread({
+      backend: "codex",
+      threadId: "thread-1",
+      name: "Ship the release runbook",
+    });
+
+    await expect(
+      registry.listThreads({ backend: "codex" }),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        id: "thread-1",
+        title: "Ship the release runbook",
+        titleSource: "explicit",
+      }),
+    ]);
   });
 
   it("exposes live Codex thread names while thread/list still returns the placeholder", async () => {
@@ -19781,6 +20061,10 @@ command = "pnpm dev"
         params: {
           threadId: "thread-title",
           threadName: "Leopard tea button",
+          // PwrAgent generated this name, and says so on the wire. Codex
+          // stores no provenance of its own, so silence here would make the
+          // recorders read a generated title as an operator rename.
+          titleSource: "derived",
         },
       },
     });

@@ -303,6 +303,39 @@ export type CodexThreadEnvironmentRuntime = {
 export const CODEX_ENVIRONMENT_ACTION_RUNS_MAX = 10;
 
 export type AppServerThreadTitleSource = "explicit" | "derived" | "fallback";
+
+/**
+ * The provenance a rename is allowed to announce.
+ *
+ * `fallback` is absent on purpose. In a thread summary it means "this thread
+ * has no name yet", which is why `ThreadChip`, the quit dialog, and the
+ * federated summary cache all read it as "show something else instead". A
+ * rename carries a name, so announcing one as `fallback` tells every consumer
+ * to discard the very title being announced. The ACP prompt-derived stopgap
+ * does store `fallback` against its own session — there it means "replaceable
+ * by a better title", a different question — and that value must not reach
+ * the wire.
+ */
+export type AppServerRenamedTitleSource = Exclude<
+  AppServerThreadTitleSource,
+  "fallback"
+>;
+
+/**
+ * Read the provenance off a rename notification.
+ *
+ * Both recorders need this and neither can trust its input: the renderer reads
+ * payloads a federated peer built, and a peer on another build can send
+ * anything. Silence means `explicit` — that is what every consumer assumed
+ * before the field existed, and it is what a provider-forwarded rename still
+ * means, since no provider reports provenance.
+ */
+export function normalizeRenamedTitleSource(
+  value: unknown,
+): AppServerRenamedTitleSource {
+  return value === "derived" ? "derived" : "explicit";
+}
+
 export type AppServerThreadStatus = "active" | "idle" | "notLoaded" | "unknown";
 
 /** Provider provenance carried by a native Codex `spawn_agent` thread. */
@@ -1732,6 +1765,17 @@ export type AppServerNotification =
       params: {
         threadId: string;
         threadName?: string;
+        /**
+         * Where the new name came from, when the emitter knows. A rename
+         * carries no provenance of its own, so a recorder that guesses calls
+         * every generated title an operator rename. Optional because a
+         * provider-forwarded or federated rename genuinely does not know;
+         * absent means "assume an operator", which is what every consumer
+         * assumed before this existed. Read it with
+         * `normalizeRenamedTitleSource` — the type is a compile-time contract
+         * and a federated payload is another instance's JSON.
+         */
+        titleSource?: AppServerRenamedTitleSource;
       };
     }
   | {

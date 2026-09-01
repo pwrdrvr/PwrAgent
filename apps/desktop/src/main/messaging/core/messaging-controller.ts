@@ -12,6 +12,7 @@ import {
   isAcpBackendId,
   isAppServerBackendKind,
   isMessagingBindingTargetKind,
+  normalizeRenamedTitleSource,
   parseCodexTurnErrorMessage,
   permissionForActionId,
   permissionForCommandVerb,
@@ -14844,6 +14845,7 @@ export class MessagingController {
     const params = event.notification.params as {
       threadId?: unknown;
       threadName?: unknown;
+      titleSource?: unknown;
     };
     if (
       typeof params.threadId !== "string" ||
@@ -14854,6 +14856,12 @@ export class MessagingController {
     }
     const threadId = params.threadId;
     const threadName = params.threadName.trim();
+    // The new name's own provenance. Carrying the row's previous source over
+    // to a new title is the orphaned pair the thread information store
+    // refuses to hold: the status and monitor cards read `derived` to decide
+    // whether to shorten a title, so a stale source formats the same rename
+    // two different ways depending on what the row said before.
+    const titleSource = normalizeRenamedTitleSource(params.titleSource);
 
     return {
       ...snapshot,
@@ -14862,6 +14870,7 @@ export class MessagingController {
           ? {
               ...thread,
               title: threadName,
+              titleSource,
             }
           : thread,
       ),
