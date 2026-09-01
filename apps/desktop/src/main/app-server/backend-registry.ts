@@ -157,6 +157,7 @@ import {
   type NavigationLaunchpadDraft,
   type NavigationLaunchpadDefaults,
   type NavigationSnapshot,
+  type NavigationThreadGitWorkingStateUpdatedNotification,
   type NavigationThreadSummary,
   type ResetDirectoryLaunchpadRequest,
   type ResetDirectoryLaunchpadResponse,
@@ -487,6 +488,10 @@ import type {
   WorktreeWorkingStateEntry,
 } from "./git-working-state-service";
 import { resolveWorktreeRepositoryDirectory } from "./thread-directory-enricher";
+import {
+  BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
+  selectStaleWorktreeWorkingStatePaths,
+} from "./thread-working-state-refresh-policy";
 import {
   AcpAvailableCommandsStore,
   type AcpAvailableCommandsStoreLike,
@@ -911,24 +916,6 @@ function resolveThreadWorkingStatePath(
   }
 
   return undefined;
-}
-
-// Per-worktree working state changes as the agent edits/commits, but each
-// such turn pushes a fresh probe, so the background freshness window only
-// needs to catch out-of-band changes (terminal/IDE edits) on the next
-// snapshot. Shorter than the per-repo directory status TTL.
-export const WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS = 30_000;
-
-// Navigation serving paths schedule this fleet in the background rather than
-// awaiting it. Mirrors the renderer's automatic navigation lane so a federated
-// viewer converges at the same rate a local window does.
-export const BACKGROUND_THREAD_WORKING_STATE_BATCH_SIZE = 8;
-
-function isFreshThreadGitWorkingStateCacheEntry(
-  entry: WorktreeGitWorkingStateCacheEntry,
-  now: number,
-): boolean {
-  return now - entry.fetchedAt < WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS;
 }
 
 function mergedPrCommitShas(prs: PrSummary[]): string[] {
@@ -11856,7 +11843,7 @@ export class DesktopBackendRegistry {
     // whole batch is already in flight must still reach the paths behind it.
     const worktreePaths = this.selectStaleThreadWorkingStatePaths(threads, {
       exclude: this.pendingThreadGitWorkingStateKeys,
-      limit: options.limit ?? BACKGROUND_THREAD_WORKING_STATE_BATCH_SIZE,
+      limit: options.limit ?? BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
     });
     if (worktreePaths.length === 0) {
       return { scheduledCount: 0 };
@@ -11902,13 +11889,16 @@ export class DesktopBackendRegistry {
   }
 
   /**
+   * Everything registry-specific about picking a batch, and nothing else:
+   * resolving threads to worktree paths, and the `multiProjectOnly` narrowing.
+   * Freshness, the cap, and the rotation order are shared policy — see
+   * `thread-working-state-refresh-policy.ts`.
+   *
    * `multiProjectOnly` belongs to the awaited review probe, whose whole job is
    * disambiguating a review target: a single-directory thread's target is
    * unambiguous without working state. The background convergence lane must
    * not inherit it — it feeds the dirty/unpushed/base-drift chips every thread
-   * shows, and the renderer lane it mirrors
-   * (ipc/app-server.ts:selectWorktreeWorkingStateRefreshCandidates) filters on
-   * cache freshness alone.
+   * shows.
    */
   private selectStaleThreadWorkingStatePaths<
     Thread extends AppServerThreadSummary,
@@ -11920,43 +11910,18 @@ export class DesktopBackendRegistry {
       multiProjectOnly?: boolean;
     } = {},
   ): string[] {
-    const now = Date.now();
-    const stale = [
-      ...new Set(
-        candidates.flatMap((thread) => {
-          if (options.multiProjectOnly && thread.linkedDirectories.length <= 1) {
-            return [];
-          }
-          const worktreePath = resolveThreadWorkingStatePath(thread);
-          if (!worktreePath || options.exclude?.has(worktreePath)) {
-            return [];
-          }
-          const cached = this.workingStateByWorktree.get(worktreePath);
-          return !cached || !isFreshThreadGitWorkingStateCacheEntry(cached, now)
-            ? [worktreePath]
-            : [];
-        }),
-      ),
-    ];
-    if (options.limit === undefined || stale.length <= options.limit) {
-      return stale;
-    }
-
-    // Stable thread ordering must not let the same prefix win every round.
-    // Never-probed worktrees go first; after that the oldest probe rotates
-    // forward, so a fleet larger than one batch still converges.
-    stale.sort((left, right) => {
-      const leftFetchedAt = this.workingStateByWorktree.get(left)?.fetchedAt;
-      const rightFetchedAt = this.workingStateByWorktree.get(right)?.fetchedAt;
-      if (leftFetchedAt === undefined) {
-        return rightFetchedAt === undefined ? 0 : -1;
-      }
-      if (rightFetchedAt === undefined) {
-        return 1;
-      }
-      return leftFetchedAt - rightFetchedAt;
+    return selectStaleWorktreeWorkingStatePaths({
+      cache: this.workingStateByWorktree,
+      ...(options.exclude ? { exclude: options.exclude } : {}),
+      ...(options.limit === undefined ? {} : { limit: options.limit }),
+      worktreePaths: candidates.flatMap((thread) => {
+        if (options.multiProjectOnly && thread.linkedDirectories.length <= 1) {
+          return [];
+        }
+        const worktreePath = resolveThreadWorkingStatePath(thread);
+        return worktreePath ? [worktreePath] : [];
+      }),
     });
-    return stale.slice(0, options.limit);
   }
 
   private async probeThreadGitWorkingStates<
@@ -12032,15 +11997,61 @@ export class DesktopBackendRegistry {
     });
   }
 
+  /**
+   * The one write seam for the working-state cache, for both lanes. Keeping it
+   * single is what makes the shared cache safe: the monotonic stamp and the
+   * notification below have to happen on every write, and a lane that set the
+   * map itself would skip them.
+   */
   async rememberThreadGitWorkingStateCacheEntry(
     entry: WorktreeGitWorkingStateCacheEntry,
   ): Promise<void> {
     await this.loadThreadGitWorkingStateCache();
-    this.workingStateByWorktree.set(entry.worktreePath, entry);
-    await this.overlayStore.writeThreadGitWorkingStateCacheEntry?.(entry);
+    // Two lanes probing one worktree can land in the same millisecond, and the
+    // renderer drops an update whose `fetchedAt` does not advance. Derive the
+    // stamp from the entry it replaces rather than trusting the clock.
+    const previous = this.workingStateByWorktree.get(entry.worktreePath);
+    const fetchedAt = Math.max(
+      entry.fetchedAt,
+      (previous?.fetchedAt ?? entry.fetchedAt - 1) + 1,
+    );
+    const stored: WorktreeGitWorkingStateCacheEntry = { ...entry, fetchedAt };
+    this.workingStateByWorktree.set(stored.worktreePath, stored);
+    await this.overlayStore.writeThreadGitWorkingStateCacheEntry?.(stored);
+
+    // Reaches already-open surfaces. Without it a background round only landed
+    // in the durable cache, so the window that scheduled it kept showing the
+    // previous chips until its next full navigation snapshot.
+    const notification: NavigationThreadGitWorkingStateUpdatedNotification = {
+      method: "navigation/threadGitWorkingState/updated",
+      params: {
+        worktreePath: stored.worktreePath,
+        gitWorkingState: stored.gitWorkingState ?? null,
+        fetchedAt,
+      },
+    };
+    await this.publishLocalEvent({
+      // Working state belongs to a worktree, not a backend, but every event on
+      // this bus carries one. Matches the renderer lane's own publish.
+      backend: "codex",
+      notification,
+    } as unknown as AgentEvent);
   }
 
-  private async loadThreadGitWorkingStateCache(): Promise<void> {
+  /**
+   * Live view of the cache both refresh lanes decide staleness against.
+   * Read-only by type: `rememberThreadGitWorkingStateCacheEntry` is the only
+   * writer, and the lanes must not each keep their own copy — a second map
+   * disagrees about what is fresh and re-probes what the other just read.
+   */
+  getThreadGitWorkingStateCache(): ReadonlyMap<
+    string,
+    WorktreeGitWorkingStateCacheEntry
+  > {
+    return this.workingStateByWorktree;
+  }
+
+  async loadThreadGitWorkingStateCache(): Promise<void> {
     if (!this.workingStateCacheLoad) {
       this.workingStateCacheLoad = (async () => {
         const entries =

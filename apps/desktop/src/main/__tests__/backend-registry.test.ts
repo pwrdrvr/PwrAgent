@@ -74,14 +74,16 @@ import type {
   ThreadStartParams as CodexThreadStartParams,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
-  BACKGROUND_THREAD_WORKING_STATE_BATCH_SIZE,
   buildCodexFastModeMismatchNotificationParams,
   CODEX_MISSING_THREAD_EVALUATION_DELAY_MS,
   DesktopBackendRegistry,
   getCodexFastModeMismatchWarning,
   withTokenMiserBridgeDescriptorEnv,
-  WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS,
 } from "../app-server/backend-registry";
+import {
+  BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
+  WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS,
+} from "../app-server/thread-working-state-refresh-policy";
 import type {
   CodexPwrdrvrTokenMiserActivation,
   CodexServerCapabilities,
@@ -3433,7 +3435,7 @@ describe("DesktopBackendRegistry", () => {
       })(),
     );
     const worktreePaths = Array.from(
-      { length: BACKGROUND_THREAD_WORKING_STATE_BATCH_SIZE + 1 },
+      { length: BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE + 1 },
       (_unused, index) => `/worktrees/repo-${index}`,
     );
     const overlayStore = {
@@ -3469,7 +3471,7 @@ describe("DesktopBackendRegistry", () => {
             .reverse(),
         ),
       ).resolves.toEqual({
-        scheduledCount: BACKGROUND_THREAD_WORKING_STATE_BATCH_SIZE,
+        scheduledCount: BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
       });
       // The round is scheduled, not awaited, so the fleet call lands some
       // microtasks after the promise above settles.
@@ -3478,7 +3480,7 @@ describe("DesktopBackendRegistry", () => {
         1,
       );
       expect(readWorkingStateEntries).toHaveBeenCalledWith(
-        worktreePaths.slice(0, BACKGROUND_THREAD_WORKING_STATE_BATCH_SIZE),
+        worktreePaths.slice(0, BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE),
         expect.anything(),
       );
     } finally {
@@ -3679,6 +3681,97 @@ describe("DesktopBackendRegistry", () => {
       );
       expect(readWorkingStateEntries.mock.calls.flatMap(([paths]) => paths))
         .not.toContain(reviewWorktreePath);
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("publishes a background probe so already-open surfaces see it", async () => {
+    // The durable cache alone only reaches the next full navigation snapshot.
+    // Without this the lane's whole point — a federated viewer and a local
+    // window converging at the same rate — held only for the viewer.
+    const worktreePath = "/worktrees/PwrAgnt";
+    const readWorkingStateEntries = vi.fn((paths: string[]) =>
+      (async function* () {
+        for (const path of paths) {
+          yield { worktreePath: path, gitWorkingState: sampleGitWorkingState };
+        }
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+    const workingStateEvents: AgentEvent[] = [];
+    const unsubscribe = registry.onEvent((event) => {
+      if (
+        event.notification.method === "navigation/threadGitWorkingState/updated"
+      ) {
+        workingStateEvents.push(event);
+      }
+    });
+
+    try {
+      await registry.refreshThreadGitWorkingStates([
+        multiProjectThread({ worktreePath }),
+      ]);
+      await expectEventually(async () => workingStateEvents.length, 1);
+      expect(workingStateEvents[0]?.notification.params).toEqual(
+        expect.objectContaining({
+          gitWorkingState: sampleGitWorkingState,
+          worktreePath,
+        }),
+      );
+    } finally {
+      unsubscribe();
+      await registry.close();
+    }
+  });
+
+  it("advances fetchedAt past the entry a probe replaces", async () => {
+    // Both lanes write through this seam, so two probes of one worktree can
+    // land in the same millisecond. The renderer ignores an update whose
+    // fetchedAt does not advance, which would drop the later result.
+    const worktreePath = "/worktrees/PwrAgnt";
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(
+        async (_entry: { fetchedAt: number }) => undefined,
+      ),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      overlayStore,
+    });
+
+    try {
+      await registry.rememberThreadGitWorkingStateCacheEntry({
+        fetchedAt: 5_000,
+        gitWorkingState: sampleGitWorkingState,
+        worktreePath,
+      });
+      await registry.rememberThreadGitWorkingStateCacheEntry({
+        fetchedAt: 5_000,
+        gitWorkingState: sampleGitWorkingState,
+        worktreePath,
+      });
+      expect(
+        overlayStore.writeThreadGitWorkingStateCacheEntry.mock.calls.map(
+          ([entry]) => entry.fetchedAt,
+        ),
+      ).toEqual([5_000, 5_001]);
+      expect(
+        registry.getThreadGitWorkingStateCache().get(worktreePath)?.fetchedAt,
+      ).toBe(5_001);
     } finally {
       await registry.close();
     }

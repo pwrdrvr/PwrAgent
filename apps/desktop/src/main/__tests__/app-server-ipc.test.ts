@@ -443,13 +443,58 @@ const writeThreadGitWorkingStateCacheEntry = vi.fn(async (_entry?: {
 const hydrateThreadGitWorkingStates = vi.fn(
   async (threads: AppServerThreadSummary[]) => threads,
 );
-const rememberThreadGitWorkingStateCacheEntry = vi.fn(async (entry: {
+// The registry owns the one working-state cache both refresh lanes read, so
+// this mock has to behave like it: keep a real map, stamp monotonically, and
+// publish. The IPC lane's freshness and rotation tests below select against
+// this map for real.
+type WorktreeWorkingStateCacheEntry = {
   worktreePath: string;
   fetchedAt: number;
   gitWorkingState?: ThreadGitWorkingState;
-}) => {
-  await writeThreadGitWorkingStateCacheEntry(entry);
+};
+const threadGitWorkingStateCache = new Map<
+  string,
+  WorktreeWorkingStateCacheEntry
+>();
+let threadGitWorkingStateCacheLoaded = false;
+const loadThreadGitWorkingStateCache = vi.fn(async () => {
+  if (threadGitWorkingStateCacheLoaded) {
+    return;
+  }
+  threadGitWorkingStateCacheLoaded = true;
+  for (const entry of Object.values(await readThreadGitWorkingStateCache())) {
+    const cached = entry as WorktreeWorkingStateCacheEntry;
+    threadGitWorkingStateCache.set(cached.worktreePath, cached);
+  }
 });
+const getThreadGitWorkingStateCache = vi.fn(
+  (): ReadonlyMap<string, WorktreeWorkingStateCacheEntry> =>
+    threadGitWorkingStateCache,
+);
+const rememberThreadGitWorkingStateCacheEntry = vi.fn(
+  async (entry: WorktreeWorkingStateCacheEntry) => {
+    await loadThreadGitWorkingStateCache();
+    const previous = threadGitWorkingStateCache.get(entry.worktreePath);
+    const fetchedAt = Math.max(
+      entry.fetchedAt,
+      (previous?.fetchedAt ?? entry.fetchedAt - 1) + 1,
+    );
+    const stored = { ...entry, fetchedAt };
+    threadGitWorkingStateCache.set(stored.worktreePath, stored);
+    await writeThreadGitWorkingStateCacheEntry(stored);
+    await publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "navigation/threadGitWorkingState/updated",
+        params: {
+          worktreePath: stored.worktreePath,
+          gitWorkingState: stored.gitWorkingState ?? null,
+          fetchedAt,
+        },
+      },
+    } as never);
+  },
+);
 type WorkingStateEntry = {
   worktreePath: string;
   gitWorkingState?: {
@@ -501,7 +546,7 @@ function emitRegistryEvent(event: unknown): void {
     listener(event);
   }
 }
-const publishLocalEvent = vi.fn(async () => undefined);
+const publishLocalEvent = vi.fn(async (_event?: unknown) => undefined);
 const setThreadPullRequestStatusToolHandler = vi.fn();
 const setThreadPullRequestCanonicalizer = vi.fn();
 const setLocalPullRequestAuthorityResolver = vi.fn();
@@ -915,6 +960,8 @@ vi.mock("../app-server/backend-registry", () => {
     invalidateDirectoryStatus,
     readWorktreeWorkingStateEntries,
     hydrateThreadGitWorkingStates,
+    getThreadGitWorkingStateCache,
+    loadThreadGitWorkingStateCache,
     rememberThreadGitWorkingStateCacheEntry,
     invalidateWorktreeWorkingState,
     resolveEditCommitStates,
@@ -937,7 +984,6 @@ vi.mock("../app-server/backend-registry", () => {
   };
   backendRegistryLifecycle.get.mockImplementation(() => registry);
   return {
-    WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS: 30_000,
     disposeDesktopBackendRegistry: vi.fn(async () => undefined),
     getDesktopBackendRegistry: backendRegistryLifecycle.get,
     getExistingDesktopBackendRegistry: () =>
@@ -1051,6 +1097,10 @@ describe("app server ipc", () => {
     hydrateThreadGitWorkingStates.mockImplementation(
       async (threads: AppServerThreadSummary[]) => threads,
     );
+    threadGitWorkingStateCache.clear();
+    threadGitWorkingStateCacheLoaded = false;
+    getThreadGitWorkingStateCache.mockClear();
+    loadThreadGitWorkingStateCache.mockClear();
     rememberThreadGitWorkingStateCacheEntry.mockClear();
     readWorktreeWorkingStateEntries.mockClear();
     resolveEditCommitStates.mockClear();
@@ -7216,6 +7266,63 @@ describe("app server ipc", () => {
     }
   });
 
+  it("reaches past a batch that is still in flight", async () => {
+    // In-flight worktrees are excluded before the cap, not after. Dropping
+    // them afterwards let a full batch of already-probing paths consume the
+    // cap and schedule nothing, so the stale one behind them waited for a
+    // round that had no reason to come.
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const threads = Array.from({ length: 9 }, (_unused, index) => ({
+      id: `thread-${index}`,
+      title: `Thread ${index}`,
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      projectKey: `/repo/wt-${index}`,
+      linkedDirectories: [],
+      updatedAt: 2_000 - index,
+    }));
+    listThreads.mockResolvedValue(threads as never);
+    let releaseFirstProbe: (() => void) | undefined;
+    const firstProbeGate = new Promise<void>((resolve) => {
+      releaseFirstProbe = resolve;
+    });
+    readWorktreeWorkingStateEntries.mockImplementationOnce(
+      (worktreePaths: string[]) =>
+        (async function* () {
+          await firstProbeGate;
+          for (const worktreePath of worktreePaths) {
+            yield { worktreePath } satisfies WorkingStateEntry;
+          }
+        })(),
+    );
+
+    try {
+      registerAppServerIpcHandlers();
+      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      await vi.waitFor(() => {
+        expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(1);
+      });
+      expect(readWorktreeWorkingStateEntries.mock.calls[0]?.[0]).toEqual(
+        threads.slice(0, 8).map((thread) => thread.projectKey),
+      );
+
+      // Nothing has been written yet, so every worktree is still stale and a
+      // naive selection would pick the same first eight again.
+      await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+      await vi.waitFor(() => {
+        expect(readWorktreeWorkingStateEntries).toHaveBeenCalledTimes(2);
+      });
+      expect(readWorktreeWorkingStateEntries.mock.calls[1]?.[0]).toEqual([
+        threads[8]!.projectKey,
+      ]);
+    } finally {
+      releaseFirstProbe?.();
+      await vi.waitFor(() => {
+        expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(9);
+      });
+    }
+  });
+
   it("lets a user-triggered working-state refresh bypass fresh cache", async () => {
     const {
       NAVIGATION_REFRESH_THREAD_GIT_WORKING_STATE_CHANNEL,
@@ -7360,6 +7467,53 @@ describe("app server ipc", () => {
         [worktreePath],
         expect.any(Object),
       );
+    });
+  });
+
+  it("serves a working-state value the registry lane wrote after startup", async () => {
+    // Both lanes read one cache. This window used to keep a second copy,
+    // loaded once at startup and never re-read, and its stale pre-stamp then
+    // satisfied the registry's own `if (thread.gitWorkingState)` short-circuit
+    // — so a registry-lane probe's result was discarded here until the next
+    // cold start.
+    const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    const worktreePath = "/repo/wt";
+    const gitWorkingState = {
+      dirtyFiles: 2,
+      dirtyAdditions: 7,
+      dirtyDeletions: 1,
+      untrackedFiles: 0,
+      unpushedCommits: 3,
+      baseBranch: "main",
+    };
+    listThreads.mockResolvedValue([
+      {
+        id: "thread-1",
+        title: "Thread one",
+        titleSource: "explicit",
+        source: "codex",
+        projectKey: worktreePath,
+        linkedDirectories: [],
+        updatedAt: 2_000,
+      },
+    ] as never);
+
+    registerAppServerIpcHandlers();
+    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    await vi.waitFor(() => {
+      expect(writeThreadGitWorkingStateCacheEntry).toHaveBeenCalledTimes(1);
+    });
+
+    // The registry's background convergence lane lands its own probe.
+    await rememberThreadGitWorkingStateCacheEntry({
+      fetchedAt: Date.now(),
+      gitWorkingState,
+      worktreePath,
+    });
+
+    const snapshot = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.({}, {});
+    expect(snapshot).toMatchObject({
+      threads: [expect.objectContaining({ gitWorkingState, id: "thread-1" })],
     });
   });
 

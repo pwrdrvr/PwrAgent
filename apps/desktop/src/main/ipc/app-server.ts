@@ -9,7 +9,6 @@ import type {
   PrLookupCacheEntry,
   PrStatusCacheEntry,
   SqliteOverlayStore,
-  WorktreeGitWorkingStateCacheEntry,
 } from "../state/overlay-store-sqlite";
 import {
   sanitizeRendererPayload,
@@ -91,7 +90,6 @@ import {
   type NavigationDirectorySummary,
   type NavigationDirectoryGitStatus,
   type NavigationDirectoryGitStatusUpdatedNotification,
-  type NavigationThreadGitWorkingStateUpdatedNotification,
   type NavigationSnapshot,
   type NavigationSnapshotTransportResponse,
   type NavigationThreadSummary,
@@ -160,7 +158,6 @@ import {
   type ResolveMissingCodexThreadsResponse,
   type RestoreThreadRequest,
   type RestoreThreadResponse,
-  type ThreadGitWorkingState,
   type ThreadOverlayState,
   type ThreadPrAutoDispatchPending,
   type UpdateDirectoryLaunchpadRequest,
@@ -195,8 +192,11 @@ import {
   disposeDesktopBackendRegistry,
   getExistingDesktopBackendRegistry,
   getDesktopBackendRegistry,
-  WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS,
 } from "../app-server/backend-registry";
+import {
+  BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
+  selectStaleWorktreeWorkingStatePaths,
+} from "../app-server/thread-working-state-refresh-policy";
 import { materializeTranscriptImageUrlsForRenderer } from "../transcript-image-protocol";
 import { hydrateLaunchpadCodexEnvironmentOptions } from "../app-server/codex-environment-config";
 import { getDesktopOverlayStore } from "../app-server/desktop-overlay-store";
@@ -357,7 +357,6 @@ const PR_STATUS_TOKEN_BUCKET_CAPACITY = 20;
 const PR_STATUS_TOKEN_BUCKET_REFILL_PER_MINUTE = 20;
 const STARTUP_DIRECTORY_GIT_STATUS_REFRESH_LIMIT =
   DIRECTORY_GIT_STATUS_BACKGROUND_BATCH_SIZE;
-const BACKGROUND_WORKTREE_WORKING_STATE_REFRESH_BATCH_SIZE = 8;
 // PR discovery (Layer B): a slow branch-lookup rotation across ALL open threads
 // to catch newly opened PRs on projects the operator is not looking at. Tick
 // often, but sweep each thread rarely and only a few per tick, so discovery
@@ -1553,11 +1552,6 @@ class DesktopAppServerService {
   >();
   private readonly pendingDirectoryGitStatusRefreshes = new Map<string, Promise<void>>();
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
-  private readonly workingStateByWorktree = new Map<
-    string,
-    WorktreeGitWorkingStateCacheEntry
-  >();
-  private workingStateCacheLoaded = false;
   private readonly pendingWorktreeWorkingStateRefreshes = new Map<
     string,
     Promise<void>
@@ -2917,7 +2911,9 @@ class DesktopAppServerService {
   ): NavigationSnapshot["threads"][number] {
     const worktreePath = this.resolveThreadWorkingStatePath(thread);
     const cached = worktreePath
-      ? this.workingStateByWorktree.get(worktreePath)
+      ? getDesktopBackendRegistry()
+          .getThreadGitWorkingStateCache()
+          .get(worktreePath)
       : undefined;
     // Threads arrive without working state (the enricher no longer computes
     // it), so hydration only ever adds the cached value. A worktree the cache
@@ -3285,16 +3281,16 @@ class DesktopAppServerService {
     } as unknown as AgentEvent);
   }
 
+  /**
+   * The registry owns the cache both refresh lanes read. This window's lane
+   * used to keep a second copy, loaded exactly once and never re-read, so a
+   * registry-lane probe landing after startup was invisible here: the stale
+   * pre-stamp from `applyCachedWorktreeWorkingState` satisfied the registry's
+   * own `if (thread.gitWorkingState)` short-circuit and the newer value was
+   * dropped.
+   */
   private async loadThreadGitWorkingStateCache(): Promise<void> {
-    if (this.workingStateCacheLoaded) {
-      return;
-    }
-    this.workingStateCacheLoaded = true;
-
-    const entries = await this.getOverlayStore().readThreadGitWorkingStateCache();
-    for (const entry of Object.values(entries)) {
-      this.workingStateByWorktree.set(entry.worktreePath, entry);
-    }
+    await getDesktopBackendRegistry().loadThreadGitWorkingStateCache();
   }
 
   /**
@@ -3309,9 +3305,12 @@ class DesktopAppServerService {
     worktreePaths: string[];
     force?: boolean;
   }): number {
-    const worktreePaths = this.selectWorktreeWorkingStateRefreshCandidates(
-      params,
-    ).filter((worktreePath) => !this.pendingWorktreeWorkingStateKeys.has(worktreePath));
+    // In-flight paths are excluded during selection, not after it: dropping
+    // them afterwards let a full batch of already-probing worktrees consume
+    // the cap and schedule nothing, leaving the stale ones behind them for a
+    // later round.
+    const worktreePaths =
+      this.selectWorktreeWorkingStateRefreshCandidates(params);
     if (worktreePaths.length === 0) {
       return 0;
     }
@@ -3369,46 +3368,27 @@ class DesktopAppServerService {
     };
   }
 
+  /**
+   * Everything lane-specific about picking a batch: the automatic navigation
+   * lane sees the whole fleet and takes a capped, rotating slice, while the
+   * focused and user-triggered lanes name one worktree and want it now.
+   * Freshness and the rotation order are shared policy — see
+   * `app-server/thread-working-state-refresh-policy.ts`.
+   */
   private selectWorktreeWorkingStateRefreshCandidates(params: {
     automatic: boolean;
     worktreePaths: string[];
     force?: boolean;
   }): string[] {
-    const candidates = [
-      ...new Set(params.worktreePaths.map((p) => p.trim()).filter(Boolean)),
-    ].filter((worktreePath) => {
-      if (params.force) {
-        return true;
-      }
-      const cached = this.workingStateByWorktree.get(worktreePath);
-      if (!cached) {
-        return true;
-      }
-      return !isFreshWorktreeWorkingStateCacheEntry(cached);
+    return selectStaleWorktreeWorkingStatePaths({
+      cache: getDesktopBackendRegistry().getThreadGitWorkingStateCache(),
+      exclude: this.pendingWorktreeWorkingStateKeys,
+      ...(params.force ? { force: true } : {}),
+      ...(params.automatic
+        ? { limit: BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE }
+        : {}),
+      worktreePaths: params.worktreePaths,
     });
-
-    if (!params.automatic) {
-      return candidates;
-    }
-
-    // Stable thread ordering must not make the same prefix win forever.
-    // Unseen worktrees sort first; after that, rotate the oldest probes
-    // forward. Selected and hover-inspected threads use the focused/user lane.
-    candidates.sort((left, right) => {
-      const leftFetchedAt = this.workingStateByWorktree.get(left)?.fetchedAt;
-      const rightFetchedAt = this.workingStateByWorktree.get(right)?.fetchedAt;
-      if (leftFetchedAt === undefined) {
-        return rightFetchedAt === undefined ? 0 : -1;
-      }
-      if (rightFetchedAt === undefined) {
-        return 1;
-      }
-      return leftFetchedAt - rightFetchedAt;
-    });
-    return candidates.slice(
-      0,
-      BACKGROUND_WORKTREE_WORKING_STATE_REFRESH_BATCH_SIZE,
-    );
   }
 
   private async refreshWorktreeWorkingStates(
@@ -3430,45 +3410,17 @@ class DesktopAppServerService {
         ),
       },
     )) {
-      await this.writeWorktreeWorkingStateEntry({
+      // The registry owns the monotonic stamp, the durable write, and the
+      // `navigation/threadGitWorkingState/updated` publish, so a probe from
+      // either lane reaches open surfaces the same way.
+      await getDesktopBackendRegistry().rememberThreadGitWorkingStateCacheEntry({
         worktreePath: entry.worktreePath,
         fetchedAt: Date.now(),
-        gitWorkingState: entry.gitWorkingState,
+        ...(entry.gitWorkingState
+          ? { gitWorkingState: entry.gitWorkingState }
+          : {}),
       });
     }
-  }
-
-  private async writeWorktreeWorkingStateEntry(params: {
-    worktreePath: string;
-    fetchedAt: number;
-    gitWorkingState?: ThreadGitWorkingState;
-  }): Promise<void> {
-    const previous = this.workingStateByWorktree.get(params.worktreePath);
-    const fetchedAt = Math.max(
-      params.fetchedAt,
-      (previous?.fetchedAt ?? params.fetchedAt - 1) + 1,
-    );
-    const cacheEntry: WorktreeGitWorkingStateCacheEntry = {
-      worktreePath: params.worktreePath,
-      fetchedAt,
-      ...(params.gitWorkingState ? { gitWorkingState: params.gitWorkingState } : {}),
-    };
-    this.workingStateByWorktree.set(params.worktreePath, cacheEntry);
-    await getDesktopBackendRegistry()
-      .rememberThreadGitWorkingStateCacheEntry(cacheEntry);
-
-    const notification: NavigationThreadGitWorkingStateUpdatedNotification = {
-      method: "navigation/threadGitWorkingState/updated",
-      params: {
-        worktreePath: params.worktreePath,
-        gitWorkingState: params.gitWorkingState ?? null,
-        fetchedAt,
-      },
-    };
-    await getDesktopBackendRegistry().publishLocalEvent({
-      backend: "codex",
-      notification,
-    } as unknown as AgentEvent);
   }
 
   /**
@@ -7446,8 +7398,6 @@ class DesktopAppServerService {
     this.lastDirectoriesByKey.clear();
     this.pendingWorktreeWorkingStateRefreshes.clear();
     this.pendingWorktreeWorkingStateKeys.clear();
-    this.workingStateByWorktree.clear();
-    this.workingStateCacheLoaded = false;
     this.worktreePathByThreadKey.clear();
     this.prRefreshContextByThreadKey.clear();
     await disposeDesktopBackendRegistry();
@@ -7526,12 +7476,6 @@ class DesktopAppServerService {
     });
     return this.focusedDiffService;
   }
-}
-
-function isFreshWorktreeWorkingStateCacheEntry(
-  entry: WorktreeGitWorkingStateCacheEntry,
-): boolean {
-  return Date.now() - entry.fetchedAt < WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS;
 }
 
 async function resolvePrimaryThreadRepoKey(

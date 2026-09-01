@@ -438,6 +438,33 @@ the paths behind it. The cap bounds one round, not the process: concurrent
 snapshots can each hold a round, and per-worktree coalescing is what keeps them
 from probing the same path twice. `close()` drains the live rounds.
 
+Two lanes drive this: the registry's background lane above, which serves
+messaging commands and federated viewers, and the renderer's navigation lane in
+`ipc/app-server.ts`, driven by the local window's snapshot polling and by
+turn/commit events. They are separate schedulers on purpose — different clocks,
+different triggers — but they are not allowed to disagree about what is stale,
+so they share two things:
+
+- **One policy.** `app-server/thread-working-state-refresh-policy.ts` owns the
+  TTL, the batch size, the freshness predicate, and the selection order. Each
+  lane keeps only what is genuinely its own: the registry resolves threads to
+  worktree paths and applies the review picker's multi-project narrowing; the
+  renderer decides whether a round is the capped automatic one or a focused
+  single-worktree one.
+- **One cache.** The registry owns the in-memory map, exposed read-only through
+  `getThreadGitWorkingStateCache()`, and
+  `rememberThreadGitWorkingStateCacheEntry` is the only writer. It stamps
+  `fetchedAt` strictly above the entry it replaces — two lanes can land in the
+  same millisecond, and the renderer ignores an update whose stamp does not
+  advance — writes the durable row, and publishes
+  `navigation/threadGitWorkingState/updated` so a probe from either lane
+  reaches already-open surfaces instead of waiting for the next full snapshot.
+
+The one seam left unshared is the in-flight set: each lane tracks its own
+pending worktrees, so the two can briefly probe the same path at once. Whichever
+lands first makes it fresh for the shared window, so the other lane's next round
+skips it.
+
 One caller does await the fleet, through
 `hydrateThreadGitWorkingStates(..., { probeMissing: true })`: the messenger's
 review picker. `findPreferredReviewWorkspaceCwd` and `buildReviewBranchOptions`
