@@ -35,10 +35,19 @@ import { RailStatusChip } from "./RailStatusChip";
 import { subAgentPricingUsageTitle } from "./subagent-kind";
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
+import { TokenMiserSummaryCard } from "./TokenMiserSummaryCard";
+import { buildTokenMiserSavingsSummary } from "../token-miser-savings-summary";
 
 type PricingPanelProps = {
   activeTurnId?: string;
   displayOptions?: PricingDisplayOptions;
+  /**
+   * Opens the Explorer on its savings lens. The Pricing rail is where an
+   * operator asks what a thread cost, so it is where the full savings
+   * breakdown has to be reachable — until now that window could only be
+   * opened from Tool calls, a tab the tool-accounting experiment gates off.
+   */
+  onOpenTokenMiserSavings?: () => void;
   onScrollToTurn?: (turnId: string, turnTimeMs?: number) => void;
   pricing?: {
     compactions?: ThreadCompactionRecord[];
@@ -110,6 +119,22 @@ export function PricingPanel(props: PricingPanelProps) {
   const parentModelSummary = aggregateUsageLines(
     allDisplayLines.filter(isMainThreadUsageLine),
   );
+  // Thread-level gate result, from every gate row on this tab. The per-turn
+  // folds below price one turn each; this is the same arithmetic run once
+  // across all of them, so the rail can answer "did the gate pay for itself"
+  // without expanding ninety folds.
+  const tokenMiserSummary = buildTokenMiserSavingsSummary({
+    ...(props.tokenMiserAccounting
+      ? { accounting: props.tokenMiserAccounting }
+      : {}),
+    gateAccountings: allDisplayLines
+      .filter(isTokenMiserGateLine)
+      .map((line) =>
+        line.sourceItemId
+          ? subAgentsById.get(line.sourceItemId)?.tokenMiserAccounting
+          : undefined,
+      ),
+  });
   const displayOptions = props.displayOptions ?? DEFAULT_PRICING_DISPLAY_OPTIONS;
   // Totals run over every line, nested gates included: a gate's helper cost is
   // still part of the running total of every turn after it.
@@ -421,6 +446,18 @@ export function PricingPanel(props: PricingPanelProps) {
         </>
       ) : displayLines.length === 0 ? (
         <p className="context-empty">No usage pricing recorded yet.</p>
+      ) : null}
+
+      {/* Under the provider summary, above the turn rows: the gate's result is
+          part of reading the bill, not a footnote to one turn of it. */}
+      {tokenMiserSummary ? (
+        <TokenMiserSummaryCard
+          {...(props.onOpenTokenMiserSavings
+            ? { onOpenSavings: props.onOpenTokenMiserSavings }
+            : {})}
+          {...(summary ? { observedCostMicros: summary.totalCostMicros } : {})}
+          summary={tokenMiserSummary}
+        />
       ) : null}
 
       {displayLines.length > 0 ? (

@@ -170,10 +170,22 @@ export type OpenToolOutputIncidentExplorerWindowRequest = {
    * against the local registry, which does not have it.
    */
   federationTarget?: FederationTarget;
+  /**
+   * Which lens the operator asked for.
+   *
+   * A window opening for the first time picks its own lens from the thread's
+   * accounting, so this only matters when the window is already open: the
+   * refresh event carries the request, and an explorer sitting on incidents
+   * has to move when the operator clicks "Token Miser Savings" on the Pricing
+   * rail. Omitted means "leave the lens alone".
+   */
+  lens?: ToolOutputIncidentExplorerLens;
   projectLabel?: string;
   threadId: string;
   title: string;
 };
+
+export type ToolOutputIncidentExplorerLens = "incidents" | "savings";
 
 export type OpenToolOutputIncidentExplorerWindowResponse = {
   opened: true;

@@ -24146,6 +24146,51 @@ button.pricing-token-miser__folded:focus-visible {
   outline-offset: 2px;
 }
 
+/* Thread-level gate result, above the turn rows. It borrows the pricing
+   summary card wholesale — same shell, same eyebrow, same key/value rows — so
+   the two read as one stack rather than as a summary and a widget. Only the
+   figure and the action are its own. */
+.token-miser-summary-card__figure {
+  color: var(--accent);
+}
+
+.token-miser-summary-card__figure[data-negative="true"] {
+  color: var(--status-warning);
+}
+
+.token-miser-summary-card__action {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 26px;
+  margin-top: 10px;
+  padding: 0 10px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.token-miser-summary-card__action:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+}
+
+.token-miser-summary-card__action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+
+.token-miser-summary-card__action svg {
+  flex: 0 0 auto;
+}
+
 .rail-card__actions {
   width: 100%;
   margin-top: 2px;
@@ -24214,6 +24259,40 @@ button.pricing-token-miser__folded:focus-visible {
 
 .tool-calls-panel__heading h3 {
   margin: 0;
+}
+
+/* A rail heading's action, at rail scale. The shared `.button` is 34px at
+   13px, which outweighed the 14px heading it sat beside; these are the same
+   measurements as `.tool-call-row__details`, the other in-rail control. Both
+   entry points to the tool-output explorer wear this class, so the Pricing
+   card's action and the Tool calls heading's action are one control with two
+   destinations. */
+.context-panel__section-action {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 5px;
+  min-height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--accent-bright);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.context-panel__section-action:hover {
+  border-color: var(--accent-border);
+  background: var(--bg-row-active);
+}
+
+.context-panel__section-action:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
 }
 
 .tool-call-alert .rail-card__title {

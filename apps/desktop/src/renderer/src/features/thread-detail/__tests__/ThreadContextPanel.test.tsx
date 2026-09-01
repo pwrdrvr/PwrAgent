@@ -15,6 +15,7 @@ import type {
   AppServerThreadEntry,
   NavigationThreadSummary,
   ThreadPricingSummary,
+  ThreadSubAgentSummary,
   ThreadToolAccounting,
   ThreadUsageLineRecord,
 } from "@pwragent/shared";
@@ -54,6 +55,14 @@ const baseThread: NavigationThreadSummary = {
 
 // A monitor-scope pricing row for a sub-agent. `sourceItemId` is the join key
 // to a `ThreadSubAgentSummary.monitorId`.
+function cardRowValue(
+  scope: ReturnType<typeof within>,
+  label: string,
+): string {
+  const row = scope.getByText(label).closest(".rail-summary-card__row");
+  return row?.querySelector(".rail-summary-card__row-value")?.textContent ?? "";
+}
+
 function buildMonitorLine(
   overrides: Partial<ThreadUsageLineRecord> = {},
 ): ThreadUsageLineRecord {
@@ -973,9 +982,11 @@ describe("ThreadContextPanel", () => {
     });
 
     fireEvent.click(screen.getByRole("button", { name: "Analyze history" }));
-    fireEvent.click(screen.getByRole("button", { name: "Explore" }));
+    fireEvent.click(
+      screen.getByRole("button", { name: "Tool Output Incidents" }),
+    );
     expect(onAnalyzeToolHistory).toHaveBeenCalledOnce();
-    expect(onOpenToolOutputIncidentExplorer).toHaveBeenCalledOnce();
+    expect(onOpenToolOutputIncidentExplorer).toHaveBeenCalledWith("incidents");
   });
 
   it("hides the Tool calls tab while its experimental flag is off", () => {
@@ -1144,6 +1155,134 @@ describe("ThreadContextPanel", () => {
     expect(summary.getByText("1k")).toBeInTheDocument();
     expect(summary.getByText("250")).toBeInTheDocument();
     expect(summary.queryByText("17k")).not.toBeInTheDocument();
+  });
+
+  it("summarizes Token Miser above the turn rows on the Pricing tab", () => {
+    /* The savings window used to be reachable only from Tool calls, a tab the
+       tool-accounting experiment hides by default — so this card is built from
+       the per-gate records the Pricing rail always has, and is asserted here
+       with that experiment off. */
+    const onOpenToolOutputIncidentExplorer = vi.fn();
+    const gateSubAgents: ThreadSubAgentSummary[] = [
+      {
+        monitorId: "system:token-miser:gate-1",
+        task: "Gate Bash output",
+        status: "success",
+        createdAt: 1_800_000_000_000,
+        updatedAt: 1_800_000_000_500,
+        tokenMiserAccounting: {
+          currency: "USD",
+          disposition: "summarized",
+          decisionSource: "helper",
+          originalModel: "gpt-5.6-sol",
+          baselineParentTokens: 60_000,
+          baselineParentCostMicros: 900_000,
+          gateModel: "gpt-5.6-luna",
+          gateTotalTokens: 12_000,
+          gateCostMicros: 60_000,
+          revealedParentTokens: 6_000,
+          revealedParentCostMicros: 90_000,
+          savingsMicros: 750_000,
+        },
+      },
+      {
+        monitorId: "system:token-miser:gate-2",
+        task: "Gate search output",
+        status: "success",
+        createdAt: 1_800_000_000_000,
+        updatedAt: 1_800_000_000_600,
+        tokenMiserAccounting: {
+          currency: "USD",
+          disposition: "passed_through",
+          decisionSource: "policy",
+          originalModel: "gpt-5.6-sol",
+          baselineParentTokens: 20_000,
+          baselineParentCostMicros: 300_000,
+          gateModel: "gpt-5.6-luna",
+          gateTotalTokens: 8_000,
+          gateCostMicros: 40_000,
+          revealedParentTokens: 20_000,
+          revealedParentCostMicros: 300_000,
+          savingsMicros: -40_000,
+        },
+      },
+    ];
+    const parentLine: ThreadUsageLineRecord = {
+      backend: "codex",
+      cachedInputCostMicros: 0,
+      cachedInputTokens: 0,
+      createdAt: 1_800_000_000_000,
+      currency: "USD",
+      inputTokens: 100_000,
+      model: "gpt-5.6-sol",
+      outputCostMicros: 30_000,
+      outputTokens: 1_000,
+      priceStatus: "priced",
+      provider: "openai",
+      reasoningOutputTokens: 250,
+      scope: "turn",
+      source: "live",
+      status: "finalized",
+      threadId: "thread-1",
+      totalCostMicros: 1_290_000,
+      totalTokens: 101_000,
+      turnId: "turn-1",
+      uncachedInputCostMicros: 1_260_000,
+      uncachedInputTokens: 100_000,
+      usageLineId: "turn-line-1",
+    };
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      onOpenToolOutputIncidentExplorer,
+      pinned: true,
+      pricing: {
+        lines: [
+          buildMonitorLine({
+            model: "gpt-5.6-luna",
+            sourceItemId: "system:token-miser:gate-1",
+            totalCostMicros: 60_000,
+            usageLineId: "gate-line-1",
+          }),
+          buildMonitorLine({
+            model: "gpt-5.6-luna",
+            sourceItemId: "system:token-miser:gate-2",
+            totalCostMicros: 40_000,
+            usageLineId: "gate-line-2",
+          }),
+          parentLine,
+        ],
+        summaries: [],
+      },
+      thread: { ...baseThread, subAgents: gateSubAgents },
+      threadPricingSummaryEnabled: true,
+      threadToolAccountingEnabled: false,
+    });
+
+    expect(
+      screen.queryByRole("tab", { name: "Tool calls" }),
+    ).not.toBeInTheDocument();
+    const card = container.querySelector(".token-miser-summary-card");
+    expect(card).not.toBeNull();
+    const miser = within(card as HTMLElement);
+    expect(miser.getByText("$0.71 saved")).toBeInTheDocument();
+    expect(miser.getByText("33.8% less")).toBeInTheDocument();
+    expect(
+      miser.getByText("Estimated same-trajectory savings · $2.10 unfiltered"),
+    ).toBeInTheDocument();
+    expect(miser.getByText("2 decisions")).toBeInTheDocument();
+    expect(cardRowValue(miser, "1 · Without the gate")).toBe("$1.20");
+    expect(cardRowValue(miser, "2 · Gate compute")).toBe("$0.10");
+    expect(cardRowValue(miser, "3 · Revealed to parent")).toBe("$0.39");
+    expect(cardRowValue(miser, "Summarized")).toBe("1");
+    expect(cardRowValue(miser, "Passed through")).toBe("1");
+    expect(cardRowValue(miser, "Luna evaluations")).toBe("1");
+    expect(cardRowValue(miser, "Parent context avoided")).toBe("54k");
+
+    fireEvent.click(
+      miser.getByRole("button", { name: "Token Miser Savings" }),
+    );
+    expect(onOpenToolOutputIncidentExplorer).toHaveBeenCalledWith("savings");
   });
 
   it("pages enormous pricing histories instead of rendering every row at once", () => {

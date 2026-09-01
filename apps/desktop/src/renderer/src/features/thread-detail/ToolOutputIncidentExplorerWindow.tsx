@@ -10,6 +10,7 @@ import type {
   ThreadCompactionRecord,
   ThreadTokenMiserSavings,
   ThreadToolInvocationRecord,
+  ToolOutputIncidentExplorerLens,
 } from "@pwragent/shared";
 import {
   buildThreadToolIncidentPrompt,
@@ -22,6 +23,7 @@ import { useDesktopApi } from "../../lib/desktop-api";
 import { useDesktopSettings } from "../settings/useDesktopSettings";
 import { ThreadChip } from "./ThreadChip";
 import { detailMatchesInvocationItem } from "./tool-call-details";
+import { describeSameTrajectoryCostChange } from "./token-miser-savings-summary";
 import type {
   CategoryShare,
   IncidentSortMode,
@@ -78,6 +80,12 @@ export function ToolOutputIncidentExplorerWindow() {
   const [statusTone, setStatusTone] = useState<"error" | "info">("info");
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
+  const [lensChoice, setLens] =
+    useState<ToolOutputIncidentExplorerLens>("incidents");
+  /* Whether the opening lens has been chosen. Declared with the state it
+     guards rather than beside the latch below, because the refresh effect
+     sets it too. */
+  const lensLatched = useRef(false);
 
   /* Stable identity: `refresh` depends on it, and a refresh that changed every
      render would re-run the effect that calls it on every render. */
@@ -125,6 +133,14 @@ export function ToolOutputIncidentExplorerWindow() {
           threadId: request.threadId,
           title: request.title,
         });
+        /* A window already open keeps the lens it is on, so an operator who
+           clicks "Token Miser Savings" on the Pricing rail and gets a focused
+           window still sitting on incidents got the wrong screen. Honor the
+           request, and stop the opening latch from overruling it. */
+        if (request.lens) {
+          lensLatched.current = true;
+          setLens(request.lens);
+        }
       }
       void refresh();
     });
@@ -225,7 +241,6 @@ export function ToolOutputIncidentExplorerWindow() {
   // feature off and nothing ever gated, this stays the single-lens screen it
   // was rather than growing a tab that can only say "nothing happened".
   const showSavingsLens = tokenMiserEnabled || Boolean(activeTokenMiser);
-  const [lensChoice, setLens] = useState<ExplorerLens>("incidents");
   // Latch the opening lens the first time accounting arrives, then leave it
   // alone. Re-deriving it from `activeTokenMiser` would yank the operator out
   // of the case they are reading the moment a gate lands mid-turn.
@@ -234,7 +249,6 @@ export function ToolOutputIncidentExplorerWindow() {
   // painted frame on the incidents lens before switching, so a thread that
   // gated would open on the wrong lens and visibly flip. React discards this
   // render and re-runs before painting.
-  const lensLatched = useRef(false);
   if (!lensLatched.current && accounting) {
     lensLatched.current = true;
     if (
@@ -244,7 +258,8 @@ export function ToolOutputIncidentExplorerWindow() {
       setLens("savings");
     }
   }
-  const lens: ExplorerLens = showSavingsLens ? lensChoice : "incidents";
+  const lens: ToolOutputIncidentExplorerLens =
+    showSavingsLens ? lensChoice : "incidents";
   const tokenMiserUsageLines = useMemo(
     () => (usageLines ?? []).filter((line) =>
       line.scope === "monitor"
@@ -1015,27 +1030,10 @@ function describeTokenMiserReach(params: {
     + `${params.toolCallCount === 1 ? "call" : "calls"} and ${kept}`;
 }
 
-type ExplorerLens = "incidents" | "savings";
-
 function describeTokenMiserOutcome(estimatedTokensSaved: number): string {
   return estimatedTokensSaved >= 0
     ? `${formatCompactTokens(estimatedTokensSaved)} estimated parent-context footprint avoided`
     : `${formatCompactTokens(Math.abs(estimatedTokensSaved))} estimated net parent-context token overhead`;
-}
-
-function describeSameTrajectoryCostChange(
-  observedCostMicros: number,
-  savingsMicros: number,
-): string | undefined {
-  if (observedCostMicros <= 0) return undefined;
-  const unfilteredCostMicros = observedCostMicros + savingsMicros;
-  if (unfilteredCostMicros <= 0) return undefined;
-  const percent = Math.abs(savingsMicros) / unfilteredCostMicros * 100;
-  if (savingsMicros === 0) {
-    return `${percent.toFixed(1)}% change from estimated unfiltered cost`;
-  }
-  return `${percent.toFixed(1)}% ${savingsMicros > 0 ? "less" : "more"} `
-    + "than estimated unfiltered cost";
 }
 
 /**
