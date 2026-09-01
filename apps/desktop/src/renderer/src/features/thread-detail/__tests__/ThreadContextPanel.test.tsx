@@ -53,8 +53,6 @@ const baseThread: NavigationThreadSummary = {
   },
 };
 
-// A monitor-scope pricing row for a sub-agent. `sourceItemId` is the join key
-// to a `ThreadSubAgentSummary.monitorId`.
 function cardRowValue(
   scope: ReturnType<typeof within>,
   label: string,
@@ -63,6 +61,8 @@ function cardRowValue(
   return row?.querySelector(".rail-summary-card__row-value")?.textContent ?? "";
 }
 
+// A monitor-scope pricing row for a sub-agent. `sourceItemId` is the join key
+// to a `ThreadSubAgentSummary.monitorId`.
 function buildMonitorLine(
   overrides: Partial<ThreadUsageLineRecord> = {},
 ): ThreadUsageLineRecord {
@@ -986,7 +986,9 @@ describe("ThreadContextPanel", () => {
       screen.getByRole("button", { name: "Tool Output Incidents" }),
     );
     expect(onAnalyzeToolHistory).toHaveBeenCalledOnce();
-    expect(onOpenToolOutputIncidentExplorer).toHaveBeenCalledWith("incidents");
+    /* No lens: the button opens the window by the window's own name and
+       leaves the opening lens to the thread's accounting. */
+    expect(onOpenToolOutputIncidentExplorer).toHaveBeenCalledWith();
   });
 
   it("hides the Tool calls tab while its experimental flag is off", () => {
@@ -1252,7 +1254,29 @@ describe("ThreadContextPanel", () => {
           }),
           parentLine,
         ],
-        summaries: [],
+        /* The provider summary is the comparison's denominator, the same rows
+           the savings window divides by — a rail that used its own headline
+           total instead would quote a different percentage than the window it
+           links to. */
+        summaries: [
+          {
+            backend: "codex",
+            cachedInputTokens: 0,
+            currency: "USD",
+            inputTokens: 100_000,
+            outputTokens: 1_000,
+            pricedUsageLineCount: 3,
+            provider: "openai",
+            reasoningOutputTokens: 250,
+            threadId: "thread-1",
+            totalCostMicros: 1_390_000,
+            totalTokens: 101_000,
+            uncachedInputTokens: 100_000,
+            unpricedUsageLineCount: 0,
+            updatedAt: 1_800_000_000_600,
+            usageLineCount: 3,
+          },
+        ],
       },
       thread: { ...baseThread, subAgents: gateSubAgents },
       threadPricingSummaryEnabled: true,
@@ -1283,6 +1307,51 @@ describe("ThreadContextPanel", () => {
       miser.getByRole("button", { name: "Token Miser Savings" }),
     );
     expect(onOpenToolOutputIncidentExplorer).toHaveBeenCalledWith("savings");
+  });
+
+  it("counts a policy pass-through that never billed a helper turn", () => {
+    /* A decision deterministic policy passed through records accounting and a
+       sub-agent and no usage line at all. Enumerated from the gate rows, an
+       all-policy thread looked like a thread with no gate. */
+    const gateSubAgents: ThreadSubAgentSummary[] = [
+      {
+        monitorId: "system:token-miser:gate-1",
+        task: "Gate Bash output",
+        status: "success",
+        createdAt: 1_800_000_000_000,
+        updatedAt: 1_800_000_000_500,
+        tokenMiserAccounting: {
+          currency: "USD",
+          disposition: "passed_through",
+          decisionSource: "policy",
+          originalModel: "gpt-5.6-sol",
+          baselineParentTokens: 20_000,
+          baselineParentCostMicros: 300_000,
+          gateModel: "gpt-5.6-luna",
+          gateTotalTokens: 0,
+          gateCostMicros: 0,
+          revealedParentTokens: 20_000,
+          revealedParentCostMicros: 300_000,
+          savingsMicros: 0,
+        },
+      },
+    ];
+
+    const { container } = renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      pricing: { lines: [], summaries: [] },
+      thread: { ...baseThread, subAgents: gateSubAgents },
+      threadPricingSummaryEnabled: true,
+      threadToolAccountingEnabled: false,
+    });
+
+    const card = container.querySelector(".token-miser-summary-card");
+    expect(card).not.toBeNull();
+    const miser = within(card as HTMLElement);
+    expect(miser.getByText("1 decision")).toBeInTheDocument();
+    expect(cardRowValue(miser, "Passed through")).toBe("1");
+    expect(cardRowValue(miser, "Luna evaluations")).toBe("0");
   });
 
   it("pages enormous pricing histories instead of rendering every row at once", () => {

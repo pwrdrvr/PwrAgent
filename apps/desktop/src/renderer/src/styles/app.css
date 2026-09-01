@@ -24147,48 +24147,25 @@ button.pricing-token-miser__folded:focus-visible {
 }
 
 /* Thread-level gate result, above the turn rows. It borrows the pricing
-   summary card wholesale — same shell, same eyebrow, same key/value rows — so
-   the two read as one stack rather than as a summary and a widget. Only the
-   figure and the action are its own. */
-.token-miser-summary-card__figure {
-  color: var(--accent);
-}
-
+   summary card wholesale — same shell, same eyebrow, same key/value rows, and
+   the section action the Tool calls tab already uses — so the two read as one
+   stack rather than as a summary and a widget. The figure keeps the card's own
+   text color; only an overhead is colored, and the accent stays a surface and
+   border signal. */
 .token-miser-summary-card__figure[data-negative="true"] {
-  color: var(--status-warning);
+  color: var(--danger-text);
 }
 
-.token-miser-summary-card__action {
+/* The rail's action is the section action, stretched: the card has a full
+   width to fill and a row of its own to sit in. Scoped to the card rather than
+   given its own class so it outranks the shared rule, which is defined further
+   down this file and would otherwise win on equal specificity. */
+.token-miser-summary-card .context-panel__section-action {
   display: flex;
-  align-items: center;
   justify-content: center;
-  gap: 6px;
   width: 100%;
   min-height: 26px;
   margin-top: 10px;
-  padding: 0 10px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--accent-bright);
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: 600;
-  cursor: pointer;
-}
-
-.token-miser-summary-card__action:hover {
-  border-color: var(--accent-border);
-  background: var(--bg-row-active);
-}
-
-.token-miser-summary-card__action:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
-}
-
-.token-miser-summary-card__action svg {
-  flex: 0 0 auto;
 }
 
 .rail-card__actions {
@@ -24293,6 +24270,10 @@ button.pricing-token-miser__folded:focus-visible {
 .context-panel__section-action:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
+}
+
+.context-panel__section-action svg {
+  flex: 0 0 auto;
 }
 
 .tool-call-alert .rail-card__title {

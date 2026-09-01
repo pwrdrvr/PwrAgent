@@ -23,7 +23,10 @@ import { useDesktopApi } from "../../lib/desktop-api";
 import { useDesktopSettings } from "../settings/useDesktopSettings";
 import { ThreadChip } from "./ThreadChip";
 import { detailMatchesInvocationItem } from "./tool-call-details";
-import { describeSameTrajectoryCostChange } from "./token-miser-savings-summary";
+import {
+  describeSameTrajectoryCostChange,
+  TOKEN_MISER_PENDING_PRICING_CAPTION,
+} from "./token-miser-savings-summary";
 import type {
   CategoryShare,
   IncidentSortMode,
@@ -81,11 +84,11 @@ export function ToolOutputIncidentExplorerWindow() {
   const [loading, setLoading] = useState(true);
   const [analyzing, setAnalyzing] = useState(false);
   const [lensChoice, setLens] =
-    useState<ToolOutputIncidentExplorerLens>("incidents");
+    useState<ToolOutputIncidentExplorerLens>(route?.lens ?? "incidents");
   /* Whether the opening lens has been chosen. Declared with the state it
      guards rather than beside the latch below, because the refresh effect
-     sets it too. */
-  const lensLatched = useRef(false);
+     sets it too. A route that named a lens has already chosen. */
+  const lensLatched = useRef(route?.lens !== undefined);
 
   /* Stable identity: `refresh` depends on it, and a refresh that changed every
      render would re-run the effect that calls it on every render. */
@@ -129,6 +132,12 @@ export function ToolOutputIncidentExplorerWindow() {
       if (request) {
         setRoute({
           backend: request.backend,
+          /* A viewer's explorer reads the peer's thread. Dropping the target
+             here would send the next refresh at the local registry, which
+             does not have this thread. */
+          ...(request.federationTarget
+            ? { federationTarget: request.federationTarget }
+            : {}),
           projectLabel: request.projectLabel,
           threadId: request.threadId,
           title: request.title,
@@ -1179,7 +1188,7 @@ function TokenMiserSavingsLens(props: {
                   )}
                 </strong>
                 {sameTrajectoryCostChange ? (
-                  <span>{sameTrajectoryCostChange}</span>
+                  <span>{sameTrajectoryCostChange.sentence}</span>
                 ) : null}
               </p>
               {props.threadCostMicros > 0 ? (
@@ -1213,7 +1222,7 @@ function TokenMiserSavingsLens(props: {
                 </span>
               </p>
               <p className="incident-explorer__savings-compare">
-                Dollar terms appear once the gate's usage line is priced.
+                {TOKEN_MISER_PENDING_PRICING_CAPTION}
               </p>
             </>
           )}
@@ -1982,14 +1991,16 @@ function countLaterTripsInTurn(
 function readIncidentRoute(): {
   backend: AppServerBackendKind;
   federationTarget?: FederationTarget;
+  lens?: ToolOutputIncidentExplorerLens;
   projectLabel?: string;
   threadId: string;
   title: string;
 } | undefined {
-  const [kind, backend, threadId, title, projectLabel, instanceId] =
+  const [kind, backend, threadId, title, projectLabel, lens, instanceId] =
     window.location.hash.replace(/^#/, "").split("/");
   if (kind !== "tool-output-incidents" || !backend || !threadId) return undefined;
   const owner = instanceId ? decodeURIComponent(instanceId) : "";
+  const requestedLens = lens ? decodeURIComponent(lens) : "";
   return {
     backend: decodeURIComponent(backend) as AppServerBackendKind,
     /* Present only for a peer's thread; a local thread carries no target and
@@ -2001,6 +2012,12 @@ function readIncidentRoute(): {
             instanceId: owner as FederationInstanceId,
           },
         }
+      : {}),
+    /* Present only when the click that opened this window named a lens. An
+       unrecognized value is treated as no preference rather than as a lens
+       nothing renders. */
+    ...(requestedLens === "incidents" || requestedLens === "savings"
+      ? { lens: requestedLens }
       : {}),
     ...(projectLabel
       ? { projectLabel: decodeURIComponent(projectLabel) }

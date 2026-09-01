@@ -173,11 +173,11 @@ export type OpenToolOutputIncidentExplorerWindowRequest = {
   /**
    * Which lens the operator asked for.
    *
-   * A window opening for the first time picks its own lens from the thread's
-   * accounting, so this only matters when the window is already open: the
-   * refresh event carries the request, and an explorer sitting on incidents
-   * has to move when the operator clicks "Token Miser Savings" on the Pricing
-   * rail. Omitted means "leave the lens alone".
+   * A request that names one takes the window there either way: a new window
+   * opens on it, and an explorer already sitting on the other lens moves when
+   * the operator clicks "Token Miser Savings" on the Pricing rail. Omitted
+   * means "leave the lens alone" — a new window then picks its own from the
+   * thread's accounting, and an open one stays where the operator left it.
    */
   lens?: ToolOutputIncidentExplorerLens;
   projectLabel?: string;

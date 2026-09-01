@@ -720,9 +720,13 @@ export function ThreadContextPanel(props: ThreadContextPanelProps) {
             entries={props.toolCallEntries}
             loadingDetailItemId={props.loadingToolCallDetailItemId}
             onAnalyzeHistory={props.onAnalyzeToolHistory}
+            /* No lens: this button opens the window by the window's own name,
+               so a thread that gated still gets the opening lens its
+               accounting chooses. Only the Pricing rail's button, which names
+               a lens inside the window, asks for one. */
             onOpenIncidentExplorer={
               props.onOpenToolOutputIncidentExplorer
-                ? () => props.onOpenToolOutputIncidentExplorer?.("incidents")
+                ? () => props.onOpenToolOutputIncidentExplorer?.()
                 : undefined
             }
             onRequestInvocationDetails={props.onRequestToolCallDetails}

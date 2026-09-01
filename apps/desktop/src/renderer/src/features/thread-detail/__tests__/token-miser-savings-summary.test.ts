@@ -86,7 +86,9 @@ describe("buildTokenMiserSavingsSummary", () => {
     expect(summary?.passThroughCount).toBe(2);
     expect(summary?.summarizedCount).toBe(3);
     expect(summary?.helperDecisionCount).toBe(4);
-    expect(summary?.avoidedParentTokens).toBe(100_000);
+    /* Replays are the window's second figure, not part of this one. Adding
+       them here would print a bigger number under the same words. */
+    expect(summary?.avoidedParentTokens).toBe(93_000);
   });
 
   it("sums the gate rows when the thread accounting is not available", () => {
@@ -107,7 +109,7 @@ describe("buildTokenMiserSavingsSummary", () => {
     expect(summary?.passThroughCount).toBe(1);
     expect(summary?.summarizedCount).toBe(1);
     expect(summary?.helperDecisionCount).toBe(1);
-    expect(summary?.avoidedParentTokens).toBe(9_250);
+    expect(summary?.avoidedParentTokens).toBe(9_200);
   });
 
   it("returns nothing when the thread made no gate decisions", () => {
@@ -128,7 +130,7 @@ describe("buildTokenMiserSavingsSummary", () => {
     expect(summary?.decisionCount).toBe(5);
     expect(summary?.pricedDecisionCount).toBe(0);
     expect(summary?.terms).toBeUndefined();
-    expect(summary?.avoidedParentTokens).toBe(100_000);
+    expect(summary?.avoidedParentTokens).toBe(93_000);
   });
 
   it("omits the decision mix rather than reporting zero of everything", () => {
@@ -155,26 +157,94 @@ describe("buildTokenMiserSavingsSummary", () => {
     expect(summary?.decisionCount).toBe(3);
     expect(summary?.pricedDecisionCount).toBe(1);
     expect(summary?.terms?.savingsMicros).toBe(16_200);
+    /* One gate priced, and it summarized. The two that have not priced yet
+       are not summarized decisions — subtracting the pass-through count from
+       every decision would have claimed all three were. */
+    expect(summary?.summarizedCount).toBe(1);
+    expect(summary?.passThroughCount).toBe(0);
+  });
+
+  it("omits the mix when the gates predate the disposition fields", () => {
+    const summary = buildTokenMiserSavingsSummary({
+      gateAccountings: [
+        gate({ disposition: undefined, decisionSource: undefined }),
+      ],
+    });
+
+    expect(summary?.decisionCount).toBe(1);
+    expect(summary?.pricedDecisionCount).toBe(1);
+    expect(summary?.passThroughCount).toBeUndefined();
+    expect(summary?.summarizedCount).toBeUndefined();
+    expect(summary?.helperDecisionCount).toBeUndefined();
+  });
+
+  it("counts only Luna's decisions as Luna evaluations", () => {
+    /* Every gate here records who decided, and only one of the two was Luna.
+       Counting "not policy" made a gate that recorded nothing look evaluated. */
+    const summary = buildTokenMiserSavingsSummary({
+      gateAccountings: [gate(), passedThroughGate],
+    });
+
+    expect(summary?.helperDecisionCount).toBe(1);
+  });
+
+  it("summarizes a thread that ran Code Mode and gated nothing", () => {
+    /* Code Mode is Token Miser too. Keyed on reducer decisions alone, this
+       thread got no card at all and no way to reach the savings window. */
+    const summary = buildTokenMiserSavingsSummary({
+      accounting: {
+        ...threadAccounting,
+        interceptionCount: 0,
+        savings: undefined,
+        codeMode: {
+          callCount: 12,
+          commandCellCount: 9,
+          directCommandCellCount: 9,
+          dispatchClusterCount: 3,
+          multiInvocationClusterCount: 1,
+          largestDispatchCluster: 4,
+          nestedCommandInvocationCount: 14,
+          patchCellCount: 1,
+          otherCellCount: 2,
+          pollingCellCount: 0,
+          directCount: 9,
+          summarizedCount: 0,
+          passThroughCount: 0,
+          retrievalCount: 0,
+          capturedNestedInvocationCount: 14,
+          observations: [],
+        },
+      },
+      gateAccountings: [],
+    });
+
+    expect(summary?.decisionCount).toBe(0);
+    expect(summary?.codeModeCallCount).toBe(12);
   });
 });
 
 describe("describeSameTrajectoryCostChange", () => {
   it("compares the observed bill to the unfiltered one", () => {
-    expect(describeSameTrajectoryCostChange(512_000, 500_000)).toBe(
-      "49.4% less than estimated unfiltered cost",
-    );
+    /* Both widths come from here. The rail used to cut the short one out of
+       the sentence, which found nothing to cut in the wording below. */
+    expect(describeSameTrajectoryCostChange(512_000, 500_000)).toEqual({
+      short: "49.4% less",
+      sentence: "49.4% less than estimated unfiltered cost",
+    });
   });
 
   it("says so when the gate cost more than it saved", () => {
-    expect(describeSameTrajectoryCostChange(120_000, -20_000)).toBe(
-      "20.0% more than estimated unfiltered cost",
-    );
+    expect(describeSameTrajectoryCostChange(120_000, -20_000)).toEqual({
+      short: "20.0% more",
+      sentence: "20.0% more than estimated unfiltered cost",
+    });
   });
 
   it("avoids a direction word when nothing changed", () => {
-    expect(describeSameTrajectoryCostChange(100_000, 0)).toBe(
-      "0.0% change from estimated unfiltered cost",
-    );
+    expect(describeSameTrajectoryCostChange(100_000, 0)).toEqual({
+      short: "0.0% change",
+      sentence: "0.0% change from estimated unfiltered cost",
+    });
   });
 
   it("says nothing without a priced thread to compare against", () => {

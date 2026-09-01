@@ -118,10 +118,71 @@ describe("TokenMiserSummaryCard", () => {
     expect(screen.getByText("93k kept out")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Dollar terms appear once each gate's usage line is priced",
+        "Dollar terms appear once the gate's usage line is priced.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText("Savings terms")).not.toBeInTheDocument();
+  });
+
+  it("names an overhead the tokens show as clearly as the dollars would", () => {
+    /* A gate whose summaries ran longer than the payloads they replaced put
+       more in the parent's context, not less. Before pricing lands the token
+       figure is the only figure, and it read as a win. */
+    render(
+      <TokenMiserSummaryCard
+        summary={{
+          decisionCount: 4,
+          pricedDecisionCount: 0,
+          avoidedParentTokens: -12_000,
+        }}
+      />,
+    );
+
+    expect(screen.getByText("12k added to context")).toHaveAttribute(
+      "data-negative",
+      "true",
+    );
+  });
+
+  it("drops the unfiltered comparison when the overhead swallows the bill", () => {
+    /* An overhead larger than the thread's own bill leaves nothing to compare
+       against; "$0.00 unfiltered" would read as a measurement. */
+    render(
+      <TokenMiserSummaryCard
+        observedCostMicros={40_000}
+        summary={{
+          ...summary,
+          terms: { ...terms, savingsMicros: -40_000 },
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("Estimated same-trajectory overhead"),
+    ).toBeInTheDocument();
+  });
+
+  it("summarizes a Code Mode thread that reached no reducer decision", () => {
+    const onOpenSavings = vi.fn();
+    render(
+      <TokenMiserSummaryCard
+        onOpenSavings={onOpenSavings}
+        summary={{
+          decisionCount: 0,
+          pricedDecisionCount: 0,
+          codeModeCallCount: 12,
+        }}
+      />,
+    );
+
+    expect(screen.getByText("12 Code Mode calls")).toBeInTheDocument();
+    expect(rowValue("Code Mode calls")).toBe("12");
+    expect(
+      screen.getByText("No reducer decision was recorded."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Token Miser Savings" }),
+    ).toBeInTheDocument();
   });
 
   it("says how much of the thread a partial total covers", () => {

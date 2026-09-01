@@ -2,6 +2,7 @@ import { formatTokenUsageMicrosAsUsd } from "@pwragent/shared";
 import { PopoutIcon } from "../../../icons";
 import {
   describeSameTrajectoryCostChange,
+  TOKEN_MISER_PENDING_PRICING_CAPTION,
   type TokenMiserSavingsSummary,
 } from "../token-miser-savings-summary";
 import { formatCompactCount, RailSummaryRow } from "./context-rail-shared";
@@ -25,8 +26,11 @@ export function TokenMiserSummaryCard(props: {
 }) {
   const summary = props.summary;
   const terms = summary.terms;
-  const savingsMicros = terms?.savingsMicros;
-  const negative = savingsMicros !== undefined && savingsMicros < 0;
+  const headline = describeHeadline(summary);
+  // Only the dollar headline has a percentage to compare against; a thread
+  // showing tokens or a bare decision count has no observed bill to divide by.
+  const savingsMicros =
+    summary.decisionCount > 0 ? terms?.savingsMicros : undefined;
   const costChange =
     savingsMicros !== undefined && props.observedCostMicros
       ? describeSameTrajectoryCostChange(props.observedCostMicros, savingsMicros)
@@ -45,20 +49,21 @@ export function TokenMiserSummaryCard(props: {
       <div className="rail-summary-card__headline">
         <span
           className="rail-summary-card__primary token-miser-summary-card__figure"
-          data-negative={negative}
+          data-negative={headline.negative}
         >
-          {formatHeadline(summary)}
+          {headline.text}
         </span>
-        {/* The percentage is the popup's, trimmed to the two words the rail has
-            room for. Its long form stays under the headline as the caption. */}
+        {/* The percentage is the popup's, in the shorter of the two widths the
+            comparison publishes. Its sentence stays under the headline. */}
         {costChange ? (
           <span className="rail-summary-card__secondary">
-            {costChange.split(" than ")[0]}
+            {costChange.short}
           </span>
         ) : null}
       </div>
       <div className="rail-summary-card__caption">
         {describeCaption({
+          decisionCount: summary.decisionCount,
           observedCostMicros: props.observedCostMicros,
           savingsMicros,
         })}
@@ -85,6 +90,7 @@ export function TokenMiserSummaryCard(props: {
         </div>
       ) : null}
       {summary.summarizedCount !== undefined
+      || summary.codeModeCallCount !== undefined
       || summary.avoidedParentTokens !== undefined ? (
         <div className="rail-summary-card__section">
           <span className="rail-summary-card__section-title">Decisions</span>
@@ -106,6 +112,12 @@ export function TokenMiserSummaryCard(props: {
               value={summary.helperDecisionCount.toLocaleString()}
             />
           ) : null}
+          {summary.codeModeCallCount !== undefined ? (
+            <RailSummaryRow
+              label="Code Mode calls"
+              value={summary.codeModeCallCount.toLocaleString()}
+            />
+          ) : null}
           {summary.avoidedParentTokens !== undefined ? (
             <RailSummaryRow
               label="Parent context avoided"
@@ -116,7 +128,7 @@ export function TokenMiserSummaryCard(props: {
       ) : null}
       {props.onOpenSavings ? (
         <button
-          className="token-miser-summary-card__action"
+          className="context-panel__section-action"
           onClick={props.onOpenSavings}
           type="button"
         >
@@ -128,35 +140,85 @@ export function TokenMiserSummaryCard(props: {
   );
 }
 
+type TokenMiserHeadline = {
+  /** True when the figure is a cost the gate added rather than one it removed. */
+  negative: boolean;
+  text: string;
+};
+
 /**
  * Dollars when the gate has priced, tokens when it has not. A thread mid-turn
  * has real decisions and no rates yet, and "$0.00 saved" would be a lie about
  * a number that simply has not arrived.
+ *
+ * Whichever figure lands here is also the one `negative` describes — a card
+ * that colored the dollars and not the tokens would render an overhead as a
+ * win the moment pricing was still pending.
  */
-function formatHeadline(summary: TokenMiserSavingsSummary): string {
-  const savingsMicros = summary.terms?.savingsMicros;
-  if (savingsMicros === undefined) {
-    return summary.avoidedParentTokens === undefined
-      ? `${summary.decisionCount.toLocaleString()} gated`
-      : `${formatCompactCount(summary.avoidedParentTokens)} kept out`;
+function describeHeadline(
+  summary: TokenMiserSavingsSummary,
+): TokenMiserHeadline {
+  const savingsMicros =
+    summary.decisionCount > 0 ? summary.terms?.savingsMicros : undefined;
+  if (savingsMicros !== undefined) {
+    return savingsMicros >= 0
+      ? {
+          negative: false,
+          text: `${formatTokenUsageMicrosAsUsd(savingsMicros)} saved`,
+        }
+      : {
+          negative: true,
+          text: `${formatTokenUsageMicrosAsUsd(
+            Math.abs(savingsMicros),
+          )} net overhead`,
+        };
   }
-  return savingsMicros >= 0
-    ? `${formatTokenUsageMicrosAsUsd(savingsMicros)} saved`
-    : `${formatTokenUsageMicrosAsUsd(Math.abs(savingsMicros))} net overhead`;
+  const avoided =
+    summary.decisionCount > 0 ? summary.avoidedParentTokens : undefined;
+  if (avoided !== undefined) {
+    // Summaries that ran longer than the payloads they replaced put more in
+    // the parent's context than passing the output through would have.
+    return avoided >= 0
+      ? { negative: false, text: `${formatCompactCount(avoided)} kept out` }
+      : {
+          negative: true,
+          text: `${formatCompactCount(Math.abs(avoided))} added to context`,
+        };
+  }
+  if (summary.decisionCount > 0) {
+    return {
+      negative: false,
+      text: `${summary.decisionCount.toLocaleString()} gated`,
+    };
+  }
+  const callCount = summary.codeModeCallCount ?? 0;
+  return {
+    negative: false,
+    text: `${callCount.toLocaleString()} Code Mode call${
+      callCount === 1 ? "" : "s"
+    }`,
+  };
 }
 
 function describeCaption(params: {
+  decisionCount: number;
   observedCostMicros?: number;
   savingsMicros?: number;
 }): string {
+  if (params.decisionCount === 0) return "No reducer decision was recorded.";
   if (params.savingsMicros === undefined) {
-    return "Dollar terms appear once each gate's usage line is priced";
+    return TOKEN_MISER_PENDING_PRICING_CAPTION;
   }
   const framing = params.savingsMicros >= 0
     ? "Estimated same-trajectory savings"
     : "Estimated same-trajectory overhead";
   if (!params.observedCostMicros) return framing;
+  // The comparison only exists while the unfiltered trajectory costs
+  // something. An overhead larger than the bill drives it to zero or below,
+  // where "$0.00 unfiltered" would read as a measurement rather than as one.
+  const unfilteredCostMicros = params.observedCostMicros + params.savingsMicros;
+  if (unfilteredCostMicros <= 0) return framing;
   return `${framing} · ${formatTokenUsageMicrosAsUsd(
-    params.observedCostMicros + params.savingsMicros,
+    unfilteredCostMicros,
   )} unfiltered`;
 }

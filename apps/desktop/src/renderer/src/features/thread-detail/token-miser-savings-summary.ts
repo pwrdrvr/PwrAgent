@@ -18,6 +18,11 @@ export type TokenMiserSavingsSummary = {
   decisionCount: number;
   /** Decisions whose dollar terms are complete. */
   pricedDecisionCount: number;
+  /**
+   * Code Mode calls the gate observed. A thread can run Code Mode and reach no
+   * reducer decision at all, which is still a Token Miser story worth telling.
+   */
+  codeModeCallCount?: number;
   /** Decisions Luna evaluated, as opposed to deterministic policy. */
   helperDecisionCount?: number;
   /** Decisions that deliberately returned the ordinary original result. */
@@ -25,8 +30,9 @@ export type TokenMiserSavingsSummary = {
   /** Decisions that replaced the payload with a summary. */
   summarizedCount?: number;
   /**
-   * Parent-context tokens the gate kept out, counted once plus every replay.
-   * The same figure the Explorer's lens tab reports as "avoided".
+   * Parent-context tokens the gate kept out of the first pass. The same figure
+   * the Explorer's lens tab reports as kept out "once" — replays are a second
+   * figure there and are deliberately not folded in here.
    */
   avoidedParentTokens?: number;
   /**
@@ -49,6 +55,24 @@ export type TokenMiserSavingsTerms = {
 };
 
 /**
+ * The same comparison in two widths: `short` for a rail headline, `sentence`
+ * for the popup's figure line. Both views need the same percentage, and a rail
+ * that re-cut the sentence with string surgery would silently print the whole
+ * sentence the moment the wording changed.
+ */
+export type TokenMiserSameTrajectoryChange = {
+  short: string;
+  sentence: string;
+};
+
+/**
+ * Shown wherever a thread has gate decisions and no rates yet. One string so
+ * the rail and the window make the same promise about when dollars arrive.
+ */
+export const TOKEN_MISER_PENDING_PRICING_CAPTION =
+  "Dollar terms appear once the gate's usage line is priced.";
+
+/**
  * Build the thread-level summary from whichever source this view has.
  *
  * `accounting` is thread-level and authoritative: the Explorer reads it
@@ -67,14 +91,23 @@ export function buildTokenMiserSavingsSummary(params: {
   );
   const decisionCount =
     params.accounting?.interceptionCount ?? params.gateAccountings.length;
-  if (decisionCount === 0) return undefined;
+  const codeModeCallCount = params.accounting?.codeMode?.callCount;
+  if (decisionCount === 0 && !codeModeCallCount) return undefined;
 
   const passThroughCount =
     params.accounting?.passThroughCount
-    ?? countGates(priced, (gate) => gate.disposition === "passed_through");
+    ?? countGates(priced, "disposition", "passed_through");
+  // On the thread-accounting path every decision is one or the other, so the
+  // complement is exact. Off it, only the gates that actually recorded a
+  // disposition can be counted — subtracting a priced-only count from a count
+  // of every decision would report unpriced gates as summarized.
+  const summarizedCount =
+    params.accounting?.passThroughCount === undefined
+      ? countGates(priced, "disposition", "summarized")
+      : Math.max(0, decisionCount - params.accounting.passThroughCount);
   const helperDecisionCount =
     params.accounting?.helperDecisionCount
-    ?? countGates(priced, (gate) => gate.decisionSource !== "policy");
+    ?? countGates(priced, "decisionSource", "helper");
   const avoidedParentTokens = readAvoidedParentTokens(params.accounting, priced);
   const terms = savings
     ? {
@@ -90,13 +123,10 @@ export function buildTokenMiserSavingsSummary(params: {
   return {
     decisionCount,
     pricedDecisionCount: savings?.pricedGateCount ?? priced.length,
+    ...(codeModeCallCount ? { codeModeCallCount } : {}),
     ...(helperDecisionCount === undefined ? {} : { helperDecisionCount }),
-    ...(passThroughCount === undefined
-      ? {}
-      : {
-          passThroughCount,
-          summarizedCount: Math.max(0, decisionCount - passThroughCount),
-        }),
+    ...(passThroughCount === undefined ? {} : { passThroughCount }),
+    ...(summarizedCount === undefined ? {} : { summarizedCount }),
     ...(avoidedParentTokens === undefined ? {} : { avoidedParentTokens }),
     ...(terms === undefined ? {} : { terms }),
   };
@@ -110,16 +140,19 @@ export function buildTokenMiserSavingsSummary(params: {
 export function describeSameTrajectoryCostChange(
   observedCostMicros: number,
   savingsMicros: number,
-): string | undefined {
+): TokenMiserSameTrajectoryChange | undefined {
   if (observedCostMicros <= 0) return undefined;
   const unfilteredCostMicros = observedCostMicros + savingsMicros;
   if (unfilteredCostMicros <= 0) return undefined;
   const percent = Math.abs(savingsMicros) / unfilteredCostMicros * 100;
   if (savingsMicros === 0) {
-    return `${percent.toFixed(1)}% change from estimated unfiltered cost`;
+    return {
+      short: `${percent.toFixed(1)}% change`,
+      sentence: `${percent.toFixed(1)}% change from estimated unfiltered cost`,
+    };
   }
-  return `${percent.toFixed(1)}% ${savingsMicros > 0 ? "less" : "more"} `
-    + "than estimated unfiltered cost";
+  const short = `${percent.toFixed(1)}% ${savingsMicros > 0 ? "less" : "more"}`;
+  return { short, sentence: `${short} than estimated unfiltered cost` };
 }
 
 /**
@@ -152,37 +185,40 @@ function sumGateTerms(
   );
 }
 
+/**
+ * Tokens the gate kept out of the parent's first pass, replays excluded.
+ *
+ * The Explorer reports the replay total as its own figure beside this one, so
+ * folding them together here would make the rail's number look like the
+ * window's while quoting a different quantity.
+ */
 function readAvoidedParentTokens(
   accounting: ThreadTokenMiserAccounting | undefined,
   priced: readonly TokenMiserSubAgentAccounting[],
 ): number | undefined {
-  if (accounting) {
-    return (
-      accounting.estimatedParentTokensSaved
-      + (accounting.estimatedCachedReplayTokensSaved ?? 0)
-    );
-  }
+  if (accounting) return accounting.estimatedParentTokensSaved;
   if (priced.length === 0) return undefined;
   return priced.reduce(
     (total, gate) =>
-      total
-      + gate.baselineParentTokens
-      + (gate.cachedBaselineTokens ?? 0)
-      - gate.revealedParentTokens
-      - (gate.cachedRevealedTokens ?? 0),
+      total + gate.baselineParentTokens - gate.revealedParentTokens,
     0,
   );
 }
 
 /**
- * Counting a disposition across only the priced gates would report "0 passed
- * through" on a thread whose gates have not priced yet, which reads as a fact
- * rather than as missing data. Absent beats wrong here.
+ * Count one value of an optional per-gate field across the priced gates.
+ *
+ * Two ways to report a fact nobody recorded, both avoided here: a thread whose
+ * gates have not priced yet has no gates to count, and older gates carry no
+ * `disposition` or `decisionSource` at all. Either way the honest answer is
+ * that the mix is unknown — "0 passed through" reads as a fact. Absent beats
+ * wrong here.
  */
-function countGates(
+function countGates<K extends "decisionSource" | "disposition">(
   priced: readonly TokenMiserSubAgentAccounting[],
-  predicate: (gate: TokenMiserSubAgentAccounting) => boolean,
+  field: K,
+  value: NonNullable<TokenMiserSubAgentAccounting[K]>,
 ): number | undefined {
-  if (priced.length === 0) return undefined;
-  return priced.filter(predicate).length;
+  if (!priced.some((gate) => gate[field] !== undefined)) return undefined;
+  return priced.filter((gate) => gate[field] === value).length;
 }
