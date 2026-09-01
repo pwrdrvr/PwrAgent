@@ -26,6 +26,7 @@
     "derive:replay-fixture": "tsx ./scripts/derive-replay-fixture.ts",
     "export:session-capture": "tsx ./scripts/export-session-capture.ts",
     "generate:dmg-background": "swift ./scripts/generate-dmg-background.swift ./build/dmg-background.png",
+    "generate:macos-app-icon": "swift ./scripts/generate-macos-app-icon.swift",
     "verify:asar-contents": "node ./scripts/verify-asar-contents.mjs",
     "postinstall": "node scripts/ensure-electron-runtime.mjs && node scripts/rebuild-native-for-electron.mjs",
     "package:dryrun": "node ./scripts/release.mjs --dryrun",

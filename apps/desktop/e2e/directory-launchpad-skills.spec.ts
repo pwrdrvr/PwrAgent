@@ -473,11 +473,17 @@ test("directory launchpad Tiptap WYSIWYG composer serializes markdown blocks", a
 
     const tiptapInput = app.window.getByTestId("composer-tiptap-input");
     const textbox = app.window.getByRole("textbox", { name: "New thread" });
+    const typeMarkdownHeading = async (level: number, text: string) => {
+      await textbox.pressSequentially(`${"#".repeat(level)} ${text}`, {
+        delay: 10,
+      });
+      const heading = tiptapInput.locator(`h${level}`, { hasText: text });
+      await expect(heading).toBeVisible();
+      return heading;
+    };
     await textbox.focus();
-    await app.window.keyboard.type("## Heading");
 
-    const heading2 = tiptapInput.locator("h2", { hasText: "Heading" });
-    await expect(heading2).toBeVisible();
+    const heading2 = await typeMarkdownHeading(2, "Heading");
     await expect(tiptapInput).toHaveAttribute("data-value", "## Heading");
     await app.window.keyboard.press("Shift+Enter");
     await app.window.keyboard.type("plain text");
@@ -489,23 +495,13 @@ test("directory launchpad Tiptap WYSIWYG composer serializes markdown blocks", a
     );
 
     await app.window.keyboard.press("Shift+Enter");
-    await app.window.keyboard.type("### Smaller heading");
-
-    const heading3 = tiptapInput.locator("h3", { hasText: "Smaller heading" });
-    await expect(heading3).toBeVisible();
+    const heading3 = await typeMarkdownHeading(3, "Smaller heading");
     await app.window.keyboard.press("Shift+Enter");
-    await app.window.keyboard.type("#### Detail heading");
+    const heading4 = await typeMarkdownHeading(4, "Detail heading");
     await app.window.keyboard.press("Shift+Enter");
-    await app.window.keyboard.type("##### Fine print heading");
+    const heading5 = await typeMarkdownHeading(5, "Fine print heading");
     await app.window.keyboard.press("Shift+Enter");
-    await app.window.keyboard.type("###### Quiet heading");
-
-    const heading4 = tiptapInput.locator("h4", { hasText: "Detail heading" });
-    const heading5 = tiptapInput.locator("h5", { hasText: "Fine print heading" });
-    const heading6 = tiptapInput.locator("h6", { hasText: "Quiet heading" });
-    await expect(heading4).toBeVisible();
-    await expect(heading5).toBeVisible();
-    await expect(heading6).toBeVisible();
+    const heading6 = await typeMarkdownHeading(6, "Quiet heading");
     const headingStyles = await Promise.all(
       [heading2, heading3, heading4, heading5, heading6].map((heading) =>
         heading.evaluate((element) => {
