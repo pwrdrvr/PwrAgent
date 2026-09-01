@@ -1,5 +1,9 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { SocketModeClient } from "@slack/socket-mode";
+import type {
+  AgentSessionStoppedEvent,
+  AgentSessionTitleChangedEvent,
+} from "@slack/types";
 import { WebClient } from "@slack/web-api";
 import type {
   MessagingActorIdentity,
@@ -95,6 +99,7 @@ const SLACK_DIRECTORY_MAX_PAGES = 10;
 const SLACK_WORKING_CARD_TOMBSTONE_MAX = 200;
 const SLACK_WORKING_CARD_RETRY_MS = 3_000;
 const SLACK_WORKING_CARD_STOP_MAX_FAILURES = 3;
+const SLACK_AGENT_SESSION_PROCESSING_REFRESH_MS = 45 * 60 * 1000;
 const SLACK_WORKING_CARD_PLAN_TITLES = {
   queued: "Starting work",
   working: "Working on your request",
@@ -127,6 +132,22 @@ export type SlackApi = {
     status: string;
     threadTs: string;
   }): Promise<void>;
+  setAssistantThreadTitle?(params: {
+    channelId: string;
+    threadTs: string;
+    title: string;
+  }): Promise<void>;
+  setAgentSessionStatus?(params: {
+    channelId: string;
+    initiatorUserId?: string;
+    status: SlackAgentSessionStatus;
+    threadTs: string;
+  }): Promise<SlackAgentSessionInfo>;
+  renameAgentSession?(params: {
+    channelId: string;
+    threadTs: string;
+    title: string;
+  }): Promise<SlackAgentSessionInfo>;
   authTest(): Promise<SlackAuthTestResult>;
   conversationsInfo?(params: { channel: string }): Promise<SlackConversationInfo | undefined>;
   conversationsHistory?(params: {
@@ -157,6 +178,7 @@ export type SlackApi = {
   stopStream?(params: {
     channel: string;
     chunks?: SlackStreamChunk[];
+    sessionStatus?: SlackAgentSessionStatus;
     ts: string;
   }): Promise<void>;
   publishHomeView?(params: {
@@ -193,7 +215,7 @@ export type SlackStreamChunk =
       type: "plan_update";
     }
   | {
-      markdown_text: string;
+      text: string;
       type: "markdown_text";
     };
 
@@ -227,8 +249,21 @@ export type SlackAuthTestResult = {
 };
 
 export type SlackMessageResult = {
+  agentSession?: SlackAgentSessionInfo;
   channel?: string;
   ts?: string;
+};
+
+export type SlackAgentSessionStatus =
+  | "active"
+  | "processing"
+  | "suspended"
+  | "closed";
+
+export type SlackAgentSessionInfo = {
+  status?: SlackAgentSessionStatus;
+  title?: string;
+  warning?: string;
 };
 
 export type SlackConversationInfo = {
@@ -239,11 +274,13 @@ export type SlackConversationInfo = {
 };
 
 export type SlackThreadMessageInfo = {
+  agentSession?: SlackAgentSessionInfo;
   text?: string;
   ts?: string;
 };
 
 export type SlackHistoryMessageInfo = {
+  agentSession?: SlackAgentSessionInfo;
   bot_id?: string;
   bot_profile?: { name?: string };
   subtype?: string;
@@ -355,7 +392,7 @@ type SlackWorkingCardQueueState = {
   pumping: boolean;
   retryMethod?: SlackWorkingCardMethod;
   retryTimer?: ReturnType<typeof setTimeout>;
-  taskDisplayMode: SlackWorkingCardIntent["card"]["displayHint"];
+  taskDisplayMode: "timeline" | "plan";
   target: SlackWorkingCardTarget;
   ts?: string;
 };
@@ -405,6 +442,10 @@ type SlackAppHomeOpenedEvent = {
   type: "app_home_opened";
   user?: string;
 };
+
+type SlackAgentSessionEvent =
+  | AgentSessionStoppedEvent
+  | AgentSessionTitleChangedEvent;
 
 type SlackBlockActionPayload = {
   actions?: Array<{ action_id?: string; value?: string }>;
@@ -543,7 +584,14 @@ export class SlackAdapter implements SlackProviderAdapter {
   private botId: string | undefined;
   private botUserId: string | undefined;
   private workspaceId: string | undefined;
+  private agentSessionStatusDisabled = false;
+  private agentSessionRenameDisabled = false;
   private assistantThreadStatusDisabled = false;
+  private assistantThreadTitleDisabled = false;
+  private readonly agentSessionStatuses = new Map<
+    string,
+    { signaledAt: number; status: SlackAgentSessionStatus }
+  >();
   private conversationInfoLookupDisabled = false;
   private threadInfoLookupDisabled = false;
   private userInfoLookupDisabled = false;
@@ -892,6 +940,9 @@ export class SlackAdapter implements SlackProviderAdapter {
       const result = updated ?? (await this.api.postMessage(body));
       const channelId = result.channel ?? target.channelId;
       const ts = result.ts ?? target.ts;
+      if (target.threadTs) {
+        this.rememberAgentSession(channelId, target.threadTs, result.agentSession);
+      }
       deliveredSideEffects = true;
       if (!ts) {
         return {
@@ -980,13 +1031,98 @@ export class SlackAdapter implements SlackProviderAdapter {
   async setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult> {
-    return {
-      channel: this.channel,
-      conversation: request.channel.conversation,
-      outcome: "unsupported",
-      title: request.title,
-      updatedAt: this.now(),
-    };
+    const target = slackAgentSessionTarget(request.channel, request.routingState);
+    if (!target) {
+      return {
+        channel: this.channel,
+        conversation: request.channel.conversation,
+        outcome: "unsupported",
+        title: request.title,
+        updatedAt: this.now(),
+      };
+    }
+
+    try {
+      if (this.api.renameAgentSession && !this.agentSessionRenameDisabled) {
+        try {
+          const session = await this.api.renameAgentSession({
+            channelId: target.channelId,
+            threadTs: target.threadTs,
+            title: request.title,
+          });
+          const title = normalizeSlackAgentSessionTitle(session.title)
+            ?? request.title;
+          this.threadTitleCache.set(
+            slackAgentSessionKey(target.channelId, target.threadTs),
+            title,
+          );
+          return {
+            channel: this.channel,
+            conversation: request.channel.conversation,
+            outcome: "updated",
+            title,
+            updatedAt: this.now(),
+          };
+        } catch (error) {
+          if (!isSlackAgentSessionsUnsupportedError(error)) {
+            throw error;
+          }
+          this.agentSessionRenameDisabled = true;
+          this.logger.warn?.("slack agent session rename unavailable; using compatibility bridge", {
+            reason: slackErrorReason(error),
+          });
+        }
+      }
+
+      if (!this.api.setAssistantThreadTitle || this.assistantThreadTitleDisabled) {
+        return {
+          channel: this.channel,
+          conversation: request.channel.conversation,
+          outcome: "unsupported",
+          title: request.title,
+          updatedAt: this.now(),
+        };
+      }
+      try {
+        await this.api.setAssistantThreadTitle({
+          channelId: target.channelId,
+          threadTs: target.threadTs,
+          title: request.title,
+        });
+      } catch (error) {
+        if (!isSlackAssistantThreadUnsupportedError(error)) {
+          throw error;
+        }
+        this.assistantThreadTitleDisabled = true;
+        return {
+          channel: this.channel,
+          conversation: request.channel.conversation,
+          outcome: "unsupported",
+          title: request.title,
+          updatedAt: this.now(),
+        };
+      }
+      this.threadTitleCache.set(
+        slackAgentSessionKey(target.channelId, target.threadTs),
+        request.title,
+      );
+      return {
+        channel: this.channel,
+        conversation: request.channel.conversation,
+        outcome: "updated",
+        title: request.title,
+        updatedAt: this.now(),
+      };
+    } catch (error) {
+      return {
+        channel: this.channel,
+        conversation: request.channel.conversation,
+        errorMessage: error instanceof Error ? error.message : String(error),
+        outcome: "failed",
+        title: request.title,
+        updatedAt: this.now(),
+      };
+    }
   }
 
   async getManagedConversationRights(
@@ -1140,6 +1276,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     const event = (envelope.event ?? body?.event) as
       | SlackMessageEvent
       | SlackAppHomeOpenedEvent
+      | SlackAgentSessionEvent
       | undefined;
     const receipt = captureMessagingInboundReceipt(
       this.now(),
@@ -1154,11 +1291,137 @@ export class SlackAdapter implements SlackProviderAdapter {
       }
       return;
     }
+    if (event?.type === "agent_session_stopped") {
+      await this.handleAgentSessionStopped(event, body?.team_id);
+      return;
+    }
+    if (event?.type === "agent_session_title_changed") {
+      await this.handleAgentSessionTitleChanged(event, body?.team_id);
+      return;
+    }
     if (!event || (event.type !== "message" && event.type !== "app_mention")) {
       return;
     }
     await this.handleMessageEvent(event, body?.team_id ?? event.team, receipt);
   };
+
+  private async handleAgentSessionStopped(
+    event: AgentSessionStoppedEvent,
+    envelopeTeamId?: unknown,
+  ): Promise<void> {
+    if (!this.listener) return;
+    const ids = this.validateAgentSessionEventIds({
+      channelId: event.channel,
+      teamId: envelopeTeamId,
+      threadTs: event.thread_ts,
+      userId: event.user,
+    });
+    if (!ids) return;
+
+    const actor = await this.actorForSlackUser(ids.userId);
+    const channel = await this.channelRefForSlack({
+      channelId: ids.channelId,
+      channelType: ids.channelId.startsWith("D") ? "im" : undefined,
+      peerTitle: actor.displayName ?? actor.username,
+      teamId: ids.teamId,
+      threadTs: ids.threadTs,
+      ts: event.event_ts,
+    });
+    const routingState = this.routingStateForChannel(channel, {
+      teamId: ids.teamId,
+      ts: event.event_ts,
+    });
+    const authorization = this.authorizeInbound({
+      actor,
+      channel,
+      kind: "callback",
+      isGroupDm: false,
+      reportRejection: true,
+      routingState,
+      teamId: ids.teamId,
+    });
+    if (authorization !== true) return;
+
+    const sourceSurface: MessagingSurfaceRef = {
+      channel: this.channel,
+      id: ids.threadTs,
+      state: routingState,
+    };
+    await this.listener({
+      id: this.newEventId("slack-agent-session-stopped"),
+      kind: "callback",
+      actionId: "status:stop",
+      actor,
+      channel,
+      interaction: sourceSurface,
+      sourceSurface,
+      receivedAt: this.now(),
+      routingState,
+      value: {
+        source: "agent_session_stopped",
+        streamingMessageTimestamps: event.streaming_message_ts.slice(0, 100),
+      },
+    });
+  }
+
+  private async handleAgentSessionTitleChanged(
+    event: AgentSessionTitleChangedEvent,
+    envelopeTeamId?: unknown,
+  ): Promise<void> {
+    const ids = this.validateAgentSessionEventIds({
+      channelId: event.channel,
+      teamId: event.team_id ?? envelopeTeamId,
+      threadTs: event.thread_ts,
+      userId: event.user,
+    });
+    if (!ids) return;
+    const title = normalizeSlackAgentSessionTitle(event.title);
+    if (!title) return;
+    this.threadTitleCache.set(
+      slackAgentSessionKey(ids.channelId, ids.threadTs),
+      title,
+    );
+    if (!this.listener) return;
+
+    const actor = await this.actorForSlackUser(ids.userId);
+    const channel = await this.channelRefForSlack({
+      channelId: ids.channelId,
+      channelType: ids.channelId.startsWith("D") ? "im" : undefined,
+      peerTitle: actor.displayName ?? actor.username,
+      teamId: ids.teamId,
+      threadTs: ids.threadTs,
+      ts: event.event_ts,
+    });
+    const routingState = this.routingStateForChannel(channel, {
+      teamId: ids.teamId,
+      ts: event.event_ts,
+    });
+    const authorization = this.authorizeInbound({
+      actor,
+      channel,
+      kind: "lifecycle",
+      isGroupDm: false,
+      reportRejection: false,
+      routingState,
+      teamId: ids.teamId,
+    });
+    if (authorization !== true) return;
+    await this.listener({
+      id: this.newEventId("slack-agent-session-title-changed"),
+      kind: "lifecycle",
+      actor,
+      channel: {
+        ...channel,
+        conversation: {
+          ...channel.conversation,
+          title,
+        },
+      },
+      lifecycle: "metadata_changed",
+      receivedAt: this.now(),
+      routingState,
+    });
+  }
 
   private async publishAppHomes(userIds: readonly string[]): Promise<void> {
     const homeUserIds = [...new Set(userIds)].filter(
@@ -1672,6 +1935,13 @@ export class SlackAdapter implements SlackProviderAdapter {
           unfurl_media: false,
         });
         deliveredAny = true;
+        if (params.target.threadTs) {
+          this.rememberAgentSession(
+            result.channel ?? params.target.channelId,
+            params.target.threadTs,
+            result.agentSession,
+          );
+        }
         const ts = result.ts;
         lastTs = ts ?? lastTs;
         if (ts) {
@@ -1945,7 +2215,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       lastDeliveredSequence: 0,
       nonRateFailureCount: 0,
       pumping: false,
-      taskDisplayMode: intent.card.displayHint,
+      taskDisplayMode: normalizeSlackTaskDisplayMode(intent.card.displayHint),
       target: workingTarget,
     };
     if (!current) {
@@ -2047,6 +2317,11 @@ export class SlackAdapter implements SlackProviderAdapter {
             if (!result.ts) {
               throw new Error("Slack chat.startStream returned no timestamp");
             }
+            this.rememberAgentSession(
+              state.target.channelId,
+              state.target.threadTs,
+              result.agentSession,
+            );
             if (state.cancelled) {
               try {
                 await this.api.deleteMessage({
@@ -2078,8 +2353,19 @@ export class SlackAdapter implements SlackProviderAdapter {
           await this.api.stopStream!({
             channel: state.target.channelId,
             ...(chunks.length > 0 ? { chunks } : {}),
+            sessionStatus: intent.card.phase === "waiting" ? "suspended" : "active",
             ts: state.ts!,
           });
+          this.agentSessionStatuses.set(
+            slackAgentSessionKey(
+              state.target.channelId,
+              state.target.threadTs,
+            ),
+            {
+              signaledAt: this.now(),
+              status: intent.card.phase === "waiting" ? "suspended" : "active",
+            },
+          );
           this.workingCardStreams.delete(key);
           this.recordWorkingCardTombstone(key, intent.card.sequence);
           return;
@@ -2194,7 +2480,7 @@ export class SlackAdapter implements SlackProviderAdapter {
     ) {
       chunks.unshift({
         type: "markdown_text",
-        markdown_text: "*Waiting for your input*",
+        text: "*Waiting for your input*",
       });
     }
     if (intent.card.isFinal && intent.card.phase === "failed") {
@@ -2736,6 +3022,67 @@ export class SlackAdapter implements SlackProviderAdapter {
     };
   }
 
+  private validateAgentSessionEventIds(params: {
+    channelId: unknown;
+    teamId?: unknown;
+    threadTs: unknown;
+    userId: unknown;
+  }): {
+    channelId: string;
+    teamId?: string;
+    threadTs: string;
+    userId: string;
+  } | undefined {
+    const channelValidation = validateSlackChannelId(params.channelId);
+    if (!channelValidation.ok) {
+      logSlackInvalidIdentifier({
+        field: "channel_id",
+        logger: this.logger,
+        reason: channelValidation.reason,
+        value: params.channelId,
+      });
+      return undefined;
+    }
+    const userValidation = validateSlackUserId(params.userId);
+    if (!userValidation.ok) {
+      logSlackInvalidIdentifier({
+        field: "user_id",
+        logger: this.logger,
+        reason: userValidation.reason,
+        value: params.userId,
+      });
+      return undefined;
+    }
+    const threadValidation = validateSlackMessageTs(params.threadTs);
+    if (!threadValidation.ok) {
+      logSlackInvalidIdentifier({
+        field: "message_ts",
+        logger: this.logger,
+        reason: threadValidation.reason,
+        value: params.threadTs,
+      });
+      return undefined;
+    }
+    if (params.teamId !== undefined) {
+      const teamValidation = validateSlackTeamId(params.teamId);
+      if (!teamValidation.ok) {
+        logSlackInvalidIdentifier({
+          field: "team_id",
+          logger: this.logger,
+          reason: teamValidation.reason,
+          value: params.teamId,
+        });
+        return undefined;
+      }
+    }
+    return {
+      channelId: params.channelId as string,
+      ...(params.teamId !== undefined ? { teamId: params.teamId as string } : {}),
+      threadTs: params.threadTs as string,
+      userId: params.userId as string,
+    };
+  }
+
   private authorizeInbound(params: {
     actor: MessagingActorIdentity;
     botMention?: boolean;
@@ -3176,7 +3523,8 @@ export class SlackAdapter implements SlackProviderAdapter {
         ts: threadTs,
       });
       const root = messages.find((message) => message.ts === threadTs) ?? messages[0];
-      const title = normalizeSlackThreadTitle(root?.text);
+      const title = normalizeSlackAgentSessionTitle(root?.agentSession?.title)
+        ?? normalizeSlackThreadTitle(root?.text);
       this.threadTitleCache.set(cacheKey, title);
       return title;
     } catch (error) {
@@ -3196,6 +3544,26 @@ export class SlackAdapter implements SlackProviderAdapter {
       }
       this.threadTitleCache.set(cacheKey, undefined);
       return undefined;
+    }
+  }
+
+  private rememberAgentSession(
+    channelId: string,
+    threadTs: string,
+    session: SlackAgentSessionInfo | undefined,
+  ): void {
+    if (!session) return;
+    const key = slackAgentSessionKey(channelId, threadTs);
+    const title = normalizeSlackAgentSessionTitle(session.title);
+    if (title) {
+      this.threadTitleCache.set(key, title);
+    }
+    const status = normalizeSlackAgentSessionStatus(session.status);
+    if (status) {
+      this.agentSessionStatuses.set(key, {
+        signaledAt: this.now(),
+        status,
+      });
     }
   }
 
@@ -3387,12 +3755,7 @@ export class SlackAdapter implements SlackProviderAdapter {
 
     const target = this.resolveTarget(intent);
     const threadTs = target?.threadTs ?? target?.ts;
-    if (
-      !target
-      || !threadTs
-      || !this.api.setAssistantThreadStatus
-      || this.assistantThreadStatusDisabled
-    ) {
+    if (!target || !threadTs) {
       return {
         channel: this.channel,
         deliveredAt: this.now(),
@@ -3400,11 +3763,77 @@ export class SlackAdapter implements SlackProviderAdapter {
       };
     }
 
+    const sessionStatus = intent.sessionState
+      ?? (intent.state === "active" ? "processing" : "active");
+    const sessionKey = slackAgentSessionKey(target.channelId, threadTs);
+    const previous = this.agentSessionStatuses.get(sessionKey);
+    if (
+      previous?.status === sessionStatus
+      && (
+        sessionStatus !== "processing"
+        || this.now() - previous.signaledAt < SLACK_AGENT_SESSION_PROCESSING_REFRESH_MS
+      )
+    ) {
+      return {
+        channel: this.channel,
+        deliveredAt: this.now(),
+        outcome: "signaled",
+      };
+    }
+
     try {
+      if (this.api.setAgentSessionStatus && !this.agentSessionStatusDisabled) {
+        try {
+          const session = await this.api.setAgentSessionStatus({
+            channelId: target.channelId,
+            initiatorUserId:
+              intent.audit?.actor.platformUserId !== "unknown"
+                ? intent.audit?.actor.platformUserId
+                : undefined,
+            status: sessionStatus,
+            threadTs,
+          });
+          this.rememberAgentSession(
+            target.channelId,
+            threadTs,
+            session,
+          );
+          this.agentSessionStatuses.set(sessionKey, {
+            signaledAt: this.now(),
+            status: sessionStatus,
+          });
+          return {
+            channel: this.channel,
+            deliveredAt: this.now(),
+            outcome: "signaled",
+          };
+        } catch (error) {
+          if (!isSlackAgentSessionsUnsupportedError(error)) {
+            throw error;
+          }
+          this.agentSessionStatusDisabled = true;
+          this.logger.warn?.("slack agent session status unavailable; using compatibility bridge", {
+            reason: slackErrorReason(error),
+            requiredScope: "chat:write",
+          });
+        }
+      }
+
+      if (!this.api.setAssistantThreadStatus || this.assistantThreadStatusDisabled) {
+        return {
+          channel: this.channel,
+          deliveredAt: this.now(),
+          outcome: "discarded",
+        };
+      }
       await this.api.setAssistantThreadStatus({
         channelId: target.channelId,
-        status: intent.state === "active" ? "is working on your request..." : "",
+        status: sessionStatus === "processing" ? "is working on your request..." : "",
         threadTs,
+      });
+      this.agentSessionStatuses.set(sessionKey, {
+        signaledAt: this.now(),
+        status: sessionStatus,
       });
       return {
         channel: this.channel,
@@ -3412,7 +3841,7 @@ export class SlackAdapter implements SlackProviderAdapter {
         outcome: "signaled",
       };
     } catch (error) {
-      if (isSlackAssistantThreadStatusUnsupportedError(error)) {
+      if (isSlackAssistantThreadUnsupportedError(error)) {
         this.assistantThreadStatusDisabled = true;
         this.logger.warn?.("slack assistant thread status unavailable", {
           reason: slackErrorReason(error),
@@ -3489,10 +3918,7 @@ export function createSlackApi(botToken: string): SlackApi {
   const client = new WebClient(botToken, { rejectRateLimitedCalls: true });
   return {
     async startStream(params) {
-      const chat = client.chat as unknown as {
-        startStream(input: Record<string, unknown>): Promise<SlackMessageResult>;
-      };
-      return await chat.startStream({
+      const response = await client.chat.startStream({
         channel: params.channel,
         chunks: params.chunks,
         thread_ts: params.threadTs,
@@ -3504,25 +3930,21 @@ export function createSlackApi(botToken: string): SlackApi {
           ? { recipient_team_id: params.recipientTeamId }
           : {}),
       });
+      return normalizeSlackMessageResult(response);
     },
     async appendStream(params) {
-      const chat = client.chat as unknown as {
-        appendStream(input: Record<string, unknown>): Promise<unknown>;
-      };
-      await chat.appendStream({
+      await client.chat.appendStream({
         channel: params.channel,
         chunks: params.chunks,
         ts: params.ts,
       });
     },
     async stopStream(params) {
-      const chat = client.chat as unknown as {
-        stopStream(input: Record<string, unknown>): Promise<unknown>;
-      };
-      await chat.stopStream({
+      await client.chat.stopStream({
         channel: params.channel,
         ts: params.ts,
         ...(params.chunks ? { chunks: params.chunks } : {}),
+        ...(params.sessionStatus ? { session_status: params.sessionStatus } : {}),
       });
     },
     async authTest() {
@@ -3549,17 +3971,70 @@ export function createSlackApi(botToken: string): SlackApi {
         thread_ts: params.threadTs,
       });
     },
+    async setAssistantThreadTitle(params) {
+      await client.assistant.threads.setTitle({
+        channel_id: params.channelId,
+        thread_ts: params.threadTs,
+        title: params.title,
+      });
+    },
+    async setAgentSessionStatus(params) {
+      const response = await client.agents.sessions.setStatus({
+        channel_id: params.channelId,
+        status: params.status,
+        thread_ts: params.threadTs,
+        ...(params.initiatorUserId
+          ? { initiator_user_id: params.initiatorUserId }
+          : {}),
+      });
+      return {
+        ...(normalizeSlackAgentSessionStatus(response.status ?? response.agent_status)
+          ? {
+              status: normalizeSlackAgentSessionStatus(
+                response.status ?? response.agent_status,
+              ),
+            }
+          : {}),
+        ...(normalizeSlackAgentSessionTitle(response.title)
+          ? { title: normalizeSlackAgentSessionTitle(response.title) }
+          : {}),
+        ...(typeof response.warning === "string"
+          ? { warning: response.warning }
+          : {}),
+      };
+    },
+    async renameAgentSession(params) {
+      const response = await client.agents.sessions.rename({
+        channel_id: params.channelId,
+        thread_ts: params.threadTs,
+        title: params.title,
+      });
+      return {
+        ...(normalizeSlackAgentSessionTitle(response.title)
+          ? { title: normalizeSlackAgentSessionTitle(response.title) }
+          : {}),
+        ...(typeof response.warning === "string"
+          ? { warning: response.warning }
+          : {}),
+      };
+    },
     async conversationsInfo(params) {
       const response = await client.conversations.info(params);
       return response.channel as SlackConversationInfo | undefined;
     },
     async conversationsHistory(params) {
       const response = await client.conversations.history(params);
-      return (response.messages ?? []) as SlackHistoryMessageInfo[];
+      return attachSlackAgentSession(
+        (response.messages ?? []) as SlackHistoryMessageInfo[],
+        readSlackAgentSessionFromResponse(response),
+      );
     },
     async conversationsReplies(params) {
       const response = await client.conversations.replies(params);
-      return (response.messages ?? []) as SlackThreadMessageInfo[];
+      return attachSlackAgentSession(
+        (response.messages ?? []) as SlackThreadMessageInfo[],
+        readSlackAgentSessionFromResponse(response),
+      );
     },
     async deleteMessage(params) {
       await client.chat.delete(params);
@@ -3591,9 +4066,9 @@ export function createSlackApi(botToken: string): SlackApi {
         : undefined;
     },
     async postMessage(params) {
-      return (await client.chat.postMessage(
+      return normalizeSlackMessageResult(await client.chat.postMessage(
         params as unknown as Parameters<typeof client.chat.postMessage>[0],
-      )) as SlackMessageResult;
+      ));
     },
     async publishHomeView(params) {
       await client.views.publish({
@@ -3602,9 +4077,9 @@ export function createSlackApi(botToken: string): SlackApi {
       });
     },
     async updateMessage(params) {
-      return (await client.chat.update(
+      return normalizeSlackMessageResult(await client.chat.update(
         params as unknown as Parameters<typeof client.chat.update>[0],
-      )) as SlackMessageResult;
+      ));
     },
     async usersInfo(params) {
       const response = await client.users.info(params);
@@ -3913,6 +4388,32 @@ function slackManagedThreadTarget(
   };
 }
 
+function slackAgentSessionTarget(
+  channel: MessagingChannelRef,
+  routingState: MessagingAdapterState | undefined,
+): { channelId: string; threadTs: string } | undefined {
+  const state = readSlackAdapterState(routingState);
+  const channelId =
+    state?.channelId
+    ?? channel.conversation.parentConversationId
+    ?? channel.conversation.id;
+  const threadTs =
+    state?.threadTs
+    ?? channel.conversation.parentId
+    ?? state?.ts;
+  if (
+    !validateSlackChannelId(channelId).ok
+    || !validateSlackMessageTs(threadTs).ok
+  ) {
+    return undefined;
+  }
+  return { channelId, threadTs: threadTs! };
+}
+
+function slackAgentSessionKey(channelId: string, threadTs: string): string {
+  return `${channelId}:${threadTs}`;
+}
+
 function callbackAllowedActorIds(
   intent: MessagingSurfaceIntent,
   fallbackActorId: string,
@@ -4118,6 +4619,79 @@ function parseSlackDataImageUrl(
   };
 }
 
+function normalizeSlackMessageResult(value: unknown): SlackMessageResult {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  const record = value as Record<string, unknown>;
+  const agentSession = readSlackAgentSession(record.agent_session);
+  return {
+    ...(agentSession ? { agentSession } : {}),
+    ...(typeof record.channel === "string" ? { channel: record.channel } : {}),
+    ...(typeof record.ts === "string" ? { ts: record.ts } : {}),
+  };
+}
+
+function readSlackAgentSession(value: unknown): SlackAgentSessionInfo | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const status = normalizeSlackAgentSessionStatus(record.status);
+  const title = normalizeSlackAgentSessionTitle(record.title);
+  if (!status && !title) return undefined;
+  return {
+    ...(status ? { status } : {}),
+    ...(title ? { title } : {}),
+  };
+}
+
+function readSlackAgentSessionFromResponse(
+  value: unknown,
+): SlackAgentSessionInfo | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return readSlackAgentSession(
+    (value as Record<string, unknown>).agent_session,
+  );
+}
+
+function attachSlackAgentSession<
+  Message extends { agentSession?: SlackAgentSessionInfo },
+>(
+  messages: Message[],
+  agentSession: SlackAgentSessionInfo | undefined,
+): Message[] {
+  if (!agentSession || messages.length === 0) return messages;
+  return messages.map((message, index) =>
+    index === 0 ? { ...message, agentSession } : message
+  );
+}
+
+function normalizeSlackAgentSessionStatus(
+  value: unknown,
+): SlackAgentSessionStatus | undefined {
+  return value === "active"
+    || value === "processing"
+    || value === "suspended"
+    || value === "closed"
+    ? value
+    : undefined;
+}
+
+function normalizeSlackAgentSessionTitle(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized ? normalized.slice(0, 200) : undefined;
+}
+
+function normalizeSlackTaskDisplayMode(
+  value: SlackWorkingCardIntent["card"]["displayHint"],
+): "timeline" | "plan" {
+  return value === "plan" ? "plan" : "timeline";
+}
+
 function normalizeSlackConversationTitle(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   if (!normalized) return undefined;
@@ -4170,7 +4744,19 @@ function retryAfterMsFromError(error: unknown): number | undefined {
   return status === 429 ? 1_000 : undefined;
 }
 
-function isSlackAssistantThreadStatusUnsupportedError(error: unknown): boolean {
+function isSlackAgentSessionsUnsupportedError(error: unknown): boolean {
+  const reason = slackErrorReason(error).toLowerCase();
+  return reason.includes("missing_scope")
+    || reason.includes("not_an_agent")
+    || reason.includes("not an agent")
+    || reason.includes("agent_not")
+    || reason.includes("feature_not_enabled")
+    || reason.includes("method_not_supported")
+    || reason.includes("unknown_method")
+    || reason.includes("unsupported");
+}
+
+function isSlackAssistantThreadUnsupportedError(error: unknown): boolean {
   const reason = slackErrorReason(error).toLowerCase();
   return reason.includes("missing_scope")
     || reason.includes("not_assistant")

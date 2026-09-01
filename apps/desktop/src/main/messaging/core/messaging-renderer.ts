@@ -32,6 +32,7 @@ export function buildActivityIntent(params: {
   createdAt: number;
   id: string;
   leaseMs?: number;
+  sessionState?: MessagingActivityIntent["sessionState"];
   state: MessagingActivityIntent["state"];
 }): MessagingActivityIntent {
   return {
@@ -41,6 +42,7 @@ export function buildActivityIntent(params: {
     bindingId: params.bindingId,
     createdAt: params.createdAt,
     leaseMs: params.leaseMs,
+    sessionState: params.sessionState,
     state: params.state,
   };
 }

@@ -193,6 +193,31 @@ turn cancellation and terminal private-response routing can cancel pending
 work or remove an already-mounted card. Completed keys retain a bounded
 sequence tombstone so delayed events cannot reopen a terminal card.
 
+### Agent session lifecycle
+
+`activity.sessionState` is the channel-neutral durable conversation lifecycle
+for providers that expose an agent-session surface. Slack maps `processing`,
+`suspended`, `active`, and `closed` directly to `agents.sessions.setStatus`.
+The ordinary typing `state` remains authoritative for providers without that
+surface. Slack coalesces unchanged status writes and refreshes a genuinely
+long-running `processing` session before Slack's one-hour timeout instead of
+turning the controller's ten-second typing lease into API traffic.
+
+Slack Agent Sessions are authoritative. The adapter uses
+`assistant.threads.setStatus` or `assistant.threads.setTitle` only as an
+exclusive compatibility fallback after the corresponding Agent Sessions API
+is unavailable; it never dual-writes one transition. Explicit conversation
+name sync uses `agents.sessions.rename`. Slack-originated title changes update
+binding-local conversation metadata and never silently rename the global
+PwrAgent thread.
+
+`agent_session_stopped` is normalized as the existing `status:stop` callback,
+so it passes through the same RBAC and active-turn checks as PwrAgent's status
+card control. A rejected or failed stop re-signals the truthful session state;
+Slack's click is a request and does not itself prove that backend work stopped.
+Terminal streams send an explicit `session_status`, and internal `dense`
+working cards normalize to Slack's documented `timeline` task display mode.
+
 - chunk long messages according to platform limits
 - preserve inline code and fenced code when supported
 - escape or neutralize markdown dialect hazards

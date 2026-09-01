@@ -102,8 +102,18 @@ function conversationKey(channel: MessagingChannelRef): string {
 }
 
 function fakeApi(spies: {
+  agentRenameError?: Error;
+  agentRenames?: Array<{ channelId: string; threadTs: string; title: string }>;
+  agentStatusError?: Error;
+  agentStatuses?: Array<{
+    channelId: string;
+    initiatorUserId?: string;
+    status: "active" | "processing" | "suspended" | "closed";
+    threadTs: string;
+  }>;
   assistantStatusError?: Error;
   assistantStatuses?: Array<{ channelId: string; status: string; threadTs: string }>;
+  assistantTitles?: Array<{ channelId: string; threadTs: string; title: string }>;
   appendedStreams?: unknown[];
   bots?: Record<string, string>;
   botsInfoCalls?: string[];
@@ -117,12 +127,41 @@ function fakeApi(spies: {
   postedChannel?: string;
   postedTimestamps?: string[];
   replies?: Record<string, string>;
+  replyAgentSessions?: Record<string, {
+    status?: "active" | "processing" | "suspended" | "closed";
+    title?: string;
+  }>;
   updated?: unknown[];
   startedStreams?: unknown[];
   stoppedStreams?: unknown[];
   users?: Record<string, { displayName?: string; realName?: string; username?: string }>;
 }): SlackApi {
   return {
+    ...(spies.agentStatuses || spies.agentStatusError
+      ? {
+          setAgentSessionStatus: async (params) => {
+            if (spies.agentStatusError) throw spies.agentStatusError;
+            spies.agentStatuses?.push(params);
+            return { status: params.status };
+          },
+        }
+      : {}),
+    ...(spies.agentRenames || spies.agentRenameError
+      ? {
+          renameAgentSession: async (params) => {
+            if (spies.agentRenameError) throw spies.agentRenameError;
+            spies.agentRenames?.push(params);
+            return { title: params.title };
+          },
+        }
+      : {}),
+    ...(spies.assistantTitles
+      ? {
+          setAssistantThreadTitle: async (params) => {
+            spies.assistantTitles?.push(params);
+          },
+        }
+      : {}),
     startStream: async (params) => {
       spies.startedStreams?.push(params);
       return { channel: params.channel, ts: "1700000000.900001" };
@@ -152,6 +191,7 @@ function fakeApi(spies: {
       is_mpim: spies.mpimChannels?.includes(params.channel) ?? false,
     }),
     conversationsReplies: async (params) => [{
+      agentSession: spies.replyAgentSessions?.[`${params.channel}:${params.ts}`],
       ts: params.ts,
       text: spies.replies?.[`${params.channel}:${params.ts}`],
     }],
@@ -424,6 +464,91 @@ describe("SlackAdapter", () => {
     expect(events).toEqual([]);
     expect(publishedHomes).toHaveLength(1);
     expect(publishedHomes[0]?.userId).toBe("U012ABCDEF0");
+  });
+
+  it("maps Slack's native Agent Session stop event to the existing status stop control", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      event: {
+        type: "agent_session_stopped",
+        channel: "C012ABCDEF0",
+        event_ts: "1783536983.783769",
+        streaming_message_ts: ["1782234987.693923"],
+        thread_ts: "1782234671.392669",
+        user: "U012ABCDEF0",
+      },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "callback",
+      actionId: "status:stop",
+      actor: { platformUserId: "U012ABCDEF0" },
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "C012ABCDEF0",
+          kind: "thread",
+          parentId: "1782234671.392669",
+        },
+      },
+      value: {
+        source: "agent_session_stopped",
+        streamingMessageTimestamps: ["1782234987.693923"],
+      },
+    });
+  });
+
+  it("records Slack Agent Session title changes as binding metadata", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      socketClient: socket,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      event: {
+        type: "agent_session_title_changed",
+        channel: "C012ABCDEF0",
+        event_ts: "1783536983.783769",
+        previous_title: "Old title",
+        team_id: "T012ABCDEF0",
+        thread_ts: "1782234671.392669",
+        title: "Bora Bora trip prep",
+        user: "U012ABCDEF0",
+      },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      kind: "lifecycle",
+      lifecycle: "metadata_changed",
+      channel: {
+        conversation: {
+          id: "C012ABCDEF0",
+          kind: "thread",
+          parentId: "1782234671.392669",
+          title: "Bora Bora trip prep",
+        },
+      },
+    });
   });
 
   it("keeps Slack messaging available when App Home publishing fails", async () => {
@@ -785,25 +910,31 @@ describe("SlackAdapter", () => {
     });
   });
 
-  it("signals Slack Assistant thread status for active typing activity", async () => {
-    const assistantStatuses: Array<{ channelId: string; status: string; threadTs: string }> = [];
+  it("signals and coalesces Slack Agent Session status for turn activity", async () => {
+    const agentStatuses: Array<{
+      channelId: string;
+      initiatorUserId?: string;
+      status: "active" | "processing" | "suspended" | "closed";
+      threadTs: string;
+    }> = [];
     const adapter = new SlackAdapter({
       config: baseConfig,
       callbackHandleStore: fakeStore(),
-      api: fakeApi({ assistantStatuses }),
+      api: fakeApi({ agentStatuses }),
       socketClient: fakeSocket(),
       now: () => 1_700_000_000_000,
     });
 
-    await expect(adapter.deliver({
+    const activity = {
       id: "activity-1",
-      kind: "activity",
-      activity: "typing",
+      kind: "activity" as const,
+      activity: "typing" as const,
       createdAt: 1,
       leaseMs: 10_000,
-      state: "active",
+      sessionState: "processing" as const,
+      state: "active" as const,
       targetSurface: {
-        channel: "slack",
+        channel: "slack" as const,
         id: "binding-1",
         state: {
           opaque: {
@@ -812,15 +943,21 @@ describe("SlackAdapter", () => {
           },
         },
       },
-    })).resolves.toMatchObject({
+    };
+    await expect(adapter.deliver(activity)).resolves.toMatchObject({
       channel: "slack",
       deliveredAt: 1_700_000_000_000,
       outcome: "signaled",
     });
+    await expect(adapter.deliver({
+      ...activity,
+      id: "activity-1-refresh",
+      createdAt: 2,
+    })).resolves.toMatchObject({ outcome: "signaled" });
 
-    expect(assistantStatuses).toEqual([{
+    expect(agentStatuses).toEqual([{
       channelId: "C012ABCDEF0",
-      status: "is working on your request...",
+      status: "processing",
       threadTs: "1712023030.000000",
     }]);
   });
@@ -860,6 +997,111 @@ describe("SlackAdapter", () => {
       status: "",
       threadTs: "1712023030.000000",
     }]);
+  });
+
+  it("maps waiting activity to a suspended Slack Agent Session", async () => {
+    const agentStatuses: Array<{
+      channelId: string;
+      status: "active" | "processing" | "suspended" | "closed";
+      threadTs: string;
+    }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ agentStatuses }),
+      socketClient: fakeSocket(),
+    });
+
+    await expect(adapter.deliver({
+      id: "activity-waiting",
+      kind: "activity",
+      activity: "typing",
+      createdAt: 1,
+      sessionState: "suspended",
+      state: "idle",
+      targetSurface: {
+        channel: "slack",
+        id: "binding-1",
+        state: {
+          opaque: {
+            channelId: "C012ABCDEF0",
+            threadTs: "1712023030.000000",
+          },
+        },
+      },
+    })).resolves.toMatchObject({ outcome: "signaled" });
+
+    expect(agentStatuses).toEqual([{
+      channelId: "C012ABCDEF0",
+      status: "suspended",
+      threadTs: "1712023030.000000",
+    }]);
+  });
+
+  it("falls back to Assistant status without dual-writing when Agent Sessions are unavailable", async () => {
+    const missingScopeError = Object.assign(
+      new Error("An API error occurred: missing_scope"),
+      { data: { error: "missing_scope", needed: "chat:write" } },
+    );
+    const assistantStatuses: Array<{
+      channelId: string;
+      status: string;
+      threadTs: string;
+    }> = [];
+    let agentAttempts = 0;
+    const api = fakeApi({ assistantStatuses });
+    api.setAgentSessionStatus = async () => {
+      agentAttempts += 1;
+      throw missingScopeError;
+    };
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api,
+      socketClient: fakeSocket(),
+    });
+    const activity = {
+      id: "activity-agent-fallback",
+      kind: "activity" as const,
+      activity: "typing" as const,
+      createdAt: 1,
+      sessionState: "processing" as const,
+      state: "active" as const,
+      targetSurface: {
+        channel: "slack" as const,
+        id: "binding-1",
+        state: {
+          opaque: {
+            channelId: "C012ABCDEF0",
+            threadTs: "1712023030.000000",
+          },
+        },
+      },
+    };
+
+    await expect(adapter.deliver(activity)).resolves.toMatchObject({
+      outcome: "signaled",
+    });
+    await expect(adapter.deliver({
+      ...activity,
+      id: "activity-agent-fallback-repeat",
+      sessionState: "active",
+      state: "idle",
+    })).resolves.toMatchObject({ outcome: "signaled" });
+
+    expect(agentAttempts).toBe(1);
+    expect(assistantStatuses).toEqual([
+      {
+        channelId: "C012ABCDEF0",
+        status: "is working on your request...",
+        threadTs: "1712023030.000000",
+      },
+      {
+        channelId: "C012ABCDEF0",
+        status: "",
+        threadTs: "1712023030.000000",
+      },
+    ]);
   });
 
   it("discards Slack typing activity when no thread timestamp is available", async () => {
@@ -957,6 +1199,99 @@ describe("SlackAdapter", () => {
       expect.objectContaining({
         requiredScope: "chat:write or assistant:write",
       }),
+    ]);
+  });
+
+  it("renames a Slack Agent Session for explicit conversation name sync", async () => {
+    const agentRenames: Array<{
+      channelId: string;
+      threadTs: string;
+      title: string;
+    }> = [];
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ agentRenames }),
+      socketClient: fakeSocket(),
+    });
+
+    await expect(adapter.setConversationTitle({
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "C012ABCDEF0",
+          kind: "thread",
+          parentId: "1712023030.000000",
+          parentConversationId: "C012ABCDEF0",
+        },
+      },
+      title: "Agent Sessions migration",
+    })).resolves.toMatchObject({
+      outcome: "updated",
+      title: "Agent Sessions migration",
+    });
+
+    expect(agentRenames).toEqual([{
+      channelId: "C012ABCDEF0",
+      threadTs: "1712023030.000000",
+      title: "Agent Sessions migration",
+    }]);
+  });
+
+  it("uses the Assistant title bridge only after Agent Session rename is unavailable", async () => {
+    const unsupported = Object.assign(new Error("not_an_agent"), {
+      data: { error: "not_an_agent" },
+    });
+    const assistantTitles: Array<{
+      channelId: string;
+      threadTs: string;
+      title: string;
+    }> = [];
+    let agentAttempts = 0;
+    const api = fakeApi({ assistantTitles });
+    api.renameAgentSession = async () => {
+      agentAttempts += 1;
+      throw unsupported;
+    };
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api,
+      socketClient: fakeSocket(),
+    });
+    const request = {
+      channel: {
+        channel: "slack" as const,
+        conversation: {
+          id: "C012ABCDEF0",
+          kind: "thread" as const,
+          parentId: "1712023030.000000",
+          parentConversationId: "C012ABCDEF0",
+        },
+      },
+      title: "Compatibility bridge",
+    };
+
+    await expect(adapter.setConversationTitle(request)).resolves.toMatchObject({
+      outcome: "updated",
+    });
+    await expect(adapter.setConversationTitle({
+      ...request,
+      title: "Compatibility bridge 2",
+    })).resolves.toMatchObject({ outcome: "updated" });
+
+    expect(agentAttempts).toBe(1);
+    expect(assistantTitles).toEqual([
+      {
+        channelId: "C012ABCDEF0",
+        threadTs: "1712023030.000000",
+        title: "Compatibility bridge",
+      },
+      {
+        channelId: "C012ABCDEF0",
+        threadTs: "1712023030.000000",
+        title: "Compatibility bridge 2",
+      },
     ]);
   });
 
@@ -3642,6 +3977,47 @@ describe("SlackAdapter", () => {
     ]);
   });
 
+  it("prefers Agent Session response metadata over the Slack root message title", async () => {
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({
+        replies: {
+          "G012ABCDEF0:1712023030.000000": "Root message fallback",
+        },
+        replyAgentSessions: {
+          "G012ABCDEF0:1712023030.000000": {
+            status: "active",
+            title: "Release agent migration",
+          },
+        },
+      }),
+      socketClient: socket,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await socket.emitEvent("slack_event", {
+      event: {
+        type: "message",
+        channel: "G012ABCDEF0",
+        channel_type: "group",
+        team: "T012ABCDEF0",
+        thread_ts: "1712023030.000000",
+        ts: "1712023032.123456",
+        user: "U012ABCDEF0",
+        text: "thread reply",
+      },
+    });
+
+    expect(events[0]?.channel.conversation.title).toBe(
+      "Release agent migration",
+    );
+  });
+
   it("discards stream updates when the thread policy is disabled without calling Slack", async () => {
     const posted: unknown[] = [];
     const updated: unknown[] = [];
@@ -4238,6 +4614,7 @@ describe("SlackAdapter", () => {
           details: "0ms",
         }),
       ]);
+    expect(stoppedStreams[0]).toMatchObject({ sessionStatus: "active" });
   });
 
   it("anchors a channel-root Agent Route card to its inbound user message", async () => {
@@ -4286,6 +4663,24 @@ describe("SlackAdapter", () => {
         recipientUserId: "U012ABCDEF0",
         threadTs: "1700000000.000099",
       }),
+    ]);
+  });
+
+  it("normalizes the internal dense card hint to Slack's documented timeline mode", async () => {
+    const startedStreams: unknown[] = [];
+    const adapter = new SlackAdapter({
+      config: { ...baseConfig, liveWorkingCards: true },
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({ startedStreams }),
+      socketClient: fakeSocket(),
+    });
+
+    await adapter.deliver(slackWorkingCardIntent(1, { displayHint: "dense" }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(startedStreams).toEqual([
+      expect.objectContaining({ taskDisplayMode: "timeline" }),
     ]);
   });
 
@@ -4867,7 +5262,7 @@ describe("SlackAdapter", () => {
     try {
       const startedStreams: Array<{
         chunks: SlackStreamChunk[];
-        taskDisplayMode: "timeline" | "plan" | "dense";
+        taskDisplayMode: "timeline" | "plan";
       }> = [];
       let startAttempts = 0;
       const api = fakeApi({});

@@ -8491,6 +8491,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.find((intent) => intent.kind === "activity")).toMatchObject({
       kind: "activity",
       activity: "typing",
+      sessionState: "processing",
       state: "active",
     });
   });
@@ -8518,6 +8519,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
+      sessionState: "processing",
       state: "active",
     });
 
@@ -8540,6 +8542,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "activity",
       activity: "typing",
+      sessionState: "active",
       state: "idle",
     });
   });
@@ -10497,7 +10500,12 @@ describe("MessagingController", () => {
 
     await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
 
-    expect(harness.delivered).toHaveLength(3);
+    expect(harness.delivered).toHaveLength(4);
+    expect(harness.delivered.at(-4)).toMatchObject({
+      kind: "activity",
+      sessionState: "closed",
+      state: "idle",
+    });
     expect(harness.delivered.at(-3)).toMatchObject({
       kind: "status",
       actions: [],
@@ -10594,8 +10602,8 @@ describe("MessagingController", () => {
 
       await harness.controller.handleInboundEvent(buildCommandEvent("/detach"));
 
-      expect(harness.delivered).toHaveLength(4);
-      expect(harness.delivered.at(-4)).toMatchObject({
+      expect(harness.delivered).toHaveLength(5);
+      expect(harness.delivered.at(-5)).toMatchObject({
         kind: "confirmation",
         title: "Monitor detached",
         actions: [],
@@ -10605,6 +10613,11 @@ describe("MessagingController", () => {
           fallback: "fail",
         },
         targetSurface: monitorSurface,
+      });
+      expect(harness.delivered.at(-4)).toMatchObject({
+        kind: "activity",
+        sessionState: "closed",
+        state: "idle",
       });
       expect(harness.delivered.at(-1)).toMatchObject({
         kind: "confirmation",
@@ -18099,6 +18112,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-2)).toMatchObject({
       kind: "activity",
       activity: "typing",
+      sessionState: "active",
       state: "idle",
     });
     expect(harness.delivered.at(-1)).toMatchObject({
@@ -19033,6 +19047,7 @@ describe("MessagingController", () => {
     expect(harness.delivered.at(-2)).toMatchObject({
       kind: "activity",
       activity: "typing",
+      sessionState: "suspended",
       state: "idle",
     });
     expect(harness.delivered.at(-1)).toMatchObject({
@@ -22543,9 +22558,42 @@ describe("MessagingController", () => {
       threadId: "thread-1",
       turnId: "turn-1",
     });
+    expect(harness.delivered.at(-2)).toMatchObject({
+      kind: "activity",
+      sessionState: "active",
+      state: "idle",
+    });
     expect(harness.delivered.at(-1)).toMatchObject({
       kind: "status",
       text: expect.stringContaining("Turn: interrupted"),
+    });
+  });
+
+  it("restores processing status when the backend rejects a native stop request", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    await harness.controller.handleInboundEvent(buildTextEvent("start work"));
+    harness.delivered.length = 0;
+    harness.interruptTurn.mockRejectedValueOnce(new Error("interrupt unavailable"));
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "status:stop",
+      value: { source: "agent_session_stopped" },
+    }));
+
+    expect(harness.delivered).toContainEqual(expect.objectContaining({
+      kind: "activity",
+      sessionState: "processing",
+      state: "active",
+    }));
+    expect(harness.delivered).toContainEqual(expect.objectContaining({
+      kind: "error",
+      title: "Stop failed",
+      body: "interrupt unavailable",
+    }));
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "status",
+      status: "working",
     });
   });
 

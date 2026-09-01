@@ -11777,6 +11777,21 @@ export class MessagingController {
       requiredPermission &&
       !(await this.requirePermission(event, requiredPermission, actionId))
     ) {
+      if (
+        actionId === "status:stop"
+        && readStringValue(event.value, "source") === "agent_session_stopped"
+      ) {
+        const binding = await this.options.store.findActiveBindingForChannel(
+          event.channel,
+        );
+        const activeTurn = binding ? this.getActiveTurn(binding) : undefined;
+        if (binding && activeTurn) {
+          await this.signalTurnActivity(binding, activeTurn, {
+            force: true,
+            reason: "agent_session_stop_denied",
+          });
+        }
+      }
       return;
     }
     // Detach is exempt: it removes the LOCAL binding record and never touches
@@ -14090,12 +14105,34 @@ export class MessagingController {
       await this.renderBindingStatus(binding, event);
       return;
     }
-    await this.options.backend.interruptTurn?.({
-      backend: binding.backend,
-      federationTarget: federationTargetForBinding(binding),
-      threadId: binding.threadId,
-      turnId: targetTurn.turnId,
-    });
+    try {
+      await this.options.backend.interruptTurn?.({
+        backend: binding.backend,
+        federationTarget: federationTargetForBinding(binding),
+        threadId: binding.threadId,
+        turnId: targetTurn.turnId,
+      });
+    } catch (error) {
+      await this.signalTurnActivity(binding, targetTurn, {
+        force: true,
+        reason: "stop_failed",
+      });
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("status-stop-failed"),
+          createdAt: this.now(),
+          title: "Stop failed",
+          body: error instanceof Error
+            ? error.message
+            : "The backend did not accept the stop request.",
+          recoverable: true,
+        }),
+        binding,
+        event,
+      );
+      await this.renderBindingStatus(binding, event);
+      return;
+    }
     if (
       !activeTurn ||
       (activeTurnIsInterruptible && activeTurn.turnId === targetTurn.turnId)
@@ -14536,6 +14573,18 @@ export class MessagingController {
         { force: true },
       );
     }
+    await this.deliver(
+      buildActivityIntent({
+        id: this.newIntentId("activity-closed"),
+        activity: "typing",
+        bindingId: binding.id,
+        createdAt: this.now(),
+        sessionState: "closed",
+        state: "idle",
+      }),
+      binding,
+      event,
+    );
     await this.flushToolUpdatesForBinding(binding, { clear: true });
     await this.stopMonitoringForBinding(binding, event, {
       deliverStatus: options.deliverMonitorStatus,
@@ -15955,6 +16004,11 @@ export class MessagingController {
     options?: { force?: boolean; reason?: string; refreshMs?: number },
   ): Promise<void> {
     const state = activeTurn.status === "working" ? "active" : "idle";
+    const sessionState = activeTurn.status === "working"
+      ? "processing"
+      : activeTurn.status === "waiting"
+        ? "suspended"
+        : "active";
     const now = this.now();
     const lastSignaledAt = this.typingActivityLastSignaledAt.get(binding.id);
     const refreshMs = options?.refreshMs ?? TYPING_ACTIVITY_REFRESH_MS;
@@ -15983,6 +16037,7 @@ export class MessagingController {
         bindingId: binding.id,
         createdAt: now,
         leaseMs: state === "active" ? TYPING_ACTIVITY_LEASE_MS : undefined,
+        sessionState,
         state,
       }),
       binding,
