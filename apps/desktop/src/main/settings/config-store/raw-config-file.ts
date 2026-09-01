@@ -1,9 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import {
+  applyDesktopSettingsPatch,
   parseDesktopSettingsToml,
   type DesktopSettingsConfig,
 } from "../desktop-config";
+import type { DesktopSettingsConfigPatch } from "@pwragent/shared";
 
 export type RawConfigFileObservation =
   | Readonly<{
@@ -67,6 +69,13 @@ export function parseRawConfigText(
       observedAt,
     };
   }
+}
+
+export function writeRawConfigPatch(
+  configPath: string,
+  patch: DesktopSettingsConfigPatch,
+): ReturnType<typeof applyDesktopSettingsPatch> {
+  return applyDesktopSettingsPatch(configPath, patch);
 }
 
 export function hashConfigText(text: string): string {

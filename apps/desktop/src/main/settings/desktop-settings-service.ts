@@ -1702,24 +1702,27 @@ export class DesktopSettingsService {
   async writeConfigPatchTargeted(
     patch: DesktopSettingsConfigPatch,
   ): Promise<ConfigUpdateResult<keyof ConfigDomainMap>> {
-    const current = this.readConfig();
-    if (current.error) {
-      throw new Error(
-        `Cannot save settings because ${this.configPath} could not be parsed: ${current.error}`,
-      );
+    let tokenMiserEnabled: boolean;
+    if (this.options.configStore) {
+      tokenMiserEnabled =
+        this.options.configStore.read("experimental").tokenMiserEnabled
+        ?? false;
+    } else {
+      const current = this.readConfig();
+      if (current.error) {
+        throw new Error(
+          `Cannot save settings because ${this.configPath} could not be parsed: ${current.error}`,
+        );
+      }
+      tokenMiserEnabled = current.config.experimental?.tokenMiserEnabled
+        ?? false;
     }
     const enablingTokenMiser =
       patch.experimental?.tokenMiserEnabled === true
-      && !this.resolveConfigBoolean(
-        current.config.experimental?.tokenMiserEnabled,
-        false,
-      ).value;
+      && !tokenMiserEnabled;
     const disablingTokenMiser =
       patch.experimental?.tokenMiserEnabled === false
-      && this.resolveConfigBoolean(
-        current.config.experimental?.tokenMiserEnabled,
-        false,
-      ).value;
+      && tokenMiserEnabled;
     // The switch is a transaction from the operator's perspective: acquire a
     // usable managed Codex first, then persist availability. A failed first
     // install leaves the feature off instead of selecting an arbitrary Codex.

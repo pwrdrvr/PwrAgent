@@ -28,13 +28,11 @@ import {
   type ProviderDiscoverer,
   type ProviderRefreshReason,
 } from "./provider-refresh";
-import {
-  applyDesktopSettingsPatch,
-  type DesktopSettingsConfig,
-} from "../desktop-config";
+import type { DesktopSettingsConfig } from "../desktop-config";
 import {
   parseRawConfigText,
   readRawConfigFile,
+  writeRawConfigPatch,
 } from "./raw-config-file";
 
 export type ConfigDomainChange<K extends keyof ConfigDomainMap> = Readonly<{
@@ -209,7 +207,7 @@ export class DesktopConfigStore {
     returnDomains: readonly K[],
   ): Promise<ConfigUpdateResult<K>> {
     const previous = this.snapshot;
-    const written = applyDesktopSettingsPatch(this.options.configPath, patch);
+    const written = writeRawConfigPatch(this.options.configPath, patch);
     const observation = parseRawConfigText(
       written.text,
       this.options.configPath,
