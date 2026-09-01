@@ -1416,7 +1416,10 @@ describe("Tangerine Terminal theme contract", () => {
 
     expect(activityTitlebar).toContain("padding: 10px 14px 0 96px;");
     expect(sidebarMasthead).toContain("padding: 10px 0 0 80px;");
-    expect(settingsMasthead).toContain("padding: 10px 0 0 80px;");
+    // The Settings nav runs its rows in the narrower 8px lane rather than the
+    // sidebar's 16px rail, so its masthead pads 88px to put the brand at the
+    // same x≈96. Both numbers must move together or the two brands drift.
+    expect(settingsMasthead).toContain("padding: 10px 0 0 88px;");
     expect(css).toMatch(
       /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.activity-titlebar\s*\{[\s\S]*?padding-left:\s*14px;[\s\S]*?\}/,
     );
@@ -1436,8 +1439,11 @@ describe("Tangerine Terminal theme contract", () => {
     expect(css).toMatch(
       /:root\[data-platform="win32"\]\s*\.sidebar__masthead\s*\{[\s\S]*?display:\s*none;[\s\S]*?\}/,
     );
+    // Same drop, except the Settings nav keeps its 8px lane inset — that
+    // 8px is the row lane, not a stoplight reservation, and it puts the
+    // brand at x=16 exactly where the main sidebar's lands off macOS.
     expect(css).toMatch(
-      /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.settings-nav__masthead\s*\{[\s\S]*?padding-left:\s*0;[\s\S]*?\}/,
+      /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.settings-nav__masthead\s*\{[\s\S]*?padding-left:\s*8px;[\s\S]*?\}/,
     );
     // Settings and Automations use the same Windows title strip as the main
     // shell, so their in-nav wordmarks would duplicate the one visible there.
