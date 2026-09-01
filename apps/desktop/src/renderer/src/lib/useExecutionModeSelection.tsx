@@ -9,9 +9,8 @@ import { createPortal } from "react-dom";
 import type { ThreadExecutionMode } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
 import {
-  invalidateDesktopSettingsRead,
+  applyDesktopSettingsConfigUpdateToCache,
   readDesktopSettingsCoalesced,
-  rememberDesktopSettingsSnapshot,
 } from "./settings-read-coordinator";
 
 /**
@@ -86,11 +85,13 @@ async function persistDismissed(desktopApi: DesktopApi): Promise<void> {
   if (!desktopApi.writeSettingsConfig) {
     throw new Error("Could not save the Full Access warning preference.");
   }
-  invalidateDesktopSettingsRead(desktopApi);
   const response = await desktopApi.writeSettingsConfig({
     patch: { experimental: { fullAccessRiskWarningDismissed: true } },
   });
-  rememberDesktopSettingsSnapshot(desktopApi, response);
+  applyDesktopSettingsConfigUpdateToCache(
+    desktopApi,
+    response.update.normalizedPatch,
+  );
   publishDismissed(true);
 }
 

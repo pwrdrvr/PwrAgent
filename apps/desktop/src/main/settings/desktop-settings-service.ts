@@ -1734,16 +1734,16 @@ export class DesktopSettingsService {
   async replaceSecret(
     secret: DesktopSettingsSecretName,
     value: string,
-  ): Promise<DesktopSettingsSnapshot> {
+  ): Promise<DesktopSettingsSecretState> {
     await this.options.secretStore.setSecret(secret, value);
-    return this.readSettings();
+    return await this.readAndPublishSecretState(secret);
   }
 
   async clearSecret(
     secret: DesktopSettingsSecretName,
-  ): Promise<DesktopSettingsSnapshot> {
+  ): Promise<DesktopSettingsSecretState> {
     await this.options.secretStore.deleteSecret(secret);
-    return this.readSettings();
+    return await this.readAndPublishSecretState(secret);
   }
 
   async getOrCreateFederationIdentityKeyPair(): Promise<FederationIdentityKeyPair> {
@@ -3171,6 +3171,18 @@ export class DesktopSettingsService {
     }
   }
 
+  private async readAndPublishSecretState(
+    secret: DesktopSettingsSecretName,
+  ): Promise<DesktopSettingsSecretState> {
+    const state = await this.readSecretState(
+      secret,
+      secretEnvironmentKey(secret),
+      this.options.secretStore.describe().available,
+    );
+    this.options.configStore?.recordSecretPresence(secret, state);
+    return state;
+  }
+
   private resolveSecretSync(
     secret: DesktopSettingsSecretName,
     envKey: string | undefined,
@@ -3179,6 +3191,47 @@ export class DesktopSettingsService {
       (envKey ? readEnvString(this.env, envKey) : undefined)
       ?? this.options.secretStore.getSecretSync?.(secret)
     );
+  }
+}
+
+function secretEnvironmentKey(
+  secret: DesktopSettingsSecretName,
+): string | undefined {
+  switch (secret) {
+    case "telegramBotToken":
+      return TELEGRAM_BOT_TOKEN_ENV;
+    case "discordBotToken":
+      return DISCORD_BOT_TOKEN_ENV;
+    case "mattermostBotToken":
+      return MATTERMOST_BOT_TOKEN_ENV;
+    case "mattermostHmacSecret":
+      return MATTERMOST_CALLBACK_HMAC_SECRET_ENV;
+    case "slackBotToken":
+      return SLACK_BOT_TOKEN_ENV;
+    case "slackAppToken":
+      return SLACK_APP_TOKEN_ENV;
+    case "slackSigningSecret":
+      return SLACK_SIGNING_SECRET_ENV;
+    case "feishuAppId":
+      return FEISHU_APP_ID_ENV;
+    case "feishuAppSecret":
+      return FEISHU_APP_SECRET_ENV;
+    case "feishuEncryptKey":
+      return FEISHU_ENCRYPT_KEY_ENV;
+    case "feishuVerificationToken":
+      return FEISHU_VERIFICATION_TOKEN_ENV;
+    case "lineChannelAccessToken":
+      return LINE_CHANNEL_ACCESS_TOKEN_ENV;
+    case "lineChannelSecret":
+      return LINE_CHANNEL_SECRET_ENV;
+    case "federationInstancePrivateKey":
+    case "federationNoiseStaticPrivateKey":
+    case "federationCloudflareClientCertificate":
+    case "federationCloudflareClientPrivateKey":
+    case "federationCloudflareAccessClientId":
+    case "federationCloudflareAccessClientSecret":
+    case "pwrsnapMcpCredential":
+      return undefined;
   }
 }
 

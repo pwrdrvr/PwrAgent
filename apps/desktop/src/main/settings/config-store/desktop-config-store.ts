@@ -1,6 +1,7 @@
 import type {
   DesktopSettingsConfigPatch,
   DesktopSettingsSecretName,
+  DesktopSettingsSecretState,
 } from "@pwragent/shared";
 import type { StateDb } from "../../state/state-db";
 import {
@@ -426,6 +427,32 @@ export class DesktopConfigStore {
       return this.snapshot.domains.providers[provider];
     }
     return await this.providerRefresh.refresh(provider, reason);
+  }
+
+  recordSecretPresence(
+    secret: DesktopSettingsSecretName,
+    state: DesktopSettingsSecretState,
+  ): void {
+    const presence: SecretPresence = {
+      configured: state.configured,
+      source: state.source,
+      writable: state.writable,
+      ...(state.unavailableReason
+        ? { unavailableReason: state.unavailableReason }
+        : {}),
+    };
+    const previous = this.snapshot.secretPresence[secret];
+    if (previous && JSON.stringify(previous) === JSON.stringify(presence)) {
+      return;
+    }
+    this.snapshot = deepFreeze({
+      ...this.snapshot,
+      version: this.snapshot.version + 1,
+      secretPresence: {
+        ...this.snapshot.secretPresence,
+        [secret]: presence,
+      },
+    });
   }
 
   recordProviderDiscovery(

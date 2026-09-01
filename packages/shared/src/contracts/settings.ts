@@ -1434,8 +1434,37 @@ export type PickGhCommandResponse = {
   candidate?: DesktopGhDiscoveryCandidate;
 };
 
+export type DesktopConfigDomainKey =
+  | "general"
+  | "onboarding"
+  | "experimental"
+  | "messaging"
+  | "federation"
+  | "models"
+  | "providers"
+  | "applications"
+  | "git"
+  | "updates"
+  | "worktrees"
+  | "ui"
+  | "integratedTerminal"
+  | "imageUploads";
+
+export type DesktopSettingsConfigUpdate = {
+  version: number;
+  configRevision: string;
+  changedDomains: readonly DesktopConfigDomainKey[];
+  normalizedPatch: DesktopSettingsConfigPatch;
+  scheduledProviderRefreshes: readonly string[];
+};
+
 export type DesktopSettingsWriteResponse = {
-  snapshot: DesktopSettingsSnapshot;
+  update: DesktopSettingsConfigUpdate;
+};
+
+export type DesktopSettingsSecretWriteResponse = {
+  secret: DesktopSettingsSecretName;
+  state: DesktopSettingsSecretState;
 };
 
 export type DesktopPwrAgentProfileSummary = {

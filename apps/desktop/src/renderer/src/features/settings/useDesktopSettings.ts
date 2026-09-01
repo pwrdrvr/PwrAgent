@@ -10,9 +10,12 @@ import type {
 } from "@pwragent/shared";
 import { DESKTOP_CHAT_REPLY_COMPOSER_DEFAULT } from "@pwragent/shared";
 import type { DesktopApi } from "../../lib/desktop-api";
+import {
+  applyConfigUpdateToSettingsSnapshot,
+  applySecretUpdateToSettingsSnapshot,
+} from "../../lib/settings-snapshot-updates";
 import { BACKEND_SUMMARIES_REFRESH_EVENT } from "../../lib/useBackendSummaries";
 import {
-  invalidateDesktopSettingsRead,
   readDesktopSettingsCoalesced,
   rememberDesktopSettingsSnapshot,
 } from "../../lib/settings-read-coordinator";
@@ -82,11 +85,17 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
       setSaving(true);
       setError(undefined);
       try {
-        invalidateDesktopSettingsRead(desktopApi);
         const request: WriteDesktopSettingsConfigRequest = { patch };
         const response = await desktopApi.writeSettingsConfig(request);
-        setSnapshot(response.snapshot);
-        rememberDesktopSettingsSnapshot(desktopApi, response);
+        setSnapshot((current) => {
+          if (!current) return current;
+          const next = applyConfigUpdateToSettingsSnapshot(
+            current,
+            response.update.normalizedPatch,
+          );
+          rememberDesktopSettingsSnapshot(desktopApi, { snapshot: next });
+          return next;
+        });
         if (
           patch.models?.codex?.path !== undefined
           || patch.acpAgents !== undefined
@@ -96,14 +105,6 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
         return true;
       } catch (writeError) {
         setError(writeError instanceof Error ? writeError.message : String(writeError));
-        try {
-          const response = await desktopApi.readSettings?.({});
-          if (response) {
-            setSnapshot(response.snapshot);
-          }
-        } catch {
-          // Keep the original write error visible.
-        }
         return false;
       } finally {
         setSaving(false);
@@ -124,8 +125,16 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
       try {
         const request: ReplaceDesktopSettingsSecretRequest = { secret, value };
         const response = await desktopApi.replaceSettingsSecret(request);
-        setSnapshot(response.snapshot);
-        rememberDesktopSettingsSnapshot(desktopApi, response);
+        setSnapshot((current) => {
+          if (!current) return current;
+          const next = applySecretUpdateToSettingsSnapshot(
+            current,
+            response.secret,
+            response.state,
+          );
+          rememberDesktopSettingsSnapshot(desktopApi, { snapshot: next });
+          return next;
+        });
         return true;
       } catch (writeError) {
         setError(writeError instanceof Error ? writeError.message : String(writeError));
@@ -149,8 +158,16 @@ export function useDesktopSettings(desktopApi?: DesktopApi): DesktopSettingsStat
       try {
         const request: ClearDesktopSettingsSecretRequest = { secret };
         const response = await desktopApi.clearSettingsSecret(request);
-        setSnapshot(response.snapshot);
-        rememberDesktopSettingsSnapshot(desktopApi, response);
+        setSnapshot((current) => {
+          if (!current) return current;
+          const next = applySecretUpdateToSettingsSnapshot(
+            current,
+            response.secret,
+            response.state,
+          );
+          rememberDesktopSettingsSnapshot(desktopApi, { snapshot: next });
+          return next;
+        });
         return true;
       } catch (writeError) {
         setError(writeError instanceof Error ? writeError.message : String(writeError));

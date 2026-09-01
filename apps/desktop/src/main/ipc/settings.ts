@@ -17,6 +17,7 @@ import type {
   DesktopMessagingContactLookupResponse,
   DesktopSettingsConfigPatch,
   DesktopSettingsSecretName,
+  DesktopSettingsSecretWriteResponse,
   DesktopSettingsWriteResponse,
   DesktopSettingsSnapshot,
   InspectDiscordThreadPermissionsRequest,
@@ -1134,7 +1135,6 @@ export function registerSettingsIpcHandlers(
   options?: {
     onConfigPatchWritten?: (
       patch: DesktopSettingsConfigPatch,
-      snapshot: DesktopSettingsSnapshot,
     ) => void | Promise<void>;
   },
 ): void {
@@ -1253,13 +1253,13 @@ export function registerSettingsIpcHandlers(
       request: WriteDesktopSettingsConfigRequest,
     ): Promise<DesktopSettingsWriteResponse> => {
       const activeService = getService(service);
-      const snapshot = await activeService.writeConfigPatch(request.patch);
-      await options?.onConfigPatchWritten?.(request.patch, snapshot);
+      const update = await activeService.writeConfigPatchTargeted(request.patch);
+      await options?.onConfigPatchWritten?.(request.patch);
       await refreshModelBackendsIfNeeded({ patch: request.patch });
       if (messagingPatchTouchesRuntime(request.patch)) {
         await applyLatestMessagingRuntimeConfig(activeService);
       }
-      return { snapshot: applyRuntimeMessagingSnapshot(snapshot) };
+      return { update };
     },
   );
 
@@ -1269,9 +1269,9 @@ export function registerSettingsIpcHandlers(
     async (
       _event,
       request: ReplaceDesktopSettingsSecretRequest,
-    ): Promise<DesktopSettingsWriteResponse> => {
+    ): Promise<DesktopSettingsSecretWriteResponse> => {
       const activeService = getService(service);
-      const snapshot = await activeService.replaceSecret(
+      const state = await activeService.replaceSecret(
         request.secret,
         request.value,
       );
@@ -1279,7 +1279,7 @@ export function registerSettingsIpcHandlers(
       if (messagingSecretTouchesRuntime(request.secret)) {
         await applyLatestMessagingRuntimeConfig(activeService);
       }
-      return { snapshot: applyRuntimeMessagingSnapshot(snapshot) };
+      return { secret: request.secret, state };
     },
   );
 
@@ -1289,14 +1289,14 @@ export function registerSettingsIpcHandlers(
     async (
       _event,
       request: ClearDesktopSettingsSecretRequest,
-    ): Promise<DesktopSettingsWriteResponse> => {
+    ): Promise<DesktopSettingsSecretWriteResponse> => {
       const activeService = getService(service);
-      const snapshot = await activeService.clearSecret(request.secret);
+      const state = await activeService.clearSecret(request.secret);
       await refreshModelBackendsIfNeeded({ secret: request.secret });
       if (messagingSecretTouchesRuntime(request.secret)) {
         await applyLatestMessagingRuntimeConfig(activeService);
       }
-      return { snapshot: applyRuntimeMessagingSnapshot(snapshot) };
+      return { secret: request.secret, state };
     },
   );
 
@@ -1573,7 +1573,6 @@ export function registerSettingsIpcHandlers(
         {
           onboarding: { completed: true, completedSource: "wizard" },
         },
-        snapshot,
       );
 
       const shouldConnect = request?.connect !== false;

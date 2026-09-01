@@ -1,7 +1,9 @@
 import type {
+  DesktopSettingsConfigPatch,
   ReadDesktopSettingsResponse,
 } from "@pwragent/shared";
 import type { DesktopApi } from "./desktop-api";
+import { applyConfigUpdateToSettingsSnapshot } from "./settings-snapshot-updates";
 
 export const RENDERER_SETTINGS_READ_REUSE_TTL_MS = 5_000;
 
@@ -74,4 +76,19 @@ export function invalidateDesktopSettingsRead(
   if (desktopApi) {
     readsByApi.delete(desktopApi);
   }
+}
+
+export function applyDesktopSettingsConfigUpdateToCache(
+  desktopApi: DesktopApi | undefined,
+  patch: DesktopSettingsConfigPatch,
+): void {
+  if (!desktopApi) return;
+  const existing = readsByApi.get(desktopApi);
+  if (!existing) return;
+  readsByApi.set(desktopApi, {
+    completedAt: existing.completedAt,
+    promise: existing.promise.then(({ snapshot }) => ({
+      snapshot: applyConfigUpdateToSettingsSnapshot(snapshot, patch),
+    })),
+  });
 }

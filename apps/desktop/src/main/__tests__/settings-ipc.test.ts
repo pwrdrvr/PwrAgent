@@ -339,8 +339,9 @@ describe("settings ipc", () => {
     );
     await handlers.get(SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL)?.({}, {});
     expect(refreshCodexDiscovery).toHaveBeenCalledOnce();
+    readSettings.mockClear();
 
-    await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
+    const writeResponse = await handlers.get(SETTINGS_WRITE_CONFIG_CHANNEL)?.(
       {},
       {
         patch: {
@@ -352,14 +353,31 @@ describe("settings ipc", () => {
         },
       },
     );
+    expect(writeResponse).toMatchObject({
+      update: {
+        normalizedPatch: {
+          experimental: { diffCondensation: { enabled: true } },
+        },
+        scheduledProviderRefreshes: [],
+      },
+    });
     expect(disposeDesktopBackendRegistryMock).not.toHaveBeenCalled();
-    await handlers.get(SETTINGS_REPLACE_SECRET_CHANNEL)?.(
+    expect(readSettings).not.toHaveBeenCalled();
+    const secretResponse = await handlers.get(SETTINGS_REPLACE_SECRET_CHANNEL)?.(
       {},
       {
         secret: "discordBotToken",
         value: "discord-secret",
       },
     );
+    expect(secretResponse).toEqual({
+      secret: "discordBotToken",
+      state: {
+        configured: true,
+        source: "keychain",
+        writable: true,
+      },
+    });
 
     const readResponse = await handlers.get(SETTINGS_READ_CHANNEL)?.({});
     const encoded = JSON.stringify(readResponse);

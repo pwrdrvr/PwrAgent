@@ -2500,8 +2500,14 @@ describe("StarMapChatCard settings menu", () => {
     // No `App` above this window to own the preference, so the gate reads
     // and writes the setting itself.
     const writeSettingsConfig = vi.fn(async () => ({
-      snapshot: {
-        experimental: { fullAccessRiskWarningDismissed: { value: true } },
+      update: {
+        version: 2,
+        configRevision: "next",
+        changedDomains: ["experimental"] as const,
+        normalizedPatch: {
+          experimental: { fullAccessRiskWarningDismissed: true },
+        },
+        scheduledProviderRefreshes: [],
       },
     }));
     const desktopApi = settingsSnapshotApi(false, {

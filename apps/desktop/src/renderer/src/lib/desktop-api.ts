@@ -363,6 +363,7 @@ import type {
   DesktopTextSize,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
+  DesktopSettingsSecretWriteResponse,
   DesktopSettingsWriteResponse,
   GenerateFederationInviteRequest,
   GenerateFederationInviteResponse,
@@ -830,10 +831,10 @@ export type DesktopApi = {
   ) => Promise<DesktopSettingsWriteResponse>;
   replaceSettingsSecret?: (
     request: ReplaceDesktopSettingsSecretRequest
-  ) => Promise<DesktopSettingsWriteResponse>;
+  ) => Promise<DesktopSettingsSecretWriteResponse>;
   clearSettingsSecret?: (
     request: ClearDesktopSettingsSecretRequest
-  ) => Promise<DesktopSettingsWriteResponse>;
+  ) => Promise<DesktopSettingsSecretWriteResponse>;
   refreshCodexDiscovery?: (
     request?: RefreshDesktopCodexDiscoveryRequest
   ) => Promise<ReadDesktopSettingsResponse>;

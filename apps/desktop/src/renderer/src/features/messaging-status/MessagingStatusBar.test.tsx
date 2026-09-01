@@ -353,7 +353,13 @@ describe("MessagingStatusBar", () => {
       },
     ] satisfies MessagingPlatformStatus[];
     const writeSettingsConfig = vi.fn(async () => ({
-      snapshot: messagingSettingsSnapshot({ telegram: false }),
+      update: {
+        version: 2,
+        configRevision: "next",
+        changedDomains: ["messaging"] as const,
+        normalizedPatch: { messaging: { telegram: { enabled: false } } },
+        scheduledProviderRefreshes: [],
+      },
     }));
     const desktopApi: DesktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => statuses),
@@ -392,7 +398,13 @@ describe("MessagingStatusBar", () => {
       disabledReasonKind: "runtime_stopped" as const,
     }));
     const writeSettingsConfig = vi.fn(async () => ({
-      snapshot: messagingSettingsSnapshot({ telegram: false }),
+      update: {
+        version: 2,
+        configRevision: "next",
+        changedDomains: ["messaging"] as const,
+        normalizedPatch: { messaging: { telegram: { enabled: false } } },
+        scheduledProviderRefreshes: [],
+      },
     }));
     const desktopApi: DesktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => statuses),
@@ -424,10 +436,13 @@ describe("MessagingStatusBar", () => {
 
   it("shows configured disabled platforms omitted by runtime startup and enables them from the row", async () => {
     const writeSettingsConfig = vi.fn(async () => ({
-      snapshot: messagingSettingsSnapshot(
-        { line: true },
-        { configured: { line: true } },
-      ),
+      update: {
+        version: 2,
+        configRevision: "next",
+        changedDomains: ["messaging"] as const,
+        normalizedPatch: { messaging: { line: { enabled: true } } },
+        scheduledProviderRefreshes: [],
+      },
     }));
     const desktopApi: DesktopApi = {
       getMessagingPlatformStatuses: vi.fn(async () => []),

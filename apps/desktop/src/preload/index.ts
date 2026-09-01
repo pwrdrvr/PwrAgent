@@ -308,6 +308,7 @@ import type {
   DeleteDesktopPwrAgentProfileResponse,
   DesktopMessagingContactLookupRequest,
   DesktopMessagingContactLookupResponse,
+  DesktopSettingsSecretWriteResponse,
   DesktopSettingsWriteResponse,
   ConfigureFederationTailscaleRequest,
   ConfigureFederationTailscaleResponse,
@@ -1184,11 +1185,11 @@ const desktopApi = Object.freeze({
     await ipcRenderer.invoke(SETTINGS_WRITE_CONFIG_CHANNEL, request),
   replaceSettingsSecret: async (
     request: ReplaceDesktopSettingsSecretRequest,
-  ): Promise<DesktopSettingsWriteResponse> =>
+  ): Promise<DesktopSettingsSecretWriteResponse> =>
     await ipcRenderer.invoke(SETTINGS_REPLACE_SECRET_CHANNEL, request),
   clearSettingsSecret: async (
     request: ClearDesktopSettingsSecretRequest,
-  ): Promise<DesktopSettingsWriteResponse> =>
+  ): Promise<DesktopSettingsSecretWriteResponse> =>
     await ipcRenderer.invoke(SETTINGS_CLEAR_SECRET_CHANNEL, request),
   refreshCodexDiscovery: async (
     request?: RefreshDesktopCodexDiscoveryRequest,

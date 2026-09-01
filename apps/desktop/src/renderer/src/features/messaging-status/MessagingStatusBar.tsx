@@ -20,6 +20,7 @@ import { SettingsIcon } from "../../icons/SettingsIcon";
 import { useMessagingPlatformStatuses } from "./useMessagingPlatformStatuses";
 import type { DesktopApi } from "../../lib/desktop-api";
 import { readDesktopSettingsCoalesced } from "../../lib/settings-read-coordinator";
+import { applyConfigUpdateToSettingsSnapshot } from "../../lib/settings-snapshot-updates";
 
 const HEALTH_LABEL: Record<MessagingPlatformHealth, string> = {
   enabled: "Enabled",
@@ -296,10 +297,16 @@ export function MessagingStatusBar(props: {
       [platform]: true,
     }));
     try {
-      const response = await desktopApi.writeSettingsConfig({
-        patch: platformEnabledPatch(platform, enabled),
-      });
-      setSettingsSnapshot(response.snapshot);
+      const patch = platformEnabledPatch(platform, enabled);
+      const response = await desktopApi.writeSettingsConfig({ patch });
+      setSettingsSnapshot((current) =>
+        current
+          ? applyConfigUpdateToSettingsSnapshot(
+              current,
+              response.update.normalizedPatch,
+            )
+          : current,
+      );
     } catch (error) {
       setPlatformToggleError(
         error instanceof Error

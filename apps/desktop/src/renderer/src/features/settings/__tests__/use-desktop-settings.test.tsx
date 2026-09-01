@@ -33,7 +33,15 @@ describe("useDesktopSettings", () => {
     const writeSettingsConfig = vi
       .fn<NonNullable<DesktopApi["writeSettingsConfig"]>>()
       .mockResolvedValue({
-        snapshot: {} as DesktopSettingsSnapshot,
+        update: {
+          version: 2,
+          configRevision: "next",
+          changedDomains: ["providers"],
+          normalizedPatch: {
+            acpAgents: { gemini: { enabled: false } },
+          },
+          scheduledProviderRefreshes: ["gemini"],
+        },
       });
     const desktopApi: DesktopApi = {
       writeSettingsConfig,
