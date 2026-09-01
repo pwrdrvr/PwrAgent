@@ -34,6 +34,8 @@ import type {
   AppServerPendingRequestNotification,
   AppServerSkillSummary,
   AppServerThreadReplay,
+  AppServerThreadActivityEntry,
+  AppServerThreadEntry,
   AppServerThreadMessageOrigin,
   AppServerThreadSummary,
   AppServerReviewTarget,
@@ -398,6 +400,28 @@ async function expectEventually<T>(
     throw lastError;
   }
   expect(lastValue).toBe(expected);
+}
+
+/**
+ * One finalized overlay turn-usage row. The overlay keeps these outside the
+ * provider rollout, so a read has to place them against the page it returns.
+ */
+function usageActivity(params: {
+  createdAt: number;
+  turnId?: string;
+  id?: string;
+}): AppServerThreadActivityEntry {
+  return {
+    type: "activity",
+    id: params.id ?? `live-turn-usage-${params.turnId}`,
+    summary: "Turn usage: 1,000 uncached in · 2,000 cached · 300 out",
+    status: "completed",
+    createdAt: params.createdAt,
+    ...(params.turnId
+      ? { turn: { id: params.turnId, status: "completed" as const } }
+      : {}),
+    details: [],
+  };
 }
 
 function createOverlayStoreMock(params?: {
@@ -13258,6 +13282,284 @@ script = "echo setup"
       summary:
         "Turn usage: 23,000 uncached in · 20,000 cached · 900 out (450 reasoning) · $0.12 list price",
     });
+
+    await registry.close();
+  });
+
+  it("omits overlay turn usage whose turn is not on the page being read", async () => {
+    // The overlay retains up to MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES finalized
+    // rows spanning the whole thread. Merging all of them into the newest page
+    // stacked weeks-old usage under recent messages, and shipped rows the
+    // reader had no turn for. Placement is turn-anchored, so a page carries
+    // usage only for the turns it actually holds.
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "assistant-turn-9",
+            role: "assistant",
+            phase: "final",
+            text: "Recent answer.",
+            createdAt: 90_000,
+            turn: { id: "turn-9", status: "completed" },
+          },
+        ],
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: true },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            immutableUsageActivities: [
+              usageActivity({ createdAt: 10_000, turnId: "turn-1" }),
+              usageActivity({ createdAt: 20_000, turnId: "turn-2" }),
+              usageActivity({ createdAt: 90_001, turnId: "turn-9" }),
+            ],
+          },
+        },
+      }),
+    });
+
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(response.replay.entries.map((entry) => entry.id)).toEqual([
+      "assistant-turn-9",
+      "live-turn-usage-turn-9",
+    ]);
+
+    await registry.close();
+  });
+
+  it("places overlay turn usage the page's turn ids cannot account for", async () => {
+    // Omitting a row is sound only where the page's own turn ids prove the row
+    // belongs to another page. A row with no turn id has no page that will
+    // ever claim it, and a page with no turn metadata — the shape
+    // findTurnPageStartIndex documents as still live — cannot claim anything.
+    // Dropping either hides the row on every page: the operator watches usage
+    // lines arrive during the turn and finds an empty transcript on restart.
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "assistant-early",
+            role: "assistant",
+            phase: "final",
+            text: "Earlier answer.",
+            createdAt: 10_000,
+          },
+          {
+            type: "message",
+            id: "assistant-late",
+            role: "assistant",
+            phase: "final",
+            text: "Later answer.",
+            createdAt: 90_000,
+          },
+        ],
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: false },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            immutableUsageActivities: [
+              usageActivity({ createdAt: 90_001, turnId: "turn-9" }),
+              usageActivity({ createdAt: 50_000, turnId: "turn-5" }),
+              usageActivity({
+                createdAt: 20_000,
+                id: "live-turn-usage-thread-1",
+              }),
+            ],
+          },
+        },
+      }),
+    });
+
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    // createdAt order, exactly where insertTranscriptEntry put them: the
+    // 20_000 and 50_000 rows before the 90_000 message, the 90_001 row after.
+    expect(response.replay.entries.map((entry) => entry.id)).toEqual([
+      "assistant-early",
+      "live-turn-usage-thread-1",
+      "live-turn-usage-turn-5",
+      "assistant-late",
+      "live-turn-usage-turn-9",
+    ]);
+
+    await registry.close();
+  });
+
+  it("anchors overlay turn usage inside an older pagination page", async () => {
+    // History pages used to receive no usage at all, which is why every row
+    // had to be merged into the newest page. A `before` read now carries the
+    // usage for its own turns, so scrolling back shows each row beside the
+    // turn it belongs to.
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "assistant-turn-1",
+            role: "assistant",
+            phase: "final",
+            text: "Older answer.",
+            createdAt: 10_000,
+            turn: { id: "turn-1", status: "completed" },
+          },
+          {
+            type: "activity",
+            id: "command-turn-1",
+            summary: "Ran shell command",
+            status: "completed",
+            createdAt: 10_001,
+            turn: { id: "turn-1", status: "completed" },
+            details: [],
+          },
+          {
+            type: "message",
+            id: "assistant-turn-2",
+            role: "assistant",
+            phase: "final",
+            text: "Next older answer.",
+            createdAt: 20_000,
+            turn: { id: "turn-2", status: "completed" },
+          },
+        ],
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: true },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            immutableUsageActivities: [
+              usageActivity({ createdAt: 10_002, turnId: "turn-1" }),
+              usageActivity({ createdAt: 20_001, turnId: "turn-2" }),
+              usageActivity({ createdAt: 90_001, turnId: "turn-9" }),
+            ],
+          },
+        },
+      }),
+    });
+
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+      before: "assistant-turn-9",
+    });
+
+    // Each row sits after the last entry of its own turn, and turn-9 usage
+    // stays off a page that does not carry turn-9.
+    expect(response.replay.entries.map((entry) => entry.id)).toEqual([
+      "assistant-turn-1",
+      "command-turn-1",
+      "live-turn-usage-turn-1",
+      "assistant-turn-2",
+      "live-turn-usage-turn-2",
+    ]);
+
+    await registry.close();
+  });
+
+  it("weaves overlay turn usage in one pass over the page", async () => {
+    // The previous merge filtered and re-inserted the whole entry array once
+    // per overlay row: 100 rows against a 500-entry page cost ~217,000 element
+    // visits where ~1,000 suffice. Instrumented ids count how many times the
+    // page is traversed, so a regression to per-row rebuilding fails here
+    // rather than showing up as a slow thread months later.
+    const pageEntryCount = 200;
+    const overlayUsageCount = 100;
+    let entryIdReads = 0;
+    const entries = Array.from(
+      { length: pageEntryCount },
+      (_value, index): AppServerThreadEntry => {
+        const id = `assistant-${index}`;
+        return {
+          type: "message",
+          get id() {
+            entryIdReads += 1;
+            return id;
+          },
+          role: "assistant",
+          phase: "final",
+          text: `Answer ${index}`,
+          createdAt: 10_000 + index,
+          turn: { id: `turn-${index}`, status: "completed" },
+        } as AppServerThreadEntry;
+      },
+    );
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries,
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: true },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            // Half anchor to this page, half belong to turns it does not hold.
+            immutableUsageActivities: Array.from(
+              { length: overlayUsageCount },
+              (_value, index) =>
+                usageActivity({
+                  createdAt: 10_000 + index,
+                  turnId: index % 2 === 0 ? `turn-${index}` : `absent-${index}`,
+                }),
+            ),
+          },
+        },
+      }),
+    });
+
+    entryIdReads = 0;
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    // A per-row rebuild reads every id once per overlay row. Allow generous
+    // headroom for unrelated id reads elsewhere in readThread while still
+    // failing an O(page x usage) regression by two orders of magnitude.
+    expect(entryIdReads).toBeLessThan(pageEntryCount * 10);
+    expect(response.replay.entries).toHaveLength(
+      pageEntryCount + overlayUsageCount / 2,
+    );
 
     await registry.close();
   });
