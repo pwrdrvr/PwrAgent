@@ -100,6 +100,7 @@ const SLACK_WORKING_CARD_TOMBSTONE_MAX = 200;
 const SLACK_WORKING_CARD_RETRY_MS = 3_000;
 const SLACK_WORKING_CARD_STOP_MAX_FAILURES = 3;
 const SLACK_AGENT_SESSION_PROCESSING_REFRESH_MS = 45 * 60 * 1000;
+const SLACK_AGENT_SESSION_STREAMING_MESSAGES_MAX = 100;
 const SLACK_WORKING_CARD_PLAN_TITLES = {
   queued: "Starting work",
   working: "Working on your request",
@@ -1312,11 +1313,17 @@ export class SlackAdapter implements SlackProviderAdapter {
     if (!this.listener) return;
     const ids = this.validateAgentSessionEventIds({
       channelId: event.channel,
+      eventTs: event.event_ts,
       teamId: envelopeTeamId,
       threadTs: event.thread_ts,
       userId: event.user,
     });
     if (!ids) return;
+    const streamingMessageTimestamps =
+      this.validateAgentSessionStreamingMessageTimestamps(
+        event.streaming_message_ts,
+      );
+    if (!streamingMessageTimestamps) return;
 
     const actor = await this.actorForSlackUser(ids.userId);
     const channel = await this.channelRefForSlack({
@@ -1325,11 +1332,11 @@ export class SlackAdapter implements SlackProviderAdapter {
       peerTitle: actor.displayName ?? actor.username,
       teamId: ids.teamId,
       threadTs: ids.threadTs,
-      ts: event.event_ts,
+      ts: ids.eventTs,
     });
     const routingState = this.routingStateForChannel(channel, {
       teamId: ids.teamId,
-      ts: event.event_ts,
+      ts: ids.eventTs,
     });
     const authorization = this.authorizeInbound({
       actor,
@@ -1359,7 +1366,7 @@ export class SlackAdapter implements SlackProviderAdapter {
       routingState,
       value: {
         source: "agent_session_stopped",
-        streamingMessageTimestamps: event.streaming_message_ts.slice(0, 100),
+        streamingMessageTimestamps,
       },
     });
   }
@@ -1370,6 +1377,7 @@ export class SlackAdapter implements SlackProviderAdapter {
   ): Promise<void> {
     const ids = this.validateAgentSessionEventIds({
       channelId: event.channel,
+      eventTs: event.event_ts,
       teamId: event.team_id ?? envelopeTeamId,
       threadTs: event.thread_ts,
       userId: event.user,
@@ -1390,11 +1398,11 @@ export class SlackAdapter implements SlackProviderAdapter {
       peerTitle: actor.displayName ?? actor.username,
       teamId: ids.teamId,
       threadTs: ids.threadTs,
-      ts: event.event_ts,
+      ts: ids.eventTs,
     });
     const routingState = this.routingStateForChannel(channel, {
       teamId: ids.teamId,
-      ts: event.event_ts,
+      ts: ids.eventTs,
     });
     const authorization = this.authorizeInbound({
       actor,
@@ -3024,11 +3032,13 @@ export class SlackAdapter implements SlackProviderAdapter {
 
   private validateAgentSessionEventIds(params: {
     channelId: unknown;
+    eventTs: unknown;
     teamId?: unknown;
     threadTs: unknown;
     userId: unknown;
   }): {
     channelId: string;
+    eventTs: string;
     teamId?: string;
     threadTs: string;
     userId: string;
@@ -3063,6 +3073,16 @@ export class SlackAdapter implements SlackProviderAdapter {
       });
       return undefined;
     }
+    const eventTsValidation = validateSlackMessageTs(params.eventTs);
+    if (!eventTsValidation.ok) {
+      logSlackInvalidIdentifier({
+        field: "event_ts",
+        logger: this.logger,
+        reason: eventTsValidation.reason,
+        value: params.eventTs,
+      });
+      return undefined;
+    }
     if (params.teamId !== undefined) {
       const teamValidation = validateSlackTeamId(params.teamId);
       if (!teamValidation.ok) {
@@ -3077,10 +3097,49 @@ export class SlackAdapter implements SlackProviderAdapter {
     }
     return {
       channelId: params.channelId as string,
+      eventTs: params.eventTs as string,
       ...(params.teamId !== undefined ? { teamId: params.teamId as string } : {}),
       threadTs: params.threadTs as string,
       userId: params.userId as string,
     };
+  }
+
+  private validateAgentSessionStreamingMessageTimestamps(
+    value: unknown,
+  ): string[] | undefined {
+    if (!Array.isArray(value)) {
+      logSlackInvalidIdentifier({
+        field: "streaming_message_ts",
+        logger: this.logger,
+        reason: "type",
+        value,
+      });
+      return undefined;
+    }
+    if (value.length > SLACK_AGENT_SESSION_STREAMING_MESSAGES_MAX) {
+      logSlackInvalidIdentifier({
+        field: "streaming_message_ts",
+        logger: this.logger,
+        reason: "length",
+        value,
+      });
+      return undefined;
+    }
+    const timestamps: string[] = [];
+    for (const timestamp of value) {
+      const validation = validateSlackMessageTs(timestamp);
+      if (!validation.ok) {
+        logSlackInvalidIdentifier({
+          field: "streaming_message_ts",
+          logger: this.logger,
+          reason: validation.reason,
+          value: timestamp,
+        });
+        return undefined;
+      }
+      timestamps.push(timestamp as string);
+    }
+    return timestamps;
   }
 
   private authorizeInbound(params: {

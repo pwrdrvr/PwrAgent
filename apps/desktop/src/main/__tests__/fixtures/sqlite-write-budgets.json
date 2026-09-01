@@ -97,6 +97,13 @@
     "rowsChanged": 30,
     "statements": 30
   },
+  "messaging-binding-revoke": {
+    "commits": 11,
+    "note": "one bus-driven binding revoke including Agent Session close status",
+    "observedWalBytes": 131840,
+    "rowsChanged": 9,
+    "statements": 11
+  },
   "messaging-outbound-file-activity": {
     "commits": 1,
     "note": "one send_messaging_file audit row; this runs per agent tool call, so the row count must not grow with attachment parts",

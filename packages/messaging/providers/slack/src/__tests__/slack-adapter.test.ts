@@ -510,6 +510,67 @@ describe("SlackAdapter", () => {
     });
   });
 
+  it.each([
+    {
+      label: "a non-array value",
+      reason: "type",
+      streamingMessageTimestamps: "1782234987.693923",
+    },
+    {
+      label: "too many timestamps",
+      reason: "length",
+      streamingMessageTimestamps: Array.from(
+        { length: 101 },
+        () => "1782234987.693923",
+      ),
+    },
+    {
+      label: "an invalid timestamp",
+      reason: "format",
+      streamingMessageTimestamps: ["not-a-timestamp"],
+    },
+  ])("rejects Agent Session stop events with $label", async ({
+    reason,
+    streamingMessageTimestamps,
+  }) => {
+    const warnings: Array<{ message: string; data?: Record<string, unknown> }> = [];
+    const socket = fakeSocket();
+    const adapter = new SlackAdapter({
+      config: baseConfig,
+      callbackHandleStore: fakeStore(),
+      api: fakeApi({}),
+      logger: {
+        warn: (message, data) => warnings.push({ message, data }),
+      },
+      socketClient: socket,
+    });
+    const events: MessagingInboundEvent[] = [];
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+
+    await expect(socket.emitEvent("slack_event", {
+      event: {
+        type: "agent_session_stopped",
+        channel: "C012ABCDEF0",
+        event_ts: "1783536983.783769",
+        streaming_message_ts: streamingMessageTimestamps,
+        thread_ts: "1782234671.392669",
+        user: "U012ABCDEF0",
+      },
+    })).resolves.toBeUndefined();
+
+    expect(events).toEqual([]);
+    expect(warnings).toContainEqual({
+      message: "messaging inbound identifier rejected",
+      data: expect.objectContaining({
+        platform: "slack",
+        identifier_field: "streaming_message_ts",
+        reason,
+      }),
+    });
+  });
+
   it("records Slack Agent Session title changes as binding metadata", async () => {
     const socket = fakeSocket();
     const adapter = new SlackAdapter({

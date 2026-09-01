@@ -10,8 +10,10 @@ export type SlackIdentifierField =
   | "bot_user_id"
   | "callback.value"
   | "channel_id"
+  | "event_ts"
   | "file_id"
   | "message_ts"
+  | "streaming_message_ts"
   | "team_id"
   | "trigger_id"
   | "user_id";
@@ -155,7 +157,8 @@ function isBase64UrlChar(code: number): boolean {
 }
 
 function identifierLength(value: unknown): number {
-  return typeof value === "string" ? value.length : 0;
+  if (typeof value === "string" || Array.isArray(value)) return value.length;
+  return 0;
 }
 
 function identifierHash(value: unknown): string {

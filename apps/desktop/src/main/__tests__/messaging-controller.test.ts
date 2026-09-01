@@ -43,6 +43,7 @@ import {
   type MessagingDeliveryResult,
   type MessagingInboundCallbackEvent,
   type MessagingInboundEvent,
+  type MessagingInboundLifecycleEvent,
   type MessagingInboundTextEvent,
   type MessagingJsonValue,
   type MessagingSurfaceIntent,
@@ -56,6 +57,14 @@ import {
   updateWorkingCardActivities,
   type MessagingControllerOptions,
 } from "../messaging/core/messaging-controller";
+import { SqliteMessagingStore } from "../state/messaging-store-sqlite";
+import {
+  measureSqliteWrites,
+  resetSqliteWriteMetrics,
+  SQLITE_WRITE_METRICS_ENV,
+} from "../state/sqlite-write-metrics";
+import { StateDb } from "../state/state-db";
+import { expectSqliteWriteBudget } from "./fixtures/sqlite-write-budget";
 import type { MessagingOutboundFileAccess } from "../messaging/core/messaging-outbound-file";
 import type { MessagingRbacPolicyProvider } from "../messaging/rbac-policy-service";
 import type { MessagingPermissionId } from "@pwragent/shared";
@@ -10538,6 +10547,55 @@ describe("MessagingController", () => {
     await expect(
       harness.store.findActiveBindingForChannel(buildCommandEvent("/detach").channel),
     ).resolves.toBeUndefined();
+  });
+
+  it("budgets SQLite writes for a bus-driven binding revoke", async () => {
+    const previousMetricsSetting = process.env[SQLITE_WRITE_METRICS_ENV];
+    process.env[SQLITE_WRITE_METRICS_ENV] = "1";
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "pwragent-detach-writes-"));
+    tempDirs.push(tempDir);
+    const stateDb = StateDb.open(path.join(tempDir, "state.db"));
+    try {
+      const store = new SqliteMessagingStore(stateDb);
+      const harness = await createHarness({ channel: "slack", store });
+      const rootChannel: MessagingChannelRef = {
+        channel: "slack",
+        conversation: {
+          id: "D012ABCDEF0",
+          isDirectMessage: true,
+          kind: "dm",
+        },
+      };
+      await harness.controller.handleInboundEvent(buildCallbackEvent({
+        actionId: "bind:codex:thread-1",
+        channel: rootChannel,
+        value: {
+          backend: "codex",
+          threadId: "thread-1",
+        },
+      }));
+      const binding = await store.findActiveBindingForChannel(rootChannel);
+      expect(binding).toBeDefined();
+      resetSqliteWriteMetrics();
+
+      const { result, writes } = await measureSqliteWrites(
+        async () => await harness.controller.handleBindingRevokeRequest(binding!),
+      );
+
+      expect(result).toBe(true);
+      expectSqliteWriteBudget({
+        note: "one bus-driven binding revoke including Agent Session close status",
+        scenario: "messaging-binding-revoke",
+        writes,
+      });
+    } finally {
+      stateDb.close();
+      if (previousMetricsSetting === undefined) {
+        delete process.env[SQLITE_WRITE_METRICS_ENV];
+      } else {
+        process.env[SQLITE_WRITE_METRICS_ENV] = previousMetricsSetting;
+      }
+    }
   });
 
   it("uses /detach to stop Monitor when no thread is bound", async () => {
@@ -22569,6 +22627,107 @@ describe("MessagingController", () => {
     });
   });
 
+  it("resolves a native Agent Session stop from a thread surface to its root DM binding", async () => {
+    const rootChannel: MessagingChannelRef = {
+      channel: "slack",
+      conversation: {
+        id: "D012ABCDEF0",
+        isDirectMessage: true,
+        kind: "dm",
+      },
+    };
+    const harness = await createHarness({ channel: "slack" });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "bind:codex:thread-1",
+      channel: rootChannel,
+      value: {
+        backend: "codex",
+        threadId: "thread-1",
+      },
+    }));
+    await expect(
+      harness.store.findActiveBindingForChannel(rootChannel),
+    ).resolves.toMatchObject({ threadId: "thread-1" });
+    await harness.controller.handleInboundEvent(buildTextEvent("start work", {
+      channel: rootChannel,
+    }));
+    expect(harness.startTurn).toHaveBeenCalled();
+
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "status:stop",
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "D012ABCDEF0",
+          isDirectMessage: true,
+          kind: "thread",
+          parentConversationId: "D012ABCDEF0",
+          parentId: "1782234671.392669",
+        },
+      },
+      value: { source: "agent_session_stopped" },
+    }));
+
+    expect(harness.interruptTurn).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+      turnId: "turn-1",
+    });
+    expect(harness.delivered).toEqual(expect.not.arrayContaining([
+      expect.objectContaining({ title: "Action expired" }),
+    ]));
+  });
+
+  it("applies Agent Session title metadata from a thread surface to its root DM binding", async () => {
+    const rootChannel: MessagingChannelRef = {
+      channel: "slack",
+      conversation: {
+        id: "D012ABCDEF0",
+        isDirectMessage: true,
+        kind: "dm",
+      },
+    };
+    const harness = await createHarness({ channel: "slack" });
+    await harness.controller.handleInboundEvent(buildCallbackEvent({
+      actionId: "bind:codex:thread-1",
+      channel: rootChannel,
+      value: {
+        backend: "codex",
+        threadId: "thread-1",
+      },
+    }));
+
+    await harness.controller.handleInboundEvent({
+      id: "event-agent-session-title",
+      kind: "lifecycle",
+      actor: { platformUserId: "user-1" },
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "D012ABCDEF0",
+          isDirectMessage: true,
+          kind: "thread",
+          parentConversationId: "D012ABCDEF0",
+          parentId: "1782234671.392669",
+          title: "New Agent Session title",
+        },
+      },
+      lifecycle: "metadata_changed",
+      receivedAt: 1000,
+    } satisfies MessagingInboundLifecycleEvent);
+
+    await expect(
+      harness.store.findActiveBindingForChannel(rootChannel),
+    ).resolves.toMatchObject({
+      channel: {
+        conversation: {
+          kind: "dm",
+          title: "New Agent Session title",
+        },
+      },
+    });
+  });
+
   it("restores processing status when the backend rejects a native stop request", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -23975,7 +24134,9 @@ describe("send_messaging_file agent tool", () => {
   });
 });
 
-async function createHarness(options?: {
+async function createHarness<
+  Store extends MessagingControllerOptions["store"] = MessagingStore,
+>(options?: {
   deliveryBudget?: MessagingDeliveryBudget;
   deliver?: (intent: MessagingSurfaceIntent) => Promise<MessagingDeliveryResult>;
   downloadAttachment?: MessagingAdapter["downloadAttachment"];
@@ -24065,6 +24226,7 @@ async function createHarness(options?: {
     | MessagingToolUpdateMode
     | ((targetKind: "thread" | "agent_thread") => MessagingToolUpdateMode);
   showStreamingOption?: boolean;
+  store?: Store;
 }): Promise<{
   controller: MessagingController;
   compactThread: ReturnType<typeof vi.fn>;
@@ -24098,9 +24260,9 @@ async function createHarness(options?: {
   steerTurn: ReturnType<typeof vi.fn>;
   submitServerRequest: ReturnType<typeof vi.fn>;
   updateDirectoryLaunchpad: ReturnType<typeof vi.fn>;
-  store: MessagingStore;
+  store: Store;
 }> {
-  const store = await createStore();
+  const store = (options?.store ?? await createStore()) as Store;
   const delivered: MessagingSurfaceIntent[] = [];
   const adapter: MessagingAdapter = {
     capabilityProfile: options?.capabilityProfile ?? PERMISSIVE_CAPABILITY_PROFILE,
