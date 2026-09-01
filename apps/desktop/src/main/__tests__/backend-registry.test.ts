@@ -3807,9 +3807,7 @@ describe("DesktopBackendRegistry", () => {
   });
 
   it("does not stop newer Token Miser replay gates for a duplicate compaction", async () => {
-    const recordThreadCompaction = vi.fn()
-      .mockResolvedValueOnce(true)
-      .mockResolvedValueOnce(false);
+    const recordThreadCompaction = vi.fn().mockResolvedValueOnce(true);
     const overlayStore = {
       ...createOverlayStoreMock(),
       recordThreadCompaction,
@@ -3847,7 +3845,7 @@ describe("DesktopBackendRegistry", () => {
       await internals.handleThreadCompactionReplayBoundary(event);
       await internals.handleThreadCompactionReplayBoundary(event);
 
-      expect(recordThreadCompaction).toHaveBeenCalledTimes(2);
+      expect(recordThreadCompaction).toHaveBeenCalledTimes(1);
       expect(stopReplayTracking).toHaveBeenCalledTimes(1);
     } finally {
       await registry.close();
