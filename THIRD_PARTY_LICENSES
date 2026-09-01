@@ -124,36 +124,36 @@ MIT
 - @pwrdrvr/codex-app-server-protocol@0.144.0 | https://github.com/pwrdrvr/codex-app-server-protocol
 - @pwrdrvr/codex-discovery@0.4.0 | https://github.com/pwrdrvr/agent-kit
 - @shutterstock/p-map-iterable@1.1.2 | https://github.com/shutterstock/p-map-iterable
-- @tiptap/core@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-blockquote@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-bold@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-bubble-menu@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-bullet-list@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-code@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-code-block@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-document@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-dropcursor@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-floating-menu@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-gapcursor@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-hard-break@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-heading@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-horizontal-rule@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-italic@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-link@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-list@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-list-item@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-list-keymap@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-mention@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-ordered-list@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-paragraph@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-strike@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-text@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extension-underline@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/extensions@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/pm@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/react@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/starter-kit@3.30.1 | https://github.com/ueberdosis/tiptap
-- @tiptap/suggestion@3.30.1 | https://github.com/ueberdosis/tiptap
+- @tiptap/core@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-blockquote@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-bold@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-bubble-menu@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-bullet-list@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-code@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-code-block@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-document@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-dropcursor@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-floating-menu@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-gapcursor@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-hard-break@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-heading@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-horizontal-rule@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-italic@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-link@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-list@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-list-item@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-list-keymap@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-mention@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-ordered-list@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-paragraph@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-strike@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-text@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extension-underline@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/extensions@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/pm@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/react@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/starter-kit@3.30.3 | https://github.com/ueberdosis/tiptap
+- @tiptap/suggestion@3.30.3 | https://github.com/ueberdosis/tiptap
 - @tufjs/canonical-json@2.0.0 | https://github.com/theupdateframework/tuf-js
 - @tufjs/models@5.0.0 | https://github.com/theupdateframework/tuf-js
 - @types/debug@4.1.13 | https://github.com/DefinitelyTyped/DefinitelyTyped
@@ -363,7 +363,7 @@ MIT
 - pkce-challenge@5.0.1 | https://github.com/crouchcd/pkce-challenge
 - prebuild-install@7.1.3 | https://github.com/prebuild/prebuild-install
 - property-information@7.1.0 | wooorm/property-information
-- prosemirror-changeset@2.4.1 | https://code.haverbeke.berlin/prosemirror/prosemirror-changeset
+- prosemirror-changeset@2.4.2 | https://code.haverbeke.berlin/prosemirror/prosemirror-changeset
 - prosemirror-commands@1.7.2 | https://code.haverbeke.berlin/prosemirror/prosemirror-commands
 - prosemirror-dropcursor@1.8.3 | https://code.haverbeke.berlin/prosemirror/prosemirror-dropcursor
 - prosemirror-gapcursor@1.4.1 | https://github.com/prosemirror/prosemirror-gapcursor
@@ -1272,42 +1272,42 @@ Representative file: @sigstore/verify@4.1.2/package metadata
 No license text file was found in the installed package for @sigstore/verify@4.1.2.
 The package declares license: Apache-2.0.
 
-@tiptap/core@3.30.1 (MIT)
+@tiptap/core@3.30.3 (MIT)
 -------------------------
 
 Applies to:
-- @tiptap/core@3.30.1 (MIT)
-- @tiptap/extension-blockquote@3.30.1 (MIT)
-- @tiptap/extension-bold@3.30.1 (MIT)
-- @tiptap/extension-bubble-menu@3.30.1 (MIT)
-- @tiptap/extension-bullet-list@3.30.1 (MIT)
-- @tiptap/extension-code@3.30.1 (MIT)
-- @tiptap/extension-code-block@3.30.1 (MIT)
-- @tiptap/extension-document@3.30.1 (MIT)
-- @tiptap/extension-dropcursor@3.30.1 (MIT)
-- @tiptap/extension-floating-menu@3.30.1 (MIT)
-- @tiptap/extension-gapcursor@3.30.1 (MIT)
-- @tiptap/extension-hard-break@3.30.1 (MIT)
-- @tiptap/extension-heading@3.30.1 (MIT)
-- @tiptap/extension-horizontal-rule@3.30.1 (MIT)
-- @tiptap/extension-italic@3.30.1 (MIT)
-- @tiptap/extension-link@3.30.1 (MIT)
-- @tiptap/extension-list@3.30.1 (MIT)
-- @tiptap/extension-list-item@3.30.1 (MIT)
-- @tiptap/extension-list-keymap@3.30.1 (MIT)
-- @tiptap/extension-mention@3.30.1 (MIT)
-- @tiptap/extension-ordered-list@3.30.1 (MIT)
-- @tiptap/extension-paragraph@3.30.1 (MIT)
-- @tiptap/extension-strike@3.30.1 (MIT)
-- @tiptap/extension-text@3.30.1 (MIT)
-- @tiptap/extension-underline@3.30.1 (MIT)
-- @tiptap/extensions@3.30.1 (MIT)
-- @tiptap/pm@3.30.1 (MIT)
-- @tiptap/react@3.30.1 (MIT)
-- @tiptap/starter-kit@3.30.1 (MIT)
-- @tiptap/suggestion@3.30.1 (MIT)
+- @tiptap/core@3.30.3 (MIT)
+- @tiptap/extension-blockquote@3.30.3 (MIT)
+- @tiptap/extension-bold@3.30.3 (MIT)
+- @tiptap/extension-bubble-menu@3.30.3 (MIT)
+- @tiptap/extension-bullet-list@3.30.3 (MIT)
+- @tiptap/extension-code@3.30.3 (MIT)
+- @tiptap/extension-code-block@3.30.3 (MIT)
+- @tiptap/extension-document@3.30.3 (MIT)
+- @tiptap/extension-dropcursor@3.30.3 (MIT)
+- @tiptap/extension-floating-menu@3.30.3 (MIT)
+- @tiptap/extension-gapcursor@3.30.3 (MIT)
+- @tiptap/extension-hard-break@3.30.3 (MIT)
+- @tiptap/extension-heading@3.30.3 (MIT)
+- @tiptap/extension-horizontal-rule@3.30.3 (MIT)
+- @tiptap/extension-italic@3.30.3 (MIT)
+- @tiptap/extension-link@3.30.3 (MIT)
+- @tiptap/extension-list@3.30.3 (MIT)
+- @tiptap/extension-list-item@3.30.3 (MIT)
+- @tiptap/extension-list-keymap@3.30.3 (MIT)
+- @tiptap/extension-mention@3.30.3 (MIT)
+- @tiptap/extension-ordered-list@3.30.3 (MIT)
+- @tiptap/extension-paragraph@3.30.3 (MIT)
+- @tiptap/extension-strike@3.30.3 (MIT)
+- @tiptap/extension-text@3.30.3 (MIT)
+- @tiptap/extension-underline@3.30.3 (MIT)
+- @tiptap/extensions@3.30.3 (MIT)
+- @tiptap/pm@3.30.3 (MIT)
+- @tiptap/react@3.30.3 (MIT)
+- @tiptap/starter-kit@3.30.3 (MIT)
+- @tiptap/suggestion@3.30.3 (MIT)
 
-Representative file: @tiptap/core@3.30.1/LICENSE.md
+Representative file: @tiptap/core@3.30.3/LICENSE.md
 
 MIT License
 
@@ -6244,13 +6244,13 @@ WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
 ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR
 IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 
-prosemirror-changeset@2.4.1 (MIT)
+prosemirror-changeset@2.4.2 (MIT)
 ---------------------------------
 
 Applies to:
-- prosemirror-changeset@2.4.1 (MIT)
+- prosemirror-changeset@2.4.2 (MIT)
 
-Representative file: prosemirror-changeset@2.4.1/LICENSE
+Representative file: prosemirror-changeset@2.4.2/LICENSE
 
 Copyright (C) 2017 by Marijn Haverbeke <marijn@haverbeke.berlin> and others
 
