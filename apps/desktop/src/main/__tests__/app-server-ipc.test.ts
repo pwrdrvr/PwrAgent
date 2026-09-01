@@ -96,6 +96,7 @@ const federationMock = vi.hoisted(() => {
     })),
     getWorktreeUnpublishedCommitDiff: vi.fn(async () => ({})),
   };
+  let nextThreadNameObservation = 0;
   const remoteThreadSummaries = {
     resolvePinnedThreads: vi.fn(
       async (): Promise<{
@@ -111,6 +112,7 @@ const federationMock = vi.hoisted(() => {
     searchForJump: vi.fn(async () => ({ results: [] })),
     threadFromPeer: vi.fn(async (): Promise<unknown> => undefined),
     rememberThreadNames: vi.fn(),
+    reserveThreadNameObservation: vi.fn(() => (nextThreadNameObservation += 1)),
     invalidate: vi.fn(),
   };
   return {
@@ -1968,6 +1970,11 @@ describe("app server ipc", () => {
         executionMode: "default" as const,
       },
     };
+    // These three carry calls over from earlier cases, and the assertions below
+    // read call zero rather than any call.
+    federationMock.runtime.remoteNavigationSnapshot.mockClear();
+    federationMock.remoteThreadSummaries.rememberThreadNames.mockClear();
+    federationMock.remoteThreadSummaries.reserveThreadNameObservation.mockClear();
     federationMock.runtime.remoteNavigationSnapshot
       .mockResolvedValueOnce(snapshot)
       .mockResolvedValueOnce(snapshot);
@@ -1976,9 +1983,21 @@ describe("app server ipc", () => {
     const handler = handlers.get(NAVIGATION_SNAPSHOT_CHANNEL);
 
     await expect(handler?.({}, { federationTarget })).resolves.toBe(snapshot);
+    const reserve =
+      federationMock.remoteThreadSummaries.reserveThreadNameObservation;
     expect(
       federationMock.remoteThreadSummaries.rememberThreadNames,
-    ).toHaveBeenCalledWith("peer_remembers_names", snapshot.threads);
+    ).toHaveBeenCalledWith(
+      "peer_remembers_names",
+      snapshot.threads,
+      reserve.mock.results[0]?.value,
+    );
+    // The sequence is taken before the peer is asked, so a snapshot that
+    // starts first and finishes last cannot revert a newer refresh's names.
+    expect(reserve.mock.invocationCallOrder[0]).toBeLessThan(
+      federationMock.runtime.remoteNavigationSnapshot.mock
+        .invocationCallOrder[0],
+    );
 
     federationMock.remoteThreadSummaries.rememberThreadNames.mockImplementationOnce(
       () => {
