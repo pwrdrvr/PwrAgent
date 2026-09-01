@@ -482,19 +482,19 @@ jobs:
 
   macos-install-deps:
     name: Setup macOS Dependencies
-    # GitHub-hosted Apple Silicon, not macos-15-intel and not macos-latest
-    # (macos-latest currently tracks macOS 26). configure-nodejs keys the
+    # GitHub-hosted Apple Silicon, matching the self-hosted Tart runners
+    # (macOS 26.6.1). Do not use macos-26-intel. configure-nodejs keys the
     # store on runner.os + runner.arch (macOS/ARM64), not the macOS version,
-    # so this gate is shared with the self-hosted Sequoia E2E lanes and the
-    # macos-15 signed-release prepare job. Keep the fork guard: a public
-    # fork still cannot run the self-hosted E2E consumer, so priming this
-    # cache there would only spend hosted macOS minutes.
+    # so this gate is shared with those E2E lanes and the macos-15
+    # signed-release prepare job. Keep the fork guard: a public fork still
+    # cannot run the self-hosted E2E consumer, so priming this cache there
+    # would only spend hosted macOS minutes.
     if: >-
       needs.changes.outputs.code_impacting == 'true' &&
       (github.event_name == 'push' ||
        (github.event_name == 'pull_request' &&
         github.event.pull_request.head.repo.full_name == github.repository))
-    runs-on: macos-15
+    runs-on: macos-26
     needs: changes
     timeout-minutes: 15
     steps:

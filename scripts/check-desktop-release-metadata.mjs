@@ -291,7 +291,7 @@ assertWorkflowJobRunner(
   ciWorkflow,
   ".github/workflows/ci.yml",
   "macos-install-deps",
-  "macos-15",
+  "macos-26",
 );
 for (const unexpected of [
   "ci:windows-signing",
