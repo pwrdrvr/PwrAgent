@@ -447,6 +447,88 @@ describe("useThreadNavigation", () => {
     ]);
   });
 
+  it("reconciles an automatic partial selection against the full startup rows", async () => {
+    const partialSnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: ["codex:partial-thread"],
+      threads: [
+        {
+          id: "partial-thread",
+          title: "Partial thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          updatedAt: 2_000,
+        },
+      ],
+      directories: [],
+      providerRefresh: { state: "ready" },
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const fullSnapshot: NavigationSnapshot = {
+      ...partialSnapshot,
+      fetchedAt: 2,
+      inboxThreadKeys: ["codex:full-thread"],
+      threads: [
+        {
+          id: "full-thread",
+          title: "Full thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          updatedAt: 1_000,
+        },
+      ],
+    };
+    const recentResponse = createDeferred<
+      Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>>
+    >();
+    const fullResponse = createDeferred<
+      Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>>
+    >();
+    const getNavigationSnapshotTransport = vi
+      .fn<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>()
+      .mockReturnValueOnce(recentResponse.promise)
+      .mockReturnValueOnce(fullResponse.promise);
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshotTransport,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() =>
+      useThreadNavigation(desktopApi, { progressiveInitialRefresh: true })
+    );
+
+    act(() => {
+      recentResponse.resolve({
+        kind: "full",
+        revision: "partial-revision",
+        snapshot: partialSnapshot,
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("partial-thread");
+    });
+
+    act(() => {
+      fullResponse.resolve({
+        kind: "full",
+        revision: "full-revision",
+        snapshot: fullSnapshot,
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("full-thread");
+    });
+  });
+
   it("defers navigation deltas during a drag and preserves the dropped pin rank", async () => {
     const buildSnapshot = (title: string): NavigationSnapshot => ({
       backend: "all",

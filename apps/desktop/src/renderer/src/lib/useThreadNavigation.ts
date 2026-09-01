@@ -3315,6 +3315,7 @@ export function useThreadNavigation(
   const prChipLocationIndexRef = useRef<PrChipLocationIndex | undefined>(undefined);
 
   const optimisticThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
+  const startupAutomaticSelectionKeyRef = useRef<string | undefined>(undefined);
   const retainedUnreadThreadRef = useRef<NavigationThreadSummary | undefined>(undefined);
   const selectedItemKeyRef = useRef<string | undefined>(undefined);
   const manuallySelectedThreadKeysRef = useRef(new Set<string>());
@@ -3674,13 +3675,29 @@ export function useThreadNavigation(
         }
 
         setSelectedItemKey((current) => {
-          return resolveRefreshSelectionKey(
+          const repairingAutomaticStartupSelection = Boolean(
+            options?.refreshMode === "full"
+            && current
+            && current === startupAutomaticSelectionKeyRef.current
+            && !hasSelectionKey(response, current, optimisticThreadKey)
+          );
+          const next = resolveRefreshSelectionKey(
             response,
-            current,
+            repairingAutomaticStartupSelection ? undefined : current,
             preferredSelectionKey,
             optimisticThreadKey,
             forcePreferredSelection
           );
+          if (
+            options?.refreshMode === "active-recent"
+            && !current
+            && !preferredSelectionKey
+          ) {
+            startupAutomaticSelectionKeyRef.current = next;
+          } else if (options?.refreshMode === "full") {
+            startupAutomaticSelectionKeyRef.current = undefined;
+          }
+          return next;
         });
       } catch (error) {
         desktopApi.recordStartupProfileEvent?.("navigation-refresh:error", {
