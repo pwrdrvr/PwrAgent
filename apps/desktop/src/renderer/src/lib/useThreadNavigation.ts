@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppServerBackendKind,
   AppServerCollaborationModeRequest,
+  AppServerRenamedTitleSource,
   AppServerReviewTarget,
   AppServerThreadImagePart,
   AppServerThreadStatus,
-  AppServerThreadTitleSource,
   AppServerTurnInputItem,
   ArchiveThreadCleanupResult,
   CodexThreadEnvironmentRuntime,
@@ -44,6 +44,7 @@ import {
   isRemoteFederationTarget,
   isSubthreadLaunchpadKey,
   normalizeNavigationBrowseMode,
+  normalizeRenamedTitleSource,
   resolveThreadParentKey,
   shortenDerivedThreadTitle,
   sortSubthreadSummaries,
@@ -174,7 +175,9 @@ type FederationPeerStatusObservation = {
 
 type ThreadNameObservation = {
   threadName: string;
-  titleSource: AppServerThreadTitleSource;
+  // Normalized, not raw: the retire check compares this against a snapshot
+  // row's source, so a value no row can carry would never retire.
+  titleSource: AppServerRenamedTitleSource;
 };
 
 type PrChipLocation = {
@@ -1101,6 +1104,9 @@ function applyObservedThreadNames(
   snapshot: NavigationSnapshot,
   observations: Map<string, ThreadNameObservation>,
 ): NavigationSnapshot {
+  if (observations.size === 0) {
+    return snapshot;
+  }
   let changed = false;
   const threads = snapshot.threads.map((thread) => {
     const threadKey = threadSummaryIdentityKey(thread);
@@ -1944,15 +1950,14 @@ function applyThreadNameUpdate(
     federationTarget?: FederationTarget;
     threadId: string;
     threadName?: string;
-    titleSource?: AppServerThreadTitleSource;
+    titleSource: AppServerRenamedTitleSource;
   }
 ): NavigationSnapshot | undefined {
   const threadName = params.threadName?.trim();
   if (!snapshot || !threadName) {
     return snapshot;
   }
-  const titleSource = params.titleSource ?? "explicit";
-
+  const titleSource = params.titleSource;
   const threadKey = params.federationTarget
     ? federatedThreadIdentityKey({
         backend: params.backend,
@@ -4329,7 +4334,7 @@ export function useThreadNavigation(
           .params as {
           threadId: string;
           threadName?: string;
-          titleSource?: AppServerThreadTitleSource;
+          titleSource?: unknown;
         };
         const nextThreadName = threadName?.trim();
         if (!nextThreadName) {
@@ -4340,7 +4345,13 @@ export function useThreadNavigation(
         // the notification carried the field. Asserting `explicit` here is
         // what made a generated title suppress the placeholder-title paths in
         // `mergeHydratedThreadWithOptimisticTitle`.
-        const nextTitleSource = titleSource ?? "explicit";
+        //
+        // Normalized rather than trusted: federation forwards a peer's params
+        // verbatim, so this is the one recorder reading another instance's
+        // JSON. A value outside the union would match no snapshot row, and the
+        // observation below retires by comparison — it would never retire, and
+        // would re-pin this title on every refresh for the life of the hook.
+        const nextTitleSource = normalizeRenamedTitleSource(titleSource);
         threadNameObservationsRef.current.set(
           agentEventThreadIdentityKey(event, threadId),
           { threadName: nextThreadName, titleSource: nextTitleSource },
@@ -7552,6 +7563,8 @@ export function useThreadNavigation(
           federationTarget: thread.federation?.ref.target,
           threadId: thread.id,
           threadName: nextName,
+          // The operator typed this one.
+          titleSource: "explicit",
         }),
       }));
       setRetainedUnreadThread((current) =>

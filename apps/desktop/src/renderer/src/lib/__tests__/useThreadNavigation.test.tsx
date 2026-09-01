@@ -4852,7 +4852,21 @@ describe("useThreadNavigation", () => {
     expect(result.current.threads[0]?.title).toBe("Newer remote title");
   });
 
-  it("records the provenance a rename notification states", async () => {
+  it.each([
+    // The agent named its own session. Stamping `explicit` here is what made
+    // the placeholder-title paths skip a generated title.
+    ["a stated provenance", "derived", "derived"],
+    // A Codex or federated rename can carry none, and the default has to stay
+    // what this assumed before the field existed.
+    ["no provenance", undefined, "explicit"],
+    // Federation forwards a peer's params verbatim, so this recorder reads
+    // another instance's JSON and a peer on a different build can send
+    // anything. An unrecognized value must not reach the row: no snapshot row
+    // could ever report it back, and the observation retires by comparing the
+    // two — it would re-pin this title on every refresh for the life of the
+    // hook, which is the failure this provenance exists to remove.
+    ["an unrecognized provenance", "generated", "explicit"],
+  ])("records %s on a rename notification", async (_label, stated, expected) => {
     let agentEventHandler:
       | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
       | undefined;
@@ -4879,55 +4893,16 @@ describe("useThreadNavigation", () => {
           params: {
             threadId: "thread-1",
             threadName: "Investigate the flaky handshake test",
-            titleSource: "derived",
+            ...(stated !== undefined ? { titleSource: stated } : {}),
           },
         },
-      });
+      } as never);
     });
 
-    // The agent named its own session. Stamping `explicit` here is what made
-    // the placeholder-title paths skip a generated title.
     expect(result.current.threads[0]?.title).toBe(
       "Investigate the flaky handshake test",
     );
-    expect(result.current.threads[0]?.titleSource).toBe("derived");
-  });
-
-  it("treats a rename that states no provenance as an operator rename", async () => {
-    let agentEventHandler:
-      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
-      | undefined;
-    const getNavigationSnapshot = vi
-      .fn()
-      .mockResolvedValue(acpFallbackTitleSnapshot("ACP session", 1_000));
-    const desktopApi: DesktopApi = {
-      getNavigationSnapshot,
-      onAgentEvent: (callback) => {
-        agentEventHandler = callback;
-        return () => undefined;
-      },
-    };
-    const { result } = renderHook(() => useThreadNavigation(desktopApi));
-
-    await waitFor(() => {
-      expect(result.current.threads[0]?.title).toBe("ACP session");
-    });
-    act(() => {
-      agentEventHandler?.({
-        backend: "acp:kimi",
-        notification: {
-          method: "thread/name/updated",
-          params: {
-            threadId: "thread-1",
-            threadName: "Ship the release runbook",
-          },
-        },
-      });
-    });
-
-    // A Codex or federated rename carries no provenance, and the default has
-    // to stay what this assumed before the field existed.
-    expect(result.current.threads[0]?.titleSource).toBe("explicit");
+    expect(result.current.threads[0]?.titleSource).toBe(expected);
   });
 
   it("retires a derived name observation after a snapshot acknowledges it", async () => {
