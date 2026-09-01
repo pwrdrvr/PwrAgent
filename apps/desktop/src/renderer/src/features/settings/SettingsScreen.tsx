@@ -1034,7 +1034,13 @@ function SettingsSectionBody(props: {
     return (
       <PluginsSettings
         desktopApi={props.desktopApi}
+        saving={props.settings.saving}
         snapshot={props.snapshot}
+        onMcpGatewayEnabledChange={async (mcpGatewayEnabled: boolean) => {
+          await props.settings.writeConfig({
+            general: { mcpGatewayEnabled },
+          });
+        }}
       />
     );
   }

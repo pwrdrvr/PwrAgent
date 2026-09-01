@@ -201,6 +201,7 @@ import {
   type RestoreThreadWorktreeResult,
   type SetThreadExecutionModeRequest,
   type SetThreadExecutionModeResponse,
+  type ReadThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsRequest,
   type SetThreadMcpConnectionsResponse,
   type SetThreadModelSettingsRequest,
@@ -7405,7 +7406,7 @@ function codexMcpIsolationUnavailableError(): Error {
   );
 }
 
-function buildCodexConnectionMcpConfig(
+export function buildCodexConnectionMcpConfig(
   registrations: McpConnectionBridgeRegistration[],
   inheritedServerNames?: readonly string[],
   options: { isolateFromInherited?: boolean } = {},
@@ -19618,6 +19619,25 @@ export class DesktopBackendRegistry {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * Read a thread's saved MCP selection.
+   *
+   * Read on demand rather than carried on every navigation summary: the
+   * selection matters only while the operator has the picker open.
+   */
+  async readThreadMcpConnections(
+    request: ReadThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse> {
+    const overlay = await this.overlayStore.getThreadOverlayState({
+      backend: request.backend,
+      threadId: request.threadId,
+    });
+    return {
+      connectionIds: overlay?.mcpConnectionIds ?? [],
+      providerServersEnabled: overlay?.mcpProviderServersEnabled !== false,
+    };
   }
 
   /**

@@ -75,6 +75,7 @@ import type {
   MutateMcpConnectionResponse,
   RemoveMcpConnectionRequest,
   SetMcpConnectionEnabledRequest,
+  ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsResponse,
   RemoveCodexMcpServerRequest,
@@ -653,6 +654,7 @@ import {
   MCP_CONNECTION_REMOVE_CHANNEL,
   MCP_CONNECTION_SET_ENABLED_CHANNEL,
   MCP_CONNECTION_SET_THREAD_CHANNEL,
+  MCP_CONNECTION_READ_THREAD_CHANNEL,
   MESSAGING_APPROVE_PAIRING_CHANNEL,
   MESSAGING_CLEAR_DEFAULT_AGENT_CHANNEL,
   MESSAGING_GENERATE_PAIRING_TOKEN_CHANNEL,
@@ -942,6 +944,10 @@ const desktopApi = Object.freeze({
     request: SetThreadMcpConnectionsRequest,
   ): Promise<SetThreadMcpConnectionsResponse> =>
     await ipcRenderer.invoke(MCP_CONNECTION_SET_THREAD_CHANNEL, request),
+  readThreadMcpConnections: async (
+    request: ReadThreadMcpConnectionsRequest,
+  ): Promise<SetThreadMcpConnectionsResponse> =>
+    await ipcRenderer.invoke(MCP_CONNECTION_READ_THREAD_CHANNEL, request),
   readPwrSnapConnectionStatus: async (
     request: ReadPwrSnapConnectionStatusRequest = {},
   ): Promise<PwrSnapConnectionStatus> =>

@@ -265,6 +265,7 @@ import type {
   MutateMcpConnectionResponse,
   RemoveMcpConnectionRequest,
   SetMcpConnectionEnabledRequest,
+  ReadThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsRequest,
   SetThreadMcpConnectionsResponse,
   InspectPdfReferencePathsRequest,
@@ -497,6 +498,9 @@ export type DesktopApi = {
   ) => Promise<MutateMcpConnectionResponse>;
   setThreadMcpConnections?: (
     request: SetThreadMcpConnectionsRequest,
+  ) => Promise<SetThreadMcpConnectionsResponse>;
+  readThreadMcpConnections?: (
+    request: ReadThreadMcpConnectionsRequest,
   ) => Promise<SetThreadMcpConnectionsResponse>;
   readPwrSnapConnectionStatus?: (
     request?: ReadPwrSnapConnectionStatusRequest,

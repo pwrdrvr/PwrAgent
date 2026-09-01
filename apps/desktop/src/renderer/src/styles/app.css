@@ -11533,6 +11533,25 @@ a.button {
   margin: 6px 0 0;
 }
 
+/* The managed rows carry one control the Codex rows do not. */
+.settings-mcp-row--managed {
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+}
+
+.settings-mcp-row__availability {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.settings-mcp-row__availability-label {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .settings-mcp-row__remove {
   color: var(--danger-text);
 }
@@ -16136,31 +16155,6 @@ a.button {
   border-radius: 8px;
 }
 
-.managed-mcp-connections {
-  margin-top: 12px;
-}
-
-.managed-mcp-connections__icon {
-  display: grid;
-  width: 72px;
-  height: 72px;
-  place-items: center;
-  border: 1px solid var(--accent-border);
-  border-radius: 8px;
-  color: var(--accent-bright);
-  background: var(--accent-soft);
-  font-family: var(--font-mono);
-  font-size: 17px;
-  font-weight: 700;
-}
-
-.managed-mcp-connections__list {
-  display: grid;
-  justify-items: end;
-  gap: 9px;
-  min-width: 170px;
-}
-
 .pwrsnap-connection__copy {
   min-width: 0;
 }
@@ -16227,16 +16221,6 @@ a.button {
   .pwrsnap-connection__icon {
     width: 56px;
     height: 56px;
-  }
-
-  .managed-mcp-connections__icon {
-    width: 56px;
-    height: 56px;
-  }
-
-  .managed-mcp-connections__list {
-    grid-column: 2;
-    justify-items: start;
   }
 
   .pwrsnap-connection__action {
@@ -20648,6 +20632,106 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .mcp-inventory-panel {
   max-height: min(44vh, 420px);
+}
+
+.mcp-access-panel {
+  max-height: min(44vh, 420px);
+}
+
+.mcp-access-panel__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-access-panel__row,
+.mcp-access-panel__policy {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-panel);
+}
+
+/*
+ * The provider-server policy answers a different question than the rows
+ * above it, so it gets a rule rather than sitting flush against the list.
+ */
+.mcp-access-panel__policy {
+  margin-top: 10px;
+}
+
+.mcp-access-panel__row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.mcp-access-panel__name {
+  color: var(--text-primary);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.mcp-access-panel__detail {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.mcp-access-panel__row .button,
+.mcp-access-panel__empty .button {
+  flex: 0 0 auto;
+}
+
+.mcp-access-panel__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.mcp-access-panel__empty p,
+.mcp-access-panel__state {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.mcp-access-panel__state--error {
+  color: var(--danger-text);
+}
+
+.mcp-access-panel__footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 10px;
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* The rail is narrow enough that the timing sentence must wrap before the
+ * button label does; a two-line button reads as a broken control. */
+.mcp-access-panel__footer .mcp-access-panel__detail {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.mcp-access-panel__footer .button {
+  flex: 0 0 auto;
 }
 
 .mcp-inventory-panel__reload,

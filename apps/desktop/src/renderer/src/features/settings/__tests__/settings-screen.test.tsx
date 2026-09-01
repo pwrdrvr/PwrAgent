@@ -21,6 +21,8 @@ import type {
   ListMessagingRoutesResponse,
   McpConnectionStatus,
   MessagingPairingEntry,
+  MutateMcpConnectionResponse,
+  SetMcpConnectionEnabledRequest,
   WorktreeSnapshotSummary,
 } from "@pwragent/shared";
 import type { DesktopApi } from "../../../lib/desktop-api";
@@ -7135,4 +7137,74 @@ describe("SettingsScreen", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("/tmp/pwragent/config.toml");
     expect(screen.queryByRole("radio", { name: "TipTap with chips" })).not.toBeInTheDocument();
   });
+
+  it("makes the MCP gateway and each connection switchable", async () => {
+    const setMcpConnectionEnabled = vi.fn(async (
+      request: SetMcpConnectionEnabledRequest,
+    ): Promise<MutateMcpConnectionResponse> => ({
+      connectionId: request.connectionId,
+      connection: {
+        id: "datadog",
+        displayName: "Datadog",
+        serverUrl: "https://mcp.datadoghq.com/mcp",
+        authMode: "oauth" as const,
+        kind: "remote" as const,
+        enabled: request.enabled,
+        createdAt: 0,
+        updatedAt: 0,
+        configured: true,
+        state: "ready" as const,
+      },
+    }));
+    const settings = createSettingsState();
+    render(
+      <SettingsScreen
+        cachedBackends={[]}
+        desktopApi={{
+          listMcpConnections: async () => ({
+            connections: [
+              {
+                id: "datadog",
+                displayName: "Datadog",
+                serverUrl: "https://mcp.datadoghq.com/mcp",
+                authMode: "oauth",
+                kind: "remote",
+                enabled: true,
+                createdAt: 0,
+                updatedAt: 0,
+                configured: true,
+                state: "ready",
+              },
+            ],
+          }),
+          setMcpConnectionEnabled,
+        }}
+        initialSection="plugins"
+        settings={settings}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("switch", { name: "Offer Datadog to threads" }),
+    );
+    await waitFor(() => {
+      expect(setMcpConnectionEnabled).toHaveBeenCalledWith({
+        connectionId: "datadog",
+        enabled: false,
+      });
+    });
+
+    // The profile-wide switch is the one control that can withhold every
+    // connection at once, so it writes the setting rather than the registry.
+    fireEvent.click(
+      screen.getByRole("switch", { name: "Managed MCP gateway" }),
+    );
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalledWith({
+        general: { mcpGatewayEnabled: false },
+      });
+    });
+  });
+
 });

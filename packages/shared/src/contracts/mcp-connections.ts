@@ -126,6 +126,11 @@ export type SetThreadMcpConnectionsRequest = {
   providerServersEnabled?: boolean;
 };
 
+export type ReadThreadMcpConnectionsRequest = {
+  backend: AppServerBackendKind;
+  threadId: string;
+};
+
 export type SetThreadMcpConnectionsResponse = {
   connectionIds: McpConnectionId[];
   providerServersEnabled: boolean;

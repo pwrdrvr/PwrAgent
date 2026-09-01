@@ -174,6 +174,8 @@ export const MCP_CONNECTION_SET_ENABLED_CHANNEL =
   "mcp-connection:set-enabled";
 export const MCP_CONNECTION_SET_THREAD_CHANNEL =
   "mcp-connection:set-thread";
+export const MCP_CONNECTION_READ_THREAD_CHANNEL =
+  "mcp-connection:read-thread";
 export const NAVIGATION_SNAPSHOT_CHANNEL = "navigation:get-snapshot";
 export const NAVIGATION_SET_BROWSE_MODE_CHANNEL =
   "navigation:set-browse-mode";
