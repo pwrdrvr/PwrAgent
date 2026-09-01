@@ -1,3 +1,4 @@
+import { rememberBoundedMap } from "../bounded-map";
 import { app } from "electron";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile as execFileCallback } from "node:child_process";
@@ -491,6 +492,11 @@ import type {
   ResolveEditCommitStatesOptions,
   WorktreeWorkingStateEntry,
 } from "./git-working-state-service";
+import {
+  ThreadInfoStore,
+  type ThreadInfo,
+  type ThreadInfoIdentity,
+} from "./thread-info-store";
 import { resolveWorktreeRepositoryDirectory } from "./thread-directory-enricher";
 import {
   BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
@@ -608,6 +614,14 @@ const CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING =
  * problem the user needs visibility into.
  */
 const MAX_QUEUE_FLUSH_ATTEMPTS = 3;
+// Upper bound on remembered terminal-notification label reconciliations. Each
+// entry is one settled promise that memoizes "this thread's label has already
+// been walked for", so they are retained on purpose; the cap keeps a long-lived
+// process from holding one per thread it has ever been notified about.
+const NOTIFICATION_CONTEXT_RECONCILIATION_LIMIT = 512;
+// An ACP listing resolves linked directories for every row it returns, so its
+// rows carry enrichment whether or not the caller requested it.
+const ACP_LISTINGS_ARE_ENRICHED = true;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const GROK_TITLE_HELPER_SESSION_POLICY = buildMinimalGrokHelperSessionPolicy({
   description: "Generate a concise title for a PwrAgent thread.",
@@ -7815,15 +7829,25 @@ export class DesktopBackendRegistry {
    */
   private toolInvocationDeltaFlushChain: Promise<void> = Promise.resolve();
   /**
-   * Best-effort cache of thread labels keyed by `buildThreadIdentityKey`, used
-   * only to label native attention/terminal notifications so multiple
-   * background turns are distinguishable. Populated from `thread/started` and
-   * `thread/name/updated` notifications as they fan out through `emit()`.
-   * Falls back to a thread-list lookup, then a generic body when context still
-   * isn't available.
+   * What this process knows about each thread it has seen, keyed by thread
+   * identity rather than by the query that revealed it.
+   *
+   * Distinct from `threadListCache`, which answers "which threads match this
+   * query" and is correctly discarded by any mutation. This answers "what is
+   * this thread called", where discarding is never correct: the previous answer
+   * remains the best one until a newer observation replaces it. Reads are
+   * synchronous and cannot start provider work, so a 500ms UI poll can use one.
    */
-  private readonly notificationThreadTitles = new Map<string, string>();
-  private readonly notificationThreadProjectLabels = new Map<string, string>();
+  private readonly threadInfoStore = new ThreadInfoStore();
+  /**
+   * In-flight terminal-notification label reconciliations, keyed by thread. A
+   * burst of turn completions on threads this process never observed must cost
+   * one provider walk per thread, not one per notification.
+   */
+  private readonly notificationContextReconciliations = new Map<
+    string,
+    Promise<void>
+  >();
   /**
    * Live `thread/name/updated` observations are newer than the provider's
    * thread list during an active turn. Reconcile list rows through this map so
@@ -9522,7 +9546,12 @@ export class DesktopBackendRegistry {
     // An event can invalidate or replace this entry while the read awaits
     // enrichment. Only the promise that still owns the key may publish it.
     const pendingState: ThreadListCacheState = {};
-    const promise = this.readThreadList(normalizedParams)
+    const displayMetadataObservationSequence =
+      this.reserveThreadInfoObservation();
+    const promise = this.readThreadList(
+      normalizedParams,
+      displayMetadataObservationSequence,
+    )
       .then((threads) => {
         if (this.threadListCache.get(cacheKey) === pendingState) {
           this.threadListCache.set(cacheKey, {
@@ -9572,6 +9601,11 @@ export class DesktopBackendRegistry {
     return await promise;
   }
 
+  /**
+   * Resolve provider ownership for one thread. A process-lifetime observation
+   * is not proof that the provider still owns it, so only the bounded query
+   * cache may satisfy this read before its forced provider refresh.
+   */
   async resolveThread(params: {
     backend?: AppServerBackendKind;
     threadId: string;
@@ -9580,10 +9614,13 @@ export class DesktopBackendRegistry {
     if (!threadId) {
       return undefined;
     }
-    const cached = this.getCachedThreadSummary({
-      backend: params.backend,
-      threadId,
-    });
+    const cached = this.findThreadListCachedSummary(
+      {
+        backend: params.backend,
+        threadId,
+      },
+      { requireFresh: true },
+    );
     if (cached) {
       return cached;
     }
@@ -9602,6 +9639,16 @@ export class DesktopBackendRegistry {
    * thread-list walk. Hot-path consumers such as messaging admission combine
    * this volatile summary with the durable per-thread overlay instead of
    * asking navigation to rebuild every thread and directory.
+   *
+   * The thread-list cache is consulted first — when it is warm it holds the
+   * freshest listing — and the information store answers when it is not. The
+   * store matters because the cache is emptied by every mutation: without the
+   * second tier, admission for a thread this process listed minutes ago falls
+   * through to `resolveThread`'s forced full listing purely because something
+   * unrelated invalidated the cache in between.
+   *
+   * This is last-observed state, not ownership proof. Consumers validating a
+   * provider or federation owner must call `resolveThread`.
    */
   getCachedThreadSummary(params: {
     backend?: AppServerBackendKind;
@@ -9611,17 +9658,52 @@ export class DesktopBackendRegistry {
     if (!threadId) {
       return undefined;
     }
+    return this.findThreadListCachedSummary({
+      ...params,
+      threadId,
+    }) ?? this.threadInfoStore.findLocalSummary({
+      ...(params.backend ? { backend: params.backend } : {}),
+      threadId,
+    });
+  }
+
+  private findThreadListCachedSummary(
+    params: {
+      backend?: AppServerBackendKind;
+      threadId: string;
+    },
+    options?: { requireFresh?: boolean },
+  ): AppServerThreadSummary | undefined {
+    const now = options?.requireFresh === true ? Date.now() : undefined;
     for (const state of this.threadListCache.values()) {
+      if (now !== undefined && (state.expiresAt ?? 0) <= now) {
+        continue;
+      }
       const cached = state.threads?.find(
         (thread) =>
           (!params.backend || thread.source === params.backend)
-          && thread.id === threadId,
+          && thread.id === params.threadId,
       );
       if (cached) {
         return cached;
       }
     }
     return undefined;
+  }
+
+  /**
+   * What this process already knows about a thread. Synchronous by contract: it
+   * never starts or awaits provider listing, directory enrichment, or
+   * persistence, so it is safe on paths that must not wait — a quit decision, a
+   * notification label, a repeating UI poll.
+   *
+   * `undefined` means this thread has never been observed. It never means a
+   * read failed or a cache lapsed; those leave the last observation in place.
+   * Callers that need directories, git state, or ordering want `resolveThread`,
+   * which may reach the provider.
+   */
+  getThreadInfo(identity: ThreadInfoIdentity): ThreadInfo | undefined {
+    return this.threadInfoStore.get(identity);
   }
 
   async getThreadAgentMetadata(params: {
@@ -9632,16 +9714,19 @@ export class DesktopBackendRegistry {
     return overlay?.agent;
   }
 
-  private async readThreadList(params: {
-    archived?: boolean;
-    backend?: AppServerBackendKind;
-    callerReason?: ThreadListCallerReason;
-    enrichDirectories: boolean;
-    filter?: string;
-    limit?: number;
-    maxPages?: number;
-    skipArchivedMetadataRefresh?: boolean;
-  }): Promise<AppServerThreadSummary[]> {
+  private async readThreadList(
+    params: {
+      archived?: boolean;
+      backend?: AppServerBackendKind;
+      callerReason?: ThreadListCallerReason;
+      enrichDirectories: boolean;
+      filter?: string;
+      limit?: number;
+      maxPages?: number;
+      skipArchivedMetadataRefresh?: boolean;
+    },
+    displayMetadataObservationSequence: number,
+  ): Promise<AppServerThreadSummary[]> {
     const diagnostics = {
       callerReason: params.callerReason ?? "thread-list",
       ownerId: this.threadListCacheOwnerId,
@@ -9669,7 +9754,12 @@ export class DesktopBackendRegistry {
           threads,
         });
       }
-      this.rememberThreadListContexts(threads);
+      this.rememberThreadListContexts(
+        threads,
+        displayMetadataObservationSequence,
+        params.enrichDirectories,
+        params.archived,
+      );
       return threads;
     }
 
@@ -9679,11 +9769,20 @@ export class DesktopBackendRegistry {
         params.filter,
         params.archived,
       );
-      this.rememberThreadListContexts(threads);
+      this.rememberThreadListContexts(
+        threads,
+        displayMetadataObservationSequence,
+        // An ACP listing resolves linked directories for every row whatever the
+        // caller asked for, so its rows are enriched even when the request was
+        // not. Passing the request's flag would record them as unenriched and
+        // send every `requireEnriched` read back to the provider.
+        ACP_LISTINGS_ARE_ENRICHED,
+        params.archived,
+      );
       return threads;
     }
 
-    const threadLists = await Promise.all([
+    const [codexThreads, acpThreads] = await Promise.all([
       this.listThreads({
         backend: "codex",
         archived: params.archived,
@@ -9697,11 +9796,21 @@ export class DesktopBackendRegistry {
       this.listAllInstalledAcpThreads(params.filter, params.archived),
     ]);
 
-    const threads = threadLists
-      .flat()
-      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
-    this.rememberThreadListContexts(threads);
-    return threads;
+    // Only the ACP half is recorded here. The Codex half went through
+    // `listThreads`, which reserved its own newer sequence and already folded
+    // those rows; folding them again writes nothing the sequence guard would
+    // accept, and it does so on the main thread once per navigation refresh.
+    // Recording them here would also stamp rows read at the inner sequence with
+    // this outer one, which is the ordering the store exists to keep honest.
+    this.rememberThreadListContexts(
+      acpThreads,
+      displayMetadataObservationSequence,
+      ACP_LISTINGS_ARE_ENRICHED,
+      params.archived,
+    );
+    return [...codexThreads, ...acpThreads].sort(
+      (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
+    );
   }
 
   private async filterArchivedThreadsPresentInActiveList(params: {
@@ -11307,6 +11416,20 @@ export class DesktopBackendRegistry {
       updatedAt: Math.max(session.updatedAt, archivedAt),
     });
     this.invalidateThreadListCache(params.backend);
+    // Archival on ACP is a local store write, with no provider to announce it.
+    // Say it in the same words Codex uses, because everything downstream is
+    // written against the notification rather than against a backend: the
+    // information store records the fact here, and messaging revokes the
+    // thread's Default Agent assignments. Without this an archived ACP thread
+    // is invisible to both -- it simply stops appearing in listings, which no
+    // consumer can tell apart from a thread it has not seen lately.
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/archived",
+        params: { threadId: params.threadId },
+      },
+    });
     await this.cleanupMessagingForArchivedThread({
       backend: params.backend,
       threadId: params.threadId,
@@ -11352,6 +11475,16 @@ export class DesktopBackendRegistry {
     this.clearArchivedMessagingCleanupCache({
       backend: params.backend,
       threadId: params.threadId,
+    });
+    // The counterpart to the archive emit above. This is the only report a
+    // restore ever makes: a listing cannot carry the news, because an
+    // unarchived thread is one that has merely started appearing again.
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/unarchived",
+        params: { threadId: params.threadId },
+      },
     });
     return {
       backend: params.backend,
@@ -11457,7 +11590,7 @@ export class DesktopBackendRegistry {
             : undefined) ?? "HEAD"
         : result.branch;
 
-    await this.overlayStore.replaceWorkspaceLinkedDirectory({
+    await this.replaceWorkspaceLinkedDirectory({
       backend: request.backend,
       threadId: request.threadId,
       directory: result.linkedDirectory,
@@ -12483,6 +12616,7 @@ export class DesktopBackendRegistry {
       this.findThreadForWorkspaceHandoff({
         backend: params.backend,
         callerReason: "transcript-image-roots",
+        freshness: "last-known",
         threadId: params.threadId,
       }),
       this.overlayStore.getThreadOverlayState({
@@ -13586,7 +13720,7 @@ export class DesktopBackendRegistry {
         // has replaced the copied parent cwd. Persist the prepared workspace now
         // so that transient provider metadata cannot become the child's source
         // of truth.
-        await this.overlayStore.replaceWorkspaceLinkedDirectory({
+        await this.replaceWorkspaceLinkedDirectory({
           backend,
           threadId: result.threadId,
           directory: linkedDirectory,
@@ -13922,10 +14056,10 @@ export class DesktopBackendRegistry {
         threadKeys.add(threadKey);
         if (owner.isSubAgent) {
           subAgentThreadKeys.add(threadKey);
-          const title = this.cachedQuitThreadTitle(owner.backend, owner.threadId);
-          if (title) {
-            threadTitles.set(threadKey, title);
-          }
+        }
+        const title = this.cachedQuitThreadTitle(owner.backend, owner.threadId);
+        if (title) {
+          threadTitles.set(threadKey, title);
         }
       }
     };
@@ -14062,25 +14196,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     threadId: string,
   ): string | undefined {
-    const key = buildThreadIdentityKey(backend, threadId);
-    const remembered =
-      this.observedThreadNames.get(key) ?? this.notificationThreadTitles.get(key);
-    if (remembered?.trim()) {
-      return remembered.trim();
-    }
-    for (const state of this.threadListCache.values()) {
-      const thread = state.threads?.find(
-        (candidate) =>
-          candidate.source === backend
-          && candidate.id === threadId
-          && candidate.titleSource !== "fallback",
-      );
-      const title = thread?.title.trim();
-      if (title) {
-        return title;
-      }
-    }
-    return undefined;
+    return this.threadInfoStore.getTitle({ backend, threadId });
   }
 
   async supportsMessagingPdfTools(params: {
@@ -18323,6 +18439,7 @@ export class DesktopBackendRegistry {
     const thread = await this.findThreadForWorkspaceHandoff({
       backend: params.backend,
       callerReason: "branch-drift",
+      freshness: "last-known",
       threadId: params.threadId,
     });
     const workspaceCwd = resolveThreadWorkspaceCwd(
@@ -18424,6 +18541,7 @@ export class DesktopBackendRegistry {
     const thread = await this.findThreadForWorkspaceHandoff({
       backend: params.backend,
       callerReason: "active-turn-branch-adoption",
+      freshness: "last-known",
       threadId: params.threadId,
     });
     const workspaceCwd = resolveThreadWorkspaceCwd(
@@ -19755,7 +19873,7 @@ export class DesktopBackendRegistry {
       // can report the same repository through a physical path alias (for
       // example macOS /private/var for a requested /var path), but the
       // worktree path still proves these describe one prepared workspace.
-      await this.overlayStore.replaceWorkspaceLinkedDirectory({
+      await this.replaceWorkspaceLinkedDirectory({
         backend: launchpad.backend,
         threadId: startThreadResponse.threadId,
         directory: linkedDirectory,
@@ -21602,6 +21720,36 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /**
+   * Rebind a thread's workspace directory, and drop the remembered provider
+   * rows whose directory data is now stale.
+   *
+   * A remembered row carries the directory set the provider last reported, and
+   * `resolveThreadWorkspaceCwd` ranks those ahead of the overlay whenever they
+   * do not already match it -- which, immediately after a rebind, is precisely
+   * when they do not. Keeping the row across this write therefore sends the
+   * next turn to the directory the thread just moved off, and nothing corrects
+   * it: no notification reports a directory change, and surviving cache
+   * invalidation is the whole point of this store.
+   *
+   * Every rebind goes through here rather than through the overlay store
+   * directly, so a site added later cannot forget the second half.
+   */
+  private async replaceWorkspaceLinkedDirectory(params: {
+    backend: AppServerBackendKind;
+    directory: LinkedDirectorySummary;
+    gitBranch?: string;
+    threadId: string;
+  }): Promise<ThreadOverlayState> {
+    const overlay =
+      await this.overlayStore.replaceWorkspaceLinkedDirectory(params);
+    this.threadInfoStore.invalidateSummaries({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    return overlay;
+  }
+
   private invalidateThreadListCache(backend?: AppServerBackendKind): void {
     if (!backend) {
       this.threadListCache.clear();
@@ -21696,7 +21844,7 @@ export class DesktopBackendRegistry {
         return;
       }
 
-      await this.overlayStore.replaceWorkspaceLinkedDirectory({
+      await this.replaceWorkspaceLinkedDirectory({
         backend: "codex",
         threadId: params.threadId,
         directory,
@@ -22620,7 +22768,7 @@ export class DesktopBackendRegistry {
       }
 
       updatedOverlaysByThreadId[thread.id] =
-        await this.overlayStore.replaceWorkspaceLinkedDirectory({
+        await this.replaceWorkspaceLinkedDirectory({
           backend: "codex",
           threadId: thread.id,
           directory,
@@ -22719,7 +22867,7 @@ export class DesktopBackendRegistry {
         }
 
         updatedOverlaysByThreadId[thread.id] =
-          await this.overlayStore.replaceWorkspaceLinkedDirectory({
+          await this.replaceWorkspaceLinkedDirectory({
             backend: "codex",
             threadId: thread.id,
             directory,
@@ -25854,15 +26002,45 @@ export class DesktopBackendRegistry {
       });
   }
 
+  /**
+   * One thread's row.
+   *
+   * `freshness` is the caller's declaration, not an optimization hint:
+   *
+   * - `"provider"` (the default) walks the provider's whole thread list and
+   *   picks the row out of it. A caller about to mutate a workspace needs the
+   *   provider's current truth, and pays for it.
+   * - `"last-known"` answers from the thread information store, which survives
+   *   list-cache invalidation. A read-only caller asking where a thread's
+   *   workspace is does not need a fresh collection, and making it pay for one
+   *   put a full paged provider walk on every turn boundary: `turn/started`
+   *   invalidates the list cache, and the next branch adoption rebuilt the
+   *   entire list to read one row.
+   *
+   * A `"last-known"` read falls back to the provider walk when the thread has
+   * never been observed at the enrichment level the caller listed at, so a cold
+   * process still answers correctly — it just stops re-answering.
+   */
   private async findThreadForWorkspaceHandoff(params: {
     backend: AppServerBackendKind;
     callerReason?: ThreadListCallerReason;
+    freshness?: "last-known" | "provider";
     threadId: string;
   }): Promise<AppServerThreadSummary | undefined> {
+    const callerReason = params.callerReason ?? "workspace-handoff";
+    if (params.freshness === "last-known") {
+      const remembered = this.threadInfoStore.getSummary(
+        { backend: params.backend, threadId: params.threadId },
+        { requireEnriched: shouldEnrichThreadDirectories(callerReason) },
+      );
+      if (remembered) {
+        return remembered;
+      }
+    }
     return await this.listThreads({
       backend: params.backend,
       archived: false,
-      callerReason: params.callerReason ?? "workspace-handoff",
+      callerReason,
     })
       .then((threads) => threads.find((thread) => thread.id === params.threadId))
       .catch(() => undefined);
@@ -25889,6 +26067,7 @@ export class DesktopBackendRegistry {
     const thread = await this.findThreadForWorkspaceHandoff({
       backend,
       callerReason: "turn-cwd",
+      freshness: "last-known",
       threadId,
     });
     const threadCwd = resolveThreadWorkspaceCwd(
@@ -34553,8 +34732,53 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Teach the information store that a thread's archived state changed.
+   *
+   * Archival is a fact about the thread, so it is an observation like any
+   * other, and it is deliberately separate from `invalidateThreadListCache`.
+   * Invalidation says a query's result may have changed; it does not say a
+   * thread was archived, and conflating the two is what made the list cache the
+   * only record of archival — and therefore made forgetting it mandatory.
+   */
+  private recordThreadArchivalFromNotification(
+    backend: AppServerBackendKind,
+    notification: AgentEvent["notification"],
+  ): void {
+    const archived =
+      notification.method === "thread/archived"
+        ? true
+        : notification.method === "thread/unarchived"
+          ? false
+          : undefined;
+    if (archived === undefined) {
+      return;
+    }
+    const threadId = (notification.params as { threadId?: unknown })?.threadId;
+    if (typeof threadId !== "string") {
+      return;
+    }
+    this.threadInfoStore.observe({
+      archived,
+      identity: { backend, threadId },
+      observationSequence: this.reserveThreadInfoObservation(),
+      source: "lifecycle-notification",
+    });
+  }
+
+  /**
+   * Take the sequence an observation will be recorded at. Asynchronous readers
+   * MUST call this before they start: a listing that is overtaken by a rename
+   * and then completes late carries the older sequence it reserved, so its
+   * stale rows lose instead of silently reverting the rename.
+   */
+  private reserveThreadInfoObservation(): number {
+    return this.threadInfoStore.reserveObservationSequence();
+  }
+
   private rememberThreadTitleFromEvent(event: AgentEvent): void {
     const method = event.notification.method;
+    this.recordThreadArchivalFromNotification(event.backend, event.notification);
     if (method === "thread/name/updated") {
       const params = event.notification.params as {
         threadId?: unknown;
@@ -34566,7 +34790,13 @@ export class DesktopBackendRegistry {
         const trimmed = threadName.trim();
         if (trimmed) {
           const key = buildThreadIdentityKey(event.backend, threadId);
-          this.notificationThreadTitles.set(key, trimmed);
+          this.threadInfoStore.observe({
+            identity: { backend: event.backend, threadId },
+            observationSequence: this.reserveThreadInfoObservation(),
+            source: "lifecycle-notification",
+            title: trimmed,
+            titleSource: "explicit",
+          });
           this.observedThreadNames.set(key, trimmed);
         }
       }
@@ -34581,7 +34811,12 @@ export class DesktopBackendRegistry {
       if (typeof threadId !== "string") {
         return;
       }
-      this.rememberThreadNotificationContext(event.backend, threadId, params.thread);
+      this.rememberThreadNotificationContext(
+        event.backend,
+        threadId,
+        params.thread,
+        this.reserveThreadInfoObservation(),
+      );
     }
   }
 
@@ -34629,6 +34864,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     threadId: string,
     thread: unknown,
+    displayMetadataObservationSequence: number,
   ): void {
     if (!thread || typeof thread !== "object" || Array.isArray(thread)) {
       return;
@@ -34637,26 +34873,81 @@ export class DesktopBackendRegistry {
     const candidate =
       (typeof record.title === "string" ? record.title : undefined) ??
       (typeof record.name === "string" ? record.name : undefined);
-    const trimmed = candidate?.trim();
-    const key = buildThreadIdentityKey(backend, threadId);
-    if (trimmed) {
-      this.notificationThreadTitles.set(key, trimmed);
-    }
+    const titleSource =
+      record.titleSource === "explicit"
+      || record.titleSource === "derived"
+      || record.titleSource === "fallback"
+        ? record.titleSource
+        : undefined;
     const projectLabel = readNotificationProjectLabel(record);
-    if (projectLabel) {
-      this.notificationThreadProjectLabels.set(key, projectLabel);
-    }
+    // A rename the provider has not acknowledged yet outranks the title in this
+    // payload. `thread/started` replays the provider's own record, which on a
+    // resume is the pre-rename one; without this the operator's rename loses on
+    // sequence alone and the quit dialog reverts to the old name. The provider
+    // acknowledging the rename clears the entry (see withObservedThreadName),
+    // after which its titles are believed normally.
+    const unacknowledgedRename = this.observedThreadNames.get(
+      buildThreadIdentityKey(backend, threadId),
+    );
+    const title = unacknowledgedRename ?? candidate;
+    this.threadInfoStore.observe({
+      identity: { backend, threadId },
+      observationSequence: displayMetadataObservationSequence,
+      source: "lifecycle-notification",
+      ...(title !== undefined ? { title } : {}),
+      ...(unacknowledgedRename !== undefined
+        ? { titleSource: "explicit" as const }
+        : titleSource !== undefined
+          ? { titleSource }
+          : {}),
+      ...(projectLabel !== undefined ? { projectLabel } : {}),
+    });
   }
 
-  /** Keep titles already shown in navigation available to time-bounded UI. */
+  /**
+   * Fold a completed listing into the thread information store. Every row is
+   * offered, including fallback-titled ones: the store decides what a fallback
+   * means, so a provider that has lost its title index cannot push uuids over
+   * names PwrAgent already knows.
+   */
   private rememberThreadListContexts(
     threads: readonly AppServerThreadSummary[],
+    displayMetadataObservationSequence: number,
+    enriched: boolean,
+    listedArchived: boolean | undefined,
   ): void {
     for (const thread of threads) {
-      if (thread.titleSource === "fallback") {
-        continue;
-      }
-      this.rememberThreadNotificationContext(thread.source, thread.id, thread);
+      const identity = { backend: thread.source, threadId: thread.id };
+      const projectLabel = readNotificationProjectLabel(
+        thread as unknown as Record<string, unknown>,
+      );
+      this.threadInfoStore.observe({
+        identity,
+        observationSequence: displayMetadataObservationSequence,
+        source: "provider-list",
+        // Only a listing that actually filtered by archival proves anything
+        // about it, and the row itself proves less than it looks like it does:
+        // an active Codex listing merges cached archived metadata into its
+        // rows, and `mergeThreadSummaries` returns the archived row wholesale
+        // when its titleSource outranks the active one. That cache refreshes on
+        // a 60s interval, so for up to a minute after an unarchive an *active*
+        // listing can hand back a row still carrying `archivedAt` -- which
+        // would overwrite the `thread/unarchived` notification at a newer
+        // sequence and withhold a live thread. `archivedAt` is also a
+        // normalized epoch that can legitimately be 0, so presence is not even
+        // a safe test for it. Record the query's own filter or nothing.
+        ...(listedArchived === undefined ? {} : { archived: listedArchived }),
+        title: thread.title,
+        ...(thread.titleSource ? { titleSource: thread.titleSource } : {}),
+        ...(projectLabel ? { projectLabel } : {}),
+        ...(thread.updatedAt !== undefined ? { updatedAt: thread.updatedAt } : {}),
+      });
+      this.threadInfoStore.observeSummary({
+        enriched,
+        identity,
+        observationSequence: displayMetadataObservationSequence,
+        summary: thread,
+      });
     }
   }
 
@@ -34664,15 +34955,29 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     threadId: string,
   ): string | undefined {
-    const key = buildThreadIdentityKey(backend, threadId);
-    const projectLabel = this.notificationThreadProjectLabels.get(key);
-    const threadTitle = this.notificationThreadTitles.get(key);
+    const info = this.threadInfoStore.get({ backend, threadId });
+    const projectLabel = info?.projectLabel;
+    const threadTitle = info?.title;
     if (projectLabel && threadTitle) {
       return `${projectLabel} > ${threadTitle}`;
     }
     return threadTitle ?? projectLabel;
   }
 
+  /**
+   * Label a terminal notification, reconciling once when nothing is known yet.
+   *
+   * The store answers for any thread this process has listed or seen start,
+   * which is nearly all of them, and that read is free. The remaining case is a
+   * turn completing on a thread this process never observed — an external
+   * process sharing the profile — where a label still beats "A turn completed".
+   *
+   * The reconciliation is deduplicated per thread because turn completions
+   * arrive in bursts across concurrent threads, and an unlabeled thread would
+   * otherwise start a fresh whole-collection walk for each one. The walk seeds
+   * the information store, so it happens at most once per thread per process
+   * rather than once per notification.
+   */
   private async notificationThreadContextLabelForTerminal(
     backend: AppServerBackendKind,
     threadId: string,
@@ -34681,25 +34986,62 @@ export class DesktopBackendRegistry {
     if (cached) {
       return cached;
     }
-    try {
-      const threads = await this.listThreads({
+    const key = buildThreadIdentityKey(backend, threadId);
+    let reconciliation = this.notificationContextReconciliations.get(key);
+    if (!reconciliation) {
+      // Retried only when the walk produced no rows at all. "Learned no label"
+      // is not a failure -- it is the answer for a thread this backend does not
+      // list, which is precisely the case this dedup exists for, so keying the
+      // retry on the label drops the entry every time and charges each of that
+      // thread's later notifications another enriched walk.
+      //
+      // Rejection is not the signal either: `listThreads` absorbs a provider
+      // error and resolves, so the `catch` below never runs for the restart it
+      // was written for. An empty result is the observable form of that
+      // failure, and it is also indistinguishable from a genuinely empty
+      // backend -- retrying both is right, because neither has an answer to
+      // memoize.
+      let walkListedRows = false;
+      reconciliation = this.listThreads({
         backend,
         callerReason: "notification-context",
         enrichDirectories: true,
-      });
-      const thread = threads.find((candidate) => candidate.id === threadId);
-      if (thread) {
-        this.rememberThreadNotificationContext(backend, threadId, thread);
-        return this.notificationThreadContextLabel(backend, threadId);
-      }
-    } catch (error) {
-      backendRegistryLog.debug("native terminal notification context lookup failed", {
-        backend,
-        error: error instanceof Error ? error.message : String(error),
-        threadId,
-      });
+      })
+        .then((rows) => {
+          walkListedRows = rows.length > 0;
+        })
+        .catch((error: unknown) => {
+          backendRegistryLog.debug("native terminal notification context lookup failed", {
+            backend,
+            error: error instanceof Error ? error.message : String(error),
+            threadId,
+          });
+        })
+        .finally(() => {
+          // Only retract this walk's own entry. The cap below can evict a key
+          // whose walk is still running, and a later notification then stores a
+          // fresh promise under it -- deleting by key alone would throw that
+          // one away when this older walk settled, and the next notification
+          // would start a third. Same ownership check the thread-list cache
+          // uses when its pending entry settles.
+          if (
+            !walkListedRows
+            && this.notificationContextReconciliations.get(key) === reconciliation
+          ) {
+            this.notificationContextReconciliations.delete(key);
+          }
+        });
+      // Settled entries are kept on purpose -- they are the memo -- so this is
+      // bounded by count rather than by liveness.
+      rememberBoundedMap(
+        this.notificationContextReconciliations,
+        key,
+        reconciliation,
+        NOTIFICATION_CONTEXT_RECONCILIATION_LIMIT,
+      );
     }
-    return undefined;
+    await reconciliation;
+    return this.notificationThreadContextLabel(backend, threadId);
   }
 
   private notifyForAttentionRequired(event: AgentEvent): void {
@@ -34717,9 +35059,10 @@ export class DesktopBackendRegistry {
     const title = isQuestion
       ? "PwrAgent input needed"
       : "PwrAgent approval needed";
-    const threadTitle = this.notificationThreadTitles.get(
-      buildThreadIdentityKey(event.backend, threadId),
-    );
+    const threadTitle = this.threadInfoStore.get({
+      backend: event.backend,
+      threadId,
+    })?.title;
     const approvalRequest = this.isApprovalAttentionNotification(event.notification)
       ? event.notification
       : undefined;

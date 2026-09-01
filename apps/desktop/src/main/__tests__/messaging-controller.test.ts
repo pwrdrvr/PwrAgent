@@ -161,6 +161,53 @@ describe("MessagingController", () => {
     );
   });
 
+  it("attributes start-turn latency to the stage that spent it", async () => {
+    // The end-to-end span above says a turn was slow; these say which stage was.
+    let clock = 1_000;
+    const info = vi.fn();
+    const harness = await createHarness({
+      logger: { info },
+      now: () => clock,
+      getThreadAdmissionState: async (request) => {
+        clock += 700;
+        const thread = buildNavigationSnapshot().threads.find(
+          (candidate) =>
+            candidate.source === request.backend
+            && candidate.id === request.threadId,
+        );
+        return thread ? { thread } : {};
+      },
+    });
+    await bindThread(harness);
+    info.mockClear();
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("measure stages"),
+      receivedAt: clock,
+    });
+
+    const startingTurn = info.mock.calls.find(
+      (call) => call[0] === "messaging starting turn",
+    );
+    expect(startingTurn?.[1]).toMatchObject({
+      inputPreparedToAdmissionStateMs: 700,
+    });
+    // Everything the admission read did not spend is attributed elsewhere, so
+    // the stages sum to the end-to-end number rather than overlapping it.
+    const detail = startingTurn?.[1] as Record<string, number>;
+    const stageTotal =
+      detail.receivedToHandledMs
+      + detail.handledToRoutedMs
+      + detail.routedToBundleReadyMs
+      + detail.bundleReadyToInputPreparedMs
+      + detail.inputPreparedToAdmissionStateMs
+      + detail.admissionStateToOccupancyMs
+      + detail.occupancyToOriginMs
+      + detail.originToPolicyMs
+      + detail.policyToStartTurnIssueMs;
+    expect(stageTotal).toBe(detail.pwragentReceivedToStartTurnIssueMs);
+  });
+
   it("merges eventual provider channel metadata without replaying inbound", async () => {
     const harness = await createHarness();
     await bindThread(harness);
@@ -4464,6 +4511,235 @@ describe("MessagingController", () => {
       }),
     );
     expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
+  // The reply hot path used to answer "does this assignment still point at an
+  // agent thread?" with a snapshot of every thread on every backend, then
+  // hydrate overlays, pull requests, Git working state, directory status and
+  // launchpads before it could start the turn. Opening the same thread in the
+  // app does none of that.
+  it("starts a default-agent reply without requesting a navigation snapshot", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Provider Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({ navigation });
+    const channel = buildTopicChannel("13120");
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:targeted-conversation",
+      scope: { kind: "conversation", channel },
+      target: { kind: "agent", backend: "codex", threadId: "thread-1" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    harness.getNavigationSnapshot.mockClear();
+    harness.getThreadAdmissionState.mockClear();
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("use the available Agent", { botMention: true, channel }),
+    );
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ backend: "codex", threadId: "thread-1" }),
+    );
+    expect(harness.getThreadAdmissionState).toHaveBeenCalledWith(
+      expect.objectContaining({ backend: "codex", threadId: "thread-1" }),
+    );
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
+  // A target with no local record at all is gone as far as this machine is
+  // concerned, and saying so costs one targeted read. The fleet snapshot this
+  // replaced charged every accepted message for the same answer.
+  it("revokes a target it has no record of without listing the fleet", async () => {
+    const navigation = buildNavigationSnapshot();
+    navigation.threads[0] = {
+      ...navigation.threads[0]!,
+      agent: {
+        name: "Provider Agent",
+        instructionLineCount: 1,
+        instructionsTooLong: false,
+        updatedAt: 1500,
+      },
+    };
+    const harness = await createHarness({
+      navigation,
+      getThreadAdmissionState: async (request) => {
+        const thread = navigation.threads.find(
+          (candidate) =>
+            candidate.source === request.backend
+            && candidate.id === request.threadId,
+        );
+        return thread ? { thread } : {};
+      },
+    });
+    const channel = buildTopicChannel("13121");
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:cold-stale",
+      scope: { kind: "conversation", channel },
+      target: { kind: "agent", backend: "codex", threadId: "never-existed" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:cold-valid",
+      scope: { kind: "provider", channel: "telegram" },
+      target: { kind: "agent", backend: "codex", threadId: "thread-1" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    harness.getNavigationSnapshot.mockClear();
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("use the available Agent", { botMention: true, channel }),
+    );
+
+    await expect(
+      harness.store.getDefaultAgentAssignment("default-agent:cold-stale"),
+    ).resolves.toMatchObject({ revokedAt: 1000 });
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ backend: "codex", threadId: "thread-1" }),
+    );
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
+  // Revocation is destructive and each iteration reads state that can fail. A
+  // failure part-way through must not leave the channel half-revoked, with the
+  // assignments already rejected gone and the rest never examined.
+  it("revokes nothing when an admission read fails part-way through", async () => {
+    const harness = await createHarness({
+      getThreadAdmissionState: async (request) => {
+        if (request.threadId === "thread-1") {
+          throw new Error("backend restarting");
+        }
+        return {};
+      },
+    });
+    const channel = buildTopicChannel("13122");
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:first-rejected",
+      scope: { kind: "conversation", channel },
+      target: { kind: "agent", backend: "codex", threadId: "never-existed" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:never-read",
+      scope: { kind: "provider", channel: "telegram" },
+      target: { kind: "agent", backend: "codex", threadId: "thread-1" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("use the available Agent", { botMention: true, channel }),
+    );
+
+    await expect(
+      harness.store.getDefaultAgentAssignment("default-agent:first-rejected"),
+    ).resolves.not.toMatchObject({ revokedAt: expect.any(Number) });
+    await expect(
+      harness.store.getDefaultAgentAssignment("default-agent:never-read"),
+    ).resolves.not.toMatchObject({ revokedAt: expect.any(Number) });
+    expect(harness.startTurn).not.toHaveBeenCalled();
+  });
+
+  // The pre-flight check reads `agent` from the thread's overlay row, which
+  // outlives the thread it describes, so it cannot tell a live target from a
+  // deleted one. The failed start is the only report that ever arrives.
+  it("retires a default-agent route whose target can no longer start a turn", async () => {
+    const navigation = buildNavigationSnapshot();
+    const agent = {
+      name: "Provider Agent",
+      instructionLineCount: 1,
+      instructionsTooLong: false,
+      updatedAt: 1500,
+    };
+    const harness = await createHarness({
+      navigation,
+      // Models the production bridge: the row is rebuilt from the durable
+      // overlay, so it answers for a thread no listing contains any more.
+      getThreadAdmissionState: async (request) => ({
+        thread: {
+          ...navigation.threads[0]!,
+          id: request.threadId,
+          source: request.backend,
+          agent,
+        },
+      }),
+    });
+    harness.startTurn.mockRejectedValue(
+      new Error("thread not found: deleted-thread"),
+    );
+    const channel = buildTopicChannel("13123");
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:deleted-target",
+      scope: { kind: "conversation", channel },
+      target: { kind: "agent", backend: "codex", threadId: "deleted-thread" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("use the available Agent", { botMention: true, channel }),
+    );
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: "deleted-thread" }),
+    );
+    await expect(
+      harness.store.getDefaultAgentAssignment("default-agent:deleted-target"),
+    ).resolves.toMatchObject({ revokedAt: expect.any(Number) });
+  });
+
+  it("preserves a default-agent route after a transient start failure", async () => {
+    const navigation = buildNavigationSnapshot();
+    const harness = await createHarness({
+      navigation,
+      getThreadAdmissionState: async (request) => ({
+        thread: {
+          ...navigation.threads[0]!,
+          id: request.threadId,
+          source: request.backend,
+          agent: {
+            name: "Provider Agent",
+            instructionLineCount: 1,
+            instructionsTooLong: false,
+            updatedAt: 1500,
+          },
+        },
+      }),
+    });
+    harness.startTurn.mockRejectedValueOnce(
+      new Error("provider unavailable for thread thread-1"),
+    );
+    const channel = buildTopicChannel("13124");
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:transient-failure",
+      scope: { kind: "conversation", channel },
+      target: { kind: "agent", backend: "codex", threadId: "thread-1" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("retry later", { botMention: true, channel }),
+    );
+
+    await expect(
+      harness.store.getDefaultAgentAssignment("default-agent:transient-failure"),
+    ).resolves.not.toMatchObject({ revokedAt: expect.any(Number) });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Turn could not start",
+      body: "provider unavailable for thread thread-1",
+    });
   });
 
   it("preserves the messaging location for queued Agent-thread turns", async () => {

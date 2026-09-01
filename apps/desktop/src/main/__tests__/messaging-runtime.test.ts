@@ -3829,11 +3829,22 @@ function createBackendBridge(): MessagingBackendBridge & {
 } {
   const backendListeners = new Set<(event: AgentEvent) => void | Promise<void>>();
 
-  return {
+  const bridge: ReturnType<typeof createBackendBridge> = {
     getNavigationSnapshot: vi.fn(async () => buildNavigationSnapshot()),
-    getThreadAdmissionState: vi.fn(async () => ({
-      thread: buildNavigationSnapshot().threads[0],
-    })),
+    // Production reads a thread's `agent` from its overlay row on BOTH the
+    // navigation path and the admission path, so a fixture whose admission
+    // state disagrees with its own navigation describes a state the app
+    // cannot reach. Resolve from whatever snapshot this bridge is serving,
+    // and answer for the thread that was actually asked about.
+    getThreadAdmissionState: vi.fn(async (request) => {
+      const navigation = await bridge.getNavigationSnapshot();
+      const thread = navigation.threads.find(
+        (candidate) =>
+          candidate.source === request.backend
+          && candidate.id === request.threadId,
+      );
+      return thread ? { thread } : {};
+    }),
     startTurn: vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,
@@ -3854,6 +3865,7 @@ function createBackendBridge(): MessagingBackendBridge & {
       );
     },
   };
+  return bridge;
 }
 
 function buildNavigationSnapshot(): NavigationSnapshot {

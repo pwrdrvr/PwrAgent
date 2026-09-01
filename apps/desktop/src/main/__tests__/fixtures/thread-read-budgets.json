@@ -1,0 +1,52 @@
+{
+  "concurrent-identical-listings": {
+    "directoryEnrichments": 0,
+    "note": "six concurrent callers asking for the same unenriched Codex listing",
+    "providerListCalls": 1
+  },
+  "known-thread-label-lookups": {
+    "directoryEnrichments": 0,
+    "note": "50 synchronous label lookups for a thread already observed once",
+    "providerListCalls": 0
+  },
+  "messaging-admission-after-invalidation": {
+    "directoryEnrichments": 0,
+    "note": "messaging admission for a listed thread whose list cache was invalidated",
+    "providerListCalls": 0
+  },
+  "quit-dialog-poll": {
+    "directoryEnrichments": 0,
+    "note": "20 quit-dialog polls against an in-progress turn, all served from observed metadata",
+    "providerListCalls": 0
+  },
+  "second-window-navigation": {
+    "directoryEnrichments": 0,
+    "note": "a second window's navigation refresh and label reads against a warm list cache",
+    "providerListCalls": 0
+  },
+  "ten-turns-warm-thread": {
+    "directoryEnrichments": 0,
+    "note": "ten complete turns on a thread the navigation refresh already observed",
+    "providerListCalls": 0
+  },
+  "terminal-notification-burst": {
+    "directoryEnrichments": 0,
+    "note": "eight terminal notifications across two threads neither of which was ever listed",
+    "providerListCalls": 1
+  },
+  "turn-lifecycle-label-reads": {
+    "directoryEnrichments": 0,
+    "note": "five complete turns with label reads between every lifecycle event",
+    "providerListCalls": 0
+  },
+  "worktree-navigation-refresh": {
+    "directoryEnrichments": 1,
+    "note": "one navigation refresh over a single worktree-backed thread",
+    "providerListCalls": 1
+  },
+  "worktree-turns-after-enrichment": {
+    "directoryEnrichments": 0,
+    "note": "five turns on an already-enriched worktree thread",
+    "providerListCalls": 0
+  }
+}
