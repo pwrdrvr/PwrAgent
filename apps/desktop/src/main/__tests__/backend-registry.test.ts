@@ -3071,13 +3071,67 @@ describe("DesktopBackendRegistry", () => {
         },
       });
 
+      // The notification carries a name and nothing else — the registry emits
+      // the same method for an operator rename, a generated title, and an
+      // agent-chosen ACP session title — so it reports no source rather than
+      // guessing one.
       expect(registry.getCachedThreadTitle({
         backend: "codex",
         threadId: "thread-1",
-      })).toEqual({
-        title: "Ship the release runbook",
-        titleSource: "explicit",
+      })).toEqual({ title: "Ship the release runbook" });
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("never names a thread after the placeholder written back to the provider", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    try {
+      // `extractThreadNameRecordFromValue` writes the literal "Untitled
+      // thread" back to Codex for a thread with no name and no preview, so it
+      // returns as ordinary provider text on the next `thread/started`.
+      await codexClient.emit({
+        method: "thread/started",
+        params: {
+          threadId: "thread-1",
+          thread: { id: "thread-1", name: "Untitled thread" },
+        },
       });
+
+      expect(registry.getCachedThreadTitle({
+        backend: "codex",
+        threadId: "thread-1",
+      })).toBeUndefined();
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("reports no source for a title the provider never classified", async () => {
+    const codexClient = new MockBackendClient({ threads: [] });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    try {
+      await codexClient.emit({
+        method: "thread/started",
+        params: {
+          threadId: "thread-1",
+          thread: { id: "thread-1", name: "Investigate the flaky login redirect" },
+        },
+      });
+
+      expect(registry.getCachedThreadTitle({
+        backend: "codex",
+        threadId: "thread-1",
+      })).toEqual({ title: "Investigate the flaky login redirect" });
     } finally {
       await registry.close();
     }

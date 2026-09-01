@@ -207,7 +207,9 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     // and naming the thread after its own id would put a raw id where the
     // operator has already seen a title. Read the registry's remembered name
     // instead — also cache-only, but not tied to the thread list's lifetime.
-    const rememberedTitle = cached
+    // Only worth asking when we are actually about to synthesize a summary:
+    // with no cached row and no overlay there is no thread to name.
+    const rememberedTitle = cached || !overlay
       ? undefined
       : this.registry.getCachedThreadTitle({
           backend: request.backend,
@@ -221,7 +223,14 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
           summary: cached ?? {
             id: request.threadId,
             title: rememberedTitle?.title ?? request.threadId,
-            titleSource: rememberedTitle?.titleSource ?? "fallback",
+            // A remembered name whose source was never classified renders as
+            // derived: that shortens and length-caps it, which is the safe
+            // direction for a chat card, and it avoids claiming an operator
+            // chose a name that may have been generated. Without a name at
+            // all the title is the thread id, which is what `fallback` means.
+            titleSource: rememberedTitle
+              ? rememberedTitle.titleSource ?? "derived"
+              : "fallback",
             source: request.backend,
             linkedDirectories: overlay?.extraLinkedDirectories ?? [],
           },

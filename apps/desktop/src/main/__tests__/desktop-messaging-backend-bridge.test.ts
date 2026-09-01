@@ -244,6 +244,36 @@ describe("DesktopMessagingBackendBridge", () => {
     });
   });
 
+  it("renders an unclassified remembered name as a derived title", async () => {
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-renamed",
+      extraLinkedDirectories: [],
+    });
+    // A rename notification carries text and no source, so the registry
+    // reports the name without one. Claiming the operator chose it would skip
+    // the status card's derived-title shortening and length cap.
+    const registry = {
+      getActiveTurnForThread: vi.fn(() => undefined),
+      getCachedThreadSummary: vi.fn(() => undefined),
+      getCachedThreadTitle: vi.fn(() => ({ title: "Ship the release runbook" })),
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      isThreadTurnOccupied: vi.fn(() => false),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    await expect(bridge.getThreadAdmissionState({
+      backend: "codex",
+      threadId: "thread-renamed",
+    })).resolves.toMatchObject({
+      thread: {
+        title: "Ship the release runbook",
+        titleSource: "derived",
+      },
+    });
+  });
+
   it("falls back to the thread id when no title was ever observed", async () => {
     getThreadOverlayState.mockResolvedValueOnce({
       backend: "codex",
@@ -270,6 +300,28 @@ describe("DesktopMessagingBackendBridge", () => {
         titleSource: "fallback",
       },
     });
+  });
+
+  it("skips the remembered-title lookup with no cached summary and no overlay", async () => {
+    getThreadOverlayState.mockResolvedValueOnce(undefined);
+    const getCachedThreadTitle = vi.fn(() => ({ title: "Never rendered" }));
+    const registry = {
+      getActiveTurnForThread: vi.fn(() => undefined),
+      getCachedThreadSummary: vi.fn(() => undefined),
+      getCachedThreadTitle,
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      isThreadTurnOccupied: vi.fn(() => false),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    const state = await bridge.getThreadAdmissionState({
+      backend: "codex",
+      threadId: "thread-unknown",
+    });
+
+    expect(state.thread).toBeUndefined();
+    expect(getCachedThreadTitle).not.toHaveBeenCalled();
   });
 
   it("keeps the cached summary title without a remembered-title lookup", async () => {

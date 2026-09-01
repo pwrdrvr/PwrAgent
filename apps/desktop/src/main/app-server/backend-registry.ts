@@ -2224,12 +2224,6 @@ function buildTerminalNotificationKey(params: {
   return `${params.backend}:${params.threadId}:turn-terminal`;
 }
 
-function isThreadTitleSource(
-  value: unknown,
-): value is AppServerThreadTitleSource {
-  return value === "explicit" || value === "derived" || value === "fallback";
-}
-
 function readNotificationProjectLabel(
   thread: Record<string, unknown> | undefined,
 ): string | undefined {
@@ -5412,13 +5406,17 @@ type CreatedThreadDirectoryVisibility = Pick<
 };
 
 /**
- * A thread name already observed by this process, kept with the source that
- * produced it so a cache-only reader renders it the same way a thread-list
- * row would.
+ * A thread name already observed by this process. `titleSource` is present
+ * only when the observation came from a normalized thread-list row, which is
+ * the one source that classifies a name. A rename notification carries just
+ * text, and a raw provider payload carries whatever the provider put there —
+ * neither can be classified here, so neither claims a source. A reader that
+ * needs one must decide how to render an unclassified name rather than being
+ * told a wrong answer.
  */
 type CachedThreadTitle = {
   title: string;
-  titleSource: AppServerThreadTitleSource;
+  titleSource?: AppServerThreadTitleSource;
 };
 
 let threadListCacheSequence = 0;
@@ -13878,38 +13876,43 @@ export class DesktopBackendRegistry {
    * name the operator has already seen after a turn or permission-mode
    * notification drops the thread list.
    *
-   * Reports the source alongside the name so a caller renders it the way a
-   * thread-list row would. The thread-list scan skips `fallback` rows, whose
-   * title is a placeholder rather than a name.
+   * Never reports a `fallback` name: that is a placeholder standing in for a
+   * name nobody has chosen, and a caller asking "what is this thread called"
+   * needs `undefined` rather than a placeholder it would have to re-detect.
+   * `titleSource` is present only when a normalized thread-list row supplied
+   * it; see `CachedThreadTitle` for why the other observations cannot supply
+   * one, and why guessing is worse than saying nothing.
+   *
+   * This deliberately does not fall back to scanning `threadListCache`. Every
+   * row that cache holds was written into `notificationThreadTitles` by
+   * `rememberThreadListContexts` on the same read, under the same fallback
+   * rule, and that map is never evicted — so a scan could only repeat, at
+   * O(entries × threads), what the lookup above already answered.
    */
   getCachedThreadTitle(params: {
     backend: AppServerBackendKind;
     threadId: string;
   }): CachedThreadTitle | undefined {
-    const key = buildThreadIdentityKey(params.backend, params.threadId);
+    const threadId = params.threadId.trim();
+    if (!threadId) {
+      return undefined;
+    }
+    const key = buildThreadIdentityKey(params.backend, threadId);
     const observedName = this.observedThreadNames.get(key)?.trim();
     if (observedName) {
-      // `withObservedThreadName` surfaces a live rename as an explicit name.
-      return { title: observedName, titleSource: "explicit" };
+      return { title: observedName };
     }
     const remembered = this.notificationThreadTitles.get(key);
     const rememberedTitle = remembered?.title.trim();
-    if (remembered && rememberedTitle) {
-      return { title: rememberedTitle, titleSource: remembered.titleSource };
+    if (!remembered || !rememberedTitle || remembered.titleSource === "fallback") {
+      return undefined;
     }
-    for (const state of this.threadListCache.values()) {
-      const thread = state.threads?.find(
-        (candidate) =>
-          candidate.source === params.backend
-          && candidate.id === params.threadId
-          && candidate.titleSource !== "fallback",
-      );
-      const title = thread?.title.trim();
-      if (thread && title) {
-        return { title, titleSource: thread.titleSource };
-      }
-    }
-    return undefined;
+    return {
+      title: rememberedTitle,
+      ...(remembered.titleSource
+        ? { titleSource: remembered.titleSource }
+        : {}),
+    };
   }
 
   async supportsMessagingPdfTools(params: {
@@ -34389,10 +34392,12 @@ export class DesktopBackendRegistry {
         const trimmed = threadName.trim();
         if (trimmed) {
           const key = buildThreadIdentityKey(event.backend, threadId);
-          this.notificationThreadTitles.set(key, {
-            title: trimmed,
-            titleSource: "explicit",
-          });
+          // `thread/name/updated` params carry a name and nothing else. The
+          // registry emits it for an operator rename, for a generated title
+          // (`applyGeneratedThreadTitle` renames with "derived" or even
+          // "fallback"), and ACP forwards it for an agent-chosen session
+          // title — so the notification alone cannot say which this is.
+          this.notificationThreadTitles.set(key, { title: trimmed });
           this.observedThreadNames.set(key, trimmed);
         }
       }
@@ -34455,6 +34460,7 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     threadId: string,
     thread: unknown,
+    titleSource?: AppServerThreadTitleSource,
   ): void {
     if (!thread || typeof thread !== "object" || Array.isArray(thread)) {
       return;
@@ -34466,14 +34472,19 @@ export class DesktopBackendRegistry {
     const trimmed = candidate?.trim();
     const key = buildThreadIdentityKey(backend, threadId);
     if (trimmed) {
+      // Only a normalized thread-list row can classify a name, and only its
+      // caller has that classification — never infer one from a raw payload.
+      // The one exception is the placeholder PwrAgent itself writes back to
+      // Codex when a thread has no name and no preview
+      // (`extractThreadNameRecordFromValue`): it arrives as ordinary provider
+      // text, and calling it a name would let a bound status card announce
+      // "Untitled thread" as though the operator had chosen it.
+      const resolvedTitleSource = isGenericPlaceholderTitle(trimmed)
+        ? "fallback"
+        : titleSource;
       this.notificationThreadTitles.set(key, {
         title: trimmed,
-        // Thread-list rows carry the normalized source. A raw `thread/started`
-        // payload does not, and its name is provider-set text, so read it the
-        // same way a caller reads an explicit name.
-        titleSource: isThreadTitleSource(record.titleSource)
-          ? record.titleSource
-          : "explicit",
+        ...(resolvedTitleSource ? { titleSource: resolvedTitleSource } : {}),
       });
     }
     const projectLabel = readNotificationProjectLabel(record);
@@ -34490,7 +34501,12 @@ export class DesktopBackendRegistry {
       if (thread.titleSource === "fallback") {
         continue;
       }
-      this.rememberThreadNotificationContext(thread.source, thread.id, thread);
+      this.rememberThreadNotificationContext(
+        thread.source,
+        thread.id,
+        thread,
+        thread.titleSource,
+      );
     }
   }
 
@@ -34523,7 +34539,12 @@ export class DesktopBackendRegistry {
       });
       const thread = threads.find((candidate) => candidate.id === threadId);
       if (thread) {
-        this.rememberThreadNotificationContext(backend, threadId, thread);
+        this.rememberThreadNotificationContext(
+          backend,
+          threadId,
+          thread,
+          thread.titleSource,
+        );
         return this.notificationThreadContextLabel(backend, threadId);
       }
     } catch (error) {

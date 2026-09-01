@@ -392,7 +392,15 @@ An ordinary reply to an existing binding does not build a navigation snapshot.
 That projection is sufficient for permission/full-access policy, message
 origin, occupancy, queue admission, and turn settings. It deliberately carries
 no PR lookup, Git working-state probe, launchpad hydration, directory-fleet
-walk, or connected-peer enumeration. The shared turn FIFO remains the final
+walk, or connected-peer enumeration.
+
+Two fields are not yet recovered on a cold read, because only the provider's
+thread-list row carries them and no durable record does. A thread's provider
+directories are missing, so a cold status card reports its project, directory,
+and worktree as unavailable; and an ACP thread's `acpRuntime` is missing, so
+its permissions line falls back to the backend-global mode or loses its
+control. Both need a last-observed thread projection rather than a name
+lookup, so they are deliberately out of scope here rather than fixed halfway. The shared turn FIFO remains the final
 race-safe admission authority if activity changes after the targeted read.
 
 Full navigation remains appropriate for explicit browse, monitor, picker,
