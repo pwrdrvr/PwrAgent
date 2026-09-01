@@ -5928,11 +5928,17 @@ function attachReviewEntryReviewers(params: {
  * Scoping is what makes this correct, not just cheap. The overlay retains up
  * to MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES finalized rows spanning the whole
  * thread, so merging all of them into the newest page put weeks-old usage
- * under recent messages. Pages are cut on turn boundaries
- * (findTurnPageStartIndex, and each page's cursor is its own first entry), so
- * exactly one page owns any given turn. Where an older replay format forces
- * entry-count paging and splits a turn, prependTranscriptHistoryPage already
- * drops entry ids it has seen, so a row cannot render twice.
+ * under recent messages. Both backends page on turn boundaries — Codex asks
+ * the app server for whole turns (thread/turns/list cursors), ACP cuts on
+ * findTurnPageStartIndex whenever the page has turn ids — so exactly one page
+ * owns any given turn. Where an older replay format forces entry-count paging
+ * and splits a turn, prependTranscriptHistoryPage already drops entry ids it
+ * has seen, so a row cannot render twice.
+ *
+ * Omission is sound only where the page's turn ids can prove the row belongs
+ * elsewhere. A row with no turn id, and any row on a page that carries no turn
+ * metadata at all, keeps the createdAt-then-append placement this merge
+ * replaced: dropping those would hide them on every page rather than on one.
  *
  * One forward pass, O(page + usage). The previous per-activity filter and
  * insert rebuilt the whole page array for each of up to 100 rows: 217,000
@@ -5961,12 +5967,23 @@ function mergeTurnAnchoredUsageActivities(params: {
   const anchoredUsageByIndex = new Map<number, AppServerThreadActivityEntry[]>();
   const anchoredUsageIds = new Set<string>();
   const supersededTurnIds = new Set<string>();
+  const unanchoredUsage: AppServerThreadActivityEntry[] = [];
   for (const activity of usageActivities) {
     const turnId = activity.turn?.id;
     const anchorIndex = turnId === undefined
       ? undefined
       : lastEntryIndexByTurnId.get(turnId);
     if (anchorIndex === undefined) {
+      if (turnId !== undefined && lastEntryIndexByTurnId.size > 0) {
+        // The page names its turns and does not name this one, so another
+        // page owns the row.
+        continue;
+      }
+      // Nothing here can place the row by turn: it carries no turn id, or the
+      // page carries none. Absence proves nothing, and omitting it would hide
+      // the row on every page.
+      unanchoredUsage.push(activity);
+      anchoredUsageIds.add(activity.id);
       continue;
     }
     const anchored = anchoredUsageByIndex.get(anchorIndex);
@@ -5983,13 +6000,36 @@ function mergeTurnAnchoredUsageActivities(params: {
       supersededTurnIds.add(turnId);
     }
   }
-  if (anchoredUsageByIndex.size === 0) {
+  if (anchoredUsageByIndex.size === 0 && unanchoredUsage.length === 0) {
     return params.replay;
   }
+
+  // The unanchored rows keep insertTranscriptEntry's remaining tiers, resolved
+  // in this same forward pass: a row lands before the first entry newer than
+  // it, and a row with no createdAt has nothing to compare against and goes
+  // last. Sorting by createdAt preserves the sequential-insert order, since
+  // ties resolve after the row already placed.
+  const timedUnanchoredUsage = unanchoredUsage
+    .filter((activity) => typeof activity.createdAt === "number")
+    .sort((left, right) => (left.createdAt ?? 0) - (right.createdAt ?? 0));
+  const untimedUnanchoredUsage = unanchoredUsage.filter(
+    (activity) => typeof activity.createdAt !== "number",
+  );
+  let unanchoredIndex = 0;
 
   const entries: AppServerThreadEntry[] = [];
   for (let index = 0; index < params.replay.entries.length; index += 1) {
     const entry = params.replay.entries[index]!;
+    const entryCreatedAt = entry.createdAt;
+    if (typeof entryCreatedAt === "number") {
+      while (
+        unanchoredIndex < timedUnanchoredUsage.length
+        && entryCreatedAt > (timedUnanchoredUsage[unanchoredIndex]!.createdAt ?? 0)
+      ) {
+        entries.push(timedUnanchoredUsage[unanchoredIndex]!);
+        unanchoredIndex += 1;
+      }
+    }
     const entryTurnId = entry.turn?.id;
     const supersededByTurnTotal =
       entryTurnId !== undefined
@@ -6007,6 +6047,10 @@ function mergeTurnAnchoredUsageActivities(params: {
       entries.push(...anchored);
     }
   }
+  for (; unanchoredIndex < timedUnanchoredUsage.length; unanchoredIndex += 1) {
+    entries.push(timedUnanchoredUsage[unanchoredIndex]!);
+  }
+  entries.push(...untimedUnanchoredUsage);
 
   return {
     ...params.replay,

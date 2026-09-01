@@ -408,15 +408,18 @@ async function expectEventually<T>(
  */
 function usageActivity(params: {
   createdAt: number;
-  turnId: string;
+  turnId?: string;
+  id?: string;
 }): AppServerThreadActivityEntry {
   return {
     type: "activity",
-    id: `live-turn-usage-${params.turnId}`,
+    id: params.id ?? `live-turn-usage-${params.turnId}`,
     summary: "Turn usage: 1,000 uncached in · 2,000 cached · 300 out",
     status: "completed",
     createdAt: params.createdAt,
-    turn: { id: params.turnId, status: "completed" },
+    ...(params.turnId
+      ? { turn: { id: params.turnId, status: "completed" as const } }
+      : {}),
     details: [],
   };
 }
@@ -13332,6 +13335,77 @@ script = "echo setup"
 
     expect(response.replay.entries.map((entry) => entry.id)).toEqual([
       "assistant-turn-9",
+      "live-turn-usage-turn-9",
+    ]);
+
+    await registry.close();
+  });
+
+  it("places overlay turn usage the page's turn ids cannot account for", async () => {
+    // Omitting a row is sound only where the page's own turn ids prove the row
+    // belongs to another page. A row with no turn id has no page that will
+    // ever claim it, and a page with no turn metadata — the shape
+    // findTurnPageStartIndex documents as still live — cannot claim anything.
+    // Dropping either hides the row on every page: the operator watches usage
+    // lines arrive during the turn and finds an empty transcript on restart.
+    const codexClient = new MockBackendClient({
+      replay: {
+        entries: [
+          {
+            type: "message",
+            id: "assistant-early",
+            role: "assistant",
+            phase: "final",
+            text: "Earlier answer.",
+            createdAt: 10_000,
+          },
+          {
+            type: "message",
+            id: "assistant-late",
+            role: "assistant",
+            phase: "final",
+            text: "Later answer.",
+            createdAt: 90_000,
+          },
+        ],
+        messages: [],
+        pagination: { supportsPagination: true, hasPreviousPage: false },
+      },
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock({
+        overlays: {
+          "codex:thread-1": {
+            backend: "codex",
+            threadId: "thread-1",
+            executionMode: "default",
+            extraLinkedDirectories: [],
+            immutableUsageActivities: [
+              usageActivity({ createdAt: 90_001, turnId: "turn-9" }),
+              usageActivity({ createdAt: 50_000, turnId: "turn-5" }),
+              usageActivity({
+                createdAt: 20_000,
+                id: "live-turn-usage-thread-1",
+              }),
+            ],
+          },
+        },
+      }),
+    });
+
+    const response = await registry.readThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    // createdAt order, exactly where insertTranscriptEntry put them: the
+    // 20_000 and 50_000 rows before the 90_000 message, the 90_001 row after.
+    expect(response.replay.entries.map((entry) => entry.id)).toEqual([
+      "assistant-early",
+      "live-turn-usage-thread-1",
+      "live-turn-usage-turn-5",
+      "assistant-late",
       "live-turn-usage-turn-9",
     ]);
 
