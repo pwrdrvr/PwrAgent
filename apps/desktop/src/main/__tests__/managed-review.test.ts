@@ -175,3 +175,77 @@ describe("managed review", () => {
     expect(prompt).toContain('"patch is incorrect"');
   });
 });
+
+describe("managed review confidence", () => {
+  const base = {
+    findings: [],
+    overall_correctness: "patch is correct",
+    overall_explanation: "Nothing regressed.",
+  };
+
+  it("keeps a reported confidence in range", () => {
+    expect(
+      parseManagedReviewOutput(JSON.stringify({
+        ...base,
+        overall_confidence_score: 0.85,
+      }))?.overall_confidence_score,
+    ).toBeCloseTo(0.85);
+  });
+
+  it("keeps the findings when the reviewer omits the score", () => {
+    // The prompt now tells a reviewer that cannot distinguish to leave the
+    // field out. Rejecting the whole object for a missing score would throw
+    // away real findings the moment a model takes that branch.
+    const parsed = parseManagedReviewOutput(JSON.stringify({
+      ...base,
+      findings: [{
+        title: "Unreleased queue",
+        body: "The failure path does not release queued work.",
+        confidence_score: 0.9,
+        code_location: {
+          absolute_file_path: "/repo/review.ts",
+          line_range: { start: 42, end: 44 },
+        },
+      }],
+      overall_correctness: "patch is incorrect",
+    }));
+
+    expect(parsed?.findings).toHaveLength(1);
+    expect(parsed?.overall_confidence_score).toBeUndefined();
+  });
+
+  it("drops a literal zero rather than printing 0% confidence", () => {
+    // The output schema in the prompt has to show the field, and a weaker
+    // model copies whatever value it shows. A zero beside "patch is correct"
+    // is a transcription, not a reviewer with no confidence.
+    expect(
+      parseManagedReviewOutput(JSON.stringify({
+        ...base,
+        overall_confidence_score: 0,
+      }))?.overall_confidence_score,
+    ).toBeUndefined();
+  });
+
+  it("drops a score outside 0-1 instead of guessing at percent", () => {
+    for (const score of [95, 1.5, -0.2, Number.NaN]) {
+      expect(
+        parseManagedReviewOutput(JSON.stringify({
+          ...base,
+          overall_confidence_score: score,
+        }))?.overall_confidence_score,
+      ).toBeUndefined();
+    }
+  });
+
+  it("defines the score in the prompt it asks the reviewer to fill", () => {
+    const prompt = buildManagedReviewPrompt({ type: "uncommittedChanges" });
+
+    expect(prompt).toContain(
+      "that overall_correctness is the right verdict",
+    );
+    expect(prompt).toContain("Omit the field entirely if you cannot distinguish");
+    // The schema example is part of the definition: a 0.0 there is the value
+    // that comes back as a 0% badge.
+    expect(prompt).not.toContain('"overall_confidence_score":0.0');
+  });
+});

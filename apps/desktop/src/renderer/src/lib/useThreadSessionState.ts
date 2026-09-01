@@ -5,7 +5,6 @@ import type {
   AppServerMcpElicitationRequestNotification,
   AppServerPendingRequestNotification,
   AppServerReadThreadResponse,
-  AppServerReviewOutput,
   AppServerThreadActivityDetail,
   AppServerThreadActivityEntry,
   AppServerToolRequestUserInputNotification,
@@ -34,7 +33,10 @@ import {
   createQuestionnaireState,
   type PendingQuestionnaireState,
 } from "../features/thread-detail/questionnaire";
-import { normalizeReviewDisplayText } from "../../../shared/review-command";
+import {
+  normalizeReviewDisplayText,
+  normalizeReviewOutputRecord,
+} from "../../../shared/review-command";
 import {
   createMcpElicitationState,
   type PendingMcpInteractionState,
@@ -3444,31 +3446,6 @@ function appendPendingAssistantMessage(
   ]);
 }
 
-function normalizeReviewOutput(value: unknown): AppServerReviewOutput | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-
-  const record = value as Record<string, unknown>;
-  const findings = Array.isArray(record.findings) ? record.findings : undefined;
-  if (
-    !findings ||
-    (record.overall_correctness !== "patch is correct" &&
-      record.overall_correctness !== "patch is incorrect") ||
-    typeof record.overall_explanation !== "string" ||
-    typeof record.overall_confidence_score !== "number"
-  ) {
-    return undefined;
-  }
-
-  return {
-    findings: findings as AppServerReviewOutput["findings"],
-    overall_correctness: record.overall_correctness,
-    overall_explanation: record.overall_explanation,
-    overall_confidence_score: record.overall_confidence_score,
-  };
-}
-
 function reviewEntryFromCompletedItem(params: {
   turnId?: string;
   item?: {
@@ -3511,8 +3488,9 @@ function reviewEntryFromCompletedItem(params: {
         ? normalizeReviewDisplayText(review)
         : "Code review started"
       : undefined;
-  const output = normalizeReviewOutput(record.data?.reviewOutput);
+  const output = normalizeReviewOutputRecord(record.data?.reviewOutput);
   const reviewer = normalizeReviewer(record.data?.reviewer);
+  const context = normalizeReviewContext(record.data?.context);
   const turn = buildTurnMetadata({
     fallbackId: typeof params.turnId === "string" ? params.turnId : undefined,
     fallbackStatus:
@@ -3526,6 +3504,7 @@ function reviewEntryFromCompletedItem(params: {
     ...(displayText ? { displayText } : {}),
     ...(output ? { output } : {}),
     ...(reviewer ? { reviewer } : {}),
+    ...(context ? { context } : {}),
     ...(turn ? { turn } : {}),
     createdAt:
       normalizeNotificationTimestamp(record.createdAt) ??
@@ -3558,6 +3537,86 @@ function normalizeReviewer(
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
   };
+}
+
+/**
+ * The registry freezes a review's workspace, branch, and pull request onto the
+ * live `item/completed` notification the same way it freezes `reviewer`, so
+ * this has to read it back the same way. Without it the provenance row is
+ * dropped on the native review path even though the main process put it on the
+ * wire.
+ *
+ * `pullRequest: null` is load-bearing and survives: it means the branch was
+ * checked and carried no pull request, which the card renders differently from
+ * an absent field.
+ */
+function normalizeReviewContext(
+  value: unknown,
+): AppServerThreadReviewEntry["context"] | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const workspacePath = readTrimmedString(record.workspacePath);
+  if (!workspacePath) {
+    return undefined;
+  }
+  const projectLabel = readTrimmedString(record.projectLabel);
+  const repositoryPath = readTrimmedString(record.repositoryPath);
+  const gitBranch = readTrimmedString(record.gitBranch);
+  const baseBranch = readTrimmedString(record.baseBranch);
+  const pullRequest = normalizeReviewPullRequest(record.pullRequest);
+  return {
+    workspacePath,
+    ...(projectLabel ? { projectLabel } : {}),
+    ...(repositoryPath ? { repositoryPath } : {}),
+    ...(gitBranch ? { gitBranch } : {}),
+    ...(baseBranch ? { baseBranch } : {}),
+    ...(record.pullRequest === null || pullRequest
+      ? { pullRequest: pullRequest ?? null }
+      : {}),
+  };
+}
+
+function normalizeReviewPullRequest(
+  value: unknown,
+): NonNullable<AppServerThreadReviewEntry["context"]>["pullRequest"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const provider = readTrimmedString(record.provider);
+  const org = readTrimmedString(record.org);
+  const repo = readTrimmedString(record.repo);
+  const url = readTrimmedString(record.url);
+  const number = record.number;
+  if (
+    !provider
+    || !org
+    || !repo
+    || !url
+    || typeof number !== "number"
+    || !Number.isFinite(number)
+  ) {
+    return undefined;
+  }
+  const title = readTrimmedString(record.title);
+  const headRefName = readTrimmedString(record.headRefName);
+  const baseRefName = readTrimmedString(record.baseRefName);
+  return {
+    provider,
+    org,
+    repo,
+    number,
+    url,
+    ...(title ? { title } : {}),
+    ...(headRefName ? { headRefName } : {}),
+    ...(baseRefName ? { baseRefName } : {}),
+  };
+}
+
+function readTrimmedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function messageContentFromUserItem(item: Record<string, unknown>): {

@@ -20323,6 +20323,82 @@ a.transcript-message__messaging-origin:focus-visible {
   margin-top: 8px;
 }
 
+/* The review's provenance row: which project, branch, and pull request the
+   review actually ran against. It sits inside `__copy` rather than beside the
+   header so the chips wrap in the copy column and never run under the
+   timestamp. Chip geometry matches `.pr-chip` so a review card and a sidebar
+   row read as the same vocabulary. */
+.transcript-review__provenance {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.review-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  max-width: 100%;
+  padding: 0 8px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  background: var(--bg-panel-elevated);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  text-decoration: none;
+}
+
+.review-chip__icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--text-muted);
+}
+
+.review-chip__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* The pill squishes line-height to 1, which leaves monospace digits sitting
+     high in their line box. A natural line box re-centers them against the
+     icons. */
+  line-height: normal;
+}
+
+/* `.path-copy-target` on the same element already supplies `cursor: pointer`
+   and the hover brightness. */
+.review-chip--project {
+  border-color: transparent;
+  background: var(--accent-soft);
+}
+
+.review-chip--project:hover,
+.review-chip--project:focus-visible {
+  border-color: var(--accent-border-soft);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  outline: none;
+}
+
+.review-chip--pull-request:hover,
+.review-chip--pull-request:focus-visible {
+  border-color: var(--accent-border);
+  background: var(--bg-panel-hover);
+  outline: none;
+}
+
+/* "no PR at review time" is an answer, not a control. Dashed and muted so it
+   reads as a recorded absence rather than something to click. */
+.review-chip--empty {
+  border-style: dashed;
+  background: transparent;
+  color: var(--text-muted);
+}
+
 .transcript-review__meta {
   display: flex;
   flex-wrap: wrap;

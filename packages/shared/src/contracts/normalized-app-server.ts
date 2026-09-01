@@ -148,7 +148,68 @@ export type AppServerReviewOutput = {
   findings: AppServerReviewFinding[];
   overall_correctness: "patch is correct" | "patch is incorrect";
   overall_explanation: string;
-  overall_confidence_score: number;
+  /**
+   * The reviewer's own confidence, from 0 to 1, that `overall_correctness` is
+   * the right verdict. Absent when the reviewer did not report one — readers
+   * must render the verdict without a number rather than substituting zero.
+   */
+  overall_confidence_score?: number;
+};
+
+/**
+ * Identity of the pull request a review was about. Deliberately carries no
+ * check, review, or merge status: this is frozen at review start and a status
+ * frozen alongside it would still be painting last month's CI result today.
+ * Callers that want live status look the PR up by this identity.
+ */
+export type AppServerReviewPullRequest = {
+  /** Forge host that owns the PR namespace, e.g. "github.com". */
+  provider: string;
+  org: string;
+  repo: string;
+  number: number;
+  url: string;
+  title?: string;
+  headRefName?: string;
+  baseRefName?: string;
+};
+
+/**
+ * Where a review ran, captured when it started. A thread can link several Git
+ * directories and a review runs in exactly one of them, so this belongs to the
+ * review artifact rather than to the thread's ambient state — the same reason
+ * `reviewer` does. Resolving it at render time would relabel a month-old card
+ * with today's workspace and today's pull requests.
+ */
+export type AppServerReviewContext = {
+  /** Absolute workspace the review ran in — the `cwd` on StartReviewRequest. */
+  workspacePath: string;
+  /** Linked-directory label for `workspacePath`, e.g. "PwrAgent". */
+  projectLabel?: string;
+  /** Repository checkout when `workspacePath` is one of its worktrees. */
+  repositoryPath?: string;
+  /**
+   * Branch checked out in `workspacePath` at start. Absent when there was no
+   * branch to read — a commit target, or a detached HEAD.
+   */
+  gitBranch?: string;
+  /**
+   * Base the diff was taken against, when the target named one. Lets a reader
+   * tell a review against the PR's own base from one against an override.
+   */
+  baseBranch?: string;
+  /**
+   * The pull request open on `gitBranch` in this workspace at start.
+   *
+   * `null` means the branch was checked and carried none. Absent means no
+   * check was possible — there was no branch, or no PR data had been fetched.
+   * The two are not interchangeable: one is an answer, the other is a gap.
+   *
+   * Never a list. A pull request that is not on the reviewed branch is not
+   * evidence about the reviewed diff, and printing the thread's other PRs here
+   * would imply a connection that does not exist.
+   */
+  pullRequest?: AppServerReviewPullRequest | null;
 };
 
 export type LinkedDirectorySummary = {
@@ -708,6 +769,12 @@ export type AppServerThreadReviewEntry = {
     model?: string;
     reasoningEffort?: string;
   };
+  /**
+   * Workspace, branch, and pull request this review was about, frozen at
+   * start. Absent on reviews that predate the capture — render nothing rather
+   * than an "unknown" row on every historical card.
+   */
+  context?: AppServerReviewContext;
   output?: AppServerReviewOutput;
   turn?: AppServerThreadTurnMetadata;
 };

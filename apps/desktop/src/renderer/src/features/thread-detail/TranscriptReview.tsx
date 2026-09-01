@@ -1,5 +1,6 @@
 import type {
   AppServerReviewFinding,
+  AppServerReviewOutput,
   AppServerThreadReviewEntry,
   DesktopApplicationsSnapshot,
   MarkdownFileViewerContext,
@@ -8,8 +9,10 @@ import { formatPathRelativeToDirectories } from "@pwragent/shared";
 import { useCallback, useMemo, type MouseEvent } from "react";
 import { normalizeReviewDisplayText } from "../../../../shared/review-command";
 import { formatBackendLabel } from "../../lib/backend-label";
+import { useViewportTooltip } from "../../lib/useViewportTooltip";
 import type { DesktopApi } from "../../lib/desktop-api";
 import type { ThreadLinkSource } from "../../lib/thread-links";
+import { ReviewProvenance } from "./ReviewProvenance";
 import { ThreadMarkdown } from "./ThreadMarkdown";
 
 type TranscriptReviewProps = {
@@ -24,12 +27,45 @@ type TranscriptReviewProps = {
   threadLinkSource?: ThreadLinkSource;
 };
 
-function formatConfidence(value: number | undefined): string | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
+/**
+ * The percentage is fused into the verdict badge rather than standing beside it
+ * as its own pill. Alone, "98% confidence" names no subject: a reader can take
+ * it for a quality score on the code just as easily as for the reviewer's
+ * confidence in its own verdict. Printed inside the verdict, it can only modify
+ * the verdict.
+ *
+ * `normalizeReviewConfidenceScore` has already dropped values that cannot mean
+ * anything, so an absent score here means the reviewer reported none and the
+ * verdict is shown without a number.
+ */
+function formatVerdict(
+  correctness: AppServerReviewOutput["overall_correctness"] | undefined,
+  confidence: number | undefined,
+): string | undefined {
+  if (!correctness) {
     return undefined;
   }
+  const verdict =
+    correctness === "patch is correct" ? "Patch correct" : "Patch needs work";
+  return confidence === undefined
+    ? verdict
+    : `${verdict} · ${Math.round(confidence * 100)}%`;
+}
 
-  return `${Math.round(value * 100)}% confidence`;
+function formatVerdictTooltip(
+  correctness: AppServerReviewOutput["overall_correctness"],
+  confidence: number | undefined,
+  reviewer: AppServerThreadReviewEntry["reviewer"],
+): string {
+  const verdict =
+    correctness === "patch is correct"
+      ? "the patch is correct"
+      : "the patch needs work";
+  const who = reviewer?.model?.trim() || "The reviewer";
+  if (confidence === undefined) {
+    return `${who} judged that ${verdict}. It reported no confidence in that judgement.`;
+  }
+  return `How sure ${who} is that its own verdict — ${verdict} — is right. It is not a score for the code, and not a judgement about whether the change is ready to merge.`;
 }
 
 function formatPath(path: string, directoryPaths: string[] | undefined): string {
@@ -116,6 +152,49 @@ function parsePlainReview(review: string): {
   };
 }
 
+/**
+ * The transcript scrolls, so the CSS pseudo-element tooltip would be clipped
+ * against the scroll container for any card near its top edge. The portalled
+ * tooltip escapes it, and `aria-describedby` is what makes the explanation
+ * reachable to a screen reader — the badge's own text is the verdict, and
+ * folding the explanation into its label would rename the thing rather than
+ * describe it.
+ */
+function ReviewVerdictBadge(props: {
+  confidence: number | undefined;
+  correctness: NonNullable<AppServerReviewOutput["overall_correctness"]>;
+  reviewer: AppServerThreadReviewEntry["reviewer"];
+  verdict: string;
+}) {
+  const tooltip = useViewportTooltip({ className: "viewport-tooltip" });
+  const text = formatVerdictTooltip(
+    props.correctness,
+    props.confidence,
+    props.reviewer
+  );
+
+  return (
+    <>
+      <span
+        aria-describedby={tooltip.visible ? tooltip.tooltipId : undefined}
+        className={`transcript-review__badge transcript-review__badge--${
+          props.correctness === "patch is correct" ? "success" : "danger"
+        }`}
+        tabIndex={0}
+        onBlur={tooltip.hide}
+        onFocus={(event) => tooltip.show(event.currentTarget, text)}
+        onMouseEnter={(event) =>
+          tooltip.showAfterDelay(event.currentTarget, text)
+        }
+        onMouseLeave={tooltip.hide}
+      >
+        {props.verdict}
+      </span>
+      {tooltip.tooltipNode}
+    </>
+  );
+}
+
 export function TranscriptReview(props: TranscriptReviewProps) {
   const editorApplication = useMemo(
     () =>
@@ -164,13 +243,10 @@ export function TranscriptReview(props: TranscriptReviewProps) {
     (shouldHideReviewBody(summary, props.entry.review)
       ? ""
       : plainReview?.explanation ?? props.entry.review);
-  const confidence = formatConfidence(output?.overall_confidence_score);
-  const correctness =
-    output?.overall_correctness === "patch is correct"
-      ? "Patch correct"
-      : output?.overall_correctness === "patch is incorrect"
-        ? "Patch needs work"
-        : undefined;
+  const verdict = formatVerdict(
+    output?.overall_correctness,
+    output?.overall_confidence_score,
+  );
   const reviewer = props.entry.reviewer;
 
   return (
@@ -179,6 +255,9 @@ export function TranscriptReview(props: TranscriptReviewProps) {
         <div className="transcript-review__copy">
           <p className="transcript-review__eyebrow">Review</p>
           <p className="transcript-review__summary">{summary}</p>
+          {props.entry.context ? (
+            <ReviewProvenance context={props.entry.context} />
+          ) : null}
           {body ? (
             <ThreadMarkdown
               applications={props.applications}
@@ -204,21 +283,17 @@ export function TranscriptReview(props: TranscriptReviewProps) {
 
       {output ? (
         <div className="transcript-review__meta" aria-label="Review summary">
-          {correctness ? (
-            <span
-              className={`transcript-review__badge transcript-review__badge--${
-                output.overall_correctness === "patch is correct" ? "success" : "danger"
-              }`}
-            >
-              {correctness}
-            </span>
+          {verdict ? (
+            <ReviewVerdictBadge
+              confidence={output.overall_confidence_score}
+              correctness={output.overall_correctness}
+              reviewer={reviewer}
+              verdict={verdict}
+            />
           ) : null}
           <span className="transcript-review__badge">
             {findingCount} {findingCount === 1 ? "finding" : "findings"}
           </span>
-          {confidence ? (
-            <span className="transcript-review__badge">{confidence}</span>
-          ) : null}
         </div>
       ) : null}
 
