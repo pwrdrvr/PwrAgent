@@ -327,8 +327,8 @@ export const SETTINGS_LAST_CREDENTIAL_TEST_CHANNEL =
 export const SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL =
   "settings:resolve-messaging-contact";
 /**
- * Builds the official Slack create-from-manifest URL and optionally
- * opens it in the system browser. Request: `SlackCreateAppRequest`.
+ * Prepares the official Slack manifest and opens either create-from-manifest
+ * or existing-app management. Request: `SlackCreateAppRequest`.
  * Response: `SlackCreateAppResponse`. The renderer never opens the
  * Slack login page itself.
  */

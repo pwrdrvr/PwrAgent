@@ -1851,10 +1851,12 @@ export type SettingsCredentialTestRequest = {
   kind: SettingsCredentialTestKind;
 };
 
-/** Open Slack's create-from-manifest page in the system browser. */
+/** Prepare the current Slack manifest for a new or existing app. */
 export type SlackCreateAppRequest = {
   /** When true (default), also open the URL via the OS browser. */
   open?: boolean;
+  /** Create a new app from the manifest, or open Slack Apps to update one. */
+  mode?: "create" | "update";
 };
 
 export type SlackCreateAppResponse = {

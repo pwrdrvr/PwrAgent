@@ -516,6 +516,36 @@ describe("settings ipc", () => {
     disposeSettingsIpcHandlers();
   });
 
+  it("opens Slack Apps and returns the manifest for an existing app update", async () => {
+    const service = {
+      readSettings: vi.fn(),
+    } as unknown as DesktopSettingsService;
+    const { registerSettingsIpcHandlers, disposeSettingsIpcHandlers } = await import(
+      "../ipc/settings"
+    );
+    const { SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL } = await import("../../shared/ipc");
+
+    disposeSettingsIpcHandlers();
+    registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL)?.(
+        {},
+        { mode: "update", open: true },
+      ),
+    ).resolves.toMatchObject({
+      opened: true,
+      oversized: false,
+      url: "https://api.slack.com/apps",
+      manifestJson: "{}",
+    });
+    expect(electronMocks.openExternal).toHaveBeenCalledExactlyOnceWith(
+      "https://api.slack.com/apps",
+    );
+
+    disposeSettingsIpcHandlers();
+  });
+
   it("checks and opens Discord's suggested thread-reply permission request", async () => {
     const service = {
       readSettings: vi.fn(),

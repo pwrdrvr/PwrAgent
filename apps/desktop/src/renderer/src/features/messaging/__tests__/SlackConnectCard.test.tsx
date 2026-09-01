@@ -60,4 +60,51 @@ describe("SlackConnectCard", () => {
       );
     });
   });
+
+  it("copies the manifest and opens Slack Apps for an existing app update", async () => {
+    const openSlackCreateApp = vi.fn(async () => ({
+      url: "https://api.slack.com/apps",
+      oversized: false,
+      manifestJson: "{\"features\":{\"agent_view\":{}}}",
+      opened: true,
+    }));
+    const copyText = vi.fn(async () => undefined);
+
+    render(
+      <SlackConnectCard
+        variant="settings"
+        desktopApi={{ openSlackCreateApp, copyText } as unknown as DesktopApi}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", {
+      name: "Update existing Slack app",
+    }));
+
+    await waitFor(() => {
+      expect(openSlackCreateApp).toHaveBeenCalledWith({
+        mode: "update",
+        open: true,
+      });
+      expect(copyText).toHaveBeenCalledWith(
+        "{\"features\":{\"agent_view\":{}}}",
+      );
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Choose your existing PwrAgent app",
+      );
+    });
+  });
+
+  it("does not offer the existing-app update action during onboarding", () => {
+    render(
+      <SlackConnectCard
+        variant="onboarding"
+        desktopApi={{ openSlackCreateApp: vi.fn() } as unknown as DesktopApi}
+      />,
+    );
+
+    expect(screen.queryByRole("button", {
+      name: "Update existing Slack app",
+    })).not.toBeInTheDocument();
+  });
 });

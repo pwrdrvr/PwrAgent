@@ -46,6 +46,27 @@ export function SlackConnectCard(props: {
     }
   };
 
+  const updateExisting = async (): Promise<void> => {
+    if (!props.desktopApi?.openSlackCreateApp || busy) return;
+    setBusy(true);
+    setError(undefined);
+    setStatus(undefined);
+    try {
+      const result = await props.desktopApi.openSlackCreateApp({
+        mode: "update",
+        open: true,
+      });
+      await copyText(result.manifestJson, props.desktopApi);
+      setStatus(
+        "Copied the current PwrAgent manifest and opened Slack Apps. Choose your existing PwrAgent app, open App Manifest, replace the manifest, and save changes.",
+      );
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <div
       className={`slack-connect slack-connect--${props.variant}`}
@@ -85,6 +106,18 @@ export function SlackConnectCard(props: {
         >
           Copy Create Slack app link
         </button>
+        {props.variant === "settings" ? (
+          <button
+            type="button"
+            className="button button--ghost"
+            disabled={busy || !canOpen}
+            onClick={() => {
+              void updateExisting();
+            }}
+          >
+            Update existing Slack app
+          </button>
+        ) : null}
       </div>
       <ol className="slack-connect__checklist">
         {SLACK_CONNECT_CHECKLIST.map((step) => (
