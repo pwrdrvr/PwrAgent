@@ -360,6 +360,7 @@ import type {
   WriteStarMapWorkspaceRequest,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
+  ReadDesktopConfigBootstrapResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
   RecordComposerDraftHistoryRequest,
@@ -714,6 +715,7 @@ import {
   SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
+  SETTINGS_READ_BOOTSTRAP_CHANNEL,
   SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
@@ -1170,6 +1172,11 @@ const desktopApi = Object.freeze({
       "readSettings",
       SETTINGS_READ_CHANNEL,
       request,
+    ),
+  readConfigBootstrap: async (): Promise<ReadDesktopConfigBootstrapResponse> =>
+    await invokeWithStartupProfileTiming(
+      "readConfigBootstrap",
+      SETTINGS_READ_BOOTSTRAP_CHANNEL,
     ),
   writeSettingsConfig: async (
     request: WriteDesktopSettingsConfigRequest,

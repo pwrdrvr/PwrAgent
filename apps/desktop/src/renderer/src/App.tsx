@@ -51,6 +51,10 @@ import {
   useDesktopSettings,
   type DesktopSettingsState,
 } from "./features/settings/useDesktopSettings";
+import {
+  useDesktopConfigBootstrap,
+  type DesktopConfigBootstrapState,
+} from "./features/settings/useDesktopConfigBootstrap";
 import type { ThreadViewProps } from "./features/thread-detail/ThreadView";
 import {
   DEFAULT_CONTEXT_TAB,
@@ -185,6 +189,7 @@ const LazyOnboardingWizard = lazy(async () => ({
 export function App() {
   const desktopApi = useDesktopApi();
   const settings = useDesktopSettings(desktopApi);
+  const bootstrapConfig = useDesktopConfigBootstrap(desktopApi);
   // Owns live theme + density state. Source of truth is per-profile
   // config.toml; the snapshot pulls it in over IPC, the hook adopts it
   // when available, and setters write back via writeSettingsConfig.
@@ -208,26 +213,12 @@ export function App() {
     writeConfig: settings.writeConfig,
   });
 
-  if (desktopApi?.readSettings && !settings.snapshot && settings.error) {
-    return (
-      <>
-        <AppTitleBar />
-        <div className="app-shell app-shell--fatal-settings">
-          <main className="app-main">
-            <Suspense fallback={null}>
-              <LazySettingsScreen
-                appearanceController={appearanceController}
-                desktopApi={desktopApi}
-                settings={settings}
-              />
-            </Suspense>
-          </main>
-        </div>
-      </>
-    );
-  }
-
-  if (settings.snapshot?.configError) {
+  if (
+    desktopApi?.readSettings
+    && !settings.snapshot
+    && settings.error
+    && !bootstrapConfig.snapshot
+  ) {
     return (
       <>
         <AppTitleBar />
@@ -249,6 +240,7 @@ export function App() {
   return (
     <DesktopAppShell
       appearanceController={appearanceController}
+      bootstrapConfig={bootstrapConfig}
       desktopApi={desktopApi}
       settings={settings}
     />
@@ -257,6 +249,7 @@ export function App() {
 
 function DesktopAppShell(props: {
   appearanceController: AppearanceController;
+  bootstrapConfig: DesktopConfigBootstrapState;
   desktopApi?: DesktopApi;
   settings: DesktopSettingsState;
 }) {
@@ -360,6 +353,39 @@ function DesktopAppShell(props: {
   const dismissAppNotice = useCallback((id: string): void => {
     dispatchAppNotice({ type: "dismiss", id });
   }, []);
+  const configError =
+    props.bootstrapConfig.snapshot?.configError
+    ?? props.settings.snapshot?.configError;
+  useEffect(() => {
+    if (!configError) {
+      dispatchAppNotice({ type: "dismiss", id: "config-file-invalid" });
+      return;
+    }
+    showAppNotice({
+      autoDismiss: false,
+      id: "config-file-invalid",
+      title: "Settings config did not load",
+      message:
+        `${configError} PwrAgent is using the last known good configuration.`,
+    });
+  }, [configError, showAppNotice]);
+  const settingsRefreshError =
+    props.desktopApi?.readSettings && props.bootstrapConfig.snapshot
+      ? props.settings.error
+      : undefined;
+  useEffect(() => {
+    if (!settingsRefreshError) {
+      dispatchAppNotice({ type: "dismiss", id: "settings-refresh-failed" });
+      return;
+    }
+    showAppNotice({
+      autoDismiss: false,
+      id: "settings-refresh-failed",
+      title: "Settings refresh failed",
+      message:
+        `${settingsRefreshError} PwrAgent is continuing with its startup configuration.`,
+    });
+  }, [settingsRefreshError, showAppNotice]);
   /* Thread create / rename / archive failures. The originating control is
      always gone by the time these resolve — the rename dialog closes on
      submit, the context menu closes on click, and a failed create has no
@@ -1216,9 +1242,12 @@ function DesktopAppShell(props: {
   }, [uiPrefs]);
 
   const normalAppEnabled =
-    !desktopApi?.readSettings ||
-    (Boolean(settings.snapshot) &&
-      settings.snapshot?.onboarding?.completed.value !== false);
+    !desktopApi?.readSettings
+    || (desktopApi.readConfigBootstrap && !props.bootstrapConfig.error
+      ? props.bootstrapConfig.snapshot?.onboarding.completed !== false
+        && Boolean(props.bootstrapConfig.snapshot)
+      : Boolean(settings.snapshot)
+        && settings.snapshot?.onboarding?.completed.value !== false);
   const profiles = usePwrAgentProfiles(desktopApi);
   const refreshProfiles = profiles.refresh;
   const runtimeIdentity = useRuntimeIdentity(desktopApi);

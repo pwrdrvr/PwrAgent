@@ -398,7 +398,7 @@ function logBootDecision(decision: ProfileBootDecision): void {
 }
 
 function prewarmInitialThreadList(): void {
-  if (getDesktopSettingsService().isCodexBootstrapDeferred()) {
+  if (!getDesktopConfigStore().read("onboarding").completed) {
     mainLog.info("startup thread list prewarm deferred until onboarding completes");
     recordStartupProfileEvent({
       type: "startup-thread-list-prewarm:deferred",

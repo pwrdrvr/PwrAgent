@@ -16,7 +16,25 @@ const getDesktopBackendRegistryMock = vi.fn(() => ({
   listThreads: listThreadsMock,
 }));
 const desktopConfigStoreMock = vi.hoisted(() => ({
+  configRevision: vi.fn(() => "config-revision"),
+  fileStatus: vi.fn(() => ({ kind: "valid", contentHash: "hash", observedAt: 20 })),
   recordProviderDiscovery: vi.fn(),
+  read: vi.fn((domain: string) =>
+    domain === "general"
+      ? {
+          appearance: {
+            theme: "system",
+            density: "mission-control",
+            sidebarTextSize: "md",
+            transcriptTextSize: "md",
+          },
+        }
+      : {
+          completed: true,
+          completedSource: "migrated",
+        },
+  ),
+  version: vi.fn(() => 1),
 }));
 const childProcessMocks = vi.hoisted(() => ({
   execFile: vi.fn(),
@@ -278,14 +296,27 @@ describe("settings ipc", () => {
       disposeSettingsIpcHandlers,
     } = await import("../ipc/settings");
     const {
+      SETTINGS_READ_BOOTSTRAP_CHANNEL,
       SETTINGS_READ_CHANNEL,
       SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
       SETTINGS_REPLACE_SECRET_CHANNEL,
       SETTINGS_WRITE_CONFIG_CHANNEL,
     } = await import("../../shared/ipc");
     const refreshCodexDiscovery = vi.spyOn(service, "refreshCodexDiscovery");
+    const readSettings = vi.spyOn(service, "readSettings");
 
     registerSettingsIpcHandlers(service);
+
+    await expect(
+      handlers.get(SETTINGS_READ_BOOTSTRAP_CHANNEL)?.({}),
+    ).resolves.toMatchObject({
+      snapshot: {
+        version: 1,
+        configRevision: "config-revision",
+        onboarding: { completed: true },
+      },
+    });
+    expect(readSettings).not.toHaveBeenCalled();
 
     await expect(
       handlers.get(SETTINGS_READ_CHANNEL)?.({}),
@@ -338,6 +369,7 @@ describe("settings ipc", () => {
 
     disposeSettingsIpcHandlers();
     expect(handlers.has(SETTINGS_READ_CHANNEL)).toBe(false);
+    expect(handlers.has(SETTINGS_READ_BOOTSTRAP_CHANNEL)).toBe(false);
   });
 
   it("uses startup messaging identity as the last credential result when no manual test ran", async () => {

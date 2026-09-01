@@ -502,6 +502,10 @@ import {
   type ThreadInfo,
   type ThreadInfoIdentity,
 } from "./thread-info-store";
+import {
+  ProviderThreadSnapshotStore,
+  type ProviderThreadSnapshotStoreLike,
+} from "./provider-thread-snapshot-store";
 import { resolveWorktreeRepositoryDirectory } from "./thread-directory-enricher";
 import {
   BACKGROUND_WORKTREE_WORKING_STATE_BATCH_SIZE,
@@ -539,8 +543,14 @@ import {
 import { AcpThreadTitleGenerator } from "./acp-thread-title-generator";
 import { buildMinimalGrokHelperSessionPolicy } from "../acp/minimal-helper-session";
 import { getMainLogger } from "../log";
-import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
-import type { ManagedCodexSelectionChange } from "../settings/desktop-settings-service";
+import {
+  getDesktopConfigStore,
+  getDesktopSettingsService,
+} from "../settings/desktop-settings-singleton";
+import {
+  ONBOARDING_CODEX_GATE_ENABLED,
+  type ManagedCodexSelectionChange,
+} from "../settings/desktop-settings-service";
 import { getDesktopNotificationService } from "../notifications/desktop-notification-service";
 import { buildApprovalIntent } from "../messaging/core/messaging-approval-renderer";
 import {
@@ -5633,6 +5643,7 @@ function shouldBackfillCodexDirectoryRelationships(
     case "navigation-snapshot":
     case "navigation-snapshot:active-recent":
     case "startup-prewarm":
+    case "startup-provider-refresh":
       return true;
     default:
       return false;
@@ -7987,6 +7998,9 @@ export class DesktopBackendRegistry {
    * synchronous and cannot start provider work, so a 500ms UI poll can use one.
    */
   private readonly threadInfoStore = new ThreadInfoStore();
+  private readonly providerThreadSnapshotStore?: ProviderThreadSnapshotStoreLike;
+  private durableStartupThreadHydrationAttempted = false;
+  private startupProviderRefreshPromise?: Promise<void>;
   /**
    * In-flight terminal-notification label reconciliations, keyed by thread. A
    * burst of turn completions on threads this process never observed must cost
@@ -8236,6 +8250,7 @@ export class DesktopBackendRegistry {
     acpRolloutStore?: AcpBackendAdapterOptions["acpRolloutStore"];
     acpSessionStore?: AcpSessionStoreLike | null;
     acpAvailableCommandsStore?: AcpAvailableCommandsStoreLike | null;
+    providerThreadSnapshotStore?: ProviderThreadSnapshotStoreLike | null;
     acpAvailableCommandProbeBudgetMs?: number;
     discoverLocalAcpAgents?: LocalAcpDiscovery;
     /**
@@ -8314,6 +8329,13 @@ export class DesktopBackendRegistry {
         ? undefined
         : options?.mcpConnectionService ??
           (isAppStateInitialized() ? getPwrSnapConnectionService() : undefined);
+    this.providerThreadSnapshotStore =
+      options?.providerThreadSnapshotStore === null
+        ? undefined
+        : options?.providerThreadSnapshotStore
+          ?? (isAppStateInitialized()
+            ? new ProviderThreadSnapshotStore(getAppStateDb())
+            : undefined);
     const replayClients = createReplayClientsFromEnv();
     const createsLiveCodexClient =
       !options?.codexClient && !replayClients?.codexClient;
@@ -8917,7 +8939,8 @@ export class DesktopBackendRegistry {
       options?.isCodexBootstrapDeferred ??
       (() => {
         try {
-          return getDesktopSettingsService().isCodexBootstrapDeferred();
+          return ONBOARDING_CODEX_GATE_ENABLED
+            && !getDesktopConfigStore().read("onboarding").completed;
         } catch (error) {
           // The settings singleton can only throw if app-state init
           // never ran. That should not be reachable in production —
@@ -9877,12 +9900,20 @@ export class DesktopBackendRegistry {
       callerReason?: ThreadListCallerReason;
       enrichDirectories: boolean;
       filter?: string;
+      forceRefresh?: boolean;
       limit?: number;
       maxPages?: number;
       skipArchivedMetadataRefresh?: boolean;
     },
     displayMetadataObservationSequence: number,
   ): Promise<AppServerThreadSummary[]> {
+    const durableThreads = this.readDurableStartupThreads(
+      params,
+      displayMetadataObservationSequence,
+    );
+    if (durableThreads) {
+      return durableThreads;
+    }
     const diagnostics = {
       callerReason: params.callerReason ?? "thread-list",
       ownerId: this.threadListCacheOwnerId,
@@ -9916,6 +9947,7 @@ export class DesktopBackendRegistry {
         params.enrichDirectories,
         params.archived,
       );
+      this.persistProviderThreadSnapshot("codex", threads, params);
       return threads;
     }
 
@@ -9935,6 +9967,7 @@ export class DesktopBackendRegistry {
         ACP_LISTINGS_ARE_ENRICHED,
         params.archived,
       );
+      this.persistProviderThreadSnapshot(params.backend, threads, params);
       return threads;
     }
 
@@ -9967,6 +10000,170 @@ export class DesktopBackendRegistry {
     return [...codexThreads, ...acpThreads].sort(
       (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
     );
+  }
+
+  private readDurableStartupThreads(
+    params: {
+      archived?: boolean;
+      backend?: AppServerBackendKind;
+      callerReason?: ThreadListCallerReason;
+      enrichDirectories: boolean;
+      filter?: string;
+      forceRefresh?: boolean;
+      limit?: number;
+      maxPages?: number;
+    },
+    displayMetadataObservationSequence: number,
+  ): AppServerThreadSummary[] | undefined {
+    if (
+      this.durableStartupThreadHydrationAttempted
+      || !this.providerThreadSnapshotStore
+      || params.backend
+      || params.archived === true
+      || Boolean(params.filter?.trim())
+      || params.forceRefresh === true
+      || (params.callerReason !== "startup-prewarm"
+        && params.callerReason !== "navigation-snapshot"
+        && params.callerReason !== "navigation-snapshot:active-recent")
+    ) {
+      return undefined;
+    }
+
+    this.durableStartupThreadHydrationAttempted = true;
+    const snapshots = this.providerThreadSnapshotStore.list();
+    const threads = snapshots.flatMap((snapshot) =>
+      snapshot.backend === "codex" && params.limit !== undefined
+        ? snapshot.threads.slice(0, params.limit)
+        : snapshot.threads,
+    ).sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+    this.rememberThreadListContexts(
+      threads,
+      displayMetadataObservationSequence,
+      params.enrichDirectories,
+      false,
+    );
+    this.scheduleStartupProviderRefresh();
+    backendRegistryLog.info("startup thread list hydrated from durable providers", {
+      providerCount: snapshots.length,
+      threadCount: threads.length,
+    });
+    return threads;
+  }
+
+  private scheduleStartupProviderRefresh(): void {
+    if (this.startupProviderRefreshPromise) {
+      return;
+    }
+    this.startupProviderRefreshPromise = Promise.resolve().then(async () => {
+      const startedAt = Date.now();
+      const results = await Promise.allSettled([
+        this.listThreads({
+          backend: "codex",
+          callerReason: "startup-provider-refresh",
+          enrichDirectories: false,
+          forceRefresh: true,
+        }),
+        this.refreshAcpProviderThreadsAtStartup(),
+      ]);
+      if (this.closed) {
+        return;
+      }
+      const failures = results.filter((result) => result.status === "rejected");
+      if (failures.length > 0) {
+        backendRegistryLog.warn("startup provider thread refresh degraded", {
+          failureCount: failures.length,
+          errors: failures.map((failure) =>
+            failure.status === "rejected"
+              ? failure.reason instanceof Error
+                ? failure.reason.message
+                : String(failure.reason)
+              : "",
+          ),
+        });
+      }
+      backendRegistryLog.info("startup provider thread refresh completed", {
+        durationMs: Date.now() - startedAt,
+        failureCount: failures.length,
+      });
+      this.publishRefreshedProviderThreadsToCache();
+      await this.emit({
+        backend: "codex",
+        notification: {
+          method: "navigation/providerThreads/refreshed",
+          params: {
+            failedProviders: failures.length,
+          },
+        },
+      });
+    }).finally(() => {
+      this.startupProviderRefreshPromise = undefined;
+    });
+  }
+
+  private async refreshAcpProviderThreadsAtStartup(): Promise<void> {
+    const agents = await this.acpBackend.listAvailableAgents();
+    await Promise.all(
+      agents.map(async (agent) => {
+        await this.listThreads({
+          backend: agent.backendId,
+          callerReason: "startup-provider-refresh",
+          forceRefresh: true,
+        });
+      }),
+    );
+  }
+
+  private publishRefreshedProviderThreadsToCache(): void {
+    if (!this.providerThreadSnapshotStore) {
+      return;
+    }
+    const threads = this.providerThreadSnapshotStore.list()
+      .flatMap((snapshot) => snapshot.threads)
+      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+    this.invalidateThreadListCache();
+    this.rememberThreadListContexts(
+      threads,
+      this.reserveThreadInfoObservation(),
+      false,
+      false,
+    );
+    const cacheKey = this.buildThreadListCacheKey({
+      callerReason: "navigation-snapshot",
+      enrichDirectories: false,
+    });
+    this.threadListCache.set(cacheKey, {
+      expiresAt: Date.now() + THREAD_LIST_REUSE_WINDOW_MS,
+      threads,
+    });
+  }
+
+  private persistProviderThreadSnapshot(
+    backend: AppServerBackendKind,
+    threads: readonly AppServerThreadSummary[],
+    params: {
+      archived?: boolean;
+      callerReason?: ThreadListCallerReason;
+      filter?: string;
+      limit?: number;
+      maxPages?: number;
+    },
+  ): void {
+    if (
+      !this.providerThreadSnapshotStore
+      || this.closed
+      || params.callerReason !== "startup-provider-refresh"
+      || params.archived === true
+      || Boolean(params.filter?.trim())
+      || params.limit !== undefined
+      || params.maxPages !== undefined
+    ) {
+      return;
+    }
+    this.providerThreadSnapshotStore.replace({
+      backend,
+      observedAt: Date.now(),
+      threads,
+    });
   }
 
   private async filterArchivedThreadsPresentInActiveList(params: {
@@ -22547,7 +22744,10 @@ export class DesktopBackendRegistry {
         this.codexClient
           .listThreads(params, diagnostics)
           .catch((error) => {
-            if (diagnostics?.callerReason === "archive-cleanup") {
+            if (
+              diagnostics?.callerReason === "archive-cleanup"
+              || diagnostics?.callerReason === "startup-provider-refresh"
+            ) {
               throw error;
             }
 

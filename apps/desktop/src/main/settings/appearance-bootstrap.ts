@@ -28,6 +28,7 @@ import {
   readDesktopSettingsConfig,
   resolveDesktopConfigPath,
 } from "./desktop-config";
+import { getExistingDesktopConfigStore } from "./config-store/desktop-config-store-singleton";
 
 export type BootstrapAppearance = {
   theme: DesktopAppearanceTheme;
@@ -50,10 +51,16 @@ export function themedWindowAdditionalArguments(
 }
 
 export function readBootstrapAppearance(
-  configPath: string = resolveDesktopConfigPath(),
+  configPath?: string,
 ): BootstrapAppearance {
+  if (!configPath) {
+    const storeAppearance = getExistingDesktopConfigStore()?.read("general").appearance;
+    if (storeAppearance) {
+      return storeAppearance;
+    }
+  }
   try {
-    const config = readDesktopSettingsConfig(configPath);
+    const config = readDesktopSettingsConfig(configPath ?? resolveDesktopConfigPath());
     return {
       theme: config.general?.appearance?.theme ?? DESKTOP_APPEARANCE_THEME_DEFAULT,
       density:

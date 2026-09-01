@@ -132,6 +132,13 @@
     "rowsChanged": 3,
     "statements": 3
   },
+  "provider-thread-snapshot-refresh": {
+    "commits": 1,
+    "note": "one secret-free provider thread projection per successful full provider list, never per thread",
+    "observedWalBytes": 8240,
+    "rowsChanged": 1,
+    "statements": 1
+  },
   "runtime-lease-dead-owner-takeover": {
     "commits": 5,
     "note": "observe one dead owner, wait one minute, replace both runtime leases",

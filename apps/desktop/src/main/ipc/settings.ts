@@ -27,6 +27,7 @@ import type {
   ListAcpAgentSettingsResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
+  ReadDesktopConfigBootstrapResponse,
   PickGhCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
@@ -61,6 +62,7 @@ import {
   SETTINGS_OPEN_SLACK_CREATE_APP_CHANNEL,
   SETTINGS_PICK_GH_COMMAND_CHANNEL,
   SETTINGS_READ_CHANNEL,
+  SETTINGS_READ_BOOTSTRAP_CHANNEL,
   SETTINGS_REFRESH_CODEX_DISCOVERY_CHANNEL,
   SETTINGS_REPLACE_SECRET_CHANNEL,
   SETTINGS_RESOLVE_MESSAGING_CONTACT_CHANNEL,
@@ -1223,6 +1225,26 @@ export function registerSettingsIpcHandlers(
       }),
   );
 
+  ipcMain.removeHandler(SETTINGS_READ_BOOTSTRAP_CHANNEL);
+  ipcMain.handle(
+    SETTINGS_READ_BOOTSTRAP_CHANNEL,
+    async (): Promise<ReadDesktopConfigBootstrapResponse> => {
+      const store = getDesktopConfigStore();
+      const fileStatus = store.fileStatus();
+      return {
+        snapshot: {
+          version: store.version(),
+          configRevision: store.configRevision(),
+          ...(fileStatus.kind === "invalid"
+            ? { configError: fileStatus.error }
+            : {}),
+          appearance: store.read("general").appearance,
+          onboarding: store.read("onboarding"),
+        },
+      };
+    },
+  );
+
   ipcMain.removeHandler(SETTINGS_WRITE_CONFIG_CHANNEL);
   ipcMain.handle(
     SETTINGS_WRITE_CONFIG_CHANNEL,
@@ -1584,6 +1606,7 @@ export function disposeSettingsIpcHandlers(): void {
   ipcMain.removeHandler(ACP_AGENTS_LIST_CHANNEL);
   ipcMain.removeHandler(ACP_AGENT_UPDATE_ACKNOWLEDGE_CHANNEL);
   ipcMain.removeHandler(SETTINGS_READ_CHANNEL);
+  ipcMain.removeHandler(SETTINGS_READ_BOOTSTRAP_CHANNEL);
   ipcMain.removeHandler(SETTINGS_WRITE_CONFIG_CHANNEL);
   ipcMain.removeHandler(SETTINGS_REPLACE_SECRET_CHANNEL);
   ipcMain.removeHandler(SETTINGS_CLEAR_SECRET_CHANNEL);

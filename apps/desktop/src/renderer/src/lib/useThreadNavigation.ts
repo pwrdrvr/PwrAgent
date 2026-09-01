@@ -4120,6 +4120,13 @@ export function useThreadNavigation(
       }
 
       markNavigationActivity({ refreshOnIdleResume: false });
+      if (method === "navigation/providerThreads/refreshed") {
+        // Startup served the durable provider snapshot first. The background
+        // revalidation has now populated the registry caches, so consume that
+        // publication without forcing a second provider walk.
+        scheduleRefresh();
+        return;
+      }
       if (method === "navigation/remoteThreadPins/changed") {
         // Viewer-side pin membership or rank changed (possibly in another
         // window) — the merged snapshot is the source of truth for the row

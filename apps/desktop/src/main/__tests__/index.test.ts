@@ -503,6 +503,12 @@ vi.mock("../state/app-state", () => ({
 }));
 
 vi.mock("../settings/desktop-settings-singleton", () => ({
+  disposeDesktopConfigStore: vi.fn(),
+  getDesktopConfigStore: vi.fn(() => ({
+    read: vi.fn(() => ({
+      completed: !isCodexBootstrapDeferredMock(),
+    })),
+  })),
   getDesktopSettingsService: getDesktopSettingsServiceMock,
 }));
 

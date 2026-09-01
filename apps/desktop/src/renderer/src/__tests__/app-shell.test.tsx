@@ -1406,7 +1406,7 @@ describe("App", () => {
     });
   });
 
-  it("blocks the app shell when desktop settings config is malformed", async () => {
+  it("keeps the app shell on the last good config when desktop settings is malformed", async () => {
     const listBackends = vi.fn(async () => ({
       fetchedAt: Date.now(),
       backends: [],
@@ -1763,15 +1763,17 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Settings config did not load",
-    );
-    expect(screen.getByRole("alert")).toHaveTextContent("line 3: expected a key");
-    expect(screen.queryByRole("complementary", { name: "Threads" })).not.toBeInTheDocument();
+    expect(await screen.findByText("Settings config did not load")).toBeInTheDocument();
+    expect(screen.getByText(/line 3: expected a key/)).toBeInTheDocument();
+    expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
   });
 
-  it("starts loading navigation after settings discovery completes", async () => {
+  it("starts loading navigation without waiting for settings discovery", async () => {
     const settings = createDeferred<{ snapshot: DesktopSettingsSnapshot }>();
+    const backends = createDeferred<{
+      fetchedAt: number;
+      backends: [];
+    }>();
     const getNavigationSnapshot = vi.fn(async () => ({
       backend: "all" as const,
       fetchedAt: Date.now(),
@@ -1788,11 +1790,24 @@ describe("App", () => {
     Object.defineProperty(window, "pwragent", {
       configurable: true,
       value: {
-        readSettings: () => settings.promise,
-        listBackends: vi.fn(async () => ({
-          fetchedAt: Date.now(),
-          backends: [],
+        readConfigBootstrap: vi.fn(async () => ({
+          snapshot: {
+            version: 1,
+            configRevision: "fixture",
+            appearance: {
+              theme: "system" as const,
+              density: "mission-control" as const,
+              sidebarTextSize: "md" as const,
+              transcriptTextSize: "md" as const,
+            },
+            onboarding: {
+              completed: true,
+              completedSource: "migrated" as const,
+            },
+          },
         })),
+        readSettings: () => settings.promise,
+        listBackends: vi.fn(() => backends.promise),
         getNavigationSnapshot,
         onAgentEvent: () => () => undefined,
       },
@@ -1800,7 +1815,10 @@ describe("App", () => {
 
     render(<App />);
 
-    expect(getNavigationSnapshot).not.toHaveBeenCalled();
+    await waitFor(() => {
+      expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
 
     await act(async () => {
       settings.resolve({
@@ -1829,10 +1847,7 @@ describe("App", () => {
       });
     });
 
-    await waitFor(() => {
-      expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
-    });
-    expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
+    expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it("renders the live thread shell with transcript history", async () => {

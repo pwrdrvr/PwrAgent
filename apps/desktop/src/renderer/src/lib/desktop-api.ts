@@ -388,6 +388,7 @@ import type {
   OpenDesktopPwrAgentProfileResponse,
   ReadDesktopSettingsRequest,
   ReadDesktopSettingsResponse,
+  ReadDesktopConfigBootstrapResponse,
   PickGhCommandResponse,
   RefreshDesktopCodexDiscoveryRequest,
   ReplaceDesktopSettingsSecretRequest,
@@ -823,6 +824,7 @@ export type DesktopApi = {
   readSettings?: (
     request?: ReadDesktopSettingsRequest
   ) => Promise<ReadDesktopSettingsResponse>;
+  readConfigBootstrap?: () => Promise<ReadDesktopConfigBootstrapResponse>;
   writeSettingsConfig?: (
     request: WriteDesktopSettingsConfigRequest
   ) => Promise<DesktopSettingsWriteResponse>;

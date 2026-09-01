@@ -1342,6 +1342,31 @@ export type ReadDesktopSettingsResponse = {
   snapshot: DesktopSettingsSnapshot;
 };
 
+/**
+ * Credential-free startup projection. Reading it is an in-memory config-store
+ * lookup and must never trigger provider, application, Git, or secret
+ * discovery.
+ */
+export type DesktopConfigBootstrapSnapshot = {
+  version: number;
+  configRevision: string;
+  configError?: string;
+  appearance: {
+    theme: DesktopAppearanceTheme;
+    density: DesktopAppearanceDensity;
+    sidebarTextSize: DesktopTextSize;
+    transcriptTextSize: DesktopTextSize;
+  };
+  onboarding: {
+    completed: boolean;
+    completedSource: DesktopOnboardingCompletedSource | "";
+  };
+};
+
+export type ReadDesktopConfigBootstrapResponse = {
+  snapshot: DesktopConfigBootstrapSnapshot;
+};
+
 export type WriteDesktopSettingsConfigRequest = {
   patch: DesktopSettingsConfigPatch;
 };

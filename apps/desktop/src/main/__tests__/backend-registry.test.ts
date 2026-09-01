@@ -96,6 +96,7 @@ import {
   type CodexEnvironmentCommandRunner,
 } from "../app-server/codex-environment-runtime";
 import { GitDirectoryService } from "../app-server/git-directory-service";
+import type { ProviderThreadSnapshot } from "../app-server/provider-thread-snapshot-store";
 import type { GitWorkingStateService } from "../app-server/git-working-state-service";
 import type { OverlayStoreLike } from "../state/overlay-store-sqlite";
 import type { WorktreeArchiveService } from "../app-server/worktree-archive-service";
@@ -6665,6 +6666,166 @@ describe("DesktopBackendRegistry", () => {
       }),
     ]);
 
+    await registry.close();
+  });
+
+  it("serves durable startup threads before provider refresh completes", async () => {
+    const providerRefresh = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      listThreadsDelay: providerRefresh.promise,
+      threads: [
+        {
+          id: "live-thread",
+          source: "codex",
+          title: "Live provider thread",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          updatedAt: 200,
+        },
+      ],
+    });
+    let storedSnapshots: ProviderThreadSnapshot[] = [
+      {
+        backend: "codex" as const,
+        observedAt: 100,
+        threads: [
+          {
+            id: "durable-thread",
+            source: "codex" as const,
+            title: "Durable provider thread",
+            titleSource: "explicit" as const,
+            linkedDirectories: [],
+            updatedAt: 100,
+          },
+        ],
+      },
+    ];
+    const replace = vi.fn((snapshot: ProviderThreadSnapshot) => {
+      storedSnapshots = [snapshot];
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      discoverLocalAcpAgents: async () => [],
+      providerThreadSnapshotStore: {
+        list: () => storedSnapshots,
+        replace,
+      },
+    });
+
+    await expect(registry.listThreads({
+      callerReason: "navigation-snapshot",
+    })).resolves.toEqual([
+      expect.objectContaining({
+        id: "durable-thread",
+        title: "Durable provider thread",
+      }),
+    ]);
+    await vi.waitFor(() => {
+      expect(codexClient.listThreadsCallCount).toBe(1);
+    });
+    expect(replace).not.toHaveBeenCalled();
+
+    providerRefresh.resolve();
+    await vi.waitFor(() => {
+      expect(replace).toHaveBeenCalledWith({
+        backend: "codex",
+        observedAt: expect.any(Number),
+        threads: [expect.objectContaining({ id: "live-thread" })],
+      });
+    });
+    await expect(registry.listThreads({
+      callerReason: "navigation-snapshot",
+    })).resolves.toEqual([
+      expect.objectContaining({ id: "live-thread" }),
+    ]);
+    expect(codexClient.listThreadsCallCount).toBe(1);
+    await registry.close();
+  });
+
+  it("returns a cold-start empty snapshot while provider discovery runs", async () => {
+    const providerRefresh = createDeferred<void>();
+    const codexClient = new MockBackendClient({
+      listThreadsDelay: providerRefresh.promise,
+      threads: [
+        {
+          id: "first-thread",
+          source: "codex",
+          title: "First provider thread",
+          titleSource: "explicit",
+          linkedDirectories: [],
+          updatedAt: 200,
+        },
+      ],
+    });
+    const replace = vi.fn();
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      discoverLocalAcpAgents: async () => [],
+      providerThreadSnapshotStore: {
+        list: () => [],
+        replace,
+      },
+    });
+
+    await expect(registry.listThreads({
+      callerReason: "startup-prewarm",
+    })).resolves.toEqual([]);
+    await vi.waitFor(() => {
+      expect(codexClient.listThreadsCallCount).toBe(1);
+    });
+
+    providerRefresh.resolve();
+    await vi.waitFor(() => {
+      expect(replace).toHaveBeenCalledWith({
+        backend: "codex",
+        observedAt: expect.any(Number),
+        threads: [expect.objectContaining({ id: "first-thread" })],
+      });
+    });
+    await registry.close();
+  });
+
+  it("does not erase durable startup threads when provider refresh fails", async () => {
+    const replace = vi.fn();
+    const codexClient = new MockBackendClient({
+      listThreadsError: new Error("provider unavailable"),
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+      discoverLocalAcpAgents: async () => [],
+      providerThreadSnapshotStore: {
+        list: () => [
+          {
+            backend: "codex" as const,
+            observedAt: 100,
+            threads: [
+              {
+                id: "last-good-thread",
+                source: "codex" as const,
+                title: "Last known good",
+                titleSource: "explicit" as const,
+                linkedDirectories: [],
+                updatedAt: 100,
+              },
+            ],
+          },
+        ],
+        replace,
+      },
+    });
+
+    await expect(registry.listThreads({
+      callerReason: "navigation-snapshot",
+    })).resolves.toEqual([
+      expect.objectContaining({ id: "last-good-thread" }),
+    ]);
+    await vi.waitFor(() => {
+      expect(codexClient.listThreadsCallCount).toBe(1);
+    });
+    expect(replace).not.toHaveBeenCalled();
     await registry.close();
   });
 

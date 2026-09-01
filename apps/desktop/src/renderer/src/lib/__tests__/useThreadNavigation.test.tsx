@@ -2242,6 +2242,12 @@ describe("useThreadNavigation", () => {
 
     const refreshNotifications: AgentEvent["notification"][] = [
       {
+        method: "navigation/providerThreads/refreshed",
+        params: {
+          failedProviders: 0,
+        },
+      },
+      {
         method: "turn/completed",
         params: {
           threadId: "thread-1",
