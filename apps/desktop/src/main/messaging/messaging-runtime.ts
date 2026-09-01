@@ -3001,7 +3001,7 @@ function pairingScopeFailure(
     return "token was generated for a user-in-group flow but was pasted in a DM";
   }
   if (entry.scope === "bucket" && isDm) {
-    return "token was generated for a group/guild bucket but was pasted in a DM";
+    return "token was generated for a group/server bucket but was pasted in a DM";
   }
   return undefined;
 }

@@ -9,7 +9,7 @@ afterEach(() => {
 });
 
 describe("MessagingActivityScreen", () => {
-  it("shows rejected actor and guild IDs as copyable controls", async () => {
+  it("shows rejected actor and server IDs as copyable controls", async () => {
     const desktopApi = {
       listMessagingActivity: vi.fn(async () => ({
         entries: [
@@ -39,8 +39,10 @@ describe("MessagingActivityScreen", () => {
     });
     expect((await screen.findByText("1177378744822943744")).closest("button"))
       .toHaveTextContent("User ID");
+    // Discord's API calls this a guild; every operator-facing surface says
+    // Server, so Messaging Activity has to match what Settings asks for.
     expect(screen.getByText("1480554271907905731").closest("button"))
-      .toHaveTextContent("Guild ID");
+      .toHaveTextContent("Server ID");
     expect(screen.getByText("1480554271907905000").closest("button"))
       .toHaveTextContent("Channel ID");
   });

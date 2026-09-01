@@ -1614,7 +1614,7 @@ describe("discord adapter", () => {
       expect(events[0]?.routingState?.opaque).not.toHaveProperty("messageId");
       expect(rejectedEvents).toEqual([]);
       expect(logger.warn).not.toHaveBeenCalledWith(
-        "discord inbound ignored unauthorized guild",
+        "discord inbound ignored unauthorized server",
         expect.anything(),
       );
       await adapter.stop();
@@ -1672,7 +1672,7 @@ describe("discord adapter", () => {
       ]);
       expect(rejectedEvents).toEqual([]);
       expect(logger.warn).not.toHaveBeenCalledWith(
-        "discord inbound ignored unauthorized guild",
+        "discord inbound ignored unauthorized server",
         expect.anything(),
       );
       await adapter.stop();
@@ -1727,7 +1727,7 @@ describe("discord adapter", () => {
         }),
       ]);
       expect(logger.warn).toHaveBeenCalledWith(
-        "discord inbound ignored unauthorized guild",
+        "discord inbound ignored unauthorized server",
         expect.objectContaining({ guildId: TEST_GUILD_ID }),
       );
       await adapter.stop();
@@ -1774,7 +1774,7 @@ describe("discord adapter", () => {
         }),
       ]);
       expect(logger.warn).toHaveBeenCalledWith(
-        "discord inbound ignored unauthorized guild",
+        "discord inbound ignored unauthorized server",
         expect.objectContaining({ guildId: TEST_GUILD_ID }),
       );
       await adapter.stop();
@@ -1829,7 +1829,7 @@ describe("discord adapter", () => {
         }),
       ]);
       expect(logger.warn).toHaveBeenCalledWith(
-        "discord inbound ignored unauthorized non-guild conversation",
+        "discord inbound ignored unauthorized non-server conversation",
         expect.objectContaining({ channelType: 3 }),
       );
       await adapter.stop();
@@ -1950,7 +1950,7 @@ describe("discord adapter", () => {
         }),
       ]);
       expect(logger.warn).toHaveBeenCalledWith(
-        "discord inbound ignored unauthorized guild",
+        "discord inbound ignored unauthorized server",
         expect.objectContaining({ guildId: TEST_GUILD_ID, surface: "interaction" }),
       );
       await adapter.stop();

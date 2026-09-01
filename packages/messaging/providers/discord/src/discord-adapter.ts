@@ -1526,7 +1526,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       const logKey = `non-guild:${channelType ?? "unknown"}`;
       if (!this.unauthorizedGuildLogKeys.has(logKey)) {
         this.unauthorizedGuildLogKeys.add(logKey);
-        this.options.logger?.warn?.("discord inbound ignored unauthorized non-guild conversation", {
+        this.options.logger?.warn?.("discord inbound ignored unauthorized non-server conversation", {
           channelType: channelType ?? null,
           surface,
         });
@@ -1539,7 +1539,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
     if (!this.unauthorizedGuildLogKeys.has(guildId)) {
       this.unauthorizedGuildLogKeys.add(guildId);
-      this.options.logger?.warn?.("discord inbound ignored unauthorized guild", {
+      this.options.logger?.warn?.("discord inbound ignored unauthorized server", {
         guildId,
         surface,
       });
@@ -2825,7 +2825,7 @@ function discordManagedThreadTarget(
 function discordManagedThreadUnsupportedReason(channel: MessagingChannelRef): string {
   return channel.conversation.kind === "thread"
     ? "Discord does not support nested threads."
-    : "Discord thread creation needs the source message in a guild text channel.";
+    : "Discord thread creation needs the source message in a server text channel.";
 }
 
 function isDiscordThreadChannel(
