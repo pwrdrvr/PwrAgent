@@ -272,7 +272,7 @@ type DesktopSettingsServiceOptions = {
     signal?: AbortSignal;
     waitForUpdate?: boolean;
   }) => Promise<ManagedCodexRuntime>;
-  resolveManagedGrokCommand?: () => Promise<string | undefined>;
+  resolveActiveManagedGrokCommand?: () => string | undefined;
   env?: NodeJS.ProcessEnv;
   argv?: readonly string[];
   secretStore: DesktopSecretStore;
@@ -2290,50 +2290,36 @@ export class DesktopSettingsService {
    * Grok command in PwrAgent should reach the same selected runtime PwrAgent
    * launches for threads.
    */
-  async resolveIntegratedTerminalCommands(): Promise<string[]> {
+  resolveIntegratedTerminalCommands(): string[] {
     const config = this.readConfig().config;
-    const grokOverride =
-      readEnvString(this.env, ACP_AGENTS_GROK_CLI_PATH_ENV)
-      || config.acpAgents?.grok?.cliPath?.trim()
-      || undefined;
-    const resolveManagedGrokCommand = this.options.resolveManagedGrokCommand;
+    const grokEnabled = config.acpAgents?.grok?.enabled !== false;
+    const grokOverride = grokEnabled
+      ? readEnvString(this.env, ACP_AGENTS_GROK_CLI_PATH_ENV)
+        || config.acpAgents?.grok?.cliPath?.trim()
+        || undefined
+      : undefined;
     const shouldResolveManagedGrok =
-      config.acpAgents?.grok?.enabled !== false
+      grokEnabled
       && !grokOverride
       && (
         config.acpAgents?.grok?.managedBuilds
         ?? this.options.defaultManagedGrokBuilds
         ?? true
       );
-    const [codexResult, grokResult] = await Promise.allSettled([
-      this.resolveCodexCommand().then((candidate) => candidate.command),
-      grokOverride
-        ? Promise.resolve(grokOverride)
-        : shouldResolveManagedGrok && resolveManagedGrokCommand
-          ? resolveManagedGrokCommand()
-          : Promise.resolve(undefined),
-    ]);
-    const logger = getMainLogger("pwragent:integrated-terminal");
-    const commands: string[] = [];
-    if (codexResult.status === "fulfilled") {
-      commands.push(codexResult.value);
-    } else {
-      logger.warn("codex-command-resolution-failed", {
-        error: codexResult.reason instanceof Error
-          ? codexResult.reason.message
-          : String(codexResult.reason),
-      });
-    }
-    if (grokResult.status === "fulfilled") {
-      if (grokResult.value) commands.push(grokResult.value);
-    } else {
-      logger.warn("grok-command-resolution-failed", {
-        error: grokResult.reason instanceof Error
-          ? grokResult.reason.message
-          : String(grokResult.reason),
-      });
-    }
-    return commands;
+    const managedCodexEnabled = this.resolveConfigBoolean(
+      config.experimental?.tokenMiserEnabled,
+      false,
+    ).value;
+    const codexCommand = managedCodexEnabled
+      ? this.managedCodexRuntime?.command
+      : this.resolveCodexCommandPreferenceFromConfig(config);
+    const grokCommand = grokOverride
+      ?? (shouldResolveManagedGrok
+        ? this.options.resolveActiveManagedGrokCommand?.()
+        : undefined);
+    return [codexCommand, grokCommand].filter(
+      (command): command is string => command !== undefined,
+    );
   }
 
   /**

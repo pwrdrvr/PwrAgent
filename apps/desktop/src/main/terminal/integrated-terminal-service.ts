@@ -39,57 +39,73 @@ const RUNTIME_PATH_PREFIX_ENV =
 const ORIGINAL_ZDOTDIR_ENV = "PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR";
 const ORIGINAL_ZDOTDIR_UNSET_ENV =
   "PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET";
+const INTEGRATION_ZDOTDIR_ENV =
+  "PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR";
 
 // Supplying PATH to `zsh -l` is insufficient: common `.zprofile` setup such
 // as `brew shellenv` prepends another bin directory during startup. ZDOTDIR is
 // zsh's supported user-startup-file root, so these wrappers source the user's
 // real files in order and reassert the selected runtime path afterward.
 const ZSH_INTEGRATION_FILES: Readonly<Record<string, string>> = {
-  ".pwragent-runtime-path.zsh": `
-_pwragent_source_original_zdotfile() {
-  local _pwragent_integration_zdotdir="$ZDOTDIR"
-  local _pwragent_original_zdotdir="${"${"}${ORIGINAL_ZDOTDIR_ENV}:-$HOME}"
-  local _pwragent_zdotfile="$1"
-  if [[ "$_pwragent_original_zdotdir" != "$_pwragent_integration_zdotdir" && -r "$_pwragent_original_zdotdir/$_pwragent_zdotfile" ]]; then
-    ZDOTDIR="$_pwragent_original_zdotdir"
-    source "$_pwragent_original_zdotdir/$_pwragent_zdotfile"
-    export ${ORIGINAL_ZDOTDIR_ENV}="$ZDOTDIR"
-    ZDOTDIR="$_pwragent_integration_zdotdir"
-  fi
-}
+  ".zshenv": zshStartupFileWrapper(".zshenv"),
+  ".zprofile": zshStartupFileWrapper(".zprofile"),
+  ".zshrc": zshStartupFileWrapper(".zshrc", { prependRuntimePath: true }),
+  ".zlogin": zshStartupFileWrapper(".zlogin", {
+    prependRuntimePath: true,
+    restoreZdotdir: true,
+  }),
+};
 
-_pwragent_prepend_runtime_path() {
-  if [[ -n "$${RUNTIME_PATH_PREFIX_ENV}" ]]; then
-    export PATH="$${RUNTIME_PATH_PREFIX_ENV}${"${PATH:+:$PATH}"}"
-  fi
-}
-`.trimStart(),
-  ".zshenv": `
-source "$ZDOTDIR/.pwragent-runtime-path.zsh"
-_pwragent_source_original_zdotfile .zshenv
-`.trimStart(),
-  ".zprofile": `
-source "$ZDOTDIR/.pwragent-runtime-path.zsh"
-_pwragent_source_original_zdotfile .zprofile
-`.trimStart(),
-  ".zshrc": `
-source "$ZDOTDIR/.pwragent-runtime-path.zsh"
-_pwragent_source_original_zdotfile .zshrc
-_pwragent_prepend_runtime_path
-`.trimStart(),
-  ".zlogin": `
-source "$ZDOTDIR/.pwragent-runtime-path.zsh"
-_pwragent_source_original_zdotfile .zlogin
-_pwragent_prepend_runtime_path
+function zshStartupFileWrapper(
+  fileName: string,
+  options: {
+    prependRuntimePath?: boolean;
+    restoreZdotdir?: boolean;
+  } = {},
+): string {
+  const prependRuntimePath = options.prependRuntimePath
+    ? `
+if [[ -n "$${RUNTIME_PATH_PREFIX_ENV}" ]]; then
+  export PATH="$${RUNTIME_PATH_PREFIX_ENV}${"${PATH:+:$PATH}"}"
+fi
+`
+    : "";
+  const restoreZdotdir = zshRestoreOriginalZdotdir();
+  return `
 if [[ "$${ORIGINAL_ZDOTDIR_UNSET_ENV}" == "1" ]]; then
   unset ZDOTDIR
 else
   ZDOTDIR="$${ORIGINAL_ZDOTDIR_ENV}"
 fi
-unset ${ORIGINAL_ZDOTDIR_ENV} ${ORIGINAL_ZDOTDIR_UNSET_ENV}
-unset -f _pwragent_source_original_zdotfile _pwragent_prepend_runtime_path
-`.trimStart(),
-};
+if [[ "$${ORIGINAL_ZDOTDIR_ENV}" != "$${INTEGRATION_ZDOTDIR_ENV}" && -r "$${ORIGINAL_ZDOTDIR_ENV}/${fileName}" ]]; then
+  source "$${ORIGINAL_ZDOTDIR_ENV}/${fileName}"
+fi
+if (( ${"${+ZDOTDIR}"} )); then
+  export ${ORIGINAL_ZDOTDIR_ENV}="$ZDOTDIR"
+  unset ${ORIGINAL_ZDOTDIR_UNSET_ENV}
+else
+  export ${ORIGINAL_ZDOTDIR_ENV}="$HOME"
+  export ${ORIGINAL_ZDOTDIR_UNSET_ENV}="1"
+fi
+ZDOTDIR="$${INTEGRATION_ZDOTDIR_ENV}"
+${prependRuntimePath}${options.restoreZdotdir
+    ? restoreZdotdir
+    : `
+if [[ ! -o RCS ]]; then
+${restoreZdotdir}
+fi
+`}
+`.trimStart();
+}
+
+function zshRestoreOriginalZdotdir(): string {
+  return `if [[ "$${ORIGINAL_ZDOTDIR_UNSET_ENV}" == "1" ]]; then
+  unset ZDOTDIR
+else
+  ZDOTDIR="$${ORIGINAL_ZDOTDIR_ENV}"
+fi
+unset ${ORIGINAL_ZDOTDIR_ENV} ${ORIGINAL_ZDOTDIR_UNSET_ENV} ${INTEGRATION_ZDOTDIR_ENV}`;
+}
 
 let zshIntegrationDirectoryPromise: Promise<string> | undefined;
 
@@ -639,10 +655,8 @@ export async function spawnTerminalPty(params: {
 }): Promise<SpawnedTerminalPty> {
   const platform = params.platform ?? process.platform;
   const settings = getDesktopSettingsService();
-  const [baseEnv, runtimeCommands] = await Promise.all([
-    settings.resolveTerminalSpawnEnvAsync(),
-    settings.resolveIntegratedTerminalCommands(),
-  ]);
+  const runtimeCommands = settings.resolveIntegratedTerminalCommands();
+  const baseEnv = await settings.resolveTerminalSpawnEnvAsync();
   let env = prependIntegratedTerminalRuntimePaths(
     baseEnv,
     runtimeCommands,
@@ -734,10 +748,12 @@ export async function prepareIntegratedTerminalShellEnvironment(options: {
     env[ORIGINAL_ZDOTDIR_UNSET_ENV] = "1";
   }
   try {
-    env.ZDOTDIR = await (
+    const integrationZdotdir = await (
       options.resolveZshIntegrationDirectory
       ?? ensureZshIntegrationDirectory
     )();
+    env[INTEGRATION_ZDOTDIR_ENV] = integrationZdotdir;
+    env.ZDOTDIR = integrationZdotdir;
   } catch (error) {
     getMainLogger("pwragent:integrated-terminal").warn(
       "zsh-runtime-path-integration-failed",
@@ -756,7 +772,7 @@ export async function writeZshIntegrationDirectory(
   directory = path.join(
     resolvePwragentRoot(),
     "shell-integration",
-    "zsh-v1",
+    "zsh-v2",
   ),
 ): Promise<string> {
   await mkdir(directory, { recursive: true });

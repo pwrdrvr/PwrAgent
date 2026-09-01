@@ -210,6 +210,18 @@ const processChecks = new Set<string>();
 const activeChecks = new Map<string, Promise<ManagedGrokRuntime | undefined>>();
 const markedRuntimeCommands = new Map<string, string>();
 
+/**
+ * Return only the managed Grok command already activated by this process.
+ * This intentionally performs no filesystem validation, release lookup, or
+ * installation work so latency-sensitive callers such as terminal startup
+ * cannot trigger an update.
+ */
+export function resolveActiveManagedGrokCommand(
+  rootDir = managedGrokRoot(),
+): string | undefined {
+  return markedRuntimeCommands.get(rootDir);
+}
+
 /** What the last managed release check decided, as recorded on disk. */
 export type ManagedGrokInstallSummary = {
   tag: string;

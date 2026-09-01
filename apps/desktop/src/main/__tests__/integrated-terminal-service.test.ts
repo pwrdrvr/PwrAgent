@@ -21,7 +21,7 @@ import {
 
 const settingsServiceMock = vi.hoisted(() => ({
   resolveIntegratedTerminalWindowsShell: vi.fn(() => "auto"),
-  resolveIntegratedTerminalCommands: vi.fn(async () => [] as string[]),
+  resolveIntegratedTerminalCommands: vi.fn(() => [] as string[]),
   resolveTerminalSpawnEnvAsync: vi.fn(
     async (): Promise<NodeJS.ProcessEnv> => ({ SHELL: "/bin/sh" }),
   ),
@@ -33,7 +33,7 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 
 beforeEach(() => {
   settingsServiceMock.resolveIntegratedTerminalWindowsShell.mockReturnValue("auto");
-  settingsServiceMock.resolveIntegratedTerminalCommands.mockResolvedValue([]);
+  settingsServiceMock.resolveIntegratedTerminalCommands.mockReturnValue([]);
   settingsServiceMock.resolveTerminalSpawnEnvAsync.mockResolvedValue({
     SHELL: "/bin/sh",
   });
@@ -77,6 +77,8 @@ describe("resolveTerminalShell", () => {
       ZDOTDIR: "/pwragent/zsh-integration",
       PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: "/Users/alice",
       PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET: "1",
+      PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR:
+        "/pwragent/zsh-integration",
     });
 
     const bashEnv = await prepareIntegratedTerminalShellEnvironment({
@@ -111,27 +113,78 @@ describe("resolveTerminalShell", () => {
       chmodSync(otherCodex, 0o700);
       writeFileSync(
         path.join(originalZdotdir, ".zprofile"),
-        `export PATH="${otherBin}:$PATH"\n`,
+        [
+          "typeset PWRAGENT_TEST_TOP_LEVEL=preserved",
+          `export PATH="${otherBin}:$PATH"`,
+          "",
+        ].join("\n"),
       );
       await writeZshIntegrationDirectory(integrationDir);
 
       expect(existsSync("/bin/zsh")).toBe(true);
       const resolved = execFileSync(
         "/bin/zsh",
-        ["-lic", "command -v codex"],
+        [
+          "-lic",
+          "print -r -- \"$(command -v codex)|${PWRAGENT_TEST_TOP_LEVEL:-missing}\"",
+        ],
         {
           encoding: "utf8",
           env: {
             ...process.env,
             PATH: `/usr/bin:/bin`,
             PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: originalZdotdir,
+            PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR: integrationDir,
             PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: managedBin,
             ZDOTDIR: integrationDir,
           },
         },
       ).trim();
 
-      expect(resolved).toBe(managedCodex);
+      expect(resolved).toBe(`${managedCodex}|preserved`);
+    },
+  );
+
+  it.skipIf(process.platform !== "darwin")(
+    "preserves a ZDOTDIR selected by the user zsh startup files",
+    async () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-zsh-zdotdir-"));
+      const integrationDir = path.join(root, "integration");
+      const originalZdotdir = path.join(root, "original");
+      const selectedZdotdir = path.join(root, "selected");
+      mkdirSync(originalZdotdir, { recursive: true });
+      mkdirSync(selectedZdotdir, { recursive: true });
+      writeFileSync(
+        path.join(originalZdotdir, ".zshenv"),
+        `ZDOTDIR="${selectedZdotdir}"\n`,
+      );
+      writeFileSync(
+        path.join(selectedZdotdir, ".zprofile"),
+        "typeset PWRAGENT_SELECTED_ZDOTDIR_PROFILE=loaded\n",
+      );
+      await writeZshIntegrationDirectory(integrationDir);
+
+      const resolved = execFileSync(
+        "/bin/zsh",
+        [
+          "-lic",
+          "print -r -- \"$ZDOTDIR|${PWRAGENT_SELECTED_ZDOTDIR_PROFILE:-missing}\"",
+        ],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: "/usr/bin:/bin",
+            PWRAGENT_INTEGRATED_TERMINAL_INTEGRATION_ZDOTDIR: integrationDir,
+            PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: originalZdotdir,
+            PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET: "1",
+            PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: "/managed/bin",
+            ZDOTDIR: integrationDir,
+          },
+        },
+      ).trim();
+
+      expect(resolved).toBe(`${selectedZdotdir}|loaded`);
     },
   );
 
@@ -321,7 +374,7 @@ describe("resolveTerminalShell", () => {
       PATH: "/opt/homebrew/bin:/usr/bin",
       SHELL: "/bin/sh",
     });
-    settingsServiceMock.resolveIntegratedTerminalCommands.mockResolvedValue([
+    settingsServiceMock.resolveIntegratedTerminalCommands.mockReturnValue([
       "/managed/codex/bin/codex",
       "/managed/grok/bin/grok",
     ]);

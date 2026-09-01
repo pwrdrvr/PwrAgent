@@ -2642,38 +2642,74 @@ describe("DesktopSettingsService", () => {
     });
   });
 
-  it("resolves the selected Codex and managed Grok commands for integrated terminals", async () => {
+  it("uses only already-active managed runtimes for integrated terminals", async () => {
     const root = createTempRoot();
-    const resolveCodex = vi.fn(async () => ({
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(configPath, [
+      "[experimental]",
+      "token_miser_enabled = true",
+      "",
+      "[acp_agents.grok]",
+      "managed_builds = true",
+      "",
+    ].join("\n"));
+    const ensureManagedCodexRuntime = vi.fn(async () => ({
+      appServerCommand: "/pwragent/codex/codex-app-server",
+      codeModeHostCommand: "/pwragent/codex/codex-code-mode-host",
       command: "/pwragent/codex/versions/current/codex",
-      source: "config" as const,
-      version: "0.149.0-pwragent.2",
+      metadata: {
+        asset: "pwragent-codex-0.149.0-pwragent.2-darwin-arm64.tar.gz",
+        checkedAt: 1,
+        installedAt: 1,
+        repository: "pwrdrvr/codex",
+        schemaVersion: 1,
+        sha256: "a".repeat(64),
+        tag: "pwragent-v0.149.0-pwragent.2",
+        version: "0.149.0-pwragent.2",
+      },
     }));
-    const resolveManagedGrokCommand = vi.fn(
-      async () => "/pwragent/grok/versions/current/grok",
+    const resolveActiveManagedGrokCommand = vi.fn(
+      () => "/pwragent/grok/versions/current/grok",
     );
     const service = new DesktopSettingsService({
       codexDiscoveryCoordinator: {
-        discover: vi.fn(async () => ({ candidates: [] })),
+        discover: vi.fn(async (configuredCommand?: string) => ({
+          candidates: configuredCommand
+            ? [{
+                command: configuredCommand,
+                executable: true,
+                selected: true,
+                source: "config" as const,
+                version: "0.149.0-pwragent.2",
+              }]
+            : [],
+        })),
         invalidate: vi.fn(),
-        resolve: resolveCodex,
+        resolve: vi.fn(async () => ({
+          command: "/usr/local/bin/codex",
+          source: "path" as const,
+        })),
       },
-      configPath: path.join(root, "config.toml"),
+      configPath,
       defaultManagedGrokBuilds: true,
+      ensureManagedCodexRuntime,
       env: {},
-      resolveManagedGrokCommand,
+      resolveActiveManagedGrokCommand,
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    await expect(service.resolveIntegratedTerminalCommands()).resolves.toEqual([
+    await service.readSettings();
+    ensureManagedCodexRuntime.mockClear();
+
+    expect(service.resolveIntegratedTerminalCommands()).toEqual([
       "/pwragent/codex/versions/current/codex",
       "/pwragent/grok/versions/current/grok",
     ]);
-    expect(resolveCodex).toHaveBeenCalledTimes(1);
-    expect(resolveManagedGrokCommand).toHaveBeenCalledTimes(1);
+    expect(ensureManagedCodexRuntime).not.toHaveBeenCalled();
+    expect(resolveActiveManagedGrokCommand).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the configured Grok override instead of the managed runtime in terminals", async () => {
+  it("uses configured Codex and Grok overrides without managed runtime work", () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
     fs.writeFileSync(
@@ -2682,33 +2718,61 @@ describe("DesktopSettingsService", () => {
         "[acp_agents.grok]",
         'cli_path = "/custom/grok/bin/grok"',
         "managed_builds = true",
+        "",
+        "[models.codex]",
+        'path = "/custom/codex/bin/codex"',
       ].join("\n"),
       "utf8",
     );
-    const resolveManagedGrokCommand = vi.fn(
-      async () => "/pwragent/grok/versions/current/grok",
+    const resolveActiveManagedGrokCommand = vi.fn(
+      () => "/pwragent/grok/versions/current/grok",
     );
     const service = new DesktopSettingsService({
-      codexDiscoveryCoordinator: {
-        discover: vi.fn(async () => ({ candidates: [] })),
-        invalidate: vi.fn(),
-        resolve: vi.fn(async () => ({
-          command: "/custom/codex/bin/codex",
-          source: "config" as const,
-        })),
-      },
       configPath,
       defaultManagedGrokBuilds: true,
       env: {},
-      resolveManagedGrokCommand,
+      resolveActiveManagedGrokCommand,
       secretStore: new MemoryDesktopSecretStore(),
     });
 
-    await expect(service.resolveIntegratedTerminalCommands()).resolves.toEqual([
+    expect(service.resolveIntegratedTerminalCommands()).toEqual([
       "/custom/codex/bin/codex",
       "/custom/grok/bin/grok",
     ]);
-    expect(resolveManagedGrokCommand).not.toHaveBeenCalled();
+    expect(resolveActiveManagedGrokCommand).not.toHaveBeenCalled();
+  });
+
+  it("does not prepend a configured Grok override when Grok is disabled", () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[acp_agents.grok]",
+        "enabled = false",
+        'cli_path = "/disabled/grok/bin/grok"',
+        "managed_builds = true",
+        "",
+        "[models.codex]",
+        'path = "/custom/codex/bin/codex"',
+      ].join("\n"),
+      "utf8",
+    );
+    const resolveActiveManagedGrokCommand = vi.fn(
+      () => "/pwragent/grok/versions/current/grok",
+    );
+    const service = new DesktopSettingsService({
+      configPath,
+      defaultManagedGrokBuilds: true,
+      env: {},
+      resolveActiveManagedGrokCommand,
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect(service.resolveIntegratedTerminalCommands()).toEqual([
+      "/custom/codex/bin/codex",
+    ]);
+    expect(resolveActiveManagedGrokCommand).not.toHaveBeenCalled();
   });
 
   it("keeps CODEX_HOME fixed to the startup Codex auth profile", async () => {
