@@ -24036,6 +24036,133 @@ a.transcript-message__messaging-origin:focus-visible {
   line-height: 1.35;
 }
 
+/* The bill split by the model that spent it. These rows live inside the
+   pricing summary card, so they carry no border box of their own — the
+   hairline between them is the whole frame, and the card supplies the rest. */
+.pricing-spend-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.pricing-spend-group + .pricing-spend-group {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pricing-spend-group__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 0 2px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.pricing-spend-group:first-child .pricing-spend-group__head {
+  padding-top: 2px;
+}
+
+.pricing-spend-group__total {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.pricing-spend-row + .pricing-spend-row {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.pricing-spend-row__summary {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The row runs edge to edge inside the card's padding, so a hovered
+   background would bleed into it. The label carries the hover instead. */
+.pricing-spend-row__summary:hover .pricing-spend-row__label {
+  color: var(--accent-bright);
+}
+
+.pricing-spend-row__summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.pricing-spend-row__chevron {
+  display: inline-block;
+  width: 8px;
+  color: var(--text-muted);
+  transition: transform 120ms ease;
+}
+
+.pricing-spend-row[data-expanded="true"] .pricing-spend-row__chevron {
+  transform: rotate(90deg);
+}
+
+.pricing-spend-row__label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pricing-spend-row__meta {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pricing-spend-row__cost {
+  margin-left: auto;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pricing-spend-row__body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 8px 15px;
+  padding-left: 9px;
+  border-left: 1px solid var(--border-subtle);
+}
+
+.pricing-spend-row__body .rail-summary-card__row-label,
+.pricing-spend-row__body .rail-summary-card__row-value {
+  font-size: 11.5px;
+}
+
+.pricing-spend-row__origin {
+  margin: 0 0 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 /* Token Miser folded under its turn: one summary line that keeps moving as
    replays are counted, a chevron, and cards only for gates worth a card. */
 .pricing-token-miser {
