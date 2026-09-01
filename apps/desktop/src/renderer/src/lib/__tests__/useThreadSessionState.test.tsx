@@ -412,6 +412,182 @@ describe("useThreadSessionState", () => {
     );
   });
 
+  it("merges overlay turn usage into older history instead of leaving it below newer messages", async () => {
+    const olderTurn = {
+      id: "older-turn",
+      status: "completed" as const,
+      startedAt: 100,
+      completedAt: 180,
+    };
+    const laterOlderTurn = {
+      id: "later-older-turn",
+      status: "completed" as const,
+      startedAt: 200,
+      completedAt: 280,
+    };
+    const recentTurn = {
+      id: "recent-turn",
+      status: "completed" as const,
+      startedAt: 400,
+      completedAt: 480,
+    };
+    const olderUsage: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-turn-usage-older-turn",
+      summary: "Turn usage: 170,652 uncached in · 2,342,912 cached · 12,266 out",
+      status: "completed",
+      createdAt: 181,
+      details: [],
+      turn: olderTurn,
+    };
+    const laterOlderUsage: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-turn-usage-later-older-turn",
+      summary: "Turn usage: 6,057 uncached in · 473,344 cached · 1,312 out",
+      status: "completed",
+      createdAt: 281,
+      details: [],
+      turn: laterOlderTurn,
+    };
+    const recentUsage: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "live-turn-usage-recent-turn",
+      summary: "Turn usage: 3,034 uncached in · 160,512 cached · 1,367 out",
+      status: "completed",
+      createdAt: 481,
+      details: [],
+      turn: recentTurn,
+    };
+    const environmentSetup: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "codex-environment-setup-pwragent",
+      summary: "Environment setup completed: PwrAgent",
+      status: "completed",
+      details: [],
+    };
+    const initialTail = readThreadResponse({
+      entries: [
+        environmentSetup,
+        olderUsage,
+        laterOlderUsage,
+        {
+          ...messageEntry({
+            id: "recent-user",
+            role: "user",
+            text: "Recent prompt",
+            createdAt: 400,
+          }),
+          turn: recentTurn,
+        },
+        {
+          ...messageEntry({
+            id: "recent-final",
+            text: "Recent answer",
+            createdAt: 480,
+          }),
+          phase: "final" as const,
+          turn: recentTurn,
+        },
+        recentUsage,
+      ],
+      hasPreviousPage: true,
+      previousCursor: "older-page",
+    });
+    const olderPage = readThreadResponse({
+      entries: [
+        {
+          ...messageEntry({
+            id: "older-user",
+            role: "user",
+            text: "Older prompt",
+            createdAt: 100,
+          }),
+          turn: olderTurn,
+        },
+        {
+          ...messageEntry({
+            id: "older-final",
+            text: "Older answer",
+            createdAt: 180,
+          }),
+          phase: "final" as const,
+          turn: olderTurn,
+        },
+        {
+          ...messageEntry({
+            id: "later-older-user",
+            role: "user",
+            text: "Later older prompt",
+            createdAt: 200,
+          }),
+          turn: laterOlderTurn,
+        },
+        {
+          ...messageEntry({
+            id: "later-older-final",
+            text: "Later older answer",
+            createdAt: 280,
+          }),
+          phase: "final" as const,
+          turn: laterOlderTurn,
+        },
+      ],
+      hasPreviousPage: false,
+    });
+    const readThread = vi
+      .fn()
+      .mockResolvedValueOnce(initialTail)
+      .mockResolvedValueOnce(olderPage);
+    const desktopApi: DesktopApi = {
+      onAgentEvent: () => () => undefined,
+      readThread,
+    };
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        initialHistoryLimit: DEFAULT_INITIAL_THREAD_HISTORY_TURN_LIMIT,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      }),
+    );
+
+    await waitForThreadHydration(result);
+    expect(result.current.entries.map((entry) => entry.id)).toEqual([
+      environmentSetup.id,
+      "recent-user",
+      "recent-final",
+      recentUsage.id,
+    ]);
+
+    await act(async () => {
+      await result.current.loadOlder();
+    });
+
+    expect(result.current.entries.map((entry) => entry.id)).toEqual([
+      "older-user",
+      "older-final",
+      olderUsage.id,
+      "later-older-user",
+      "later-older-final",
+      laterOlderUsage.id,
+      environmentSetup.id,
+      "recent-user",
+      "recent-final",
+      recentUsage.id,
+    ]);
+    expect(transcriptLabels(result.current.entries)).toEqual([
+      "message:Older prompt",
+      "message:Older answer",
+      "activity:Turn usage: 170,652 uncached in · 2,342,912 cached · 12,266 out",
+      "message:Later older prompt",
+      "message:Later older answer",
+      "activity:Turn usage: 6,057 uncached in · 473,344 cached · 1,312 out",
+      "activity:Environment setup completed: PwrAgent",
+      "message:Recent prompt",
+      "message:Recent answer",
+      "activity:Turn usage: 3,034 uncached in · 160,512 cached · 1,367 out",
+    ]);
+  });
+
   it("keeps completed remote turns ordered when a bounded refresh advances past them", async () => {
     const publishedTurn = {
       id: "published-turn",

@@ -1,5 +1,6 @@
 import type {
   AppServerReadThreadResponse,
+  AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadMessage,
 } from "@pwragent/shared";
@@ -34,6 +35,7 @@ export type TranscriptHistoryIndex = {
   entryIds: Set<string>;
   messageIds: Set<string>;
   review: TranscriptReviewHistoryIndex;
+  turnIds: Set<string>;
 };
 
 export function createTranscriptHistoryIndex(): TranscriptHistoryIndex {
@@ -41,7 +43,120 @@ export function createTranscriptHistoryIndex(): TranscriptHistoryIndex {
     entryIds: new Set(),
     messageIds: new Set(),
     review: createTranscriptReviewHistoryIndex(),
+    turnIds: new Set(),
   };
+}
+
+function isRelocatableOverlayUsage(
+  entry: AppServerThreadEntry,
+): entry is AppServerThreadActivityEntry {
+  return (
+    entry.type === "activity"
+    && (
+      entry.id.startsWith("live-turn-usage-")
+      || entry.summary.startsWith("Turn usage:")
+    )
+  );
+}
+
+/**
+ * Weave overlay usage into one already-ordered page. Matching turns are
+ * inserted after the last same-turn entry in a single forward pass so a
+ * history prepend stays O(page + matching usage), not a rescan of the
+ * combined transcript.
+ */
+function mergeOverlayUsageIntoEntries(
+  entries: AppServerThreadEntry[],
+  usageEntries: readonly AppServerThreadActivityEntry[],
+): AppServerThreadEntry[] {
+  if (usageEntries.length === 0) {
+    return entries;
+  }
+
+  const lastIndexByTurn = new Map<string, number>();
+  for (let index = 0; index < entries.length; index += 1) {
+    const turnId = entries[index]?.turn?.id;
+    if (turnId) {
+      lastIndexByTurn.set(turnId, index);
+    }
+  }
+
+  const usageAfterIndex = new Map<number, AppServerThreadActivityEntry[]>();
+  for (const usage of usageEntries) {
+    const turnId = usage.turn?.id;
+    const turnIndex = turnId === undefined
+      ? undefined
+      : lastIndexByTurn.get(turnId);
+    if (turnIndex === undefined) {
+      continue;
+    }
+    const bucket = usageAfterIndex.get(turnIndex);
+    if (bucket) {
+      bucket.push(usage);
+    } else {
+      usageAfterIndex.set(turnIndex, [usage]);
+    }
+  }
+  if (usageAfterIndex.size === 0) {
+    return entries;
+  }
+
+  const merged: AppServerThreadEntry[] = [];
+  for (let index = 0; index < entries.length; index += 1) {
+    merged.push(entries[index]!);
+    const bucket = usageAfterIndex.get(index);
+    if (bucket) {
+      merged.push(...bucket);
+    }
+  }
+  return merged;
+}
+
+function visibleTranscriptTailEntries(
+  tailEntries: AppServerThreadEntry[],
+  index: TranscriptHistoryIndex | undefined,
+): AppServerThreadEntry[] {
+  const tailTurnIds = new Set<string>();
+  let oldestTailAnchorCreatedAt: number | undefined;
+  for (const entry of tailEntries) {
+    if (isRelocatableOverlayUsage(entry)) {
+      continue;
+    }
+    if (entry.turn?.id) {
+      tailTurnIds.add(entry.turn.id);
+    }
+    if (typeof entry.createdAt === "number") {
+      oldestTailAnchorCreatedAt = Math.min(
+        oldestTailAnchorCreatedAt ?? entry.createdAt,
+        entry.createdAt,
+      );
+    }
+  }
+
+  const filtered = tailEntries.filter((entry) => {
+    if (!isRelocatableOverlayUsage(entry)) {
+      return true;
+    }
+    if (index?.entryIds.has(entry.id)) {
+      return false;
+    }
+    const turnId = entry.turn?.id;
+    if (turnId && tailTurnIds.has(turnId)) {
+      return true;
+    }
+    if (turnId && index?.turnIds.has(turnId)) {
+      return false;
+    }
+    if (
+      typeof entry.createdAt === "number"
+      && oldestTailAnchorCreatedAt !== undefined
+      && entry.createdAt < oldestTailAnchorCreatedAt
+    ) {
+      return false;
+    }
+    return true;
+  });
+  return filtered.length === tailEntries.length ? tailEntries : filtered;
 }
 
 function messagesForEntries(
@@ -74,6 +189,9 @@ function messagesForEntries(
 /**
  * Adds one server page without traversing or copying previously loaded pages.
  *
+ * Overlay turn usage is hydrated on the latest page, so a newly loaded older
+ * page merges matching usage from the tail once. Prior pages stay immutable.
+ *
  * The index is an append-only, non-rendered companion owned by one thread
  * session. Keeping it outside React state is deliberate: cloning a growing
  * Set here would merely move the cumulative history copy from the entry array
@@ -86,16 +204,46 @@ export function prependTranscriptHistoryPage(params: {
   tailEntries: AppServerThreadEntry[];
 }): LoadedTranscriptHistory {
   const tailEntryIds = new Set(params.tailEntries.map((entry) => entry.id));
-  const entries = params.page.replay.entries.filter(
+  const historicalEntries = params.page.replay.entries.filter(
     (entry) =>
       !tailEntryIds.has(entry.id)
       && !params.index.entryIds.has(entry.id),
+  );
+  const pageEntryIds = new Set(historicalEntries.map((entry) => entry.id));
+  const pageTurnIds = new Set<string>();
+  for (const entry of historicalEntries) {
+    if (entry.turn?.id) {
+      pageTurnIds.add(entry.turn.id);
+    }
+  }
+  const relocatedUsage: AppServerThreadActivityEntry[] = [];
+  if (pageTurnIds.size > 0) {
+    for (const entry of params.tailEntries) {
+      if (
+        !isRelocatableOverlayUsage(entry)
+        || !entry.turn?.id
+        || !pageTurnIds.has(entry.turn.id)
+        || params.index.entryIds.has(entry.id)
+        || pageEntryIds.has(entry.id)
+      ) {
+        continue;
+      }
+      relocatedUsage.push(entry);
+      pageEntryIds.add(entry.id);
+    }
+  }
+  const entries = mergeOverlayUsageIntoEntries(
+    historicalEntries,
+    relocatedUsage,
   );
   const messages = messagesForEntries(entries, params.page.replay.messages);
   const reviewSummary = summarizeTranscriptReviewSegment(entries, messages);
 
   for (const entry of entries) {
     params.index.entryIds.add(entry.id);
+    if (entry.turn?.id) {
+      params.index.turnIds.add(entry.turn.id);
+    }
   }
   for (const message of messages) {
     params.index.messageIds.add(message.id);
@@ -436,10 +584,11 @@ export function combineTranscriptEntries(
     "excludedHistoryEntryIds" | "historyEntryOverrides"
   >,
 ): AppServerThreadEntry[] {
+  const displayTail = visibleTranscriptTailEntries(tailEntries, index);
   if (!history?.oldestPage || !index) {
-    return tailEntries;
+    return displayTail;
   }
-  const excludedHistoryIds = historyOverlapIds(tailEntries, index.entryIds);
+  const excludedHistoryIds = historyOverlapIds(displayTail, index.entryIds);
   for (const id of presentation?.excludedHistoryEntryIds ?? []) {
     excludedHistoryIds.add(id);
   }
@@ -450,7 +599,7 @@ export function combineTranscriptEntries(
     historyPage: history.oldestPage,
     itemOverrides: presentation?.historyEntryOverrides,
     pageItems: (page) => page.entries,
-    tail: tailEntries,
+    tail: displayTail,
   });
 }
 

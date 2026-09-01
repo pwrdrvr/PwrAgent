@@ -1,5 +1,6 @@
 import type {
   AppServerReadThreadResponse,
+  AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadMessageEntry,
 } from "@pwragent/shared";
@@ -13,12 +14,36 @@ import {
   type TranscriptHistoryPage,
 } from "../segmented-transcript";
 
-function message(id: string, text = id): AppServerThreadMessageEntry {
+function message(
+  id: string,
+  text = id,
+  extras: Partial<AppServerThreadMessageEntry> = {},
+): AppServerThreadMessageEntry {
   return {
     type: "message",
     id,
     role: "assistant",
     text,
+    ...extras,
+  };
+}
+
+function turnUsage(params: {
+  createdAt: number;
+  summary: string;
+  turnId: string;
+}): AppServerThreadActivityEntry {
+  return {
+    type: "activity",
+    id: `live-turn-usage-${params.turnId}`,
+    summary: params.summary,
+    status: "completed",
+    createdAt: params.createdAt,
+    details: [],
+    turn: {
+      id: params.turnId,
+      status: "completed",
+    },
   };
 }
 
@@ -249,5 +274,268 @@ describe("segmented transcript history", () => {
 
     expect(found).toBe(false);
     expect(retainedHistoryIdReads).toBe(2_000);
+  });
+
+  it("merges overlay turn usage into an older history page once instead of leaving it in the tail", () => {
+    const olderTurn = {
+      id: "older-turn",
+      status: "completed" as const,
+    };
+    const laterOlderTurn = {
+      id: "later-older-turn",
+      status: "completed" as const,
+    };
+    const recentTurn = {
+      id: "recent-turn",
+      status: "completed" as const,
+    };
+    const environmentSetup: AppServerThreadActivityEntry = {
+      type: "activity",
+      id: "codex-environment-setup-pwragent",
+      summary: "Environment setup completed: PwrAgent",
+      status: "completed",
+      details: [],
+    };
+    const olderUsage = turnUsage({
+      createdAt: 181,
+      summary: "Turn usage: 170,652 uncached in · 2,342,912 cached · 12,266 out",
+      turnId: olderTurn.id,
+    });
+    const laterOlderUsage = turnUsage({
+      createdAt: 281,
+      summary: "Turn usage: 6,057 uncached in · 473,344 cached · 1,312 out",
+      turnId: laterOlderTurn.id,
+    });
+    const recentUsage = turnUsage({
+      createdAt: 481,
+      summary: "Turn usage: 3,034 uncached in · 160,512 cached · 1,367 out",
+      turnId: recentTurn.id,
+    });
+    const tail = [
+      environmentSetup,
+      olderUsage,
+      laterOlderUsage,
+      message("recent-user", "Recent prompt", {
+        role: "user",
+        createdAt: 400,
+        turn: recentTurn,
+      }),
+      message("recent-final", "Recent answer", {
+        createdAt: 480,
+        turn: recentTurn,
+      }),
+      recentUsage,
+    ];
+    const index = createTranscriptHistoryIndex();
+    const history = prependTranscriptHistoryPage({
+      history: undefined,
+      index,
+      page: response([
+        message("older-user", "Older prompt", {
+          role: "user",
+          createdAt: 100,
+          turn: olderTurn,
+        }),
+        message("older-final", "Older answer", {
+          createdAt: 180,
+          turn: olderTurn,
+        }),
+        message("later-older-user", "Later older prompt", {
+          role: "user",
+          createdAt: 200,
+          turn: laterOlderTurn,
+        }),
+        message("later-older-final", "Later older answer", {
+          createdAt: 280,
+          turn: laterOlderTurn,
+        }),
+      ]),
+      tailEntries: tail,
+    });
+    const entries = combineTranscriptEntries(history, index, tail);
+
+    expect(entries.map((entry) => entry.id)).toEqual([
+      "older-user",
+      "older-final",
+      olderUsage.id,
+      "later-older-user",
+      "later-older-final",
+      laterOlderUsage.id,
+      environmentSetup.id,
+      "recent-user",
+      "recent-final",
+      recentUsage.id,
+    ]);
+  });
+
+  it("hides overlay usage for turns that are not in the loaded window yet", () => {
+    const olderTurn = {
+      id: "older-turn",
+      status: "completed" as const,
+    };
+    const laterOlderTurn = {
+      id: "later-older-turn",
+      status: "completed" as const,
+    };
+    const recentTurn = {
+      id: "recent-turn",
+      status: "completed" as const,
+    };
+    const olderUsage = turnUsage({
+      createdAt: 181,
+      summary: "Turn usage: older",
+      turnId: olderTurn.id,
+    });
+    const laterOlderUsage = turnUsage({
+      createdAt: 281,
+      summary: "Turn usage: later older",
+      turnId: laterOlderTurn.id,
+    });
+    const recentUsage = turnUsage({
+      createdAt: 481,
+      summary: "Turn usage: recent",
+      turnId: recentTurn.id,
+    });
+    const tail = [
+      olderUsage,
+      laterOlderUsage,
+      message("recent-final", "Recent answer", {
+        createdAt: 480,
+        turn: recentTurn,
+      }),
+      recentUsage,
+    ];
+
+    expect(
+      combineTranscriptEntries(undefined, undefined, tail).map((entry) => entry.id),
+    ).toEqual(["recent-final", recentUsage.id]);
+
+    const index = createTranscriptHistoryIndex();
+    const history = prependTranscriptHistoryPage({
+      history: undefined,
+      index,
+      page: response([
+        message("later-older-final", "Later older answer", {
+          createdAt: 280,
+          turn: laterOlderTurn,
+        }),
+      ]),
+      tailEntries: tail,
+    });
+
+    expect(
+      combineTranscriptEntries(history, index, tail).map((entry) => entry.id),
+    ).toEqual([
+      "later-older-final",
+      laterOlderUsage.id,
+      "recent-final",
+      recentUsage.id,
+    ]);
+  });
+
+  it("relocates overlay usage with one linear pass over the new page and tail", () => {
+    const priorPageCount = 20;
+    const entriesPerPage = 50;
+    const index = createTranscriptHistoryIndex();
+    let history: LoadedTranscriptHistory | undefined;
+    let retainedHistoryIdReads = 0;
+
+    for (let pageIndex = 0; pageIndex < priorPageCount; pageIndex += 1) {
+      const entries = Array.from(
+        { length: entriesPerPage },
+        (_value, entryIndex): AppServerThreadMessageEntry => {
+          const id = `history-${pageIndex}-${entryIndex}`;
+          return {
+            type: "message",
+            get id() {
+              retainedHistoryIdReads += 1;
+              return id;
+            },
+            role: "assistant",
+            text: id,
+            turn: {
+              id: `history-turn-${pageIndex}-${entryIndex}`,
+              status: "completed",
+            },
+          };
+        },
+      );
+      history = prependTranscriptHistoryPage({
+        history,
+        index,
+        page: response(entries, `cursor-${pageIndex}`),
+        tailEntries: [],
+      });
+    }
+
+    const retainedPages = historyPages(history);
+    const olderTurnIds = Array.from(
+      { length: 10 },
+      (_value, turnIndex) => `older-turn-${turnIndex}`,
+    );
+    const unmatchedTurnIds = Array.from(
+      { length: 90 },
+      (_value, turnIndex) => `unloaded-turn-${turnIndex}`,
+    );
+    const tail: AppServerThreadEntry[] = [
+      ...unmatchedTurnIds.map((turnId, turnIndex) =>
+        turnUsage({
+          createdAt: 100 + turnIndex,
+          summary: `Turn usage: ${turnId}`,
+          turnId,
+        }),
+      ),
+      ...olderTurnIds.map((turnId, turnIndex) =>
+        turnUsage({
+          createdAt: 1_100 + turnIndex,
+          summary: `Turn usage: ${turnId}`,
+          turnId,
+        }),
+      ),
+      message("recent-final", "Recent answer", {
+        createdAt: 2_000,
+        turn: { id: "recent-turn", status: "completed" },
+      }),
+    ];
+    const olderPageEntries = olderTurnIds.map((turnId, turnIndex) =>
+      message(`older-final-${turnIndex}`, `Older answer ${turnIndex}`, {
+        createdAt: 1_000 + turnIndex,
+        turn: { id: turnId, status: "completed" },
+      }),
+    );
+
+    retainedHistoryIdReads = 0;
+    history = prependTranscriptHistoryPage({
+      history,
+      index,
+      page: response(olderPageEntries, "older-cursor"),
+      tailEntries: tail,
+    });
+
+    const nextPages = historyPages(history);
+    const nextArrays = new Set(nextPages.map((page) => page.entries));
+    let copiedPriorEntrySlots = 0;
+    for (const retainedPage of retainedPages) {
+      if (!nextArrays.has(retainedPage.entries)) {
+        copiedPriorEntrySlots += retainedPage.entries.length;
+      }
+    }
+
+    expect(copiedPriorEntrySlots).toBe(0);
+    expect(retainedHistoryIdReads).toBe(0);
+
+    const entries = combineTranscriptEntries(history, index, tail);
+    expect(
+      entries.slice(0, olderTurnIds.length * 2).map((entry) => entry.id),
+    ).toEqual(
+      olderTurnIds.flatMap((turnId, turnIndex) => [
+        `older-final-${turnIndex}`,
+        `live-turn-usage-${turnId}`,
+      ]),
+    );
+    expect(entries.at(-1)?.id).toBe("recent-final");
+    expect(
+      entries.some((entry) => entry.id.startsWith("live-turn-usage-unloaded-")),
+    ).toBe(false);
   });
 });
