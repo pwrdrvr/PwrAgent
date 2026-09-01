@@ -23,6 +23,10 @@ older clients can keep reading existing configs.
 
 - Keep workflow semantics channel-neutral. Resume navigation, status cards, approvals, questionnaires, markdown/content composition, attachments, and message routing should be expressed as generic intents and actions.
 - Provider adapters must validate every inbound platform identifier at the boundary before authorization, persistence, logging, store lookup, or listener dispatch. Use ReDoS-safe validators: hard length cap first, simple character loops or anchored single-class bounded regex only, and reject-and-log with `platform`, `identifier_field`, `length`, `first8_hash`, and `reason` without echoing raw attacker input.
+- Provider adapters must capture PwrAgent `receivedAt` at the first inbound
+  handler boundary, before validation or any `await`. Preserve an original
+  provider message time separately as optional `providerSentAt`; never use it
+  as `receivedAt` and never invent it. Dispatch before optional REST enrichment.
 - Provider adapters must enforce configured actor and conversation allowlists before dispatching to the desktop controller. Unauthorized general group/guild chatter should drop silently; log only DMs or actionable attempts such as slash commands, button clicks, or bot mentions, with rate-limiting for repeated unauthorized conversations.
 - Shared conversation authorization is fail-closed: empty or removed group/workspace/guild/team/supergroup allowlists deny access, even for an authorized actor. Treat 1:1 DMs separately from group DMs, and document/test new-provider behavior against [`docs/messaging-adding-a-provider.md` § Inbound authorization is fail-closed](../../docs/messaging-adding-a-provider.md#inbound-authorization-is-fail-closed).
 - Store provider-specific routing data only as opaque adapter state. Core workflow code may persist and echo this state, but must not parse Telegram chat IDs, Discord message IDs, callback payloads, or provider SDK types.

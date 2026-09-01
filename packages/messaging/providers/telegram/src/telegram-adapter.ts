@@ -16,6 +16,7 @@ import type {
   MessagingFilePart,
   MessagingClientRateLimitStrategy,
   MessagingInboundEvent,
+  MessagingInboundReceipt,
   MessagingInboundRejectedListener,
   MessagingManagedConversationActionRequest,
   MessagingManagedConversationActionResult,
@@ -31,6 +32,7 @@ import type {
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import {
+  captureMessagingInboundReceipt,
   evictStaleStreamAnchors,
   looksLikePairingAttempt,
   layoutMessagingActionRows,
@@ -1459,19 +1461,24 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   }
 
   async handleUpdate(update: TelegramUpdate): Promise<void> {
+    const receipt = captureMessagingInboundReceipt(
+      this.now(),
+      update.message ? telegramMessageSentAt(update.message) : undefined,
+    );
     if (update.message) {
-      await this.handleMessage(update.update_id, update.message);
+      await this.handleMessage(update.update_id, update.message, receipt);
       return;
     }
 
     if (update.callback_query) {
-      await this.handleCallbackQuery(update.update_id, update.callback_query);
+      await this.handleCallbackQuery(update.update_id, update.callback_query, receipt);
     }
   }
 
   private async handleMessage(
     updateId: number,
     message: TelegramMessage,
+    receipt: MessagingInboundReceipt,
   ): Promise<void> {
     const listener = this.listener;
     if (!listener || !message.from) {
@@ -1545,6 +1552,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           isPairingMessage
           || mentionRemainder !== undefined
           || Boolean(message.text?.startsWith("/")),
+        receipt,
       })
     ) {
       return;
@@ -1571,7 +1579,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
           channel: this.channelFromMessage(message),
           command: "help",
           rawText: "/help",
-          receivedAt: this.messageReceivedAt(message),
+          ...receipt,
           routingState: this.routingStateFromMessage(message),
           ...(sourceUrl ? { sourceUrl } : {}),
         });
@@ -1599,7 +1607,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
             message.video?.mime_type,
           sizeBytes: attachments[0]?.sizeBytes,
         },
-        receivedAt: this.messageReceivedAt(message),
+        ...receipt,
         routingState: this.routingStateFromMessage(message),
         ...(sourceUrl ? { sourceUrl } : {}),
         ...(mentionRemainder !== undefined ? { botMention: true } : {}),
@@ -1632,7 +1640,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         : {
             text: inboundText,
           }),
-      receivedAt: this.messageReceivedAt(message),
+      ...receipt,
       routingState: this.routingStateFromMessage(message),
       ...(sourceUrl ? { sourceUrl } : {}),
     } as MessagingInboundEvent);
@@ -1641,6 +1649,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
   private async handleCallbackQuery(
     updateId: number,
     callbackQuery: TelegramCallbackQuery,
+    receipt: MessagingInboundReceipt,
   ): Promise<void> {
     const listener = this.listener;
     const message = callbackQuery.message;
@@ -1650,7 +1659,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     if (!this.validateCallbackIdentifiers(updateId, callbackQuery)) {
       return;
     }
-    if (!this.isAuthorizedCallbackSource(callbackQuery)) {
+    if (!this.isAuthorizedCallbackSource(callbackQuery, receipt)) {
       await this.bot.api.answerCallbackQuery({
         callback_query_id: callbackQuery.id,
       });
@@ -1704,7 +1713,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       },
       actionId: persistedBinding?.actionId,
       value: persistedBinding?.value,
-      receivedAt: this.now(),
+      ...receipt,
       routingState,
       ...(sourceUrl ? { sourceUrl } : {}),
     });
@@ -1794,7 +1803,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   private isAuthorizedMessageSource(
     message: TelegramMessage,
-    options: { actionable: boolean },
+    options: { actionable: boolean; receipt: MessagingInboundReceipt },
   ): boolean {
     const actorId = String(message.from?.id ?? "");
     if (!this.isAuthorizedActor(actorId)) {
@@ -1808,6 +1817,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         this.emitInboundRejected(this.rejectedEventFromMessage(message, {
           kind: options.actionable ? "command" : "text",
           reason: "unauthorized-actor",
+          receipt: options.receipt,
         }));
       }
       return false;
@@ -1818,13 +1828,17 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       this.emitInboundRejected(this.rejectedEventFromMessage(message, {
         kind: options.actionable ? "command" : "text",
         reason: "unauthorized-conversation",
+        receipt: options.receipt,
       }));
       return false;
     }
     return true;
   }
 
-  private isAuthorizedCallbackSource(callbackQuery: TelegramCallbackQuery): boolean {
+  private isAuthorizedCallbackSource(
+    callbackQuery: TelegramCallbackQuery,
+    receipt: MessagingInboundReceipt,
+  ): boolean {
     const actorId = String(callbackQuery.from.id);
     const chat = callbackQuery.message?.chat;
     if (!this.isAuthorizedActor(actorId)) {
@@ -1835,6 +1849,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       if (chat) {
         this.emitInboundRejected(this.rejectedEventFromCallback(callbackQuery, {
           reason: "unauthorized-actor",
+          receipt,
         }));
       }
       return false;
@@ -1843,6 +1858,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
       this.logUnauthorizedConversationOnce("callback", chat);
       this.emitInboundRejected(this.rejectedEventFromCallback(callbackQuery, {
         reason: "unauthorized-conversation",
+        receipt,
       }));
       return false;
     }
@@ -2574,14 +2590,16 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   private rejectedEventFromMessage(
     message: TelegramMessage,
-    options: Pick<MessagingRejectedInboundEvent, "kind" | "reason">,
+    options: Pick<MessagingRejectedInboundEvent, "kind" | "reason"> & {
+      receipt: MessagingInboundReceipt;
+    },
   ): MessagingRejectedInboundEvent {
     return {
       id: `telegram:message:${message.message_id}:rejected`,
       kind: options.kind,
       actor: this.actorFromUser(message.from),
       channel: this.channelFromMessage(message),
-      receivedAt: this.messageReceivedAt(message),
+      ...options.receipt,
       reason: options.reason,
       routingState: this.routingStateFromMessage(message),
     };
@@ -2589,7 +2607,9 @@ export class TelegramAdapter implements TelegramProviderAdapter {
 
   private rejectedEventFromCallback(
     callbackQuery: TelegramCallbackQuery,
-    options: Pick<MessagingRejectedInboundEvent, "reason">,
+    options: Pick<MessagingRejectedInboundEvent, "reason"> & {
+      receipt: MessagingInboundReceipt;
+    },
   ): MessagingRejectedInboundEvent {
     const message = callbackQuery.message;
     return {
@@ -2605,7 +2625,7 @@ export class TelegramAdapter implements TelegramProviderAdapter {
               kind: "dm",
             },
           },
-      receivedAt: this.now(),
+      ...options.receipt,
       reason: options.reason,
       ...(message ? { routingState: this.routingStateFromMessage(message) } : {}),
     };
@@ -2699,10 +2719,6 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return `${chatId}:${messageThreadId}`;
   }
 
-  private messageReceivedAt(message: TelegramMessage): number {
-    return message.date ? message.date * 1000 : this.now();
-  }
-
   private registerBotHandlers(): void {
     if (!this.bot.on) {
       return;
@@ -2713,7 +2729,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         update?: { update_id?: number };
       };
       if (update.message) {
-        await this.handleMessage(update.update?.update_id ?? this.now(), update.message);
+        await this.handleUpdate({
+          update_id: update.update?.update_id ?? this.now(),
+          message: update.message,
+        });
       }
     });
     this.bot.on("callback_query:data", async (context) => {
@@ -2722,10 +2741,10 @@ export class TelegramAdapter implements TelegramProviderAdapter {
         update?: { update_id?: number };
       };
       if (update.callbackQuery) {
-        await this.handleCallbackQuery(
-          update.update?.update_id ?? this.now(),
-          update.callbackQuery,
-        );
+        await this.handleUpdate({
+          update_id: update.update?.update_id ?? this.now(),
+          callback_query: update.callbackQuery,
+        });
       }
     });
   }
@@ -2761,6 +2780,12 @@ export class TelegramAdapter implements TelegramProviderAdapter {
     return this.options.fetch ?? fetch;
   }
 
+}
+
+function telegramMessageSentAt(message: TelegramMessage): number | undefined {
+  return typeof message.date === "number" && Number.isFinite(message.date)
+    ? message.date * 1000
+    : undefined;
 }
 
 export function createTelegramAdapter(

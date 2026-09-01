@@ -4,6 +4,7 @@ import {
   type MessagingCallbackHandleRecord,
   type MessagingCallbackHandleStore,
   type MessagingInboundEvent,
+  type MessagingInboundChannelMetadataUpdate,
   type MessagingRejectedInboundEvent,
   type MessagingStatusIntent,
 } from "@pwragent/messaging-interface";
@@ -13,9 +14,11 @@ import {
   DiscordJsGatewayConnection,
   stripDiscordBotMention,
   type DiscordApi,
+  type DiscordChannelInfo,
   type DiscordGatewayConnection,
   type DiscordGatewayEvent,
   type DiscordGatewayListener,
+  type DiscordInteractionCreateDispatch,
   type DiscordMessageCreateDispatch,
 } from "../discord-adapter.ts";
 import {
@@ -1505,6 +1508,112 @@ describe("discord adapter", () => {
     await restartedAdapter.stop();
   });
 
+  it.each([
+    {
+      data: { name: "resume" },
+      expectedKind: "command",
+      label: "slash commands",
+      responseType: 5,
+      type: 2,
+    },
+    {
+      data: { custom_id: "dc:abcdefghijklmnopqrstuvwx" },
+      expectedKind: "callback",
+      label: "component interactions",
+      responseType: 6,
+      type: 3,
+    },
+  ])("dispatches $label before breadcrumb REST enrichment", async ({
+    data,
+    expectedKind,
+    responseType,
+    type,
+  }) => {
+    const parentChannelId = "1480556454498009357";
+    const events: MessagingInboundEvent[] = [];
+    const metadataUpdates: MessagingInboundChannelMetadataUpdate[] = [];
+    const gateway = new TestDiscordGateway();
+    const createInteractionResponse = vi.fn(async () => {});
+    let resolveThreadChannel!: (value: DiscordChannelInfo) => void;
+    const pendingThreadChannel = new Promise<DiscordChannelInfo>((resolve) => {
+      resolveThreadChannel = resolve;
+    });
+    const getChannel = vi.fn(async (id: string) => id === TEST_CHANNEL_ID
+      ? await pendingThreadChannel
+      : { id, name: "project-parent" });
+    const adapter = new DiscordAdapter({
+      api: createApi({ createInteractionResponse, getChannel }),
+      config: {
+        authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+        authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
+        botToken: "token",
+        channel: "discord",
+      },
+      gateway,
+      now: () => 1234,
+    });
+    await adapter.start(async (event) => {
+      events.push(event);
+    });
+    adapter.onInboundChannelMetadata((update) => {
+      metadataUpdates.push(update);
+    });
+
+    const emitted = gateway.emit({
+      op: 0,
+      t: "INTERACTION_CREATE",
+      d: {
+        channel_id: TEST_CHANNEL_ID,
+        channel_type: 11,
+        data,
+        guild_id: TEST_GUILD_ID,
+        id: TEST_MESSAGE_ID,
+        is_thread: true,
+        parent_id: parentChannelId,
+        token: "token_ABC.123",
+        type,
+        user: {
+          id: TEST_USER_ID,
+          username: "fixtureuser",
+        },
+      } as DiscordInteractionCreateDispatch & { parent_id: string },
+    });
+
+    await vi.waitFor(() => {
+      expect(getChannel).toHaveBeenCalledWith(TEST_CHANNEL_ID);
+    });
+    const visibleBeforeEnrichment = events.length;
+    resolveThreadChannel({
+      id: TEST_CHANNEL_ID,
+      name: "project-thread",
+      parentId: parentChannelId,
+    });
+    await emitted;
+
+    expect(createInteractionResponse).toHaveBeenCalledWith(
+      TEST_MESSAGE_ID,
+      "token_ABC.123",
+      { type: responseType },
+    );
+    expect(visibleBeforeEnrichment).toBe(1);
+    expect(events[0]).toMatchObject({
+      channel: {
+        conversation: {
+          id: TEST_CHANNEL_ID,
+          kind: "thread",
+          parentConversationId: parentChannelId,
+          parentConversationParentId: TEST_GUILD_ID,
+        },
+      },
+      kind: expectedKind,
+      receivedAt: 1234,
+    });
+    await vi.waitFor(() => {
+      expect(metadataUpdates).toHaveLength(1);
+    });
+    await adapter.stop();
+  });
+
   describe("stripDiscordBotMention", () => {
     const BOT_ID = "1480556454498009352";
 
@@ -1546,6 +1655,63 @@ describe("discord adapter", () => {
   });
 
   describe("text mention dispatch", () => {
+    it("dispatches before breadcrumb REST enrichment and preserves receipt provenance", async () => {
+      const providerSentAt = Date.parse("2026-08-31T17:13:26.477Z");
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      let clock = providerSentAt + 25;
+      let resolveChannel!: (value: DiscordChannelInfo) => void;
+      const pendingChannel = new Promise<DiscordChannelInfo>((resolve) => {
+        resolveChannel = resolve;
+      });
+      const getChannel = vi.fn(async () => {
+        clock = providerSentAt + 14_600;
+        return await pendingChannel;
+      });
+      const adapter = new DiscordAdapter({
+        api: createApi({ getChannel }),
+        config: {
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: TEST_AUTHORIZED_GUILD_IDS,
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => clock,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      const dispatch = {
+        ...messageDispatch({
+          authorBot: false,
+          content: "investigate ingress latency",
+          id: "latency-regression",
+        }),
+        timestamp: "2026-08-31T17:13:26.477Z",
+      } as DiscordMessageCreateDispatch;
+      const emitted = gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: dispatch,
+      });
+
+      await vi.waitFor(() => {
+        expect(getChannel).toHaveBeenCalledTimes(1);
+      });
+      const visibleBeforeEnrichment = events.length;
+      resolveChannel({ id: TEST_CHANNEL_ID, name: "latency-lab" });
+      await emitted;
+
+      expect(visibleBeforeEnrichment).toBe(1);
+      expect(events[0]).toMatchObject({
+        providerSentAt,
+        receivedAt: providerSentAt + 25,
+      });
+      await adapter.stop();
+    });
+
     it("dispatches pairing tokens from unauthorized actors before allowlist checks", async () => {
       const events: MessagingInboundEvent[] = [];
       const rejectedEvents: MessagingRejectedInboundEvent[] = [];
@@ -2056,6 +2222,7 @@ describe("discord adapter", () => {
       const BOT_ID = "1480556454498009352";
       const categoryId = "1480556454498009357";
       const events: MessagingInboundEvent[] = [];
+      const metadataUpdates: MessagingInboundChannelMetadataUpdate[] = [];
       const gateway = new TestDiscordGateway();
       const adapter = new DiscordAdapter({
         api: createApi({
@@ -2087,6 +2254,9 @@ describe("discord adapter", () => {
       await adapter.start(async (event) => {
         events.push(event);
       });
+      adapter.onInboundChannelMetadata((update) => {
+        metadataUpdates.push(update);
+      });
 
       await gateway.emit({
         op: 0,
@@ -2106,6 +2276,19 @@ describe("discord adapter", () => {
         channel: {
           channel: "discord",
           conversation: {
+            id: TEST_CHANNEL_ID,
+            kind: "channel",
+            workspaceId: TEST_GUILD_ID,
+          },
+        },
+      });
+      await vi.waitFor(() => {
+        expect(metadataUpdates).toHaveLength(1);
+      });
+      expect(metadataUpdates[0]).toMatchObject({
+        channel: {
+          channel: "discord",
+          conversation: {
             ancestorTitle: "PwrDrvr",
             id: TEST_CHANNEL_ID,
             kind: "channel",
@@ -2122,6 +2305,7 @@ describe("discord adapter", () => {
       const BOT_ID = "1480556454498009352";
       const parentChannelId = "1480556454498009357";
       const events: MessagingInboundEvent[] = [];
+      const metadataUpdates: MessagingInboundChannelMetadataUpdate[] = [];
       const gateway = new TestDiscordGateway();
       const adapter = new DiscordAdapter({
         api: createApi({
@@ -2153,6 +2337,9 @@ describe("discord adapter", () => {
       await adapter.start(async (event) => {
         events.push(event);
       });
+      adapter.onInboundChannelMetadata((update) => {
+        metadataUpdates.push(update);
+      });
 
       await gateway.emit({
         op: 0,
@@ -2165,11 +2352,29 @@ describe("discord adapter", () => {
           }),
           channel_type: 11,
           is_thread: true,
-        },
+          parent_id: parentChannelId,
+        } as DiscordMessageCreateDispatch & { parent_id: string },
       });
 
       expect(events[0]).toMatchObject({
         botMention: true,
+        channel: {
+          channel: "discord",
+          conversation: {
+            id: TEST_CHANNEL_ID,
+            kind: "thread",
+            parentConversationId: parentChannelId,
+            parentConversationParentId: TEST_GUILD_ID,
+            workspaceId: TEST_GUILD_ID,
+          },
+        },
+        kind: "text",
+        text: "investigate this",
+      });
+      await vi.waitFor(() => {
+        expect(metadataUpdates).toHaveLength(1);
+      });
+      expect(metadataUpdates[0]).toMatchObject({
         channel: {
           channel: "discord",
           conversation: {
@@ -2182,8 +2387,6 @@ describe("discord adapter", () => {
             workspaceId: TEST_GUILD_ID,
           },
         },
-        kind: "text",
-        text: "investigate this",
       });
       await adapter.stop();
     });

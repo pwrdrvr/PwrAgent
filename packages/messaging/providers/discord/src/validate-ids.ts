@@ -15,6 +15,7 @@ export type DiscordIdentifierField =
   | "interaction.id"
   | "interaction.token"
   | "message.id"
+  | "parent_id"
   | "user.id";
 
 export type IdentifierRejectionLogger = {

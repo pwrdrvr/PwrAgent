@@ -18,12 +18,14 @@ import type {
   MessagingDeliveryResult,
   MessagingDeliveryScope,
   MessagingInboundEvent,
+  MessagingInboundReceipt,
   MessagingInboundRejectedListener,
   MessagingRejectedInboundEvent,
   MessagingSurfaceAction,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
 import {
+  captureMessagingInboundReceipt,
   extractMessagingPairingToken,
   MESSAGING_CALLBACK_HANDLE_TTL_MS,
   splitTextForDelivery,
@@ -521,6 +523,7 @@ export class LineAdapter implements LineProviderAdapter {
     request: IncomingMessage,
     response: ServerResponse,
   ): Promise<void> {
+    const receivedAt = this.now();
     if (request.method !== "POST") {
       response.statusCode = 405;
       response.end();
@@ -568,11 +571,15 @@ export class LineAdapter implements LineProviderAdapter {
 
     if (!Array.isArray(parsed.events)) return;
     for (const event of parsed.events) {
-      await this.handleWebhookEvent(event);
+      await this.handleWebhookEvent(event, receivedAt);
     }
   }
 
-  private async handleWebhookEvent(event: LineWebhookEvent): Promise<void> {
+  private async handleWebhookEvent(
+    event: LineWebhookEvent,
+    receivedAt: number,
+  ): Promise<void> {
+    const receipt = captureMessagingInboundReceipt(receivedAt, event.timestamp);
     if (!this.listener) return;
     const ids = this.validateInboundIds(event);
     if (!ids) return;
@@ -587,10 +594,10 @@ export class LineAdapter implements LineProviderAdapter {
 
     switch (event.type) {
       case "message":
-        await this.handleMessageEvent(event, actor, channel, routingState);
+        await this.handleMessageEvent(event, actor, channel, routingState, receipt);
         return;
       case "postback":
-        await this.handlePostbackEvent(event, actor, channel, routingState);
+        await this.handlePostbackEvent(event, actor, channel, routingState, receipt);
         return;
       case "follow":
       case "unfollow":
@@ -603,7 +610,7 @@ export class LineAdapter implements LineProviderAdapter {
           kind: "lifecycle",
           actor,
           channel,
-          receivedAt: this.now(),
+          ...receipt,
           routingState,
           lifecycle: event.type === "follow" ? "bound" : "detached",
         });
@@ -628,7 +635,7 @@ export class LineAdapter implements LineProviderAdapter {
           kind: "lifecycle",
           actor,
           channel,
-          receivedAt: this.now(),
+          ...receipt,
           routingState,
           lifecycle:
             event.type === "join"
@@ -646,6 +653,7 @@ export class LineAdapter implements LineProviderAdapter {
     actor: MessagingActorIdentity,
     channel: MessagingChannelRef,
     routingState: MessagingAdapterState,
+    receipt: MessagingInboundReceipt,
   ): Promise<void> {
     if (!this.listener || !event.message) return;
     const text = event.message.type === "text" ? event.message.text ?? "" : "";
@@ -678,7 +686,7 @@ export class LineAdapter implements LineProviderAdapter {
           kind: "command",
           actor,
           channel,
-          receivedAt: this.now(),
+          ...receipt,
           routingState,
           rawText: text,
           command: text.slice(1).split(/\s+/)[0] ?? "",
@@ -691,7 +699,7 @@ export class LineAdapter implements LineProviderAdapter {
         kind: "text",
         actor,
         channel,
-        receivedAt: this.now(),
+        ...receipt,
         routingState,
         text: stripSelfMention(text, event.message.mention),
       });
@@ -705,7 +713,7 @@ export class LineAdapter implements LineProviderAdapter {
       kind: "media",
       actor,
       channel,
-      receivedAt: this.now(),
+      ...receipt,
       routingState,
       attachments: [attachment],
       disposition: attachment.disposition,
@@ -718,6 +726,7 @@ export class LineAdapter implements LineProviderAdapter {
     actor: MessagingActorIdentity,
     channel: MessagingChannelRef,
     routingState: MessagingAdapterState,
+    receipt: MessagingInboundReceipt,
   ): Promise<void> {
     if (!this.listener) return;
     const signed = this.parseSignedPostbackData(event.postback?.data);
@@ -754,7 +763,7 @@ export class LineAdapter implements LineProviderAdapter {
       kind: "callback",
       actor,
       channel,
-      receivedAt: this.now(),
+      ...receipt,
       routingState,
       interaction: {
         channel: "line",

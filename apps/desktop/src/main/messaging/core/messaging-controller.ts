@@ -87,6 +87,7 @@ import type {
   MessagingDefaultAgentScope,
   MessagingInboundCallbackEvent,
   MessagingInboundCommandEvent,
+  MessagingInboundChannelMetadataUpdate,
   MessagingInboundEvent,
   MessagingInboundMediaEvent,
   MessagingInboundTextEvent,
@@ -1173,6 +1174,20 @@ export class MessagingController {
     }
   }
 
+  async handleInboundChannelMetadata(
+    update: MessagingInboundChannelMetadataUpdate,
+  ): Promise<void> {
+    try {
+      await this.refreshBindingChannelMetadata(update.channel, update.routingState);
+    } catch (error) {
+      this.logger.debug?.("messaging inbound metadata enrichment failed", {
+        eventId: update.eventId,
+        platform: update.channel.channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   async deliverAutomationSourceMessage(params: {
     broadcast?: boolean;
     destination: "source_thread" | "source_channel";
@@ -2162,17 +2177,24 @@ export class MessagingController {
   private async refreshBindingFromInbound(
     event: MessagingInboundEvent,
   ): Promise<void> {
+    await this.refreshBindingChannelMetadata(event.channel, event.routingState);
+  }
+
+  private async refreshBindingChannelMetadata(
+    channel: MessagingChannelRef,
+    routingStateUpdate?: MessagingAdapterState,
+  ): Promise<void> {
     const binding = await this.options.store.findActiveBindingForChannel(
-      event.channel,
+      channel,
     );
     if (!binding) return;
     const stored = binding.channel.conversation;
-    const incoming = event.channel.conversation;
+    const incoming = channel.conversation;
     // Incoming wins when present. Adapters fetch fresher metadata
     // than we stored at bind time:
-    //   - Discord resolves channel/parent/guild names via REST every
-    //     inbound (bounded LRU cache), so a server or channel rename
-    //     reaches us on the next message.
+    //   - Discord publishes channel/parent/guild names through the
+    //     post-dispatch metadata hook after bounded-LRU REST enrichment,
+    //     so a server or channel rename reaches us without delaying admission.
     //   - Telegram caches forum-topic names from `forum_topic_created`
     //     and `forum_topic_edited` service messages, so renames done
     //     in the Telegram client propagate to subsequent inbound
@@ -2190,7 +2212,7 @@ export class MessagingController {
     const managedTopic =
       incoming.kind === "topic" && incoming.parentId
         ? await this.options.store.findManagedTopicByConversation({
-            channel: event.channel.channel,
+            channel: channel.channel,
             supergroupId: incoming.parentId,
             topicId: incoming.id,
           })
@@ -2204,7 +2226,7 @@ export class MessagingController {
       ancestorTitle:
         incoming.ancestorTitle ?? stored.ancestorTitle ?? managedConversation?.ancestorTitle,
     };
-    const routingState = event.routingState ?? binding.routingState;
+    const routingState = routingStateUpdate ?? binding.routingState;
     const changed =
       merged.title !== stored.title
       || merged.parentTitle !== stored.parentTitle
@@ -4098,6 +4120,20 @@ export class MessagingController {
       // threadId to verify the routing matched intent. `executionModeSource` of
       // anything other than `thread` is suspicious for a thread the UI
       // claims has been explicitly toggled.
+      const startTurnIssuedAt = this.now();
+      const inboundTiming = params.event
+        ? {
+            inboundEventId: params.event.id,
+            providerSentAt: params.event.providerSentAt,
+            pwragentReceivedAt: params.event.receivedAt,
+            providerSentToPwragentReceivedMs:
+              params.event.providerSentAt === undefined
+                ? undefined
+                : params.event.receivedAt - params.event.providerSentAt,
+            pwragentReceivedToStartTurnIssueMs:
+              startTurnIssuedAt - params.event.receivedAt,
+          }
+        : {};
       this.logger.info?.("messaging starting turn", {
         backend: params.binding.backend,
         bindingId: params.binding.id,
@@ -4107,6 +4143,8 @@ export class MessagingController {
         executionModeSource: executionResolution.source,
         model: turnSettings.model,
         fastMode: turnSettings.fastMode,
+        startTurnIssuedAt,
+        ...inboundTiming,
       });
       const started = await this.options.backend.startTurn({
         backend: params.binding.backend,
@@ -4116,6 +4154,18 @@ export class MessagingController {
         messageOrigin: messageOriginForInboundEvent(params.event),
         ...turnSettings,
       });
+      const startTurnAcceptedAt = this.now();
+      const acceptanceTiming = params.event
+        ? {
+            pwragentReceivedToStartTurnAcceptedMs:
+              startTurnAcceptedAt - params.event.receivedAt,
+            startTurnIssueToAcceptedMs: startTurnAcceptedAt - startTurnIssuedAt,
+            startTurnAcceptedAt,
+          }
+        : {
+            startTurnIssueToAcceptedMs: startTurnAcceptedAt - startTurnIssuedAt,
+            startTurnAcceptedAt,
+          };
       if (started.queueStatus === "queued") {
         this.rememberQueuedAgentMessagingOrigin({
           binding: params.binding,
@@ -4129,6 +4179,7 @@ export class MessagingController {
           threadId: params.binding.threadId,
           queueEntryId: started.queueEntryId ?? started.turnId,
           requestedExecutionMode: turnSettings.executionMode ?? "unset",
+          ...acceptanceTiming,
         });
         return "queued";
       }
@@ -4138,6 +4189,7 @@ export class MessagingController {
         threadId: params.binding.threadId,
         turnId: started.turnId,
         requestedExecutionMode: turnSettings.executionMode ?? "unset",
+        ...acceptanceTiming,
       });
       const activeTurn: MessagingActiveTurnSummary = {
         turnId: started.turnId,

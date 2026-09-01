@@ -112,6 +112,19 @@ describe("DesktopMessagingRuntime", () => {
     // regression there still fails fast instead of idling for the full 30s.
   }, process.platform === "win32" ? 30_000 : 15_000);
 
+  it("rejects provider events without a first-boundary receipt timestamp", async () => {
+    const { runtime, adapter } = await createRuntimeHarness();
+    await runtime.start();
+    const invalidEvent = {
+      ...buildCommandEvent("/resume"),
+      receivedAt: undefined,
+    } as unknown as MessagingInboundEvent;
+
+    await expect(adapter.listener?.(invalidEvent)).rejects.toThrow(
+      "omitted a finite first-boundary receivedAt",
+    );
+  });
+
   it("subscribes only to federated bindings on running adapters", async () => {
     const { runtime, bridge } = await createRuntimeHarness();
     const { getDesktopMessagingStore } = await import(
