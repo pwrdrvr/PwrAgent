@@ -2848,6 +2848,118 @@ describe("useThreadSessionState", () => {
     ]);
   });
 
+  it("materializes a started user message before assistant output", async () => {
+    let agentEventHandler:
+      | ((event: {
+          backend: "codex" | "acp:grok";
+          notification: {
+            method: string;
+            params: Record<string, unknown>;
+          };
+        }) => void)
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback as typeof agentEventHandler;
+        return () => undefined;
+      },
+      readThread: async () => readThreadResponse({
+        entries: [],
+        hasPreviousPage: false,
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "turn/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+            turn: {
+              id: "turn-2",
+              status: "in_progress",
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/started",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+            item: {
+              id: "user-message-2",
+              type: "userMessage",
+              content: [{ type: "text", text: "Run the corrected command." }],
+            },
+          },
+        },
+      });
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+            item: {
+              id: "user-message-2",
+              type: "userMessage",
+              content: [{ type: "text", text: "Run the corrected command." }],
+            },
+          },
+        },
+      });
+    });
+
+    act(() => {
+      result.current.addOptimisticUserMessage(
+        "Run the corrected command.",
+        [],
+        "turn-2",
+      );
+    });
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-2",
+            item: {
+              id: "assistant-message-2",
+              type: "agentMessage",
+              text: "The corrected command is running.",
+            },
+          },
+        },
+      });
+    });
+
+    expect(
+      result.current.entries.map((entry) =>
+        entry.type === "message" ? `${entry.role}:${entry.text}` : entry.type
+      )
+    ).toEqual([
+      "user:Run the corrected command.",
+      "assistant:The corrected command is running.",
+    ]);
+  });
+
   it("does not duplicate a final reported by both item and turn completion", async () => {
     let agentEventHandler:
       | ((event: {
@@ -11374,6 +11486,159 @@ describe("useThreadSessionState", () => {
       id: "turn-review-1-item",
       createdAt: finalReviewCreatedAt,
     });
+  });
+
+  it("carries the review's frozen workspace and pull request onto the entry", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventHandler = listener;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review-2",
+            item: {
+              id: "turn-review-2-item",
+              type: "exitedReviewMode",
+              review: "One finding.",
+              data: {
+                reviewer: { backend: "codex", model: "gpt-5.6-sol" },
+                // The registry freezes this onto the live item beside
+                // `reviewer`; dropping it here is what once made the
+                // provenance row invisible on the native review path.
+                context: {
+                  workspacePath: "/Users/dev/pwrdrvr/PwrAgent",
+                  projectLabel: "PwrAgent",
+                  gitBranch: "fix/dock-icon",
+                  baseBranch: "origin/main",
+                  pullRequest: {
+                    provider: "github.com",
+                    org: "pwrdrvr",
+                    repo: "PwrAgent",
+                    number: 1918,
+                    baseRefName: "main",
+                    url: "https://github.com/pwrdrvr/PwrAgent/pull/1918",
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+    });
+    expect(result.current.entries[0]).toMatchObject({
+      type: "review",
+      context: {
+        workspacePath: "/Users/dev/pwrdrvr/PwrAgent",
+        projectLabel: "PwrAgent",
+        gitBranch: "fix/dock-icon",
+        baseBranch: "origin/main",
+        pullRequest: { number: 1918, baseRefName: "main" },
+      },
+      reviewer: { backend: "codex", model: "gpt-5.6-sol" },
+    });
+  });
+
+  it("keeps a checked branch that carried no pull request distinguishable", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const desktopApi: DesktopApi = {
+      onAgentEvent: (listener) => {
+        agentEventHandler = listener;
+        return () => undefined;
+      },
+      readThread: async ({ backend, threadId }) => ({
+        backend: backend ?? "codex",
+        fetchedAt: Date.now(),
+        threadId,
+        replay: {
+          entries: [],
+          messages: [],
+          pagination: {
+            supportsPagination: false,
+            hasPreviousPage: false,
+          },
+        },
+      }),
+    };
+
+    const { result } = renderHook(() =>
+      useThreadSessionState({
+        desktopApi,
+        thread: buildThread({ id: "thread-1", updatedAt: 1_000 }),
+      })
+    );
+
+    await waitForThreadHydration(result);
+
+    act(() => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "item/completed",
+          params: {
+            threadId: "thread-1",
+            turnId: "turn-review-3",
+            item: {
+              id: "turn-review-3-item",
+              type: "exitedReviewMode",
+              review: "No findings.",
+              data: {
+                context: {
+                  workspacePath: "/Users/dev/pwrdrvr/PwrAgent",
+                  gitBranch: "main",
+                  // An answer, not a gap: the card says so out loud.
+                  pullRequest: null,
+                },
+              },
+            },
+          },
+        },
+      });
+    });
+
+    await waitFor(() => {
+      expect(result.current.entries).toHaveLength(1);
+    });
+    const entry = result.current.entries[0];
+    expect(entry.type === "review" && entry.context?.pullRequest).toBeNull();
   });
 
   it("keeps a review turn active when a separate turn/started arrives", async () => {

@@ -5,12 +5,19 @@ import type {
 import {
   MANAGED_REVIEW_CONTEXT_CLOSE_MARKER,
   MANAGED_REVIEW_CONTEXT_OPEN_MARKER,
+  normalizeReviewConfidenceScore,
 } from "../../shared/review-command";
 
 const REVIEW_OUTPUT_INSTRUCTIONS = [
   "Return only one JSON object with this exact top-level shape:",
-  '{"findings":[],"overall_correctness":"patch is correct","overall_explanation":"...","overall_confidence_score":0.0}',
+  '{"findings":[],"overall_correctness":"patch is correct","overall_explanation":"...","overall_confidence_score":0.85}',
   'overall_correctness must be exactly "patch is correct" or "patch is incorrect" — no other wording.',
+  // The field had no stated meaning for most of its life, so the number the
+  // card printed was whatever each model decided it meant. The example value
+  // is part of the definition: a schema showing 0.0 is a value weaker models
+  // copy through, and a literal zero renders as "0% confidence" beside a
+  // correct verdict.
+  "overall_confidence_score is how confident you are, from 0 to 1, that overall_correctness is the right verdict. It is not a quality score for the patch and not a merge recommendation. Omit the field entirely if you cannot distinguish.",
   "Each finding must contain title, body, confidence_score, optional priority (0-3), and code_location with absolute_file_path plus line_range.start/end.",
   "Do not wrap the JSON in Markdown fences and do not include prose outside it.",
 ].join("\n");
@@ -64,11 +71,13 @@ export function parseManagedReviewOutput(
     || typeof record.overall_correctness !== "string"
     || !record.overall_correctness.trim()
     || typeof record.overall_explanation !== "string"
-    || typeof record.overall_confidence_score !== "number"
   ) {
     return undefined;
   }
 
+  const confidenceScore = normalizeReviewConfidenceScore(
+    record.overall_confidence_score,
+  );
   const findings = record.findings.flatMap(
     (value): AppServerReviewOutput["findings"] => {
       if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -112,7 +121,9 @@ export function parseManagedReviewOutput(
       findings,
     ),
     overall_explanation: record.overall_explanation,
-    overall_confidence_score: record.overall_confidence_score,
+    ...(confidenceScore === undefined
+      ? {}
+      : { overall_confidence_score: confidenceScore }),
   };
 }
 

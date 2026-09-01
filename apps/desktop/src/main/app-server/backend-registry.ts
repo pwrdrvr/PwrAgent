@@ -60,6 +60,7 @@ import {
   isUsageActivityEntry,
   usageActivityScope,
 } from "./overlay-transcript-entries";
+import { resolveReviewProvenance } from "./review-provenance";
 import { assertReviewWorkspaceMatchesAttachedPullRequest } from "./review-workspace-guard";
 import { pageNormalizedReplay } from "./thread-replay-pagination";
 import {
@@ -74,6 +75,7 @@ import {
   estimateTokenUsageCost,
   formatTokenUsageUsd,
   isToolManagedWorktreePath,
+  normalizeRenamedTitleSource,
   resolveOpenAiPricingServiceTier,
   shortenDerivedThreadTitle,
   type AgentEvent,
@@ -89,12 +91,15 @@ import {
   type AppServerReadThreadResponse,
   type AppServerThreadActivityEntry,
   type AppServerThreadEntry,
+  type AppServerReviewContext,
+  type AppServerReviewTarget,
   type AppServerThreadImagePart,
   type AppServerThreadMessage,
   type AppServerThreadMessageOrigin,
   type AppServerThreadReviewEntry,
   type AppServerToolRequestUserInputResponse,
   type AppServerThreadReplay,
+  type AppServerRenamedTitleSource,
   type AppServerThreadStatus,
   type AppServerThreadSummary,
   type AppServerThreadTitleSource,
@@ -2775,6 +2780,13 @@ type TaskMonitorDelegationRecord = {
 type ReviewSubAgentRecord = {
   /** Backend running the review child. */
   backend: AppServerBackendKind;
+  /**
+   * Workspace, branch, and pull request the review was started against,
+   * resolved once at start. Held on the record so the completion entry reports
+   * the same facts as the start entry rather than re-deriving them from a
+   * thread that may have moved on.
+   */
+  context?: AppServerReviewContext;
   createdAt: number;
   displayText: string;
   fastMode?: boolean;
@@ -7853,8 +7865,16 @@ export class DesktopBackendRegistry {
    * thread list during an active turn. Reconcile list rows through this map so
    * federation snapshots and remote search do not regress to a placeholder
    * after the local renderer has already received the generated name.
+   *
+   * The provenance travels with the name. Re-stating it as `explicit` on the
+   * way out would undo what the rename recorded, and every reader here writes
+   * at a newer sequence than the rename did — so the guess, not the rename,
+   * would be what the store keeps.
    */
-  private readonly observedThreadNames = new Map<string, string>();
+  private readonly observedThreadNames = new Map<
+    string,
+    { title: string; titleSource: AppServerRenamedTitleSource }
+  >();
   private hasLoggedNotificationsEnabledError = false;
   private readonly threadTurnQueue: ThreadTurnQueue;
   private automationInspectionHandler?: AutomationInspectionHandler;
@@ -11699,6 +11719,10 @@ export class DesktopBackendRegistry {
 
   async renameThread(
     request: RenameThreadRequest,
+    // Not on `RenameThreadRequest`: that type crosses IPC, and an operator
+    // rename must never be able to claim it was generated. Only this class's
+    // own title generator supplies a source.
+    options?: { titleSource?: AppServerRenamedTitleSource },
   ): Promise<RenameThreadResponse> {
     const backend = request.backend ?? "codex";
     // A rename supersedes PwrAgent's launch placeholder. Clear this before the
@@ -11709,7 +11733,12 @@ export class DesktopBackendRegistry {
     );
     let result: { threadId: string };
     if (isAcpBackendId(backend)) {
-      result = await this.renameAcpSession(backend, request.threadId, request.name);
+      result = await this.renameAcpSession(
+        backend,
+        request.threadId,
+        request.name,
+        options,
+      );
     } else if (backend === "codex") {
       result = await this.withCodexThreadClient(request.threadId, async (client) =>
         await this.renameWithClient(client, request.threadId, request.name),
@@ -11740,6 +11769,7 @@ export class DesktopBackendRegistry {
           params: {
             threadId: result.threadId,
             threadName: request.name.trim(),
+            ...(options?.titleSource ? { titleSource: options.titleSource } : {}),
           },
         },
       });
@@ -11767,12 +11797,22 @@ export class DesktopBackendRegistry {
       throw new Error("Selected ACP thread was not found.");
     }
     const updatedAt = Date.now();
+    const titleSource = options?.titleSource ?? "explicit";
     this.acpBackend.upsertSession({
       ...session,
       title: nextName,
-      titleSource: options?.titleSource ?? "explicit",
+      titleSource,
       updatedAt: Math.max(session.updatedAt, updatedAt),
     });
+    // The session store and the notification ask different questions of the
+    // same word. `fallback` there means "a better title may still replace
+    // this", which is how the prompt-derived stopgap keeps its name open to
+    // the agent's own (see updateSessionTitleFromAcpUpdate). On the wire it
+    // would mean "this thread has no name", and every consumer would discard
+    // the name being announced. The stopgap's title is real, so the rename
+    // announces the only two things a rename can be.
+    const announcedTitleSource: AppServerRenamedTitleSource | undefined =
+      titleSource === "fallback" ? undefined : titleSource;
     await this.emit({
       backend,
       notification: {
@@ -11780,6 +11820,7 @@ export class DesktopBackendRegistry {
         params: {
           threadId,
           threadName: nextName,
+          ...(announcedTitleSource ? { titleSource: announcedTitleSource } : {}),
         },
       },
     });
@@ -15231,6 +15272,7 @@ export class DesktopBackendRegistry {
     let overlay: ThreadOverlayState | undefined;
     let cwd: string | undefined;
     let codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
+    let reviewContext: AppServerReviewContext | undefined;
     let tokenMiserEnabled = false;
     try {
       if (params.backend === "codex") {
@@ -15298,6 +15340,14 @@ export class DesktopBackendRegistry {
         executionTarget: codexEnvironmentRuntime?.executionTarget,
         prs: overlay?.prs,
         target: params.target,
+      });
+      reviewContext = await this.resolveReviewContext({
+        backend: params.backend,
+        cwd,
+        executionTarget: codexEnvironmentRuntime?.executionTarget,
+        overlay,
+        target: params.target,
+        threadId: params.threadId,
       });
       // A review on another provider cannot inherit the parent thread's model
       // settings — that model belongs to a different catalog. Fall back to the
@@ -15422,6 +15472,7 @@ export class DesktopBackendRegistry {
         ? { reasoningEffort: modelSettings.reasoningEffort }
         : {}),
       mode: managedMode ? "managed" : "native",
+      ...(reviewContext ? { context: reviewContext } : {}),
       parentBackend: params.backend,
       parentThreadId: result.threadId,
       reviewThreadId: result.reviewThreadId || result.threadId,
@@ -15621,6 +15672,59 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Never fails a review. Provenance is reporting: a card that cannot say which
+   * project it ran in is worse than one that can, but it is not worth refusing
+   * to run the review the operator asked for.
+   */
+  private async resolveReviewContext(params: {
+    backend: AppServerBackendKind;
+    cwd?: string;
+    executionTarget?: "local" | "remote";
+    overlay?: ThreadOverlayState;
+    target: AppServerReviewTarget;
+    threadId: string;
+  }): Promise<AppServerReviewContext | undefined> {
+    if (!params.cwd?.trim()) {
+      return undefined;
+    }
+    try {
+      // Read the remembered summary directly rather than through
+      // `findThreadForWorkspaceHandoff`, which falls through to `thread/list`
+      // on a miss. `resolveThreadEnvironmentCwd` already looked this thread up
+      // moments ago; provenance is reporting and must not add an uncached
+      // round trip to the app server before the review starts. The enriched
+      // row carries directory labels, so prefer it and settle for the plain
+      // row — a basename label beats a blocked review.
+      const threadKey = {
+        backend: params.backend,
+        threadId: params.threadId,
+      };
+      const thread =
+        this.threadInfoStore.getSummary(threadKey, { requireEnriched: true })
+        ?? this.threadInfoStore.getSummary(threadKey);
+      return await resolveReviewProvenance({
+        cwd: params.cwd,
+        ...(params.executionTarget
+          ? { executionTarget: params.executionTarget }
+          : {}),
+        linkedDirectories: [
+          ...(thread?.linkedDirectories ?? []),
+          ...(params.overlay?.extraLinkedDirectories ?? []),
+        ],
+        ...(params.overlay?.prs ? { prs: params.overlay.prs } : {}),
+        target: params.target,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("failed to resolve review provenance", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId,
+      });
+      return undefined;
+    }
+  }
+
   private async emitManagedReviewStarted(
     record: ReviewSubAgentRecord,
   ): Promise<void> {
@@ -15632,6 +15736,7 @@ export class DesktopBackendRegistry {
       displayText: record.displayText,
       createdAt: startedAt,
       reviewer: reviewEntryReviewer(record),
+      ...(record.context ? { context: record.context } : {}),
       turn: {
         id: record.turnId,
         status: "in_progress",
@@ -24964,6 +25069,7 @@ export class DesktopBackendRegistry {
         review,
         createdAt: completedAt,
         reviewer: reviewEntryReviewer(params.record),
+        ...(params.record.context ? { context: params.record.context } : {}),
         ...(parsed ? { output: parsed } : {}),
         turn: {
           id: params.record.turnId,
@@ -28500,16 +28606,24 @@ export class DesktopBackendRegistry {
     threadId: string;
     title: string;
   }): Promise<void> {
+    // Both backends announce the same provenance. PwrAgent generated this
+    // title and knows that; the branch is only about which rename path stores
+    // it. Letting the Codex side stay silent would make it read as an operator
+    // rename, which is what this provenance exists to stop — and would make
+    // the behavior depend on the backend.
     if (isAcpBackendId(params.backend)) {
       await this.renameAcpSession(params.backend, params.threadId, params.title, {
         titleSource: "derived",
       });
     } else {
-      await this.renameThread({
-        backend: params.backend,
-        threadId: params.threadId,
-        name: params.title,
-      });
+      await this.renameThread(
+        {
+          backend: params.backend,
+          threadId: params.threadId,
+          name: params.title,
+        },
+        { titleSource: "derived" },
+      );
     }
   }
 
@@ -34783,6 +34897,7 @@ export class DesktopBackendRegistry {
       const params = event.notification.params as {
         threadId?: unknown;
         threadName?: unknown;
+        titleSource?: unknown;
       };
       const threadId = params.threadId;
       const threadName = params.threadName;
@@ -34790,14 +34905,24 @@ export class DesktopBackendRegistry {
         const trimmed = threadName.trim();
         if (trimmed) {
           const key = buildThreadIdentityKey(event.backend, threadId);
+          const titleSource = normalizeRenamedTitleSource(params.titleSource);
           this.threadInfoStore.observe({
             identity: { backend: event.backend, threadId },
             observationSequence: this.reserveThreadInfoObservation(),
             source: "lifecycle-notification",
             title: trimmed,
-            titleSource: "explicit",
+            titleSource,
           });
-          this.observedThreadNames.set(key, trimmed);
+          // Only where a provider can still contradict us. This map is the
+          // "provider has not echoed our rename back yet" set, and every
+          // reader of it is Codex-facing; the sole path that removes an entry
+          // is the Codex listing. An ACP rename has no such window — it wrote
+          // the session store on its way here, and that store is what ACP
+          // listings read — so remembering one only leaks an entry that
+          // nothing can ever retire.
+          if (!isAcpBackendId(event.backend)) {
+            this.observedThreadNames.set(key, { title: trimmed, titleSource });
+          }
         }
       }
       return;
@@ -34824,21 +34949,25 @@ export class DesktopBackendRegistry {
     thread: AppServerThreadSummary,
   ): AppServerThreadSummary {
     const key = buildThreadIdentityKey(thread.source, thread.id);
-    const observedName = this.observedThreadNames.get(key);
-    if (!observedName) {
+    const observed = this.observedThreadNames.get(key);
+    if (!observed) {
       return thread;
     }
-    if (thread.titleSource === "explicit") {
-      // Matching explicit text means the provider acknowledged our event.
-      // Different explicit text is durable provider truth from a rename this
-      // process may not have observed (profiles can be shared by processes).
+    if (thread.titleSource === observed.titleSource) {
+      // Matching provenance means the provider acknowledged our event. Text
+      // that differs under the same source is durable provider truth from a
+      // rename this process may not have observed (profiles can be shared by
+      // processes). Comparing against the recorded source rather than a
+      // hardcoded `explicit` is what lets a generated title retire: stamping
+      // `explicit` here would also overwrite the `derived` the rename set,
+      // leaving listThreads and getThreadInfo permanently disagreeing.
       this.observedThreadNames.delete(key);
       return thread;
     }
     return {
       ...thread,
-      title: observedName,
-      titleSource: "explicit",
+      title: observed.title,
+      titleSource: observed.titleSource,
     };
   }
 
@@ -34849,10 +34978,10 @@ export class DesktopBackendRegistry {
       return threadIds;
     }
     const keyPrefix = buildThreadIdentityKey("codex", "");
-    for (const [key, observedName] of this.observedThreadNames) {
+    for (const [key, observed] of this.observedThreadNames) {
       if (
         key.startsWith(keyPrefix)
-        && observedName.toLowerCase().includes(normalizedFilter)
+        && observed.title.toLowerCase().includes(normalizedFilter)
       ) {
         threadIds.add(key.slice(keyPrefix.length));
       }
@@ -34889,14 +35018,17 @@ export class DesktopBackendRegistry {
     const unacknowledgedRename = this.observedThreadNames.get(
       buildThreadIdentityKey(backend, threadId),
     );
-    const title = unacknowledgedRename ?? candidate;
+    const title = unacknowledgedRename?.title ?? candidate;
     this.threadInfoStore.observe({
       identity: { backend, threadId },
       observationSequence: displayMetadataObservationSequence,
       source: "lifecycle-notification",
       ...(title !== undefined ? { title } : {}),
+      // The rename's own provenance, not a fresh guess. This observation takes
+      // a newer sequence than the rename did, so asserting `explicit` here
+      // would silently revert a generated title on the next resume replay.
       ...(unacknowledgedRename !== undefined
-        ? { titleSource: "explicit" as const }
+        ? { titleSource: unacknowledgedRename.titleSource }
         : titleSource !== undefined
           ? { titleSource }
           : {}),
@@ -36045,7 +36177,19 @@ export class DesktopBackendRegistry {
     const record =
       this.activeReviewSubAgents.get(reviewKey)
       ?? this.reviewSubAgentsByReviewTurn.get(reviewKey);
-    if (!record || readRecord(item.data)?.reviewer) {
+    if (!record) {
+      return event;
+    }
+    const data = readRecord(item.data) ?? {};
+    // Each field guards itself. Keying the whole decoration off `reviewer`
+    // made a later field's delivery depend on an unrelated field's absence:
+    // an item that already carried a reviewer would silently ship without
+    // provenance.
+    const additions = {
+      ...(data.reviewer ? {} : { reviewer: reviewEntryReviewer(record) }),
+      ...(record.context && !data.context ? { context: record.context } : {}),
+    };
+    if (Object.keys(additions).length === 0) {
       return event;
     }
     return {
@@ -36057,8 +36201,8 @@ export class DesktopBackendRegistry {
           item: {
             ...item,
             data: {
-              ...(readRecord(item.data) ?? {}),
-              reviewer: reviewEntryReviewer(record),
+              ...data,
+              ...additions,
             },
           },
         },

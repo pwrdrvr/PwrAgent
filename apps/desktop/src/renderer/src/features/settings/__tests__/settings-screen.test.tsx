@@ -520,6 +520,79 @@ function createSettingsState(
   };
 }
 
+describe("SettingsScreen segmented pending", () => {
+  it("shows pending on a converted segmented group and clears it", async () => {
+    let settleWrite!: () => void;
+    const write = new Promise<boolean>((resolve) => {
+      settleWrite = () => resolve(true);
+    });
+    const settings = createSettingsState();
+    settings.writeConfig = vi.fn(() => write);
+
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Worktrees" }));
+
+    const group = screen.getByRole("radiogroup", {
+      name: "Where should worktrees live?",
+    });
+    // The fixture already selects "User home", and re-picking the selected
+    // segment is deliberately a no-op, so drive the one that actually changes.
+    const inRepo = within(group).getByRole("radio", { name: "In repository" });
+    fireEvent.click(inRepo);
+
+    // The group was hand-rolled markup before the pending rollout reached it,
+    // so this asserts the conversion actually wired the affordance rather
+    // than only preserving the roles.
+    await waitFor(() => {
+      expect(document.querySelector(".settings-pending")).not.toBeNull();
+    });
+    expect(inRepo).toHaveAttribute("aria-busy", "true");
+    expect(
+      within(group).getByRole("radio", { name: "User home" }),
+    ).not.toHaveAttribute("aria-busy");
+
+    await act(async () => {
+      settleWrite();
+      await write;
+    });
+
+    expect(document.querySelector(".settings-pending")).toBeNull();
+    expect(inRepo).not.toHaveAttribute("aria-busy");
+  });
+
+  it("ignores a re-click on the segment already selected", () => {
+    const settings = createSettingsState();
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Worktrees" }));
+    const group = screen.getByRole("radiogroup", {
+      name: "Where should worktrees live?",
+    });
+
+    fireEvent.click(within(group).getByRole("radio", { name: "User home" }));
+
+    expect(settings.writeConfig).not.toHaveBeenCalled();
+    expect(document.querySelector(".settings-pending")).toBeNull();
+  });
+
+  it("leaves the appearance axes free of a pending affordance", () => {
+    const settings = createSettingsState();
+    render(<SettingsScreen settings={settings} onClose={() => undefined} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "General" }));
+
+    // Theme applies optimistically — the window re-themes on the click — so
+    // this group shares the segmented markup but deliberately takes no
+    // tracker. A spinner here would report a wait that already ended.
+    const theme = screen.queryByRole("radiogroup", { name: "Theme" });
+    if (theme) {
+      fireEvent.click(within(theme).getAllByRole("radio")[0]!);
+      expect(document.querySelector(".settings-pending")).toBeNull();
+    }
+  });
+});
+
 function createArchivedSnapshot(
   threadId: string,
   archivedAt: number,
@@ -3051,7 +3124,7 @@ describe("SettingsScreen", () => {
 
     expect(screen.getByText("Opt-in")).toBeInTheDocument();
     const defaultSwitch = screen.getByRole("switch", {
-      name: "Enable Token Miser on threads by default",
+      name: "Enable on threads by default — Token Miser",
     });
     expect(defaultSwitch).toHaveAttribute("aria-checked", "false");
     expect(defaultSwitch).not.toBeDisabled();

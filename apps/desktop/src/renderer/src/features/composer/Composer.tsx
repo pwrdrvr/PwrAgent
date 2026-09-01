@@ -216,7 +216,8 @@ type ComposerProps = {
   addOptimisticReviewEntry?: (displayText: string) => string;
   addOptimisticUserMessage?: (
     text: string,
-    imageParts?: AppServerThreadImagePart[]
+    imageParts?: AppServerThreadImagePart[],
+    turnId?: string,
   ) => string;
   backends?: BackendSummary[];
   applications?: DesktopApplicationsSnapshot;
@@ -6281,6 +6282,7 @@ export function Composer(props: ComposerProps) {
             optimisticMessageId = props.addOptimisticUserMessage?.(
               payload.displayText,
               payload.imageParts,
+              response.turnId,
             );
             setActiveOptimisticMessageId(optimisticMessageId);
           }
@@ -10477,7 +10479,7 @@ export function Composer(props: ComposerProps) {
                       {previewState?.status === "loading" ? (
                         <span
                           aria-hidden="true"
-                          className="composer__pdf-preview-spinner"
+                          className="pending-spinner pending-spinner--lg"
                         />
                       ) : (
                         <FileCodeIcon size={22} aria-hidden="true" />
@@ -12015,6 +12017,7 @@ export function Composer(props: ComposerProps) {
               // command picker. Click left to run, right to choose.
               <div className="composer__run-split">
                 <button
+                  aria-busy={currentThreadEnvActionStarting || undefined}
                   aria-label="Run"
                   className="composer__run-split-play tooltip-target"
                   data-tooltip={
@@ -12035,7 +12038,7 @@ export function Composer(props: ComposerProps) {
                   {currentThreadEnvActionStarting ? (
                     <span
                       aria-hidden="true"
-                      className="composer__action-button-spinner"
+                      className="pending-spinner"
                     />
                   ) : (
                     <PlayIcon size={13} aria-hidden="true" />

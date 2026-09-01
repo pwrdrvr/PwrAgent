@@ -517,7 +517,11 @@ function formatBranchTooltip(
     .join("\n");
 }
 
-function CopyableThreadChip(props: {
+/**
+ * Shared with the transcript's review provenance row, which copies a review's
+ * workspace path from the same primitive so both surfaces behave identically.
+ */
+export function CopyableThreadChip(props: {
   "aria-label": string;
   children: ReactNode;
   className: string;

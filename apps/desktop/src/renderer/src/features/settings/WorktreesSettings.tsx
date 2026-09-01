@@ -3,6 +3,7 @@ import type {
   DesktopWorktreeStorageLocation,
 } from "@pwragent/shared";
 import {
+  SegmentedField,
   SettingsField,
   SettingsPanelHead,
   SettingsSection,
@@ -55,7 +56,7 @@ export function WorktreesSettings(props: {
         chipKind={overridden ? "warn" : "default"}
       >
         <div className="settings-fields">
-          <SettingsField
+          <SegmentedField
             label="Where should worktrees live?"
             sub="Pick a strategy that matches how you keep your projects on disk."
             help={
@@ -64,31 +65,12 @@ export function WorktreesSettings(props: {
                 : activeOption?.description
             }
             error={storage.error}
-            control={
-              <div
-                className="settings-segmented"
-                role="radiogroup"
-                aria-label="Worktree storage location"
-              >
-                {STORAGE_OPTIONS.map((option) => (
-                  <button
-                    key={option.value}
-                    aria-checked={storage.value === option.value}
-                    className={`settings-segmented__button${
-                      storage.value === option.value ? " is-active" : ""
-                    }`}
-                    disabled={props.saving || overridden}
-                    role="radio"
-                    type="button"
-                    onClick={() => {
-                      void props.onStorageChange(option.value);
-                    }}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            }
+            disabled={props.saving || overridden}
+            options={STORAGE_OPTIONS}
+            value={storage.value}
+            onChange={(value) => {
+              return props.onStorageChange(value);
+            }}
           />
 
           <SettingsField

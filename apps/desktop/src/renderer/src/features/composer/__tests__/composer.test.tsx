@@ -2212,7 +2212,7 @@ describe("Composer", () => {
     expect(runButton).toBeDisabled();
     expect(runButton).not.toHaveTextContent("Run");
     expect(
-      runButton.querySelector(".composer__action-button-spinner"),
+      runButton.querySelector(".pending-spinner"),
     ).toBeInTheDocument();
 
     await act(async () => {
@@ -2225,7 +2225,7 @@ describe("Composer", () => {
     });
     expect(runButton).not.toBeDisabled();
     expect(
-      runButton.querySelector(".composer__action-button-spinner"),
+      runButton.querySelector(".pending-spinner"),
     ).not.toBeInTheDocument();
   });
 
@@ -2293,7 +2293,7 @@ describe("Composer", () => {
     const secondRunButton = screen.getByRole("button", { name: "Run" });
     expect(secondRunButton).not.toBeDisabled();
     expect(
-      secondRunButton.querySelector(".composer__action-button-spinner"),
+      secondRunButton.querySelector(".pending-spinner"),
     ).toBeNull();
 
     await act(async () => {
@@ -7597,6 +7597,77 @@ describe("Composer", () => {
 
     expect(draftStore.getQueuedTurn(scopeKey)).toBeUndefined();
     expect(screen.queryByLabelText("Queued message")).not.toBeInTheDocument();
+  });
+
+  it("reconciles a late optimistic message with its admitted turn", async () => {
+    const startTurnDeferred = createDeferred<StartTurnResponse>();
+    const startTurn = vi.fn(
+      (_request: StartTurnRequest) => startTurnDeferred.promise,
+    );
+    const addOptimisticUserMessage = vi.fn(() => "optimistic-1");
+    let agentEventHandler: ((event: AgentEvent) => void) | undefined;
+
+    render(
+      <Composer
+        activeTurnId="turn-1"
+        addOptimisticUserMessage={addOptimisticUserMessage}
+        desktopApi={{
+          onAgentEvent: (listener) => {
+            agentEventHandler = listener;
+            return () => undefined;
+          },
+          startTurn,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Active turn",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "Admit before optimistic reconciliation" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+    await waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1));
+    const queueEntryId = startTurn.mock.calls[0]?.[0].queueEntryId;
+    expect(queueEntryId).toBeDefined();
+
+    await act(async () => {
+      agentEventHandler?.({
+        backend: "codex",
+        notification: {
+          method: "thread/turnQueue/updated",
+          params: {
+            threadId: "thread-1",
+            queueEntryId: queueEntryId!,
+            origin: "manual",
+            status: "started",
+            turnId: "turn-2",
+          },
+        },
+      });
+      startTurnDeferred.resolve({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-2",
+      });
+      await startTurnDeferred.promise;
+    });
+
+    expect(addOptimisticUserMessage).toHaveBeenCalledWith(
+      "Admit before optimistic reconciliation",
+      [],
+      "turn-2",
+    );
   });
 
   it("keeps a delayed backend queue acknowledgement scoped to its thread", async () => {

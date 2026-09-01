@@ -7,6 +7,7 @@ import {
 } from "@pwragent/shared";
 import type {
   AgentEvent,
+  AppServerThreadTitleSource,
   FederationRemoteTarget,
   NavigationLaunchpadDefaults,
   NavigationLaunchpadDraft,
@@ -42,6 +43,54 @@ function latestThreadActionError(
     ([event]) => event?.kind === kind,
   );
   return calls.at(-1)?.[0]?.message;
+}
+
+/**
+ * One ACP thread whose title provenance the caller chooses. The rename path
+ * only reveals what it recorded when the row starts as something other than
+ * the source under test, so these deliberately start at `fallback`.
+ */
+function acpTitleSnapshot(
+  title: string,
+  titleSource: AppServerThreadTitleSource,
+  updatedAt: number,
+): NavigationSnapshot {
+  return {
+    backend: "all",
+    fetchedAt: updatedAt,
+    unchanged: false,
+    inboxThreadKeys: ["acp:kimi:thread-1"],
+    threads: [
+      {
+        id: "thread-1",
+        title,
+        titleSource,
+        source: "acp:kimi",
+        linkedDirectories: [],
+        inbox: { inInbox: true, reason: "new-thread" },
+        updatedAt,
+      },
+    ],
+    directories: [],
+    launchpadDefaults: {
+      backend: "codex",
+      executionMode: "default",
+    },
+  };
+}
+
+function acpFallbackTitleSnapshot(
+  title: string,
+  updatedAt: number,
+): NavigationSnapshot {
+  return acpTitleSnapshot(title, "fallback", updatedAt);
+}
+
+function acpDerivedTitleSnapshot(
+  title: string,
+  updatedAt: number,
+): NavigationSnapshot {
+  return acpTitleSnapshot(title, "derived", updatedAt);
 }
 
 describe("useThreadNavigation", () => {
@@ -4796,6 +4845,115 @@ describe("useThreadNavigation", () => {
       await result.current.refresh();
     });
     expect(result.current.threads[0]?.title).toBe("Generated title");
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.threads[0]?.title).toBe("Newer remote title");
+  });
+
+  it.each([
+    // The agent named its own session. Stamping `explicit` here is what made
+    // the placeholder-title paths skip a generated title.
+    ["a stated provenance", "derived", "derived"],
+    // A Codex or federated rename can carry none, and the default has to stay
+    // what this assumed before the field existed.
+    ["no provenance", undefined, "explicit"],
+    // Federation forwards a peer's params verbatim, so this recorder reads
+    // another instance's JSON and a peer on a different build can send
+    // anything. An unrecognized value must not reach the row: no snapshot row
+    // could ever report it back, and the observation retires by comparing the
+    // two — it would re-pin this title on every refresh for the life of the
+    // hook, which is the failure this provenance exists to remove.
+    ["an unrecognized provenance", "generated", "explicit"],
+  ])("records %s on a rename notification", async (_label, stated, expected) => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockResolvedValue(acpFallbackTitleSnapshot("ACP session", 1_000));
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.title).toBe("ACP session");
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "acp:kimi",
+        notification: {
+          method: "thread/name/updated",
+          params: {
+            threadId: "thread-1",
+            threadName: "Investigate the flaky handshake test",
+            ...(stated !== undefined ? { titleSource: stated } : {}),
+          },
+        },
+      } as never);
+    });
+
+    expect(result.current.threads[0]?.title).toBe(
+      "Investigate the flaky handshake test",
+    );
+    expect(result.current.threads[0]?.titleSource).toBe(expected);
+  });
+
+  it("retires a derived name observation after a snapshot acknowledges it", async () => {
+    let agentEventHandler:
+      | Parameters<NonNullable<DesktopApi["onAgentEvent"]>>[0]
+      | undefined;
+    const getNavigationSnapshot = vi
+      .fn()
+      .mockResolvedValueOnce(acpFallbackTitleSnapshot("ACP session", 1_000))
+      .mockResolvedValueOnce(
+        acpDerivedTitleSnapshot("Investigate the flaky handshake test", 2_000),
+      )
+      .mockResolvedValueOnce(
+        acpDerivedTitleSnapshot("Newer remote title", 3_000),
+      );
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshot,
+      onAgentEvent: (callback) => {
+        agentEventHandler = callback;
+        return () => undefined;
+      },
+    };
+    const { result } = renderHook(() => useThreadNavigation(desktopApi));
+
+    await waitFor(() => {
+      expect(result.current.threads[0]?.title).toBe("ACP session");
+    });
+    act(() => {
+      agentEventHandler?.({
+        backend: "acp:kimi",
+        notification: {
+          method: "thread/name/updated",
+          params: {
+            threadId: "thread-1",
+            threadName: "Investigate the flaky handshake test",
+            titleSource: "derived",
+          },
+        },
+      });
+    });
+
+    // The snapshot catches up and agrees, which is what retires the pending
+    // observation. Comparing it against a hardcoded `explicit` never matches a
+    // derived row, so the observation would be re-applied on every refresh and
+    // pin the title forever.
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.threads[0]?.title).toBe(
+      "Investigate the flaky handshake test",
+    );
 
     await act(async () => {
       await result.current.refresh();

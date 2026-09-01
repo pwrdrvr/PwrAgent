@@ -16,6 +16,7 @@ import type {
 } from "@pwragent/shared";
 import type { FederationThreadTarget } from "../../chrome/federation-thread-targets";
 import { HOVER_TRANSITION_GRACE_MS } from "../../../lib/useHoverTransitionGrace";
+import { threadSummaryIdentityKey } from "../../../lib/federated-thread-events";
 import { Sidebar } from "../Sidebar";
 
 /**
@@ -267,6 +268,75 @@ function releaseThreadPinPointer(
     pointerId: THREAD_PIN_POINTER_ID,
   });
 }
+
+/**
+ * The rendered order of one sub-thread tray. Sub-agent groups and child rows
+ * are siblings in the same list, so their relative order — and which of them
+ * carries the nested indent — is the placement contract under test.
+ */
+function subthreadTrayItems(
+  container: HTMLElement,
+  selector = ".subthread-list",
+): string[] {
+  const tray = container.querySelector(selector);
+  if (!(tray instanceof HTMLElement)) {
+    throw new Error(`Expected a ${selector} tray`);
+  }
+  return Array.from(tray.children).map((item) => {
+    const subAgentOwner = item.getAttribute("data-subagents-thread");
+    if (subAgentOwner) {
+      const nested = item.classList.contains("native-subagents--nested");
+      return `sub-agents${nested ? "(nested)" : ""}:${subAgentOwner}`;
+    }
+    const title = item.querySelector(".thread-row__title");
+    if (!title) {
+      throw new Error("Expected a tray entry to be a sub-agent group or a thread row");
+    }
+    return `thread:${title.textContent}`;
+  });
+}
+
+const nativeParentThread: NavigationThreadSummary = {
+  ...sharedThread,
+  id: "thread-native-tray-parent",
+  title: "Coordinate the launch",
+  codexNativeSubAgents: [
+    {
+      threadId: "thread-parent-worker",
+      title: "Draft the launch plan",
+      depth: 1,
+      agentNickname: "parent-scout",
+      agentRole: "researcher",
+      threadStatus: "idle",
+    },
+  ],
+};
+
+const nativeChildThread: NavigationThreadSummary = {
+  ...sharedThread,
+  id: "thread-native-tray-child",
+  title: "Review the rollout",
+  parentThreadId: nativeParentThread.id,
+  parentThreadBackend: "codex",
+  codexNativeSubAgents: [
+    {
+      threadId: "thread-child-worker",
+      title: "Check the rollout gates",
+      depth: 1,
+      agentNickname: "child-scout",
+      agentRole: "reviewer",
+      threadStatus: "active",
+    },
+    {
+      threadId: "thread-child-worker-two",
+      title: "Summarize the gate results",
+      depth: 2,
+      agentNickname: "child-summarizer",
+      agentRole: "writer",
+      threadStatus: "idle",
+    },
+  ],
+};
 
 afterEach(() => {
   delete (window as unknown as {
@@ -1269,7 +1339,7 @@ describe("Sidebar", () => {
     expect(screen.queryByText("launch-scout")).not.toBeInTheDocument();
 
     const nativeSubAgentsToggle = screen.getByRole("button", {
-      name: "Expand 3 native Codex sub-agents",
+      name: "Expand 3 native Codex sub-agents for Coordinate the launch",
     });
     expect(screen.queryByText("launch-scout")).not.toBeInTheDocument();
 
@@ -1334,9 +1404,236 @@ describe("Sidebar", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "Expand 1 native Codex sub-agents" }),
+      screen.getByRole("button", {
+        name: "Expand 1 native Codex sub-agents for Coordinate the directory launch",
+      }),
     ).toBeInTheDocument();
     expect(screen.queryByText("directory-scout")).not.toBeInTheDocument();
+  });
+
+  it("puts a parent's sub-agents above its child rows in Inbox", () => {
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[nativeChildThread, nativeParentThread]}
+        loading={false}
+        selectedItemKey="codex:thread-native-tray-parent"
+        threads={[nativeChildThread, nativeParentThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    // The parent owns the first slot of its own tray: a reader finds its
+    // workers directly under the parent row, not after every child.
+    expect(subthreadTrayItems(container)).toEqual([
+      `sub-agents:${threadSummaryIdentityKey(nativeParentThread)}`,
+      "thread:Review the rollout",
+      `sub-agents(nested):${threadSummaryIdentityKey(nativeChildThread)}`,
+    ]);
+  });
+
+  it("gives each child thread its own sub-agent group in Inbox", () => {
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[nativeChildThread, nativeParentThread]}
+        loading={false}
+        selectedItemKey="codex:thread-native-tray-parent"
+        threads={[nativeChildThread, nativeParentThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    expect(container.querySelectorAll(".native-subagents")).toHaveLength(2);
+
+    // Each group expands independently and lists only its own workers. A
+    // merged list would make a child's workers unfindable.
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Expand 1 native Codex sub-agents for Coordinate the launch",
+      }),
+    );
+    expect(screen.getByText("parent-scout")).toBeInTheDocument();
+    expect(screen.queryByText("child-scout")).not.toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Expand 2 native Codex sub-agents for Review the rollout",
+      }),
+    );
+    const childList = screen.getByRole("list", {
+      name: "Native Codex sub-agents for Review the rollout",
+    });
+    expect(within(childList).getByText("child-scout")).toBeInTheDocument();
+    expect(within(childList).getByText("child-summarizer")).toBeInTheDocument();
+    expect(within(childList).queryByText("parent-scout")).not.toBeInTheDocument();
+  });
+
+  it("shows a child's sub-agents when the parent has none", () => {
+    const parentWithoutSubAgents: NavigationThreadSummary = {
+      ...nativeParentThread,
+      codexNativeSubAgents: undefined,
+    };
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[nativeChildThread, parentWithoutSubAgents]}
+        loading={false}
+        selectedItemKey="codex:thread-native-tray-parent"
+        threads={[nativeChildThread, parentWithoutSubAgents]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    expect(subthreadTrayItems(container)).toEqual([
+      "thread:Review the rollout",
+      `sub-agents(nested):${threadSummaryIdentityKey(nativeChildThread)}`,
+    ]);
+  });
+
+  it("hides every sub-agent group while the parent's tray is collapsed", () => {
+    const collapsedParent: NavigationThreadSummary = {
+      ...nativeParentThread,
+      subthreadsCollapsed: true,
+    };
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={[nativeChildThread, collapsedParent]}
+        loading={false}
+        selectedItemKey="codex:thread-native-tray-parent"
+        threads={[nativeChildThread, collapsedParent]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    // A child's group hangs off the child row, so it goes away with the row.
+    // Collapsing must not become a way to reach sub-agents without children.
+    expect(container.querySelector(".subthread-list")).toBeNull();
+    expect(container.querySelectorAll(".native-subagents")).toHaveLength(0);
+    expect(
+      screen.queryByRole("button", { name: "Review the rollout" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("puts a parent's sub-agents above its child rows in Directories", () => {
+    const directory: NavigationDirectorySummary = {
+      ...directories[0]!,
+      threadKeys: [
+        "codex:thread-native-tray-parent",
+        "codex:thread-native-tray-child",
+      ],
+    };
+
+    const { container } = render(
+      <Sidebar
+        backends={backends}
+        browseMode="directories"
+        directories={[directory]}
+        inboxThreads={[nativeChildThread, nativeParentThread]}
+        loading={false}
+        selectedItemKey="codex:thread-native-tray-parent"
+        threads={[nativeChildThread, nativeParentThread]}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+      />,
+    );
+
+    expect(
+      subthreadTrayItems(container, ".subthread-list--compact"),
+    ).toEqual([
+      `sub-agents:${threadSummaryIdentityKey(nativeParentThread)}`,
+      "thread:Review the rollout",
+      `sub-agents(nested):${threadSummaryIdentityKey(nativeChildThread)}`,
+    ]);
+  });
+
+  it("keeps a child's sub-agents with it when it is unlinked from its parent", () => {
+    const onUnlinkThreads = vi.fn(async () => undefined);
+    const renderSidebar = (threads: NavigationThreadSummary[]) => (
+      <Sidebar
+        backends={backends}
+        browseMode="inbox"
+        directories={directories}
+        inboxThreads={threads}
+        loading={false}
+        selectedItemKey="codex:thread-native-tray-child"
+        threads={threads}
+        onBrowseModeChange={() => undefined}
+        onCreateThread={async () => undefined}
+        onOpenLaunchpad={async () => undefined}
+        onSelectThread={() => undefined}
+        onUnlinkThreads={onUnlinkThreads}
+      />
+    );
+    const view = render(
+      renderSidebar([nativeChildThread, nativeParentThread]),
+    );
+
+    fireEvent.contextMenu(
+      screen.getByRole("button", { name: "Review the rollout" }),
+    );
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: "Unlink from Parent" }),
+    );
+    expect(onUnlinkThreads).toHaveBeenCalledWith([
+      expect.objectContaining({ id: nativeChildThread.id }),
+    ]);
+
+    // The unlink promotes the child to the top level. Its workers belong to
+    // it, not to the parent it left, so they move with it.
+    const unlinkedChild: NavigationThreadSummary = {
+      ...nativeChildThread,
+      parentThreadBackend: undefined,
+      parentThreadId: undefined,
+    };
+    view.rerender(renderSidebar([unlinkedChild, nativeParentThread]));
+
+    expect(view.container.querySelectorAll(".native-subagents")).toHaveLength(2);
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Expand 2 native Codex sub-agents for Review the rollout",
+      }),
+    );
+    const childList = screen.getByRole("list", {
+      name: "Native Codex sub-agents for Review the rollout",
+    });
+    expect(within(childList).getByText("child-scout")).toBeInTheDocument();
+    expect(within(childList).getByText("child-summarizer")).toBeInTheDocument();
+
+    // The former parent keeps only the workers it started.
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Expand 1 native Codex sub-agents for Coordinate the launch",
+      }),
+    );
+    const parentList = screen.getByRole("list", {
+      name: "Native Codex sub-agents for Coordinate the launch",
+    });
+    expect(within(parentList).getByText("parent-scout")).toBeInTheDocument();
+    expect(within(parentList).queryByText("child-scout")).not.toBeInTheDocument();
   });
 
   it("opens worktree sub-thread launchpads from the thread context menu", () => {

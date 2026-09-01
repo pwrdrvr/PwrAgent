@@ -12,6 +12,7 @@ import {
   isAcpBackendId,
   isAppServerBackendKind,
   isMessagingBindingTargetKind,
+  normalizeRenamedTitleSource,
   parseCodexTurnErrorMessage,
   permissionForActionId,
   permissionForCommandVerb,
@@ -191,7 +192,10 @@ import { getMainLogger } from "../../log.js";
 import { PerKeyAsyncLock } from "../../util/per-key-async-lock.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
 import { actionsForIntent } from "./deterministic-interaction-mapper.js";
-import { parseReviewCommand } from "../../../shared/review-command.js";
+import {
+  normalizeReviewOutputRecord,
+  parseReviewCommand,
+} from "../../../shared/review-command.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
 import {
   buildResumeIntent,
@@ -14844,6 +14848,7 @@ export class MessagingController {
     const params = event.notification.params as {
       threadId?: unknown;
       threadName?: unknown;
+      titleSource?: unknown;
     };
     if (
       typeof params.threadId !== "string" ||
@@ -14854,6 +14859,12 @@ export class MessagingController {
     }
     const threadId = params.threadId;
     const threadName = params.threadName.trim();
+    // The new name's own provenance. Carrying the row's previous source over
+    // to a new title is the orphaned pair the thread information store
+    // refuses to hold: the status and monitor cards read `derived` to decide
+    // whether to shorten a title, so a stale source formats the same rename
+    // two different ways depending on what the row said before.
+    const titleSource = normalizeRenamedTitleSource(params.titleSource);
 
     return {
       ...snapshot,
@@ -14862,6 +14873,7 @@ export class MessagingController {
           ? {
               ...thread,
               title: threadName,
+              titleSource,
             }
           : thread,
       ),
@@ -20668,27 +20680,7 @@ function normalizeStructuredReviewOutput(
     asPlainRecord(data?.review_output) ??
     asPlainRecord(item.reviewOutput) ??
     asPlainRecord(item.review_output);
-  const findings = Array.isArray(reviewOutput?.findings)
-    ? reviewOutput.findings
-    : undefined;
-
-  if (
-    !reviewOutput ||
-    !findings ||
-    (reviewOutput.overall_correctness !== "patch is correct" &&
-      reviewOutput.overall_correctness !== "patch is incorrect") ||
-    typeof reviewOutput.overall_explanation !== "string" ||
-    typeof reviewOutput.overall_confidence_score !== "number"
-  ) {
-    return undefined;
-  }
-
-  return {
-    findings: findings as NonNullable<AppServerThreadReviewEntry["output"]>["findings"],
-    overall_correctness: reviewOutput.overall_correctness,
-    overall_explanation: reviewOutput.overall_explanation,
-    overall_confidence_score: reviewOutput.overall_confidence_score,
-  };
+  return normalizeReviewOutputRecord(reviewOutput);
 }
 
 function isPlanStepStatus(value: unknown): value is AppServerThreadPlanEntry["steps"][number]["status"] {

@@ -67,15 +67,16 @@ import {
 } from "../../lib/slack-pairing-approval";
 import type { DesktopApi } from "../../lib/desktop-api";
 import {
+  SegmentedField,
   SettingsContextStrip,
   SettingsField,
   SettingsIndexRow,
   SettingsPanelHead,
   SettingsSection,
   SettingsSectionStack,
+  ToggleField,
   type SettingsChipTone,
 } from "./SettingsLayout";
-import { SettingsSwitch } from "./SettingsSwitch";
 import { SlackConnectCard } from "../messaging/SlackConnectCard";
 import { SLACK_EVENTS_API_UNIMPLEMENTED_NOTICE } from "../messaging/slack-connect-copy";
 import { SettingsTestBlock } from "./SettingsTestBlock";
@@ -501,7 +502,7 @@ export function MessagingSettings(props: {
                 : sourceBadge(messagingEnabled)
             }
             onChange={(enabled) => {
-              void props.onMessagingEnabledChange(enabled);
+              return props.onMessagingEnabledChange(enabled);
             }}
           />
           <SegmentedField
@@ -528,7 +529,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(toolUpdateMode)}
             value={toolUpdateMode.value}
             onChange={(mode) => {
-              void props.onToolUpdateModeChange(mode);
+              return props.onToolUpdateModeChange(mode);
             }}
           />
           <SegmentedField
@@ -555,7 +556,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(managerToolUpdateMode)}
             value={managerToolUpdateMode.value}
             onChange={(mode) => {
-              void props.onManagerToolUpdateModeChange(mode);
+              return props.onManagerToolUpdateModeChange(mode);
             }}
           />
           {toolUpdateBindingResetStatus ? (
@@ -580,7 +581,7 @@ export function MessagingSettings(props: {
             sub="Allow messaging users to see and resume threads that are already in Full Access."
             source={sourceBadge(allowFullAccessThreadResume)}
             onChange={(enabled) => {
-              void props.onFullAccessThreadResumeChange(enabled);
+              return props.onFullAccessThreadResumeChange(enabled);
             }}
           />
           <ToggleField
@@ -590,7 +591,7 @@ export function MessagingSettings(props: {
             sub="Allow messaging users to switch Default Access threads or new threads into Full Access."
             source={sourceBadge(allowFullAccessEscalation)}
             onChange={(enabled) => {
-              void props.onFullAccessEscalationChange(enabled);
+              return props.onFullAccessEscalationChange(enabled);
             }}
           />
           <SegmentedField
@@ -601,7 +602,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(fullAccessWarning)}
             value={fullAccessWarning.value}
             onChange={(policy) => {
-              void props.onFullAccessWarningPolicyChange(policy);
+              return props.onFullAccessWarningPolicyChange(policy);
             }}
           />
           <SegmentedField
@@ -612,7 +613,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(imageProfile)}
             value={imageProfile.value}
             onChange={(profile) => {
-              void props.onImageProfileChange(profile);
+              return props.onImageProfileChange(profile);
             }}
           />
           <SegmentedField
@@ -623,7 +624,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(pdfProfile)}
             value={pdfProfile.value}
             onChange={(profile) => {
-              void props.onPdfProfileChange(profile);
+              return props.onPdfProfileChange(profile);
             }}
           />
 
@@ -635,7 +636,7 @@ export function MessagingSettings(props: {
             sub="Advanced. Reveals a per-thread streaming toggle in chat status cards and the New Thread menu. Streaming does not send in-turn messages — it repeatedly edits one message as tokens arrive, which burns platform rate limits fast and usually ends up throttled. Most people should leave this off."
             source={sourceBadge(showStreamingOption)}
             onChange={(enabled) => {
-              void props.onShowStreamingOptionChange(enabled);
+              return props.onShowStreamingOptionChange(enabled);
             }}
           />
         </div>
@@ -706,7 +707,7 @@ export function MessagingSettings(props: {
             sub="Turn the Telegram adapter on or off independently of the global messaging switch."
             source={sourceBadge(telegram.enabled)}
             onChange={(enabled) => {
-              void props.onSaveTelegram({
+              return props.onSaveTelegram({
                 ...telegram,
                 enabled: { ...telegram.enabled, value: enabled },
               });
@@ -750,7 +751,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(telegram.responseMode)}
             value={telegram.responseMode.value}
             onChange={(responseMode) => {
-              void props.onSaveTelegram({
+              return props.onSaveTelegram({
                 ...telegram,
                 responseMode: {
                   ...telegram.responseMode,
@@ -768,7 +769,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(telegram.streamingResponses)}
             onChange={(streamingResponses) => {
               if (streamingResponses) maybeNudgeForStreaming("telegram", "Telegram");
-              void props.onSaveTelegram({
+              return props.onSaveTelegram({
                 ...telegram,
                 streamingResponses: {
                   ...telegram.streamingResponses,
@@ -850,7 +851,7 @@ export function MessagingSettings(props: {
             sub="Turn the Discord adapter on or off independently of the global messaging switch."
             source={sourceBadge(discord.enabled)}
             onChange={(enabled) => {
-              void props.onSaveDiscord({
+              return props.onSaveDiscord({
                 ...discord,
                 enabled: { ...discord.enabled, value: enabled },
               });
@@ -901,7 +902,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(discord.streamingResponses)}
             onChange={(streamingResponses) => {
               if (streamingResponses) maybeNudgeForStreaming("discord", "Discord");
-              void props.onSaveDiscord({
+              return props.onSaveDiscord({
                 ...discord,
                 streamingResponses: {
                   ...discord.streamingResponses,
@@ -941,7 +942,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(discord.responseMode)}
             value={discord.responseMode.value}
             onChange={(responseMode) => {
-              void props.onSaveDiscord({
+              return props.onSaveDiscord({
                 ...discord,
                 responseMode: {
                   ...discord.responseMode,
@@ -1026,7 +1027,7 @@ export function MessagingSettings(props: {
             sub="Turn the Mattermost adapter on or off independently of the global messaging switch."
             source={sourceBadge(mattermost.enabled)}
             onChange={(enabled) => {
-              void props.onSaveMattermost({
+              return props.onSaveMattermost({
                 ...mattermost,
                 enabled: { ...mattermost.enabled, value: enabled },
               });
@@ -1091,7 +1092,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(mattermost.streamingResponses)}
             onChange={(streamingResponses) => {
               if (streamingResponses) maybeNudgeForStreaming("mattermost", "Mattermost");
-              void props.onSaveMattermost({
+              return props.onSaveMattermost({
                 ...mattermost,
                 streamingResponses: {
                   ...mattermost.streamingResponses,
@@ -1153,7 +1154,7 @@ export function MessagingSettings(props: {
             sub="Off by default. Mattermost 10.x slash-command bodies omit thread context, so responses land in the channel — use @bot help mentions instead. Mattermost 11.0+ supports threaded slash replies."
             source={sourceBadge(mattermost.registerSlashCommands)}
             onChange={(registerSlashCommands) => {
-              void props.onSaveMattermost({
+              return props.onSaveMattermost({
                 ...mattermost,
                 registerSlashCommands: {
                   ...mattermost.registerSlashCommands,
@@ -1267,7 +1268,7 @@ export function MessagingSettings(props: {
             sub="Turn the Slack adapter on or off independently of the global messaging switch."
             source={sourceBadge(slack.enabled)}
             onChange={(enabled) => {
-              void props.onSaveSlack({
+              return props.onSaveSlack({
                 ...slack,
                 enabled: { ...slack.enabled, value: enabled },
               });
@@ -1372,7 +1373,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(slack.dmAccessMode)}
             value={slack.dmAccessMode.value}
             onChange={(dmAccessMode) => {
-              void props.onSaveSlack({
+              return props.onSaveSlack({
                 ...slack,
                 dmAccessMode: { ...slack.dmAccessMode, value: dmAccessMode },
               });
@@ -1386,7 +1387,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(slack.groupDmAccessMode)}
             value={slack.groupDmAccessMode.value}
             onChange={(groupDmAccessMode) => {
-              void props.onSaveSlack({
+              return props.onSaveSlack({
                 ...slack,
                 groupDmAccessMode: {
                   ...slack.groupDmAccessMode,
@@ -1403,7 +1404,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(slack.teamAuthorizationMode)}
             value={slack.teamAuthorizationMode.value}
             onChange={(teamAuthorizationMode) => {
-              void props.onSaveSlack({
+              return props.onSaveSlack({
                 ...slack,
                 teamAuthorizationMode: {
                   ...slack.teamAuthorizationMode,
@@ -1450,7 +1451,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(slack.channelAuthorizationMode)}
             value={slack.channelAuthorizationMode.value}
             onChange={(channelAuthorizationMode) => {
-              void props.onSaveSlack({
+              return props.onSaveSlack({
                 ...slack,
                 channelAuthorizationMode: {
                   ...slack.channelAuthorizationMode,
@@ -1500,7 +1501,7 @@ export function MessagingSettings(props: {
               source={sourceBadge(slack.channelUserAccessMode)}
               value={slack.channelUserAccessMode.value}
               onChange={(channelUserAccessMode) => {
-                void props.onSaveSlack({
+                return props.onSaveSlack({
                   ...slack,
                   channelUserAccessMode: {
                     ...slack.channelUserAccessMode,
@@ -1519,7 +1520,7 @@ export function MessagingSettings(props: {
               source={sourceBadge(slack.responseMode)}
               value={slack.responseMode.value}
               onChange={(responseMode) => {
-                void props.onSaveSlack({
+                return props.onSaveSlack({
                   ...slack,
                   responseMode: {
                     ...slack.responseMode,
@@ -1562,7 +1563,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(slack.inboundMode)}
             value={slack.inboundMode.value === "events" ? "socket" : slack.inboundMode.value}
             onChange={(inboundMode) => {
-              void props.onSaveSlack({
+              return props.onSaveSlack({
                 ...slack,
                 inboundMode: { ...slack.inboundMode, value: inboundMode },
               });
@@ -1575,7 +1576,7 @@ export function MessagingSettings(props: {
             sub="Reserved for Slack app command setup. Leave off unless your app is configured for PwrAgent slash commands."
             source={sourceBadge(slack.registerSlashCommands)}
             onChange={(registerSlashCommands) => {
-              void props.onSaveSlack({
+              return props.onSaveSlack({
                 ...slack,
                 registerSlashCommands: {
                   ...slack.registerSlashCommands,
@@ -1609,7 +1610,7 @@ export function MessagingSettings(props: {
             sub="Shows Working Updates in one Slack task card per turn when Slack stream APIs are available; otherwise uses text updates."
             source={sourceBadge(slack.liveWorkingCards)}
             onChange={(liveWorkingCards) => {
-              void props.onSaveSlack({
+              return props.onSaveSlack({
                 ...slack,
                 liveWorkingCards: {
                   ...slack.liveWorkingCards,
@@ -1627,7 +1628,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(slack.streamingResponses)}
             onChange={(streamingResponses) => {
               if (streamingResponses) maybeNudgeForStreaming("slack", "Slack");
-              void props.onSaveSlack({
+              return props.onSaveSlack({
                 ...slack,
                 streamingResponses: {
                   ...slack.streamingResponses,
@@ -1655,7 +1656,7 @@ export function MessagingSettings(props: {
             sub="Turn the Feishu / Lark adapter on or off independently of the global messaging switch."
             source={sourceBadge(feishu.enabled)}
             onChange={(enabled) => {
-              void props.onSaveFeishu({
+              return props.onSaveFeishu({
                 ...feishu,
                 enabled: { ...feishu.enabled, value: enabled },
               });
@@ -1707,7 +1708,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(feishu.inboundMode)}
             value={feishu.inboundMode.value}
             onChange={(inboundMode) => {
-              void props.onSaveFeishu({
+              return props.onSaveFeishu({
                 ...feishu,
                 inboundMode: { ...feishu.inboundMode, value: inboundMode },
               });
@@ -1721,7 +1722,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(feishu.tenantRegion)}
             value={feishu.tenantRegion.value}
             onChange={(tenantRegion) => {
-              void props.onSaveFeishu({
+              return props.onSaveFeishu({
                 ...feishu,
                 tenantRegion: { ...feishu.tenantRegion, value: tenantRegion },
               });
@@ -1792,7 +1793,7 @@ export function MessagingSettings(props: {
             source={sourceBadge(feishu.streamingResponses)}
             onChange={(streamingResponses) => {
               if (streamingResponses) maybeNudgeForStreaming("feishu", "Feishu");
-              void props.onSaveFeishu({
+              return props.onSaveFeishu({
                 ...feishu,
                 streamingResponses: {
                   ...feishu.streamingResponses,
@@ -1808,7 +1809,7 @@ export function MessagingSettings(props: {
             sub="Reserved for Feishu / Lark shortcut command setup. Mentions and DMs work without this."
             source={sourceBadge(feishu.registerSlashCommands)}
             onChange={(registerSlashCommands) => {
-              void props.onSaveFeishu({
+              return props.onSaveFeishu({
                 ...feishu,
                 registerSlashCommands: {
                   ...feishu.registerSlashCommands,
@@ -1920,7 +1921,7 @@ export function MessagingSettings(props: {
             sub="Turn the LINE adapter on or off independently of the global messaging switch."
             source={sourceBadge(line.enabled)}
             onChange={(enabled) => {
-              void props.onSaveLine({
+              return props.onSaveLine({
                 ...line,
                 enabled: { ...line.enabled, value: enabled },
               });
@@ -2613,51 +2614,6 @@ function isLikelyWorkspaceUrl(value: string): boolean {
   return /^https?:\/\/[^\s.]+\.[^\s]+$/i.test(trimmed);
 }
 
-function SegmentedField<TValue extends string>(props: {
-  actions?: ReactNode;
-  disabled?: boolean;
-  label: string;
-  sub?: ReactNode;
-  options: Array<{ label: string; value: TValue }>;
-  source: string;
-  value: TValue;
-  onChange: (value: TValue) => void;
-}) {
-  return (
-    <SettingsField
-      label={props.label}
-      sub={props.sub}
-      source={props.source}
-      control={
-        <>
-          <div
-            className="settings-segmented"
-            role="radiogroup"
-            aria-label={props.label}
-          >
-            {props.options.map((option) => (
-              <button
-                key={option.value}
-                aria-checked={props.value === option.value}
-                className={`settings-segmented__button${
-                  props.value === option.value ? " is-active" : ""
-                }`}
-                disabled={props.disabled}
-                role="radio"
-                type="button"
-                onClick={() => props.onChange(option.value)}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-          {props.actions}
-        </>
-      }
-    />
-  );
-}
-
 function ToolUpdateBindingResetActions(props: {
   applying: boolean;
   disabled: boolean;
@@ -2733,33 +2689,6 @@ function toolUpdateTargetLabel(
 function toolUpdateModeLabel(mode: MessagingToolUpdateMode): string {
   return TOOL_UPDATE_MODE_OPTIONS.find((option) => option.value === mode)?.label
     ?? "the selected default";
-}
-
-function ToggleField(props: {
-  checked: boolean;
-  disabled?: boolean;
-  label: string;
-  sub?: ReactNode;
-  help?: ReactNode;
-  source: string;
-  onChange: (value: boolean) => void;
-}) {
-  return (
-    <SettingsField
-      label={props.label}
-      sub={props.sub}
-      help={props.help}
-      source={props.source}
-      control={
-        <SettingsSwitch
-          checked={props.checked}
-          disabled={props.disabled}
-          label={props.label}
-          onChange={props.onChange}
-        />
-      }
-    />
-  );
 }
 
 function TextField(props: {
