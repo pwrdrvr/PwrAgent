@@ -22,6 +22,7 @@ describe("detectObservedContextWindowDrop", () => {
       cursor,
       tokenUsage: {
         last: {
+          cachedInputTokens: 0,
           inputTokens: 21_000,
           outputTokens: 500,
           totalTokens: 21_500,
@@ -49,6 +50,24 @@ describe("detectObservedContextWindowDrop", () => {
       tokenUsage: {
         last: { inputTokens: 241_000, totalTokens: 241_000 },
         total: { inputTokens: 641_000 },
+      },
+    })).toBeUndefined();
+  });
+
+  it("does not classify the real-shape smaller hot replay as compaction", () => {
+    expect(detectObservedContextWindowDrop({
+      cursor: {
+        cumulativeInputTokens: 2_024_300,
+        lastContextTokens: 182_485,
+      },
+      tokenUsage: {
+        last: {
+          cachedInputTokens: 159_104,
+          inputTokens: 159_821,
+          outputTokens: 6,
+          totalTokens: 159_827,
+        },
+        total: { inputTokens: 2_184_121 },
       },
     })).toBeUndefined();
   });

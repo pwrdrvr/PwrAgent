@@ -720,6 +720,35 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     ]);
   });
 
+  it("keeps counting when a hot replay has a smaller context", async () => {
+    const { objectId, tokenMiserStore } = await startLiveReplayGate();
+
+    await registry.publishLocalEvent(parentContextUsageEvent({
+      cachedInputTokens: 178_400,
+      cumulativeInputTokens: 182_300,
+      inputTokens: 182_300,
+      outputTokens: 185,
+    }));
+    const beforeSmallerReplay = await tokenMiserStore.readMetadata(objectId);
+
+    await registry.publishLocalEvent(parentContextUsageEvent({
+      cachedInputTokens: 159_104,
+      cumulativeInputTokens: 342_121,
+      inputTokens: 159_821,
+      outputTokens: 6,
+    }));
+    const afterSmallerReplay = await tokenMiserStore.readMetadata(objectId);
+
+    expect(afterSmallerReplay?.parentRequestsObservedAfterGate).toBe(
+      (beforeSmallerReplay?.parentRequestsObservedAfterGate ?? 0) + 1,
+    );
+    expect(afterSmallerReplay?.replayTrackingStoppedAt).toBeUndefined();
+    expect(await store.listThreadCompactions({
+      backend: "codex",
+      threadId: "thread-parent",
+    })).toEqual([]);
+  });
+
   it("does not infer a second marker for an already reported compaction", async () => {
     await startLiveReplayGate();
     await registry.publishLocalEvent(parentContextUsageEvent({
@@ -871,6 +900,44 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
       backend: "codex",
       threadId: "thread-parent",
     })).toHaveLength(1);
+  });
+
+  it("records one marker when thread/compacted omits the ContextCompaction item id", async () => {
+    await startLiveReplayGate();
+
+    await registry.publishLocalEvent(parentUsageEvent(2_000));
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          item: {
+            id: "compact-item-with-optional-id",
+            type: "ContextCompaction",
+          },
+          threadId: "thread-parent",
+          turnId: "turn-parent",
+        },
+      },
+    });
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "thread/compacted",
+        params: {
+          threadId: "thread-parent",
+        },
+      },
+    });
+
+    expect(await store.listThreadCompactions({
+      backend: "codex",
+      threadId: "thread-parent",
+    })).toEqual([
+      expect.objectContaining({
+        itemId: "compact-item-with-optional-id",
+      }),
+    ]);
   });
 
   async function startLiveReplayGate(): Promise<{

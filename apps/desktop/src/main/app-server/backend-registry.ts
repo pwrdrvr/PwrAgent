@@ -3525,6 +3525,10 @@ type LiveThreadContextWindowObservation = {
 const MIN_OBSERVED_CONTEXT_REPLAY_INPUT_TOKENS = 32_000;
 // A replay counts as "hot" when at least this fraction of its input was cached.
 const OBSERVED_HOT_CACHE_FRACTION = 0.9;
+// The item lifecycle event and deprecated thread notification are emitted next
+// to each other. Keep their semantic boundary briefly so the notification can
+// omit its optional item id without creating a second durable marker.
+const COMPACTION_NOTIFICATION_DEDUP_WINDOW_MS = 30_000;
 
 // Per-thread replay-observation cursor.
 export type ObservedContextReplayCursor = {
@@ -3621,14 +3625,22 @@ export type ObservedContextWindowDrop = {
   previousContextTokens: number;
 };
 
+type ReportedCompactionRequestBoundary = {
+  cumulativeInputTokens?: number;
+  itemId?: string;
+  observedAt: number;
+  turnId?: string;
+};
+
 /**
- * Detect the safety-net compaction signal: a genuinely new model request whose
- * working context is smaller than the preceding request's context.
+ * Detect the safety-net compaction signal: a genuinely new cold model request
+ * whose working context is smaller than the preceding request's context.
  *
  * The cumulative input high-water mark rejects duplicate and stale usage
- * emissions. Any backwards movement at a new request boundary means prior
- * context left the window; whether Codex omitted the ContextCompaction item or
- * another backend reports only usage, replay savings must stop there.
+ * emissions. A smaller hot request is an ordinary replay whose fresh tail got
+ * shorter, so it is not enough to infer compaction. Requiring the smaller
+ * request to miss the cache gives the fallback independent evidence that the
+ * prior replay window was replaced.
  */
 export function detectObservedContextWindowDrop(params: {
   cursor: ObservedContextReplayCursor | undefined;
@@ -3646,13 +3658,19 @@ export function detectObservedContextWindowDrop(params: {
   const records = readTaskMonitorTokenUsageRecords(params.tokenUsage);
   const cumulativeInputTokens = records?.totalUsage?.inputTokens;
   const latest = records?.latestUsage;
+  const latestInputTokens = latest?.inputTokens;
+  const cachedInputTokens = latest?.cachedInputTokens;
   const currentContextTokens = latest?.totalTokens
-    ?? (typeof latest?.inputTokens === "number"
-      ? latest.inputTokens + (latest.outputTokens ?? 0)
+    ?? (typeof latestInputTokens === "number"
+      ? latestInputTokens + (latest?.outputTokens ?? 0)
       : undefined);
   if (
     typeof cumulativeInputTokens !== "number"
     || cumulativeInputTokens <= cursor.cumulativeInputTokens
+    || typeof latestInputTokens !== "number"
+    || latestInputTokens <= 0
+    || typeof cachedInputTokens !== "number"
+    || cachedInputTokens >= OBSERVED_HOT_CACHE_FRACTION * latestInputTokens
     || typeof currentContextTokens !== "number"
     || currentContextTokens < 0
     || currentContextTokens >= previousContextTokens
@@ -7744,13 +7762,16 @@ export class DesktopBackendRegistry {
     string,
     ObservedContextReplayCursor
   >();
-  // Request cursor at the latest successfully persisted reported compaction.
+  // Semantic boundary at the latest successfully persisted reported
+  // compaction. The cursor lets usage-only inference match the exact boundary;
+  // the remaining fields reconcile the item lifecycle event with an adjacent
+  // item-less `thread/compacted` notification.
   // A later context drop suppresses inference only when its immediately prior
   // request has this exact cursor; an older unattributed database row is not
   // evidence that the new drop was already marked.
   private readonly reportedCompactionRequestBoundaries = new Map<
     string,
-    number
+    ReportedCompactionRequestBoundary
   >();
   /**
    * Cumulative live usage waiting for one bulk sqlite transaction. The
@@ -27555,6 +27576,37 @@ export class DesktopBackendRegistry {
     const cumulativeInputTokens = this.liveThreadReplayInputCursor.get(
       threadKey,
     )?.cumulativeInputTokens;
+    const reportedBoundary = this.reportedCompactionRequestBoundaries.get(
+      threadKey,
+    );
+    const isRecentBoundary =
+      reportedBoundary !== undefined
+      && observedAt - reportedBoundary.observedAt
+        <= COMPACTION_NOTIFICATION_DEDUP_WINDOW_MS
+      && reportedBoundary.cumulativeInputTokens === cumulativeInputTokens
+      && (
+        reportedBoundary.turnId === undefined
+        || turnId === undefined
+        || reportedBoundary.turnId === turnId
+      );
+    const isSameItem =
+      itemId !== undefined
+      && itemId === reportedBoundary?.itemId;
+    const isDuplicateReportedBoundary =
+      isRecentBoundary
+      && (
+        isSameItem
+        || (reportedBoundary.itemId === undefined) !== (itemId === undefined)
+      );
+    if (isDuplicateReportedBoundary) {
+      this.reportedCompactionRequestBoundaries.set(threadKey, {
+        cumulativeInputTokens,
+        itemId: reportedBoundary.itemId ?? itemId,
+        observedAt,
+        turnId: reportedBoundary.turnId ?? turnId,
+      });
+      return false;
+    }
     const compactionId = buildThreadCompactionIdentity({
       backend: event.backend,
       cumulativeInputTokens,
@@ -27574,11 +27626,13 @@ export class DesktopBackendRegistry {
           ...(turnId ? { turnId } : {}),
         },
       }) ?? true;
-      if (recorded && cumulativeInputTokens !== undefined) {
-        this.reportedCompactionRequestBoundaries.set(
-          threadKey,
+      if (recorded) {
+        this.reportedCompactionRequestBoundaries.set(threadKey, {
           cumulativeInputTokens,
-        );
+          itemId,
+          observedAt,
+          turnId,
+        });
       }
       return recorded;
     } catch (error) {
@@ -27613,15 +27667,16 @@ export class DesktopBackendRegistry {
       threadKey,
     );
     if (
-      reportedBoundary
+      reportedBoundary?.cumulativeInputTokens
       === params.contextDrop.previousCumulativeInputTokens
     ) {
       this.reportedCompactionRequestBoundaries.delete(threadKey);
       return;
     }
     if (
-      reportedBoundary !== undefined
-      && reportedBoundary < params.contextDrop.previousCumulativeInputTokens
+      reportedBoundary?.cumulativeInputTokens !== undefined
+      && reportedBoundary.cumulativeInputTokens
+        < params.contextDrop.previousCumulativeInputTokens
     ) {
       this.reportedCompactionRequestBoundaries.delete(threadKey);
     }
