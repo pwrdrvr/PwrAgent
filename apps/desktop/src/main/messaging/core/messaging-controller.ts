@@ -2660,8 +2660,12 @@ export class MessagingController {
     binding: MessagingBindingRecord,
     event: MessagingInboundEvent,
   ): Promise<void> {
+    // findPreferredReviewWorkspaceCwd and buildReviewBranchOptions below read
+    // thread.gitWorkingState to choose a workspace and infer a base branch, so
+    // this picker cannot race the background refresh.
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: binding.backend,
+      probeWorkingStates: true,
     });
     const thread = findThreadForBinding(navigation, binding);
     const workspaces = (thread?.linkedDirectories ?? [])
@@ -5150,8 +5154,12 @@ export class MessagingController {
       return;
     }
 
+    // buildReviewBranchOptions below infers the base branch from
+    // thread.gitWorkingState, so this callback awaits working state for the
+    // same reason presentReviewPicker does.
     const navigation = await this.options.backend.getNavigationSnapshot({
       backend: binding.backend,
+      probeWorkingStates: true,
     });
     const targetSurface = pendingIntent.surface ?? (
       event.kind === "callback" ? event.interaction : undefined

@@ -79,6 +79,7 @@ import {
   DesktopBackendRegistry,
   getCodexFastModeMismatchWarning,
   withTokenMiserBridgeDescriptorEnv,
+  WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS,
 } from "../app-server/backend-registry";
 import type {
   CodexPwrdrvrTokenMiserActivation,
@@ -434,8 +435,6 @@ const sampleGitWorkingState = {
   baseAheadCommitCount: 16,
 };
 
-// Only a multi-project thread is probe-eligible: a single-directory thread's
-// review target needs no working state to disambiguate it.
 function multiProjectThread(params: {
   worktreePath: string;
 }): AppServerThreadSummary {
@@ -3525,6 +3524,106 @@ describe("DesktopBackendRegistry", () => {
         .toEqual([[worktreePath], [`${worktreePath}-2`]]);
     } finally {
       releaseProbe?.();
+      await registry.close();
+    }
+  });
+
+  it("re-probes a stale worktree that hydration already stamped", async () => {
+    // The serving path hydrates from the cache and then schedules, so every
+    // thread reaching the scheduler carries a `gitWorkingState`. Deciding
+    // staleness from that field instead of from the cache entry's age makes
+    // the probe inert the moment a worktree has any row: the operator commits
+    // from a terminal and the chips never move again.
+    const worktreePath = "/worktrees/PwrAgnt";
+    const readWorkingStateEntries = vi.fn((paths: string[]) =>
+      (async function* () {
+        for (const path of paths) {
+          yield { worktreePath: path, gitWorkingState: sampleGitWorkingState };
+        }
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({
+        [worktreePath]: {
+          worktreePath,
+          gitWorkingState: sampleGitWorkingState,
+          fetchedAt: Date.now() - WORKTREE_WORKING_STATE_CACHE_MAX_AGE_MS - 1,
+        },
+      })),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+    const hydrated = await registry.hydrateThreadGitWorkingStates([
+      multiProjectThread({ worktreePath }),
+    ]);
+
+    try {
+      expect(hydrated[0]?.gitWorkingState).toEqual(sampleGitWorkingState);
+      await expect(
+        registry.refreshThreadGitWorkingStates(hydrated),
+      ).resolves.toEqual({ scheduledCount: 1 });
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("schedules a single-directory thread the chips also need", async () => {
+    // The multi-project narrowing belongs to the awaited review probe, which
+    // uses working state to disambiguate a review target. The background lane
+    // feeds the dirty/unpushed chips every thread shows, so inheriting that
+    // filter would leave a federated viewer's ordinary threads frozen.
+    const worktreePath = "/worktrees/PwrAgnt";
+    const readWorkingStateEntries = vi.fn((paths: string[]) =>
+      (async function* () {
+        for (const path of paths) {
+          yield { worktreePath: path, gitWorkingState: sampleGitWorkingState };
+        }
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({})),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+    const singleDirectoryThread = (path: string): AppServerThreadSummary => {
+      const thread = multiProjectThread({ worktreePath: path });
+      return {
+        ...thread,
+        linkedDirectories: thread.linkedDirectories.slice(0, 1),
+      };
+    };
+    const reviewWorktreePath = "/worktrees/PwrSnap";
+
+    try {
+      await expect(
+        registry.refreshThreadGitWorkingStates([
+          singleDirectoryThread(worktreePath),
+        ]),
+      ).resolves.toEqual({ scheduledCount: 1 });
+
+      // The awaited review probe keeps the narrowing: one workspace needs no
+      // working state to disambiguate it.
+      await registry.hydrateThreadGitWorkingStates(
+        [singleDirectoryThread(reviewWorktreePath)],
+        { probeMissing: true },
+      );
+      expect(readWorkingStateEntries.mock.calls.flatMap(([paths]) => paths))
+        .not.toContain(reviewWorktreePath);
+    } finally {
       await registry.close();
     }
   });

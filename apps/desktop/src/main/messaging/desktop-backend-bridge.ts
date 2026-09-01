@@ -303,18 +303,25 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       await this.registry.canonicalizeNavigationThreadPullRequests(
         snapshot.threads,
       );
-    // Working state is renderer-facing chip data — no main-process messaging
-    // or federation code reads it. Serve the durable cache the way the
-    // renderer's own navigation path does (ipc/app-server.ts) and let a
-    // bounded background probe converge the rest, instead of holding every
-    // messaging command and every remote viewer's snapshot behind a Git fleet.
+    // Working state is chip data for almost every caller, and the review
+    // picker is the exception that has to await it: it compares dirt and
+    // base-branch drift across a thread's workspaces to pick one
+    // (findPreferredReviewWorkspaceCwd, buildReviewBranchOptions). Everything
+    // else serves the durable cache the way the renderer's own navigation path
+    // does (ipc/app-server.ts) and lets a bounded background probe converge
+    // the rest, instead of holding every messaging command and every remote
+    // viewer's snapshot behind a Git fleet.
+    const probeWorkingStates = request.probeWorkingStates === true;
     const threads = await this.registry.hydrateThreadGitWorkingStates(
       canonicalThreads,
+      { probeMissing: probeWorkingStates },
     );
-    if (typeof this.registry.refreshThreadGitWorkingStates === "function") {
-      void this.registry.refreshThreadGitWorkingStates(threads).catch(() => {
-        // Background convergence: the next snapshot reads whatever landed.
-      });
+    if (!probeWorkingStates) {
+      void this.registry
+        .refreshThreadGitWorkingStates(canonicalThreads)
+        .catch(() => {
+          // Background convergence: the next snapshot reads whatever landed.
+        });
     }
     const hydratedSnapshot = {
       ...snapshot,

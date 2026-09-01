@@ -425,22 +425,28 @@ background probe completes.
 #### Thread working-state refresh policy
 
 Per-worktree working state (dirty files, unpushed commits, base-branch drift)
-follows the same shape. It is renderer-facing chip data: no main-process
-messaging or federation code reads it. A broad snapshot serves the durable
-per-worktree cache and treats an entry as fresh for 30 seconds — shorter than
-the directory TTL, because working state has to catch out-of-band terminal and
-IDE edits.
+follows the same shape. A broad snapshot serves the durable per-worktree cache
+and treats an entry as fresh for 30 seconds — shorter than the directory TTL,
+because working state has to catch out-of-band terminal and IDE edits.
 
-Only a multi-project thread is probe-eligible; a single-directory thread's
-review target needs no working state to disambiguate it. A snapshot schedules
-at most eight stale worktrees at once and never awaits that batch. Never-probed
-worktrees are selected first, then the oldest probe rotates forward, so a fleet
-larger than one round still converges. Registry scheduling coalesces each
-worktree while its probe is pending, and in-flight worktrees are excluded
-before the batch cap so a saturated round still reaches the paths behind it.
+Each such snapshot schedules at most eight stale worktrees per round and never
+awaits them. Never-probed worktrees are selected first, then the oldest probe
+rotates forward, so a fleet larger than one round still converges. Registry
+scheduling coalesces each worktree while its probe is pending, and in-flight
+worktrees are excluded before the batch cap so a saturated round still reaches
+the paths behind it. The cap bounds one round, not the process: concurrent
+snapshots can each hold a round, and per-worktree coalescing is what keeps them
+from probing the same path twice. `close()` drains the live rounds.
 
-A caller that cannot tolerate a stale answer awaits the fleet through
-`hydrateThreadGitWorkingStates(..., { probeMissing: true })` instead.
+One caller does await the fleet, through
+`hydrateThreadGitWorkingStates(..., { probeMissing: true })`: the messenger's
+review picker. `findPreferredReviewWorkspaceCwd` and `buildReviewBranchOptions`
+read `thread.gitWorkingState` to choose a workspace and infer a base branch, so
+the picker cannot race the background refresh. Requests opt in with
+`GetNavigationSnapshotRequest.probeWorkingStates`, and only that path narrows to
+multi-project threads — a single-directory thread's review target needs no
+working state to disambiguate it. The background lane covers every thread,
+because it feeds the chips every thread shows.
 
 ### Single platform-agnostic detach pipeline
 

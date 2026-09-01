@@ -7928,6 +7928,7 @@ export class DesktopBackendRegistry {
   private directoryGitStatusWriter: DirectoryGitStatusWriter | undefined;
   private readonly pendingDirectoryGitStatusKeys = new Set<string>();
   private readonly pendingThreadGitWorkingStateKeys = new Set<string>();
+  private readonly threadGitWorkingStateRefreshRounds = new Set<Promise<void>>();
   private threadPrAutoDispatchHandler: ThreadPrAutoDispatchHandler | undefined;
   private threadPullRequestDetachHandler:
     | ThreadPullRequestDetachHandler
@@ -11810,7 +11811,9 @@ export class DesktopBackendRegistry {
       return hydrated;
     }
 
-    const probePaths = this.selectStaleThreadWorkingStatePaths(candidates);
+    const probePaths = this.selectStaleThreadWorkingStatePaths(candidates, {
+      multiProjectOnly: true,
+    });
     if (probePaths.length === 0) {
       return hydrated;
     }
@@ -11839,17 +11842,19 @@ export class DesktopBackendRegistry {
     threads: Thread[],
     options: { limit?: number } = {},
   ): Promise<{ scheduledCount: number }> {
-    const candidates = threads.filter(
-      (thread) => !thread.gitWorkingState && resolveThreadWorkingStatePath(thread),
-    );
-    if (candidates.length === 0) {
+    if (this.closed) {
       return { scheduledCount: 0 };
     }
 
     await this.loadThreadGitWorkingStateCache();
+    // Staleness is decided in exactly one place: the cache. Filtering threads
+    // on `gitWorkingState` here would read the field a serving path has just
+    // hydrated from that same cache, so a worktree with any row — however old
+    // — would never be probed again and nothing would ever converge.
+    //
     // Exclude in-flight worktrees before the cap, not after: a round whose
     // whole batch is already in flight must still reach the paths behind it.
-    const worktreePaths = this.selectStaleThreadWorkingStatePaths(candidates, {
+    const worktreePaths = this.selectStaleThreadWorkingStatePaths(threads, {
       exclude: this.pendingThreadGitWorkingStateKeys,
       limit: options.limit ?? BACKGROUND_THREAD_WORKING_STATE_BATCH_SIZE,
     });
@@ -11860,7 +11865,22 @@ export class DesktopBackendRegistry {
     for (const worktreePath of worktreePaths) {
       this.pendingThreadGitWorkingStateKeys.add(worktreePath);
     }
-    void this.refreshThreadGitWorkingStatesInBackground(threads, worktreePaths);
+    // Carry only the threads behind this batch. The round outlives the
+    // snapshot that scheduled it, and retaining every thread would hold a full
+    // navigation snapshot for as long as the Git fleet runs.
+    const batched = new Set(worktreePaths);
+    const probedThreads = threads.filter((thread) => {
+      const worktreePath = resolveThreadWorkingStatePath(thread);
+      return worktreePath !== undefined && batched.has(worktreePath);
+    });
+    const round = this.refreshThreadGitWorkingStatesInBackground(
+      probedThreads,
+      worktreePaths,
+    );
+    this.threadGitWorkingStateRefreshRounds.add(round);
+    void round.finally(() => {
+      this.threadGitWorkingStateRefreshRounds.delete(round);
+    });
     return { scheduledCount: worktreePaths.length };
   }
 
@@ -11882,20 +11902,29 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Only a multi-project thread needs a probe: a single-directory thread's
-   * review target is unambiguous without one.
+   * `multiProjectOnly` belongs to the awaited review probe, whose whole job is
+   * disambiguating a review target: a single-directory thread's target is
+   * unambiguous without working state. The background convergence lane must
+   * not inherit it — it feeds the dirty/unpushed/base-drift chips every thread
+   * shows, and the renderer lane it mirrors
+   * (ipc/app-server.ts:selectWorktreeWorkingStateRefreshCandidates) filters on
+   * cache freshness alone.
    */
   private selectStaleThreadWorkingStatePaths<
     Thread extends AppServerThreadSummary,
   >(
     candidates: Thread[],
-    options: { exclude?: ReadonlySet<string>; limit?: number } = {},
+    options: {
+      exclude?: ReadonlySet<string>;
+      limit?: number;
+      multiProjectOnly?: boolean;
+    } = {},
   ): string[] {
     const now = Date.now();
     const stale = [
       ...new Set(
         candidates.flatMap((thread) => {
-          if (thread.linkedDirectories.length <= 1) {
+          if (options.multiProjectOnly && thread.linkedDirectories.length <= 1) {
             return [];
           }
           const worktreePath = resolveThreadWorkingStatePath(thread);
@@ -20059,6 +20088,12 @@ export class DesktopBackendRegistry {
     this.acceptedSteerRequests.clear();
     this.acceptedThreadControlRequests.clear();
     this.acceptedActiveTurnControlRequests.clear();
+    // A background working-state round outlives the snapshot that scheduled
+    // it. `closed` stops a new one, and draining the live ones here keeps the
+    // clears below final: `rememberThreadGitWorkingStateCacheEntry` reloads
+    // the durable cache, so a late round would refill the map and write to a
+    // store that is on its way out.
+    await Promise.all([...this.threadGitWorkingStateRefreshRounds]);
     this.workingStateByWorktree.clear();
     this.workingStateCacheLoad = undefined;
     if (this.taskMonitorWatchdogTimer) {
