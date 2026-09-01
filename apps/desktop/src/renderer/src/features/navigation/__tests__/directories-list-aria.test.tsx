@@ -93,6 +93,25 @@ describe("Directories lens thread list ARIA", () => {
       .map((child) => `${child.tagName.toLowerCase()}[role=${child.getAttribute("role")}].${child.className}`);
     expect(offenders).toEqual([]);
 
+    // The list's composition, not just its validity. `a11y.spec.ts` asserts a
+    // hard count of these direct children, and that number goes stale the
+    // moment a child type is added or a role changes — which is exactly what
+    // happened when the pin-drop boundary became a `listitem` and CI caught
+    // the drift instead of this file. Splitting rows from non-rows makes the
+    // staleness fail here, in a second.
+    const children = [...threads.children];
+    const rows = children.filter((child) =>
+      child.classList.contains("thread-row-shell"),
+    );
+    const nonRows = children.filter(
+      (child) => !child.classList.contains("thread-row-shell"),
+    );
+    // Two pinned + the ten-row cap (12 unpinned, one re-parented as a
+    // sub-thread, so 11 against a cap of 10).
+    expect(rows).toHaveLength(12);
+    // The sub-thread list, the pin-drop boundary, the disclosure, "Show more".
+    expect(nonRows).toHaveLength(4);
+
     // A bare <button> child has no explicit role but IS a button to axe, so
     // the role check above cannot see it. Assert both controls sit in a
     // wrapper. Names come from the fixture: the unpinned lane is 12 threads

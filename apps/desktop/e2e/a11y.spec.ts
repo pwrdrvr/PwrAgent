@@ -657,11 +657,15 @@ for (const theme of AUDIT_THEMES) {
           await expect(
             threads.getByRole("button", { name: "Show 2 more", exact: true }),
           ).toBeVisible();
-          // Two pinned rows + the ten-row unpinned cap + the two controls,
-          // each of which has to be a `listitem` for the list to be valid.
+          // Two pinned rows + the pin-drop boundary + the "Directory threads"
+          // disclosure + the ten-row unpinned cap + "Show more". Everything
+          // that is not a row is a `listitem` too, because a list owns only
+          // listitem — including the boundary, whose separator child is
+          // exposed mid-drag.
+          //
           // Direct children: `getByRole` matches DESCENDANTS, so it would also
           // count a sub-thread list's own rows and read as fixture drift.
-          await expect(listItems(threads)).toHaveCount(14);
+          await expect(listItems(threads)).toHaveCount(15);
 
           await settle();
           await runAxe(app.window, "directories lens, expanded directory");
@@ -674,7 +678,8 @@ for (const theme of AUDIT_THEMES) {
           await threads
             .getByRole("button", { name: "Show 2 more", exact: true })
             .click();
-          await expect(listItems(threads)).toHaveCount(16);
+          // The two rows past the cap, on top of the 15 above.
+          await expect(listItems(threads)).toHaveCount(17);
           await settle();
           await runAxe(app.window, "directories lens, unpinned overflow");
         });
