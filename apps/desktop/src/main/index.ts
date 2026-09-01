@@ -845,7 +845,7 @@ function installDevelopmentDockIcon(): void {
     return;
   }
 
-  const iconPath = join(app.getAppPath(), "build/icon.png");
+  const iconPath = join(app.getAppPath(), "build/icon-macos.png");
   const icon = nativeImage.createFromPath(iconPath);
   if (icon.isEmpty()) {
     mainLog.warn("failed to load development dock icon", { iconPath });
