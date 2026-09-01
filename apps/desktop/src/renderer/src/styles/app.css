@@ -9278,6 +9278,11 @@ textarea,
   padding: 0 18px 14px;
 }
 
+.messaging-routes__response-add > label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
 .messaging-routes__response-add select {
   min-width: 0;
   flex: 1 1 auto;
