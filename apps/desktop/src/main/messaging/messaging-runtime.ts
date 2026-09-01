@@ -3023,7 +3023,10 @@ function pairingScopeFailure(
     return "token was generated for a user-in-group flow but was pasted in a DM";
   }
   if (entry.scope === "bucket" && isDm) {
-    return "token was generated for a group/guild bucket but was pasted in a DM";
+    // Platform-neutral on purpose: this reply reaches Telegram supergroups,
+    // Slack workspaces, Mattermost teams, Feishu tenants, and LINE groups as
+    // well as Discord servers, so it must not name any one platform's noun.
+    return "token was generated for a group/workspace bucket but was pasted in a DM";
   }
   return undefined;
 }

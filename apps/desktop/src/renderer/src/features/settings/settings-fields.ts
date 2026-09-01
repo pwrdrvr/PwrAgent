@@ -1,8 +1,29 @@
 import type {
   DesktopAuthorizedContact,
+  DesktopMessagingResponseMode,
   DesktopSettingsValue,
 } from "@pwragent/shared";
 import type { AppMetadata } from "../../../../shared/app-metadata";
+
+/**
+ * The one wording for response modes. Lives here so the Messaging screen's
+ * segmented fields, its authorized-list rows, and the Routes per-surface rows
+ * cannot drift apart.
+ */
+export const RESPONSE_MODE_OPTIONS: Array<{
+  label: string;
+  value: DesktopMessagingResponseMode;
+}> = [
+  { label: "@ mention only", value: "mention_only" },
+  { label: "Every message", value: "every_message" },
+];
+
+/** Shared tooltip for every per-row response-mode control. */
+export function responseModeTitle(scopeNoun: string): string {
+  return `Sets whether PwrAgent replies to every message in this ${scopeNoun}`
+    + " or only when @ mentioned. This does not choose an Agent or authorize"
+    + " access.";
+}
 
 /** Renderer pid is absent when metadata was resolved outside a window. */
 export function formatProcessIds(metadata: AppMetadata): string {

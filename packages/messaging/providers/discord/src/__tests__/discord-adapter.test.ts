@@ -1780,7 +1780,7 @@ describe("discord adapter", () => {
       expect(events[0]?.routingState?.opaque).not.toHaveProperty("messageId");
       expect(rejectedEvents).toEqual([]);
       expect(logger.warn).not.toHaveBeenCalledWith(
-        "discord inbound ignored unauthorized guild",
+        "discord inbound ignored unauthorized server",
         expect.anything(),
       );
       await adapter.stop();
@@ -1838,9 +1838,119 @@ describe("discord adapter", () => {
       ]);
       expect(rejectedEvents).toEqual([]);
       expect(logger.warn).not.toHaveBeenCalledWith(
-        "discord inbound ignored unauthorized guild",
+        "discord inbound ignored unauthorized server",
         expect.anything(),
       );
+      await adapter.stop();
+    });
+
+    it("admits every channel and native thread inside an authorized server", async () => {
+      // Authorization is server-wide: there is no channel allowlist, so one
+      // authorized server ID has to cover each of its channels and native
+      // threads, while a second server stays denied.
+      const otherGuildId = "1480556454498009888";
+      const secondChannelId = "1480556454498009777";
+      const nativeThreadId = "1480556454498009666";
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: [{ id: TEST_GUILD_ID, displayName: "Test server" }],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+
+      for (const dispatch of [
+        { channelId: TEST_CHANNEL_ID, id: "authorized-channel", isThread: false },
+        { channelId: secondChannelId, id: "authorized-second", isThread: false },
+        { channelId: nativeThreadId, id: "authorized-thread", isThread: true },
+      ]) {
+        await gateway.emit({
+          op: 0,
+          t: "MESSAGE_CREATE",
+          d: {
+            ...messageDispatch({
+              authorBot: false,
+              content: "/status",
+              id: dispatch.id,
+            }),
+            channel_id: dispatch.channelId,
+            channel_type: dispatch.isThread ? 11 : 0,
+            is_thread: dispatch.isThread,
+          },
+        });
+      }
+
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: {
+          ...messageDispatch({
+            authorBot: false,
+            content: "/status",
+            id: "other-server",
+          }),
+          guild_id: otherGuildId,
+        },
+      });
+
+      expect(events.map((event) => event.channel.conversation.id)).toEqual([
+        TEST_CHANNEL_ID,
+        secondChannelId,
+        nativeThreadId,
+      ]);
+      await adapter.stop();
+    });
+
+    it("admits an unmentioned message from a mention_only server row", async () => {
+      // Response behavior and access are separate decisions, and "mention_only"
+      // is the setting most likely to be mistaken for an admission gate. The
+      // adapter must still hand the message up; whether PwrAgent replies is
+      // decided later by resolveMessagingResponseModeForChannel. One adapter is
+      // enough — the adapter reads only `id`, so this guards a future change
+      // that starts reading `responseMode` here, not today's behavior.
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: [
+            {
+              id: TEST_GUILD_ID,
+              displayName: "Test server",
+              responseMode: "mention_only",
+            },
+          ],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          authorBot: false,
+          content: "no mention here",
+          id: "mention-only-server-row",
+        }),
+      });
+
+      expect(events).toHaveLength(1);
       await adapter.stop();
     });
 
@@ -1893,7 +2003,7 @@ describe("discord adapter", () => {
         }),
       ]);
       expect(logger.warn).toHaveBeenCalledWith(
-        "discord inbound ignored unauthorized guild",
+        "discord inbound ignored unauthorized server",
         expect.objectContaining({ guildId: TEST_GUILD_ID }),
       );
       await adapter.stop();
@@ -1940,7 +2050,7 @@ describe("discord adapter", () => {
         }),
       ]);
       expect(logger.warn).toHaveBeenCalledWith(
-        "discord inbound ignored unauthorized guild",
+        "discord inbound ignored unauthorized server",
         expect.objectContaining({ guildId: TEST_GUILD_ID }),
       );
       await adapter.stop();
@@ -1995,7 +2105,7 @@ describe("discord adapter", () => {
         }),
       ]);
       expect(logger.warn).toHaveBeenCalledWith(
-        "discord inbound ignored unauthorized non-guild conversation",
+        "discord inbound ignored unauthorized non-server conversation",
         expect.objectContaining({ channelType: 3 }),
       );
       await adapter.stop();
@@ -2116,7 +2226,7 @@ describe("discord adapter", () => {
         }),
       ]);
       expect(logger.warn).toHaveBeenCalledWith(
-        "discord inbound ignored unauthorized guild",
+        "discord inbound ignored unauthorized server",
         expect.objectContaining({ guildId: TEST_GUILD_ID, surface: "interaction" }),
       );
       await adapter.stop();

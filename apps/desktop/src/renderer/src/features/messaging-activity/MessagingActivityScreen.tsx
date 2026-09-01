@@ -439,7 +439,7 @@ function parentIdLabel(
   conversationKind?: string,
 ): string {
   if (platform === "telegram") return "Supergroup ID";
-  if (platform === "discord") return "Guild ID";
+  if (platform === "discord") return "Server ID";
   if (platform === "feishu") return "Tenant Key";
   if (platform === "mattermost" && conversationKind === "thread") return "Root ID";
   return "Parent ID";
@@ -447,7 +447,7 @@ function parentIdLabel(
 
 function bucketIdLabel(platform: MessagingActivityEntry["platform"]): string {
   if (platform === "telegram") return "Supergroup ID";
-  if (platform === "discord") return "Guild ID";
+  if (platform === "discord") return "Server ID";
   if (platform === "slack") return "Workspace ID";
   if (platform === "feishu") return "Tenant Key";
   if (platform === "mattermost") return "Team ID";

@@ -139,7 +139,7 @@ export type SeedActivityEntry = {
   /**
    * Free-form payload bag. The renderer reads:
    *   - conversationKind
-   *   - conversationParentId (becomes "Supergroup ID" / "Guild ID" / etc.)
+   *   - conversationParentId (becomes "Supergroup ID" / "Server ID" / etc.)
    *   - conversationBucketId
    * Anything else is preserved but not rendered.
    */

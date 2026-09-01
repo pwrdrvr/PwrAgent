@@ -9326,6 +9326,45 @@ textarea,
   gap: 7px;
 }
 
+/* The subhead's generic span rule would flatten the source chip into body
+   copy, so the chip restates its own presentation at matching specificity. */
+.messaging-routes__subhead .settings-source {
+  display: inline-flex;
+  margin-top: 6px;
+  font-size: 10px;
+}
+
+.messaging-routes__response-add {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 0 18px 14px;
+}
+
+.messaging-routes__response-add > label {
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+.messaging-routes__response-add select {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.messaging-routes__response-identity {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Composes .messaging-route-row__actions for layout and compact button
+   sizing; only the select needs a width of its own. */
+.messaging-routes__response-controls select {
+  width: auto;
+}
+
 .messaging-routes__error,
 .messaging-route-editor__error {
   margin: 0;
@@ -9572,6 +9611,12 @@ textarea,
 
 @media (max-width: 640px) {
   .messaging-routes__toolbar {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .messaging-routes__response-add,
+  .messaging-routes__response-controls {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -9852,12 +9897,16 @@ textarea,
 
 .settings-authorized-list__remove,
 .settings-authorized-list__lookup,
-.settings-authorized-list__add {
+.settings-authorized-list__add,
+.settings-authorized-list__refresh {
   width: max-content;
 }
 
-.settings-authorized-list__add {
+.settings-authorized-list__actions {
+  display: flex;
   align-self: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .settings-authorized-list__default-agent {

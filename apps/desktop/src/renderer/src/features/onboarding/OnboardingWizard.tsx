@@ -2723,7 +2723,7 @@ const PROVIDER_ROWS: readonly ProviderRow[] = [
     name: "Discord",
     icon: <DiscordIcon size={20} aria-hidden />,
     notes:
-      "Developer Portal app · bot token · OAuth invite to a guild. No ports or tunnels needed.",
+      "Developer Portal app · bot token · OAuth invite to a server. No ports or tunnels needed.",
     setupTime: "~10 min",
     risk: "low",
     riskLabel: "Low",
@@ -3998,7 +3998,7 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
         label: "Pair your DMs with the bot",
         help: (
           <>
-            Invite the bot to a guild (Developer Portal → OAuth2 URL
+            Invite the bot to a server (Developer Portal → OAuth2 URL
             Generator, scopes <code>bot</code> + <code>applications.commands</code>),
             then DM the bot the pairing message below from your Discord
             account.
@@ -5264,7 +5264,7 @@ function PairingBlock(props: {
 /**
  * Human label for a pairing scope, scoped by the onboarding-known
  * platforms so we say "DM" / "Supergroup" for Telegram, "DM" /
- * "Guild" for Discord, etc. Falls back to a generic "Group" /
+ * "Server" for Discord, etc. Falls back to a generic "Group" /
  * "Conversation" label for any platform the wizard doesn't render
  * a setup step for (currently none — the union is wider than the
  * wizard's surface area to leave room for future providers).
@@ -5281,7 +5281,7 @@ function labelForPairingScope(
     case "telegram":
       return "Supergroup";
     case "discord":
-      return "Guild";
+      return "Server";
     case "slack":
       return "Workspace";
     case "mattermost":

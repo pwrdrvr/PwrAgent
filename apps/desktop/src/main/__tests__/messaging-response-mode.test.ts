@@ -54,6 +54,36 @@ describe("resolveMessagingResponseModeForChannel", () => {
       responseModeOverrides: [],
     }), channelRef)).toBe("every_message");
   });
+
+  it("inherits past an override row that carries no response mode", () => {
+    // An override row with no `response_mode` is the "Default" state the
+    // Routes picker offers. It must fall through to the server row, and a
+    // server row with no mode of its own must fall through to the Discord-wide
+    // default — this is what the Routes empty state promises operators.
+    const withoutModes = discordConfig({
+      responseMode: "mention_only",
+      authorizedGuildIds: [{ id: GUILD_ID, displayName: "Test server" }],
+      responseModeOverrides: [
+        { id: THREAD_ID, displayName: "native-thread" },
+        { id: CHANNEL_ID, displayName: "parent-channel" },
+      ],
+    });
+
+    expect(resolve(withoutModes, discordThreadRef())).toBe("mention_only");
+
+    const serverOnly = discordConfig({
+      ...withoutModes.discord,
+      authorizedGuildIds: [
+        {
+          id: GUILD_ID,
+          displayName: "Test server",
+          responseMode: "every_message",
+        },
+      ],
+    });
+
+    expect(resolve(serverOnly, discordThreadRef())).toBe("every_message");
+  });
 });
 
 function discordConfig(
