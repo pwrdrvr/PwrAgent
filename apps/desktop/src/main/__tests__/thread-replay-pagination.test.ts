@@ -86,7 +86,6 @@ describe("thread replay pagination", () => {
   });
 });
 
-
 describe("thread replay pagination cursor id space", () => {
   it("names a provider entry when overlay rows lead the page", () => {
     // Entry-count paging, because the legacy rows carry no turn metadata. Its
@@ -170,7 +169,7 @@ describe("thread replay federation byte budget", () => {
     });
   });
 
-  it("keeps a natively paginated backend's own cursor", () => {
+  it("compacts in place rather than move a natively paginated page's boundary", () => {
     const replay: AppServerThreadReplay = {
       ...buildReplay([
         turnEntry("turn-1", "user", "Question one"),
@@ -183,37 +182,8 @@ describe("thread replay federation byte budget", () => {
       },
     };
 
-    const trimmed = fitNormalizedReplayWithinByteBudget({
+    const fitted = fitNormalizedReplayWithinByteBudget({
       cursorIdSpace: "provider-cursor",
-      replay,
-      maxBytes: 0,
-      measureBytes: (candidate) => (candidate.entries.length > 1 ? 1 : 0),
-    });
-
-    expect(trimmed.entries.map((entry) => entry.id)).toEqual([
-      "turn-2-user-Question two",
-    ]);
-    // An entry id is not a `thread/turns/list` cursor, so the trim leaves the
-    // backend's own cursor alone rather than substituting one.
-    expect(trimmed.pagination).toEqual({
-      supportsPagination: true,
-      hasPreviousPage: true,
-      previousCursor: "opaque-turns-list-cursor",
-    });
-  });
-
-  it("stops trimming at the newest provider entry rather than lose the cursor", () => {
-    const replay = buildReplay([
-      turnEntry("turn-1", "user", "Question one"),
-      turnEntry("turn-1", "assistant", "Answer one", "final"),
-      usageEntry("turn-1"),
-    ]);
-
-    // Nothing fits, so the trim runs to its floor and the oversized-entry
-    // compaction takes over. A page trimmed down to the usage row alone would
-    // report previous history with no id left to ask for it.
-    const trimmed = fitNormalizedReplayWithinByteBudget({
-      cursorIdSpace: "entry-id",
       replay,
       maxBytes: 0,
       measureBytes: (candidate) =>
@@ -223,13 +193,109 @@ describe("thread replay federation byte budget", () => {
           : 1,
     });
 
+    // The backend's cursor is defined against this entry set, so the set is
+    // kept whole and the oldest entry loses its content instead. Dropping it
+    // would strand everything between the cursor and the new page start.
+    expect(fitted.entries.map((entry) => entry.id)).toEqual([
+      "turn-1-user-Question one",
+      "turn-2-user-Question two",
+    ]);
+    expect(fitted.entries[0]).toMatchObject({
+      text: expect.stringContaining("exceeded the federation frame limit"),
+    });
+    expect(fitted.pagination).toEqual({
+      supportsPagination: true,
+      hasPreviousPage: true,
+      previousCursor: "opaque-turns-list-cursor",
+    });
+  });
+
+  it("reports no previous page when only overlay rows remain to name", () => {
+    const replay = buildReplay([
+      turnEntry("turn-1", "user", "Question one"),
+      usageEntry("turn-1"),
+    ]);
+
+    const trimmed = fitNormalizedReplayWithinByteBudget({
+      cursorIdSpace: "entry-id",
+      replay,
+      maxBytes: 0,
+      measureBytes: (candidate) => (candidate.entries.length > 1 ? 1 : 0),
+    });
+
+    // The renderer gates its load-older control on `hasPreviousPage` alone but
+    // every loader bails without a cursor, so announcing a page nothing can
+    // name would leave a control that never loads anything.
     expect(trimmed.entries.map((entry) => entry.id)).toEqual([
-      "turn-1-assistant-Answer one",
+      "live-turn-usage-turn-1",
+    ]);
+    expect(trimmed.pagination).toEqual({
+      supportsPagination: true,
+      hasPreviousPage: false,
+    });
+  });
+
+  it("classifies the entry as it arrived, not as compaction rewrote it", () => {
+    // A monitor-scope usage row is overlay-owned by its summary alone; its id
+    // carries no overlay prefix. Compaction replaces that summary, so
+    // classifying the compacted row would read it as provider-owned and mint
+    // an overlay id as the cursor.
+    const replay = buildReplay([
+      turnEntry("turn-1", "user", "Question one"),
+      {
+        type: "activity",
+        id: "monitor-usage-1",
+        summary: "Monitor usage: 100 uncached in · 20 out",
+        status: "completed",
+        details: [],
+      },
+    ]);
+
+    const trimmed = fitNormalizedReplayWithinByteBudget({
+      cursorIdSpace: "entry-id",
+      replay,
+      maxBytes: 0,
+      measureBytes: (candidate) =>
+        candidate.entries[0]?.type === "activity"
+        && candidate.entries[0].summary.startsWith("Content omitted")
+          ? 0
+          : 1,
+    });
+
+    expect(trimmed.entries.map((entry) => entry.id)).toEqual([
+      "monitor-usage-1",
+    ]);
+    expect(trimmed.pagination).toEqual({
+      supportsPagination: true,
+      hasPreviousPage: false,
+    });
+  });
+
+  it("keeps trimming past overlay rows to retain real content", () => {
+    const replay = buildReplay([
+      turnEntry("turn-1", "user", "Question one"),
+      usageEntry("turn-1"),
+      turnEntry("turn-2", "user", "Question two"),
+    ]);
+
+    // The floor this replaced stopped at the newest provider-owned entry, so a
+    // page whose tail is overlay rows collapsed to one compacted entry even
+    // when a longer suffix would have fit.
+    const trimmed = fitNormalizedReplayWithinByteBudget({
+      cursorIdSpace: "entry-id",
+      replay,
+      maxBytes: 0,
+      measureBytes: (candidate) => (candidate.entries.length > 2 ? 1 : 0),
+    });
+
+    expect(trimmed.entries.map((entry) => entry.id)).toEqual([
+      "live-turn-usage-turn-1",
+      "turn-2-user-Question two",
     ]);
     expect(trimmed.pagination).toEqual({
       supportsPagination: true,
       hasPreviousPage: true,
-      previousCursor: "turn-1-assistant-Answer one",
+      previousCursor: "turn-2-user-Question two",
     });
   });
 });

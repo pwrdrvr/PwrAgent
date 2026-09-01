@@ -13,6 +13,7 @@ import {
   FEDERATION_BACKEND_METHODS,
   FEDERATION_BACKEND_METHOD_CAPABILITIES,
   FEDERATION_LOAD_STATUS_TIMEOUT_MS,
+  FEDERATION_RESPONSE_BYTE_BUDGET,
   FederationRemoteBackendClient,
   registerFederationBackendHandlers,
   type FederationBackendOperations,
@@ -1458,13 +1459,16 @@ describe("federation backend bridge", () => {
   });
 
   it("hands back a provider cursor when the trim leaves an overlay row leading", async () => {
-    const responseByteBudget = FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
     // Two entries that together overflow the frame budget while the newer one
     // fits inside it on its own, so the trim has to stop between them. A
     // message's text is measured three times over — in `entries`, in
     // `messages`, and again as `lastUserMessage` / `lastAssistantMessage`.
-    const olderLargeText = "o".repeat(Math.floor(responseByteBudget * 0.28));
-    const newestLargeText = "n".repeat(Math.floor(responseByteBudget * 0.25));
+    const olderLargeText = "o".repeat(
+      Math.floor(FEDERATION_RESPONSE_BYTE_BUDGET * 0.28),
+    );
+    const newestLargeText = "n".repeat(
+      Math.floor(FEDERATION_RESPONSE_BYTE_BUDGET * 0.25),
+    );
     // What the ACP provider itself holds. `before` is resolved against this,
     // so an id that is not in this list is an id no read can answer.
     const providerEntries: AppServerReadThreadResponse["replay"]["entries"] = [
@@ -1485,22 +1489,23 @@ describe("federation backend bridge", () => {
     const backend = {
       readThread: vi.fn(async (request: AppServerReadThreadRequest) => {
         // Mirrors readAcpThread: page the provider's own replay, then merge
-        // the overlay rows into whatever page came back.
+        // the overlay rows in — but only for a live read. readAcpThread gates
+        // that merge on `!request.before`, so an older page never carries them.
         const page = pageNormalizedReplay(
           {
             entries: providerEntries,
             messages: providerEntries.flatMap((entry) =>
               entry.type === "message"
                 ? [{ id: entry.id, role: entry.role, text: entry.text }]
-                : []
+                : [],
             ),
             pagination: { supportsPagination: false, hasPreviousPage: false },
           },
           request,
         );
-        const anchorIndex = page.entries.findIndex(
-          (entry) => entry.id === "entry-3",
-        );
+        const anchorIndex = request.before === undefined
+          ? page.entries.findIndex((entry) => entry.id === "entry-3")
+          : -1;
         const entries = anchorIndex === -1
           ? page.entries
           : [
@@ -1576,12 +1581,12 @@ describe("federation backend bridge", () => {
 
     const olderReplay = (replies[1] as { result: AppServerReadThreadResponse })
       .result.replay;
-    // Older history, not the newest page handed back a second time.
+    // Older history, not the newest page handed back a second time. No overlay
+    // row here: readAcpThread merges those only into a live read.
     expect(olderReplay.entries.map((entry) => entry.id)).toEqual([
       "entry-1",
       "entry-2",
       "entry-3",
-      "live-turn-usage-turn-1",
     ]);
     expect(olderReplay.pagination).toEqual({
       supportsPagination: true,

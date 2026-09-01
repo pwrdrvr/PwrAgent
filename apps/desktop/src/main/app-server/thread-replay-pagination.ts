@@ -13,8 +13,10 @@ const threadReplayPaginationLog = getMainLogger(
   "pwragent:thread-replay-pagination",
 );
 
+// "page", not "entry": a page kept whole for a backend-owned cursor sheds
+// bytes by compacting entries that were not themselves oversized.
 const FEDERATION_OMITTED_ENTRY_TEXT =
-  "Content omitted because this entry exceeded the federation frame limit.";
+  "Content omitted because this page exceeded the federation frame limit.";
 
 /**
  * Which id space a replay's pagination cursor lives in.
@@ -78,11 +80,16 @@ export function pageNormalizedReplay(
     };
   }
 
-  if (options.limit === undefined && !options.before) {
+  if (options.limit === undefined && options.before === undefined) {
     return replay;
   }
 
-  const beforeIndex = options.before
+  // Presence, not truthiness: an empty-string cursor is a cursor that resolves
+  // to nothing, and reading it as "no cursor" would hand the newest page to a
+  // caller asking for older history — the failure the guard below exists to
+  // prevent. Federation casts a peer's params straight to this request shape,
+  // so the value is not ours to trust.
+  const beforeIndex = options.before !== undefined
     ? replay.entries.findIndex((entry) => entry.id === options.before)
     : replay.entries.length;
   if (beforeIndex < 0) {
@@ -184,44 +191,24 @@ export function fitNormalizedReplayWithinByteBudget(params: {
 
   // A natively paginated replay carries the backend's own cursor, which is not
   // a transcript entry id at all — Codex hands back an opaque
-  // `thread/turns/list` cursor. Trimming for the frame ceiling must not
-  // rewrite it into an entry id the backend has never issued, so carry the
-  // backend's pagination through untouched and let the reader keep paging from
-  // the boundary the backend gave us.
-  const paginationFor = (
-    entries: AppServerThreadEntry[],
-    hasPreviousPage: boolean,
-  ): AppServerThreadReplay["pagination"] =>
-    params.cursorIdSpace === "provider-cursor"
-      ? params.replay.pagination
-      : mintedCursorPagination(entries, hasPreviousPage);
+  // `thread/turns/list` cursor. Nothing here can improve on it and nothing may
+  // substitute an entry id for it, so the page's boundaries are the backend's
+  // to keep: shrink it by compacting entries in place rather than by dropping
+  // them, which would leave the preserved cursor naming a boundary the page no
+  // longer has and silently strand everything between the two.
+  if (params.cursorIdSpace === "provider-cursor") {
+    return compactReplayWithinByteBudget(params);
+  }
 
-  // Trimming from the front moves the page start, and the page start is what
-  // the next synthetic cursor names. Never trim past the newest provider-owned
-  // entry: a page made only of overlay rows has no id any provider could
-  // resolve, so it would report more history behind it with no way left to ask
-  // for that history.
-  const lastProviderOwnedIndex = params.replay.entries.findLastIndex(
-    (entry) => !isOverlayOwnedTranscriptEntry(entry),
-  );
-  const lastTrimmableStartIndex = Math.max(
-    0,
-    lastProviderOwnedIndex >= 0
-      ? lastProviderOwnedIndex
-      : params.replay.entries.length - 1,
-  );
-
+  // Every entry the trim removes from the front is one the reader can still
+  // ask for, because the cursor this mints names the new page start.
   let entries = params.replay.entries;
-  for (
-    let startIndex = 1;
-    startIndex <= lastTrimmableStartIndex;
-    startIndex += 1
-  ) {
-    entries = params.replay.entries.slice(startIndex);
+  while (entries.length > 1) {
+    entries = entries.slice(1);
     const candidate = replayWithEntries(
       params.replay,
       entries,
-      paginationFor(entries, true),
+      mintedCursorPagination(entries, true),
     );
     if (params.measureBytes(candidate) <= params.maxBytes) {
       return candidate;
@@ -230,12 +217,15 @@ export function fitNormalizedReplayWithinByteBudget(params: {
 
   const oversizedEntry = entries[0];
   if (oversizedEntry) {
-    const compacted = [compactOversizedEntry(oversizedEntry)];
     const candidate = replayWithEntries(
       params.replay,
-      compacted,
-      paginationFor(
-        compacted,
+      [compactOversizedEntry(oversizedEntry)],
+      // Classify the entry as it arrived. Compaction rewrites an activity's
+      // summary, and a usage row matched by summary rather than by id would
+      // read as provider-owned afterwards — the overlay-id cursor this module
+      // exists to prevent.
+      mintedCursorPagination(
+        [oversizedEntry],
         params.replay.pagination.hasPreviousPage || params.replay.entries.length > 1,
       ),
     );
@@ -244,16 +234,36 @@ export function fitNormalizedReplayWithinByteBudget(params: {
     }
   }
 
-  return {
-    entries: [],
-    messages: [],
-    pagination: params.cursorIdSpace === "provider-cursor"
-      ? params.replay.pagination
-      : {
-          supportsPagination: true,
-          hasPreviousPage: false,
-        },
-  };
+  return replayWithEntries(params.replay, [], mintedCursorPagination([], false));
+}
+
+/**
+ * Fits a page whose boundaries belong to the backend.
+ *
+ * The entry set is what the backend's cursor is defined against, so it is kept
+ * whole and the oversized entries inside it are replaced with the omitted-entry
+ * marker, oldest first. The reader sees which rows were dropped and can still
+ * page back from exactly where the backend said.
+ */
+function compactReplayWithinByteBudget(params: {
+  replay: AppServerThreadReplay;
+  maxBytes: number;
+  measureBytes: (replay: AppServerThreadReplay) => number;
+}): AppServerThreadReplay {
+  const entries = [...params.replay.entries];
+  for (let index = 0; index < entries.length; index += 1) {
+    entries[index] = compactOversizedEntry(entries[index]!);
+    const candidate = replayWithEntries(
+      params.replay,
+      [...entries],
+      params.replay.pagination,
+    );
+    if (params.measureBytes(candidate) <= params.maxBytes) {
+      return candidate;
+    }
+  }
+
+  return replayWithEntries(params.replay, [], params.replay.pagination);
 }
 
 /**
@@ -263,6 +273,14 @@ export function fitNormalizedReplayWithinByteBudget(params: {
  * an overlay-minted row, so an overlay id as a cursor is a cursor no read can
  * resolve. Skipping forward costs at most one overlay row repeated on the
  * older page, which `prependTranscriptHistoryPage` already dedupes by id.
+ *
+ * `hasPreviousPage` is reported only when a cursor was actually found. A page
+ * made entirely of overlay rows leaves nothing to name, and announcing history
+ * that cannot be requested is worse than announcing none: the renderer gates
+ * its "load older" affordance on `hasPreviousPage` alone but every loader
+ * bails on the missing cursor, so the control would render, the scroll
+ * sentinel would keep firing it, and each request would resolve having loaded
+ * nothing.
  */
 function mintedCursorPagination(
   entries: AppServerThreadEntry[],
@@ -273,7 +291,7 @@ function mintedCursorPagination(
     : undefined;
   return {
     supportsPagination: true,
-    hasPreviousPage,
+    hasPreviousPage: cursorEntry !== undefined,
     ...(cursorEntry ? { previousCursor: cursorEntry.id } : {}),
   };
 }

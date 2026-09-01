@@ -161,7 +161,7 @@ import {
 } from "../app-server/thread-replay-pagination";
 import { FEDERATION_MAX_FRAME_BYTES } from "./federation-transport";
 
-const FEDERATION_RESPONSE_BYTE_BUDGET =
+export const FEDERATION_RESPONSE_BYTE_BUDGET =
   FEDERATION_MAX_FRAME_BYTES - 64 * 1024;
 
 /**
@@ -890,8 +890,12 @@ export function registerFederationBackendHandlers(params: {
         ? response.replay
         : pageNormalizedReplay(response.replay, request);
       const replay = fitNormalizedReplayWithinByteBudget({
+        // `response.backend` rather than `request.backend`: the request field
+        // is optional and the remote forwarding path passes it through
+        // undefined, while the response always names the backend the owner
+        // actually read with.
         cursorIdSpace: alreadyPaged
-          ? threadReplayCursorIdSpace(request.backend)
+          ? threadReplayCursorIdSpace(response.backend)
           : "entry-id",
         replay: pagedReplay,
         maxBytes: FEDERATION_RESPONSE_BYTE_BUDGET,
