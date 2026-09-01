@@ -34,7 +34,10 @@ import {
   createQuestionnaireState,
   type PendingQuestionnaireState,
 } from "../features/thread-detail/questionnaire";
-import { normalizeReviewDisplayText } from "../../../shared/review-command";
+import {
+  normalizeReviewConfidenceScore,
+  normalizeReviewDisplayText,
+} from "../../../shared/review-command";
 import {
   createMcpElicitationState,
   type PendingMcpInteractionState,
@@ -3434,17 +3437,21 @@ function normalizeReviewOutput(value: unknown): AppServerReviewOutput | undefine
     !findings ||
     (record.overall_correctness !== "patch is correct" &&
       record.overall_correctness !== "patch is incorrect") ||
-    typeof record.overall_explanation !== "string" ||
-    typeof record.overall_confidence_score !== "number"
+    typeof record.overall_explanation !== "string"
   ) {
     return undefined;
   }
 
+  const confidenceScore = normalizeReviewConfidenceScore(
+    record.overall_confidence_score,
+  );
   return {
     findings: findings as AppServerReviewOutput["findings"],
     overall_correctness: record.overall_correctness,
     overall_explanation: record.overall_explanation,
-    overall_confidence_score: record.overall_confidence_score,
+    ...(confidenceScore === undefined
+      ? {}
+      : { overall_confidence_score: confidenceScore }),
   };
 }
 

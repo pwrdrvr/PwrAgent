@@ -152,3 +152,31 @@ function stripWrappingQuotes(value: string): string {
   const trimmed = value.trim();
   return trimmed.replace(/^(['"])(.*)\1$/, "$2").trim();
 }
+
+/**
+ * Keeps a reviewer-reported confidence only when it can mean something.
+ *
+ * The score is the reviewer's own confidence that its `overall_correctness`
+ * verdict is right. Three values look like numbers and are not judgements:
+ *
+ * - Exactly `0`. The output schema in the review prompt has to show the field,
+ *   and whatever value it shows is the one a weaker model copies through. A
+ *   literal zero next to "patch is correct" is a transcription, not a reviewer
+ *   with no confidence at all.
+ * - Anything above 1. A model answering `95` may mean 95%, or may mean nothing.
+ *   Rescaling it guesses at intent; dropping it does not.
+ * - Anything below 0, or non-finite.
+ *
+ * Dropping the value is safe because the verdict stands on its own — readers
+ * render the correctness without a number. Substituting zero would not.
+ */
+export function normalizeReviewConfidenceScore(
+  value: unknown,
+): number | undefined {
+  return typeof value === "number"
+    && Number.isFinite(value)
+    && value > 0
+    && value <= 1
+    ? value
+    : undefined;
+}

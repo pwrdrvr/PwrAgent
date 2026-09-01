@@ -107,7 +107,10 @@ import {
   createThreadDirectoryEnricher,
   type ThreadDirectoryEnrichment,
 } from "../app-server/thread-directory-enricher";
-import { normalizeReviewDisplayText } from "../../shared/review-command";
+import {
+  normalizeReviewConfidenceScore,
+  normalizeReviewDisplayText,
+} from "../../shared/review-command";
 import {
   formatDynamicToolOutput,
   formatMcpToolOutput,
@@ -2939,17 +2942,21 @@ function normalizeReviewOutput(
     !findings ||
     (reviewOutput.overall_correctness !== "patch is correct" &&
       reviewOutput.overall_correctness !== "patch is incorrect") ||
-    typeof reviewOutput.overall_explanation !== "string" ||
-    typeof reviewOutput.overall_confidence_score !== "number"
+    typeof reviewOutput.overall_explanation !== "string"
   ) {
     return undefined;
   }
 
+  const confidenceScore = normalizeReviewConfidenceScore(
+    reviewOutput.overall_confidence_score,
+  );
   return {
     findings: findings as NonNullable<AppServerThreadReviewEntry["output"]>["findings"],
     overall_correctness: reviewOutput.overall_correctness,
     overall_explanation: reviewOutput.overall_explanation,
-    overall_confidence_score: reviewOutput.overall_confidence_score,
+    ...(confidenceScore === undefined
+      ? {}
+      : { overall_confidence_score: confidenceScore }),
   };
 }
 

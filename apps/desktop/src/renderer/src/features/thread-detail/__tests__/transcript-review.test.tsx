@@ -1,5 +1,9 @@
+import type {
+  AppServerReviewOutput,
+  AppServerThreadReviewEntry,
+} from "@pwragent/shared";
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { TranscriptReview } from "../TranscriptReview";
 
@@ -49,9 +53,8 @@ describe("TranscriptReview", () => {
 
     expect(screen.getByText("Review")).toBeInTheDocument();
     expect(screen.getByText("Review changes against main")).toBeInTheDocument();
-    expect(screen.getByText("Patch needs work")).toBeInTheDocument();
+    expect(screen.getByText("Patch needs work · 87%")).toBeInTheDocument();
     expect(screen.getByText("1 finding")).toBeInTheDocument();
-    expect(screen.getByText("87% confidence")).toBeInTheDocument();
     const runtime = screen.getByLabelText("Review runtime");
     expect(runtime).toHaveTextContent("OpenAI");
     expect(runtime).toHaveTextContent("gpt-5.6-sol");
@@ -165,5 +168,154 @@ describe("TranscriptReview", () => {
       screen.getByRole("link", { name: "/outside/repository/VeryLongOutsideFileName.ts" })
     ).toHaveAttribute("href", "file:///outside/repository/VeryLongOutsideFileName.ts:1");
     expect(screen.getByRole("link", { name: "packages/app/high.ts" })).toBeInTheDocument();
+  });
+});
+
+describe("TranscriptReview provenance", () => {
+  const context = {
+    workspacePath: "/Users/dev/.codex/worktrees/mti5p133/PwrAgent",
+    projectLabel: "PwrAgent",
+    repositoryPath: "/Users/dev/pwrdrvr/PwrAgent",
+    gitBranch: "fix/macos-dock-icon-safe-area",
+    baseBranch: "origin/main",
+    pullRequest: {
+      provider: "github.com",
+      org: "pwrdrvr",
+      repo: "PwrAgent",
+      number: 1918,
+      baseRefName: "origin/main",
+      url: "https://github.com/pwrdrvr/PwrAgent/pull/1918",
+    },
+  } as const;
+
+  function renderReview(
+    entry: Partial<AppServerThreadReviewEntry> = {},
+  ): void {
+    render(
+      <TranscriptReview
+        entry={{
+          type: "review",
+          id: "review-provenance",
+          review: "",
+          displayText: "Review changes against origin/main",
+          ...entry,
+        }}
+      />
+    );
+  }
+
+  it("names the project, branch, and pull request the review ran against", () => {
+    renderReview({ context });
+
+    const row = screen.getByLabelText("What was reviewed");
+    expect(row).toHaveTextContent("PwrAgent");
+    expect(row).toHaveTextContent("fix/macos-dock-icon-safe-area");
+    expect(row).toHaveTextContent("pwrdrvr/PwrAgent#1918");
+    expect(
+      screen.getByRole("link", { name: /pwrdrvr\/PwrAgent#1918/ })
+    ).toHaveAttribute("href", "https://github.com/pwrdrvr/PwrAgent/pull/1918");
+  });
+
+  it("offers the full workspace path to copy", () => {
+    renderReview({ context });
+
+    expect(
+      screen.getByLabelText("Copy workspace path for PwrAgent")
+    ).toBeInTheDocument();
+  });
+
+  it("shows the base only when it is not the pull request's own", () => {
+    renderReview({ context });
+    // Same base as the PR: the summary line already says it, so the chip does
+    // not repeat it.
+    expect(screen.getByLabelText("What was reviewed")).not.toHaveTextContent(
+      "→"
+    );
+    cleanup();
+
+    renderReview({
+      context: {
+        ...context,
+        gitBranch: "feat/star-map-float",
+        pullRequest: { ...context.pullRequest, baseRefName: "feat/star-map-layer" },
+      },
+    });
+    expect(screen.getByLabelText("What was reviewed")).toHaveTextContent(
+      "feat/star-map-float → origin/main"
+    );
+  });
+
+  it("says the branch carried no pull request rather than listing others", () => {
+    renderReview({
+      context: { ...context, pullRequest: null, gitBranch: "main" },
+    });
+
+    expect(screen.getByText("no PR at review time")).toBeInTheDocument();
+  });
+
+  it("shows no pull-request chip at all when none could be checked", () => {
+    const { pullRequest: _pullRequest, ...unchecked } = context;
+    renderReview({ context: unchecked });
+
+    expect(screen.queryByText("no PR at review time")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("renders no row for a review that predates the capture", () => {
+    renderReview();
+
+    expect(screen.queryByLabelText("What was reviewed")).not.toBeInTheDocument();
+  });
+});
+
+describe("TranscriptReview verdict", () => {
+  function renderVerdict(
+    output: Partial<AppServerReviewOutput> = {},
+  ): void {
+    render(
+      <TranscriptReview
+        entry={{
+          type: "review",
+          id: "review-verdict",
+          review: "",
+          reviewer: { backend: "codex", model: "gpt-5.6-sol" },
+          output: {
+            findings: [],
+            overall_correctness: "patch is correct",
+            overall_explanation: "Nothing regressed.",
+            ...output,
+          },
+        }}
+      />
+    );
+  }
+
+  it("fuses the confidence into the verdict it modifies", () => {
+    renderVerdict({ overall_confidence_score: 0.98 });
+
+    expect(screen.getByText("Patch correct · 98%")).toBeInTheDocument();
+  });
+
+  it("describes what the number is a confidence in, on focus", async () => {
+    renderVerdict({ overall_confidence_score: 0.98 });
+
+    const badge = screen.getByText("Patch correct · 98%");
+    // Standing alone the number names no subject, so the explanation has to be
+    // reachable — and as a description, not by renaming the badge.
+    expect(badge).not.toHaveAccessibleDescription();
+    act(() => {
+      badge.focus();
+    });
+    expect(badge).toHaveAccessibleDescription(
+      /its own verdict — the patch is correct/
+    );
+    expect(badge).toHaveAccessibleDescription(/not a score for the code/);
+  });
+
+  it("shows the verdict alone when the reviewer reported no confidence", () => {
+    renderVerdict();
+
+    expect(screen.getByText("Patch correct")).toBeInTheDocument();
+    expect(screen.queryByText(/%/)).not.toBeInTheDocument();
   });
 });

@@ -5,30 +5,30 @@ import {
   type GitHubRepoRef,
 } from "../pr-status/git-remote";
 
-type ReviewGitRunner = (
+export type ReviewGitRunner = (
   cwd: string,
   args: string[],
 ) => Promise<{ stdout: string }>;
 
-function normalizeWorkspacePath(value: string): string {
+export function normalizeWorkspacePath(value: string): string {
   const normalized = value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
   return /^[a-z]:\//i.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
-function prBelongsToWorkspace(pr: PrSummary, cwd: string): boolean {
+export function prBelongsToWorkspace(pr: PrSummary, cwd: string): boolean {
   const selectedWorkspace = normalizeWorkspacePath(cwd);
   return (pr.linkedDirectoryPaths ?? []).some(
     (directoryPath) => normalizeWorkspacePath(directoryPath) === selectedWorkspace,
   );
 }
 
-function prMatchesRepository(pr: PrSummary, repo: GitHubRepoRef): boolean {
+export function prMatchesRepository(pr: PrSummary, repo: GitHubRepoRef): boolean {
   return pr.provider.trim().toLowerCase() === repo.host.toLowerCase()
     && pr.org.trim().toLowerCase() === repo.owner.toLowerCase()
     && pr.repo.trim().toLowerCase() === repo.repo.toLowerCase();
 }
 
-function normalizeFullRef(ref: string): string {
+export function normalizeFullRef(ref: string): string {
   const normalized = ref.trim();
   const localMatch = normalized.match(/^refs\/heads\/(.+)$/);
   if (localMatch?.[1]) {

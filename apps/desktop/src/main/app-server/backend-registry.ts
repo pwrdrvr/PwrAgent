@@ -60,6 +60,7 @@ import {
   isUsageActivityEntry,
   usageActivityScope,
 } from "./overlay-transcript-entries";
+import { resolveReviewProvenance } from "./review-provenance";
 import { assertReviewWorkspaceMatchesAttachedPullRequest } from "./review-workspace-guard";
 import { pageNormalizedReplay } from "./thread-replay-pagination";
 import {
@@ -89,6 +90,8 @@ import {
   type AppServerReadThreadResponse,
   type AppServerThreadActivityEntry,
   type AppServerThreadEntry,
+  type AppServerReviewContext,
+  type AppServerReviewTarget,
   type AppServerThreadImagePart,
   type AppServerThreadMessage,
   type AppServerThreadMessageOrigin,
@@ -2775,6 +2778,13 @@ type TaskMonitorDelegationRecord = {
 type ReviewSubAgentRecord = {
   /** Backend running the review child. */
   backend: AppServerBackendKind;
+  /**
+   * Workspace, branch, and pull request the review was started against,
+   * resolved once at start. Held on the record so the completion entry reports
+   * the same facts as the start entry rather than re-deriving them from a
+   * thread that may have moved on.
+   */
+  context?: AppServerReviewContext;
   createdAt: number;
   displayText: string;
   fastMode?: boolean;
@@ -15231,6 +15241,7 @@ export class DesktopBackendRegistry {
     let overlay: ThreadOverlayState | undefined;
     let cwd: string | undefined;
     let codexEnvironmentRuntime: CodexThreadEnvironmentRuntime | undefined;
+    let reviewContext: AppServerReviewContext | undefined;
     let tokenMiserEnabled = false;
     try {
       if (params.backend === "codex") {
@@ -15298,6 +15309,14 @@ export class DesktopBackendRegistry {
         executionTarget: codexEnvironmentRuntime?.executionTarget,
         prs: overlay?.prs,
         target: params.target,
+      });
+      reviewContext = await this.resolveReviewContext({
+        backend: params.backend,
+        cwd,
+        executionTarget: codexEnvironmentRuntime?.executionTarget,
+        overlay,
+        target: params.target,
+        threadId: params.threadId,
       });
       // A review on another provider cannot inherit the parent thread's model
       // settings — that model belongs to a different catalog. Fall back to the
@@ -15422,6 +15441,7 @@ export class DesktopBackendRegistry {
         ? { reasoningEffort: modelSettings.reasoningEffort }
         : {}),
       mode: managedMode ? "managed" : "native",
+      ...(reviewContext ? { context: reviewContext } : {}),
       parentBackend: params.backend,
       parentThreadId: result.threadId,
       reviewThreadId: result.reviewThreadId || result.threadId,
@@ -15621,6 +15641,51 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Never fails a review. Provenance is reporting: a card that cannot say which
+   * project it ran in is worse than one that can, but it is not worth refusing
+   * to run the review the operator asked for.
+   */
+  private async resolveReviewContext(params: {
+    backend: AppServerBackendKind;
+    cwd?: string;
+    executionTarget?: "local" | "remote";
+    overlay?: ThreadOverlayState;
+    target: AppServerReviewTarget;
+    threadId: string;
+  }): Promise<AppServerReviewContext | undefined> {
+    if (!params.cwd?.trim()) {
+      return undefined;
+    }
+    try {
+      const thread = await this.findThreadForWorkspaceHandoff({
+        backend: params.backend,
+        callerReason: "review-provenance",
+        freshness: "last-known",
+        threadId: params.threadId,
+      });
+      return await resolveReviewProvenance({
+        cwd: params.cwd,
+        ...(params.executionTarget
+          ? { executionTarget: params.executionTarget }
+          : {}),
+        linkedDirectories: [
+          ...(thread?.linkedDirectories ?? []),
+          ...(params.overlay?.extraLinkedDirectories ?? []),
+        ],
+        ...(params.overlay?.prs ? { prs: params.overlay.prs } : {}),
+        target: params.target,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("failed to resolve review provenance", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId,
+      });
+      return undefined;
+    }
+  }
+
   private async emitManagedReviewStarted(
     record: ReviewSubAgentRecord,
   ): Promise<void> {
@@ -15632,6 +15697,7 @@ export class DesktopBackendRegistry {
       displayText: record.displayText,
       createdAt: startedAt,
       reviewer: reviewEntryReviewer(record),
+      ...(record.context ? { context: record.context } : {}),
       turn: {
         id: record.turnId,
         status: "in_progress",
@@ -24964,6 +25030,7 @@ export class DesktopBackendRegistry {
         review,
         createdAt: completedAt,
         reviewer: reviewEntryReviewer(params.record),
+        ...(params.record.context ? { context: params.record.context } : {}),
         ...(parsed ? { output: parsed } : {}),
         turn: {
           id: params.record.turnId,
@@ -36059,6 +36126,7 @@ export class DesktopBackendRegistry {
             data: {
               ...(readRecord(item.data) ?? {}),
               reviewer: reviewEntryReviewer(record),
+              ...(record.context ? { context: record.context } : {}),
             },
           },
         },

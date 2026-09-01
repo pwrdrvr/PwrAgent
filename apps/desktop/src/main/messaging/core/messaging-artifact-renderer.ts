@@ -271,7 +271,14 @@ function renderReviewMarkdown(review: AppServerThreadReviewEntry): string {
   if (review.output) {
     lines.push("", "## Summary");
     lines.push(`- Correctness: ${review.output.overall_correctness}`);
-    lines.push(`- Confidence: ${review.output.overall_confidence_score}`);
+    // Absent when the reviewer reported no usable confidence. Printing the
+    // line anyway would put "undefined" — or a substituted zero — where a
+    // judgement is supposed to be.
+    if (review.output.overall_confidence_score !== undefined) {
+      lines.push(
+        `- Confidence in verdict: ${review.output.overall_confidence_score}`,
+      );
+    }
     if (
       !reviewTextContainsExplanation(
         reviewText,

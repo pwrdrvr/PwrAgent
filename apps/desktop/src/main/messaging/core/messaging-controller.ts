@@ -191,7 +191,10 @@ import { getMainLogger } from "../../log.js";
 import { PerKeyAsyncLock } from "../../util/per-key-async-lock.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
 import { actionsForIntent } from "./deterministic-interaction-mapper.js";
-import { parseReviewCommand } from "../../../shared/review-command.js";
+import {
+  normalizeReviewConfidenceScore,
+  parseReviewCommand,
+} from "../../../shared/review-command.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
 import {
   buildResumeIntent,
@@ -20677,17 +20680,21 @@ function normalizeStructuredReviewOutput(
     !findings ||
     (reviewOutput.overall_correctness !== "patch is correct" &&
       reviewOutput.overall_correctness !== "patch is incorrect") ||
-    typeof reviewOutput.overall_explanation !== "string" ||
-    typeof reviewOutput.overall_confidence_score !== "number"
+    typeof reviewOutput.overall_explanation !== "string"
   ) {
     return undefined;
   }
 
+  const confidenceScore = normalizeReviewConfidenceScore(
+    reviewOutput.overall_confidence_score,
+  );
   return {
     findings: findings as NonNullable<AppServerThreadReviewEntry["output"]>["findings"],
     overall_correctness: reviewOutput.overall_correctness,
     overall_explanation: reviewOutput.overall_explanation,
-    overall_confidence_score: reviewOutput.overall_confidence_score,
+    ...(confidenceScore === undefined
+      ? {}
+      : { overall_confidence_score: confidenceScore }),
   };
 }
 
