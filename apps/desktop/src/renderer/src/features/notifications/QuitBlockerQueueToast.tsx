@@ -20,6 +20,27 @@ const GROUPS: ReadonlyArray<{
   { kind: "action", heading: "Environment actions" },
 ];
 
+function retainKnownTitles(
+  current: QuitBlockerQueueSnapshot | undefined,
+  next: QuitBlockerQueueSnapshot,
+): QuitBlockerQueueSnapshot {
+  if (!current) return next;
+  const titlesByItemKey = new Map(
+    current.items.flatMap((item) => {
+      const title = item.title?.trim();
+      return title ? [[quitBlockerItemKey(item), title] as const] : [];
+    }),
+  );
+  return {
+    ...next,
+    items: next.items.map((item) => {
+      if (item.title?.trim()) return item;
+      const title = titlesByItemKey.get(quitBlockerItemKey(item));
+      return title ? { ...item, title } : item;
+    }),
+  };
+}
+
 type QuitBlockerQueueApi = Pick<
   DesktopApi,
   | "copyText"
@@ -52,7 +73,10 @@ export function QuitBlockerQueueToast(props: {
       try {
         const nextSnapshot = await readQuitBlockerQueue();
         if (!disposed) {
-          setSnapshot(nextSnapshot);
+          // Blocker membership is authoritative, but title resolution is
+          // best-effort and bounded. Do not downgrade a known label when one
+          // refresh times out and omits only that optional presentation data.
+          setSnapshot((current) => retainKnownTitles(current, nextSnapshot));
         }
       } catch {
         // Keep the last authoritative snapshot visible. The next interval can
