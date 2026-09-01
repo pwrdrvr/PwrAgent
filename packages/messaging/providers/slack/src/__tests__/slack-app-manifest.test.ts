@@ -49,6 +49,9 @@ describe("official Slack app manifest", () => {
         ),
       );
     expect(manifest.features.slash_commands).toHaveLength(9);
+    expect(manifest.features.slash_commands.every(
+      (command) => command.usage_hint === undefined,
+    )).toBe(true);
   });
 
   it("keeps PKCE, token rotation, and org deploy off", () => {

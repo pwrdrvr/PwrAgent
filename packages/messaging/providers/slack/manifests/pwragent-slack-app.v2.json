@@ -25,55 +25,46 @@
       {
         "command": "/pwragent_resume",
         "description": "choose a thread to control from this conversation",
-        "usage_hint": "",
         "should_escape": false
       },
       {
         "command": "/pwragent_agent",
         "description": "choose an Agent thread, or manage the default with /agent default",
-        "usage_hint": "",
         "should_escape": false
       },
       {
         "command": "/pwragent_new",
         "description": "start a new thread from a project",
-        "usage_hint": "",
         "should_escape": false
       },
       {
         "command": "/pwragent_status",
         "description": "show the current binding and controls",
-        "usage_hint": "",
         "should_escape": false
       },
       {
         "command": "/pwragent_detach",
         "description": "detach this conversation from its thread",
-        "usage_hint": "",
         "should_escape": false
       },
       {
         "command": "/pwragent_monitor",
         "description": "monitor recent PwrAgent threads once per minute",
-        "usage_hint": "",
         "should_escape": false
       },
       {
         "command": "/pwragent_schedule",
         "description": "schedule a message for the bound thread",
-        "usage_hint": "",
         "should_escape": false
       },
       {
         "command": "/pwragent_scheduled",
         "description": "list or manage scheduled messages",
-        "usage_hint": "",
         "should_escape": false
       },
       {
         "command": "/pwragent_help",
         "description": "show this message",
-        "usage_hint": "",
         "should_escape": false
       }
     ]

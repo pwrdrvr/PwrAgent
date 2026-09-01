@@ -50,7 +50,7 @@ export type SlackAppManifestSlashCommand = {
   command: string;
   description: string;
   should_escape: false;
-  usage_hint: string;
+  usage_hint?: string;
 };
 
 export type SlackAppManifest = {
@@ -131,7 +131,6 @@ export function buildOfficialSlackAppManifest(
       slash_commands: MESSAGING_COMMAND_CATALOG.map((command) => ({
         command: `/${prefix}${command.verb}`,
         description: command.description,
-        usage_hint: "",
         should_escape: false,
       })),
     },
