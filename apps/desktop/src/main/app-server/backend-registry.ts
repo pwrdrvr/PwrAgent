@@ -3617,6 +3617,7 @@ export function readThreadCompactionBoundary(
 export type ObservedContextWindowDrop = {
   cumulativeInputTokens: number;
   currentContextTokens: number;
+  previousCumulativeInputTokens: number;
   previousContextTokens: number;
 };
 
@@ -3633,9 +3634,11 @@ export function detectObservedContextWindowDrop(params: {
   cursor: ObservedContextReplayCursor | undefined;
   tokenUsage: unknown;
 }): ObservedContextWindowDrop | undefined {
-  const previousContextTokens = params.cursor?.lastContextTokens;
+  const cursor = params.cursor;
+  const previousContextTokens = cursor?.lastContextTokens;
   if (
-    typeof previousContextTokens !== "number"
+    !cursor
+    || typeof previousContextTokens !== "number"
     || previousContextTokens <= 0
   ) {
     return undefined;
@@ -3649,7 +3652,7 @@ export function detectObservedContextWindowDrop(params: {
       : undefined);
   if (
     typeof cumulativeInputTokens !== "number"
-    || cumulativeInputTokens <= params.cursor!.cumulativeInputTokens
+    || cumulativeInputTokens <= cursor.cumulativeInputTokens
     || typeof currentContextTokens !== "number"
     || currentContextTokens < 0
     || currentContextTokens >= previousContextTokens
@@ -3659,6 +3662,7 @@ export function detectObservedContextWindowDrop(params: {
   return {
     cumulativeInputTokens,
     currentContextTokens,
+    previousCumulativeInputTokens: cursor.cumulativeInputTokens,
     previousContextTokens,
   };
 }
@@ -7739,6 +7743,14 @@ export class DesktopBackendRegistry {
   private readonly liveThreadReplayInputCursor = new Map<
     string,
     ObservedContextReplayCursor
+  >();
+  // Request cursor at the latest successfully persisted reported compaction.
+  // A later context drop suppresses inference only when its immediately prior
+  // request has this exact cursor; an older unattributed database row is not
+  // evidence that the new drop was already marked.
+  private readonly reportedCompactionRequestBoundaries = new Map<
+    string,
+    number
   >();
   /**
    * Cumulative live usage waiting for one bulk sqlite transaction. The
@@ -27539,17 +27551,19 @@ export class DesktopBackendRegistry {
     const observedAt = Date.now();
     const turnId = boundary.turnId
       ?? this.findActiveTurnIdForThread(event.backend, threadId);
+    const threadKey = [event.backend, threadId].join(":");
+    const cumulativeInputTokens = this.liveThreadReplayInputCursor.get(
+      threadKey,
+    )?.cumulativeInputTokens;
     const compactionId = buildThreadCompactionIdentity({
       backend: event.backend,
-      cumulativeInputTokens: this.liveThreadReplayInputCursor.get(
-        [event.backend, threadId].join(":"),
-      )?.cumulativeInputTokens,
+      cumulativeInputTokens,
       itemId,
       threadId,
       turnId,
     });
     try {
-      return await this.overlayStore.recordThreadCompaction?.({
+      const recorded = await this.overlayStore.recordThreadCompaction?.({
         compaction: {
           backend: event.backend,
           compactionId,
@@ -27560,6 +27574,13 @@ export class DesktopBackendRegistry {
           ...(turnId ? { turnId } : {}),
         },
       }) ?? true;
+      if (recorded && cumulativeInputTokens !== undefined) {
+        this.reportedCompactionRequestBoundaries.set(
+          threadKey,
+          cumulativeInputTokens,
+        );
+      }
+      return recorded;
     } catch (error) {
       backendRegistryLog.warn("compaction marker write failed", {
         backend: event.backend,
@@ -27576,10 +27597,10 @@ export class DesktopBackendRegistry {
    * Persist the usage-only safety boundary unless a reported compaction is
    * already waiting for this same post-boundary request.
    *
-   * Reported markers are written before the next usage update and remain
-   * unattributed until that update reaches the pricing ledger. That pending
-   * state is the exact deduplication seam: an inferred marker is needed only
-   * when no such marker exists.
+   * Match the reported marker's in-memory request cursor, not the database's
+   * attribution state. An old marker can remain unattributed when its next
+   * request was small or cache-served; treating every such row as current made
+   * it suppress a later genuinely unreported compaction.
    */
   private async handleInferredThreadCompaction(params: {
     backend: AppServerBackendKind;
@@ -27587,14 +27608,24 @@ export class DesktopBackendRegistry {
     threadId: string;
     turnId?: string;
   }): Promise<void> {
+    const threadKey = [params.backend, params.threadId].join(":");
+    const reportedBoundary = this.reportedCompactionRequestBoundaries.get(
+      threadKey,
+    );
+    if (
+      reportedBoundary
+      === params.contextDrop.previousCumulativeInputTokens
+    ) {
+      this.reportedCompactionRequestBoundaries.delete(threadKey);
+      return;
+    }
+    if (
+      reportedBoundary !== undefined
+      && reportedBoundary < params.contextDrop.previousCumulativeInputTokens
+    ) {
+      this.reportedCompactionRequestBoundaries.delete(threadKey);
+    }
     try {
-      const compactions = await this.overlayStore.listThreadCompactions?.({
-        backend: params.backend,
-        threadId: params.threadId,
-      });
-      if (compactions?.some((entry) => entry.coldUsageLineId === undefined)) {
-        return;
-      }
       const observedAt = Date.now();
       const recorded = await this.overlayStore.recordThreadCompaction?.({
         compaction: {

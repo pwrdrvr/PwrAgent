@@ -758,6 +758,48 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     ]);
   });
 
+  it("does infer a new boundary past an older unattributed marker", async () => {
+    await startLiveReplayGate();
+    await registry.publishLocalEvent(parentContextUsageEvent({
+      cachedInputTokens: 199_000,
+      cumulativeInputTokens: 200_000,
+      inputTokens: 200_000,
+      outputTokens: 1_000,
+    }));
+    const staleObservedAt = Date.now();
+    await store.recordThreadCompaction({
+      compaction: {
+        backend: "codex",
+        compactionId: "stale-unattributed-marker",
+        observedAt: staleObservedAt,
+        threadId: "thread-parent",
+        turnId: "turn-old",
+        updatedAt: staleObservedAt,
+      },
+    });
+    await registry.publishLocalEvent(parentContextUsageEvent({
+      cachedInputTokens: 209_000,
+      cumulativeInputTokens: 410_000,
+      inputTokens: 210_000,
+      outputTokens: 1_000,
+    }));
+
+    await registry.publishLocalEvent(parentContextUsageEvent({
+      cachedInputTokens: 0,
+      cumulativeInputTokens: 431_000,
+      inputTokens: 21_000,
+      outputTokens: 500,
+    }));
+
+    expect(await store.listThreadCompactions({
+      backend: "codex",
+      threadId: "thread-parent",
+    })).toEqual([
+      expect.objectContaining({ compactionId: "stale-unattributed-marker" }),
+      expect.objectContaining({ turnId: "turn-parent" }),
+    ]);
+  });
+
   it("does not treat a non-compaction item as a replay boundary", async () => {
     const { objectId, tokenMiserStore } = await startLiveReplayGate();
 

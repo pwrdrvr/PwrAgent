@@ -307,6 +307,73 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     )).toBeInTheDocument();
   });
 
+  it("shows every compaction on the Savings context-by-turn chart", async () => {
+    const response = buildResponse();
+    response.toolAccounting!.tokenMiser = {
+      baselineParentTokens: 10_000,
+      estimatedParentTokensSaved: 9_600,
+      interceptionCount: 1,
+      interceptions: [],
+      originalCharacters: 40_000,
+      replacementTokens: 400,
+      retrievedTokens: 0,
+    };
+    response.pricing = {
+      compactions: [
+        {
+          backend: "codex",
+          compactionId: "compaction-turn-2",
+          observedAt: 1_800_000_010_500,
+          threadId: "thread-1",
+          turnId: "turn-2",
+          updatedAt: 1_800_000_010_500,
+        },
+        {
+          backend: "codex",
+          compactionId: "compaction-turn-3",
+          observedAt: 1_800_000_020_000,
+          threadId: "thread-1",
+          turnId: "turn-3",
+          updatedAt: 1_800_000_020_000,
+        },
+      ],
+      lines: [
+        {
+          ...buildContextUsageLine(),
+          createdAt: 1_800_000_000_000,
+          finalContextTokens: 231_000,
+          peakContextTokens: 240_000,
+          turnId: "turn-1",
+          usageLineId: "usage-turn-1",
+        },
+        {
+          ...buildContextUsageLine(),
+          createdAt: 1_800_000_010_000,
+          finalContextTokens: 21_500,
+          peakContextTokens: 243_864,
+          turnId: "turn-2",
+          usageLineId: "usage-turn-2",
+        },
+      ],
+      summaries: [],
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Context%20history";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const chart = await screen.findByRole("region", {
+      name: "Token Miser context by turn",
+    });
+    expect(within(chart).getAllByRole("img")).toHaveLength(3);
+    expect(within(chart).getByRole("img", {
+      name: /Turn 2.*final context 21\.5k.*context compacted 1 time/,
+    })).toHaveAttribute("data-compaction", "true");
+    expect(within(chart).getByRole("img", {
+      name: /Turn 3.*final context not observed.*context compacted 1 time/,
+    })).toHaveAttribute("data-compaction", "true");
+    expect(within(chart).getByText(/compaction boundary/)).toBeInTheDocument();
+  });
+
   // The summary is what the parent actually received in place of the payload.
   // Without it the screen can only say how many tokens were traded, never what
   // was traded for — which is the only way to judge whether a "win" was one.

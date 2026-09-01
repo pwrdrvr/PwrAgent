@@ -597,6 +597,7 @@ export function ToolOutputIncidentExplorerWindow() {
           invocations={allInvocations}
           threadCostMicros={threadCostMicros}
           tokenMiser={activeTokenMiser}
+          usageLines={usageLines ?? []}
         />
       ) : (
       <>
@@ -1117,6 +1118,7 @@ function TokenMiserSavingsLens(props: {
   invocations: ThreadToolInvocationRecord[];
   threadCostMicros: number;
   tokenMiser?: ThreadToolAccounting["tokenMiser"];
+  usageLines: readonly ThreadUsageLineRecord[];
 }) {
   const tokenMiser = props.tokenMiser;
   if (!tokenMiser) {
@@ -1132,6 +1134,10 @@ function TokenMiserSavingsLens(props: {
   if (!props.comparison) {
     return (
       <div className="incident-explorer__savings">
+        <TokenMiserContextTimeline
+          compactions={props.compactions}
+          usageLines={props.usageLines}
+        />
         <TokenMiserCodeModeStats
           tokenMiser={tokenMiser}
         />
@@ -1329,6 +1335,10 @@ function TokenMiserSavingsLens(props: {
         {" · "}{(tokenMiser.policyPassThroughCount ?? 0).toLocaleString()} policy pass-throughs
         {" · "}{(tokenMiser.helperPassThroughCount ?? 0).toLocaleString()} helper pass-throughs
       </p>
+      <TokenMiserContextTimeline
+        compactions={props.compactions}
+        usageLines={props.usageLines}
+      />
       <TokenMiserCompactionStats
         compactions={props.compactions}
         contextWindow={props.contextWindow}
@@ -1341,6 +1351,213 @@ function TokenMiserSavingsLens(props: {
       <TokenMiserResultList entries={props.gates} tokenMiser={tokenMiser} />
     </div>
   );
+}
+
+type TokenMiserContextTurn = {
+  compactionCount: number;
+  finalContextTokens: number | undefined;
+  key: string;
+  label: string;
+  modelContextWindow: number | undefined;
+  observedAt: number;
+  peakContextTokens: number | undefined;
+  turnId: string | undefined;
+};
+
+/**
+ * Parent-context history is the Token Miser verification chart. It is built
+ * from pricing turns rather than tool invocations so a compaction remains
+ * visible even when that turn made no tool call or its tool history no longer
+ * survives replay.
+ */
+function TokenMiserContextTimeline(props: {
+  compactions: readonly ThreadCompactionRecord[];
+  usageLines: readonly ThreadUsageLineRecord[];
+}) {
+  const turns = useMemo(
+    () => buildTokenMiserContextTurns(props.usageLines, props.compactions),
+    [props.compactions, props.usageLines],
+  );
+  if (turns.length === 0) {
+    return null;
+  }
+  const compactionCount = turns.reduce(
+    (total, turn) => total + turn.compactionCount,
+    0,
+  );
+  const measuredTurnCount = turns.filter((turn) =>
+    turn.finalContextTokens !== undefined
+    && turn.modelContextWindow !== undefined
+  ).length;
+  const parentTurnCount = turns.filter((turn) => turn.turnId !== undefined).length;
+  const unassignedBoundaryCount = turns.length - parentTurnCount;
+  return (
+    <section
+      aria-label="Token Miser context by turn"
+      className="incident-explorer__context-turns"
+    >
+      <div className="incident-explorer__context-turns-head">
+        <p className="incident-explorer__eyebrow">Context by turn</p>
+        <p className="incident-explorer__context-turns-legend">
+          <span aria-hidden="true" data-kind="final" /> final
+          <span aria-hidden="true" data-kind="peak" /> peak
+          <span aria-hidden="true" data-kind="compaction" /> compaction boundary
+        </p>
+      </div>
+      <div
+        aria-label="Parent context per turn, in order"
+        className="incident-explorer__context-turns-chart"
+        role="group"
+      >
+        {turns.map((turn) => {
+          const peakPercent = contextWindowPercent(
+            turn.peakContextTokens,
+            turn.modelContextWindow,
+          );
+          const finalPercent = contextWindowPercent(
+            turn.finalContextTokens,
+            turn.modelContextWindow,
+          );
+          const description = [
+            turn.label,
+            new Date(turn.observedAt).toLocaleString(),
+            ...(turn.finalContextTokens !== undefined
+              && turn.modelContextWindow !== undefined
+              ? [`final context ${formatContextWindowPoint(
+                  turn.finalContextTokens,
+                  turn.modelContextWindow,
+                )}`]
+              : ["final context not observed"]),
+            ...(turn.peakContextTokens !== undefined
+              && turn.modelContextWindow !== undefined
+              ? [`peak context ${formatContextWindowPoint(
+                  turn.peakContextTokens,
+                  turn.modelContextWindow,
+                )}`]
+              : []),
+            ...(turn.compactionCount > 0
+              ? [`context compacted ${turn.compactionCount.toLocaleString()} ${turn.compactionCount === 1 ? "time" : "times"}`]
+              : []),
+          ].join(" · ");
+          return (
+            <span
+              aria-label={description}
+              className="incident-explorer__context-turn"
+              data-compaction={turn.compactionCount > 0}
+              key={turn.key}
+              role="img"
+              title={description}
+            >
+              <span
+                aria-hidden="true"
+                className="incident-explorer__context-turn-track"
+              >
+                <i style={{ height: `${peakPercent}%` }} />
+                <b style={{ height: `${finalPercent}%` }} />
+              </span>
+            </span>
+          );
+        })}
+      </div>
+      <p className="incident-explorer__savings-caption">
+        {parentTurnCount.toLocaleString()} parent turn
+        {parentTurnCount === 1 ? "" : "s"}
+        {" · "}{measuredTurnCount.toLocaleString()} with context measurements
+        {" · "}{compactionCount.toLocaleString()} compaction boundar
+        {compactionCount === 1 ? "y" : "ies"}
+        {unassignedBoundaryCount > 0
+          ? ` · ${unassignedBoundaryCount.toLocaleString()} without a turn id`
+          : ""}
+      </p>
+    </section>
+  );
+}
+
+function buildTokenMiserContextTurns(
+  usageLines: readonly ThreadUsageLineRecord[],
+  compactions: readonly ThreadCompactionRecord[],
+): TokenMiserContextTurn[] {
+  const byTurn = new Map<string, Omit<TokenMiserContextTurn, "label">>();
+  const turnByUsageLine = new Map<string, string>();
+  for (const line of usageLines) {
+    if (line.scope !== "turn" || !line.turnId) {
+      continue;
+    }
+    turnByUsageLine.set(line.usageLineId, line.turnId);
+    const observedAt = line.completedAt ?? line.startedAt ?? line.createdAt;
+    const existing = byTurn.get(line.turnId);
+    const lineIsNewer = !existing || observedAt >= existing.observedAt;
+    byTurn.set(line.turnId, {
+      compactionCount: existing?.compactionCount ?? 0,
+      finalContextTokens: lineIsNewer
+        ? line.finalContextTokens ?? existing?.finalContextTokens
+        : existing.finalContextTokens,
+      key: `turn:${line.turnId}`,
+      modelContextWindow: lineIsNewer
+        ? line.modelContextWindow ?? existing?.modelContextWindow
+        : existing.modelContextWindow,
+      observedAt: Math.max(observedAt, existing?.observedAt ?? observedAt),
+      peakContextTokens: Math.max(
+        line.peakContextTokens ?? 0,
+        existing?.peakContextTokens ?? 0,
+      ) || undefined,
+      turnId: line.turnId,
+    });
+  }
+  const unassigned: Array<Omit<TokenMiserContextTurn, "label">> = [];
+  for (const compaction of compactions) {
+    const turnId = compaction.turnId
+      ?? (compaction.coldUsageLineId
+        ? turnByUsageLine.get(compaction.coldUsageLineId)
+        : undefined);
+    if (!turnId) {
+      unassigned.push({
+        compactionCount: 1,
+        finalContextTokens: undefined,
+        key: `compaction:${compaction.compactionId}`,
+        modelContextWindow: undefined,
+        observedAt: compaction.observedAt,
+        peakContextTokens: undefined,
+        turnId: undefined,
+      });
+      continue;
+    }
+    const existing = byTurn.get(turnId);
+    byTurn.set(turnId, {
+      compactionCount: (existing?.compactionCount ?? 0) + 1,
+      finalContextTokens: existing?.finalContextTokens,
+      key: `turn:${turnId}`,
+      modelContextWindow: existing?.modelContextWindow,
+      observedAt: existing?.observedAt ?? compaction.observedAt,
+      peakContextTokens: existing?.peakContextTokens,
+      turnId,
+    });
+  }
+  const ordered = [...byTurn.values(), ...unassigned].sort(
+    (left, right) =>
+      left.observedAt - right.observedAt
+      || left.key.localeCompare(right.key),
+  );
+  let ordinal = 0;
+  return ordered.map((turn) => ({
+    ...turn,
+    label: turn.turnId ? `Turn ${(ordinal += 1)}` : "Unassigned boundary",
+  }));
+}
+
+function contextWindowPercent(
+  tokens: number | undefined,
+  modelContextWindow: number | undefined,
+): number {
+  if (
+    tokens === undefined
+    || modelContextWindow === undefined
+    || modelContextWindow <= 0
+  ) {
+    return 0;
+  }
+  const percent = tokens / modelContextWindow * 100;
+  return Math.min(100, Math.max(tokens > 0 ? 2 : 0, percent));
 }
 
 function TokenMiserCompactionStats(props: {

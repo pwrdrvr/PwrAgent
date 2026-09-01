@@ -31,6 +31,7 @@ describe("detectObservedContextWindowDrop", () => {
     })).toEqual({
       cumulativeInputTokens: 421_000,
       currentContextTokens: 21_500,
+      previousCumulativeInputTokens: 400_000,
       previousContextTokens: 240_000,
     });
   });
