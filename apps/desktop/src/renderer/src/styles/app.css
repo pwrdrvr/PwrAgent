@@ -8206,6 +8206,53 @@ textarea,
   text-transform: uppercase;
 }
 
+/* Section list — the ONLY part of the nav that scrolls. The masthead
+   owns the stoplight gutter and the window drag region, and Exit
+   Settings is the escape hatch, so both stay pinned: scrolling them
+   away would slide the brand out from under the traffic lights and
+   put Exit out of reach on exactly the short windows that need it.
+   This is the main sidebar's split — fixed masthead above a scrolling
+   lane (`.sidebar__scroll-region` + `.sidebar-list--dense`).
+
+   Before this wrapper the rows were direct nav children, so the nav's
+   own `overflow: hidden` CLIPPED them instead of scrolling: at the
+   640px `MAIN_WINDOW_MIN_HEIGHT` (window.ts) the tail of an expanded
+   list — Experimental, Troubleshooting, About — painted below the clip
+   with no scrollbar and no wheel scrolling, out of a pointer's reach.
+   Collapsing every group fits, but with no margin to spare.
+
+   The bleed-then-re-inset is `.sidebar-list--dense`'s move, at the
+   same inset the nav already runs in (that inset is the point — it is
+   what makes this list read at the thread list's density). The bleed
+   buys exactly one thing: the reserved gutter lands between the
+   padding edge and the nav wall, so the thumb parks AT the wall
+   instead of inside it. Keep the two in lockstep — a bleed that stops
+   matching the nav's padding moves every row sideways.
+   `theme-contract.test.tsx` derives both from `.settings-nav` and
+   pins them, along with `flex`, `min-height` and `gap`.
+
+   `scrollbar-gutter: stable` reserves the space permanently so no row
+   jumps sideways the moment the bar appears — which it does on Windows
+   and Linux, where classic scrollbars take layout width (and on macOS
+   under "Show scroll bars: Always"). Under an overlay scrollbar the
+   gutter is zero and every row's box is unchanged from before this
+   rule existed.
+
+   Do NOT add a `::-webkit-scrollbar` block here — see
+   `.sidebar-list--dense` for why the universal `scrollbar-width: thin`
+   rule has to stay in charge. */
+.settings-nav__sections {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-height: 0;
+  margin-inline: -8px;
+  padding-inline: 8px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
 /* Section row: caret gutter + label button. Every row reserves the
    24px gutter (caret button or spacer) so section labels align whether
    or not the section expands into a sublist. The gutter is 24px rather

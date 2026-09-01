@@ -376,106 +376,113 @@ export function SettingsScreen(props: {
         {/* Group label between Exit and the section list. */}
         <p className="settings-nav__group-label">General</p>
 
-        {ORDERED_SECTIONS.map((item) => {
-          const isGroup = SETTINGS_NAV_GROUPS.has(item.id);
-          const open = openGroups[item.id] === true;
-          const sublistId = `settings-nav-sublist-${item.id}`;
-          // Plugins keeps its long-standing contract: the MCPs child —
-          // the pane's whole content — carries the active state, not
-          // the parent row.
-          const groupHoldsRoute = section === item.id;
-          const parentActive =
-            groupHoldsRoute
-            && route.sub === undefined
-            && item.id !== "plugins";
-          // A collapsed group hides its aria-current child inside an
-          // aria-hidden, inert sublist, so the parent row takes over
-          // the marker — the nav must always show where the operator
-          // is (this also covers collapsed Plugins).
-          const parentMarksRoute =
-            parentActive || (isGroup && !open && groupHoldsRoute);
-          const children = isGroup ? navChildren(item.id) : [];
-          return (
-            <Fragment key={item.id}>
-              <div
-                className={`settings-nav__row${parentMarksRoute ? " is-active" : ""}`}
-              >
-                {isGroup ? (
-                  <button
-                    aria-controls={sublistId}
-                    aria-expanded={open}
-                    aria-label={`${open ? "Collapse" : "Expand"} ${item.label}`}
-                    className="settings-nav__caret"
-                    type="button"
-                    onClick={() => toggleGroup(item.id)}
-                  >
+        {/* Section list is its own scroll container so the masthead and
+            Exit stay pinned. The nav itself is `overflow: hidden`; with
+            the rows as direct children the list clipped instead of
+            scrolling, and at the 640px minimum window height its tail
+            was unreachable by pointer. See `.settings-nav__sections`. */}
+        <div className="settings-nav__sections">
+          {ORDERED_SECTIONS.map((item) => {
+            const isGroup = SETTINGS_NAV_GROUPS.has(item.id);
+            const open = openGroups[item.id] === true;
+            const sublistId = `settings-nav-sublist-${item.id}`;
+            // Plugins keeps its long-standing contract: the MCPs child —
+            // the pane's whole content — carries the active state, not
+            // the parent row.
+            const groupHoldsRoute = section === item.id;
+            const parentActive =
+              groupHoldsRoute
+              && route.sub === undefined
+              && item.id !== "plugins";
+            // A collapsed group hides its aria-current child inside an
+            // aria-hidden, inert sublist, so the parent row takes over
+            // the marker — the nav must always show where the operator
+            // is (this also covers collapsed Plugins).
+            const parentMarksRoute =
+              parentActive || (isGroup && !open && groupHoldsRoute);
+            const children = isGroup ? navChildren(item.id) : [];
+            return (
+              <Fragment key={item.id}>
+                <div
+                  className={`settings-nav__row${parentMarksRoute ? " is-active" : ""}`}
+                >
+                  {isGroup ? (
+                    <button
+                      aria-controls={sublistId}
+                      aria-expanded={open}
+                      aria-label={`${open ? "Collapse" : "Expand"} ${item.label}`}
+                      className="settings-nav__caret"
+                      type="button"
+                      onClick={() => toggleGroup(item.id)}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`settings-nav__caret-mark${open ? " is-open" : ""}`}
+                      />
+                    </button>
+                  ) : (
                     <span
                       aria-hidden="true"
-                      className={`settings-nav__caret-mark${open ? " is-open" : ""}`}
+                      className="settings-nav__caret-spacer"
                     />
+                  )}
+                  <button
+                    aria-current={parentMarksRoute ? "page" : undefined}
+                    className={`settings-nav__button${parentMarksRoute ? " is-active" : ""}`}
+                    type="button"
+                    onClick={() => openRoute(item.id)}
+                  >
+                    {item.label}
                   </button>
-                ) : (
-                  <span
-                    aria-hidden="true"
-                    className="settings-nav__caret-spacer"
-                  />
-                )}
-                <button
-                  aria-current={parentMarksRoute ? "page" : undefined}
-                  className={`settings-nav__button${parentMarksRoute ? " is-active" : ""}`}
-                  type="button"
-                  onClick={() => openRoute(item.id)}
-                >
-                  {item.label}
-                </button>
-              </div>
-              {isGroup ? (
-                <div
-                  aria-hidden={!open}
-                  className={`settings-nav__sublist${open ? " is-open" : ""}`}
-                  id={sublistId}
-                  inert={open ? undefined : true}
-                >
-                  <div className="settings-nav__sublist-clip">
-                    {children.map((child) => {
-                      const childActive =
-                        section === item.id && route.sub === child.sub;
-                      return (
-                        <button
-                          key={child.key}
-                          aria-current={childActive ? "page" : undefined}
-                          className={`settings-nav__subbutton${
-                            childActive ? " is-active" : ""
-                          }`}
-                          type="button"
-                          onClick={() => openRoute(item.id, child.sub)}
-                        >
-                          {child.dot ? (
-                            <span
-                              aria-hidden="true"
-                              className={`settings-nav__subdot settings-nav__subdot--${child.dot}`}
-                            />
-                          ) : null}
-                          <span className="settings-nav__sublabel">
-                            {child.label}
-                          </span>
-                          {child.chip ? (
-                            <span className="settings-nav__subchip">
-                              {child.chip}
-                            </span>
-                          ) : null}
-                        </button>
-                      );
-                    })}
-                  </div>
                 </div>
-              ) : null}
-              {item.id === SETTINGS_NAV_DIVIDER_AFTER ? (
-                <hr className="settings-nav__divider" />
-              ) : null}
-            </Fragment>
-          );
-        })}
+                {isGroup ? (
+                  <div
+                    aria-hidden={!open}
+                    className={`settings-nav__sublist${open ? " is-open" : ""}`}
+                    id={sublistId}
+                    inert={open ? undefined : true}
+                  >
+                    <div className="settings-nav__sublist-clip">
+                      {children.map((child) => {
+                        const childActive =
+                          section === item.id && route.sub === child.sub;
+                        return (
+                          <button
+                            key={child.key}
+                            aria-current={childActive ? "page" : undefined}
+                            className={`settings-nav__subbutton${
+                              childActive ? " is-active" : ""
+                            }`}
+                            type="button"
+                            onClick={() => openRoute(item.id, child.sub)}
+                          >
+                            {child.dot ? (
+                              <span
+                                aria-hidden="true"
+                                className={`settings-nav__subdot settings-nav__subdot--${child.dot}`}
+                              />
+                            ) : null}
+                            <span className="settings-nav__sublabel">
+                              {child.label}
+                            </span>
+                            {child.chip ? (
+                              <span className="settings-nav__subchip">
+                                {child.chip}
+                              </span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : null}
+                {item.id === SETTINGS_NAV_DIVIDER_AFTER ? (
+                  <hr className="settings-nav__divider" />
+                ) : null}
+              </Fragment>
+            );
+          })}
+        </div>
       </nav>
 
       {/* Right pane — its own header (breadcrumb + MessagingStatusBar)

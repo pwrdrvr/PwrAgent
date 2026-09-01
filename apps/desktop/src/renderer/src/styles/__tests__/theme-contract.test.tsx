@@ -57,6 +57,21 @@ function extractRuleBody(source: string, selector: string): string {
   return ruleMatch.groups.body;
 }
 
+/**
+ * The Settings nav's horizontal inset, read off its `padding` shorthand.
+ * Two tests need it — one checks it equals the sidebar's lane inset, the
+ * other that `.settings-nav__sections` bleeds and re-insets by exactly it —
+ * and a copy of the shorthand regex in each is one edit away from drifting.
+ * NaN when the shorthand stops matching, so callers can guard once.
+ */
+function settingsNavInset(source: string): number {
+  return Number(
+    extractRuleBody(source, ".settings-nav").match(
+      /\n\s*padding:\s*0\s+(\d+)px\s+\d+px;/,
+    )?.[1],
+  );
+}
+
 /** First `z-index` in a rule body, NaN when the rule declares none. */
 function readZIndex(rule: string): number {
   return Number(rule.match(/z-index:\s*(\d+);/)?.[1] ?? Number.NaN);
@@ -1766,11 +1781,7 @@ describe("Tangerine Terminal theme contract", () => {
     const sidebar = extractRuleBody(css, ".sidebar");
     const lane = Number(sidebar.match(/--sidebar-lane-inset:\s*(\d+)px;/)?.[1]);
     const rail = Number(sidebar.match(/--sidebar-rail-inset:\s*(\d+)px;/)?.[1]);
-    const navLane = Number(
-      extractRuleBody(css, ".settings-nav").match(
-        /\n\s*padding:\s*0\s+(\d+)px\s+\d+px;/,
-      )?.[1],
-    );
+    const navLane = settingsNavInset(css);
     expect(navLane).toBe(lane);
 
     // Brand x, macOS: both mastheads reserve the stoplight gutter from
@@ -1798,6 +1809,57 @@ describe("Tangerine Terminal theme contract", () => {
     ]) {
       expect(navLane + Number(css.match(override)?.[1])).toBe(rail);
     }
+  });
+
+  it("scrolls the Settings nav's section list without letting the reserved gutter move the rows", () => {
+    // Regression guard. `.settings-nav` clips (that is what keeps the
+    // bleed below from escaping the column), so the section list needs a
+    // scroll container of its own or its tail is simply unreachable at
+    // the 640px minimum window height. The nav must KEEP clipping — the
+    // fix is the inner lane, not `overflow: auto` on the nav, which would
+    // scroll the brand out from under the stoplights.
+    const nav = extractRuleBody(css, ".settings-nav");
+    expect(nav).toContain("overflow: hidden;");
+
+    const lane = extractRuleBody(css, ".settings-nav__sections");
+    expect(lane).toContain("overflow-y: auto;");
+    // `flex: 1` + `min-height: 0` is what lets the lane fill the nav column
+    // and then shrink below its content. Drop the `flex` and the lane sizes
+    // to its content instead: it still scrolls (flex-shrink covers that), but
+    // it stops spanning the column, so the scrollbar track no longer reaches
+    // the nav's full height. Measured: 523px tall becomes 499px.
+    expect(lane).toContain("flex: 1;");
+    expect(lane).toContain("min-height: 0;");
+
+    // Same bleed-then-re-inset move as `.sidebar-list--dense`, and it must
+    // land back on the nav's OWN inset — Exit and the GENERAL label sit
+    // outside the scroller, so a lane that re-insets to anything else moves
+    // every row sideways relative to the chrome above it. Derive both from
+    // the nav's padding rather than repeating the number: this rule was
+    // written against the pre-#1901 16px nav and went stale the same week
+    // that padding moved to the 8px lane.
+    const navInset = settingsNavInset(css);
+    expect(navInset).toBeGreaterThan(0);
+    expect(lane).toMatch(new RegExp(`margin-inline:\\s*-${navInset}px;`));
+    expect(lane).toMatch(new RegExp(`padding-inline:\\s*${navInset}px;`));
+
+    // The rows lost the nav's own `gap` when they moved into the lane, so
+    // the lane has to restate it or the list re-spaces itself. Guarded like
+    // `navInset` above, so a nav gap this regex stops matching reports the
+    // nav rather than blaming the lane for not containing "gap: undefined;".
+    const navGap = nav.match(/\n\s*gap:\s*(\d+px);/)?.[1];
+    expect(navGap).toBeDefined();
+    expect(lane).toContain(`gap: ${navGap};`);
+
+    // Without a reserved gutter every row would jump sideways the moment a
+    // classic scrollbar appeared (Windows and Linux always; macOS under
+    // "Show scroll bars: Always"), because the bar takes layout width.
+    expect(lane).toContain("scrollbar-gutter: stable;");
+
+    // Defining a `::-webkit-scrollbar` block here would override the
+    // universal `scrollbar-width: thin` and reintroduce the classic-mode
+    // fat-bar flicker — the same trap the sidebar lanes are guarded from.
+    expect(css).not.toMatch(/\.settings-nav__sections::-webkit-scrollbar/);
   });
 
   it("applies a thin, themed scrollbar to every scroller via the universal selector (scrollbar-width does not inherit)", () => {

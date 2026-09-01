@@ -770,6 +770,54 @@ describe("SettingsScreen", () => {
     );
   });
 
+  it("keeps every section row inside the scrolling lane and the chrome outside it", () => {
+    // Regression guard for the clipped nav. `.settings-nav` is
+    // `overflow: hidden`, so a section row rendered as a direct child of
+    // the nav does not scroll — it is painted below the clip and no
+    // pointer can reach it. At the 640px MAIN_WINDOW_MIN_HEIGHT that was
+    // the whole tail of the list (Experimental, Troubleshooting, About).
+    //
+    // jsdom has no layout, so this cannot assert the geometry; what it
+    // can pin is the structural invariant the geometry rests on — every
+    // row inside the lane, and the masthead + Exit deliberately outside
+    // it so they stay put while the list scrolls under them.
+    const { container } = render(
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
+    );
+
+    const nav = container.querySelector(".settings-nav");
+    const lane = container.querySelector(".settings-nav__sections");
+    expect(nav).not.toBeNull();
+    expect(lane).not.toBeNull();
+
+    // Every scrolling part, not just the rows: the collapsible sublists and
+    // the divider come out of the same map, and a refactor that hoisted the
+    // sublists out — to stop the scroller clipping them, say — would leave a
+    // rows-only assertion green while group children stopped scrolling with
+    // their parent row.
+    for (const selector of [
+      ".settings-nav__row",
+      ".settings-nav__sublist",
+      ".settings-nav__divider",
+    ]) {
+      const members = [...container.querySelectorAll(selector)];
+      expect(members.length).toBeGreaterThan(0);
+      for (const member of members) {
+        expect(lane?.contains(member)).toBe(true);
+      }
+    }
+
+    // The pinned chrome is a sibling of the lane, not a passenger in it.
+    for (const selector of [".settings-nav__masthead", ".settings-nav__exit"]) {
+      const chrome = container.querySelector(selector);
+      expect(chrome).not.toBeNull();
+      expect(chrome?.parentElement).toBe(nav);
+    }
+  });
+
   it("switches sections and saves settings", async () => {
     const settings = createSettingsState();
     const desktopApi = {
