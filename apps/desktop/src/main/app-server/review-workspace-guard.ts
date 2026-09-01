@@ -1,4 +1,5 @@
 import type { AppServerReviewTarget, PrSummary } from "@pwragent/shared";
+import { normalizeFullRef } from "../../shared/review-command";
 import { runGitCommand } from "./git-executable";
 import {
   resolveGitHubReposForDirectory,
@@ -26,16 +27,6 @@ export function prMatchesRepository(pr: PrSummary, repo: GitHubRepoRef): boolean
   return pr.provider.trim().toLowerCase() === repo.host.toLowerCase()
     && pr.org.trim().toLowerCase() === repo.owner.toLowerCase()
     && pr.repo.trim().toLowerCase() === repo.repo.toLowerCase();
-}
-
-export function normalizeFullRef(ref: string): string {
-  const normalized = ref.trim();
-  const localMatch = normalized.match(/^refs\/heads\/(.+)$/);
-  if (localMatch?.[1]) {
-    return localMatch[1];
-  }
-  const remoteMatch = normalized.match(/^refs\/remotes\/[^/]+\/(.+)$/);
-  return remoteMatch?.[1] ?? normalized;
 }
 
 async function resolveLocalTargetBranch(

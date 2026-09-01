@@ -192,7 +192,7 @@ import { PerKeyAsyncLock } from "../../util/per-key-async-lock.js";
 import { DeterministicInteractionMapper } from "./deterministic-interaction-mapper.js";
 import { actionsForIntent } from "./deterministic-interaction-mapper.js";
 import {
-  normalizeReviewConfidenceScore,
+  normalizeReviewOutputRecord,
   parseReviewCommand,
 } from "../../../shared/review-command.js";
 import type { MessagingInteractionMapper } from "./interaction-mapper.js";
@@ -20671,31 +20671,7 @@ function normalizeStructuredReviewOutput(
     asPlainRecord(data?.review_output) ??
     asPlainRecord(item.reviewOutput) ??
     asPlainRecord(item.review_output);
-  const findings = Array.isArray(reviewOutput?.findings)
-    ? reviewOutput.findings
-    : undefined;
-
-  if (
-    !reviewOutput ||
-    !findings ||
-    (reviewOutput.overall_correctness !== "patch is correct" &&
-      reviewOutput.overall_correctness !== "patch is incorrect") ||
-    typeof reviewOutput.overall_explanation !== "string"
-  ) {
-    return undefined;
-  }
-
-  const confidenceScore = normalizeReviewConfidenceScore(
-    reviewOutput.overall_confidence_score,
-  );
-  return {
-    findings: findings as NonNullable<AppServerThreadReviewEntry["output"]>["findings"],
-    overall_correctness: reviewOutput.overall_correctness,
-    overall_explanation: reviewOutput.overall_explanation,
-    ...(confidenceScore === undefined
-      ? {}
-      : { overall_confidence_score: confidenceScore }),
-  };
+  return normalizeReviewOutputRecord(reviewOutput);
 }
 
 function isPlanStepStatus(value: unknown): value is AppServerThreadPlanEntry["steps"][number]["status"] {

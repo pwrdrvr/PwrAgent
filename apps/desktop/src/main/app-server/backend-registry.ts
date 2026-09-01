@@ -15658,12 +15658,20 @@ export class DesktopBackendRegistry {
       return undefined;
     }
     try {
-      const thread = await this.findThreadForWorkspaceHandoff({
+      // Read the remembered summary directly rather than through
+      // `findThreadForWorkspaceHandoff`, which falls through to `thread/list`
+      // on a miss. `resolveThreadEnvironmentCwd` already looked this thread up
+      // moments ago; provenance is reporting and must not add an uncached
+      // round trip to the app server before the review starts. The enriched
+      // row carries directory labels, so prefer it and settle for the plain
+      // row — a basename label beats a blocked review.
+      const threadKey = {
         backend: params.backend,
-        callerReason: "review-provenance",
-        freshness: "last-known",
         threadId: params.threadId,
-      });
+      };
+      const thread =
+        this.threadInfoStore.getSummary(threadKey, { requireEnriched: true })
+        ?? this.threadInfoStore.getSummary(threadKey);
       return await resolveReviewProvenance({
         cwd: params.cwd,
         ...(params.executionTarget
@@ -36112,7 +36120,19 @@ export class DesktopBackendRegistry {
     const record =
       this.activeReviewSubAgents.get(reviewKey)
       ?? this.reviewSubAgentsByReviewTurn.get(reviewKey);
-    if (!record || readRecord(item.data)?.reviewer) {
+    if (!record) {
+      return event;
+    }
+    const data = readRecord(item.data) ?? {};
+    // Each field guards itself. Keying the whole decoration off `reviewer`
+    // made a later field's delivery depend on an unrelated field's absence:
+    // an item that already carried a reviewer would silently ship without
+    // provenance.
+    const additions = {
+      ...(data.reviewer ? {} : { reviewer: reviewEntryReviewer(record) }),
+      ...(record.context && !data.context ? { context: record.context } : {}),
+    };
+    if (Object.keys(additions).length === 0) {
       return event;
     }
     return {
@@ -36124,9 +36144,8 @@ export class DesktopBackendRegistry {
           item: {
             ...item,
             data: {
-              ...(readRecord(item.data) ?? {}),
-              reviewer: reviewEntryReviewer(record),
-              ...(record.context ? { context: record.context } : {}),
+              ...data,
+              ...additions,
             },
           },
         },

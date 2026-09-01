@@ -1,4 +1,4 @@
-import type { AppServerReviewTarget } from "@pwragent/shared";
+import type { AppServerReviewOutput, AppServerReviewTarget } from "@pwragent/shared";
 
 export type ParsedReviewCommand = {
   target: AppServerReviewTarget;
@@ -179,4 +179,84 @@ export function normalizeReviewConfidenceScore(
     && value <= 1
     ? value
     : undefined;
+}
+
+/**
+ * Reduce a Git ref to the branch name both sides of a comparison can agree on.
+ *
+ * The same branch reaches us written three ways: `refs/heads/main` from Git
+ * plumbing, `origin/main` from a review target the operator picked, and bare
+ * `main` from the GitHub API. Comparing the raw strings makes those three
+ * different branches.
+ */
+export function normalizeFullRef(ref: string): string {
+  const normalized = ref.trim();
+  const localMatch = normalized.match(/^refs\/heads\/(.+)$/);
+  if (localMatch?.[1]) {
+    return localMatch[1];
+  }
+  const remoteMatch = normalized.match(/^refs\/remotes\/[^/]+\/(.+)$/);
+  return remoteMatch?.[1] ?? normalized;
+}
+
+/**
+ * Whether a review's base target names something other than the pull request's
+ * own base — the stacked-branch case, where the operator skipped past the
+ * branch below to compare against `origin/main` directly.
+ *
+ * A remote-qualified target still names the pull request's base, so `main`,
+ * `origin/main`, and `refs/remotes/origin/main` all have to compare equal to
+ * GitHub's bare `main`. Answering `false` when either side is unknown keeps a
+ * missing value from reading as a deliberate override.
+ */
+export function reviewComparedPastPullRequestBase(
+  baseBranch: string | undefined,
+  pullRequestBase: string | undefined,
+): boolean {
+  const base = normalizeFullRef(baseBranch ?? "");
+  const pullRequest = normalizeFullRef(pullRequestBase ?? "");
+  if (!base || !pullRequest) {
+    return false;
+  }
+  return base !== pullRequest && !base.endsWith(`/${pullRequest}`);
+}
+
+/**
+ * Validate a candidate structured review output.
+ *
+ * Four surfaces normalize this shape — the Codex client, the messaging
+ * controller, the renderer's session state, and the managed-review parser —
+ * and a copy that falls behind does not fail loudly: it returns `undefined`
+ * and the card silently loses its verdict, explanation, and every finding. The
+ * validation therefore lives in one place that main and the renderer can both
+ * import; callers keep only their own shape-digging.
+ */
+export function normalizeReviewOutputRecord(
+  value: unknown,
+): AppServerReviewOutput | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const findings = Array.isArray(record.findings) ? record.findings : undefined;
+  if (
+    !findings
+    || (record.overall_correctness !== "patch is correct"
+      && record.overall_correctness !== "patch is incorrect")
+    || typeof record.overall_explanation !== "string"
+  ) {
+    return undefined;
+  }
+
+  const confidenceScore = normalizeReviewConfidenceScore(
+    record.overall_confidence_score,
+  );
+  return {
+    findings: findings as AppServerReviewOutput["findings"],
+    overall_correctness: record.overall_correctness,
+    overall_explanation: record.overall_explanation,
+    ...(confidenceScore === undefined
+      ? {}
+      : { overall_confidence_score: confidenceScore }),
+  };
 }

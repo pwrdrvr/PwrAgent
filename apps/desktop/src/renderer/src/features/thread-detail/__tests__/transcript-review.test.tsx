@@ -183,7 +183,9 @@ describe("TranscriptReview provenance", () => {
       org: "pwrdrvr",
       repo: "PwrAgent",
       number: 1918,
-      baseRefName: "origin/main",
+      // GitHub reports the bare branch name. Writing `origin/main` here was
+      // what let the raw string comparison in `formatBranchLabel` pass.
+      baseRefName: "main",
       url: "https://github.com/pwrdrvr/PwrAgent/pull/1918",
     },
   } as const;
@@ -224,22 +226,28 @@ describe("TranscriptReview provenance", () => {
     ).toBeInTheDocument();
   });
 
-  it("shows the base only when it is not the pull request's own", () => {
+  it("treats a remote-qualified target as the pull request's own base", () => {
+    // The ordinary review: target `origin/main`, GitHub base `main`. The
+    // summary line already says it, so the chip does not repeat it.
     renderReview({ context });
-    // Same base as the PR: the summary line already says it, so the chip does
-    // not repeat it.
+
     expect(screen.getByLabelText("What was reviewed")).not.toHaveTextContent(
       "→"
     );
-    cleanup();
+  });
 
+  it("shows the base when the review skipped past the pull request's own", () => {
     renderReview({
       context: {
         ...context,
         gitBranch: "feat/star-map-float",
-        pullRequest: { ...context.pullRequest, baseRefName: "feat/star-map-layer" },
+        pullRequest: {
+          ...context.pullRequest,
+          baseRefName: "feat/star-map-layer",
+        },
       },
     });
+
     expect(screen.getByLabelText("What was reviewed")).toHaveTextContent(
       "feat/star-map-float → origin/main"
     );

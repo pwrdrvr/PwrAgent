@@ -108,8 +108,8 @@ import {
   type ThreadDirectoryEnrichment,
 } from "../app-server/thread-directory-enricher";
 import {
-  normalizeReviewConfidenceScore,
   normalizeReviewDisplayText,
+  normalizeReviewOutputRecord,
 } from "../../shared/review-command";
 import {
   formatDynamicToolOutput,
@@ -2933,31 +2933,7 @@ function normalizeReviewOutput(
     asRecord(data?.review_output) ??
     asRecord(item.reviewOutput) ??
     asRecord(item.review_output);
-  const findings = Array.isArray(reviewOutput?.findings)
-    ? reviewOutput.findings
-    : undefined;
-
-  if (
-    !reviewOutput ||
-    !findings ||
-    (reviewOutput.overall_correctness !== "patch is correct" &&
-      reviewOutput.overall_correctness !== "patch is incorrect") ||
-    typeof reviewOutput.overall_explanation !== "string"
-  ) {
-    return undefined;
-  }
-
-  const confidenceScore = normalizeReviewConfidenceScore(
-    reviewOutput.overall_confidence_score,
-  );
-  return {
-    findings: findings as NonNullable<AppServerThreadReviewEntry["output"]>["findings"],
-    overall_correctness: reviewOutput.overall_correctness,
-    overall_explanation: reviewOutput.overall_explanation,
-    ...(confidenceScore === undefined
-      ? {}
-      : { overall_confidence_score: confidenceScore }),
-  };
+  return normalizeReviewOutputRecord(reviewOutput);
 }
 
 function reviewDisplayText(item: Record<string, unknown>): string | undefined {

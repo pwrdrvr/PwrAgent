@@ -1,4 +1,5 @@
 import type { AppServerReviewContext } from "@pwragent/shared";
+import { reviewComparedPastPullRequestBase } from "../../../../shared/review-command";
 import { BranchIcon } from "../../icons/BranchIcon";
 import { FolderIcon } from "../../icons/FolderIcon";
 import { WorktreeIcon } from "../../icons/WorktreeIcon";
@@ -94,10 +95,16 @@ function formatBranchLabel(
     return undefined;
   }
   const base = context.baseBranch?.trim();
-  const pullRequestBase = context.pullRequest?.baseRefName?.trim();
-  const comparedPastPullRequestBase =
-    Boolean(base) && Boolean(pullRequestBase) && base !== pullRequestBase;
-  return comparedPastPullRequestBase ? `${branch} → ${base}` : branch;
+  // GitHub reports a bare `main` while a review target is usually written
+  // `origin/main`, so the two have to be compared as refs. Comparing the raw
+  // strings put the arrow on every ordinary review and hid it on the stacked
+  // one it exists for.
+  return reviewComparedPastPullRequestBase(
+    base,
+    context.pullRequest?.baseRefName,
+  )
+    ? `${branch} → ${base}`
+    : branch;
 }
 
 function formatWorkspaceTooltip(context: AppServerReviewContext): string {

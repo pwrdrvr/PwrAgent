@@ -275,8 +275,12 @@ function renderReviewMarkdown(review: AppServerThreadReviewEntry): string {
     // line anyway would put "undefined" — or a substituted zero — where a
     // judgement is supposed to be.
     if (review.output.overall_confidence_score !== undefined) {
+      // Percent, matching the desktop card. One number rendered two ways
+      // across two surfaces is the ambiguity this field already suffered from.
       lines.push(
-        `- Confidence in verdict: ${review.output.overall_confidence_score}`,
+        `- Confidence in verdict: ${Math.round(
+          review.output.overall_confidence_score * 100,
+        )}%`,
       );
     }
     if (

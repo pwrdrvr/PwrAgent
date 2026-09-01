@@ -5,9 +5,9 @@ import type {
   LinkedDirectorySummary,
   PrSummary,
 } from "@pwragent/shared";
+import { normalizeFullRef } from "../../shared/review-command";
 import { runGitCommand } from "./git-executable";
 import {
-  normalizeFullRef,
   normalizeWorkspacePath,
   prBelongsToWorkspace,
   prMatchesRepository,
@@ -48,7 +48,16 @@ function resolveProjectLabel(
   if (label) {
     return label;
   }
-  return normalizeWorkspacePath(workspacePath).split("/").pop() || undefined;
+  // Not `normalizeWorkspacePath`: it case-folds a Windows drive-letter path so
+  // two paths can be compared, which would label `C:\Users\dev\PwrAgent` as
+  // "pwragent". A displayed name keeps the casing the operator gave it.
+  return workspacePath
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/\/+$/, "")
+    .split("/")
+    .pop()
+    || undefined;
 }
 
 async function resolveCheckedOutBranch(

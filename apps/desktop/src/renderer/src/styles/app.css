@@ -20370,10 +20370,11 @@ a.transcript-message__messaging-origin:focus-visible {
   line-height: normal;
 }
 
+/* `.path-copy-target` on the same element already supplies `cursor: pointer`
+   and the hover brightness. */
 .review-chip--project {
   border-color: transparent;
   background: var(--accent-soft);
-  cursor: pointer;
 }
 
 .review-chip--project:hover,
