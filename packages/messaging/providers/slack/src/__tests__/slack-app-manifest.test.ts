@@ -91,6 +91,8 @@ describe("buildSlackCreateAppUrl", () => {
     expect(prepared.fullUrl).toBe(prepared.url);
     expect(prepared.url.startsWith(`${SLACK_CREATE_APP_URL_BASE}&manifest_json=`))
       .toBe(true);
+    expect(prepared.manifestJson).toBe(slackAppManifestJson());
+    expect(prepared.manifestJson).toContain('\n  "display_information": {\n');
   });
 
   it("falls back to the bare create-app page when the query is oversized", () => {

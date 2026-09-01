@@ -1,5 +1,6 @@
 import {
   buildOfficialSlackAppManifest,
+  slackAppManifestJson,
   type SlackAppManifest,
 } from "./slack-app-manifest.ts";
 
@@ -31,9 +32,10 @@ export function buildSlackCreateAppUrl(
   options: BuildSlackCreateAppUrlOptions = {},
 ): SlackCreateAppUrl {
   const manifest = options.manifest ?? buildOfficialSlackAppManifest();
-  const manifestJson = JSON.stringify(manifest);
+  const compactManifestJson = JSON.stringify(manifest);
+  const manifestJson = slackAppManifestJson(manifest);
   const fullUrl =
-    `${SLACK_CREATE_APP_URL_BASE}&manifest_json=${encodeURIComponent(manifestJson)}`;
+    `${SLACK_CREATE_APP_URL_BASE}&manifest_json=${encodeURIComponent(compactManifestJson)}`;
   const maxLength = options.maxLength ?? SLACK_CREATE_APP_URL_MAX_LENGTH;
   const oversized = fullUrl.length > maxLength;
   return {
