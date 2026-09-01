@@ -117,6 +117,11 @@ const federationMock = vi.hoisted(() => {
     remoteBackend,
     remoteThreadSummaries,
     runtime: {
+      connectedPeerTargets: vi.fn((): Array<{
+        target: { scope: "remote"; instanceId: string };
+        label: string;
+        capabilities: string[];
+      }> => []),
       health: vi.fn(async () => ({ instanceId: "pwr_local" })),
       hydrateThreadMessageOrigins: vi.fn(async (response) => response),
       remoteBackend: vi.fn(() => remoteBackend),
@@ -1017,6 +1022,8 @@ describe("app server ipc", () => {
     federationMock.remoteBackend.listWorktreeUnpublishedCommits.mockClear();
     federationMock.remoteBackend.getWorktreeUnpublishedCommitDiff.mockClear();
     federationMock.runtime.remoteBackend.mockClear();
+    federationMock.runtime.connectedPeerTargets.mockReset();
+    federationMock.runtime.connectedPeerTargets.mockReturnValue([]);
     federationMock.runtime.remoteTargetSupportsCapability.mockReset();
     federationMock.runtime.remoteTargetSupportsCapability.mockReturnValue(true);
     federationMock.runtime.hydrateThreadMessageOrigins.mockClear();
@@ -4222,6 +4229,111 @@ describe("app server ipc", () => {
       ghAvailable: true,
       prs: [],
     });
+  });
+
+  it("skips remote PR refresh when the attached profile lacks navigation support", async () => {
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "pwr_owner",
+    };
+    federationMock.runtime.remoteTargetSupportsCapability.mockReturnValueOnce(
+      false,
+    );
+    federationMock.runtime.connectedPeerTargets.mockReturnValueOnce([
+      {
+        target: federationTarget,
+        label: "Mac-Mini-M4 / dev",
+        capabilities: [],
+      },
+    ]);
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      { sender: { id: 999 } },
+      {
+        backend: "codex",
+        threadId: "thread-remote",
+        trigger: "scheduled",
+        branch: "fix/remote-pr-refresh",
+        directoryPaths: ["/remote/repo"],
+        federationTarget,
+      },
+    );
+
+    expect(
+      federationMock.remoteBackend.refreshThreadPullRequests,
+    ).not.toHaveBeenCalled();
+    expect(response).toEqual({
+      backend: "codex",
+      threadId: "thread-remote",
+      provider: "github.com",
+      ghAvailable: false,
+      prs: [],
+      refreshStarted: false,
+      skippedReason: "remote_refresh_unsupported",
+    });
+    expect(mockAppServerLog.info).toHaveBeenCalledWith(
+      "thread PR refresh skipped: attached instance \"Mac-Mini-M4 / dev\" does not support remote PR refresh",
+      {
+        backend: "codex",
+        instanceId: "pwr_owner",
+        reason: "missing-thread-navigation-capability",
+        threadId: "thread-remote",
+      },
+    );
+  });
+
+  it("degrades missing remote PR refresh methods without surfacing an IPC error", async () => {
+    const { NAVIGATION_REFRESH_THREAD_PRS_CHANNEL } = await import("../../shared/ipc");
+    const federationTarget = {
+      scope: "remote" as const,
+      instanceId: "pwr_owner",
+    };
+    federationMock.runtime.connectedPeerTargets.mockReturnValueOnce([
+      {
+        target: federationTarget,
+        label: "Mac-Mini-M4 / default",
+        capabilities: ["thread_navigation"],
+      },
+    ]);
+    federationMock.remoteBackend.refreshThreadPullRequests.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "method_not_found: No federation handler registered for backend.refreshThreadPullRequests",
+        ),
+        { code: "method_not_found" },
+      ),
+    );
+    registerAppServerIpcHandlers();
+
+    const response = await handlers.get(NAVIGATION_REFRESH_THREAD_PRS_CHANNEL)?.(
+      { sender: { id: 999 } },
+      {
+        backend: "codex",
+        threadId: "thread-remote",
+        trigger: "scheduled",
+        branch: "fix/remote-pr-refresh",
+        directoryPaths: ["/remote/repo"],
+        federationTarget,
+      },
+    );
+
+    expect(response).toMatchObject({
+      backend: "codex",
+      threadId: "thread-remote",
+      refreshStarted: false,
+      skippedReason: "remote_refresh_unsupported",
+    });
+    expect(mockAppServerLog.info).toHaveBeenCalledWith(
+      "thread PR refresh skipped: attached instance \"Mac-Mini-M4 / default\" does not support remote PR refresh",
+      {
+        backend: "codex",
+        instanceId: "pwr_owner",
+        reason: "remote-method-not-found",
+        threadId: "thread-remote",
+      },
+    );
   });
 
   it("resolves federated PR refresh inputs from the owner's thread state", async () => {

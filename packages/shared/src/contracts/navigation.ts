@@ -1830,6 +1830,11 @@ export type RefreshThreadPullRequestsResponse = {
   lastStatusCheckAgeMs?: number;
   /** True when main accepted this request and started a provider refresh. */
   refreshStarted?: boolean;
+  /**
+   * Present when main intentionally skipped the refresh because the attached
+   * remote instance does not support this federation operation.
+   */
+  skippedReason?: "remote_refresh_unsupported";
   /** True when the host doesn't have `gh` installed; degrade silently. */
   ghAvailable: boolean;
   /**

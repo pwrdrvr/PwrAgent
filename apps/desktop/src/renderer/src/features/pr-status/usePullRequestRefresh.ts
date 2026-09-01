@@ -76,6 +76,9 @@ export function usePullRequestRefresh(params: {
           ...(federationTarget ? { federationTarget } : {}),
         })
         .then((response) => {
+          if (response.skippedReason) {
+            return;
+          }
           if (prSummariesEqual(thread.prs, response.prs)) {
             return;
           }
