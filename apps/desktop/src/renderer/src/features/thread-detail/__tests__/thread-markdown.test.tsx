@@ -878,6 +878,34 @@ describe("ThreadMarkdown", () => {
     expect(screen.getByText("Change the admission path as described")).toBeInTheDocument();
   });
 
+  it("keeps a three-level numbered outline nested so CSS can label 1.2 and 2.2.3", () => {
+    const { container } = render(
+      <ThreadMarkdown
+        text={[
+          "1. What?",
+          "   1. I'm testing something",
+          "   2. 2nd item on indented list... should be 1.2",
+          "2. Hi",
+          "   1. Your mom",
+          "   2. Is nice",
+          "      1. Like the real kinda nice",
+          "      2. Not making a mom joke",
+          "      3. this should be 2.2.3",
+        ].join("\n")}
+      />
+    );
+
+    const rootList = container.querySelector(".thread-markdown > ol.transcript-message__list");
+    expect(rootList).toHaveAttribute("role", "list");
+    expect(rootList?.querySelectorAll(":scope > li")).toHaveLength(2);
+    expect(rootList?.querySelectorAll(":scope > li:first-child > ol > li")).toHaveLength(2);
+    expect(rootList?.querySelectorAll(":scope > li:last-child > ol > li")).toHaveLength(2);
+    expect(
+      rootList?.querySelectorAll(":scope > li:last-child > ol > li:nth-child(2) > ol > li"),
+    ).toHaveLength(3);
+    expect(screen.getByText("this should be 2.2.3")).toBeInTheDocument();
+  });
+
   it("keeps composer-style hyphen-only bullet items visible", () => {
     const { container } = render(
       <ThreadMarkdown

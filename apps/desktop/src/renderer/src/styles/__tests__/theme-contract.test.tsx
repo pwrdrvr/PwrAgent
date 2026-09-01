@@ -1652,6 +1652,30 @@ describe("Tangerine Terminal theme contract", () => {
     expect(listRule).toContain("overflow-wrap: anywhere;");
   });
 
+  it("numbers nested ordered transcript lists as an outline instead of restarting at 1", () => {
+    const orderedListRule = extractRuleBody(css, "ol.transcript-message__list");
+    expect(orderedListRule).toContain("list-style: none;");
+    expect(orderedListRule).toContain("counter-reset: transcript-ol;");
+
+    const orderedItemRule = extractRuleBody(css, "ol.transcript-message__list > li");
+    expect(orderedItemRule).toContain("counter-increment: transcript-ol;");
+
+    const orderedMarkerRule = extractRuleBody(
+      css,
+      "ol.transcript-message__list > li::before",
+    );
+    expect(orderedMarkerRule).toContain("counters(transcript-ol, \".\")");
+
+    expect(css).toMatch(
+      /\.composer-tiptap-input__editor ol \{\n  list-style: none;\n  counter-reset: composer-ol;/,
+    );
+    const composerMarkerRule = extractRuleBody(
+      css,
+      ".composer-tiptap-input__editor ol > li::before",
+    );
+    expect(composerMarkerRule).toContain("counters(composer-ol, \".\")");
+  });
+
   it("bounds long transcript code and quote blocks with their own vertical scroll", () => {
     const preRule = extractRuleBody(css, ".transcript-message__pre");
     expect(preRule).toContain("max-height:");

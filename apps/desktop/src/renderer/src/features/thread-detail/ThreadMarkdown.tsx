@@ -595,7 +595,11 @@ export const ThreadMarkdown = memo(function ThreadMarkdown(props: ThreadMarkdown
         );
       },
       ol(listProps) {
-        return <ol className="transcript-message__list">{listProps.children}</ol>;
+        return (
+          <ol className="transcript-message__list" role="list">
+            {listProps.children}
+          </ol>
+        );
       },
       p(paragraphProps) {
         return (
