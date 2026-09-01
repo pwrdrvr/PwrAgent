@@ -10,7 +10,7 @@ afterPack: "scripts/afterpack-sign-dock-tile-plugin.mjs"
 # and is therefore not present in the deploy stage's node_modules.
 # Keep this in sync with the apps/desktop Electron version resolved in
 # pnpm-lock.yaml. CI enforces the exact packaged/runtime match.
-electronVersion: 41.10.5
+electronVersion: 41.10.6
 
 # Bundle layout
 asar: true
