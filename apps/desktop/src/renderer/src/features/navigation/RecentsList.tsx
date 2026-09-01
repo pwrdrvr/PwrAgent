@@ -140,10 +140,18 @@ export function RecentsList(props: RecentsListProps) {
     );
     return (
       <div className="subthread-list" role="list" aria-label={`Sub-threads of ${parent.title}`}>
-        {children.map((child) => {
+        {/* The parent's own workers lead its tray. Trailing them after every
+            child read as the last child's workers and buried them under a
+            long child list. */}
+        {nativeSubAgentCount > 0 ? (
+          <NativeSubAgentsDisclosure thread={parent} />
+        ) : null}
+        {children.flatMap((child) => {
           const childKey = threadSummaryIdentityKey(child);
           const rowDropKey = `${parentKey}:${childKey}`;
-          return (
+          // A row plus its own worker group, as siblings of this list. A
+          // wrapping element would break the tray's flat list semantics.
+          return [
             <ThreadRow
               key={childKey}
               approvalRequestThreadKeys={props.approvalRequestThreadKeys}
@@ -239,12 +247,19 @@ export function RecentsList(props: RecentsListProps) {
               onSetReaction={props.onSetReaction}
               onSetThreadPin={props.onSetThreadPin}
               onUnbindMessagingBinding={props.onUnbindMessagingBinding}
-            />
-          );
+            />,
+            // A child's workers belong to the child, so they render under its
+            // own row. They follow it out of this tray when it is unlinked,
+            // because the child summary is what carries them.
+            child.codexNativeSubAgents?.length ? (
+              <NativeSubAgentsDisclosure
+                key={`${childKey}:subagents`}
+                nested
+                thread={child}
+              />
+            ) : null,
+          ];
         })}
-        {nativeSubAgentCount > 0 ? (
-          <NativeSubAgentsDisclosure thread={parent} />
-        ) : null}
       </div>
     );
   };
