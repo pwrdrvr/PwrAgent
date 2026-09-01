@@ -3614,6 +3614,55 @@ export function readThreadCompactionBoundary(
   };
 }
 
+export type ObservedContextWindowDrop = {
+  cumulativeInputTokens: number;
+  currentContextTokens: number;
+  previousContextTokens: number;
+};
+
+/**
+ * Detect the safety-net compaction signal: a genuinely new model request whose
+ * working context is smaller than the preceding request's context.
+ *
+ * The cumulative input high-water mark rejects duplicate and stale usage
+ * emissions. Any backwards movement at a new request boundary means prior
+ * context left the window; whether Codex omitted the ContextCompaction item or
+ * another backend reports only usage, replay savings must stop there.
+ */
+export function detectObservedContextWindowDrop(params: {
+  cursor: ObservedContextReplayCursor | undefined;
+  tokenUsage: unknown;
+}): ObservedContextWindowDrop | undefined {
+  const previousContextTokens = params.cursor?.lastContextTokens;
+  if (
+    typeof previousContextTokens !== "number"
+    || previousContextTokens <= 0
+  ) {
+    return undefined;
+  }
+  const records = readTaskMonitorTokenUsageRecords(params.tokenUsage);
+  const cumulativeInputTokens = records?.totalUsage?.inputTokens;
+  const latest = records?.latestUsage;
+  const currentContextTokens = latest?.totalTokens
+    ?? (typeof latest?.inputTokens === "number"
+      ? latest.inputTokens + (latest.outputTokens ?? 0)
+      : undefined);
+  if (
+    typeof cumulativeInputTokens !== "number"
+    || cumulativeInputTokens <= params.cursor!.cumulativeInputTokens
+    || typeof currentContextTokens !== "number"
+    || currentContextTokens < 0
+    || currentContextTokens >= previousContextTokens
+  ) {
+    return undefined;
+  }
+  return {
+    cumulativeInputTokens,
+    currentContextTokens,
+    previousContextTokens,
+  };
+}
+
 // Pure core of the context-replay accumulator: fold one token-usage update into
 // a running per-turn tally, given the per-thread cursor. A replay is counted
 // only when the cumulative input grows past the cursor, the growing request
@@ -23303,6 +23352,7 @@ export class DesktopBackendRegistry {
     }
     await work.precedingDerivation;
     let derivedUsage: DerivedLiveThreadTokenUsage | undefined;
+    let contextDrop: ObservedContextWindowDrop | undefined;
     let observedReplays: ObservedContextReplayTally | undefined;
     let contextWindow: LiveThreadContextWindowObservation | undefined;
     try {
@@ -23345,6 +23395,12 @@ export class DesktopBackendRegistry {
         tokenUsage,
         turnId: notification.params.turnId ?? undefined,
       });
+      contextDrop = detectObservedContextWindowDrop({
+        cursor: this.liveThreadReplayInputCursor.get(
+          [event.backend, threadId].join(":"),
+        ),
+        tokenUsage,
+      });
       observedReplays = this.observeLiveThreadContextReplay({
         backend: event.backend,
         threadId,
@@ -23364,6 +23420,14 @@ export class DesktopBackendRegistry {
     }
     if (!derivedUsage) {
       return;
+    }
+    if (contextDrop) {
+      await this.handleInferredThreadCompaction({
+        backend: event.backend,
+        contextDrop,
+        threadId,
+        turnId: notification.params.turnId ?? undefined,
+      });
     }
 
     const overlay = await this.overlayStore.getThreadOverlayState({
@@ -27508,6 +27572,74 @@ export class DesktopBackendRegistry {
     }
   }
 
+  /**
+   * Persist the usage-only safety boundary unless a reported compaction is
+   * already waiting for this same post-boundary request.
+   *
+   * Reported markers are written before the next usage update and remain
+   * unattributed until that update reaches the pricing ledger. That pending
+   * state is the exact deduplication seam: an inferred marker is needed only
+   * when no such marker exists.
+   */
+  private async handleInferredThreadCompaction(params: {
+    backend: AppServerBackendKind;
+    contextDrop: ObservedContextWindowDrop;
+    threadId: string;
+    turnId?: string;
+  }): Promise<void> {
+    try {
+      const compactions = await this.overlayStore.listThreadCompactions?.({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+      if (compactions?.some((entry) => entry.coldUsageLineId === undefined)) {
+        return;
+      }
+      const observedAt = Date.now();
+      const recorded = await this.overlayStore.recordThreadCompaction?.({
+        compaction: {
+          backend: params.backend,
+          compactionId: buildThreadCompactionIdentity({
+            backend: params.backend,
+            cumulativeInputTokens: params.contextDrop.cumulativeInputTokens,
+            threadId: params.threadId,
+            turnId: params.turnId,
+          }),
+          observedAt,
+          threadId: params.threadId,
+          updatedAt: observedAt,
+          ...(params.turnId ? { turnId: params.turnId } : {}),
+        },
+      }) ?? true;
+      if (!recorded) {
+        return;
+      }
+      backendRegistryLog.warn("compaction inferred from context-window drop", {
+        backend: params.backend,
+        currentContextTokens: params.contextDrop.currentContextTokens,
+        previousContextTokens: params.contextDrop.previousContextTokens,
+        threadId: params.threadId,
+        turnId: params.turnId,
+      });
+      await this.stopTokenMiserReplayTrackingAtBoundary({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+    } catch (error) {
+      backendRegistryLog.warn("inferred compaction marker write failed", {
+        backend: params.backend,
+        error: error instanceof Error ? error.message : String(error),
+        threadId: params.threadId,
+      });
+      // The observed context drop is still authoritative enough to end replay
+      // accounting even when durable marker storage is unavailable.
+      await this.stopTokenMiserReplayTrackingAtBoundary({
+        backend: params.backend,
+        threadId: params.threadId,
+      });
+    }
+  }
+
   // The compaction notification carries no turn id, so recover it from the
   // active-turn set: compaction happens inside a turn, and attributing the
   // marker to that turn is what lets the pricing view group it under the work
@@ -27529,14 +27661,23 @@ export class DesktopBackendRegistry {
     event: AgentEvent,
   ): Promise<void> {
     const boundary = readThreadCompactionBoundary(event);
-    if (
-      event.backend !== "codex"
-      || !boundary
-      || !this.tokenMiserStore
-    ) {
+    if (!boundary) {
       return;
     }
-    const entries = this.activeTokenMiserReplayEntries.get(boundary.threadId);
+    await this.stopTokenMiserReplayTrackingAtBoundary({
+      backend: event.backend,
+      threadId: boundary.threadId,
+    });
+  }
+
+  private async stopTokenMiserReplayTrackingAtBoundary(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<void> {
+    if (params.backend !== "codex" || !this.tokenMiserStore) {
+      return;
+    }
+    const entries = this.activeTokenMiserReplayEntries.get(params.threadId);
     if (!entries || entries.size === 0) {
       return;
     }
@@ -27550,7 +27691,7 @@ export class DesktopBackendRegistry {
     }
     await this.emitThreadToolAccountingUpdated({
       backend: "codex",
-      threadId: boundary.threadId,
+      threadId: params.threadId,
     });
   }
 

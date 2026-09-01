@@ -1015,6 +1015,36 @@ describe("ToolOutputIncidentExplorerWindow", () => {
     )).toHaveTextContent("7.6k est.");
   });
 
+  it("marks compaction boundaries on the per-turn rows and timeline", async () => {
+    const response = buildMultiTurnResponse();
+    response.pricing = {
+      compactions: [{
+        backend: "codex",
+        compactionId: "compaction-turn-2",
+        observedAt: 1_800_000_003_500,
+        threadId: "thread-1",
+        turnId: "turn-2",
+        updatedAt: 1_800_000_003_500,
+      }],
+      lines: [],
+      summaries: [],
+    };
+    installApi({ readThread: async () => response });
+    window.location.hash = "#tool-output-incidents/codex/thread-1/Noisy%20work";
+    render(<ToolOutputIncidentExplorerWindow />);
+
+    const turns = await screen.findByLabelText("Cost by turn");
+    expect(within(turns).getByRole("button", { name: /Turn 2.*compacted/ }))
+      .toBeInTheDocument();
+    const timeline = screen.getByRole("group", {
+      name: "Tool cost per turn, in order",
+    });
+    expect(within(timeline).getByRole("button", {
+      name: /Turn 2.*context compacted 1 time/,
+    })).toHaveAttribute("data-compaction", "true");
+    expect(screen.getByText("compaction boundary")).toBeInTheDocument();
+  });
+
   it("labels the hover price as billed rather than treating tool output as usage", async () => {
     const response = buildMultiTurnResponse();
     response.pricing = {

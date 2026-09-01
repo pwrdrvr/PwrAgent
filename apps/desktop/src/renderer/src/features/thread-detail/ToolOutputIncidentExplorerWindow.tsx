@@ -10,6 +10,7 @@ import type {
   ThreadCompactionRecord,
   ThreadTokenMiserSavings,
   ThreadToolInvocationRecord,
+  ThreadUsageLineRecord,
   ToolOutputIncidentExplorerLens,
 } from "@pwragent/shared";
 import {
@@ -297,6 +298,13 @@ export function ToolOutputIncidentExplorerWindow() {
       ...(usageLines ? { usageLines } : {}),
     }),
     [allInvocations, largeOutputThresholdChars, turnScope, usageLines],
+  );
+  const compactionsByTurn = useMemo(
+    () => countCompactionsByTurn(
+      latest?.pricing?.compactions ?? [],
+      usageLines ?? [],
+    ),
+    [latest?.pricing?.compactions, usageLines],
   );
   const currency = usageLines?.[0]?.currency;
   const contextWindowSummary = useMemo(
@@ -654,6 +662,7 @@ export function ToolOutputIncidentExplorerWindow() {
             ))}
           </div>
           <TurnTimeline
+            compactionsByTurn={compactionsByTurn}
             {...(currency ? { currency } : {})}
             now={renderedAt}
             onSelect={(row) => setTurnFilter(
@@ -702,6 +711,7 @@ export function ToolOutputIncidentExplorerWindow() {
       ) : null}
 
       <TurnStrip
+        compactionsByTurn={compactionsByTurn}
         {...(currency ? { currency } : {})}
         now={renderedAt}
         onScopeChange={setTurnScope}
@@ -1669,6 +1679,29 @@ function CompositionBar(props: { composition: CategoryShare[] }) {
   );
 }
 
+function countCompactionsByTurn(
+  compactions: readonly ThreadCompactionRecord[],
+  usageLines: readonly ThreadUsageLineRecord[],
+): Map<string, number> {
+  const turnByUsageLine = new Map(
+    usageLines.flatMap((line) =>
+      line.turnId ? [[line.usageLineId, line.turnId] as const] : []
+    ),
+  );
+  const counts = new Map<string, number>();
+  for (const compaction of compactions) {
+    const turnId = compaction.turnId
+      ?? (compaction.coldUsageLineId
+        ? turnByUsageLine.get(compaction.coldUsageLineId)
+        : undefined);
+    if (!turnId) {
+      continue;
+    }
+    counts.set(turnId, (counts.get(turnId) ?? 0) + 1);
+  }
+  return counts;
+}
+
 /**
  * The second cost driver. A solid bar reads as volume, a tick rail reads as
  * discrete events — deliberately different marks, because a turn that is long
@@ -1676,6 +1709,7 @@ function CompositionBar(props: { composition: CategoryShare[] }) {
  * the two need to be told apart at a glance.
  */
 function TurnStrip(props: {
+  compactionsByTurn: ReadonlyMap<string, number>;
   currency?: string;
   /* Captured once by the caller so every row in a render measures "ago"
      against the same instant. */
@@ -1724,53 +1758,66 @@ function TurnStrip(props: {
           <span className="incident-explorer__turns-key" data-kind="trips" /> round trips
         </p>
       </div>
-      {props.strip.rows.map((row) => (
-        <button
-          aria-pressed={props.selectedKey === row.key}
-          className="incident-explorer__turn"
-          data-cost={props.showCost}
-          key={row.key}
-          onClick={() => props.onSelect(row)}
-          type="button"
-        >
-          <span className="incident-explorer__turn-label">
-            {row.label}
-            <span title={new Date(row.firstObservedAt).toLocaleString()}>
-              {` · ${formatTurnWhen(row.firstObservedAt, props.now)}`}
-            </span>
-          </span>
-          <span aria-hidden="true" className="incident-explorer__turn-bar">
-            <i
-              data-critical={row.overCapCount > 0}
-              style={{ width: `${scaleWidth(row.estimatedOutputTokens, props.strip.maxTokens)}%` }}
-            />
-          </span>
-          <span
-            className="incident-explorer__turn-number"
-            title={`${formatCompactTokens(row.estimatedOutputTokens)} estimated tool-output tokens; this is not provider-billed usage`}
+      {props.strip.rows.map((row) => {
+        const compactionCount = row.turnId
+          ? (props.compactionsByTurn.get(row.turnId) ?? 0)
+          : 0;
+        return (
+          <button
+            aria-pressed={props.selectedKey === row.key}
+            className="incident-explorer__turn"
+            data-cost={props.showCost}
+            key={row.key}
+            onClick={() => props.onSelect(row)}
+            type="button"
           >
-            {formatCompactTokens(row.estimatedOutputTokens)} est.
-          </span>
-          <span aria-hidden="true" className="incident-explorer__turn-trips">
-            <i style={{ width: `${scaleWidth(row.callCount, props.strip.maxCallCount)}%` }} />
-          </span>
-          <span className="incident-explorer__turn-number">
-            {row.callCount.toLocaleString()} {row.callCount === 1 ? "call" : "calls"}
-          </span>
-          {props.showCost ? (
-            <span
-              className="incident-explorer__turn-cost"
-              title={row.costMicros !== undefined
-                ? `Billed cost from provider-reported usage: ${formatMicrosCurrency(row.costMicros, props.currency)}`
-                : undefined}
-            >
-              {row.costMicros !== undefined
-                ? formatMicrosCurrency(row.costMicros, props.currency)
-                : "—"}
+            <span className="incident-explorer__turn-label">
+              {row.label}
+              <span title={new Date(row.firstObservedAt).toLocaleString()}>
+                {` · ${formatTurnWhen(row.firstObservedAt, props.now)}`}
+              </span>
+              {compactionCount > 0 ? (
+                <span
+                  className="incident-explorer__turn-compaction"
+                  title={`Context compacted ${compactionCount.toLocaleString()} ${compactionCount === 1 ? "time" : "times"} during this turn`}
+                >
+                  {` · compacted${compactionCount === 1 ? "" : ` ×${compactionCount.toLocaleString()}`}`}
+                </span>
+              ) : null}
             </span>
-          ) : null}
-        </button>
-      ))}
+            <span aria-hidden="true" className="incident-explorer__turn-bar">
+              <i
+                data-critical={row.overCapCount > 0}
+                style={{ width: `${scaleWidth(row.estimatedOutputTokens, props.strip.maxTokens)}%` }}
+              />
+            </span>
+            <span
+              className="incident-explorer__turn-number"
+              title={`${formatCompactTokens(row.estimatedOutputTokens)} estimated tool-output tokens; this is not provider-billed usage`}
+            >
+              {formatCompactTokens(row.estimatedOutputTokens)} est.
+            </span>
+            <span aria-hidden="true" className="incident-explorer__turn-trips">
+              <i style={{ width: `${scaleWidth(row.callCount, props.strip.maxCallCount)}%` }} />
+            </span>
+            <span className="incident-explorer__turn-number">
+              {row.callCount.toLocaleString()} {row.callCount === 1 ? "call" : "calls"}
+            </span>
+            {props.showCost ? (
+              <span
+                className="incident-explorer__turn-cost"
+                title={row.costMicros !== undefined
+                  ? `Billed cost from provider-reported usage: ${formatMicrosCurrency(row.costMicros, props.currency)}`
+                  : undefined}
+              >
+                {row.costMicros !== undefined
+                  ? formatMicrosCurrency(row.costMicros, props.currency)
+                  : "—"}
+              </span>
+            ) : null}
+          </button>
+        );
+      })}
       {strip.hiddenTurnCount > 0 || strip.scope === "flagged" ? (
         <p className="incident-explorer__turns-note">
           {strip.hiddenTurnCount > 0
@@ -1792,6 +1839,7 @@ function TurnStrip(props: {
  * adjacency. Hover carries the numbers; click filters cases to the turn.
  */
 function TurnTimeline(props: {
+  compactionsByTurn: ReadonlyMap<string, number>;
   currency?: string;
   now: number;
   onSelect: (row: TurnCostRow) => void;
@@ -1807,15 +1855,28 @@ function TurnTimeline(props: {
     (max, row) => Math.max(max, row.callCount),
     0,
   );
+  const hasCompactions = props.timeline.some((row) =>
+    row.turnId && (props.compactionsByTurn.get(row.turnId) ?? 0) > 0
+  );
   return (
     <div className="incident-explorer__timeline-block">
-      <p className="incident-explorer__eyebrow">When it went</p>
+      <div className="incident-explorer__timeline-head">
+        <p className="incident-explorer__eyebrow">When it went</p>
+        {hasCompactions ? (
+          <p className="incident-explorer__timeline-legend">
+            <span aria-hidden="true" /> compaction boundary
+          </p>
+        ) : null}
+      </div>
       <div
         aria-label="Tool cost per turn, in order"
         className="incident-explorer__timeline"
         role="group"
       >
         {props.timeline.map((row) => {
+          const compactionCount = row.turnId
+            ? (props.compactionsByTurn.get(row.turnId) ?? 0)
+            : 0;
           const description = [
             row.label,
             formatTurnWhen(row.firstObservedAt, props.now),
@@ -1824,12 +1885,16 @@ function TurnTimeline(props: {
             ...(row.costMicros !== undefined
               ? [`billed cost ${formatMicrosCurrency(row.costMicros, props.currency)}`]
               : []),
+            ...(compactionCount > 0
+              ? [`context compacted ${compactionCount.toLocaleString()} ${compactionCount === 1 ? "time" : "times"}`]
+              : []),
           ].join(" · ");
           return (
             <button
               aria-label={description}
               aria-pressed={props.selectedKey === row.key}
               className="incident-explorer__timeline-turn"
+              data-compaction={compactionCount > 0}
               key={row.key}
               onClick={() => props.onSelect(row)}
               title={description}

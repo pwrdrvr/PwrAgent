@@ -18126,6 +18126,30 @@ a.transcript-message__messaging-origin:focus-visible {
   margin-top: 10px;
 }
 
+.incident-explorer__timeline-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.incident-explorer__timeline-legend {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.incident-explorer__timeline-legend span {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  background: var(--status-warning);
+  transform: rotate(45deg);
+}
+
 .incident-explorer__timeline {
   display: flex;
   align-items: stretch;
@@ -18137,6 +18161,7 @@ a.transcript-message__messaging-origin:focus-visible {
    a 300-turn thread in a narrow window must compress to 1px columns instead
    of overflowing, and gaps do not shrink. */
 .incident-explorer .incident-explorer__timeline-turn {
+  position: relative;
   display: flex;
   flex: 1 1 0;
   flex-direction: column;
@@ -18147,6 +18172,38 @@ a.transcript-message__messaging-origin:focus-visible {
   border-radius: 0;
   background: transparent;
   cursor: pointer;
+}
+
+/* Compaction is an event, not another volume series. A dashed boundary and
+   diamond cap cross both halves of the bar, while the button's accessible name
+   carries the count for operators who do not see the mark. */
+.incident-explorer__timeline-turn[data-compaction="true"]::before {
+  position: absolute;
+  z-index: 2;
+  top: 2px;
+  bottom: 1px;
+  left: 50%;
+  width: 1px;
+  background: repeating-linear-gradient(
+    to bottom,
+    var(--status-warning) 0 2px,
+    transparent 2px 4px
+  );
+  content: "";
+  pointer-events: none;
+}
+
+.incident-explorer__timeline-turn[data-compaction="true"]::after {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  left: calc(50% - 2px);
+  width: 5px;
+  height: 5px;
+  background: var(--status-warning);
+  content: "";
+  pointer-events: none;
+  transform: rotate(45deg);
 }
 
 .incident-explorer .incident-explorer__timeline-turn:last-child {
@@ -18326,6 +18383,10 @@ a.transcript-message__messaging-origin:focus-visible {
 
 .incident-explorer__turn-label span {
   color: var(--text-muted);
+}
+
+.incident-explorer__turn-label .incident-explorer__turn-compaction {
+  color: var(--status-warning);
 }
 
 .incident-explorer__turn-bar,

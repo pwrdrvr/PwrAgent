@@ -686,6 +686,78 @@ describe("DesktopBackendRegistry Token Miser ledger", () => {
     });
   });
 
+  it("infers a missing compaction boundary when live context drops", async () => {
+    const { objectId, tokenMiserStore } = await startLiveReplayGate();
+
+    await registry.publishLocalEvent(parentContextUsageEvent({
+      cachedInputTokens: 199_000,
+      cumulativeInputTokens: 200_000,
+      inputTokens: 200_000,
+      outputTokens: 1_000,
+    }));
+    const beforeDrop = await tokenMiserStore.readMetadata(objectId);
+
+    await registry.publishLocalEvent(parentContextUsageEvent({
+      cachedInputTokens: 0,
+      cumulativeInputTokens: 221_000,
+      inputTokens: 21_000,
+      outputTokens: 500,
+    }));
+
+    expect(await tokenMiserStore.readMetadata(objectId)).toMatchObject({
+      parentRequestsObservedAfterGate:
+        beforeDrop?.parentRequestsObservedAfterGate,
+      replayTrackingStoppedAt: expect.any(Number),
+    });
+    expect(await store.listThreadCompactions({
+      backend: "codex",
+      threadId: "thread-parent",
+    })).toEqual([
+      expect.objectContaining({
+        threadId: "thread-parent",
+        turnId: "turn-parent",
+      }),
+    ]);
+  });
+
+  it("does not infer a second marker for an already reported compaction", async () => {
+    await startLiveReplayGate();
+    await registry.publishLocalEvent(parentContextUsageEvent({
+      cachedInputTokens: 199_000,
+      cumulativeInputTokens: 200_000,
+      inputTokens: 200_000,
+      outputTokens: 1_000,
+    }));
+    await registry.publishLocalEvent({
+      backend: "codex",
+      notification: {
+        method: "item/completed",
+        params: {
+          item: {
+            id: "compact-item-before-drop",
+            type: "ContextCompaction",
+          },
+          threadId: "thread-parent",
+          turnId: "turn-parent",
+        },
+      },
+    });
+
+    await registry.publishLocalEvent(parentContextUsageEvent({
+      cachedInputTokens: 0,
+      cumulativeInputTokens: 221_000,
+      inputTokens: 21_000,
+      outputTokens: 500,
+    }));
+
+    expect(await store.listThreadCompactions({
+      backend: "codex",
+      threadId: "thread-parent",
+    })).toEqual([
+      expect.objectContaining({ itemId: "compact-item-before-drop" }),
+    ]);
+  });
+
   it("does not treat a non-compaction item as a replay boundary", async () => {
     const { objectId, tokenMiserStore } = await startLiveReplayGate();
 
@@ -819,6 +891,41 @@ function parentUsageEvent(inputTokens: number): AgentEvent {
             outputTokens: 0,
             reasoningOutputTokens: 0,
             totalTokens: inputTokens,
+          },
+        },
+      },
+    },
+  };
+}
+
+function parentContextUsageEvent(params: {
+  cachedInputTokens: number;
+  cumulativeInputTokens: number;
+  inputTokens: number;
+  outputTokens: number;
+}): AgentEvent {
+  return {
+    backend: "codex",
+    notification: {
+      method: "thread/tokenUsage/updated",
+      params: {
+        threadId: "thread-parent",
+        turnId: "turn-parent",
+        tokenUsage: {
+          last: {
+            cachedInputTokens: params.cachedInputTokens,
+            inputTokens: params.inputTokens,
+            outputTokens: params.outputTokens,
+            reasoningOutputTokens: 0,
+            totalTokens: params.inputTokens + params.outputTokens,
+          },
+          modelContextWindow: 258_400,
+          total: {
+            cachedInputTokens: params.cachedInputTokens,
+            inputTokens: params.cumulativeInputTokens,
+            outputTokens: params.outputTokens,
+            reasoningOutputTokens: 0,
+            totalTokens: params.cumulativeInputTokens + params.outputTokens,
           },
         },
       },
