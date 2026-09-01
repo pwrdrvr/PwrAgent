@@ -172,7 +172,7 @@ export type SlackApi = {
     chunks: SlackStreamChunk[];
     recipientTeamId?: string;
     recipientUserId?: string;
-    taskDisplayMode: "timeline" | "plan" | "dense";
+    taskDisplayMode: "timeline" | "plan";
     threadTs: string;
   }): Promise<SlackMessageResult>;
   stopStream?(params: {
@@ -4624,7 +4624,7 @@ function normalizeSlackMessageResult(value: unknown): SlackMessageResult {
     return {};
   }
   const record = value as Record<string, unknown>;
-  const agentSession = readSlackAgentSession(record.agent_session);
+  const agentSession = readSlackAgentSessionFromResponse(record);
   return {
     ...(agentSession ? { agentSession } : {}),
     ...(typeof record.channel === "string" ? { channel: record.channel } : {}),
@@ -4652,9 +4652,14 @@ function readSlackAgentSessionFromResponse(
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
-  return readSlackAgentSession(
-    (value as Record<string, unknown>).agent_session,
-  );
+  const record = value as Record<string, unknown>;
+  const message = readPlainRecord(record.message);
+  const nestedMessage = readPlainRecord(message?.message);
+  return readSlackAgentSession(record.agent_session ?? record.agentSession)
+    ?? readSlackAgentSession(message?.agent_session ?? message?.agentSession)
+    ?? readSlackAgentSession(
+      nestedMessage?.agent_session ?? nestedMessage?.agentSession,
+    );
 }
 
 function attachSlackAgentSession<
@@ -4663,10 +4668,18 @@ function attachSlackAgentSession<
   messages: Message[],
   agentSession: SlackAgentSessionInfo | undefined,
 ): Message[] {
-  if (!agentSession || messages.length === 0) return messages;
-  return messages.map((message, index) =>
-    index === 0 ? { ...message, agentSession } : message
-  );
+  if (messages.length === 0) return messages;
+  return messages.map((message, index) => {
+    const resolved = readSlackAgentSessionFromResponse(message)
+      ?? (index === 0 ? agentSession : undefined);
+    return resolved ? { ...message, agentSession: resolved } : message;
+  });
+}
+
+function readPlainRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
 }
 
 function normalizeSlackAgentSessionStatus(

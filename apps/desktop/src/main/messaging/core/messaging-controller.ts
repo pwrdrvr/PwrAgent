@@ -14113,10 +14113,12 @@ export class MessagingController {
         turnId: targetTurn.turnId,
       });
     } catch (error) {
-      await this.signalTurnActivity(binding, targetTurn, {
-        force: true,
-        reason: "stop_failed",
-      });
+      if (activeTurn) {
+        await this.signalTurnActivity(binding, activeTurn, {
+          force: true,
+          reason: "stop_failed",
+        });
+      }
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("status-stop-failed"),
