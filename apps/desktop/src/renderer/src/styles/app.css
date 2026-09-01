@@ -2189,9 +2189,10 @@ textarea,
 }
 
 /* Title-bar strip — single-row chrome. Base padding keeps macOS
-   stoplight clearance on the left: `.settings-nav__masthead`
-   (10/0/0/96) alignment, stoplights end at ~x=72, brand lands at
-   x=96. Platforms without macOS/Windows chrome conventions override
+   stoplight clearance on the left: the same x=96 the two nav mastheads
+   reach (`.sidebar__masthead` pads 80px inside a 16px rail,
+   `.settings-nav__masthead` 88px inside an 8px lane); stoplights end at
+   ~x=72, brand lands at x=96. Platforms without macOS/Windows chrome conventions override
    the left padding below so auxiliary-window titles don't float
    awkwardly away from the window edge. */
 .activity-titlebar {
@@ -8336,7 +8337,11 @@ textarea,
 
 /* Indent = the row's 24px caret gutter + the label button's 4px left
    padding, so the sublist's left rule lands under the section label's
-   first character. */
+   first character. The explicit width is load-bearing and must track the
+   margin: a form control shrink-to-fits even as a block-level flex box,
+   so `width: auto` collapses this row to its label instead of filling
+   the clip. (`.settings-nav__divider` needs no such width — an `<hr>` is
+   a plain flex item and stretches.) */
 .settings-nav__subbutton {
   display: flex;
   align-items: center;
@@ -8402,8 +8407,9 @@ textarea,
   text-transform: uppercase;
 }
 
+/* Margins alone set the width — a flex item stretches across the
+   column, so the inset is stated once. */
 .settings-nav__divider {
-  width: calc(100% - 16px);
   height: 1px;
   margin: 6px 8px;
   border: 0;

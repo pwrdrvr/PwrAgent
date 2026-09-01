@@ -1753,6 +1753,53 @@ describe("Tangerine Terminal theme contract", () => {
     );
   });
 
+  it("keeps the Settings nav on the sidebar's lane and brand alignment", () => {
+    // The Settings nav is the inset system's second consumer, and neither
+    // half of its participation can be read off a single declaration.
+    // Its rows run in the lane as a LITERAL — `--sidebar-lane-inset` is
+    // scoped to `.sidebar` and does not inherit into this subtree — and its
+    // brand x is a SUM, because the masthead adds back the rail difference
+    // the narrower lane gave up. Assert both, or a later edit to either
+    // number alone drifts the Settings list off the thread list's density
+    // (the bug this nav was retuned to fix) or its wordmark off the main
+    // one, with every existing literal assertion still green.
+    const sidebar = extractRuleBody(css, ".sidebar");
+    const lane = Number(sidebar.match(/--sidebar-lane-inset:\s*(\d+)px;/)?.[1]);
+    const rail = Number(sidebar.match(/--sidebar-rail-inset:\s*(\d+)px;/)?.[1]);
+    const navLane = Number(
+      extractRuleBody(css, ".settings-nav").match(
+        /\n\s*padding:\s*0\s+(\d+)px\s+\d+px;/,
+      )?.[1],
+    );
+    expect(navLane).toBe(lane);
+
+    // Brand x, macOS: both mastheads reserve the stoplight gutter from
+    // inside their own inset, and the two totals must be the same number.
+    const brandX = (inset: number, masthead: string, pattern: RegExp) =>
+      inset + Number(masthead.match(pattern)?.[1]);
+    const sidebarBrandX = brandX(
+      rail,
+      extractRuleBody(css, ".sidebar__masthead"),
+      /padding:\s*10px 0 0 (\d+)px;/,
+    );
+    expect(
+      brandX(
+        navLane,
+        extractRuleBody(css, ".settings-nav__masthead"),
+        /padding:\s*10px 0 0 (\d+)px;/,
+      ),
+    ).toBe(sidebarBrandX);
+
+    // …and on the two branches that release that reservation, where the
+    // main sidebar's masthead drops to 0 and lands the brand on the rail.
+    for (const override of [
+      /:root\[data-platform\]:not\(\[data-platform="darwin"\]\):not\(\[data-platform="win32"\]\)\s*\.settings-nav__masthead\s*\{[^}]*?padding-left:\s*(\d+)px;/,
+      /:root\[data-platform="darwin"\]\[data-fullscreen="true"\]\s*\.settings-nav__masthead\s*\{[^}]*?padding-left:\s*(\d+)px;/,
+    ]) {
+      expect(navLane + Number(css.match(override)?.[1])).toBe(rail);
+    }
+  });
+
   it("applies a thin, themed scrollbar to every scroller via the universal selector (scrollbar-width does not inherit)", () => {
     // `scrollbar-color` inherits but `scrollbar-width` does NOT, so a
     // `:root` rule alone leaves scrollers at the chunky default width in
