@@ -643,7 +643,7 @@ describe("DesktopMessagingRuntime", () => {
     });
   });
 
-  it("requests messaging startup eligibility logging only for the startup config load", async () => {
+  it("does not reload config after the startup policy snapshot", async () => {
     await prepareRuntimeStore();
     const adapter = createAdapter("telegram");
     const configLoader = vi.fn(() => ({
@@ -691,7 +691,7 @@ describe("DesktopMessagingRuntime", () => {
     expect(configLoader).toHaveBeenNthCalledWith(1, {
       logStartupEligibility: true,
     });
-    expect(configLoader).toHaveBeenNthCalledWith(2, undefined);
+    expect(configLoader).toHaveBeenCalledTimes(1);
   });
 
   it("uses adapter-supplied authorization without provider-specific runtime config", async () => {

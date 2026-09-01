@@ -378,6 +378,7 @@ describe("settings ipc", () => {
         writable: true,
       },
     });
+    expect(readSettings).not.toHaveBeenCalled();
 
     const readResponse = await handlers.get(SETTINGS_READ_CHANNEL)?.({});
     const encoded = JSON.stringify(readResponse);

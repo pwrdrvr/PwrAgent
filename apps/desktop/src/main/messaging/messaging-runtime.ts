@@ -29,6 +29,7 @@ import type {
   MessagingPlatformHealth,
   MessagingPlatformStatus,
   MessagingPlatformStatusEvent,
+  MessagingToolUpdateMode,
   PwrAgentMessagingRequest,
   PwrAgentMessagingResponse,
 } from "@pwragent/shared";
@@ -233,6 +234,13 @@ type FullAccessPolicySnapshot = {
   controls: DesktopMessagingFullAccessControls;
   revision: number;
 };
+
+type MessagingAdmissionPolicySnapshot = Readonly<{
+  managerToolUpdateDefaultMode: MessagingToolUpdateMode;
+  pdfAnalysisEnabled: boolean;
+  showStreamingOption: boolean;
+  toolUpdateDefaultMode: MessagingToolUpdateMode;
+}>;
 
 function snapshotFullAccessControls(
   controls: DesktopMessagingFullAccessControls | undefined,
@@ -454,6 +462,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     controls: snapshotFullAccessControls(undefined),
     revision: 0,
   };
+  private messagingAdmissionPolicySnapshot: MessagingAdmissionPolicySnapshot = {
+    managerToolUpdateDefaultMode: "show_none",
+    pdfAnalysisEnabled: true,
+    showStreamingOption: false,
+    toolUpdateDefaultMode: "show_some",
+  };
   /**
    * Listeners notified whenever any controller mutates a binding
    * (create / refresh metadata / sync title / detach / revoke). The
@@ -604,6 +618,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     options: { allowStart?: boolean } = {},
   ): Promise<void> {
     this.applyFullAccessPolicySnapshot(config);
+    this.applyMessagingAdmissionPolicySnapshot(config);
     try {
       await this.applyConfigNow(config, options);
       this.clearStartupFailuresForDisabledPlatforms(config);
@@ -1423,24 +1438,22 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       channel: adapter.channel,
       deliveryBudget,
       inputDebounceMs: config.inputDebounceMs,
-      pdfAnalysisEnabled: async () =>
-        (await this.loadConfig()).pdfAnalysisEnabled !== false,
+      pdfAnalysisEnabled: () =>
+        this.messagingAdmissionPolicySnapshot.pdfAnalysisEnabled,
       store,
       activityLog: getDesktopMessagingActivityLog,
       streamingResponsesDefault: streamingResponsesDefaultForChannel(
         config,
         adapter.channel,
       ),
-      showStreamingOption: async () =>
-        (await this.loadConfig()).showStreamingOption ?? false,
+      showStreamingOption: () =>
+        this.messagingAdmissionPolicySnapshot.showStreamingOption,
       responseModeForConversation: (channel) =>
         responseModeSnapshot.resolve({ channelRef: channel }),
-      toolUpdateDefaultMode: async (targetKind) => {
-        const config = await this.loadConfig();
-        return targetKind === "agent_thread"
-          ? config.managerToolUpdateDefaultMode ?? "show_none"
-          : config.toolUpdateDefaultMode ?? "show_some";
-      },
+      toolUpdateDefaultMode: (targetKind) =>
+        targetKind === "agent_thread"
+          ? this.messagingAdmissionPolicySnapshot.managerToolUpdateDefaultMode
+          : this.messagingAdmissionPolicySnapshot.toolUpdateDefaultMode,
       fullAccessControls: () => this.fullAccessPolicySnapshot.controls,
       fullAccessControlsSource: "runtime-snapshot",
       fullAccessPolicyRevision: () => this.fullAccessPolicySnapshot.revision,
@@ -2972,6 +2985,18 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
     this.fullAccessPolicySnapshot = {
       controls,
       revision: this.fullAccessPolicySnapshot.revision + 1,
+    };
+  }
+
+  private applyMessagingAdmissionPolicySnapshot(
+    config: DesktopMessagingConfig,
+  ): void {
+    this.messagingAdmissionPolicySnapshot = {
+      managerToolUpdateDefaultMode:
+        config.managerToolUpdateDefaultMode ?? "show_none",
+      pdfAnalysisEnabled: config.pdfAnalysisEnabled !== false,
+      showStreamingOption: config.showStreamingOption ?? false,
+      toolUpdateDefaultMode: config.toolUpdateDefaultMode ?? "show_some",
     };
   }
 

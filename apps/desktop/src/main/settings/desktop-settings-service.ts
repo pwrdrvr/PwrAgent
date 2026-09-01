@@ -105,6 +105,7 @@ import {
   type ConfigDomainMap,
 } from "./config-store/config-domains";
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
+import { resolveMessagingSettingsDomain } from "../messaging/messaging-settings-domain";
 import type { DesktopSecretStore } from "./desktop-secret-store";
 import {
   CHAT_REPLY_COMPOSER_ENV,
@@ -1357,6 +1358,22 @@ export class DesktopSettingsService {
       },
       worktrees: this.resolveWorktrees(config.worktrees?.storage),
     };
+  }
+
+  readMessagingConfig(): ConfigDomainMap["messaging"] {
+    return this.options.configStore
+      ? this.options.configStore.read("messaging")
+      : this.readConfig().config.messaging ?? {};
+  }
+
+  readMessagingSettings(): DesktopSettingsSnapshot["messaging"] {
+    return resolveMessagingSettingsDomain(this.readMessagingConfig(), this.env);
+  }
+
+  readGeneralConfig(): ConfigDomainMap["general"]["settings"] {
+    return this.options.configStore
+      ? this.options.configStore.read("general").settings
+      : this.readConfig().config.general ?? {};
   }
 
   // git/applications discovery is config-independent (depends only on this.env

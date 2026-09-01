@@ -1336,6 +1336,48 @@ export function bootstrapApp(): void {
         options,
       ),
     );
+    let messagingConfigFingerprint = JSON.stringify({
+      messaging: getDesktopConfigStore().read("messaging"),
+      pdfAnalysisEnabled:
+        getDesktopConfigStore().read("general").settings.pdfAnalysisEnabled
+        ?? true,
+    });
+    getDesktopConfigStore().subscribe(
+      ["general", "messaging"],
+      () => {
+        const nextFingerprint = JSON.stringify({
+          messaging: getDesktopConfigStore().read("messaging"),
+          pdfAnalysisEnabled:
+            getDesktopConfigStore().read("general").settings.pdfAnalysisEnabled
+            ?? true,
+        });
+        if (nextFingerprint === messagingConfigFingerprint) {
+          return;
+        }
+        messagingConfigFingerprint = nextFingerprint;
+        const runtimeOverride = resolveRuntimeMessagingOverride();
+        void getRuntimeMessagingLeaseCoordinator()
+          .applyLatestConfig(
+            messagingRuntime,
+            (options) =>
+              loadDesktopMessagingConfigFromSettings(
+                getDesktopSettingsService(),
+                process.env,
+                options,
+              ),
+            {
+              allowStart:
+                !runtimeOverride.disabled || messagingRuntime.isEnabled(),
+              logStartupEligibility: true,
+            },
+          )
+          .catch((error) => {
+            mainLog.error("messaging runtime config refresh failed", {
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+      },
+    );
     getDesktopBackendRegistry().setMessagingArchiveCleaner({
       requestBindingRevokeAllForThread: (request) =>
         messagingRuntime.requestBindingRevokeAllForThread(request),

@@ -1256,7 +1256,7 @@ export function registerSettingsIpcHandlers(
       const update = await activeService.writeConfigPatchTargeted(request.patch);
       await options?.onConfigPatchWritten?.(request.patch);
       await refreshModelBackendsIfNeeded({ patch: request.patch });
-      if (messagingPatchTouchesRuntime(request.patch)) {
+      if (service && messagingPatchTouchesRuntime(request.patch)) {
         await applyLatestMessagingRuntimeConfig(activeService);
       }
       return { update };
