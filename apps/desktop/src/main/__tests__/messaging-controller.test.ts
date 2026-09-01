@@ -279,6 +279,124 @@ describe("MessagingController", () => {
     );
   });
 
+  it("does not let delayed inbound metadata restore a concurrently revoked binding", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    const [binding] = await harness.store.findActiveBindingsForThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    if (!binding) {
+      throw new Error("Expected a bound thread");
+    }
+    const topicChannel: MessagingInboundTextEvent["channel"] = {
+      channel: "telegram",
+      conversation: {
+        id: "topic-1",
+        kind: "topic",
+        parentId: "chat-1",
+      },
+    };
+    const topicBinding = await harness.store.upsertBinding({
+      ...binding,
+      channel: topicChannel,
+      updatedAt: 900,
+    });
+    const managedTopicRead = createDeferred<undefined>();
+    const managedTopicReadStarted = createDeferred<void>();
+    vi.spyOn(harness.store, "findManagedTopicByConversation")
+      .mockImplementationOnce(async () => {
+        managedTopicReadStarted.resolve();
+        return await managedTopicRead.promise;
+      });
+
+    const metadataRefresh = harness.controller.handleInboundChannelMetadata({
+      eventId: "metadata-race",
+      observedAt: 1_000,
+      channel: {
+        ...topicChannel,
+        conversation: {
+          ...topicChannel.conversation,
+          title: "Fresh topic title",
+        },
+      },
+    });
+    await managedTopicReadStarted.promise;
+    await harness.store.revokeBinding({
+      bindingId: topicBinding.id,
+      revokedAt: 1_001,
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(topicChannel),
+    ).resolves.toBeUndefined();
+
+    managedTopicRead.resolve(undefined);
+    await metadataRefresh;
+    await expect(
+      harness.store.findActiveBindingForChannel(topicChannel),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not let delayed topic observation overwrite newer managed-topic state", async () => {
+    const metadataFinished = createDeferred<void>();
+    const debug = vi.fn((message: string) => {
+      if (message === "messaging off-path inbound metadata timing") {
+        metadataFinished.resolve();
+      }
+    });
+    const harness = await createHarness({ logger: { debug } });
+    const bindingRead = createDeferred<undefined>();
+    const bindingReadStarted = createDeferred<void>();
+    vi.spyOn(harness.store, "findActiveBindingForChannel")
+      .mockImplementationOnce(async () => {
+        bindingReadStarted.resolve();
+        return await bindingRead.promise;
+      });
+    const channel: MessagingChannelRef = {
+      channel: "telegram",
+      conversation: {
+        id: "topic-1",
+        kind: "topic",
+        parentId: "chat-1",
+        title: "Observed topic",
+      },
+    };
+
+    const handled = harness.controller.handleInboundEvent(buildTextEvent(
+      "observe topic",
+      { channel },
+    ));
+    await bindingReadStarted.promise;
+    await harness.store.upsertManagedTopic({
+      id: "topic:telegram:chat-1:topic-1",
+      authorizedActorIds: ["user-1"],
+      channel: "telegram",
+      closedAt: 1_001,
+      conversation: channel.conversation,
+      createdAt: 1_000,
+      lastObservedAt: 1_000,
+      lifecycle: "closed",
+      source: "owned",
+      supergroupId: "chat-1",
+      title: "Owned topic",
+      topicId: "topic-1",
+      updatedAt: 1_001,
+    });
+
+    bindingRead.resolve(undefined);
+    await handled;
+    await metadataFinished.promise;
+    await expect(
+      harness.store.getManagedTopic("topic:telegram:chat-1:topic-1"),
+    ).resolves.toMatchObject({
+      closedAt: 1_001,
+      lifecycle: "closed",
+      source: "owned",
+      title: "Owned topic",
+      updatedAt: 1_001,
+    });
+  });
+
   it("merges eventual provider channel metadata without replaying inbound", async () => {
     const harness = await createHarness();
     await bindThread(harness);

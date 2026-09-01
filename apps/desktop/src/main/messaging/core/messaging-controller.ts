@@ -1238,7 +1238,11 @@ export class MessagingController {
     update: MessagingInboundChannelMetadataUpdate,
   ): Promise<void> {
     try {
-      await this.refreshBindingChannelMetadata(update.channel, update.routingState);
+      await this.refreshBindingChannelMetadata(
+        update.channel,
+        update.routingState,
+        update.observedAt,
+      );
     } catch (error) {
       this.logger.debug?.("messaging inbound metadata enrichment failed", {
         eventId: update.eventId,
@@ -2266,18 +2270,22 @@ export class MessagingController {
   private async refreshBindingFromInbound(
     event: MessagingInboundEvent,
   ): Promise<void> {
-    await this.refreshBindingChannelMetadata(event.channel, event.routingState);
+    await this.refreshBindingChannelMetadata(
+      event.channel,
+      event.routingState,
+      event.receivedAt,
+    );
   }
 
   private async refreshBindingChannelMetadata(
     channel: MessagingChannelRef,
     routingStateUpdate?: MessagingAdapterState,
+    observedAt = this.now(),
   ): Promise<void> {
     const binding = await this.options.store.findActiveBindingForChannel(
       channel,
     );
     if (!binding) return;
-    const stored = binding.channel.conversation;
     const incoming = channel.conversation;
     // Incoming wins when present. Adapters fetch fresher metadata
     // than we stored at bind time:
@@ -2290,10 +2298,12 @@ export class MessagingController {
     //     messages.
     // When `incoming` doesn't carry a field (e.g. a regular Telegram
     // topic message that doesn't ship the topic name and the cache
-    // missed), we fall back to `stored` so we never lose data we
-    // already have.
+    // missed), the store merge keeps the current value so we never
+    // lose data we already have. The read/compare/write is one store
+    // transaction: this off-path task cannot restore a binding that
+    // routing revoked or overwrite a newer preference update.
     //
-    // Loop safety: the `if (!changed)` guard below means an inbound
+    // Loop safety: the store's `changed` guard means an inbound
     // whose values match what's stored produces no write and no
     // broadcast — so the gateway echo of our own `editForumTopic`
     // call (which carries the same name we just wrote in
@@ -2307,27 +2317,16 @@ export class MessagingController {
           })
         : undefined;
     const managedConversation = managedTopic?.conversation;
-    const merged = {
-      ...stored,
-      title: incoming.title ?? stored.title ?? managedConversation?.title,
-      parentTitle:
-        incoming.parentTitle ?? stored.parentTitle ?? managedConversation?.parentTitle,
-      ancestorTitle:
-        incoming.ancestorTitle ?? stored.ancestorTitle ?? managedConversation?.ancestorTitle,
-    };
-    const routingState = routingStateUpdate ?? binding.routingState;
-    const changed =
-      merged.title !== stored.title
-      || merged.parentTitle !== stored.parentTitle
-      || merged.ancestorTitle !== stored.ancestorTitle
-      || !messagingAdapterStateEqual(routingState, binding.routingState);
-    if (!changed) return;
-    await this.options.store.upsertBinding({
-      ...binding,
-      channel: { ...binding.channel, conversation: merged },
-      routingState,
-      updatedAt: this.now(),
+    const merged = await this.options.store.mergeBindingChannelMetadata({
+      ancestorTitle: incoming.ancestorTitle ?? managedConversation?.ancestorTitle,
+      bindingId: binding.id,
+      channel,
+      observedAt,
+      parentTitle: incoming.parentTitle ?? managedConversation?.parentTitle,
+      routingState: routingStateUpdate,
+      title: incoming.title ?? managedConversation?.title,
     });
+    if (!merged?.changed) return;
     // The chip now has fresher breadcrumbs in the store; nudge the
     // renderer to refetch so the tooltip / label reflect them.
     this.notifyBindingChanged("refresh-from-inbound");
@@ -11215,9 +11214,19 @@ export class MessagingController {
     ) {
       return;
     }
-    await this.upsertManagedTopicFromChannel(event, {
-      source: "observed",
+    const observedAt = event.receivedAt;
+    await this.options.store.mergeManagedTopicObservation({
+      ...managedTopicRecordFromConversation({
+        actorIds: this.monitorAuthorizedActorIds(event),
+        channel: event.channel.channel,
+        conversation: event.channel.conversation,
+        now: observedAt,
+        routingState: event.routingState,
+        source: "observed",
+      }),
+      lastObservedAt: observedAt,
       lifecycle: "open",
+      updatedAt: observedAt,
     });
   }
 
@@ -22349,13 +22358,6 @@ function readAcpRuntimeOptionSource(
   return source === "mode" || source === "configOption" || source === "model"
     ? source
     : undefined;
-}
-
-function messagingAdapterStateEqual(
-  left: MessagingAdapterState | undefined,
-  right: MessagingAdapterState | undefined,
-): boolean {
-  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
 }
 
 function messageOriginForInboundEvent(

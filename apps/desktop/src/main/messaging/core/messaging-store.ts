@@ -31,6 +31,13 @@ import {
   buildDefaultAgentScopeLookup,
   buildMessagingDefaultAgentScopeKey,
 } from "./messaging-default-agent.js";
+import {
+  mergeMessagingBindingChannelMetadata,
+  mergeMessagingManagedTopicObservation,
+  type MessagingBindingChannelMetadataUpdate,
+  type MessagingBindingChannelMetadataMerge,
+  type MessagingManagedTopicObservationMerge,
+} from "./messaging-store-merge.js";
 
 const SECRET_KEY_PATTERN = /token|secret|password|authorization|api[_-]?key/i;
 
@@ -57,6 +64,27 @@ export class MessagingStore {
 
       data.bindings[sanitized.id] = sanitized;
       return structuredClone(sanitized);
+    });
+  }
+
+  async mergeBindingChannelMetadata(
+    update: MessagingBindingChannelMetadataUpdate,
+  ): Promise<MessagingBindingChannelMetadataMerge | undefined> {
+    return await this.withData((data) => {
+      const merged = mergeMessagingBindingChannelMetadata(
+        data.bindings[update.bindingId],
+        update,
+      );
+      if (!merged) {
+        return undefined;
+      }
+      if (merged.changed) {
+        data.bindings[update.bindingId] = sanitizeBinding(merged.binding);
+      }
+      return {
+        binding: structuredClone(merged.binding),
+        changed: merged.changed,
+      };
     });
   }
 
@@ -371,6 +399,25 @@ export class MessagingStore {
     return await this.withData((data) => {
       data.topics[sanitized.id] = sanitized;
       return structuredClone(sanitized);
+    });
+  }
+
+  async mergeManagedTopicObservation(
+    observation: MessagingManagedTopicRecord,
+  ): Promise<MessagingManagedTopicObservationMerge> {
+    const sanitized = sanitizeManagedTopic(observation);
+    return await this.withData((data) => {
+      const merged = mergeMessagingManagedTopicObservation(
+        data.topics[sanitized.id],
+        sanitized,
+      );
+      if (merged.changed) {
+        data.topics[sanitized.id] = sanitizeManagedTopic(merged.topic);
+      }
+      return {
+        changed: merged.changed,
+        topic: structuredClone(merged.topic),
+      };
     });
   }
 
