@@ -149,6 +149,14 @@ private delivery suppresses the source-conversation final response. Provider
 user IDs and DM routing remain validated and opaque inside the adapter; the
 Agent cannot select an arbitrary recipient.
 
+The scoped `rename_current_messaging_conversation` tool lets an Agent rename
+only the messaging conversation or thread that started its active turn. The
+controller passes the normalized source channel and opaque routing state to
+the adapter's existing `setConversationTitle` capability; the Agent receives
+no provider token and cannot select another channel. This is distinct from
+renaming the PwrAgent thread. Provider title-change events remain responsible
+for refreshing stored binding metadata.
+
 `send_messaging_file` is the opt-in companion for generated files that are not
 already in the assistant response (rendered PDFs, zips, installers). Do not use
 it for images the model will embed in the final reply; those already mirror to

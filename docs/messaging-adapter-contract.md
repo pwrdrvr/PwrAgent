@@ -211,6 +211,14 @@ name sync uses `agents.sessions.rename`. Slack-originated title changes update
 binding-local conversation metadata and never silently rename the global
 PwrAgent thread.
 
+Agent turns can invoke `rename_current_messaging_conversation` for their active
+messaging origin. Desktop orchestration resolves that origin and calls the
+same optional `setConversationTitle` adapter method used by the status-card
+Sync Name action. The tool cannot supply an arbitrary destination, and the
+adapter continues to own provider-specific identifiers, title limits, and API
+translation. Agents should use this operation instead of Browser or Computer
+Use when the user asks to name the current platform thread or conversation.
+
 `agent_session_stopped` is normalized as the existing `status:stop` callback,
 so it passes through the same RBAC and active-turn checks as PwrAgent's status
 card control. A rejected or failed stop re-signals the truthful session state;

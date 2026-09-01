@@ -4709,6 +4709,88 @@ describe("MessagingController", () => {
     );
   });
 
+  it("lets an Agent rename the messaging conversation that started its turn", async () => {
+    const setConversationTitle = vi.fn(
+      async (
+        request: Parameters<NonNullable<MessagingAdapter["setConversationTitle"]>>[0],
+      ) => ({
+        channel: "slack" as const,
+        conversation: {
+          ...request.channel.conversation,
+          title: request.title,
+        },
+        outcome: "updated" as const,
+        title: request.title,
+        updatedAt: 1000,
+      }),
+    );
+    const harness = await createHarness({
+      channel: "slack",
+      setConversationTitle,
+    });
+    const event = buildTextEvent("Name this Slack thread Gone Fishin'", {
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "D012ABCDEF0",
+          kind: "thread",
+          parentConversationId: "D012ABCDEF0",
+          parentId: "1782234671.392669",
+        },
+      },
+      routingState: {
+        opaque: {
+          channelId: "D012ABCDEF0",
+          threadTs: "1782234671.392669",
+        },
+      },
+    });
+    await harness.store.upsertBinding({
+      id: "binding:slack:thread:1782234671.392669:D012ABCDEF0:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+    await harness.controller.handleInboundEvent(event);
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "rename_current_messaging_conversation",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: { title: "  Gone   Fishin'  " },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        channel: "slack",
+        conversation: {
+          id: "D012ABCDEF0",
+          kind: "thread",
+          parentId: "1782234671.392669",
+          title: "Gone Fishin'",
+        },
+        outcome: "renamed",
+        title: "Gone Fishin'",
+        updatedAt: 1000,
+      },
+    });
+    expect(setConversationTitle).toHaveBeenCalledWith({
+      actor: event.actor,
+      channel: event.channel,
+      routingState: event.routingState,
+      title: "Gone Fishin'",
+    });
+  });
+
   it("preserves a concrete live messaging origin for ordinary Codex turns only", async () => {
     const harness = await createHarness();
     const event = buildTextEvent(

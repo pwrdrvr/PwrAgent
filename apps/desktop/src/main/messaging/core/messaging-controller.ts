@@ -1172,6 +1172,10 @@ export class MessagingController {
           },
         };
       }
+      case "rename_current_messaging_conversation":
+        return await this.renameCurrentMessagingConversationFromAgentMessagingOrigin(
+          request,
+        );
       case "send_private_response":
         return await this.sendPrivateResponseFromAgentMessagingOrigin(request);
       case "send_messaging_file":
@@ -17382,6 +17386,73 @@ export class MessagingController {
           ? "created_and_attached"
           : "attached",
         placement: resolvedPlacement.placement,
+      },
+    };
+  }
+
+  private async renameCurrentMessagingConversationFromAgentMessagingOrigin(
+    request: Extract<
+      PwrAgentMessagingRequest,
+      { operation: "rename_current_messaging_conversation" }
+    >,
+  ): Promise<PwrAgentMessagingResponse> {
+    const title = normalizeConversationTitle(
+      typeof request.args?.title === "string" ? request.args.title : undefined,
+    );
+    if (!title || title.length > 200) {
+      return {
+        ok: false,
+        error: {
+          code: "invalid_arguments",
+          message:
+            "rename_current_messaging_conversation requires title between 1 and 200 characters.",
+        },
+      };
+    }
+    const origin = await this.resolveAgentMessagingOrigin(request.context);
+    if (!origin.ok) {
+      return origin;
+    }
+    if (!this.options.adapter.setConversationTitle) {
+      return {
+        ok: false,
+        error: {
+          code: "unsupported_operation",
+          message:
+            "This messaging provider does not support renaming the current conversation.",
+        },
+      };
+    }
+
+    const result = await this.options.adapter.setConversationTitle({
+      actor: origin.origin.event.actor,
+      channel: origin.origin.event.channel,
+      routingState:
+        origin.origin.event.routingState ?? origin.origin.binding?.routingState,
+      title,
+    });
+    if (result.outcome !== "updated") {
+      return {
+        ok: false,
+        error: {
+          code: result.outcome === "unsupported"
+            ? "unsupported_operation"
+            : "internal_error",
+          message:
+            result.errorMessage
+            ?? "The messaging provider could not rename the current conversation.",
+        },
+      };
+    }
+
+    return {
+      ok: true,
+      data: {
+        channel: result.channel,
+        conversation: summarizeMessagingConversation(result.conversation),
+        outcome: "renamed",
+        title: result.title,
+        updatedAt: result.updatedAt,
       },
     };
   }

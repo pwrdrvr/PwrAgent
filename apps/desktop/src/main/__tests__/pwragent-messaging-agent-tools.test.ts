@@ -54,6 +54,10 @@ describe("PwrAgent messaging agent tools", () => {
           }),
           expect.objectContaining({
             type: "function",
+            name: "rename_current_messaging_conversation",
+          }),
+          expect.objectContaining({
+            type: "function",
             name: "attach_thread_here",
           }),
         ]),
@@ -62,6 +66,7 @@ describe("PwrAgent messaging agent tools", () => {
     expect(specs[0]?.type === "namespace" ? specs[0].tools.map((tool) => tool.name) : [])
       .toEqual([
       "get_current_messaging_surface",
+      "rename_current_messaging_conversation",
       "send_private_response",
       "send_messaging_file",
       "attach_thread_here",
@@ -71,6 +76,7 @@ describe("PwrAgent messaging agent tools", () => {
     ]);
     expect(router.buildMcpTools().map((tool) => tool.name)).toEqual([
       "get_current_messaging_surface",
+      "rename_current_messaging_conversation",
       "send_private_response",
       "send_messaging_file",
       "attach_thread_here",
@@ -88,6 +94,24 @@ describe("PwrAgent messaging agent tools", () => {
             description: expect.stringContaining(
               "start a continuation from the first private reply",
             ),
+          }),
+        }),
+      }),
+    });
+    const renameConversationTool = specs[0]?.type === "namespace"
+      ? specs[0].tools.find(
+          (tool) => tool.name === "rename_current_messaging_conversation",
+        )
+      : undefined;
+    expect(renameConversationTool).toMatchObject({
+      description: expect.stringContaining("instead of Browser or Computer Use"),
+      inputSchema: expect.objectContaining({
+        required: ["title"],
+        properties: expect.objectContaining({
+          title: expect.objectContaining({
+            type: "string",
+            minLength: 1,
+            maxLength: 200,
           }),
         }),
       }),

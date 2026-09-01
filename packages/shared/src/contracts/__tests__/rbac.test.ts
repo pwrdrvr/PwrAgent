@@ -354,6 +354,12 @@ describe("action → permission lookup tables", () => {
       permissionForDynamicTool("messaging_context", "get_current_messaging_surface"),
     ).toBeUndefined();
     expect(
+      permissionForDynamicTool(
+        "messaging_context",
+        "rename_current_messaging_conversation",
+      ),
+    ).toBe("thread.settings.name");
+    expect(
       permissionForDynamicTool("messaging_context", "send_private_response"),
     ).toBeUndefined();
     expect(
