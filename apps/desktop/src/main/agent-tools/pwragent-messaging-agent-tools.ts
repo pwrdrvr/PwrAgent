@@ -119,7 +119,7 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
     case "get_current_messaging_surface":
       return "Inspect the current messaging surface, actor, conversation, binding, bound thread, and native child-topic support. Also returns this surface's outbound attachment limits.";
     case "rename_current_messaging_conversation":
-      return "Rename the current messaging conversation or thread that started this Agent turn. Use this when the user asks to name or rename the current Slack thread or Agent Session, Telegram topic, or equivalent provider surface. Use this PwrAgent operation instead of Browser or Computer Use. This cannot target another conversation and does not rename the PwrAgent Agent thread.";
+      return "Rename the current messaging conversation or thread that started this Agent turn. Use when the user asks to name the current Slack thread, Agent Session, Telegram topic, or equivalent surface. Use this PwrAgent operation instead of Browser or Computer Use. This cannot target another conversation and does not rename the PwrAgent Agent thread.";
     case "send_private_response":
       return "Send the final response privately to the user who started this messaging turn. Use this only after an explicit request or to protect secrets. After success, end the turn without a public copy. Set awaitReply and replyInstructions to start a continuation from one private reply. Only the continuation's final response returns to the source surface. This tool works only in an active messaging turn and cannot target another user.";
     case "send_messaging_file":
