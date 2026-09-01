@@ -93,6 +93,27 @@ function buildMonitorLine(
   };
 }
 
+/**
+ * One row of the Pricing rail's "Spend by model" section, found by the model
+ * it is keyed on. Scoped to the section because the same model name also
+ * appears on every usage card below it.
+ */
+function spendRow(model: string): HTMLElement {
+  const list = document.querySelector(".pricing-spend-list");
+  expect(list).not.toBeNull();
+  const row = within(list as HTMLElement)
+    .getByText(model)
+    .closest(".pricing-spend-row");
+  expect(row).not.toBeNull();
+  return row as HTMLElement;
+}
+
+function expandSpendRow(model: string): HTMLElement {
+  const row = spendRow(model);
+  fireEvent.click(within(row).getByRole("button"));
+  return row;
+}
+
 const baseBackend: BackendSummary = {
   kind: "codex",
   label: "OpenAI",
@@ -1072,9 +1093,26 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByRole("heading", { level: 3, name: "Pricing" })).toBeInTheDocument();
     expect(screen.getByText("Pricing summary")).toBeInTheDocument();
     expect(screen.getByText("1 row")).toBeInTheDocument();
-    expect(screen.getByText("Parent model token volume")).toBeInTheDocument();
-    expect(screen.getByText("$0.010")).toBeInTheDocument();
+    expect(screen.getByText("Spend by model")).toBeInTheDocument();
+    const summaryCard = screen.getByText("Pricing summary").closest(
+      ".pricing-summary-card",
+    ) as HTMLElement;
+    expect(
+      summaryCard.querySelector(".rail-summary-card__primary"),
+    ).toHaveTextContent("$0.010");
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
+    /* One model, so its row opens on the token volume the section replaced —
+       there is nothing for it to hide behind a click. */
+    const onlyModel = spendRow("gpt-5.5");
+    expect(within(onlyModel).getByText("OpenAI · 1 row")).toBeInTheDocument();
+    expect(onlyModel).toHaveTextContent("Uncached input1.5k");
+    expect(onlyModel).toHaveTextContent("Cached input500");
+    expect(onlyModel).toHaveTextContent("Output300");
+    expect(onlyModel).toHaveTextContent("Reasoning120");
+    /* Open by default is a default, not a fixture: an operator who does not
+       want the volume can still close it. */
+    fireEvent.click(within(onlyModel).getByRole("button"));
+    expect(spendRow("gpt-5.5")).not.toHaveTextContent("Uncached input");
     expect(screen.getByText("gpt-5.5 · high · Fast")).toBeInTheDocument();
     expect(screen.queryByText("Turn usage")).not.toBeInTheDocument();
     expect(
@@ -1087,7 +1125,7 @@ describe("ThreadContextPanel", () => {
     expect(screen.getByText("Running total: $0.010 list price")).toBeInTheDocument();
   });
 
-  it("keeps helper tokens out of the parent model summary", () => {
+  it("gives each model its own token volume instead of only the parent's", () => {
     const parentLine: ThreadUsageLineRecord = {
       backend: "codex",
       cachedInputCostMicros: 45_000,
@@ -1144,19 +1182,33 @@ describe("ThreadContextPanel", () => {
       threadPricingSummaryEnabled: true,
     });
 
+    /* The rail used to show one token volume, filtered to the parent's own
+       turns, so a helper that spent 7k tokens appeared here as dollars and
+       nothing else. Each model now answers for its own rows — and still only
+       its own: a single merged figure was the bug, not the fix. */
     const summaryCard = screen.getByText("Pricing summary").closest(
       ".pricing-summary-card",
     );
     expect(summaryCard).not.toBeNull();
     const summary = within(summaryCard as HTMLElement);
-    expect(summary.getByText("$0.13")).toBeInTheDocument();
     expect(summary.getByText("3 rows")).toBeInTheDocument();
-    expect(summary.getByText("Parent model token volume")).toBeInTheDocument();
-    expect(summary.getByText("10k")).toBeInTheDocument();
-    expect(summary.getByText("90k")).toBeInTheDocument();
-    expect(summary.getByText("1k")).toBeInTheDocument();
-    expect(summary.getByText("250")).toBeInTheDocument();
-    expect(summary.queryByText("17k")).not.toBeInTheDocument();
+    expect(
+      summaryCard?.querySelector(".rail-summary-card__primary"),
+    ).toHaveTextContent("$0.13");
+
+    const parent = expandSpendRow("gpt-5.6-sol");
+    expect(parent).toHaveTextContent("This thread's model");
+    expect(parent).toHaveTextContent("Uncached input10k");
+    expect(parent).toHaveTextContent("Cached input90k");
+    expect(parent).toHaveTextContent("Output1k");
+    expect(parent).toHaveTextContent("Reasoning250");
+
+    const helper = expandSpendRow("gpt-5.6-luna");
+    expect(within(helper).getByText("2 rows")).toBeInTheDocument();
+    expect(helper).toHaveTextContent("2 sub-agents");
+    expect(helper).toHaveTextContent("Uncached input7k");
+    expect(helper).toHaveTextContent("Output420");
+    expect(helper).not.toHaveTextContent("90k");
   });
 
   it("summarizes Token Miser above the turn rows on the Pricing tab", () => {
@@ -1580,10 +1632,13 @@ describe("ThreadContextPanel", () => {
 
     expect(screen.getByText("$56.98 · 1,424 Codex Credits estimated")).toBeInTheDocument();
     expect(screen.queryByText("$21.44 · 1,423 Codex Credits")).not.toBeInTheDocument();
-    expect(document.body).toHaveTextContent("Uncached input2.8M");
-    expect(document.body).toHaveTextContent("Cached input70.5M");
-    expect(document.body).toHaveTextContent("Output221.7k");
-    expect(document.body).toHaveTextContent("Reasoning37k");
+    /* The estimated gap line is the thread model's, so the cumulative tokens
+       land in its spend row rather than in the monitor's. */
+    const parent = expandSpendRow("gpt-5.5");
+    expect(parent).toHaveTextContent("Uncached input2.8M");
+    expect(parent).toHaveTextContent("Cached input70.5M");
+    expect(parent).toHaveTextContent("Output221.7k");
+    expect(parent).toHaveTextContent("Reasoning37k");
     expect(screen.getByText("Historical usage estimate")).toBeInTheDocument();
     expect(
       screen.getByText("$56.23 estimated list price · 1,406 Codex Credits estimated"),
@@ -4584,22 +4639,22 @@ describe("ThreadContextPanel", () => {
       ".pricing-summary-card",
     );
     expect(summaryCard).not.toBeNull();
-    expect(within(summaryCard as HTMLElement).getByText("By provider")).toBeInTheDocument();
-    expect(within(summaryCard as HTMLElement).getByText("OpenAI")).toBeInTheDocument();
-    expect(within(summaryCard as HTMLElement).getByText("xAI")).toBeInTheDocument();
+    const summary = within(summaryCard as HTMLElement);
+    expect(summary.getByText("Spend by model")).toBeInTheDocument();
+    /* Costliest first, so the row that explains the bill is the one at the
+       top. The reviewer's own row carries no model of its own — its name comes
+       from the sub-agent, the same chain the usage card below walks. */
+    const rows = summaryCard?.querySelectorAll(".pricing-spend-row") ?? [];
+    expect(rows).toHaveLength(2);
+    expect(within(spendRow("gpt-5.5")).getByText("xAI · 1 row")).toBeInTheDocument();
+    expect(within(spendRow("gpt-5.5")).getByText("$2.00")).toBeInTheDocument();
     expect(
-      within(summaryCard as HTMLElement).getByText("$1.00 · 1 row"),
+      within(spendRow("gpt-5.6-sol")).getByText("OpenAI · 1 row"),
     ).toBeInTheDocument();
-    expect(
-      within(summaryCard as HTMLElement).getByText("$2.00 · 1 row"),
-    ).toBeInTheDocument();
-    const providerDetail = screen.getByText("openai · USD").closest(
-      ".pricing-provider-row",
-    );
-    expect(providerDetail).not.toBeNull();
-    expect(
-      within(providerDetail as HTMLElement).getByText("$1.00 list price · 1 row"),
-    ).toBeInTheDocument();
+    expect(within(spendRow("gpt-5.6-sol")).getByText("$1.00")).toBeInTheDocument();
+    /* The provider ids used to be printed raw, in a second list of cards that
+       repeated these same three facts underneath the card. */
+    expect(screen.queryByText("openai · USD")).not.toBeInTheDocument();
 
     const reviewUsage = screen.getByText("Review usage").closest(
       ".pricing-usage-row",
@@ -4610,6 +4665,80 @@ describe("ThreadContextPanel", () => {
       within(reviewUsage as HTMLElement).getByText("gpt-5.6-sol · high"),
     ).toBeInTheDocument();
     expect(within(reviewUsage as HTMLElement).queryByText("Grok")).not.toBeInTheDocument();
+  });
+
+  it("ranks a four-provider turn by spend and subtotals only the shared provider", () => {
+    /* The case the section exists for: one thread model and four reviewers on
+       three other providers. The old split printed four provider lines and
+       four cards repeating them, and melted the two OpenAI reviews into one
+       row that could not be taken apart. */
+    const createdAt = 1_800_000_000_000;
+    const turnLines = [0, 1, 2, 3].map((index) =>
+      buildMonitorLine({
+        backend: "acp:grok",
+        createdAt: createdAt - index,
+        model: "grok-4.1-fast",
+        provider: "xai",
+        scope: "turn",
+        source: "live",
+        totalCostMicros: 647_500,
+        usageLineId: `grok-turn-${index}`,
+      }),
+    );
+    const reviews = [
+      { cost: 1_070_000, id: "sol", model: "gpt-5.6-sol", provider: "openai" },
+      { cost: 840_000, id: "terra", model: "gpt-5.6-terra", provider: "openai" },
+      { cost: 210_000, id: "kimi", model: "kimi-k2.5", provider: "moonshot" },
+      { cost: 140_000, id: "qwen", model: "qwen3-max", provider: "qwen" },
+    ].map((review) =>
+      buildMonitorLine({
+        backend: "acp:grok",
+        createdAt,
+        model: review.model,
+        parentThreadId: "thread-1",
+        provider: review.provider,
+        sourceItemId: `review:${review.id}`,
+        totalCostMicros: review.cost,
+        usageLineId: `review-${review.id}`,
+      }),
+    );
+
+    renderPanel({
+      activeTab: "pricing",
+      pinned: true,
+      thread: { ...baseThread, source: "acp:grok" },
+      pricing: { lines: [...turnLines, ...reviews], summaries: [] },
+      threadPricingSummaryEnabled: true,
+    });
+
+    const summaryCard = screen.getByText("Pricing summary").closest(
+      ".pricing-summary-card",
+    ) as HTMLElement;
+    expect(
+      summaryCard.querySelector(".rail-summary-card__primary"),
+    ).toHaveTextContent("$4.85");
+    expect(
+      [...summaryCard.querySelectorAll(".pricing-spend-row__label")].map(
+        (label) => label.textContent,
+      ),
+    ).toEqual([
+      "grok-4.1-fast",
+      "gpt-5.6-sol",
+      "gpt-5.6-terra",
+      "kimi-k2.5",
+      "qwen3-max",
+    ]);
+    /* Only OpenAI ran two models, so it is the only provider whose subtotal is
+       not already a row of its own. */
+    const heads = [...summaryCard.querySelectorAll(".pricing-spend-group__head")];
+    expect(heads).toHaveLength(1);
+    expect(heads[0]).toHaveTextContent("OpenAI$1.91 · 2 rows");
+    expect(
+      within(spendRow("grok-4.1-fast")).getByText("xAI · 4 rows"),
+    ).toBeInTheDocument();
+    expect(
+      within(spendRow("qwen3-max")).getByText("Qwen · 1 row"),
+    ).toBeInTheDocument();
   });
 
   it("renders accumulated edit groups on the Edits tab and toggles the dock", () => {

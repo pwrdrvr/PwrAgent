@@ -39,6 +39,12 @@ import {
 import { RailCardTiming, useNowWhileActive } from "./RailCardTiming";
 import { TokenMiserSavingsBreakdown } from "./TokenMiserSavingsBreakdown";
 import { TokenMiserSummaryCard } from "./TokenMiserSummaryCard";
+import {
+  addUsageLineToSummary,
+  buildPricingSpendByModel,
+  emptyPricingSummary,
+  type PricingModelSpend,
+} from "../pricing-spend-by-model";
 import { buildTokenMiserSavingsSummary } from "../token-miser-savings-summary";
 
 type PricingPanelProps = {
@@ -108,6 +114,15 @@ export function PricingPanel(props: PricingPanelProps) {
     usagePage.key === pricingHistoryKey
       ? usagePage.count
       : PRICING_USAGE_PAGE_SIZE;
+  // Which spend rows the operator has opened, and which they have closed. A
+  // lone row starts open — there is nothing for it to hide, and closing it
+  // would take away the token volume this section replaced.
+  const [spendExpansion, setSpendExpansion] = useState<{
+    key: string;
+    overrides: Readonly<Record<string, boolean>>;
+  }>({ key: pricingHistoryKey, overrides: {} });
+  const spendOverrides =
+    spendExpansion.key === pricingHistoryKey ? spendExpansion.overrides : {};
   const visibleDisplayLines = displayLines.slice(0, visibleUsageRowCount);
   const hiddenUsageRowCount = displayLines.length - visibleDisplayLines.length;
   const estimatedLines = allDisplayLines.filter(isEstimatedUsageGap);
@@ -115,13 +130,41 @@ export function PricingPanel(props: PricingPanelProps) {
   const summary =
     aggregateSummaries(displaySummaries) ?? aggregateUsageLines(allDisplayLines);
   // The headline is the all-in bill, including naming, reviews, monitors and
-  // Token Miser. Token volume is a context question, though: only the parent
-  // thread's turn rows enter its model context. Helper usage already has its
-  // own cards below, and mixing it here made the summary disagree with both
-  // the turn card and Codex's context-window meter.
-  const parentModelSummary = aggregateUsageLines(
-    allDisplayLines.filter(isMainThreadUsageLine),
+  // Token Miser. Underneath it, the same bill split by the model that spent
+  // it: a turn that sends four reviewers to four models bills three providers,
+  // and a per-provider split answers none of the questions that raises.
+  const spendByModel = buildPricingSpendByModel({
+    lines: allDisplayLines,
+    resolveModel: (line) =>
+      resolveUsageLineModel(
+        line,
+        line.scope === "monitor" && line.sourceItemId
+          ? subAgentsById.get(line.sourceItemId)
+          : undefined,
+      ),
+  });
+  const spendModelCount = spendByModel.reduce(
+    (total, group) => total + group.models.length,
+    0,
   );
+  // A thread with one model has nothing to hide behind a click, and hiding it
+  // would take away the token volume this section replaced.
+  const spendRowStartsExpanded = spendModelCount === 1;
+  const isSpendRowExpanded = (key: string): boolean =>
+    spendOverrides[key] ?? spendRowStartsExpanded;
+  const toggleSpendRow = (key: string): void => {
+    setSpendExpansion((current) => {
+      const overrides =
+        current.key === pricingHistoryKey ? current.overrides : {};
+      return {
+        key: pricingHistoryKey,
+        overrides: {
+          ...overrides,
+          [key]: !(overrides[key] ?? spendRowStartsExpanded),
+        },
+      };
+    });
+  };
   // Thread-level gate result, from every gate this thread spawned. The
   // per-turn folds below price one turn each; this is the same arithmetic run
   // once across all of them, so the rail can answer "did the gate pay for
@@ -244,11 +287,7 @@ export function PricingPanel(props: PricingPanelProps) {
         ? props.threadReasoningEffort
         : undefined);
     const runtimeLabel = formatUsageLineRuntimeLabel(line, subAgent);
-    const runtimeModel =
-      line.model
-      ?? subAgent?.preferredModel
-      ?? subAgent?.monitorUsage?.model
-      ?? subAgent?.monitorUsage?.cost?.model;
+    const runtimeModel = resolveUsageLineModel(line, subAgent);
 
     return (
       <li
@@ -384,48 +423,41 @@ export function PricingPanel(props: PricingPanelProps) {
               {summary.unpricedUsageLineCount.toLocaleString()} unpriced ·{" "}
               {formatTimestamp(summary.updatedAt)}
             </div>
-            {parentModelSummary ? (
+            {spendByModel.length > 0 ? (
               <div className="rail-summary-card__section">
                 <span className="rail-summary-card__section-title">
-                  Parent model token volume
+                  Spend by model
                 </span>
-                <RailSummaryRow
-                  label="Uncached input"
-                  value={formatCompactCount(parentModelSummary.uncachedInputTokens)}
-                />
-                <RailSummaryRow
-                  label="Cached input"
-                  value={formatCompactCount(parentModelSummary.cachedInputTokens)}
-                />
-                <RailSummaryRow
-                  label="Output"
-                  value={formatCompactCount(parentModelSummary.outputTokens)}
-                />
-                {parentModelSummary.reasoningOutputTokens > 0 ? (
-                  <RailSummaryRow
-                    label="Reasoning"
-                    value={formatCompactCount(
-                      parentModelSummary.reasoningOutputTokens,
-                    )}
-                  />
-                ) : null}
-              </div>
-            ) : null}
-            {displaySummaries.length > 1 ? (
-              <div className="rail-summary-card__section">
-                <span className="rail-summary-card__section-title">By provider</span>
-                {displaySummaries.map((providerSummary) => (
-                  <RailSummaryRow
-                    key={`${providerSummary.provider}:${providerSummary.currency}`}
-                    label={formatPricingProviderLabel(providerSummary.provider)}
-                    value={`${formatMoney(
-                      providerSummary.totalCostMicros,
-                      providerSummary.currency,
-                    )} · ${providerSummary.usageLineCount.toLocaleString()} row${
-                      providerSummary.usageLineCount === 1 ? "" : "s"
-                    }`}
-                  />
-                ))}
+                <div className="pricing-spend-list">
+                  {spendByModel.map((group) => (
+                    <div className="pricing-spend-group" key={group.key}>
+                      {/* A provider gets a heading only where it contributed
+                          more than one model, because that is the one case
+                          where its subtotal is not already a row. */}
+                      {group.models.length > 1 ? (
+                        <div className="pricing-spend-group__head">
+                          <span>
+                            {formatPricingProviderLabel(group.provider)}
+                          </span>
+                          <span className="pricing-spend-group__total">
+                            {formatMoney(group.totalCostMicros, group.currency)}
+                            {" · "}
+                            {formatUsageRowCount(group.usageLineCount)}
+                          </span>
+                        </div>
+                      ) : null}
+                      {group.models.map((modelSpend) => (
+                        <PricingModelSpendRow
+                          expanded={isSpendRowExpanded(modelSpend.key)}
+                          key={modelSpend.key}
+                          onToggle={() => toggleSpendRow(modelSpend.key)}
+                          showProvider={group.models.length === 1}
+                          spend={modelSpend}
+                        />
+                      ))}
+                    </div>
+                  ))}
+                </div>
               </div>
             ) : null}
           </div>
@@ -434,28 +466,6 @@ export function PricingPanel(props: PricingPanelProps) {
               {summary.unpricedUsageLineCount.toLocaleString()} usage row
               {summary.unpricedUsageLineCount === 1 ? "" : "s"} could not be priced.
             </p>
-          ) : null}
-          {displaySummaries.length > 1 ? (
-            <ul className="context-list context-list--cards pricing-provider-list">
-              {displaySummaries.map((providerSummary) => (
-                <li
-                  key={`${providerSummary.provider}:${providerSummary.currency}`}
-                  className="rail-card pricing-provider-row"
-                >
-                  <p className="rail-card__title">
-                    {providerSummary.provider} · {providerSummary.currency}
-                  </p>
-                  <p className="rail-card__usage">
-                    {formatMoney(
-                      providerSummary.totalCostMicros,
-                      providerSummary.currency,
-                    )}{" "}
-                    list price · {providerSummary.usageLineCount.toLocaleString()} row
-                    {providerSummary.usageLineCount === 1 ? "" : "s"}
-                  </p>
-                </li>
-              ))}
-            </ul>
           ) : null}
         </>
       ) : displayLines.length === 0 ? (
@@ -508,6 +518,120 @@ export function PricingPanel(props: PricingPanelProps) {
         </div>
       ) : null}
     </section>
+  );
+}
+
+/**
+ * One model's share of the bill, closed by default, opening onto the token
+ * volume behind it.
+ *
+ * Only the parent thread's volume was ever shown here, so a review that spent
+ * a dollar and 1.3M tokens appeared in the rail as a dollar. The row that
+ * replaced the provider split carries both.
+ */
+function PricingModelSpendRow(props: {
+  expanded: boolean;
+  onToggle: () => void;
+  /** True when no provider heading sits above this row to name it. */
+  showProvider: boolean;
+  spend: PricingModelSpend;
+}) {
+  const summary = props.spend.summary;
+  const meta = [
+    props.showProvider
+      ? formatPricingProviderLabel(props.spend.provider)
+      : undefined,
+    formatUsageRowCount(summary.usageLineCount),
+  ]
+    .filter((part): part is string => part !== undefined)
+    .join(" · ");
+  const origin = formatModelSpendOrigin(props.spend);
+
+  return (
+    <div
+      className="pricing-spend-row"
+      data-expanded={props.expanded ? "true" : "false"}
+    >
+      <button
+        aria-expanded={props.expanded}
+        className="pricing-spend-row__summary"
+        onClick={props.onToggle}
+        type="button"
+      >
+        <span aria-hidden="true" className="pricing-spend-row__chevron">›</span>
+        <span className="pricing-spend-row__label">
+          {props.spend.model ?? "Unknown model"}
+        </span>
+        <span className="pricing-spend-row__meta">{meta}</span>
+        <span className="pricing-spend-row__cost">
+          {formatMoney(summary.totalCostMicros, summary.currency)}
+        </span>
+      </button>
+      {props.expanded ? (
+        <div className="pricing-spend-row__body">
+          {origin ? <p className="pricing-spend-row__origin">{origin}</p> : null}
+          <RailSummaryRow
+            label="Uncached input"
+            value={formatCompactCount(summary.uncachedInputTokens)}
+          />
+          <RailSummaryRow
+            label="Cached input"
+            value={formatCompactCount(summary.cachedInputTokens)}
+          />
+          <RailSummaryRow
+            label="Output"
+            value={formatCompactCount(summary.outputTokens)}
+          />
+          {summary.reasoningOutputTokens > 0 ? (
+            <RailSummaryRow
+              label="Reasoning"
+              value={formatCompactCount(summary.reasoningOutputTokens)}
+            />
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Says where a model's rows came from, when saying it adds something. A thread
+ * whose own model is also a reviewer's reads "This thread's model · 2
+ * sub-agents"; a bucket that is only turn rows says so once and stops.
+ */
+function formatModelSpendOrigin(spend: PricingModelSpend): string | undefined {
+  const subAgents =
+    spend.subAgentCount > 0
+      ? `${spend.subAgentCount.toLocaleString()} sub-agent${
+          spend.subAgentCount === 1 ? "" : "s"
+        }`
+      : undefined;
+  if (spend.threadUsageLineCount > 0) {
+    return subAgents
+      ? `This thread's model · ${subAgents}`
+      : "This thread's model";
+  }
+  return subAgents;
+}
+
+function formatUsageRowCount(count: number): string {
+  return `${count.toLocaleString()} row${count === 1 ? "" : "s"}`;
+}
+
+/**
+ * The model a usage row belongs to. A helper's row often carries none of its
+ * own and the sub-agent summary holds it, so the row card and the spend bucket
+ * walk the same chain rather than disagreeing about who spent the money.
+ */
+function resolveUsageLineModel(
+  line: ThreadUsageLineRecord,
+  subAgent?: ThreadSubAgentSummary,
+): string | undefined {
+  return (
+    line.model
+    ?? subAgent?.preferredModel
+    ?? subAgent?.monitorUsage?.model
+    ?? subAgent?.monitorUsage?.cost?.model
   );
 }
 
@@ -925,25 +1049,7 @@ function addEstimatedLinesToSummaries(
   }
   for (const line of estimatedLines) {
     const key = usageLineSummaryKey(line);
-    const existing =
-      byKey.get(key) ??
-      ({
-        backend: line.backend,
-        cachedInputTokens: 0,
-        currency: line.currency,
-        inputTokens: 0,
-        outputTokens: 0,
-        pricedUsageLineCount: 0,
-        provider: line.provider,
-        reasoningOutputTokens: 0,
-        threadId: line.parentThreadId ?? line.threadId,
-        totalCostMicros: 0,
-        totalTokens: 0,
-        uncachedInputTokens: 0,
-        unpricedUsageLineCount: 0,
-        updatedAt: 0,
-        usageLineCount: 0,
-      } satisfies ThreadPricingSummary);
+    const existing = byKey.get(key) ?? emptyPricingSummary(line);
     byKey.set(key, addUsageLineToSummary(existing, line));
   }
   return [...byKey.values()].sort((left, right) => {
@@ -958,53 +1064,10 @@ function aggregateUsageLines(lines: PricingUsageLine[]): ThreadPricingSummary | 
   if (lines.length === 0) {
     return undefined;
   }
-  const firstLine = lines[0];
   return lines.reduce<ThreadPricingSummary>(
     (summary, line) => addUsageLineToSummary(summary, line),
-    {
-      backend: firstLine.backend,
-      cachedInputTokens: 0,
-      currency: firstLine.currency,
-      inputTokens: 0,
-      outputTokens: 0,
-      pricedUsageLineCount: 0,
-      provider: firstLine.provider,
-      reasoningOutputTokens: 0,
-      threadId: firstLine.threadId,
-      totalCostMicros: 0,
-      totalTokens: 0,
-      uncachedInputTokens: 0,
-      unpricedUsageLineCount: 0,
-      updatedAt: 0,
-      usageLineCount: 0,
-    },
+    emptyPricingSummary(lines[0]),
   );
-}
-
-function addUsageLineToSummary(
-  summary: ThreadPricingSummary,
-  line: PricingUsageLine,
-): ThreadPricingSummary {
-  return {
-    backend: summary.backend,
-    cachedInputTokens: summary.cachedInputTokens + line.cachedInputTokens,
-    currency: summary.currency,
-    inputTokens: summary.inputTokens + line.inputTokens,
-    outputTokens: summary.outputTokens + line.outputTokens,
-    pricedUsageLineCount:
-      summary.pricedUsageLineCount + (line.priceStatus === "priced" ? 1 : 0),
-    provider: summary.provider,
-    reasoningOutputTokens:
-      summary.reasoningOutputTokens + line.reasoningOutputTokens,
-    threadId: summary.threadId,
-    totalCostMicros: summary.totalCostMicros + line.totalCostMicros,
-    totalTokens: summary.totalTokens + line.totalTokens,
-    uncachedInputTokens: summary.uncachedInputTokens + line.uncachedInputTokens,
-    unpricedUsageLineCount:
-      summary.unpricedUsageLineCount + (line.priceStatus === "priced" ? 0 : 1),
-    updatedAt: Math.max(summary.updatedAt, line.completedAt ?? line.createdAt),
-    usageLineCount: summary.usageLineCount + 1,
-  };
 }
 
 function summaryKey(summary: ThreadPricingSummary): string {
@@ -1051,10 +1114,6 @@ function compareUsageLinesDescending(
 
 function lineSortTimestamp(line: ThreadUsageLineRecord): number {
   return line.startedAt ?? line.createdAt;
-}
-
-function isMainThreadUsageLine(line: ThreadUsageLineRecord): boolean {
-  return line.scope !== "monitor";
 }
 
 function formatSummaryEstimates(params: {
