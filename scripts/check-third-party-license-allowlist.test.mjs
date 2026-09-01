@@ -305,7 +305,7 @@ describe("notice coverage", () => {
   });
 
   it("selects the workspace packages the desktop app ships, not apps/desktop alone", () => {
-    // The `...` suffix is the difference between judging 472 shipped packages
+    // The `...` suffix is the difference between judging 470 shipped packages
     // and judging 401. A bare `@pwragent/desktop` reports only the dependencies
     // declared in apps/desktop/package.json, so everything reached through the
     // eight workspace packages it depends on — the entire npm tree under the

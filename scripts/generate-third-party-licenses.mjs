@@ -461,14 +461,22 @@ function main() {
         "THIRD_PARTY_LICENSES is out of date. Run `pnpm licenses:generate` and commit the result.",
       );
       // Say what moved. "Out of date" alone sends the reader to regenerate
-      // locally and diff by hand, which does not work when the committed file
-      // was generated on a different platform than the one running the check:
-      // the two installs disagree about which optional packages exist, and the
-      // only way to see that from CI is for CI to name them.
+      // locally and diff by hand, which reproduces neither side when the branch
+      // and the machine running the check resolve different dependency
+      // versions — a branch that predates a dependency bump on main is the
+      // common case, and it looks identical to a stale commit until something
+      // names the packages.
       for (const line of describeNoticeDrift(current, output)) {
         console.error(`  ${line}`);
       }
-      process.exit(1);
+      // `process.exitCode` rather than `process.exit`, which discards queued
+      // asynchronous stderr writes. The drift report above runs to 22 lines,
+      // and CI captures stderr through a pipe, where writes are async on Linux
+      // — exiting here can drop the one thing that makes this failure
+      // actionable. Same reason check-third-party-license-allowlist.mjs and
+      // check-electron-version-policy.mjs do it.
+      process.exitCode = 1;
+      return;
     }
     console.log("third-party license notice check passed");
   } else {
