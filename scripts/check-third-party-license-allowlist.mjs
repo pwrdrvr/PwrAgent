@@ -27,7 +27,10 @@
  * three sources, and this gate reads the two that introduce a license string:
  *
  * 1. The npm production tree (`pnpm licenses list --prod --filter
- *    @pwragent/desktop`) — the surface that moves on its own under Dependabot.
+ *    @pwragent/desktop...`) — the surface that moves on its own under
+ *    Dependabot. The `...` widens the selector from apps/desktop alone to every
+ *    workspace project it ships, so the npm dependencies of the messaging
+ *    providers are judged too; without it, 69 shipped packages were ungated.
  * 2. `NOTICE_DEV_DEPENDENCIES` from the `all` report. The generator pulls
  *    Electron in from there because Electron is a devDependency that ships;
  *    reading only the production report would leave the single largest shipped
@@ -78,6 +81,7 @@ import { fileURLToPath } from "node:url";
 import {
   NOTICE_DEV_DEPENDENCIES,
   NOTICE_PNPM_ARGS,
+  NOTICE_PNPM_FILTER,
   flattenLicenseReport,
   runPnpmLicenses,
 } from "./generate-third-party-licenses.mjs";
@@ -329,7 +333,7 @@ export function checkSurfaceCoverage({ productionRecords = [], allRecords = [] }
   if (productionRecords.length === 0) {
     failures.push(
       "the production license report contained no packages, so this gate judged nothing. "
-        + "Run `pnpm install`, and check that `--filter @pwragent/desktop` in "
+        + `Run \`pnpm install\`, and check that \`--filter ${NOTICE_PNPM_FILTER}\` in `
         + "generate-third-party-licenses.mjs still names a real workspace package.",
     );
   }

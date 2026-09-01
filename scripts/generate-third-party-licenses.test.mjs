@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  describeNoticeDrift,
   expandOptionalPlatformVariants,
   enrichRecord,
   StaleInstallError,
@@ -144,5 +145,62 @@ describe("third-party license package enrichment", () => {
       "example-canvas-linux-x64@1.2.3",
       "example-canvas@1.2.3",
     ]);
+  });
+});
+
+
+describe("describeNoticeDrift", () => {
+  const summaryLine = (key) => `- ${key} | https://example.invalid/${key}`;
+  const notice = (keys) => `${keys.map(summaryLine).join("\n")}\n`;
+
+  it("names the packages each side has and the other does not", () => {
+    const lines = describeNoticeDrift(
+      notice(["a@1.0.0", "b@2.0.0"]),
+      notice(["a@1.0.0", "c@3.0.0"]),
+    );
+    expect(lines).toEqual([
+      "only in the freshly generated notice (1): c@3.0.0",
+      "only in the committed notice (1): b@2.0.0",
+    ]);
+  });
+
+  it("reads package keys only from the summary list", () => {
+    // Every package appears twice in the notice: once in the summary list with
+    // a source URL, and again under "Applies to:" with its declared license. A
+    // pattern loose enough to match both would double every count and report a
+    // package as added when only its license section moved.
+    const lines = describeNoticeDrift("", `${notice(["a@1.0.0"])}\n- a@1.0.0 (MIT)\n`);
+    expect(lines).toEqual(["only in the freshly generated notice (1): a@1.0.0"]);
+  });
+
+  it("caps the list so a wholesale regeneration cannot flood a CI log", () => {
+    // The widened-selector change added 69 packages at once; an uncapped list
+    // would bury the header it is meant to explain.
+    const keys = Array.from({ length: 25 }, (_, index) => `p${String(index).padStart(2, "0")}@1.0.0`);
+    const lines = describeNoticeDrift("", notice(keys));
+    expect(lines).toHaveLength(2);
+    expect(lines[0]).toContain("(25):");
+    expect(lines[0]).toContain("p19@1.0.0");
+    expect(lines[0]).not.toContain("p20@1.0.0");
+    expect(lines[1]).toBe("  ...and 5 more");
+  });
+
+  it("falls back to the first differing line when the package set is unchanged", () => {
+    // A license text or source URL that changed under an unchanged version is
+    // invisible to the package-level view, and reporting nothing there would
+    // leave "out of date" as unactionable as before.
+    const lines = describeNoticeDrift(
+      "PwrAgent Third-Party Licenses\nCopyright (c) 2025\n",
+      "PwrAgent Third-Party Licenses\nCopyright (c) 2026\n",
+    );
+    expect(lines).toEqual([
+      'the package set is identical; the text differs from line 2: committed "Copyright (c) 2025"'
+        + ', generated "Copyright (c) 2026"',
+    ]);
+  });
+
+  it("reports a length-only difference when one notice is a prefix of the other", () => {
+    const lines = describeNoticeDrift("same\n", "same\n\n\n");
+    expect(lines).toEqual(["the package set is identical; the text differs only in length"]);
   });
 });

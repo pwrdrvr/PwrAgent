@@ -14,7 +14,26 @@ import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outputPath = join(repoRoot, "THIRD_PARTY_LICENSES");
-const desktopFilter = "@pwragent/desktop";
+/**
+ * The pnpm selector naming every workspace project the desktop app ships.
+ *
+ * The trailing `...` is load-bearing. A bare `@pwragent/desktop` selects that
+ * one project, so `pnpm licenses list` reports only the dependencies declared
+ * in apps/desktop/package.json — and every dependency reached THROUGH a
+ * workspace package is invisible. That is not a corner: @pwragent/desktop
+ * depends on eight workspace packages, and the whole npm tree beneath the six
+ * messaging providers (discord.js, grammy, @slack/*, @line/bot-sdk,
+ * @mattermost/client, @larksuiteoapi/node-sdk and their transitive deps) ships
+ * in the packaged application. Before the `...`, 69 shipped packages were
+ * absent from this notice and, because check-third-party-license-allowlist.mjs
+ * reads the same selector, never gated either.
+ *
+ * `...` selects the project plus its dependency projects. Combined with
+ * `--prod` it yields the same set as pnpm's `--filter-prod`, because no
+ * workspace package is a devDependency of another; the two were compared when
+ * this was widened. Keep the suffix when editing this string.
+ */
+export const NOTICE_PNPM_FILTER = "@pwragent/desktop...";
 const PLATFORM_VARIANT_SUFFIX = /-(?:android|darwin|freebsd|linux|openbsd|sunos|win32)(?:-|$)/;
 
 /**
@@ -43,7 +62,7 @@ export const NOTICE_DEV_DEPENDENCIES = new Set(["electron"]);
 export function runPnpmLicenses(args) {
   const result = spawnSync(
     "pnpm",
-    ["licenses", "list", "--json", "--filter", desktopFilter, ...args],
+    ["licenses", "list", "--json", "--filter", NOTICE_PNPM_FILTER, ...args],
     {
       cwd: repoRoot,
       encoding: "utf8",
@@ -268,6 +287,58 @@ export function enrichRecord(record) {
   };
 }
 
+/**
+ * A bounded description of how the committed notice differs from a fresh one.
+ *
+ * Reports package-level changes rather than a line diff, because the notice
+ * repeats each package in a summary list and again in a license section, so a
+ * raw diff of a single added package runs to dozens of lines. Capped so a large
+ * drift cannot flood a CI log.
+ */
+export function describeNoticeDrift(current, generated) {
+  const CAP = 20;
+  const packageKeys = (text) =>
+    new Set(
+      text
+        .split("\n")
+        .map((line) => /^- (\S+@\S+) \| /.exec(line)?.[1])
+        .filter((key) => key !== undefined),
+    );
+
+  const before = packageKeys(current);
+  const after = packageKeys(generated);
+  const added = [...after].filter((key) => !before.has(key)).sort();
+  const removed = [...before].filter((key) => !after.has(key)).sort();
+
+  const lines = [];
+  const report = (label, keys) => {
+    if (keys.length === 0) return;
+    lines.push(`${label} (${keys.length}): ${keys.slice(0, CAP).join(", ")}`);
+    if (keys.length > CAP) {
+      lines.push(`  ...and ${keys.length - CAP} more`);
+    }
+  };
+  report("only in the freshly generated notice", added);
+  report("only in the committed notice", removed);
+
+  if (lines.length === 0) {
+    // Same package set, so the difference is in the license text, the source
+    // URL, or the ordering of a section — nothing the package-level view shows.
+    const currentLines = current.split("\n");
+    const generatedLines = generated.split("\n");
+    const index = currentLines.findIndex((line, i) => line !== generatedLines[i]);
+    lines.push(
+      "the package set is identical; the text differs"
+        + (index === -1
+          ? " only in length"
+          : ` from line ${index + 1}: committed ${JSON.stringify(currentLines[index] ?? "")}`
+            + `, generated ${JSON.stringify(generatedLines[index] ?? "")}`),
+    );
+  }
+
+  return lines;
+}
+
 function compareRecords(a, b) {
   return (
     a.name.localeCompare(b.name) ||
@@ -327,7 +398,7 @@ function main() {
   lines.push("-----");
   lines.push("");
   lines.push(
-    "This notice covers npm production dependencies for @pwragent/desktop plus the Electron runtime package.",
+    "This notice covers npm production dependencies for @pwragent/desktop and the workspace packages it ships, plus the Electron runtime package.",
   );
   lines.push(
     "Electron includes Chromium and Node.js runtime components. PwrAgent includes Electron's MIT runtime license here; Chromium's generated credits are maintained upstream by Chromium/Electron and are intentionally not appended to this text notice because Electron's generated LICENSES.chromium.html is about 18 MB for the pinned runtime.",
@@ -389,7 +460,23 @@ function main() {
       console.error(
         "THIRD_PARTY_LICENSES is out of date. Run `pnpm licenses:generate` and commit the result.",
       );
-      process.exit(1);
+      // Say what moved. "Out of date" alone sends the reader to regenerate
+      // locally and diff by hand, which reproduces neither side when the branch
+      // and the machine running the check resolve different dependency
+      // versions — a branch that predates a dependency bump on main is the
+      // common case, and it looks identical to a stale commit until something
+      // names the packages.
+      for (const line of describeNoticeDrift(current, output)) {
+        console.error(`  ${line}`);
+      }
+      // `process.exitCode` rather than `process.exit`, which discards queued
+      // asynchronous stderr writes. The drift report above runs to 22 lines,
+      // and CI captures stderr through a pipe, where writes are async on Linux
+      // — exiting here can drop the one thing that makes this failure
+      // actionable. Same reason check-third-party-license-allowlist.mjs and
+      // check-electron-version-policy.mjs do it.
+      process.exitCode = 1;
+      return;
     }
     console.log("third-party license notice check passed");
   } else {
