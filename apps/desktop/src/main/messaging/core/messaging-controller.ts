@@ -305,7 +305,8 @@ const DEFAULT_INPUT_DEBOUNCE_MS = 500;
 // Upper bound on retained admission stage marks. A turn that is queued behind a
 // busy thread, or that fails before `startTurn`, never reaches the log that
 // consumes its marks, so the ceiling cannot depend on the happy path. Oldest
-// entry is evicted first; each holds at most eight numbers.
+// entry is evicted first; each holds one fixed, bounded set of stage/subspan
+// numbers.
 const ADMISSION_STAGE_MARK_LIMIT = 256;
 
 /**
@@ -332,6 +333,28 @@ type MessagingAdmissionStage =
   | "occupancyResolved"
   | "originBuilt"
   | "policyResolved";
+
+type MessagingHandledToRoutedSubspan =
+  | "handledAutomationInboundMs"
+  | "handledBindingLookupMs"
+  | "handledDefaultAgentAssignmentsMs"
+  | "handledDefaultAgentBackendValidationMs"
+  | "handledDefaultAgentRevocationsMs"
+  | "handledDefaultAgentTargetValidationMs"
+  | "handledPendingIntentReadMs"
+  | "handledPendingNewThreadReadMs"
+  | "handledPrivateContinuationExpirationMs"
+  | "handledRemoteScopeMs"
+  | "handledRequirePermissionMs"
+  | "handledResponseModeMs"
+  | "handledSharedMessagePolicyMs"
+  | "handledTextParsingMs"
+  | "finalAdmissionAppendAwaitMs";
+
+type MessagingAdmissionTimingRecord = {
+  marks: Partial<Record<MessagingAdmissionStage, number>>;
+  subspans: Partial<Record<MessagingHandledToRoutedSubspan, number>>;
+};
 // Upper bound on retained automation start/final delivery-dedup keys. Each entry
 // embeds the full rendered message text and is only consulted while a run's
 // terminal events are in flight; oldest-first eviction reclaims keys for runs
@@ -958,7 +981,7 @@ export class MessagingController {
   private readonly now: () => number;
   private readonly admissionStageMarks = new Map<
     string,
-    Partial<Record<MessagingAdmissionStage, number>>
+    MessagingAdmissionTimingRecord
   >();
   private readonly pendingIntentTtlMs: number;
   private readonly interactionMapper: MessagingInteractionMapper;
@@ -1155,24 +1178,15 @@ export class MessagingController {
     // of it.
     this.markAdmissionStage(event, "handled");
 
-    // Self-heal: every inbound event carries the freshest ancestry data
-    // the adapter knows (parentTitle = supergroup/server, ancestorTitle
-    // = guild for Discord threads). Merge any new fields into the
-    // stored binding so the renderer's binding chip can show full
-    // breadcrumbs without waiting for an explicit refresh.
-    //
-    // Best-effort: a sqlite hiccup here must not abort the inbound kind
-    // dispatch below — the binding refresh is observability/UX, not the
-    // source of truth for routing. Log and continue.
-    try {
-      await this.refreshBindingFromInbound(event);
-      await this.observeManagedTopicFromInbound(event);
-    } catch (error) {
-      this.logger.debug?.("messaging inbound metadata refresh failed", {
-        eventId: event.id,
-        platform: event.channel.channel,
-        error: error instanceof Error ? error.message : String(error),
-      });
+    // Breadcrumb self-healing and managed-topic observation are optional UX
+    // bookkeeping for turn input. Start them from this lifecycle boundary, but
+    // never charge their SQLite reads/writes to accepted reply routing. Control
+    // events retain ordering because commands such as `/monitor topics` can
+    // intentionally promote an observed topic to owned state.
+    if (event.kind === "text" || event.kind === "media") {
+      void this.refreshInboundMetadata(event);
+    } else {
+      await this.refreshInboundMetadata(event);
     }
 
     if (event.kind === "command") {
@@ -1198,10 +1212,16 @@ export class MessagingController {
 
     if (
       (event.kind === "text" || event.kind === "media") &&
-      this.options.automationInboundHandler &&
-      (await this.options.automationInboundHandler(event))
+      this.options.automationInboundHandler
     ) {
-      return;
+      const automationMatched = await this.measureHandledToRoutedSubspan(
+        event,
+        "handledAutomationInboundMs",
+        async () => await this.options.automationInboundHandler?.(event) ?? false,
+      );
+      if (automationMatched) {
+        return;
+      }
     }
 
     if (event.kind === "media") {
@@ -1218,7 +1238,11 @@ export class MessagingController {
     update: MessagingInboundChannelMetadataUpdate,
   ): Promise<void> {
     try {
-      await this.refreshBindingChannelMetadata(update.channel, update.routingState);
+      await this.refreshBindingChannelMetadata(
+        update.channel,
+        update.routingState,
+        update.observedAt,
+      );
     } catch (error) {
       this.logger.debug?.("messaging inbound metadata enrichment failed", {
         eventId: update.eventId,
@@ -2205,6 +2229,35 @@ export class MessagingController {
     }
   }
 
+  private async refreshInboundMetadata(event: MessagingInboundEvent): Promise<void> {
+    const startedAt = this.now();
+    let refreshBindingFromInboundMs = 0;
+    let observeManagedTopicFromInboundMs = 0;
+    try {
+      const refreshStartedAt = this.now();
+      await this.refreshBindingFromInbound(event);
+      refreshBindingFromInboundMs = this.now() - refreshStartedAt;
+
+      const observeStartedAt = this.now();
+      await this.observeManagedTopicFromInbound(event);
+      observeManagedTopicFromInboundMs = this.now() - observeStartedAt;
+    } catch (error) {
+      this.logger.debug?.("messaging inbound metadata refresh failed", {
+        eventId: event.id,
+        platform: event.channel.channel,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      this.logger.debug?.("messaging off-path inbound metadata timing", {
+        eventId: event.id,
+        platform: event.channel.channel,
+        refreshBindingFromInboundMs,
+        observeManagedTopicFromInboundMs,
+        totalMs: this.now() - startedAt,
+      });
+    }
+  }
+
   /**
    * Self-heal stored bindings from the freshest data on every inbound.
    * The adapter populates `parentTitle` / `ancestorTitle` (supergroup
@@ -2217,18 +2270,22 @@ export class MessagingController {
   private async refreshBindingFromInbound(
     event: MessagingInboundEvent,
   ): Promise<void> {
-    await this.refreshBindingChannelMetadata(event.channel, event.routingState);
+    await this.refreshBindingChannelMetadata(
+      event.channel,
+      event.routingState,
+      event.receivedAt,
+    );
   }
 
   private async refreshBindingChannelMetadata(
     channel: MessagingChannelRef,
     routingStateUpdate?: MessagingAdapterState,
+    observedAt = this.now(),
   ): Promise<void> {
     const binding = await this.options.store.findActiveBindingForChannel(
       channel,
     );
     if (!binding) return;
-    const stored = binding.channel.conversation;
     const incoming = channel.conversation;
     // Incoming wins when present. Adapters fetch fresher metadata
     // than we stored at bind time:
@@ -2241,10 +2298,12 @@ export class MessagingController {
     //     messages.
     // When `incoming` doesn't carry a field (e.g. a regular Telegram
     // topic message that doesn't ship the topic name and the cache
-    // missed), we fall back to `stored` so we never lose data we
-    // already have.
+    // missed), the store merge keeps the current value so we never
+    // lose data we already have. The read/compare/write is one store
+    // transaction: this off-path task cannot restore a binding that
+    // routing revoked or overwrite a newer preference update.
     //
-    // Loop safety: the `if (!changed)` guard below means an inbound
+    // Loop safety: the store's `changed` guard means an inbound
     // whose values match what's stored produces no write and no
     // broadcast — so the gateway echo of our own `editForumTopic`
     // call (which carries the same name we just wrote in
@@ -2258,27 +2317,16 @@ export class MessagingController {
           })
         : undefined;
     const managedConversation = managedTopic?.conversation;
-    const merged = {
-      ...stored,
-      title: incoming.title ?? stored.title ?? managedConversation?.title,
-      parentTitle:
-        incoming.parentTitle ?? stored.parentTitle ?? managedConversation?.parentTitle,
-      ancestorTitle:
-        incoming.ancestorTitle ?? stored.ancestorTitle ?? managedConversation?.ancestorTitle,
-    };
-    const routingState = routingStateUpdate ?? binding.routingState;
-    const changed =
-      merged.title !== stored.title
-      || merged.parentTitle !== stored.parentTitle
-      || merged.ancestorTitle !== stored.ancestorTitle
-      || !messagingAdapterStateEqual(routingState, binding.routingState);
-    if (!changed) return;
-    await this.options.store.upsertBinding({
-      ...binding,
-      channel: { ...binding.channel, conversation: merged },
-      routingState,
-      updatedAt: this.now(),
+    const merged = await this.options.store.mergeBindingChannelMetadata({
+      ancestorTitle: incoming.ancestorTitle ?? managedConversation?.ancestorTitle,
+      bindingId: binding.id,
+      channel,
+      observedAt,
+      parentTitle: incoming.parentTitle ?? managedConversation?.parentTitle,
+      routingState: routingStateUpdate,
+      title: incoming.title ?? managedConversation?.title,
     });
+    if (!merged?.changed) return;
     // The chip now has fresher breadcrumbs in the store; nudge the
     // renderer to refetch so the tooltip / label reflect them.
     this.notifyBindingChanged("refresh-from-inbound");
@@ -3264,7 +3312,11 @@ export class MessagingController {
   }
 
   private async handleText(event: MessagingInboundTextEvent): Promise<void> {
-    const command = parseTextCommand(event.text);
+    const command = this.measureHandledToRoutedSyncSubspan(
+      event,
+      "handledTextParsingMs",
+      () => parseTextCommand(event.text),
+    );
     if (command) {
       await this.handleCommand({
         ...event,
@@ -3276,9 +3328,11 @@ export class MessagingController {
       return;
     }
 
-    const mentionCommand = event.botMention
-      ? parseMentionCommand(event.text)
-      : undefined;
+    const mentionCommand = this.measureHandledToRoutedSyncSubspan(
+      event,
+      "handledTextParsingMs",
+      () => event.botMention ? parseMentionCommand(event.text) : undefined,
+    );
     if (mentionCommand) {
       await this.handleCommand({
         ...event,
@@ -3290,12 +3344,23 @@ export class MessagingController {
       return;
     }
 
-    const pendingNewThread = await this.findPendingNewThreadSession(event);
-    const pendingIntent = await this.options.store.findActivePendingIntentForChannel({
-      actorId: event.actor.platformUserId,
-      channel: event.channel,
-      now: this.now(),
-    });
+    const [pendingNewThread, pendingIntent] = await Promise.all([
+      this.measureHandledToRoutedSubspan(
+        event,
+        "handledPendingNewThreadReadMs",
+        async () => await this.findPendingNewThreadSession(event),
+      ),
+      this.measureHandledToRoutedSubspan(
+        event,
+        "handledPendingIntentReadMs",
+        async () =>
+          await this.options.store.findActivePendingIntentForChannel({
+            actorId: event.actor.platformUserId,
+            channel: event.channel,
+            now: this.now(),
+          }),
+      ),
+    ]);
     if (pendingIntent) {
       if (isSkillsSearchIntent(pendingIntent.intent)) {
         const mapped = await this.interactionMapper.mapText({
@@ -3389,10 +3454,23 @@ export class MessagingController {
       return;
     }
 
-    let binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    binding = await this.revokeExpiredPrivateReplyContinuation(binding);
+    let binding = await this.measureHandledToRoutedSubspan(
+      event,
+      "handledBindingLookupMs",
+      async () => await this.options.store.findActiveBindingForChannel(event.channel),
+    );
+    binding = await this.measureHandledToRoutedSubspan(
+      event,
+      "handledPrivateContinuationExpirationMs",
+      async () => await this.revokeExpiredPrivateReplyContinuation(binding),
+    );
+    binding = bindingWithInboundRoutingState(binding, event.routingState);
     if (!binding) {
-      if (!await this.shouldHandleAmbientSharedMessage(event)) {
+      if (!await this.measureHandledToRoutedSubspan(
+        event,
+        "handledSharedMessagePolicyMs",
+        async () => await this.shouldHandleAmbientSharedMessage(event),
+      )) {
         return;
       }
       if (await this.bootstrapDefaultAgentForAcceptedMessage(event)) {
@@ -3402,7 +3480,11 @@ export class MessagingController {
       return;
     }
 
-    if (!await this.shouldHandleAmbientSharedMessage(event, binding)) {
+    if (!await this.measureHandledToRoutedSubspan(
+      event,
+      "handledSharedMessagePolicyMs",
+      async () => await this.shouldHandleAmbientSharedMessage(event, binding),
+    )) {
       return;
     }
 
@@ -3418,16 +3500,31 @@ export class MessagingController {
     // RBAC floor: sending a turn to the agent needs `message.reply`. Silent
     // drop (no reply) so an under-permissioned sender can't be spammed with
     // rejections in a shared channel.
-    if (!(await this.requirePermission(event, "message.reply", "message:reply", { notify: false }))) {
+    if (!(await this.measureHandledToRoutedSubspan(
+      event,
+      "handledRequirePermissionMs",
+      async () =>
+        await this.requirePermission(
+          event,
+          "message.reply",
+          "message:reply",
+          { notify: false },
+        ),
+    ))) {
       return;
     }
     // A turn into a remote-bound thread runs on the peer's machine.
     if (
-      !(await this.requireRemoteScopeForBinding(
+      !(await this.measureHandledToRoutedSubspan(
         event,
-        binding,
-        "message:reply:remote-instance",
-        { notify: false },
+        "handledRemoteScopeMs",
+        async () =>
+          await this.requireRemoteScopeForBinding(
+            event,
+            binding,
+            "message:reply:remote-instance",
+            { notify: false },
+          ),
       ))
     ) {
       return;
@@ -3440,18 +3537,28 @@ export class MessagingController {
     event: MessagingInboundTextEvent | MessagingInboundMediaEvent,
   ): Promise<boolean> {
     const assignments =
-      await this.options.store.findActiveDefaultAgentAssignmentsForChannel(
-        event.channel,
+      await this.measureHandledToRoutedSubspan(
+        event,
+        "handledDefaultAgentAssignmentsMs",
+        async () =>
+          await this.options.store.findActiveDefaultAgentAssignmentsForChannel(
+            event.channel,
+          ),
       );
     if (assignments.length === 0) {
       return false;
     }
     if (
-      !(await this.requirePermission(
+      !(await this.measureHandledToRoutedSubspan(
         event,
-        "message.reply",
-        event.kind === "media" ? "media:reply" : "message:reply",
-        { notify: false },
+        "handledRequirePermissionMs",
+        async () =>
+          await this.requirePermission(
+            event,
+            "message.reply",
+            event.kind === "media" ? "media:reply" : "message:reply",
+            { notify: false },
+          ),
       ))
     ) {
       return true;
@@ -3462,7 +3569,8 @@ export class MessagingController {
           assignment: MessagingDefaultAgentAssignmentRecord;
         }
       | undefined;
-    const backendSummaries = await this.loadDefaultAgentBackendSummaries();
+    let backendSummaries: BackendSummary[] | undefined;
+    let backendSummariesLoaded = false;
     // Revocations are buffered, not applied as they are decided. Every
     // iteration reads backend state that can fail, and a failure part-way
     // through used to leave the channel half-revoked: the assignments already
@@ -3474,7 +3582,12 @@ export class MessagingController {
       let targetIsAgentThread: boolean;
       try {
         targetIsAgentThread =
-          await this.defaultAgentTargetIsAgentThread(assignment.target);
+          await this.measureHandledToRoutedSubspan(
+            event,
+            "handledDefaultAgentTargetValidationMs",
+            async () =>
+              await this.defaultAgentTargetIsAgentThread(assignment.target),
+          );
       } catch (error) {
         await this.deliverDefaultAgentBootstrapError(
           event,
@@ -3482,6 +3595,17 @@ export class MessagingController {
           error instanceof Error ? error.message : String(error),
         );
         return true;
+      }
+      if (
+        isAcpBackendId(assignment.target.backend)
+        && !backendSummariesLoaded
+      ) {
+        backendSummaries = await this.measureHandledToRoutedSubspan(
+          event,
+          "handledDefaultAgentBackendValidationMs",
+          async () => await this.loadDefaultAgentBackendSummaries(),
+        );
+        backendSummariesLoaded = true;
       }
       const backendSupport = defaultAgentBackendSupport(
         assignment.target.backend,
@@ -3505,13 +3629,19 @@ export class MessagingController {
       }
       revocations.push(assignment);
     }
-    for (const assignment of revocations) {
-      await this.options.store.revokeDefaultAgentAssignment({
-        assignmentId: assignment.id,
-        revokedAt: this.now(),
-      });
-      this.notifyBindingChanged("default-agent-cleared");
-    }
+    await this.measureHandledToRoutedSubspan(
+      event,
+      "handledDefaultAgentRevocationsMs",
+      async () => {
+        for (const assignment of revocations) {
+          await this.options.store.revokeDefaultAgentAssignment({
+            assignmentId: assignment.id,
+            revokedAt: this.now(),
+          });
+          this.notifyBindingChanged("default-agent-cleared");
+        }
+      },
+    );
     if (!selected) {
       return false;
     }
@@ -3593,7 +3723,11 @@ export class MessagingController {
   }
 
   private async handleMedia(event: MessagingInboundMediaEvent): Promise<void> {
-    const command = event.text ? parseTextCommand(event.text) : undefined;
+    const command = this.measureHandledToRoutedSyncSubspan(
+      event,
+      "handledTextParsingMs",
+      () => event.text ? parseTextCommand(event.text) : undefined,
+    );
     if (command) {
       await this.handleCommand({
         ...event,
@@ -3604,9 +3738,13 @@ export class MessagingController {
       });
       return;
     }
-    const mentionCommand = event.botMention && event.text
-      ? parseMentionCommand(event.text)
-      : undefined;
+    const mentionCommand = this.measureHandledToRoutedSyncSubspan(
+      event,
+      "handledTextParsingMs",
+      () => event.botMention && event.text
+        ? parseMentionCommand(event.text)
+        : undefined,
+    );
     if (mentionCommand) {
       await this.handleCommand({
         ...event,
@@ -3618,16 +3756,33 @@ export class MessagingController {
       return;
     }
 
-    const pendingNewThread = await this.findPendingNewThreadSession(event);
+    const pendingNewThread = await this.measureHandledToRoutedSubspan(
+      event,
+      "handledPendingNewThreadReadMs",
+      async () => await this.findPendingNewThreadSession(event),
+    );
     if (pendingNewThread) {
       await this.appendPendingNewThreadPrompt(pendingNewThread, event);
       return;
     }
 
-    let binding = await this.options.store.findActiveBindingForChannel(event.channel);
-    binding = await this.revokeExpiredPrivateReplyContinuation(binding);
+    let binding = await this.measureHandledToRoutedSubspan(
+      event,
+      "handledBindingLookupMs",
+      async () => await this.options.store.findActiveBindingForChannel(event.channel),
+    );
+    binding = await this.measureHandledToRoutedSubspan(
+      event,
+      "handledPrivateContinuationExpirationMs",
+      async () => await this.revokeExpiredPrivateReplyContinuation(binding),
+    );
+    binding = bindingWithInboundRoutingState(binding, event.routingState);
     if (!binding) {
-      if (!await this.shouldHandleAmbientSharedMessage(event)) {
+      if (!await this.measureHandledToRoutedSubspan(
+        event,
+        "handledSharedMessagePolicyMs",
+        async () => await this.shouldHandleAmbientSharedMessage(event),
+      )) {
         return;
       }
       if (await this.bootstrapDefaultAgentForAcceptedMessage(event)) {
@@ -3656,19 +3811,38 @@ export class MessagingController {
       return;
     }
 
-    if (!await this.shouldHandleAmbientSharedMessage(event, binding)) {
+    if (!await this.measureHandledToRoutedSubspan(
+      event,
+      "handledSharedMessagePolicyMs",
+      async () => await this.shouldHandleAmbientSharedMessage(event, binding),
+    )) {
       return;
     }
 
-    if (!(await this.requirePermission(event, "message.reply", "media:reply", { notify: false }))) {
+    if (!(await this.measureHandledToRoutedSubspan(
+      event,
+      "handledRequirePermissionMs",
+      async () =>
+        await this.requirePermission(
+          event,
+          "message.reply",
+          "media:reply",
+          { notify: false },
+        ),
+    ))) {
       return;
     }
     if (
-      !(await this.requireRemoteScopeForBinding(
+      !(await this.measureHandledToRoutedSubspan(
         event,
-        binding,
-        "media:reply:remote-instance",
-        { notify: false },
+        "handledRemoteScopeMs",
+        async () =>
+          await this.requireRemoteScopeForBinding(
+            event,
+            binding,
+            "media:reply:remote-instance",
+            { notify: false },
+          ),
       ))
     ) {
       return;
@@ -3694,7 +3868,11 @@ export class MessagingController {
     }
     const responseMode = resolveMessagingResponseMode(
       binding,
-      await this.responseModeForConversation(event.channel),
+      await this.measureHandledToRoutedSubspan(
+        event,
+        "handledResponseModeMs",
+        async () => await this.responseModeForConversation(event.channel),
+      ),
     );
     return responseMode === "every_message" || event.botMention === true;
   }
@@ -3748,7 +3926,87 @@ export class MessagingController {
     event: MessagingTurnInputEvent;
   }): Promise<void> {
     this.markAdmissionStage(params.event, "routed");
-    await this.turnAdmission.append(params);
+    const startedAt = this.now();
+    try {
+      await this.turnAdmission.append(params);
+    } finally {
+      const finalAdmissionAppendAwaitMs = this.now() - startedAt;
+      this.recordHandledToRoutedSubspan(
+        params.event,
+        "finalAdmissionAppendAwaitMs",
+        finalAdmissionAppendAwaitMs,
+        false,
+      );
+      this.logger.debug?.("messaging admission append timing", {
+        eventId: params.event.id,
+        platform: params.event.channel.channel,
+        finalAdmissionAppendAwaitMs,
+      });
+    }
+  }
+
+  private async measureHandledToRoutedSubspan<T>(
+    event: MessagingInboundEvent,
+    subspan: MessagingHandledToRoutedSubspan,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const startedAt = this.now();
+    try {
+      return await operation();
+    } finally {
+      this.recordHandledToRoutedSubspan(
+        event,
+        subspan,
+        this.now() - startedAt,
+      );
+    }
+  }
+
+  private measureHandledToRoutedSyncSubspan<T>(
+    event: MessagingInboundEvent,
+    subspan: MessagingHandledToRoutedSubspan,
+    operation: () => T,
+  ): T {
+    const startedAt = this.now();
+    try {
+      return operation();
+    } finally {
+      this.recordHandledToRoutedSubspan(
+        event,
+        subspan,
+        this.now() - startedAt,
+      );
+    }
+  }
+
+  private recordHandledToRoutedSubspan(
+    event: MessagingInboundEvent,
+    subspan: MessagingHandledToRoutedSubspan,
+    durationMs: number,
+    create = true,
+  ): void {
+    const timing = create
+      ? this.admissionTimingForEvent(event)
+      : this.admissionStageMarks.get(event.id);
+    if (!timing) return;
+    timing.subspans[subspan] =
+      (timing.subspans[subspan] ?? 0) + durationMs;
+  }
+
+  private admissionTimingForEvent(
+    event: MessagingInboundEvent,
+  ): MessagingAdmissionTimingRecord {
+    let timing = this.admissionStageMarks.get(event.id);
+    if (!timing) {
+      timing = { marks: {}, subspans: {} };
+      rememberBoundedMap(
+        this.admissionStageMarks,
+        event.id,
+        timing,
+        ADMISSION_STAGE_MARK_LIMIT,
+      );
+    }
+    return timing;
   }
 
   /**
@@ -3763,17 +4021,8 @@ export class MessagingController {
     stage: MessagingAdmissionStage,
   ): void {
     if (!event) return;
-    let marks = this.admissionStageMarks.get(event.id);
-    if (!marks) {
-      marks = {};
-      rememberBoundedMap(
-        this.admissionStageMarks,
-        event.id,
-        marks,
-        ADMISSION_STAGE_MARK_LIMIT,
-      );
-    }
-    marks[stage] ??= this.now();
+    const timing = this.admissionTimingForEvent(event);
+    timing.marks[stage] ??= this.now();
   }
 
   /**
@@ -3793,9 +4042,10 @@ export class MessagingController {
     startTurnIssuedAt: number,
   ): Record<string, number> {
     if (!event) return {};
-    const marks = this.admissionStageMarks.get(event.id);
-    if (!marks) return {};
+    const admissionTiming = this.admissionStageMarks.get(event.id);
+    if (!admissionTiming) return {};
     this.admissionStageMarks.delete(event.id);
+    const marks = admissionTiming.marks;
     const spans: Array<[string, number | undefined, number | undefined]> = [
       ["receivedToHandledMs", event.receivedAt, marks.handled],
       ["handledToRoutedMs", marks.handled, marks.routed],
@@ -3828,6 +4078,7 @@ export class MessagingController {
         timing[name] = to - from;
       }
     }
+    Object.assign(timing, admissionTiming.subspans);
     return timing;
   }
 
@@ -10965,9 +11216,19 @@ export class MessagingController {
     ) {
       return;
     }
-    await this.upsertManagedTopicFromChannel(event, {
-      source: "observed",
+    const observedAt = event.receivedAt;
+    await this.options.store.mergeManagedTopicObservation({
+      ...managedTopicRecordFromConversation({
+        actorIds: this.monitorAuthorizedActorIds(event),
+        channel: event.channel.channel,
+        conversation: event.channel.conversation,
+        now: observedAt,
+        routingState: event.routingState,
+        source: "observed",
+      }),
+      lastObservedAt: observedAt,
       lifecycle: "open",
+      updatedAt: observedAt,
     });
   }
 
@@ -22101,11 +22362,16 @@ function readAcpRuntimeOptionSource(
     : undefined;
 }
 
-function messagingAdapterStateEqual(
-  left: MessagingAdapterState | undefined,
-  right: MessagingAdapterState | undefined,
-): boolean {
-  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+function bindingWithInboundRoutingState(
+  binding: MessagingBindingRecord | undefined,
+  routingState: MessagingAdapterState | undefined,
+): MessagingBindingRecord | undefined {
+  // Metadata persistence is intentionally off-path, but this event's delivery
+  // state is already authoritative for replies and typing activity on the same
+  // route. Use it immediately without waiting for the merge-safe store update.
+  return binding && routingState
+    ? { ...binding, routingState }
+    : binding;
 }
 
 function messageOriginForInboundEvent(

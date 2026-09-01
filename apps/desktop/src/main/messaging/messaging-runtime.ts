@@ -79,7 +79,10 @@ import {
   type DesktopMessagingConfigChannel,
   type DesktopMessagingChannelConfigUpdate,
 } from "./messaging-config";
-import { resolveMessagingResponseModeForChannel } from "./messaging-response-mode";
+import {
+  createMessagingResponseModeSnapshot,
+  resolveMessagingResponseModeForChannel,
+} from "./messaging-response-mode";
 import { DesktopMessagingBackendBridge } from "./desktop-backend-bridge";
 import { resolvePwragentRoot } from "../profile";
 import { getDesktopFederationRuntime } from "../federation/federation-runtime";
@@ -217,6 +220,7 @@ type RunningMessagingAdapter = {
   unsubscribeRateLimit?: () => void;
   unsubscribeReconnect?: () => void;
   unsubscribeRuntimeError?: () => void;
+  updateResponseModeSnapshot(config: DesktopMessagingConfig): void;
 };
 
 type RunningMessagingAuthorization = {
@@ -1341,6 +1345,10 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       actorIds: authorizedActorIds,
       actorIdSet: new Set(authorizedActorIds),
     };
+    let responseModeSnapshot = createMessagingResponseModeSnapshot({
+      channel: adapter.channel,
+      config,
+    });
     const deliveryBudget = new MessagingDeliveryBudget();
     if (adapter.clientRateLimitStrategy === "sdk-managed") {
       messagingLog.warn(`${adapter.channel}: SDK-managed rate-limit retries are enabled`, {
@@ -1369,12 +1377,8 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       ),
       showStreamingOption: async () =>
         (await this.loadConfig()).showStreamingOption ?? false,
-      responseModeForConversation: async (channel) =>
-        resolveMessagingResponseModeForChannel({
-          channel: adapter.channel,
-          channelRef: channel,
-          config: await this.loadConfig(),
-        }),
+      responseModeForConversation: (channel) =>
+        responseModeSnapshot.resolve({ channelRef: channel }),
       toolUpdateDefaultMode: async (targetKind) => {
         const config = await this.loadConfig();
         return targetKind === "agent_thread"
@@ -1602,6 +1606,12 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
       unsubscribeRateLimit,
       unsubscribeReconnect,
       unsubscribeRuntimeError,
+      updateResponseModeSnapshot: (nextConfig) => {
+        responseModeSnapshot = createMessagingResponseModeSnapshot({
+          channel: adapter.channel,
+          config: nextConfig,
+        });
+      },
     });
     this.syncRunningAdapterLists();
     this.setPlatformHealth(adapter.channel, "enabled", {
@@ -1741,6 +1751,7 @@ export class DesktopMessagingRuntime implements MessagingAgentToolService {
 
     running.config = next.config;
     running.fingerprint = next.fingerprint;
+    running.updateResponseModeSnapshot(next.config);
     this.recordDiagnosticActivity({
       platform: adapter.channel,
       summary: `Hot-applied messaging config: ${adapter.channel}`,

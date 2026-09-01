@@ -101,6 +101,17 @@ async function createStore(): Promise<MessagingStore> {
   return new MessagingStore(path.join(tempDir, "messaging-state.json"));
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
+}
+
 afterEach(async () => {
   vi.useRealTimers();
   await Promise.all(
@@ -195,6 +206,9 @@ describe("MessagingController", () => {
     // Everything the admission read did not spend is attributed elsewhere, so
     // the stages sum to the end-to-end number rather than overlapping it.
     const detail = startingTurn?.[1] as Record<string, number>;
+    expect(Object.keys(detail).indexOf("handledToRoutedMs")).toBeLessThan(
+      Object.keys(detail).indexOf("handledTextParsingMs"),
+    );
     const stageTotal =
       detail.receivedToHandledMs
       + detail.handledToRoutedMs
@@ -206,6 +220,181 @@ describe("MessagingController", () => {
       + detail.originToPolicyMs
       + detail.policyToStartTurnIssueMs;
     expect(stageTotal).toBe(detail.pwragentReceivedToStartTurnIssueMs);
+  });
+
+  it("does not await optional inbound metadata before routing a reply", async () => {
+    const debug = vi.fn();
+    const harness = await createHarness({ logger: { debug } });
+    await bindThread(harness);
+    const findBinding = harness.store.findActiveBindingForChannel.bind(
+      harness.store,
+    );
+    const metadataRead = createDeferred<
+      Awaited<ReturnType<typeof findBinding>>
+    >();
+    const metadataStarted = createDeferred<void>();
+    const pendingSessionRead = vi.spyOn(
+      harness.store,
+      "findActiveBrowseSessionForChannel",
+    );
+    let bindingReadCount = 0;
+    vi.spyOn(harness.store, "findActiveBindingForChannel")
+      .mockImplementation(async (channel) => {
+        bindingReadCount += 1;
+        if (bindingReadCount === 1) {
+          metadataStarted.resolve();
+          return await metadataRead.promise;
+        }
+        return await findBinding(channel);
+      });
+
+    const handled = harness.controller.handleInboundEvent(
+      buildTextEvent("route before metadata"),
+    );
+    expect(pendingSessionRead).toHaveBeenCalledTimes(1);
+    await metadataStarted.promise;
+
+    metadataRead.resolve(
+      await findBinding(buildTextEvent("metadata").channel),
+    );
+    await handled;
+    expect(harness.startTurn).toHaveBeenCalledTimes(1);
+    for (let index = 0; index < 10; index += 1) {
+      await Promise.resolve();
+    }
+    expect(debug).toHaveBeenCalledWith(
+      "messaging off-path inbound metadata timing",
+      expect.objectContaining({
+        eventId: "event-text",
+        platform: "telegram",
+      }),
+    );
+    expect(debug).toHaveBeenCalledWith(
+      "messaging admission append timing",
+      expect.objectContaining({
+        eventId: "event-text",
+        finalAdmissionAppendAwaitMs: expect.any(Number),
+        platform: "telegram",
+      }),
+    );
+  });
+
+  it("does not let delayed inbound metadata restore a concurrently revoked binding", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+    const [binding] = await harness.store.findActiveBindingsForThread({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    if (!binding) {
+      throw new Error("Expected a bound thread");
+    }
+    const topicChannel: MessagingInboundTextEvent["channel"] = {
+      channel: "telegram",
+      conversation: {
+        id: "topic-1",
+        kind: "topic",
+        parentId: "chat-1",
+      },
+    };
+    const topicBinding = await harness.store.upsertBinding({
+      ...binding,
+      channel: topicChannel,
+      updatedAt: 900,
+    });
+    const managedTopicRead = createDeferred<undefined>();
+    const managedTopicReadStarted = createDeferred<void>();
+    vi.spyOn(harness.store, "findManagedTopicByConversation")
+      .mockImplementationOnce(async () => {
+        managedTopicReadStarted.resolve();
+        return await managedTopicRead.promise;
+      });
+
+    const metadataRefresh = harness.controller.handleInboundChannelMetadata({
+      eventId: "metadata-race",
+      observedAt: 1_000,
+      channel: {
+        ...topicChannel,
+        conversation: {
+          ...topicChannel.conversation,
+          title: "Fresh topic title",
+        },
+      },
+    });
+    await managedTopicReadStarted.promise;
+    await harness.store.revokeBinding({
+      bindingId: topicBinding.id,
+      revokedAt: 1_001,
+    });
+    await expect(
+      harness.store.findActiveBindingForChannel(topicChannel),
+    ).resolves.toBeUndefined();
+
+    managedTopicRead.resolve(undefined);
+    await metadataRefresh;
+    await expect(
+      harness.store.findActiveBindingForChannel(topicChannel),
+    ).resolves.toBeUndefined();
+  });
+
+  it("does not let delayed topic observation overwrite newer managed-topic state", async () => {
+    const metadataFinished = createDeferred<void>();
+    const debug = vi.fn((message: string) => {
+      if (message === "messaging off-path inbound metadata timing") {
+        metadataFinished.resolve();
+      }
+    });
+    const harness = await createHarness({ logger: { debug } });
+    const bindingRead = createDeferred<undefined>();
+    const bindingReadStarted = createDeferred<void>();
+    vi.spyOn(harness.store, "findActiveBindingForChannel")
+      .mockImplementationOnce(async () => {
+        bindingReadStarted.resolve();
+        return await bindingRead.promise;
+      });
+    const channel: MessagingChannelRef = {
+      channel: "telegram",
+      conversation: {
+        id: "topic-1",
+        kind: "topic",
+        parentId: "chat-1",
+        title: "Observed topic",
+      },
+    };
+
+    const handled = harness.controller.handleInboundEvent(buildTextEvent(
+      "observe topic",
+      { channel },
+    ));
+    await bindingReadStarted.promise;
+    await harness.store.upsertManagedTopic({
+      id: "topic:telegram:chat-1:topic-1",
+      authorizedActorIds: ["user-1"],
+      channel: "telegram",
+      closedAt: 1_001,
+      conversation: channel.conversation,
+      createdAt: 1_000,
+      lastObservedAt: 1_000,
+      lifecycle: "closed",
+      source: "owned",
+      supergroupId: "chat-1",
+      title: "Owned topic",
+      topicId: "topic-1",
+      updatedAt: 1_001,
+    });
+
+    bindingRead.resolve(undefined);
+    await handled;
+    await metadataFinished.promise;
+    await expect(
+      harness.store.getManagedTopic("topic:telegram:chat-1:topic-1"),
+    ).resolves.toMatchObject({
+      closedAt: 1_001,
+      lifecycle: "closed",
+      source: "owned",
+      title: "Owned topic",
+      updatedAt: 1_001,
+    });
   });
 
   it("merges eventual provider channel metadata without replaying inbound", async () => {
@@ -2223,6 +2412,7 @@ describe("MessagingController", () => {
   });
 
   it("routes an accepted every-message topic to its default Agent without binding it", async () => {
+    const info = vi.fn();
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
       ...navigation.threads[0]!,
@@ -2235,6 +2425,7 @@ describe("MessagingController", () => {
       },
     };
     const harness = await createHarness({
+      logger: { info },
       navigation,
       responseModeForConversation: () => "every_message",
     });
@@ -2274,6 +2465,26 @@ describe("MessagingController", () => {
     );
     expect(harness.delivered).not.toContainEqual(
       expect.objectContaining({ title: "PwrAgent commands" }),
+    );
+    expect(harness.listBackends).not.toHaveBeenCalled();
+    const startingTurn = info.mock.calls.find(
+      (call) => call[0] === "messaging starting turn",
+    );
+    expect(startingTurn?.[1]).toMatchObject({
+      handledBindingLookupMs: 0,
+      handledDefaultAgentAssignmentsMs: 0,
+      handledDefaultAgentRevocationsMs: 0,
+      handledDefaultAgentTargetValidationMs: 0,
+      handledPendingIntentReadMs: 0,
+      handledPendingNewThreadReadMs: 0,
+      handledPrivateContinuationExpirationMs: 0,
+      handledRequirePermissionMs: 0,
+      handledResponseModeMs: 0,
+      handledSharedMessagePolicyMs: 0,
+      handledTextParsingMs: 0,
+    });
+    expect(startingTurn?.[1]).not.toHaveProperty(
+      "handledDefaultAgentBackendValidationMs",
     );
   });
 

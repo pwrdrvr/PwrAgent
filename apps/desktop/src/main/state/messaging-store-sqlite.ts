@@ -32,6 +32,13 @@ import {
   buildDefaultAgentScopeLookup,
   buildMessagingDefaultAgentScopeKey,
 } from "../messaging/core/messaging-default-agent.js";
+import {
+  mergeMessagingBindingChannelMetadata,
+  mergeMessagingManagedTopicObservation,
+  type MessagingBindingChannelMetadataMerge,
+  type MessagingBindingChannelMetadataUpdate,
+  type MessagingManagedTopicObservationMerge,
+} from "../messaging/core/messaging-store-merge.js";
 
 const SECRET_KEY_PATTERN = /token|secret|password|authorization|api[_-]?key/i;
 
@@ -63,6 +70,57 @@ export class SqliteMessagingStore {
       await this.upsertObservedSurface(sanitized.channel, sanitized.updatedAt);
     }
     return structuredClone(sanitized);
+  }
+
+  async mergeBindingChannelMetadata(
+    update: MessagingBindingChannelMetadataUpdate,
+  ): Promise<MessagingBindingChannelMetadataMerge | undefined> {
+    const merge = this.stateDb.raw.transaction(() => {
+      const row = this.stateDb.raw
+        .prepare("SELECT payload FROM bindings WHERE binding_id = ?")
+        .get(update.bindingId) as { payload: string } | undefined;
+      const merged = mergeMessagingBindingChannelMetadata(
+        row
+          ? JSON.parse(row.payload) as MessagingBindingRecord
+          : undefined,
+        update,
+      );
+      if (!merged || !merged.changed) {
+        return merged;
+      }
+      const sanitized = sanitizeBinding(merged.binding);
+      const channel = sanitized.channel;
+      this.stateDb.raw
+        .prepare(
+          `INSERT OR REPLACE INTO bindings(binding_id, channel_kind, channel_id, thread_id, status, created_at, updated_at, revoked_at, payload)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          sanitized.id,
+          channel.channel,
+          buildChannelId(channel),
+          sanitized.threadId,
+          sanitized.revokedAt ? "revoked" : "active",
+          sanitized.createdAt,
+          sanitized.updatedAt,
+          sanitized.revokedAt ?? null,
+          JSON.stringify(sanitized),
+        );
+      return { binding: sanitized, changed: true };
+    });
+    const merged = merge();
+    if (merged?.changed && !merged.binding.revokedAt) {
+      await this.upsertObservedSurface(
+        merged.binding.channel,
+        merged.binding.updatedAt,
+      );
+    }
+    return merged
+      ? {
+          binding: structuredClone(merged.binding),
+          changed: merged.changed,
+        }
+      : undefined;
   }
 
   async getBinding(id: string): Promise<MessagingBindingRecord | undefined> {
@@ -546,6 +604,50 @@ export class SqliteMessagingStore {
         JSON.stringify(sanitized),
       );
     return structuredClone(sanitized);
+  }
+
+  async mergeManagedTopicObservation(
+    observation: MessagingManagedTopicRecord,
+  ): Promise<MessagingManagedTopicObservationMerge> {
+    const sanitizedObservation = sanitizeManagedTopic(observation);
+    const merge = this.stateDb.raw.transaction(() => {
+      const row = this.stateDb.raw
+        .prepare(
+          "SELECT payload FROM messaging_managed_topics WHERE topic_record_id = ?",
+        )
+        .get(sanitizedObservation.id) as { payload: string } | undefined;
+      const merged = mergeMessagingManagedTopicObservation(
+        row
+          ? JSON.parse(row.payload) as MessagingManagedTopicRecord
+          : undefined,
+        sanitizedObservation,
+      );
+      if (!merged.changed) {
+        return merged;
+      }
+      const sanitized = sanitizeManagedTopic(merged.topic);
+      this.stateDb.raw
+        .prepare(
+          `INSERT OR REPLACE INTO messaging_managed_topics(topic_record_id, channel_kind, supergroup_id, topic_id, status, created_at, updated_at, payload)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          sanitized.id,
+          sanitized.channel,
+          sanitized.supergroupId,
+          sanitized.topicId,
+          sanitized.lifecycle,
+          sanitized.createdAt,
+          sanitized.updatedAt,
+          JSON.stringify(sanitized),
+        );
+      return { changed: true, topic: sanitized };
+    });
+    const merged = merge();
+    return {
+      changed: merged.changed,
+      topic: structuredClone(merged.topic),
+    };
   }
 
   async getManagedTopic(
@@ -1402,6 +1504,7 @@ function sanitizeJsonValue(value: MessagingJsonValue): MessagingJsonValue {
 export type MessagingStoreLike = Pick<
   SqliteMessagingStore,
   | "upsertBinding"
+  | "mergeBindingChannelMetadata"
   | "getBinding"
   | "upsertDefaultAgentAssignment"
   | "getDefaultAgentAssignment"
@@ -1422,6 +1525,7 @@ export type MessagingStoreLike = Pick<
   | "findActiveMonitorSubscriptionsForChannelKind"
   | "revokeMonitorSubscription"
   | "upsertManagedTopic"
+  | "mergeManagedTopicObservation"
   | "getManagedTopic"
   | "findManagedTopicsForSupergroup"
   | "findManagedTopicByConversation"

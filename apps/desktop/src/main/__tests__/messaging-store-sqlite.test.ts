@@ -327,6 +327,26 @@ describe("SqliteMessagingStore", () => {
     });
   });
 
+  it("atomically rejects stale binding metadata after revocation", async () => {
+    const store = await createStore();
+    await store.upsertBinding(buildBinding());
+    await store.revokeBinding({
+      bindingId: "binding-1",
+      revokedAt: 1_001,
+    });
+
+    await expect(store.mergeBindingChannelMetadata({
+      bindingId: "binding-1",
+      channel: buildBinding().channel,
+      observedAt: 1_000,
+      title: "Stale title",
+    })).resolves.toBeUndefined();
+    await expect(store.getBinding("binding-1")).resolves.toMatchObject({
+      revokedAt: 1_001,
+      updatedAt: 1_001,
+    });
+  });
+
   it("finds a legacy channel-shaped binding from its normalized thread surface", async () => {
     const store = await createStore();
     await store.upsertBinding(buildBinding({
@@ -1114,6 +1134,32 @@ describe("SqliteMessagingStore", () => {
         "proposal-1": expect.objectContaining({
           status: "pending",
         }),
+      },
+    });
+  });
+
+  it("atomically preserves newer managed-topic state over an old observation", async () => {
+    const store = await createStore();
+    await store.upsertManagedTopic(buildManagedTopic({
+      closedAt: 1_001,
+      lifecycle: "closed",
+      updatedAt: 1_001,
+    }));
+
+    await expect(store.mergeManagedTopicObservation(buildManagedTopic({
+      lastObservedAt: 1_000,
+      lifecycle: "open",
+      source: "observed",
+      title: "Stale observed title",
+      updatedAt: 1_000,
+    }))).resolves.toMatchObject({
+      changed: true,
+      topic: {
+        closedAt: 1_001,
+        lifecycle: "closed",
+        source: "owned",
+        title: "PwrAgent",
+        updatedAt: 1_001,
       },
     });
   });
