@@ -1,4 +1,5 @@
 import { existsSync, readFileSync, statSync } from "node:fs";
+import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -25,6 +26,7 @@ import type {
 import { getMainLogger } from "../log";
 import { getDesktopSettingsService } from "../settings/desktop-settings-singleton";
 import { buildPwrAgentChildProcessEnv } from "../child-process-env";
+import { resolvePwragentRoot } from "../profile";
 
 const DEFAULT_COLUMNS = 80;
 const DEFAULT_ROWS = 18;
@@ -32,6 +34,64 @@ const MAX_COLUMNS = 500;
 const MAX_ROWS = 200;
 const OUTPUT_BUFFER_LIMIT = 128 * 1024;
 const PTY_SHUTDOWN_FORCE_KILL_MS = 500;
+const RUNTIME_PATH_PREFIX_ENV =
+  "PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX";
+const ORIGINAL_ZDOTDIR_ENV = "PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR";
+const ORIGINAL_ZDOTDIR_UNSET_ENV =
+  "PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET";
+
+// Supplying PATH to `zsh -l` is insufficient: common `.zprofile` setup such
+// as `brew shellenv` prepends another bin directory during startup. ZDOTDIR is
+// zsh's supported user-startup-file root, so these wrappers source the user's
+// real files in order and reassert the selected runtime path afterward.
+const ZSH_INTEGRATION_FILES: Readonly<Record<string, string>> = {
+  ".pwragent-runtime-path.zsh": `
+_pwragent_source_original_zdotfile() {
+  local _pwragent_integration_zdotdir="$ZDOTDIR"
+  local _pwragent_original_zdotdir="${"${"}${ORIGINAL_ZDOTDIR_ENV}:-$HOME}"
+  local _pwragent_zdotfile="$1"
+  if [[ "$_pwragent_original_zdotdir" != "$_pwragent_integration_zdotdir" && -r "$_pwragent_original_zdotdir/$_pwragent_zdotfile" ]]; then
+    ZDOTDIR="$_pwragent_original_zdotdir"
+    source "$_pwragent_original_zdotdir/$_pwragent_zdotfile"
+    export ${ORIGINAL_ZDOTDIR_ENV}="$ZDOTDIR"
+    ZDOTDIR="$_pwragent_integration_zdotdir"
+  fi
+}
+
+_pwragent_prepend_runtime_path() {
+  if [[ -n "$${RUNTIME_PATH_PREFIX_ENV}" ]]; then
+    export PATH="$${RUNTIME_PATH_PREFIX_ENV}${"${PATH:+:$PATH}"}"
+  fi
+}
+`.trimStart(),
+  ".zshenv": `
+source "$ZDOTDIR/.pwragent-runtime-path.zsh"
+_pwragent_source_original_zdotfile .zshenv
+`.trimStart(),
+  ".zprofile": `
+source "$ZDOTDIR/.pwragent-runtime-path.zsh"
+_pwragent_source_original_zdotfile .zprofile
+`.trimStart(),
+  ".zshrc": `
+source "$ZDOTDIR/.pwragent-runtime-path.zsh"
+_pwragent_source_original_zdotfile .zshrc
+_pwragent_prepend_runtime_path
+`.trimStart(),
+  ".zlogin": `
+source "$ZDOTDIR/.pwragent-runtime-path.zsh"
+_pwragent_source_original_zdotfile .zlogin
+_pwragent_prepend_runtime_path
+if [[ "$${ORIGINAL_ZDOTDIR_UNSET_ENV}" == "1" ]]; then
+  unset ZDOTDIR
+else
+  ZDOTDIR="$${ORIGINAL_ZDOTDIR_ENV}"
+fi
+unset ${ORIGINAL_ZDOTDIR_ENV} ${ORIGINAL_ZDOTDIR_UNSET_ENV}
+unset -f _pwragent_source_original_zdotfile _pwragent_prepend_runtime_path
+`.trimStart(),
+};
+
+let zshIntegrationDirectoryPromise: Promise<string> | undefined;
 
 type TerminalSession = {
   sessionId: string;
@@ -579,12 +639,25 @@ export async function spawnTerminalPty(params: {
 }): Promise<SpawnedTerminalPty> {
   const platform = params.platform ?? process.platform;
   const settings = getDesktopSettingsService();
-  const env = await settings.resolveTerminalSpawnEnvAsync();
+  const [baseEnv, runtimeCommands] = await Promise.all([
+    settings.resolveTerminalSpawnEnvAsync(),
+    settings.resolveIntegratedTerminalCommands(),
+  ]);
+  let env = prependIntegratedTerminalRuntimePaths(
+    baseEnv,
+    runtimeCommands,
+    platform,
+  );
   const cwd = resolveTerminalCwd(params.cwd);
   const shell = resolveTerminalShell({
     env,
     platform,
     windowsShell: settings.resolveIntegratedTerminalWindowsShell(),
+  });
+  env = await prepareIntegratedTerminalShellEnvironment({
+    env,
+    platform,
+    shell: shell.file,
   });
   const nodePty = await (params.loadNodePty ?? loadNodePty)();
   const pty = nodePty.spawn(shell.file, shell.args, {
@@ -598,6 +671,112 @@ export async function spawnTerminalPty(params: {
     }),
   });
   return { pty, cwd, shell };
+}
+
+export function prependIntegratedTerminalRuntimePaths(
+  baseEnv: NodeJS.ProcessEnv,
+  commands: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): NodeJS.ProcessEnv {
+  const env = buildPwrAgentChildProcessEnv(baseEnv);
+  const pathApi = platform === "win32" ? path.win32 : path.posix;
+  const runtimeDirectories = commands
+    .map((command) => command.trim())
+    .filter((command) => pathApi.isAbsolute(command))
+    .map((command) => pathApi.dirname(command));
+  if (runtimeDirectories.length === 0) return env;
+
+  const pathKey = Object.keys(env).find((key) => key.toUpperCase() === "PATH")
+    ?? "PATH";
+  const existingEntries = (env[pathKey] ?? "")
+    .split(pathApi.delimiter)
+    .filter((entry) => entry.length > 0);
+  const seen = new Set<string>();
+  const normalizedKey = (entry: string): string => {
+    const normalized = pathApi.normalize(entry);
+    return platform === "win32" ? normalized.toLowerCase() : normalized;
+  };
+  const runtimeSeen = new Set<string>();
+  const runtimeEntries = runtimeDirectories.filter((entry) => {
+    const key = normalizedKey(entry);
+    if (runtimeSeen.has(key)) return false;
+    runtimeSeen.add(key);
+    return true;
+  });
+  const entries = [...runtimeEntries, ...existingEntries].filter((entry) => {
+    const key = normalizedKey(entry);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  env[pathKey] = entries.join(pathApi.delimiter);
+  env[RUNTIME_PATH_PREFIX_ENV] = runtimeEntries.join(pathApi.delimiter);
+  return env;
+}
+
+export async function prepareIntegratedTerminalShellEnvironment(options: {
+  env: NodeJS.ProcessEnv;
+  platform: NodeJS.Platform;
+  shell: string;
+  resolveZshIntegrationDirectory?: () => Promise<string>;
+}): Promise<NodeJS.ProcessEnv> {
+  const env = buildPwrAgentChildProcessEnv(options.env);
+  if (
+    options.platform === "win32"
+    || path.basename(options.shell) !== "zsh"
+    || !env[RUNTIME_PATH_PREFIX_ENV]
+  ) {
+    return env;
+  }
+  const originalZdotdir = env.ZDOTDIR?.trim();
+  env[ORIGINAL_ZDOTDIR_ENV] = originalZdotdir || env.HOME || homedir();
+  if (!originalZdotdir) {
+    env[ORIGINAL_ZDOTDIR_UNSET_ENV] = "1";
+  }
+  try {
+    env.ZDOTDIR = await (
+      options.resolveZshIntegrationDirectory
+      ?? ensureZshIntegrationDirectory
+    )();
+  } catch (error) {
+    getMainLogger("pwragent:integrated-terminal").warn(
+      "zsh-runtime-path-integration-failed",
+      { error: error instanceof Error ? error.message : String(error) },
+    );
+  }
+  return env;
+}
+
+async function ensureZshIntegrationDirectory(): Promise<string> {
+  zshIntegrationDirectoryPromise ??= writeZshIntegrationDirectory();
+  return await zshIntegrationDirectoryPromise;
+}
+
+export async function writeZshIntegrationDirectory(
+  directory = path.join(
+    resolvePwragentRoot(),
+    "shell-integration",
+    "zsh-v1",
+  ),
+): Promise<string> {
+  await mkdir(directory, { recursive: true });
+  await Promise.all(
+    Object.entries(ZSH_INTEGRATION_FILES).map(async ([name, contents]) => {
+      const destination = path.join(directory, name);
+      const temporary = path.join(
+        directory,
+        `.${name}.${process.pid}.${randomUUID()}.tmp`,
+      );
+      try {
+        await writeFile(temporary, contents, { encoding: "utf8", mode: 0o600 });
+        await rename(temporary, destination);
+      } catch (error) {
+        await unlink(temporary).catch(() => undefined);
+        throw error;
+      }
+    }),
+  );
+  return directory;
 }
 
 export function clampTerminalColumns(value: number): number {

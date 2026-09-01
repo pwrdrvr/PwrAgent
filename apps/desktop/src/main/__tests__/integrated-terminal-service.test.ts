@@ -1,4 +1,11 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+} from "node:fs";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import type { WebContents } from "electron";
@@ -6,11 +13,15 @@ import type { IPty } from "node-pty";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   IntegratedTerminalService,
+  prependIntegratedTerminalRuntimePaths,
+  prepareIntegratedTerminalShellEnvironment,
   resolveTerminalShell,
+  writeZshIntegrationDirectory,
 } from "../terminal/integrated-terminal-service";
 
 const settingsServiceMock = vi.hoisted(() => ({
   resolveIntegratedTerminalWindowsShell: vi.fn(() => "auto"),
+  resolveIntegratedTerminalCommands: vi.fn(async () => [] as string[]),
   resolveTerminalSpawnEnvAsync: vi.fn(
     async (): Promise<NodeJS.ProcessEnv> => ({ SHELL: "/bin/sh" }),
   ),
@@ -22,12 +33,108 @@ vi.mock("../settings/desktop-settings-singleton", () => ({
 
 beforeEach(() => {
   settingsServiceMock.resolveIntegratedTerminalWindowsShell.mockReturnValue("auto");
+  settingsServiceMock.resolveIntegratedTerminalCommands.mockResolvedValue([]);
   settingsServiceMock.resolveTerminalSpawnEnvAsync.mockResolvedValue({
     SHELL: "/bin/sh",
   });
 });
 
 describe("resolveTerminalShell", () => {
+  it("puts selected Codex and Grok runtime directories first without duplicates", () => {
+    expect(
+      prependIntegratedTerminalRuntimePaths(
+        {
+          PATH: "/opt/homebrew/bin:/managed/codex/bin:/usr/bin",
+        },
+        [
+          "/managed/codex/bin/codex",
+          "/managed/grok/bin/grok",
+          "/managed/codex/bin/codex",
+          "codex",
+        ],
+        "darwin",
+      ),
+    ).toMatchObject({
+      PATH: "/managed/codex/bin:/managed/grok/bin:/opt/homebrew/bin:/usr/bin",
+      PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX:
+        "/managed/codex/bin:/managed/grok/bin",
+    });
+  });
+
+  it("wires the zsh startup integration without changing other shells", async () => {
+    const zshEnv = await prepareIntegratedTerminalShellEnvironment({
+      env: {
+        HOME: "/Users/alice",
+        PATH: "/managed/codex/bin:/usr/bin",
+        PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX:
+          "/managed/codex/bin",
+      },
+      platform: "darwin",
+      resolveZshIntegrationDirectory: async () => "/pwragent/zsh-integration",
+      shell: "/bin/zsh",
+    });
+    expect(zshEnv).toMatchObject({
+      ZDOTDIR: "/pwragent/zsh-integration",
+      PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: "/Users/alice",
+      PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR_UNSET: "1",
+    });
+
+    const bashEnv = await prepareIntegratedTerminalShellEnvironment({
+      env: {
+        PATH: "/managed/codex/bin:/usr/bin",
+        PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX:
+          "/managed/codex/bin",
+      },
+      platform: "darwin",
+      resolveZshIntegrationDirectory: async () => "/unused",
+      shell: "/bin/bash",
+    });
+    expect(bashEnv).not.toHaveProperty("ZDOTDIR");
+  });
+
+  it.skipIf(process.platform !== "darwin")(
+    "reasserts the selected runtime after zsh login files rewrite PATH",
+    async () => {
+      const root = mkdtempSync(path.join(os.tmpdir(), "pwragent-zsh-path-"));
+      const integrationDir = path.join(root, "integration");
+      const originalZdotdir = path.join(root, "original");
+      const managedBin = path.join(root, "managed");
+      const otherBin = path.join(root, "other");
+      mkdirSync(originalZdotdir, { recursive: true });
+      mkdirSync(managedBin, { recursive: true });
+      mkdirSync(otherBin, { recursive: true });
+      const managedCodex = path.join(managedBin, "codex");
+      const otherCodex = path.join(otherBin, "codex");
+      writeFileSync(managedCodex, "#!/bin/sh\nexit 0\n");
+      writeFileSync(otherCodex, "#!/bin/sh\nexit 0\n");
+      chmodSync(managedCodex, 0o700);
+      chmodSync(otherCodex, 0o700);
+      writeFileSync(
+        path.join(originalZdotdir, ".zprofile"),
+        `export PATH="${otherBin}:$PATH"\n`,
+      );
+      await writeZshIntegrationDirectory(integrationDir);
+
+      expect(existsSync("/bin/zsh")).toBe(true);
+      const resolved = execFileSync(
+        "/bin/zsh",
+        ["-lic", "command -v codex"],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `/usr/bin:/bin`,
+            PWRAGENT_INTEGRATED_TERMINAL_ORIGINAL_ZDOTDIR: originalZdotdir,
+            PWRAGENT_INTEGRATED_TERMINAL_RUNTIME_PATH_PREFIX: managedBin,
+            ZDOTDIR: integrationDir,
+          },
+        },
+      ).trim();
+
+      expect(resolved).toBe(managedCodex);
+    },
+  );
+
   it("uses the login shell on POSIX", () => {
     expect(
       resolveTerminalShell({
@@ -211,8 +318,13 @@ describe("resolveTerminalShell", () => {
     settingsServiceMock.resolveTerminalSpawnEnvAsync.mockResolvedValue({
       ELECTRON_RENDERER_URL: "http://localhost:5175",
       KEEP_TERMINAL_ENV: "yes",
+      PATH: "/opt/homebrew/bin:/usr/bin",
       SHELL: "/bin/sh",
     });
+    settingsServiceMock.resolveIntegratedTerminalCommands.mockResolvedValue([
+      "/managed/codex/bin/codex",
+      "/managed/grok/bin/grok",
+    ]);
     const service = new IntegratedTerminalService({
       loadNodePty: async () => ({
         spawn: spawn as unknown as typeof import("node-pty").spawn,
@@ -233,6 +345,8 @@ describe("resolveTerminalShell", () => {
     expect(spawnOptions?.env).not.toHaveProperty("ELECTRON_RENDERER_URL");
     expect(spawnOptions?.env).toMatchObject({
       KEEP_TERMINAL_ENV: "yes",
+      PATH:
+        "/managed/codex/bin:/managed/grok/bin:/opt/homebrew/bin:/usr/bin",
       TERM: "xterm-256color",
       COLORTERM: "truecolor",
     });

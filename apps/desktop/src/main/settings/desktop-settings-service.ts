@@ -272,6 +272,7 @@ type DesktopSettingsServiceOptions = {
     signal?: AbortSignal;
     waitForUpdate?: boolean;
   }) => Promise<ManagedCodexRuntime>;
+  resolveManagedGrokCommand?: () => Promise<string | undefined>;
   env?: NodeJS.ProcessEnv;
   argv?: readonly string[];
   secretStore: DesktopSecretStore;
@@ -2280,6 +2281,59 @@ export class DesktopSettingsService {
       source: selected.source,
       ...(selected.version ? { version: selected.version } : {}),
     };
+  }
+
+  /**
+   * Commands whose containing directories must lead PATH in a newly opened
+   * human-facing integrated terminal. This is intentionally separate from the
+   * agent subprocess environments: an operator running `codex mcp login` or a
+   * Grok command in PwrAgent should reach the same selected runtime PwrAgent
+   * launches for threads.
+   */
+  async resolveIntegratedTerminalCommands(): Promise<string[]> {
+    const config = this.readConfig().config;
+    const grokOverride =
+      readEnvString(this.env, ACP_AGENTS_GROK_CLI_PATH_ENV)
+      || config.acpAgents?.grok?.cliPath?.trim()
+      || undefined;
+    const resolveManagedGrokCommand = this.options.resolveManagedGrokCommand;
+    const shouldResolveManagedGrok =
+      config.acpAgents?.grok?.enabled !== false
+      && !grokOverride
+      && (
+        config.acpAgents?.grok?.managedBuilds
+        ?? this.options.defaultManagedGrokBuilds
+        ?? true
+      );
+    const [codexResult, grokResult] = await Promise.allSettled([
+      this.resolveCodexCommand().then((candidate) => candidate.command),
+      grokOverride
+        ? Promise.resolve(grokOverride)
+        : shouldResolveManagedGrok && resolveManagedGrokCommand
+          ? resolveManagedGrokCommand()
+          : Promise.resolve(undefined),
+    ]);
+    const logger = getMainLogger("pwragent:integrated-terminal");
+    const commands: string[] = [];
+    if (codexResult.status === "fulfilled") {
+      commands.push(codexResult.value);
+    } else {
+      logger.warn("codex-command-resolution-failed", {
+        error: codexResult.reason instanceof Error
+          ? codexResult.reason.message
+          : String(codexResult.reason),
+      });
+    }
+    if (grokResult.status === "fulfilled") {
+      if (grokResult.value) commands.push(grokResult.value);
+    } else {
+      logger.warn("grok-command-resolution-failed", {
+        error: grokResult.reason instanceof Error
+          ? grokResult.reason.message
+          : String(grokResult.reason),
+      });
+    }
+    return commands;
   }
 
   /**

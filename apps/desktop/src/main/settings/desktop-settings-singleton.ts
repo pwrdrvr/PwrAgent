@@ -9,6 +9,7 @@ import {
   MemoryDesktopSecretStore,
 } from "./desktop-secret-store";
 import { ensureManagedCodexRuntime } from "../codex-managed-runtime";
+import { ensureManagedGrokRuntime } from "../acp/grok-managed-runtime";
 import { SETTINGS_RUNTIME_CHANGED_EVENT_CHANNEL } from "../../shared/ipc";
 import { subscribersForChannel } from "../window-channels";
 import {
@@ -62,6 +63,15 @@ export function getDesktopSettingsService(): DesktopSettingsService {
           signal,
           waitForUpdate,
         }),
+      resolveManagedGrokCommand: async () => {
+        if (!app.isPackaged && process.env.PWRAGENT_E2E === "1") {
+          return undefined;
+        }
+        return (await ensureManagedGrokRuntime({
+          checkMode: app.isPackaged ? "ttl" : "once-per-process",
+          requirePlatformSignature: app.isPackaged === true,
+        }))?.command;
+      },
       resolveAppVersion: () => app.getVersion(),
       secretStore,
       configPath,

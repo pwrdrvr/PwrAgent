@@ -2642,6 +2642,75 @@ describe("DesktopSettingsService", () => {
     });
   });
 
+  it("resolves the selected Codex and managed Grok commands for integrated terminals", async () => {
+    const root = createTempRoot();
+    const resolveCodex = vi.fn(async () => ({
+      command: "/pwragent/codex/versions/current/codex",
+      source: "config" as const,
+      version: "0.149.0-pwragent.2",
+    }));
+    const resolveManagedGrokCommand = vi.fn(
+      async () => "/pwragent/grok/versions/current/grok",
+    );
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({ candidates: [] })),
+        invalidate: vi.fn(),
+        resolve: resolveCodex,
+      },
+      configPath: path.join(root, "config.toml"),
+      defaultManagedGrokBuilds: true,
+      env: {},
+      resolveManagedGrokCommand,
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await expect(service.resolveIntegratedTerminalCommands()).resolves.toEqual([
+      "/pwragent/codex/versions/current/codex",
+      "/pwragent/grok/versions/current/grok",
+    ]);
+    expect(resolveCodex).toHaveBeenCalledTimes(1);
+    expect(resolveManagedGrokCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the configured Grok override instead of the managed runtime in terminals", async () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "config.toml");
+    fs.writeFileSync(
+      configPath,
+      [
+        "[acp_agents.grok]",
+        'cli_path = "/custom/grok/bin/grok"',
+        "managed_builds = true",
+      ].join("\n"),
+      "utf8",
+    );
+    const resolveManagedGrokCommand = vi.fn(
+      async () => "/pwragent/grok/versions/current/grok",
+    );
+    const service = new DesktopSettingsService({
+      codexDiscoveryCoordinator: {
+        discover: vi.fn(async () => ({ candidates: [] })),
+        invalidate: vi.fn(),
+        resolve: vi.fn(async () => ({
+          command: "/custom/codex/bin/codex",
+          source: "config" as const,
+        })),
+      },
+      configPath,
+      defaultManagedGrokBuilds: true,
+      env: {},
+      resolveManagedGrokCommand,
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    await expect(service.resolveIntegratedTerminalCommands()).resolves.toEqual([
+      "/custom/codex/bin/codex",
+      "/custom/grok/bin/grok",
+    ]);
+    expect(resolveManagedGrokCommand).not.toHaveBeenCalled();
+  });
+
   it("keeps CODEX_HOME fixed to the startup Codex auth profile", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
