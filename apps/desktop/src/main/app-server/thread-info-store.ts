@@ -252,6 +252,20 @@ export class ThreadInfoStore {
       changed.push(field);
     }
 
+    // A title and its source are one fact wearing two field names. They carry
+    // independent sequences, so an observation that renames a thread without
+    // saying where the name came from would otherwise leave the previous
+    // source behind, still describing a string that is gone. Readers then
+    // disagree: one reports the new name as an operator rename that never
+    // happened, the other reports a real rename as machine-derived. Drop the
+    // orphaned source instead, and let the readers say "unknown" honestly.
+    if (
+      changed.includes("title")
+      && observation.titleSource === undefined
+    ) {
+      delete entry.fields.titleSource;
+    }
+
     entry.lastObservedSequence = Math.max(
       entry.lastObservedSequence,
       observation.observationSequence,
@@ -423,23 +437,19 @@ export class ThreadInfoStore {
     ) {
       return summary.value;
     }
-    // A title and its source are separate fields with separate sequences, so
-    // the row's `titleSource` describes the row's title and says nothing about
-    // this one. Carrying it over mislabels provenance in both directions: a
-    // provider replay inherits `explicit` and reads as an operator rename,
-    // which suppresses generated titles and reports a rename nobody made; a
-    // real name inherits `fallback` and every `!== "fallback"` guard downstream
-    // discards it. Claim the field lane's own source only when it was observed
-    // no earlier than the title it describes, and otherwise say `derived` --
-    // the honest claim for a usable name that no operator set.
-    const titleSource = entry.fields.titleSource;
+    // The field lane's own source is authoritative when it has one, because
+    // `observe` drops a source whose title has been replaced -- so if it is
+    // here, it describes this title. Otherwise the row's source still applies
+    // if the row is talking about the same string, and only a title whose
+    // provenance nothing records is reported as `derived`.
+    const titleSource = entry.fields.titleSource?.value
+      ?? (summary.value.title === title.value
+        ? summary.value.titleSource
+        : "derived");
     return {
       ...summary.value,
       title: title.value,
-      titleSource:
-        titleSource && titleSource.observationSequence >= title.observationSequence
-          ? titleSource.value
-          : "derived",
+      titleSource,
     };
   }
 
@@ -504,27 +514,6 @@ export class ThreadInfoStore {
       return;
     }
     this.entries.delete(identityKey({ ...identity, threadId }));
-  }
-
-  /**
-   * Drop every remembered enriched row, keeping every other fact.
-   *
-   * The store survives cache invalidation on purpose: "this query result may be
-   * stale" says nothing about what a thread is called. Linked directories are
-   * the exception. They are not a property of the thread the way its name is --
-   * they are the answer a directory-resolving listing gave at one moment, and a
-   * workspace rebind or a detached directory makes that answer wrong with no
-   * notification to correct it. Nothing else observes the enriched slot, so it
-   * would otherwise serve its founding answer for the life of the process.
-   *
-   * The one caller that reads enriched rows turns them into the allowlist of
-   * paths whose images may be attached to an outbound message, so a stale
-   * answer there approves a directory the thread no longer has.
-   */
-  forgetEnrichedSummaries(): void {
-    for (const entry of this.entries.values()) {
-      delete entry.enrichedSummary;
-    }
   }
 
   /**

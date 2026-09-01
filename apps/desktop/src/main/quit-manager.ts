@@ -571,10 +571,11 @@ export async function resolveQuitBlockerThreadTitles(
     });
   };
 
-  await Promise.all([
-    Promise.resolve().then(resolveLocal).catch(() => undefined),
-    resolveRemote().catch(() => undefined),
-  ]);
+  // `resolveLocal` is synchronous and swallows its own failures per row, so
+  // there is nothing here to await or to catch. The two write disjoint keys --
+  // local rows carry no `target`, and the key includes it -- so order is free.
+  resolveLocal();
+  await resolveRemote().catch(() => undefined);
   return titles;
 }
 

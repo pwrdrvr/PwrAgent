@@ -1,3 +1,4 @@
+import { rememberBoundedMap } from "../../bounded-map";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -327,6 +328,7 @@ type MessagingAdmissionStage =
   | "bundleReady"
   | "inputPrepared"
   | "admissionStateResolved"
+  | "queued"
   | "occupancyResolved"
   | "originBuilt"
   | "policyResolved";
@@ -1128,7 +1130,6 @@ export class MessagingController {
   }
 
   async handleInboundEvent(event: MessagingInboundEvent): Promise<void> {
-    this.markAdmissionStage(event, "handled");
     if (!this.authorizeInboundAdmission(event)) {
       // In enforcing mode this fires for actors with no permission-granting
       // role (default-deny); record it so operators can see who was inert.
@@ -1148,6 +1149,11 @@ export class MessagingController {
       );
       return;
     }
+    // Marked past the authorization gate, not at the door. An unauthorized
+    // actor's traffic is not a turn anyone is timing, and marking it would let
+    // a burst of rejected events push the entries this map exists to hold out
+    // of it.
+    this.markAdmissionStage(event, "handled");
 
     // Self-heal: every inbound event carries the freshest ancestry data
     // the adapter knows (parentTitle = supergroup/server, ancestorTitle
@@ -3696,6 +3702,41 @@ export class MessagingController {
   }
 
   /**
+   * Retire a Default Agent assignment whose target could not start a turn.
+   *
+   * Scoped to bindings this controller routed through a Default Agent: an
+   * ordinary bound thread failing to start is a transient the operator can
+   * retry, not evidence that the binding is wrong. A revoked assignment leaves
+   * the channel unbound, so the next message falls through to normal handling
+   * and the operator is told the default was cleared.
+   */
+  private async revokeDefaultAgentRouteForFailedStart(
+    binding: MessagingBindingRecord,
+  ): Promise<void> {
+    if (!isDefaultAgentRouteBinding(binding)) {
+      return;
+    }
+    const revoked = await this.options.store
+      .revokeDefaultAgentAssignmentsForTarget({
+        backend: binding.backend,
+        threadId: binding.threadId,
+        revokedAt: this.now(),
+      })
+      .catch((error: unknown) => {
+        this.logger.debug?.("messaging default agent revoke after failed start failed", {
+          error: error instanceof Error ? error.message : String(error),
+          threadId: binding.threadId,
+        });
+        return [];
+      });
+    // An empty array is still truthy, and a start can fail on a channel whose
+    // assignment was already retired -- announce a change only when one moved.
+    if (revoked.length > 0) {
+      this.notifyBindingChanged("default-agent-cleared");
+    }
+  }
+
+  /**
    * The one door into the admission queue, so every route marks the same stage.
    */
   private async admitTurnInput(params: {
@@ -3720,15 +3761,13 @@ export class MessagingController {
     if (!event) return;
     let marks = this.admissionStageMarks.get(event.id);
     if (!marks) {
-      if (this.admissionStageMarks.size >= ADMISSION_STAGE_MARK_LIMIT) {
-        // Insertion-ordered, so the first key is the oldest.
-        const oldest = this.admissionStageMarks.keys().next();
-        if (!oldest.done) {
-          this.admissionStageMarks.delete(oldest.value);
-        }
-      }
       marks = {};
-      this.admissionStageMarks.set(event.id, marks);
+      rememberBoundedMap(
+        this.admissionStageMarks,
+        event.id,
+        marks,
+        ADMISSION_STAGE_MARK_LIMIT,
+      );
     }
     marks[stage] ??= this.now();
   }
@@ -3768,6 +3807,13 @@ export class MessagingController {
         marks.admissionStateResolved,
         marks.occupancyResolved,
       ],
+      // A turn that waited behind a busy thread reports its wait here instead.
+      // Without these two the wait belonged to no span at all, so the stages
+      // stopped summing to the end-to-end number with nothing saying why -- the
+      // one reading that would send someone hunting for time that was never
+      // lost.
+      ["admissionStateToQueuedMs", marks.admissionStateResolved, marks.queued],
+      ["queuedToOriginMs", marks.queued, marks.originBuilt],
       ["occupancyToOriginMs", marks.occupancyResolved, marks.originBuilt],
       ["originToPolicyMs", marks.originBuilt, marks.policyResolved],
       ["policyToStartTurnIssueMs", marks.policyResolved, startTurnIssuedAt],
@@ -3785,6 +3831,13 @@ export class MessagingController {
     bundle: MessagingTurnAdmissionBundle,
   ): Promise<void> {
     this.markAdmissionStage(bundle.events[0], "bundleReady");
+    // Only the first event of a bundle is carried forward to the start-turn
+    // log, so the others' marks can never be consumed. Dropping them here is
+    // what keeps the ceiling from evicting a turn that is still in flight --
+    // eviction is oldest-first, and the oldest entry is the one still waiting.
+    for (const event of bundle.events.slice(1)) {
+      this.admissionStageMarks.delete(event.id);
+    }
     const currentBinding = bundle.binding.pendingSkillSelection
       ? await this.options.store.getBinding(bundle.binding.id) ?? bundle.binding
       : bundle.binding;
@@ -3834,6 +3887,7 @@ export class MessagingController {
         admissionState,
       )
     ) {
+      this.markAdmissionStage(bundle.events[0], "queued");
       await this.queuePreparedInput({
         binding: consumedSkillBinding,
         event: bundle.events[0],
@@ -4427,6 +4481,15 @@ export class MessagingController {
         }
         return "failed";
       }
+      // A Default Agent route that cannot start its turn is the only report we
+      // get that its target is gone. Nothing else says so: `agent` lives in the
+      // thread's overlay row, which outlives the thread, so the pre-flight
+      // check cannot tell a live target from a deleted one, and archival is
+      // announced only for threads this process is around to hear about.
+      // Without this the channel keeps routing every later message to the same
+      // dead thread and failing identically, with no way back to a working
+      // default short of the operator clearing it by hand.
+      await this.revokeDefaultAgentRouteForFailedStart(params.binding);
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("turn-start-failed"),
@@ -20736,20 +20799,6 @@ function rememberBoundedKey(
     const oldest = set.values().next().value;
     if (oldest === undefined) break;
     set.delete(oldest);
-  }
-}
-
-function rememberBoundedMap<Value>(
-  map: Map<string, Value>,
-  key: string,
-  value: Value,
-  maxSize = MAX_DELIVERED_AUTOMATION_KEYS,
-): void {
-  map.set(key, value);
-  while (map.size > maxSize) {
-    const oldest = map.keys().next().value;
-    if (oldest === undefined) break;
-    map.delete(oldest);
   }
 }
 

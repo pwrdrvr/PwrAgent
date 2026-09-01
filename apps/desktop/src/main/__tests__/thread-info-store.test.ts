@@ -506,23 +506,6 @@ describe("ThreadInfoStore", () => {
       ).toBe("Thread on peer-a::b");
     });
 
-    // Names outlive invalidation; a resolved directory set does not.
-    it("drops enriched rows on invalidation and keeps everything else", () => {
-      const store = new ThreadInfoStore();
-      store.observeSummary({
-        enriched: true,
-        identity: local("t1"),
-        observationSequence: store.reserveObservationSequence(),
-        summary: rowFor("Enriched"),
-      });
-
-      store.forgetEnrichedSummaries();
-
-      expect(store.getSummary(local("t1"), { requireEnriched: true }))
-        .toBeUndefined();
-      expect(store.getSummary(local("t1"))?.title).toBe("Enriched");
-    });
-
     it("forgets an entry whose id needed normalizing", () => {
       const store = new ThreadInfoStore();
       store.observe({

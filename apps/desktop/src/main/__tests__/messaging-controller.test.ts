@@ -4650,6 +4650,52 @@ describe("MessagingController", () => {
     expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
+  // The pre-flight check reads `agent` from the thread's overlay row, which
+  // outlives the thread it describes, so it cannot tell a live target from a
+  // deleted one. The failed start is the only report that ever arrives.
+  it("retires a default-agent route whose target can no longer start a turn", async () => {
+    const navigation = buildNavigationSnapshot();
+    const agent = {
+      name: "Provider Agent",
+      instructionLineCount: 1,
+      instructionsTooLong: false,
+      updatedAt: 1500,
+    };
+    const harness = await createHarness({
+      navigation,
+      // Models the production bridge: the row is rebuilt from the durable
+      // overlay, so it answers for a thread no listing contains any more.
+      getThreadAdmissionState: async (request) => ({
+        thread: {
+          ...navigation.threads[0]!,
+          id: request.threadId,
+          source: request.backend,
+          agent,
+        },
+      }),
+    });
+    harness.startTurn.mockRejectedValue(new Error("thread not found"));
+    const channel = buildTopicChannel("13123");
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:deleted-target",
+      scope: { kind: "conversation", channel },
+      target: { kind: "agent", backend: "codex", threadId: "deleted-thread" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("use the available Agent", { botMention: true, channel }),
+    );
+
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: "deleted-thread" }),
+    );
+    await expect(
+      harness.store.getDefaultAgentAssignment("default-agent:deleted-target"),
+    ).resolves.toMatchObject({ revokedAt: expect.any(Number) });
+  });
+
   it("preserves the messaging location for queued Agent-thread turns", async () => {
     const harness = await createHarness();
     harness.startTurn.mockImplementation(async (request: StartTurnRequest) => {

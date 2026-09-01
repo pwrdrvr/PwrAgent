@@ -320,7 +320,8 @@ export class RemoteThreadSummaryCache {
       // record. A peer exposing thousands of unnamed threads would cost
       // per-thread bookkeeping, retained for the life of the process, holding
       // nothing any read can answer from.
-      if (!thread.title?.trim() || thread.titleSource === "fallback") {
+      const title = thread.title?.trim();
+      if (!title || thread.titleSource === "fallback" || title === thread.id) {
         continue;
       }
       this.threadNames.observe({

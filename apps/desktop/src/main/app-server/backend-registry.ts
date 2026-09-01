@@ -1,3 +1,4 @@
+import { rememberBoundedMap } from "../bounded-map";
 import { app } from "electron";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { execFile as execFileCallback } from "node:child_process";
@@ -11317,6 +11318,20 @@ export class DesktopBackendRegistry {
       updatedAt: Math.max(session.updatedAt, archivedAt),
     });
     this.invalidateThreadListCache(params.backend);
+    // Archival on ACP is a local store write, with no provider to announce it.
+    // Say it in the same words Codex uses, because everything downstream is
+    // written against the notification rather than against a backend: the
+    // information store records the fact here, and messaging revokes the
+    // thread's Default Agent assignments. Without this an archived ACP thread
+    // is invisible to both -- it simply stops appearing in listings, which no
+    // consumer can tell apart from a thread it has not seen lately.
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/archived",
+        params: { threadId: params.threadId },
+      },
+    });
     await this.cleanupMessagingForArchivedThread({
       backend: params.backend,
       threadId: params.threadId,
@@ -11362,6 +11377,16 @@ export class DesktopBackendRegistry {
     this.clearArchivedMessagingCleanupCache({
       backend: params.backend,
       threadId: params.threadId,
+    });
+    // The counterpart to the archive emit above. This is the only report a
+    // restore ever makes: a listing cannot carry the news, because an
+    // unarchived thread is one that has merely started appearing again.
+    await this.emit({
+      backend: params.backend,
+      notification: {
+        method: "thread/unarchived",
+        params: { threadId: params.threadId },
+      },
     });
     return {
       backend: params.backend,
@@ -11467,7 +11492,7 @@ export class DesktopBackendRegistry {
             : undefined) ?? "HEAD"
         : result.branch;
 
-    await this.overlayStore.replaceWorkspaceLinkedDirectory({
+    await this.replaceWorkspaceLinkedDirectory({
       backend: request.backend,
       threadId: request.threadId,
       directory: result.linkedDirectory,
@@ -13450,7 +13475,7 @@ export class DesktopBackendRegistry {
         // has replaced the copied parent cwd. Persist the prepared workspace now
         // so that transient provider metadata cannot become the child's source
         // of truth.
-        await this.overlayStore.replaceWorkspaceLinkedDirectory({
+        await this.replaceWorkspaceLinkedDirectory({
           backend,
           threadId: result.threadId,
           directory: linkedDirectory,
@@ -19603,7 +19628,7 @@ export class DesktopBackendRegistry {
       // can report the same repository through a physical path alias (for
       // example macOS /private/var for a requested /var path), but the
       // worktree path still proves these describe one prepared workspace.
-      await this.overlayStore.replaceWorkspaceLinkedDirectory({
+      await this.replaceWorkspaceLinkedDirectory({
         backend: launchpad.backend,
         threadId: startThreadResponse.threadId,
         directory: linkedDirectory,
@@ -21444,12 +21469,37 @@ export class DesktopBackendRegistry {
     };
   }
 
+  /**
+   * Rebind a thread's workspace directory, and drop what the store remembers
+   * about that thread.
+   *
+   * A remembered row carries the directory set the provider last reported, and
+   * `resolveThreadWorkspaceCwd` ranks those ahead of the overlay whenever they
+   * do not already match it -- which, immediately after a rebind, is precisely
+   * when they do not. Keeping the row across this write therefore sends the
+   * next turn to the directory the thread just moved off, and nothing corrects
+   * it: no notification reports a directory change, and surviving cache
+   * invalidation is the whole point of this store.
+   *
+   * Every rebind goes through here rather than through the overlay store
+   * directly, so a site added later cannot forget the second half.
+   */
+  private async replaceWorkspaceLinkedDirectory(params: {
+    backend: AppServerBackendKind;
+    directory: LinkedDirectorySummary;
+    gitBranch?: string;
+    threadId: string;
+  }): Promise<ThreadOverlayState> {
+    const overlay =
+      await this.overlayStore.replaceWorkspaceLinkedDirectory(params);
+    this.threadInfoStore.forget({
+      backend: params.backend,
+      threadId: params.threadId,
+    });
+    return overlay;
+  }
+
   private invalidateThreadListCache(backend?: AppServerBackendKind): void {
-    // Names survive invalidation; resolved directories do not. A directory set
-    // is the answer one enriching listing gave, and the events that invalidate
-    // these caches -- a workspace rebind, a detached directory -- are exactly
-    // the ones that make that answer wrong, with no notification to correct it.
-    this.threadInfoStore.forgetEnrichedSummaries();
     if (!backend) {
       this.threadListCache.clear();
       return;
@@ -21543,7 +21593,7 @@ export class DesktopBackendRegistry {
         return;
       }
 
-      await this.overlayStore.replaceWorkspaceLinkedDirectory({
+      await this.replaceWorkspaceLinkedDirectory({
         backend: "codex",
         threadId: params.threadId,
         directory,
@@ -22467,7 +22517,7 @@ export class DesktopBackendRegistry {
       }
 
       updatedOverlaysByThreadId[thread.id] =
-        await this.overlayStore.replaceWorkspaceLinkedDirectory({
+        await this.replaceWorkspaceLinkedDirectory({
           backend: "codex",
           threadId: thread.id,
           directory,
@@ -22566,7 +22616,7 @@ export class DesktopBackendRegistry {
         }
 
         updatedOverlaysByThreadId[thread.id] =
-          await this.overlayStore.replaceWorkspaceLinkedDirectory({
+          await this.replaceWorkspaceLinkedDirectory({
             backend: "codex",
             threadId: thread.id,
             directory,
@@ -34624,17 +34674,18 @@ export class DesktopBackendRegistry {
         identity,
         observationSequence: displayMetadataObservationSequence,
         source: "provider-list",
-        // Read archival off the row, not off the query. Both backends coerce
-        // an unspecified `archived` to `false` -- Codex requests
-        // `archived: false` pages, the ACP store filters on
-        // `Boolean(archivedAt) === (params?.archived === true)` -- so every
-        // listing is filtered whether or not the caller said so, and the row's
-        // own `archivedAt` is the fact rather than the argument that produced
-        // it. Taking it from the row keeps a row that arrives carrying
-        // `archivedAt` from being recorded as active, and keeps the store
-        // correctable: an out-of-band unarchive is a row that comes back
-        // without `archivedAt`, which no notification would have reported.
-        archived: thread.archivedAt !== undefined || listedArchived === true,
+        // Only a listing that actually filtered by archival proves anything
+        // about it, and the row itself proves less than it looks like it does:
+        // an active Codex listing merges cached archived metadata into its
+        // rows, and `mergeThreadSummaries` returns the archived row wholesale
+        // when its titleSource outranks the active one. That cache refreshes on
+        // a 60s interval, so for up to a minute after an unarchive an *active*
+        // listing can hand back a row still carrying `archivedAt` -- which
+        // would overwrite the `thread/unarchived` notification at a newer
+        // sequence and withhold a live thread. `archivedAt` is also a
+        // normalized epoch that can legitimately be 0, so presence is not even
+        // a safe test for it. Record the query's own filter or nothing.
+        ...(listedArchived === undefined ? {} : { archived: listedArchived }),
         title: thread.title,
         ...(thread.titleSource ? { titleSource: thread.titleSource } : {}),
         ...(projectLabel ? { projectLabel } : {}),
@@ -34716,24 +34767,27 @@ export class DesktopBackendRegistry {
           });
         })
         .finally(() => {
-          if (!walkListedRows) {
+          // Only retract this walk's own entry. The cap below can evict a key
+          // whose walk is still running, and a later notification then stores a
+          // fresh promise under it -- deleting by key alone would throw that
+          // one away when this older walk settled, and the next notification
+          // would start a third. Same ownership check the thread-list cache
+          // uses when its pending entry settles.
+          if (
+            !walkListedRows
+            && this.notificationContextReconciliations.get(key) === reconciliation
+          ) {
             this.notificationContextReconciliations.delete(key);
           }
         });
-      if (
-        this.notificationContextReconciliations.size
-        >= NOTIFICATION_CONTEXT_RECONCILIATION_LIMIT
-      ) {
-        // Settled entries are kept on purpose -- they are the memo. Insertion
-        // order makes the first key the oldest, so a process that outlives many
-        // threads reclaims them instead of holding one promise per thread it
-        // has ever been notified about.
-        const oldest = this.notificationContextReconciliations.keys().next();
-        if (!oldest.done) {
-          this.notificationContextReconciliations.delete(oldest.value);
-        }
-      }
-      this.notificationContextReconciliations.set(key, reconciliation);
+      // Settled entries are kept on purpose -- they are the memo -- so this is
+      // bounded by count rather than by liveness.
+      rememberBoundedMap(
+        this.notificationContextReconciliations,
+        key,
+        reconciliation,
+        NOTIFICATION_CONTEXT_RECONCILIATION_LIMIT,
+      );
     }
     await reconciliation;
     return this.notificationThreadContextLabel(backend, threadId);
