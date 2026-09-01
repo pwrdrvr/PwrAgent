@@ -51,6 +51,20 @@ export class CountingBackendClient {
 
   async close(): Promise<void> {}
 
+  /**
+   * Archiving is the cheapest real mutation that invalidates the thread-list
+   * cache, which is what the admission budgets need to reproduce. Recorded as
+   * a mutation, not a read, so it does not move the read counters.
+   */
+  async archiveThread(params: { threadId: string }): Promise<{
+    threadId: string;
+  }> {
+    this.threads = this.threads.filter(
+      (thread) => thread.id !== params.threadId,
+    );
+    return { threadId: params.threadId };
+  }
+
   async getInitializeResult(): Promise<unknown> {
     return { methods: ["thread/list", "turn/start"] };
   }

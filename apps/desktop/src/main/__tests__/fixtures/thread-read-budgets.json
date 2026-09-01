@@ -9,6 +9,11 @@
     "note": "50 synchronous label lookups for a thread already observed once",
     "providerListCalls": 0
   },
+  "messaging-admission-after-invalidation": {
+    "directoryEnrichments": 0,
+    "note": "messaging admission for a listed thread whose list cache was invalidated",
+    "providerListCalls": 0
+  },
   "quit-dialog-poll": {
     "directoryEnrichments": 0,
     "note": "20 quit-dialog polls against an in-progress turn, all served from observed metadata",
