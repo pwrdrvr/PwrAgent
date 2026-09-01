@@ -469,21 +469,22 @@ export class ThreadInfoStore {
     // picks its own. Answering an ambiguous id with whichever backend this
     // process happened to observe first would hand back another thread's
     // directories; a caller that cannot name the backend gets nothing.
-    let match: AppServerThreadSummary | undefined;
+    //
+    // Ambiguity is decided on the entries, not on what survives projection. An
+    // entry withheld because its thread was archived is still a second thread
+    // wearing this id, and skipping it before the count would make the
+    // remaining one look unambiguous and answer with its directories.
+    let match: ThreadInfoEntry | undefined;
     for (const entry of this.entries.values()) {
       if (entry.identity.instanceId || entry.identity.threadId !== threadId) {
-        continue;
-      }
-      const projected = this.projectSummary(entry, false);
-      if (!projected) {
         continue;
       }
       if (match) {
         return undefined;
       }
-      match = projected;
+      match = entry;
     }
-    return match;
+    return match ? this.projectSummary(match, false) : undefined;
   }
 
   /** The display title, or `undefined` when none has ever been observed. */
@@ -505,11 +506,38 @@ export class ThreadInfoStore {
     this.entries.delete(identityKey({ ...identity, threadId }));
   }
 
-  /** Drop every thread belonging to a peer that unmounted. */
+  /**
+   * Drop every remembered enriched row, keeping every other fact.
+   *
+   * The store survives cache invalidation on purpose: "this query result may be
+   * stale" says nothing about what a thread is called. Linked directories are
+   * the exception. They are not a property of the thread the way its name is --
+   * they are the answer a directory-resolving listing gave at one moment, and a
+   * workspace rebind or a detached directory makes that answer wrong with no
+   * notification to correct it. Nothing else observes the enriched slot, so it
+   * would otherwise serve its founding answer for the life of the process.
+   *
+   * The one caller that reads enriched rows turns them into the allowlist of
+   * paths whose images may be attached to an outbound message, so a stale
+   * answer there approves a directory the thread no longer has.
+   */
+  forgetEnrichedSummaries(): void {
+    for (const entry of this.entries.values()) {
+      delete entry.enrichedSummary;
+    }
+  }
+
+  /**
+   * Drop every thread belonging to a peer that unmounted.
+   *
+   * Matched on the entry's own instance id rather than on a key prefix. The
+   * key joins its parts with `::`, and an instance id is peer-supplied text
+   * that may contain one, so a prefix scan for `peer-a` also claims the
+   * entries of a peer named `peer-a::b`.
+   */
   forgetInstance(instanceId: string): void {
-    const prefix = `${instanceId}::`;
-    for (const key of this.entries.keys()) {
-      if (key.startsWith(prefix)) {
+    for (const [key, entry] of this.entries) {
+      if (entry.identity.instanceId === instanceId) {
         this.entries.delete(key);
       }
     }

@@ -609,6 +609,9 @@ const MAX_QUEUE_FLUSH_ATTEMPTS = 3;
 // been walked for", so they are retained on purpose; the cap keeps a long-lived
 // process from holding one per thread it has ever been notified about.
 const NOTIFICATION_CONTEXT_RECONCILIATION_LIMIT = 512;
+// An ACP listing resolves linked directories for every row it returns, so its
+// rows carry enrichment whether or not the caller requested it.
+const ACP_LISTINGS_ARE_ENRICHED = true;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const GROK_TITLE_HELPER_SESSION_POLICY = buildMinimalGrokHelperSessionPolicy({
   description: "Generate a concise title for a PwrAgent thread.",
@@ -9678,13 +9681,17 @@ export class DesktopBackendRegistry {
       this.rememberThreadListContexts(
         threads,
         displayMetadataObservationSequence,
-        params.enrichDirectories,
+        // An ACP listing resolves linked directories for every row whatever the
+        // caller asked for, so its rows are enriched even when the request was
+        // not. Passing the request's flag would record them as unenriched and
+        // send every `requireEnriched` read back to the provider.
+        ACP_LISTINGS_ARE_ENRICHED,
         params.archived,
       );
       return threads;
     }
 
-    const threadLists = await Promise.all([
+    const [codexThreads, acpThreads] = await Promise.all([
       this.listThreads({
         backend: "codex",
         archived: params.archived,
@@ -9698,16 +9705,21 @@ export class DesktopBackendRegistry {
       this.listAllInstalledAcpThreads(params.filter, params.archived),
     ]);
 
-    const threads = threadLists
-      .flat()
-      .sort((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
+    // Only the ACP half is recorded here. The Codex half went through
+    // `listThreads`, which reserved its own newer sequence and already folded
+    // those rows; folding them again writes nothing the sequence guard would
+    // accept, and it does so on the main thread once per navigation refresh.
+    // Recording them here would also stamp rows read at the inner sequence with
+    // this outer one, which is the ordering the store exists to keep honest.
     this.rememberThreadListContexts(
-      threads,
+      acpThreads,
       displayMetadataObservationSequence,
-      params.enrichDirectories,
+      ACP_LISTINGS_ARE_ENRICHED,
       params.archived,
     );
-    return threads;
+    return [...codexThreads, ...acpThreads].sort(
+      (left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0),
+    );
   }
 
   private async filterArchivedThreadsPresentInActiveList(params: {
@@ -21433,6 +21445,11 @@ export class DesktopBackendRegistry {
   }
 
   private invalidateThreadListCache(backend?: AppServerBackendKind): void {
+    // Names survive invalidation; resolved directories do not. A directory set
+    // is the answer one enriching listing gave, and the events that invalidate
+    // these caches -- a workspace rebind, a detached directory -- are exactly
+    // the ones that make that answer wrong, with no notification to correct it.
+    this.threadInfoStore.forgetEnrichedSummaries();
     if (!backend) {
       this.threadListCache.clear();
       return;

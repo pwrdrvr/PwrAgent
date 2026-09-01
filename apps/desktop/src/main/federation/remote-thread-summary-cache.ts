@@ -315,6 +315,14 @@ export class RemoteThreadSummaryCache {
     observationSequence: number,
   ): void {
     for (const thread of threads) {
+      // A fallback or blank title is not news, and observing one anyway leaves
+      // an entry behind: the store rejects the value but still creates the
+      // record. A peer exposing thousands of unnamed threads would cost
+      // per-thread bookkeeping, retained for the life of the process, holding
+      // nothing any read can answer from.
+      if (!thread.title?.trim() || thread.titleSource === "fallback") {
+        continue;
+      }
       this.threadNames.observe({
         identity: {
           backend: thread.source,

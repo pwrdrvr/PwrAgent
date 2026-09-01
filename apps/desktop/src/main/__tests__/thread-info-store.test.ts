@@ -457,6 +457,72 @@ describe("ThreadInfoStore", () => {
       ).toBe("shared-id");
     });
 
+    // Withholding is not absence. A second thread wearing this id is a second
+    // thread whether or not this store will currently answer for it.
+    it("refuses an ambiguous lookup when one match is withheld", () => {
+      const store = new ThreadInfoStore();
+      for (const backend of ["codex", "acp:claude-code"] as const) {
+        store.observeSummary({
+          enriched: false,
+          identity: { backend, threadId: "shared-id" },
+          observationSequence: store.reserveObservationSequence(),
+          summary: { ...rowFor("Either one"), id: "shared-id" },
+        });
+      }
+      store.observe({
+        archived: true,
+        identity: { backend: "acp:claude-code", threadId: "shared-id" },
+        observationSequence: store.reserveObservationSequence(),
+        source: "lifecycle-notification",
+      });
+
+      expect(
+        store.getSummary({ backend: "acp:claude-code", threadId: "shared-id" }),
+      ).toBeUndefined();
+      expect(store.findLocalSummary({ threadId: "shared-id" })).toBeUndefined();
+    });
+
+    // The key joins its parts with `::` and an instance id is peer-supplied
+    // text, so a prefix scan claims more than it was asked for.
+    it("forgets one peer without taking a peer whose id extends it", () => {
+      const store = new ThreadInfoStore();
+      for (const instanceId of ["peer-a", "peer-a::b"] as const) {
+        store.observe({
+          identity: { backend: "codex", instanceId, threadId: "t1" },
+          observationSequence: store.reserveObservationSequence(),
+          source: "provider-list",
+          title: `Thread on ${instanceId}`,
+          titleSource: "explicit",
+        });
+      }
+
+      store.forgetInstance("peer-a");
+
+      expect(
+        store.getTitle({ backend: "codex", instanceId: "peer-a", threadId: "t1" }),
+      ).toBeUndefined();
+      expect(
+        store.getTitle({ backend: "codex", instanceId: "peer-a::b", threadId: "t1" }),
+      ).toBe("Thread on peer-a::b");
+    });
+
+    // Names outlive invalidation; a resolved directory set does not.
+    it("drops enriched rows on invalidation and keeps everything else", () => {
+      const store = new ThreadInfoStore();
+      store.observeSummary({
+        enriched: true,
+        identity: local("t1"),
+        observationSequence: store.reserveObservationSequence(),
+        summary: rowFor("Enriched"),
+      });
+
+      store.forgetEnrichedSummaries();
+
+      expect(store.getSummary(local("t1"), { requireEnriched: true }))
+        .toBeUndefined();
+      expect(store.getSummary(local("t1"))?.title).toBe("Enriched");
+    });
+
     it("forgets an entry whose id needed normalizing", () => {
       const store = new ThreadInfoStore();
       store.observe({
