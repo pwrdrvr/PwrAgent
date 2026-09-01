@@ -1,4 +1,13 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const backendRegistryMock = vi.hoisted(() => ({
+  getCachedThreadDisplayMetadata: vi.fn(),
+  getInProgressThreadSnapshotForQuit: vi.fn(() => ({
+    count: 0,
+    threadIds: [] as string[],
+  })),
+  listThreads: vi.fn(async (): Promise<unknown[]> => []),
+}));
 
 vi.mock("electron", () => ({
   app: {
@@ -10,9 +19,7 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("../app-server/backend-registry", () => ({
-  getDesktopBackendRegistry: vi.fn(() => ({
-    getInProgressThreadSnapshotForQuit: () => ({ count: 0, threadIds: [] }),
-  })),
+  getDesktopBackendRegistry: vi.fn(() => backendRegistryMock),
 }));
 
 vi.mock("../ipc/integrated-terminal", () => ({
@@ -42,6 +49,17 @@ vi.mock("../log", () => ({
     warn: vi.fn(),
   })),
 }));
+
+beforeEach(() => {
+  backendRegistryMock.getCachedThreadDisplayMetadata.mockReset();
+  backendRegistryMock.getInProgressThreadSnapshotForQuit.mockReset();
+  backendRegistryMock.getInProgressThreadSnapshotForQuit.mockReturnValue({
+    count: 0,
+    threadIds: [],
+  });
+  backendRegistryMock.listThreads.mockReset();
+  backendRegistryMock.listThreads.mockResolvedValue([]);
+});
 
 describe("createQuitManager", () => {
   it("quits immediately when no threads are in progress", async () => {
@@ -703,9 +721,10 @@ describe("resolveQuitBlockerThreadTitles", () => {
     const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
       "../quit-manager"
     );
-    const listLocalThreads = vi.fn(async () => [
-      { source: "codex" as const, id: "local-thread", title: "Local Work" },
-    ]);
+    const cachedLocalThreadName = vi.fn(() => ({
+      title: "Local Work",
+      titleSource: "explicit" as const,
+    }));
     const cachedRemoteThreadName = vi.fn(() => ({
       title: "Reap Windows Worktrees",
       titleSource: "derived" as const,
@@ -713,7 +732,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
     const listRemoteThreadPins = vi.fn(async () => []);
 
     const titles = await resolveQuitBlockerThreadTitles([localItem, remoteItem], {
-      listLocalThreads,
+      cachedLocalThreadName,
       cachedRemoteThreadName,
       listRemoteThreadPins,
     });
@@ -727,9 +746,10 @@ describe("resolveQuitBlockerThreadTitles", () => {
       backend: "codex",
       threadId: "0f9c2b7a-remote",
     });
-    // The local list is a peer-blind lookup; asking it about a remote thread
-    // is what produced the uuid in the first place.
-    expect(listLocalThreads).toHaveBeenCalledTimes(1);
+    expect(cachedLocalThreadName).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex",
+      threadId: "local-thread",
+    });
     // The memory cache answered, so the store is never read.
     expect(listRemoteThreadPins).not.toHaveBeenCalled();
   });
@@ -740,7 +760,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
     );
 
     const titles = await resolveQuitBlockerThreadTitles([remoteItem], {
-      listLocalThreads: async () => [],
+      cachedLocalThreadName: () => undefined,
       cachedRemoteThreadName: () => undefined,
       listRemoteThreadPins: async () => [
         {
@@ -779,7 +799,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
     let settled = false;
 
     const pending = resolveQuitBlockerThreadTitles([remoteItem], {
-      listLocalThreads: async () => [],
+      cachedLocalThreadName: () => undefined,
       cachedRemoteThreadName: () => ({
         title: "Reap Windows Worktrees",
         titleSource: "derived" as const,
@@ -802,7 +822,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
     const { resolveQuitBlockerThreadTitles } = await import("../quit-manager");
 
     const titles = await resolveQuitBlockerThreadTitles([remoteItem], {
-      listLocalThreads: async () => [],
+      cachedLocalThreadName: () => undefined,
       cachedRemoteThreadName: () => ({
         title: "0f9c2b7a-remote",
         titleSource: "fallback" as const,
@@ -827,7 +847,7 @@ describe("resolveQuitBlockerThreadTitles", () => {
     const titles = await resolveQuitBlockerThreadTitles(
       [collidingLocal, remoteItem],
       {
-        listLocalThreads: async () => [],
+        cachedLocalThreadName: () => undefined,
         cachedRemoteThreadName: () => ({
           title: "Reap Windows Worktrees",
           titleSource: "derived" as const,
@@ -842,15 +862,46 @@ describe("resolveQuitBlockerThreadTitles", () => {
     expect(titles.get(quitBlockerTitleKey(collidingLocal))).toBeUndefined();
   });
 
+  it("keeps same-keyed remote titles qualified by owning instance", async () => {
+    const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
+      "../quit-manager"
+    );
+    const peerBItem = {
+      ...remoteItem,
+      target: { scope: "remote" as const, instanceId: "peer-b" },
+    };
+    const cachedLocalThreadName = vi.fn(() => ({
+      title: "Wrong local title",
+      titleSource: "explicit" as const,
+    }));
+
+    const titles = await resolveQuitBlockerThreadTitles(
+      [remoteItem, peerBItem],
+      {
+        cachedLocalThreadName,
+        cachedRemoteThreadName: ({ target }) => ({
+          title: target.instanceId === "peer-a" ? "Peer A work" : "Peer B work",
+          titleSource: "explicit" as const,
+        }),
+        listRemoteThreadPins: async () => [],
+      },
+    );
+
+    expect(titles.get(quitBlockerTitleKey(remoteItem))).toBe("Peer A work");
+    expect(titles.get(quitBlockerTitleKey(peerBItem))).toBe("Peer B work");
+    expect(cachedLocalThreadName).not.toHaveBeenCalled();
+  });
+
   it("still names local rows when the remote lookups throw", async () => {
     const { resolveQuitBlockerThreadTitles, quitBlockerTitleKey } = await import(
       "../quit-manager"
     );
 
     const titles = await resolveQuitBlockerThreadTitles([localItem, remoteItem], {
-      listLocalThreads: async () => [
-        { source: "codex" as const, id: "local-thread", title: "Local Work" },
-      ],
+      cachedLocalThreadName: () => ({
+        title: "Local Work",
+        titleSource: "explicit" as const,
+      }),
       cachedRemoteThreadName: () => {
         throw new Error("federation runtime unavailable");
       },
@@ -862,6 +913,85 @@ describe("resolveQuitBlockerThreadTitles", () => {
     expect(titles.get(quitBlockerTitleKey(localItem))).toBe("Local Work");
     expect(titles.get(quitBlockerTitleKey(remoteItem))).toBeUndefined();
   });
+});
+
+describe("readQuitBlockerQueueSnapshot", () => {
+  it("repeated polls perform zero full thread-list or directory-enrichment reads", async () => {
+    backendRegistryMock.getInProgressThreadSnapshotForQuit.mockReturnValue({
+      count: 1,
+      threadIds: ["codex:thread-live"],
+    });
+    backendRegistryMock.getCachedThreadDisplayMetadata.mockReturnValue({
+      title: "Keep the quit queue stable",
+      titleSource: "explicit",
+    });
+    backendRegistryMock.listThreads.mockResolvedValue([
+      {
+        source: "codex",
+        id: "thread-live",
+        title: "Keep the quit queue stable",
+        titleSource: "explicit",
+      },
+    ]);
+    const { readQuitBlockerQueueSnapshot } = await import("../quit-manager");
+
+    const snapshots = [];
+    for (let poll = 0; poll < 4; poll += 1) {
+      snapshots.push(await readQuitBlockerQueueSnapshot());
+    }
+
+    expect(snapshots).toHaveLength(4);
+    for (const snapshot of snapshots) {
+      expect(snapshot.items).toEqual([
+        expect.objectContaining({
+          kind: "turn",
+          threadKey: "codex:thread-live",
+          title: "Keep the quit queue stable",
+        }),
+      ]);
+    }
+    // A registry thread-list read is the only entrance to provider listing and
+    // its default quit-confirmation policy enables directory enrichment. Zero
+    // registry reads therefore enforces both steady-state budgets.
+    expect(backendRegistryMock.listThreads).not.toHaveBeenCalled();
+    expect(
+      backendRegistryMock.getCachedThreadDisplayMetadata,
+    ).toHaveBeenCalledTimes(4);
+  });
+
+  it.each([
+    ["hangs", () => new Promise<never[]>(() => undefined)],
+    ["rejects", async () => {
+      throw new Error("provider list rejected");
+    }],
+    ["is unavailable", () => {
+      throw new Error("provider list unavailable");
+    }],
+  ] as const)(
+    "builds the first named snapshot when provider listing %s",
+    async (_scenario, providerList) => {
+      backendRegistryMock.getInProgressThreadSnapshotForQuit.mockReturnValue({
+        count: 1,
+        threadIds: ["codex:thread-first-snapshot"],
+      });
+      backendRegistryMock.getCachedThreadDisplayMetadata.mockReturnValue({
+        title: "First snapshot stays named",
+        titleSource: "explicit",
+      });
+      backendRegistryMock.listThreads.mockImplementation(providerList);
+      const { readQuitBlockerQueueSnapshot } = await import("../quit-manager");
+
+      await expect(readQuitBlockerQueueSnapshot()).resolves.toMatchObject({
+        items: [
+          expect.objectContaining({
+            threadKey: "codex:thread-first-snapshot",
+            title: "First snapshot stays named",
+          }),
+        ],
+      });
+      expect(backendRegistryMock.listThreads).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("resolveQuitCountdownSeconds", () => {

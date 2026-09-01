@@ -98,7 +98,7 @@ export type QuitManagerDependencies = {
   performQuit: () => void;
 };
 
-/** Titles are a nicety; quitting must not hang on a slow app-server. */
+/** Titles are a nicety; quitting must not hang on optional cache/store reads. */
 const QUIT_TITLE_RESOLVE_TIMEOUT_MS = 1_500;
 
 export type QuitManager = {
@@ -394,8 +394,9 @@ export function formatAutomationRunStart(startedAt: number): string {
 
 /**
  * Attach thread titles to the blocker rows, bounded by a timeout: a hung
- * app-server must not be able to wedge shutdown. On timeout or failure the rows
- * keep their thread ids, which still link correctly — they just read worse.
+ * optional title source must not be able to wedge shutdown. On timeout or
+ * failure the rows keep their thread ids, which still link correctly — they
+ * just read worse.
  */
 async function withResolvedTitles(
   items: QuitBlockerItem[],
@@ -454,15 +455,11 @@ type QuitBlockerThreadTitle = {
 };
 
 export type QuitBlockerTitleResolverDependencies = {
-  /** Threads owned by THIS instance. */
-  listLocalThreads: () => Promise<
-    ReadonlyArray<{
-      source: AppServerBackendKind;
-      id: string;
-      title?: string;
-      titleSource?: AppServerThreadTitleSource;
-    }>
-  >;
+  /** Already-observed display metadata for a thread owned by THIS instance. */
+  cachedLocalThreadName: (params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }) => QuitBlockerThreadTitle | undefined;
   /**
    * What a peer calls one of its threads, out of names ALREADY seen locally.
    * Synchronous by contract: this must not become a peer round trip.
@@ -480,11 +477,9 @@ export type QuitBlockerTitleResolverDependencies = {
  * Name every blocker row from what this machine already knows, including what
  * it knows about its peers.
  *
- * This is tier-2 resolution — local plus *cached* remote. The old lookup was
- * tier 1: it asked this instance's thread list, which cannot answer for a
- * peer's thread, so the row fell back to the thread id and the operator was
- * asked to decide about a uuid while their sidebar showed that same thread by
- * name.
+ * This is cache-only local plus cache-only remote resolution. The old lookup
+ * asked this instance's full thread list, which both delayed quit and could
+ * not answer for a peer's thread.
  *
  * Reaching the peer (tier 3) is deliberately NOT done here. A remote thread
  * is a quit blocker because a window on this machine has its terminal open,
@@ -516,17 +511,22 @@ export async function resolveQuitBlockerThreadTitles(
     item.target ? [{ item, target: item.target }] : [],
   );
 
-  const resolveLocal = async (): Promise<void> => {
+  const resolveLocal = (): void => {
     if (localItems.length === 0) return;
-    const threads = await dependencies.listLocalThreads();
-    const byThreadKey = new Map(
-      threads.map((thread) => [
-        buildThreadIdentityKey(thread.source, thread.id),
-        thread,
-      ]),
-    );
     for (const item of localItems) {
-      record(titles, item, byThreadKey.get(item.threadKey));
+      try {
+        record(
+          titles,
+          item,
+          dependencies.cachedLocalThreadName({
+            backend: item.backend as AppServerBackendKind,
+            threadId: item.threadId,
+          }),
+        );
+      } catch {
+        // One unavailable cache entry must not prevent the remaining rows from
+        // resolving or delay the quit decision.
+      }
     }
   };
 
@@ -572,7 +572,7 @@ export async function resolveQuitBlockerThreadTitles(
   };
 
   await Promise.all([
-    resolveLocal().catch(() => undefined),
+    Promise.resolve().then(resolveLocal).catch(() => undefined),
     resolveRemote().catch(() => undefined),
   ]);
   return titles;
@@ -617,10 +617,8 @@ async function resolveCurrentQuitBlockerTitles(
   items: QuitBlockerItem[],
 ): Promise<Map<string, string>> {
   return await resolveQuitBlockerThreadTitles(items, {
-    listLocalThreads: async () =>
-      await getDesktopBackendRegistry().listThreads({
-        callerReason: "quit-confirmation",
-      }),
+    cachedLocalThreadName: (params) =>
+      getDesktopBackendRegistry().getCachedThreadDisplayMetadata(params),
     cachedRemoteThreadName: (params) =>
       getDesktopFederationRuntime()
         .remoteThreadSummaries()
