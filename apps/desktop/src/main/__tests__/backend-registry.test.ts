@@ -2987,6 +2987,102 @@ describe("DesktopBackendRegistry", () => {
     }
   });
 
+  it("keeps a remembered thread title after a notification drops the thread list cache", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-1",
+          title: "Investigate the flaky login redirect",
+          titleSource: "derived",
+          source: "codex",
+          linkedDirectories: [],
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    try {
+      await registry.listThreads({ callerReason: "navigation-snapshot" });
+      expect(registry.getCachedThreadSummary({
+        backend: "codex",
+        threadId: "thread-1",
+      })).toMatchObject({ title: "Investigate the flaky login redirect" });
+
+      // `subscribeClient` invalidates the thread list before it emits, so any
+      // consumer reacting to this notification reads the summary cache cold.
+      await codexClient.emit({
+        method: "thread/executionMode/updated",
+        params: {
+          threadId: "thread-1",
+          executionMode: "full-access",
+        },
+      });
+
+      expect(registry.getCachedThreadSummary({
+        backend: "codex",
+        threadId: "thread-1",
+      })).toBeUndefined();
+      // The name the operator has already seen outlives the list. Messaging
+      // admission renders a bound thread from this instead of its raw id.
+      expect(registry.getCachedThreadTitle({
+        backend: "codex",
+        threadId: "thread-1",
+      })).toEqual({
+        title: "Investigate the flaky login redirect",
+        titleSource: "derived",
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("reports a renamed thread title before the next thread list read", async () => {
+    const codexClient = new MockBackendClient({
+      threads: [
+        {
+          id: "thread-1",
+          title: "Untitled thread",
+          titleSource: "fallback",
+          source: "codex",
+          linkedDirectories: [],
+        },
+      ],
+    });
+    const registry = new DesktopBackendRegistry({
+      codexClient,
+      overlayStore: createOverlayStoreMock(),
+    });
+
+    try {
+      await registry.listThreads({ callerReason: "navigation-snapshot" });
+      expect(registry.getCachedThreadTitle({
+        backend: "codex",
+        threadId: "thread-1",
+      })).toBeUndefined();
+
+      await codexClient.emit({
+        method: "thread/name/updated",
+        params: {
+          threadId: "thread-1",
+          threadName: "Ship the release runbook",
+        },
+      });
+
+      expect(registry.getCachedThreadTitle({
+        backend: "codex",
+        threadId: "thread-1",
+      })).toEqual({
+        title: "Ship the release runbook",
+        titleSource: "explicit",
+      });
+    } finally {
+      await registry.close();
+    }
+  });
+
   it("hydrates review working state from the shared navigation cache", async () => {
     const worktreePath = "/worktrees/PwrAgnt";
     const gitWorkingState = {

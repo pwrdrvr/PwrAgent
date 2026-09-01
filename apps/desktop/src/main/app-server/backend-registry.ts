@@ -2224,6 +2224,12 @@ function buildTerminalNotificationKey(params: {
   return `${params.backend}:${params.threadId}:turn-terminal`;
 }
 
+function isThreadTitleSource(
+  value: unknown,
+): value is AppServerThreadTitleSource {
+  return value === "explicit" || value === "derived" || value === "fallback";
+}
+
 function readNotificationProjectLabel(
   thread: Record<string, unknown> | undefined,
 ): string | undefined {
@@ -5405,6 +5411,16 @@ type CreatedThreadDirectoryVisibility = Pick<
   hasPinnedTopLevelThread: boolean;
 };
 
+/**
+ * A thread name already observed by this process, kept with the source that
+ * produced it so a cache-only reader renders it the same way a thread-list
+ * row would.
+ */
+type CachedThreadTitle = {
+  title: string;
+  titleSource: AppServerThreadTitleSource;
+};
+
 let threadListCacheSequence = 0;
 
 function shouldEnrichThreadDirectories(
@@ -7755,14 +7771,21 @@ export class DesktopBackendRegistry {
    */
   private toolInvocationDeltaFlushChain: Promise<void> = Promise.resolve();
   /**
-   * Best-effort cache of thread labels keyed by `buildThreadIdentityKey`, used
-   * only to label native attention/terminal notifications so multiple
-   * background turns are distinguishable. Populated from `thread/started` and
-   * `thread/name/updated` notifications as they fan out through `emit()`.
-   * Falls back to a thread-list lookup, then a generic body when context still
-   * isn't available.
+   * Best-effort cache of thread labels keyed by `buildThreadIdentityKey`,
+   * used to label native attention/terminal notifications so multiple
+   * background turns are distinguishable, and to name a thread for any caller
+   * that must not wait for a provider round trip (`getCachedThreadTitle`).
+   * Populated from `thread/started` and `thread/name/updated` notifications as
+   * they fan out through `emit()`, and from every thread-list read. Falls back
+   * to a thread-list lookup, then a generic body when context still isn't
+   * available.
+   *
+   * This map deliberately outlives `invalidateThreadListCache`. A turn or
+   * permission-mode notification invalidates the thread list because thread
+   * *state* moved, not because the name we already showed the operator became
+   * unknowable.
    */
-  private readonly notificationThreadTitles = new Map<string, string>();
+  private readonly notificationThreadTitles = new Map<string, CachedThreadTitle>();
   private readonly notificationThreadProjectLabels = new Map<string, string>();
   /**
    * Live `thread/name/updated` observations are newer than the provider's
@@ -13845,22 +13868,45 @@ export class DesktopBackendRegistry {
     backend: AppServerBackendKind,
     threadId: string,
   ): string | undefined {
-    const key = buildThreadIdentityKey(backend, threadId);
-    const remembered =
-      this.observedThreadNames.get(key) ?? this.notificationThreadTitles.get(key);
-    if (remembered?.trim()) {
-      return remembered.trim();
+    return this.getCachedThreadTitle({ backend, threadId })?.title;
+  }
+
+  /**
+   * Name one already-observed thread without a provider round trip. Unlike
+   * `getCachedThreadSummary` this survives `invalidateThreadListCache`, so a
+   * hot-path caller — quit naming, messaging admission — still renders the
+   * name the operator has already seen after a turn or permission-mode
+   * notification drops the thread list.
+   *
+   * Reports the source alongside the name so a caller renders it the way a
+   * thread-list row would. The thread-list scan skips `fallback` rows, whose
+   * title is a placeholder rather than a name.
+   */
+  getCachedThreadTitle(params: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): CachedThreadTitle | undefined {
+    const key = buildThreadIdentityKey(params.backend, params.threadId);
+    const observedName = this.observedThreadNames.get(key)?.trim();
+    if (observedName) {
+      // `withObservedThreadName` surfaces a live rename as an explicit name.
+      return { title: observedName, titleSource: "explicit" };
+    }
+    const remembered = this.notificationThreadTitles.get(key);
+    const rememberedTitle = remembered?.title.trim();
+    if (remembered && rememberedTitle) {
+      return { title: rememberedTitle, titleSource: remembered.titleSource };
     }
     for (const state of this.threadListCache.values()) {
       const thread = state.threads?.find(
         (candidate) =>
-          candidate.source === backend
-          && candidate.id === threadId
+          candidate.source === params.backend
+          && candidate.id === params.threadId
           && candidate.titleSource !== "fallback",
       );
       const title = thread?.title.trim();
-      if (title) {
-        return title;
+      if (thread && title) {
+        return { title, titleSource: thread.titleSource };
       }
     }
     return undefined;
@@ -34343,7 +34389,10 @@ export class DesktopBackendRegistry {
         const trimmed = threadName.trim();
         if (trimmed) {
           const key = buildThreadIdentityKey(event.backend, threadId);
-          this.notificationThreadTitles.set(key, trimmed);
+          this.notificationThreadTitles.set(key, {
+            title: trimmed,
+            titleSource: "explicit",
+          });
           this.observedThreadNames.set(key, trimmed);
         }
       }
@@ -34417,7 +34466,15 @@ export class DesktopBackendRegistry {
     const trimmed = candidate?.trim();
     const key = buildThreadIdentityKey(backend, threadId);
     if (trimmed) {
-      this.notificationThreadTitles.set(key, trimmed);
+      this.notificationThreadTitles.set(key, {
+        title: trimmed,
+        // Thread-list rows carry the normalized source. A raw `thread/started`
+        // payload does not, and its name is provider-set text, so read it the
+        // same way a caller reads an explicit name.
+        titleSource: isThreadTitleSource(record.titleSource)
+          ? record.titleSource
+          : "explicit",
+      });
     }
     const projectLabel = readNotificationProjectLabel(record);
     if (projectLabel) {
@@ -34443,7 +34500,7 @@ export class DesktopBackendRegistry {
   ): string | undefined {
     const key = buildThreadIdentityKey(backend, threadId);
     const projectLabel = this.notificationThreadProjectLabels.get(key);
-    const threadTitle = this.notificationThreadTitles.get(key);
+    const threadTitle = this.notificationThreadTitles.get(key)?.title;
     if (projectLabel && threadTitle) {
       return `${projectLabel} > ${threadTitle}`;
     }
@@ -34496,7 +34553,7 @@ export class DesktopBackendRegistry {
       : "PwrAgent approval needed";
     const threadTitle = this.notificationThreadTitles.get(
       buildThreadIdentityKey(event.backend, threadId),
-    );
+    )?.title;
     const approvalRequest = this.isApprovalAttentionNotification(event.notification)
       ? event.notification
       : undefined;

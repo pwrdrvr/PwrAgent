@@ -181,6 +181,7 @@ describe("DesktopMessagingBackendBridge", () => {
     const registry = {
       getActiveTurnForThread: vi.fn(() => undefined),
       getCachedThreadSummary: vi.fn(() => undefined),
+      getCachedThreadTitle: vi.fn(() => undefined),
       getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
       getQueuedTurnsSnapshot: vi.fn(() => ({})),
       isThreadTurnOccupied: vi.fn(() => false),
@@ -200,6 +201,110 @@ describe("DesktopMessagingBackendBridge", () => {
       },
       threadStatus: "idle",
     });
+  });
+
+  it("names a cold-cache thread from the registry's remembered title", async () => {
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-cold",
+      executionMode: "full-access",
+      extraLinkedDirectories: [],
+    });
+    // A turn, status, or permission-mode notification drops the thread-list
+    // cache, so admission reads the summary cold while the overlay survives.
+    // Naming the thread after its own id would put a raw id on the status
+    // card where the operator has already seen a title.
+    const getCachedThreadTitle = vi.fn(() => ({
+      title: "Investigate the flaky login redirect",
+      titleSource: "derived" as const,
+    }));
+    const registry = {
+      getActiveTurnForThread: vi.fn(() => undefined),
+      getCachedThreadSummary: vi.fn(() => undefined),
+      getCachedThreadTitle,
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      isThreadTurnOccupied: vi.fn(() => false),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    await expect(bridge.getThreadAdmissionState({
+      backend: "codex",
+      threadId: "thread-cold",
+    })).resolves.toMatchObject({
+      thread: {
+        executionMode: "full-access",
+        title: "Investigate the flaky login redirect",
+        titleSource: "derived",
+      },
+    });
+    expect(getCachedThreadTitle).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex",
+      threadId: "thread-cold",
+    });
+  });
+
+  it("falls back to the thread id when no title was ever observed", async () => {
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-unnamed",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+    });
+    const registry = {
+      getActiveTurnForThread: vi.fn(() => undefined),
+      getCachedThreadSummary: vi.fn(() => undefined),
+      getCachedThreadTitle: vi.fn(() => undefined),
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      isThreadTurnOccupied: vi.fn(() => false),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    await expect(bridge.getThreadAdmissionState({
+      backend: "codex",
+      threadId: "thread-unnamed",
+    })).resolves.toMatchObject({
+      thread: {
+        title: "thread-unnamed",
+        titleSource: "fallback",
+      },
+    });
+  });
+
+  it("keeps the cached summary title without a remembered-title lookup", async () => {
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-warm",
+      extraLinkedDirectories: [],
+    });
+    const getCachedThreadTitle = vi.fn(() => ({
+      title: "Stale remembered name",
+      titleSource: "explicit" as const,
+    }));
+    const registry = {
+      getActiveTurnForThread: vi.fn(() => undefined),
+      getCachedThreadSummary: vi.fn(() => ({
+        id: "thread-warm",
+        title: "Current provider name",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        linkedDirectories: [],
+      })),
+      getCachedThreadTitle,
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      isThreadTurnOccupied: vi.fn(() => false),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    await expect(bridge.getThreadAdmissionState({
+      backend: "codex",
+      threadId: "thread-warm",
+    })).resolves.toMatchObject({
+      thread: { title: "Current provider name" },
+    });
+    expect(getCachedThreadTitle).not.toHaveBeenCalled();
   });
 
   it("serves cached directory status without awaiting a fleet refresh", async () => {

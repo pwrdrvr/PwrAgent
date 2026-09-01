@@ -201,6 +201,18 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     const queuedExecutionMode =
       this.registry.getQueuedExecutionModesSnapshot()[threadKey];
     const queuedTurns = this.registry.getQueuedTurnsSnapshot()[threadKey];
+    // The summary cache is dropped whenever a turn, status, or permission-mode
+    // notification lands, so a status refresh driven by one of those events
+    // reads it cold. The overlay carries the durable thread state but no name,
+    // and naming the thread after its own id would put a raw id where the
+    // operator has already seen a title. Read the registry's remembered name
+    // instead — also cache-only, but not tied to the thread list's lifetime.
+    const rememberedTitle = cached
+      ? undefined
+      : this.registry.getCachedThreadTitle({
+          backend: request.backend,
+          threadId: request.threadId,
+        });
     const thread = cached || overlay
       ? buildAdmissionThreadSummary({
           overlay,
@@ -208,8 +220,8 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
           queuedTurns,
           summary: cached ?? {
             id: request.threadId,
-            title: request.threadId,
-            titleSource: "fallback",
+            title: rememberedTitle?.title ?? request.threadId,
+            titleSource: rememberedTitle?.titleSource ?? "fallback",
             source: request.backend,
             linkedDirectories: overlay?.extraLinkedDirectories ?? [],
           },
