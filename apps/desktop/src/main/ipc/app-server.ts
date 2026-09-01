@@ -2322,7 +2322,6 @@ class DesktopAppServerService {
     const providerRefresh =
       backend === "all"
       && !request.filter?.trim()
-      && !activeRecentRefresh
       && typeof registry.getStartupProviderRefreshStatus === "function"
         ? registry.getStartupProviderRefreshStatus()
         : undefined;

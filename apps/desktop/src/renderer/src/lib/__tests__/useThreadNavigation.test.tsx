@@ -124,6 +124,7 @@ describe("useThreadNavigation", () => {
       inboxThreadKeys: [],
       threads: [],
       directories: [],
+      providerRefresh: { state: "checking" },
       launchpadDefaults: {
         backend: "codex",
         executionMode: "default",

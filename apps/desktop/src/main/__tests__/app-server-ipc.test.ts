@@ -3433,9 +3433,10 @@ describe("app server ipc", () => {
   it("uses one active recent page for lightweight navigation refreshes", async () => {
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
 
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "checking" });
     registerAppServerIpcHandlers();
 
-    await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
+    const response = await handlers.get(NAVIGATION_SNAPSHOT_CHANNEL)?.(
       {},
       {
         forceRefresh: true,
@@ -3457,6 +3458,9 @@ describe("app server ipc", () => {
         partial: true,
       }),
     );
+    expect(response).toEqual(expect.objectContaining({
+      providerRefresh: { state: "checking" },
+    }));
     expect(rememberCompleteNavigationSnapshot).not.toHaveBeenCalled();
   });
 
