@@ -6772,6 +6772,9 @@ describe("DesktopBackendRegistry", () => {
     await expect(registry.listThreads({
       callerReason: "startup-prewarm",
     })).resolves.toEqual([]);
+    expect(registry.getStartupProviderRefreshStatus()).toEqual({
+      state: "checking",
+    });
     await vi.waitFor(() => {
       expect(codexClient.listThreadsCallCount).toBe(1);
     });
@@ -6782,6 +6785,11 @@ describe("DesktopBackendRegistry", () => {
         backend: "codex",
         observedAt: expect.any(Number),
         threads: [expect.objectContaining({ id: "first-thread" })],
+      });
+    });
+    await vi.waitFor(() => {
+      expect(registry.getStartupProviderRefreshStatus()).toEqual({
+        state: "ready",
       });
     });
     await registry.close();
@@ -6824,6 +6832,12 @@ describe("DesktopBackendRegistry", () => {
     ]);
     await vi.waitFor(() => {
       expect(codexClient.listThreadsCallCount).toBe(1);
+    });
+    await vi.waitFor(() => {
+      expect(registry.getStartupProviderRefreshStatus()).toEqual({
+        state: "degraded",
+        failedProviders: 1,
+      });
     });
     expect(replace).not.toHaveBeenCalled();
     await registry.close();

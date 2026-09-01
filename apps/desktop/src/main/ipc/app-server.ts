@@ -2314,6 +2314,14 @@ class DesktopAppServerService {
 
     const remotePins = await this.mergePinnedRemoteThreads();
 
+    const registry = getDesktopBackendRegistry();
+    const providerRefresh =
+      backend === "all"
+      && !request.filter?.trim()
+      && !activeRecentRefresh
+      && typeof registry.getStartupProviderRefreshStatus === "function"
+        ? registry.getStartupProviderRefreshStatus()
+        : undefined;
     const responseWithoutLiveTokenMiser = {
       ...snapshot,
       threads: [...threadsWithWorkingState, ...remotePins.threads],
@@ -2339,8 +2347,8 @@ class DesktopAppServerService {
         && !canonicalSnapshot.changed
         && !primaryGitRepositoriesChanged
         && !remotePins.changed,
+      ...(providerRefresh ? { providerRefresh } : {}),
     };
-    const registry = getDesktopBackendRegistry();
     const response = typeof registry.withLiveTokenMiserNavigationSnapshot
       === "function"
       ? registry.withLiveTokenMiserNavigationSnapshot(

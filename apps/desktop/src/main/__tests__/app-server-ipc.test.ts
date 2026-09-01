@@ -198,6 +198,7 @@ const resolveGitHubReposForDirectory = vi.hoisted(() =>
 );
 
 const handlers = new Map<string, (...args: unknown[]) => Promise<unknown>>();
+const getStartupProviderRefreshStatus = vi.fn();
 const listThreads = vi.fn(async (request?: {
   archived?: boolean;
   backend?: "codex" | "acp:grok";
@@ -982,6 +983,7 @@ vi.mock("../app-server/backend-registry", () => {
     updateDirectoryLaunchpad,
     getQueuedExecutionModesSnapshot: () => ({}),
     getQueuedTurnsSnapshot: () => ({}),
+    getStartupProviderRefreshStatus,
     rememberCompleteNavigationSnapshot,
   };
   backendRegistryLifecycle.get.mockImplementation(() => registry);
@@ -2166,6 +2168,7 @@ describe("app server ipc", () => {
 
   it("aggregates navigation snapshots across backends by default", async () => {
     const { NAVIGATION_SNAPSHOT_CHANNEL } = await import("../../shared/ipc");
+    getStartupProviderRefreshStatus.mockReturnValueOnce({ state: "checking" });
 
     registerAppServerIpcHandlers();
 
@@ -2224,6 +2227,7 @@ describe("app server ipc", () => {
         backend: "codex",
         executionMode: "default",
       },
+      providerRefresh: { state: "checking" },
     });
   });
 

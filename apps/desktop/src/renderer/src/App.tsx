@@ -2527,6 +2527,7 @@ function DesktopAppShell(props: {
           profiles={profiles.profiles}
           loaded={navigation.loaded}
           loading={navigation.loading}
+          providerRefresh={navigation.providerRefresh}
           approvalRequestThreadKeys={session.approvalRequestThreadKeys}
           inputRequestThreadKeys={session.inputRequestThreadKeys}
           terminalThreadKeys={terminalThreadKeys}

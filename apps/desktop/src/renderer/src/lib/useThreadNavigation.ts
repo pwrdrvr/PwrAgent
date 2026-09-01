@@ -2993,6 +2993,7 @@ export function useThreadNavigation(
   worktreeArchiveError?: string;
   loading: boolean;
   loaded: boolean;
+  providerRefresh?: NavigationSnapshot["providerRefresh"];
   refreshing: boolean;
   refresh: () => Promise<void>;
   materializeDirectoryLaunchpad: (
@@ -8567,6 +8568,7 @@ export function useThreadNavigation(
     worktreeArchiveError,
     loading: state.loading,
     loaded: Boolean(state.response),
+    providerRefresh: state.response?.providerRefresh,
     refreshing: state.refreshing,
     refresh: refreshNavigation,
     materializeDirectoryLaunchpad,

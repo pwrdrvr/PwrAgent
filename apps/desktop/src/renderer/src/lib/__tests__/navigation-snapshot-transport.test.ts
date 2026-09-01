@@ -42,6 +42,7 @@ function buildFull(): NavigationSnapshotTransportFull {
       backend: "codex",
       executionMode: "default",
     },
+    providerRefresh: { state: "checking" },
   };
   return { kind: "full", revision: "1", snapshot };
 }
@@ -85,6 +86,7 @@ describe("applyNavigationSnapshotTransportResponse", () => {
         key(buildThread("one")),
         key(buildThread("two")),
       ],
+      providerRefresh: { state: "ready" },
     });
 
     expect(updated?.revision).toBe("2");
@@ -96,6 +98,7 @@ describe("applyNavigationSnapshotTransportResponse", () => {
     expect(updated?.snapshot.inboxThreadKeys).toEqual([key(three)]);
     expect(updated?.snapshot.fetchedAt).toBe(2);
     expect(updated?.snapshot.unchanged).toBe(false);
+    expect(updated?.snapshot.providerRefresh).toEqual({ state: "ready" });
   });
 
   it("rejects a delta without the matching canonical baseline", () => {

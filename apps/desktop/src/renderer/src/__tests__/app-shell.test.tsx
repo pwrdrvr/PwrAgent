@@ -1785,6 +1785,9 @@ describe("App", () => {
         backend: "codex" as const,
         executionMode: "default" as const,
       },
+      providerRefresh: {
+        state: "checking" as const,
+      },
     }));
 
     Object.defineProperty(window, "pwragent", {
@@ -1819,6 +1822,7 @@ describe("App", () => {
       expect(getNavigationSnapshot).toHaveBeenCalledTimes(1);
     });
     expect(screen.getByRole("complementary", { name: "Threads" })).toBeInTheDocument();
+    expect(screen.getByText("Checking providers…")).toBeInTheDocument();
 
     await act(async () => {
       settings.resolve({

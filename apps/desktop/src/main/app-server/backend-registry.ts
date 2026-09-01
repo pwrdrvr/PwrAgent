@@ -8001,6 +8001,10 @@ export class DesktopBackendRegistry {
   private readonly providerThreadSnapshotStore?: ProviderThreadSnapshotStoreLike;
   private durableStartupThreadHydrationAttempted = false;
   private startupProviderRefreshPromise?: Promise<void>;
+  private startupProviderRefreshStatus?: Readonly<{
+    state: "checking" | "degraded" | "ready";
+    failedProviders?: number;
+  }>;
   /**
    * In-flight terminal-notification label reconciliations, keyed by thread. A
    * burst of turn completions on threads this process never observed must cost
@@ -10031,6 +10035,7 @@ export class DesktopBackendRegistry {
 
     this.durableStartupThreadHydrationAttempted = true;
     const snapshots = this.providerThreadSnapshotStore.list();
+    this.startupProviderRefreshStatus = { state: "checking" };
     const threads = snapshots.flatMap((snapshot) =>
       snapshot.backend === "codex" && params.limit !== undefined
         ? snapshot.threads.slice(0, params.limit)
@@ -10085,6 +10090,12 @@ export class DesktopBackendRegistry {
         durationMs: Date.now() - startedAt,
         failureCount: failures.length,
       });
+      this.startupProviderRefreshStatus = failures.length > 0
+        ? {
+            state: "degraded",
+            failedProviders: failures.length,
+          }
+        : { state: "ready" };
       this.publishRefreshedProviderThreadsToCache();
       await this.emit({
         backend: "codex",
@@ -10111,6 +10122,13 @@ export class DesktopBackendRegistry {
         });
       }),
     );
+  }
+
+  getStartupProviderRefreshStatus(): Readonly<{
+    state: "checking" | "degraded" | "ready";
+    failedProviders?: number;
+  }> | undefined {
+    return this.startupProviderRefreshStatus;
   }
 
   private publishRefreshedProviderThreadsToCache(): void {
