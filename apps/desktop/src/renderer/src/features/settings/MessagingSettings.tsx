@@ -85,9 +85,11 @@ import {
   MessagingRoutesSettings,
 } from "./MessagingRoutesSettings";
 import {
+  RESPONSE_MODE_OPTIONS,
   formatSourceLabel,
   optionalListSourceBadge,
   optionalStringSourceBadge,
+  responseModeTitle,
   sourceBadge,
 } from "./settings-fields";
 
@@ -990,7 +992,9 @@ export function MessagingSettings(props: {
             source={optionalListSourceBadge(discord.authorizedGuilds)}
             validateEntry={validateDiscordGuildIdEntry}
             value={discord.authorizedGuilds.value}
-            refreshNamesLabel="Refresh server names"
+            refreshNamesLabel={discordIdentityConfigured
+              ? "Refresh server names"
+              : undefined}
             responseModePolicy={discordIdentityConfigured}
             responseModeScopeNoun="server"
             onSave={(authorizedGuilds) => {
@@ -2475,14 +2479,6 @@ const PDF_PROFILE_OPTIONS: Array<{
   { label: "Maximum", value: "actual" },
 ];
 
-const RESPONSE_MODE_OPTIONS: Array<{
-  label: string;
-  value: DesktopMessagingResponseMode;
-}> = [
-  { label: "@ mention only", value: "mention_only" },
-  { label: "Every message", value: "every_message" },
-];
-
 const TEAM_AUTHORIZATION_MODE_OPTIONS: Array<{
   label: string;
   value: DesktopMessagingAuthorizationMode;
@@ -3329,8 +3325,10 @@ function AuthorizedListField(props: {
   help?: ReactNode;
   label: string;
   lookup?: (id: string) => Promise<DesktopMessagingContactLookupResponse>;
-  // Label for an explicit bulk name repair. Omitted callers get no button:
-  // names are never rewritten in the background or by heuristic.
+  // Label for an explicit bulk name repair, and the switch that renders the
+  // button: omit it — or pass undefined while the platform has no credential,
+  // since every lookup would then fail for one uninteresting reason — and
+  // there is none. Names are never rewritten in the background or by heuristic.
   refreshNamesLabel?: string;
   responseModePolicy?: boolean;
   // Names what a row stands for, so the response control never claims a server
@@ -3362,11 +3360,18 @@ function AuthorizedListField(props: {
     message?: string;
     running?: boolean;
   }>({});
+  // The pass owns this, not React state: a successful refresh saves, which
+  // hands back a new `props.value` identity and re-runs the effect below. A
+  // state-only guard was cleared there mid-pass, re-enabling the button and
+  // letting a second concurrent pass start.
+  const refreshRunningRef = useRef(false);
   useEffect(() => {
     rowsRef.current = props.value;
     setRowsState(props.value);
     setLookupState({});
-    setRefreshState({});
+    // `refreshState` is deliberately NOT reset here. A rename saves, and the
+    // save returns a fresh snapshot — resetting would erase the summary in
+    // exactly the case where it reports work that happened.
   }, [props.value]);
   const normalizedRows = rows.map(normalizeAuthorizedContactRow);
   const invalidEntries = props.validateEntry
@@ -3398,7 +3403,8 @@ function AuthorizedListField(props: {
     setRowsState(nextRows);
   };
 
-  const saveIfValid = (nextRows: DesktopAuthorizedContact[]) => {
+  /** Returns false when an invalid row blocked the save, so callers can say so. */
+  const saveIfValid = (nextRows: DesktopAuthorizedContact[]): boolean => {
     const normalized = nextRows.map(normalizeAuthorizedContactRow);
     if (
       props.validateEntry &&
@@ -3409,9 +3415,10 @@ function AuthorizedListField(props: {
             && (row.displayName.length > 0 || Boolean(row.username))),
       )
     ) {
-      return;
+      return false;
     }
     props.onSave(normalized.filter((row) => row.id.length > 0));
+    return true;
   };
 
   const updateRow = (
@@ -3451,16 +3458,7 @@ function AuthorizedListField(props: {
       ...current,
       [indexToLookup]: { loading: true },
     }));
-    let result: DesktopMessagingContactLookupResponse;
-    try {
-      result = await lookup(row.id);
-    } catch (error) {
-      result = {
-        status: "failed",
-        id: row.id,
-        errorMessage: error instanceof Error ? error.message : String(error),
-      };
-    }
+    const result = await resolveContact(lookup, row.id);
     const resolvedUsername = props.showUsername
       ? sanitizeMessagingContactHandle(result.handle)
       : "";
@@ -3523,7 +3521,7 @@ function AuthorizedListField(props: {
    */
   const refreshNames = async () => {
     const lookup = props.lookup;
-    if (!lookup || refreshState.running) return;
+    if (!lookup || refreshRunningRef.current) return;
     const uniqueIds = [...new Set(
       rowsRef.current
         .map(normalizeAuthorizedContactRow)
@@ -3535,50 +3533,53 @@ function AuthorizedListField(props: {
       return;
     }
 
+    refreshRunningRef.current = true;
     setRefreshState({ running: true });
-    const resolvedNames = new Map<string, string>();
-    let failures = 0;
-    for (const id of uniqueIds) {
-      let result: DesktopMessagingContactLookupResponse;
-      try {
-        result = await lookup(id);
-      } catch (error) {
-        result = {
-          status: "failed",
-          id,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        };
+    try {
+      const resolvedNames = new Map<string, string>();
+      let failures = 0;
+      let failureReason: string | undefined;
+      for (const id of uniqueIds) {
+        const result = await resolveContact(lookup, id);
+        const resolved = result.status === "ok"
+          ? sanitizeMessagingContactLabel(result.displayName)
+          : "";
+        if (resolved) {
+          resolvedNames.set(id, resolved);
+        } else {
+          failures += 1;
+          // Keep the first cause. "2 lookups failed" alone hides the one thing
+          // the operator can act on, such as a token that is not configured.
+          failureReason ??= lookupFailureMessage(result);
+        }
       }
-      const resolved = result.status === "ok"
-        ? sanitizeMessagingContactLabel(result.displayName)
-        : "";
-      if (resolved) {
-        resolvedNames.set(id, resolved);
-      } else {
-        failures += 1;
-      }
-    }
 
-    let renamed = 0;
-    const nextRows = rowsRef.current.map((row) => {
-      const resolved = resolvedNames.get(
-        normalizeAuthorizedContactRow(row).id,
-      );
-      if (!resolved || resolved === row.displayName) return row;
-      renamed += 1;
-      return { ...row, displayName: resolved };
-    });
-    if (renamed > 0) {
-      setRows(nextRows);
-      saveIfValid(nextRows);
+      let renamed = 0;
+      const nextRows = rowsRef.current.map((row) => {
+        const resolved = resolvedNames.get(
+          normalizeAuthorizedContactRow(row).id,
+        );
+        if (!resolved || resolved === row.displayName) return row;
+        renamed += 1;
+        return { ...row, displayName: resolved };
+      });
+      let saved = true;
+      if (renamed > 0) {
+        setRows(nextRows);
+        saved = saveIfValid(nextRows);
+      }
+      setRefreshState({
+        message: refreshSummary({
+          checked: uniqueIds.length,
+          failureReason,
+          failures,
+          renamed,
+          saved,
+        }),
+      });
+    } finally {
+      refreshRunningRef.current = false;
     }
-    setRefreshState({
-      message: refreshSummary({
-        checked: uniqueIds.length,
-        failures,
-        renamed,
-      }),
-    });
   };
 
   return (
@@ -3680,7 +3681,7 @@ function AuthorizedListField(props: {
                     <input
                       aria-label={`${props.label} display name ${index + 1}`}
                       className="settings-input settings-authorized-list__name"
-                      disabled={props.disabled}
+                      disabled={props.disabled || refreshState.running}
                       maxLength={64}
                       placeholder="Display name"
                       value={row.displayName}
@@ -3774,9 +3775,9 @@ function AuthorizedListField(props: {
                         className="settings-input settings-authorized-list__response-mode"
                         disabled={props.disabled}
                         id={responseModeSelectId}
-                        title={`Sets whether PwrAgent replies to every message in this ${
-                          props.responseModeScopeNoun ?? "conversation"
-                        } or only when @ mentioned. This does not choose an Agent or authorize access.`}
+                        title={responseModeTitle(
+                          props.responseModeScopeNoun ?? "conversation",
+                        )}
                         value={row.responseMode ?? ""}
                         onBlur={() => {
                           const nextRows = rows.map((current, rowIndex) =>
@@ -4031,21 +4032,48 @@ function validateDiscordUserIdEntry(value: string): string | undefined {
 
 function refreshSummary(counts: {
   checked: number;
+  failureReason?: string;
   failures: number;
   renamed: number;
+  saved: boolean;
 }): string {
+  const names = counts.renamed === 1 ? "name" : "names";
   const parts = [
     `Checked ${counts.checked} ${counts.checked === 1 ? "ID" : "IDs"}.`,
-    counts.renamed > 0
-      ? `Updated ${counts.renamed} ${counts.renamed === 1 ? "name" : "names"}.`
-      : "No names changed.",
+    counts.renamed === 0
+      ? "No names changed."
+      : counts.saved
+        ? `Updated ${counts.renamed} ${names}.`
+        // Never claim a write that saveIfValid refused. The rename is only in
+        // this list until the invalid row is fixed, and would revert silently.
+        : `Resolved ${counts.renamed} ${names}, but nothing was saved: fix or`
+          + " remove the invalid IDs above, then refresh again.",
   ];
   if (counts.failures > 0) {
     parts.push(counts.failures === 1
       ? "1 lookup failed and was left unchanged."
       : `${counts.failures} lookups failed and were left unchanged.`);
+    if (counts.failureReason) {
+      parts.push(counts.failureReason);
+    }
   }
   return parts.join(" ");
+}
+
+/** One lookup, with the rejection normalized into a response the UI can read. */
+async function resolveContact(
+  lookup: (id: string) => Promise<DesktopMessagingContactLookupResponse>,
+  id: string,
+): Promise<DesktopMessagingContactLookupResponse> {
+  try {
+    return await lookup(id);
+  } catch (error) {
+    return {
+      status: "failed",
+      id,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    };
+  }
 }
 
 function validateDiscordGuildIdEntry(value: string): string | undefined {

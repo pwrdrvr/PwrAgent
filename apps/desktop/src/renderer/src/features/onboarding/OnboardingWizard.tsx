@@ -3998,7 +3998,7 @@ const PROVIDER_SETUP_CONFIGS: Record<OnboardingProvider, ProviderSetupConfig> = 
         label: "Pair your DMs with the bot",
         help: (
           <>
-            Invite the bot to a guild (Developer Portal → OAuth2 URL
+            Invite the bot to a server (Developer Portal → OAuth2 URL
             Generator, scopes <code>bot</code> + <code>applications.commands</code>),
             then DM the bot the pairing message below from your Discord
             account.

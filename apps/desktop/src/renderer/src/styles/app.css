@@ -9295,13 +9295,8 @@ textarea,
   gap: 12px;
 }
 
-.messaging-routes__response-controls {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 10px;
-}
-
+/* Composes .messaging-route-row__actions for layout and compact button
+   sizing; only the select needs a width of its own. */
 .messaging-routes__response-controls select {
   width: auto;
 }

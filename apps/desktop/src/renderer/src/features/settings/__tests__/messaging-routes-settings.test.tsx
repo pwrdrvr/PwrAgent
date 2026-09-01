@@ -194,7 +194,7 @@ describe("MessagingRoutesSettings", () => {
     const api = buildDesktopApi(routes);
     const onSave = vi.fn();
 
-    render(
+    const { rerender } = render(
       <MessagingRoutesProvider desktopApi={api.desktopApi}>
         <MessagingRoutesSettings
           desktopApi={api.desktopApi}
@@ -208,23 +208,129 @@ describe("MessagingRoutesSettings", () => {
     const picker = await screen.findByRole("combobox", {
       name: "Add a channel or thread",
     });
-    const named = await screen.findByRole("option", {
+    await screen.findByRole("option", {
       name: "Discord / Test server / general",
     });
     fireEvent.change(picker, { target: { value: "1480556454498009352" } });
 
-    expect(named).toBeInTheDocument();
-    expect(onSave).toHaveBeenCalledWith([
+    const saved = [
       {
         id: "1480556454498009352",
         displayName: "general",
-        responseMode: "mention_only",
+        responseMode: "mention_only" as const,
       },
-    ]);
+    ];
+    expect(onSave).toHaveBeenCalledWith(saved);
     // Admission and routing are independent: choosing when to respond must not
     // assign, clear, or otherwise disturb a default Agent.
     expect(api.setMessagingDefaultAgent).not.toHaveBeenCalled();
     expect(api.clearMessagingDefaultAgent).not.toHaveBeenCalled();
+
+    // The component is controlled, so re-render with what the save produced:
+    // the surface becomes a row and leaves the "add" list.
+    rerender(
+      <MessagingRoutesProvider desktopApi={api.desktopApi}>
+        <MessagingRoutesSettings
+          desktopApi={api.desktopApi}
+          discordResponseBehavior={{ source: "config", value: saved, onSave }}
+        />
+      </MessagingRoutesProvider>,
+    );
+
+    expect(
+      screen.queryByRole("option", { name: "Discord / Test server / general" }),
+    ).toBeNull();
+    const rowMode = screen.getByRole("combobox", {
+      name: "Responds to for Discord / Test server / general",
+    });
+    expect(rowMode).toHaveValue("mention_only");
+
+    // "Default" has to be reachable, or a row can never be returned to
+    // inheriting its server's setting once it has been given one.
+    onSave.mockClear();
+    fireEvent.change(rowMode, { target: { value: "" } });
+    expect(onSave).toHaveBeenCalledWith([
+      { id: "1480556454498009352", displayName: "general" },
+    ]);
+  });
+
+  it("edits one of two rows that share an ID", async () => {
+    // `response_mode_overrides` is a plain array and nothing dedupes it; the
+    // raw-ID editor this replaced could persist the same snowflake twice.
+    // Matching by ID would delete or rewrite both rows.
+    const api = buildDesktopApi();
+    const onSave = vi.fn();
+    const duplicated = [
+      {
+        id: "1480556454498009352",
+        displayName: "first",
+        responseMode: "mention_only" as const,
+      },
+      {
+        id: "1480556454498009352",
+        displayName: "second",
+        responseMode: "every_message" as const,
+      },
+    ];
+
+    render(
+      <MessagingRoutesProvider desktopApi={api.desktopApi}>
+        <MessagingRoutesSettings
+          desktopApi={api.desktopApi}
+          discordResponseBehavior={{
+            source: "config",
+            value: duplicated,
+            onSave,
+          }}
+        />
+      </MessagingRoutesProvider>,
+    );
+
+    const removes = await screen.findAllByRole("button", {
+      name: "Remove response behavior for second",
+    });
+    fireEvent.click(removes[0]!);
+
+    expect(onSave).toHaveBeenCalledWith([duplicated[0]]);
+  });
+
+  it("does not label a channel with its server name when the parent lookup failed", async () => {
+    // The adapter sets `parentTitle` to `parentChannelName ?? guildName`, and
+    // marks a resolved parent by also setting `ancestorTitle`. Without that
+    // marker the name in hand is the server's, so the picker must fall back to
+    // the ID rather than offer a channel that reads as the whole server.
+    const routes = buildRoutes();
+    routes.observedSurfaces.push({
+      platform: "discord",
+      conversation: {
+        id: "1480556454498009400",
+        kind: "thread",
+        title: "bugfix",
+        parentConversationId: "1480556454498009352",
+        parentTitle: "Test server",
+        workspaceId: "1480556454498009353",
+      },
+      firstSeenAt: 1000,
+      lastSeenAt: 3000,
+    });
+    const api = buildDesktopApi(routes);
+
+    render(
+      <MessagingRoutesProvider desktopApi={api.desktopApi}>
+        <MessagingRoutesSettings
+          desktopApi={api.desktopApi}
+          discordResponseBehavior={{ source: "config", value: [], onSave: vi.fn() }}
+        />
+      </MessagingRoutesProvider>,
+    );
+
+    await screen.findByRole("combobox", { name: "Add a channel or thread" });
+    expect(
+      screen.queryByRole("option", { name: "Discord / Test server" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("option", { name: "Discord / 1480556454498009352" }),
+    ).toBeInTheDocument();
   });
 
   it("assigns a default Agent without writing response behavior", async () => {

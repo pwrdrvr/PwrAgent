@@ -5,7 +5,6 @@ import {
   type MessagingCallbackHandleStore,
   type MessagingInboundEvent,
   type MessagingRejectedInboundEvent,
-  type MessagingResponseMode,
   type MessagingStatusIntent,
 } from "@pwragent/messaging-interface";
 import { describe, expect, it, vi } from "vitest";
@@ -1746,47 +1745,47 @@ describe("discord adapter", () => {
       await adapter.stop();
     });
 
-    it("ignores a server row's response setting when deciding authorization", async () => {
-      // Response behavior and access are separate decisions. Whatever a row
-      // says about when to reply, admission depends only on the ID matching.
-      const admitted: Array<MessagingResponseMode | undefined> = [];
-      for (const responseMode of [
-        undefined,
-        "mention_only" as const,
-        "every_message" as const,
-      ]) {
-        const events: MessagingInboundEvent[] = [];
-        const gateway = new TestDiscordGateway();
-        const adapter = new DiscordAdapter({
-          api: createApi(),
-          config: {
-            authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
-            authorizedGuildIds: [
-              { id: TEST_GUILD_ID, displayName: "Test server", responseMode },
-            ],
-            botToken: "token",
-            channel: "discord",
-          },
-          gateway,
-          now: () => 1234,
-        });
-        await adapter.start(async (event) => {
-          events.push(event);
-        });
-        await gateway.emit({
-          op: 0,
-          t: "MESSAGE_CREATE",
-          d: messageDispatch({
-            authorBot: false,
-            content: "/status",
-            id: `response-mode-${responseMode ?? "default"}`,
-          }),
-        });
-        if (events.length === 1) admitted.push(responseMode);
-        await adapter.stop();
-      }
+    it("admits an unmentioned message from a mention_only server row", async () => {
+      // Response behavior and access are separate decisions, and "mention_only"
+      // is the setting most likely to be mistaken for an admission gate. The
+      // adapter must still hand the message up; whether PwrAgent replies is
+      // decided later by resolveMessagingResponseModeForChannel. One adapter is
+      // enough — the adapter reads only `id`, so this guards a future change
+      // that starts reading `responseMode` here, not today's behavior.
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: [
+            {
+              id: TEST_GUILD_ID,
+              displayName: "Test server",
+              responseMode: "mention_only",
+            },
+          ],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: messageDispatch({
+          authorBot: false,
+          content: "no mention here",
+          id: "mention-only-server-row",
+        }),
+      });
 
-      expect(admitted).toEqual([undefined, "mention_only", "every_message"]);
+      expect(events).toHaveLength(1);
+      await adapter.stop();
     });
 
     it("drops messages from unauthorized guilds before listener dispatch", async () => {

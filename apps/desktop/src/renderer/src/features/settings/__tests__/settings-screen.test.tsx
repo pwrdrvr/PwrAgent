@@ -4915,7 +4915,7 @@ describe("SettingsScreen", () => {
           }
         : { status: "not_found" as const, id: request.id });
 
-    render(
+    const { rerender } = render(
       <SettingsScreen
         desktopApi={{ resolveMessagingContact } as never}
         settings={settings}
@@ -4957,11 +4957,34 @@ describe("SettingsScreen", () => {
     expect(resolveMessagingContact).toHaveBeenCalledTimes(2);
     // One save for the whole pass, not one per resolved row.
     expect(settings.writeConfig).toHaveBeenCalledTimes(1);
-    expect(
-      await discordControls.findByText(
-        "Checked 2 IDs. Updated 1 name. 1 lookup failed and was left unchanged.",
-      ),
-    ).toBeInTheDocument();
+    const summary =
+      "Checked 2 IDs. Updated 1 name. 1 lookup failed and was left unchanged."
+      + " No matching platform identity was found.";
+    expect(await discordControls.findByText(summary)).toBeInTheDocument();
+
+    // The real writeConfig resolves by replacing the snapshot, which hands the
+    // list a brand-new `value` array. The summary has to survive that: it
+    // reports the save that caused it, and it names the row that failed.
+    const saved = createSnapshot();
+    saved.messaging.discord.botToken = snapshot.messaging.discord.botToken;
+    saved.messaging.discord.authorizedGuilds.value = [
+      {
+        id: "1480556454498009353",
+        displayName: "resolved-name",
+        responseMode: "every_message",
+      },
+      { id: "1480556454498009354", displayName: "kept-name" },
+    ];
+    rerender(
+      <SettingsScreen
+        desktopApi={{ resolveMessagingContact } as never}
+        settings={{ ...settings, snapshot: saved }}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    expect(discordControls.getByText(summary)).toBeInTheDocument();
   });
 
   it("disables Discord mention modes until a bot identity can be resolved", () => {
