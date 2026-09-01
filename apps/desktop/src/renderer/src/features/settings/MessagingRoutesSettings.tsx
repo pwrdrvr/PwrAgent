@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useId,
   useMemo,
   useRef,
   useState,
@@ -10,10 +11,12 @@ import {
 } from "react";
 import type {
   AppServerBackendKind,
+  DesktopAuthorizedContact,
   DesktopMessagingAgentRouteTarget,
   DesktopMessagingDefaultAgentRoute,
   DesktopMessagingDefaultAgentScope,
   DesktopMessagingObservedSurface,
+  DesktopMessagingResponseMode,
   ListMessagingRoutesResponse,
   MessagingChannelKind,
   MessagingConversationKind,
@@ -176,6 +179,10 @@ export function MessagingRoutesSettings(props: {
   agentRouteToolUpdateMode?: MessagingToolUpdateMode;
   configuredPlatforms?: readonly MessagingChannelKind[];
   desktopApi?: DesktopApi;
+  discordResponseBehavior?: Omit<
+    DiscordResponseBehaviorProps,
+    "observedSurfaces"
+  >;
   onOpenThread?: (target: {
     backend: AppServerBackendKind;
     threadId: string;
@@ -347,6 +354,13 @@ export function MessagingRoutesSettings(props: {
             ))
           )}
         </div>
+
+        {props.discordResponseBehavior ? (
+          <DiscordResponseBehavior
+            {...props.discordResponseBehavior}
+            observedSurfaces={routes.observedSurfaces ?? []}
+          />
+        ) : null}
 
         <div className="messaging-routes__subhead">
           <strong>Active bindings</strong>
@@ -1351,4 +1365,233 @@ function formatTimestamp(value: number): string {
     dateStyle: "medium",
     timeStyle: "short",
   });
+}
+
+/**
+ * Response behavior for one exact Discord channel or native thread.
+ *
+ * This sits beside Default Agents rather than inside it because the two
+ * decisions are independent: admission runs first and only decides whether an
+ * ambient message is accepted at all, and routing then picks the Agent for an
+ * accepted unbound message. Sharing the observed-surface picker keeps operators
+ * choosing a named channel instead of pasting a snowflake, but the two lists
+ * never share a value.
+ */
+export type DiscordResponseBehaviorProps = {
+  disabled?: boolean;
+  observedSurfaces: DesktopMessagingObservedSurface[];
+  source: string;
+  value: DesktopAuthorizedContact[];
+  onSave: (value: DesktopAuthorizedContact[]) => void;
+};
+
+function DiscordResponseBehavior(props: DiscordResponseBehaviorProps) {
+  const selectId = useId();
+  const configured = props.value;
+  const configuredIds = new Set(configured.map((entry) => entry.id));
+  const candidates = discordResponseSurfaceCandidates(props.observedSurfaces)
+    .filter((candidate) => !configuredIds.has(candidate.id));
+
+  const addSurface = (id: string) => {
+    const candidate = candidates.find((entry) => entry.id === id);
+    if (!candidate || configuredIds.has(id)) return;
+    props.onSave([
+      ...configured,
+      {
+        id: candidate.id,
+        displayName: candidate.displayName,
+        responseMode: "mention_only",
+      },
+    ]);
+  };
+
+  const updateMode = (id: string, responseMode: DesktopMessagingResponseMode) => {
+    props.onSave(configured.map((entry) =>
+      entry.id === id ? { ...entry, responseMode } : entry));
+  };
+
+  const removeSurface = (id: string) => {
+    props.onSave(configured.filter((entry) => entry.id !== id));
+  };
+
+  return (
+    <>
+      <div className="messaging-routes__subhead">
+        <strong>When PwrAgent responds</strong>
+        <span>
+          Pick a Discord channel or native thread PwrAgent has seen, then choose
+          whether it replies to every message there or only when @ mentioned.
+          This does not choose an Agent or authorize access.
+        </span>
+        <span className="settings-source">{props.source}</span>
+      </div>
+      <div className="messaging-routes__response-add">
+        <label className="settings-authorized-list__policy-label" htmlFor={selectId}>
+          Add a channel or thread
+        </label>
+        <select
+          className="settings-input"
+          disabled={props.disabled || candidates.length === 0}
+          id={selectId}
+          value=""
+          onChange={(event) => {
+            const id = event.currentTarget.value;
+            if (id) addSurface(id);
+          }}
+        >
+          <option value="">
+            {candidates.length === 0
+              ? "No unconfigured Discord channels seen yet"
+              : "Select a channel or thread..."}
+          </option>
+          {candidates.map((candidate) => (
+            <option key={candidate.id} value={candidate.id}>
+              {candidate.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div
+        className="messaging-routes__list"
+        aria-label="Discord channel and thread response behavior"
+      >
+        {configured.length === 0 ? (
+          <p className="messaging-routes__empty">
+            Every Discord channel and native thread follows its server setting.
+          </p>
+        ) : (
+          configured.map((entry) => (
+            <DiscordResponseRow
+              key={entry.id}
+              disabled={props.disabled}
+              entry={entry}
+              observedSurfaces={props.observedSurfaces}
+              onChangeMode={(responseMode) => updateMode(entry.id, responseMode)}
+              onRemove={() => removeSurface(entry.id)}
+            />
+          ))
+        )}
+      </div>
+    </>
+  );
+}
+
+function DiscordResponseRow(props: {
+  disabled?: boolean;
+  entry: DesktopAuthorizedContact;
+  observedSurfaces: DesktopMessagingObservedSurface[];
+  onChangeMode: (responseMode: DesktopMessagingResponseMode) => void;
+  onRemove: () => void;
+}) {
+  const selectId = useId();
+  const observed = discordResponseSurfaceCandidates(props.observedSurfaces)
+    .find((candidate) => candidate.id === props.entry.id);
+  // A configured surface the adapter has not seen recently still has to render
+  // with whatever identity we stored, so removing it stays possible.
+  const label = observed?.label
+    ?? props.entry.displayName
+    ?? props.entry.id;
+  const DiscordIcon = MESSAGING_PLATFORM_ICONS.discord;
+  return (
+    <div className="messaging-route-row">
+      <div className="messaging-routes__response-identity">
+        <div className="messaging-route-row__platform" aria-hidden="true">
+          {DiscordIcon ? <DiscordIcon size={16} /> : null}
+        </div>
+        <div className="messaging-route-row__main">
+          <div className="messaging-route-row__title">{label}</div>
+          <div className="messaging-route-row__meta">
+            {observed ? observed.kindLabel : "Not seen recently"}
+            {" / ID "}
+            {props.entry.id}
+          </div>
+        </div>
+      </div>
+      <div className="messaging-routes__response-controls">
+        <label className="settings-authorized-list__policy-label" htmlFor={selectId}>
+          Responds to
+        </label>
+        <select
+          className="settings-input"
+          disabled={props.disabled}
+          id={selectId}
+          title={
+            "Sets whether PwrAgent replies to every message in this channel or "
+            + "thread or only when @ mentioned. This does not choose an Agent or "
+            + "authorize access."
+          }
+          value={props.entry.responseMode ?? "mention_only"}
+          onChange={(event) => props.onChangeMode(
+            event.currentTarget.value as DesktopMessagingResponseMode,
+          )}
+        >
+          <option value="mention_only">@ mention only</option>
+          <option value="every_message">Every message</option>
+        </select>
+        <button
+          aria-label={`Remove response behavior for ${label}`}
+          className="button button--ghost"
+          disabled={props.disabled}
+          type="button"
+          onClick={props.onRemove}
+        >
+          Remove
+        </button>
+      </div>
+    </div>
+  );
+}
+
+type DiscordResponseSurfaceCandidate = {
+  displayName: string;
+  id: string;
+  kindLabel: string;
+  label: string;
+  lastSeenAt: number;
+};
+
+/**
+ * Observed Discord channels and native threads, plus the parent channel of any
+ * observed thread. The parent is offered because an operator who has only ever
+ * seen thread traffic may still want to set the containing channel's behavior.
+ */
+function discordResponseSurfaceCandidates(
+  surfaces: DesktopMessagingObservedSurface[],
+): DiscordResponseSurfaceCandidate[] {
+  const candidates = new Map<string, DiscordResponseSurfaceCandidate>();
+  const remember = (candidate: DiscordResponseSurfaceCandidate) => {
+    const existing = candidates.get(candidate.id);
+    if (existing && existing.lastSeenAt >= candidate.lastSeenAt) return;
+    candidates.set(candidate.id, candidate);
+  };
+  for (const surface of surfaces) {
+    if (surface.platform !== "discord") continue;
+    const conversation = surface.conversation;
+    if (conversation.kind === "channel" || conversation.kind === "thread") {
+      remember({
+        displayName: conversation.title ?? "",
+        id: conversation.id,
+        kindLabel: conversation.kind === "thread" ? "Native thread" : "Channel",
+        label: formatConversationLabel("discord", conversation),
+        lastSeenAt: surface.lastSeenAt,
+      });
+    }
+    const parentConversationId = conversation.parentConversationId;
+    if (conversation.kind === "thread" && parentConversationId) {
+      remember({
+        displayName: conversation.parentTitle ?? "",
+        id: parentConversationId,
+        kindLabel: "Channel",
+        label: formatObservedContainerLabel({
+          platform: "discord",
+          id: parentConversationId,
+          names: [conversation.ancestorTitle, conversation.parentTitle],
+        }),
+        lastSeenAt: surface.lastSeenAt,
+      });
+    }
+  }
+  return [...candidates.values()].sort((left, right) =>
+    right.lastSeenAt - left.lastSeenAt
+    || left.label.localeCompare(right.label));
 }

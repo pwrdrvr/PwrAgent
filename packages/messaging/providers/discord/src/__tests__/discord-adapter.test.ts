@@ -5,6 +5,7 @@ import {
   type MessagingCallbackHandleStore,
   type MessagingInboundEvent,
   type MessagingRejectedInboundEvent,
+  type MessagingResponseMode,
   type MessagingStatusIntent,
 } from "@pwragent/messaging-interface";
 import { describe, expect, it, vi } from "vitest";
@@ -1676,6 +1677,116 @@ describe("discord adapter", () => {
         expect.anything(),
       );
       await adapter.stop();
+    });
+
+    it("admits every channel and native thread inside an authorized server", async () => {
+      // Authorization is server-wide: there is no channel allowlist, so one
+      // authorized server ID has to cover each of its channels and native
+      // threads, while a second server stays denied.
+      const otherGuildId = "1480556454498009888";
+      const secondChannelId = "1480556454498009777";
+      const nativeThreadId = "1480556454498009666";
+      const events: MessagingInboundEvent[] = [];
+      const gateway = new TestDiscordGateway();
+      const adapter = new DiscordAdapter({
+        api: createApi(),
+        config: {
+          authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+          authorizedGuildIds: [{ id: TEST_GUILD_ID, displayName: "Test server" }],
+          botToken: "token",
+          channel: "discord",
+        },
+        gateway,
+        now: () => 1234,
+      });
+
+      await adapter.start(async (event) => {
+        events.push(event);
+      });
+
+      for (const dispatch of [
+        { channelId: TEST_CHANNEL_ID, id: "authorized-channel", isThread: false },
+        { channelId: secondChannelId, id: "authorized-second", isThread: false },
+        { channelId: nativeThreadId, id: "authorized-thread", isThread: true },
+      ]) {
+        await gateway.emit({
+          op: 0,
+          t: "MESSAGE_CREATE",
+          d: {
+            ...messageDispatch({
+              authorBot: false,
+              content: "/status",
+              id: dispatch.id,
+            }),
+            channel_id: dispatch.channelId,
+            channel_type: dispatch.isThread ? 11 : 0,
+            is_thread: dispatch.isThread,
+          },
+        });
+      }
+
+      await gateway.emit({
+        op: 0,
+        t: "MESSAGE_CREATE",
+        d: {
+          ...messageDispatch({
+            authorBot: false,
+            content: "/status",
+            id: "other-server",
+          }),
+          guild_id: otherGuildId,
+        },
+      });
+
+      expect(events.map((event) => event.channel.conversation.id)).toEqual([
+        TEST_CHANNEL_ID,
+        secondChannelId,
+        nativeThreadId,
+      ]);
+      await adapter.stop();
+    });
+
+    it("ignores a server row's response setting when deciding authorization", async () => {
+      // Response behavior and access are separate decisions. Whatever a row
+      // says about when to reply, admission depends only on the ID matching.
+      const admitted: Array<MessagingResponseMode | undefined> = [];
+      for (const responseMode of [
+        undefined,
+        "mention_only" as const,
+        "every_message" as const,
+      ]) {
+        const events: MessagingInboundEvent[] = [];
+        const gateway = new TestDiscordGateway();
+        const adapter = new DiscordAdapter({
+          api: createApi(),
+          config: {
+            authorizedActorIds: [{ id: TEST_USER_ID, displayName: "" }],
+            authorizedGuildIds: [
+              { id: TEST_GUILD_ID, displayName: "Test server", responseMode },
+            ],
+            botToken: "token",
+            channel: "discord",
+          },
+          gateway,
+          now: () => 1234,
+        });
+        await adapter.start(async (event) => {
+          events.push(event);
+        });
+        await gateway.emit({
+          op: 0,
+          t: "MESSAGE_CREATE",
+          d: messageDispatch({
+            authorBot: false,
+            content: "/status",
+            id: `response-mode-${responseMode ?? "default"}`,
+          }),
+        });
+        if (events.length === 1) admitted.push(responseMode);
+        await adapter.stop();
+      }
+
+      expect(admitted).toEqual([undefined, "mention_only", "every_message"]);
     });
 
     it("drops messages from unauthorized guilds before listener dispatch", async () => {

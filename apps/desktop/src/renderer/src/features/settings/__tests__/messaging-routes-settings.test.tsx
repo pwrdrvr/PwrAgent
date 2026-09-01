@@ -177,6 +177,93 @@ function renderRoutes(
 }
 
 describe("MessagingRoutesSettings", () => {
+  it("sets Discord response behavior from named surfaces without touching routes", async () => {
+    const routes = buildRoutes();
+    routes.observedSurfaces.push({
+      platform: "discord",
+      conversation: {
+        id: "1480556454498009352",
+        kind: "channel",
+        title: "general",
+        ancestorTitle: "Test server",
+        workspaceId: "1480556454498009353",
+      },
+      firstSeenAt: 1000,
+      lastSeenAt: 3000,
+    });
+    const api = buildDesktopApi(routes);
+    const onSave = vi.fn();
+
+    render(
+      <MessagingRoutesProvider desktopApi={api.desktopApi}>
+        <MessagingRoutesSettings
+          desktopApi={api.desktopApi}
+          discordResponseBehavior={{ source: "config", value: [], onSave }}
+        />
+      </MessagingRoutesProvider>,
+    );
+
+    // The picker offers the observed channel by name. An operator never types
+    // a snowflake to set response behavior.
+    const picker = await screen.findByRole("combobox", {
+      name: "Add a channel or thread",
+    });
+    const named = await screen.findByRole("option", {
+      name: "Discord / Test server / general",
+    });
+    fireEvent.change(picker, { target: { value: "1480556454498009352" } });
+
+    expect(named).toBeInTheDocument();
+    expect(onSave).toHaveBeenCalledWith([
+      {
+        id: "1480556454498009352",
+        displayName: "general",
+        responseMode: "mention_only",
+      },
+    ]);
+    // Admission and routing are independent: choosing when to respond must not
+    // assign, clear, or otherwise disturb a default Agent.
+    expect(api.setMessagingDefaultAgent).not.toHaveBeenCalled();
+    expect(api.clearMessagingDefaultAgent).not.toHaveBeenCalled();
+  });
+
+  it("assigns a default Agent without writing response behavior", async () => {
+    const api = buildDesktopApi();
+    const onSave = vi.fn();
+
+    render(
+      <MessagingRoutesProvider desktopApi={api.desktopApi}>
+        <MessagingRoutesSettings
+          desktopApi={api.desktopApi}
+          discordResponseBehavior={{
+            source: "config",
+            value: [
+              {
+                id: "1480556454498009352",
+                displayName: "general",
+                responseMode: "mention_only",
+              },
+            ],
+            onSave,
+          }}
+        />
+      </MessagingRoutesProvider>,
+    );
+
+    fireEvent.click((await screen.findAllByRole("button", { name: "Change" }))[0]!);
+    fireEvent.change(screen.getByLabelText("Route Working Updates"), {
+      target: { value: "show_all" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save default" }));
+
+    await waitFor(() => {
+      expect(api.setMessagingDefaultAgent).toHaveBeenCalled();
+    });
+    // The mirror of the test above: changing the route leaves the configured
+    // response behavior exactly as it was.
+    expect(onSave).not.toHaveBeenCalled();
+  });
+
   it("shows an empty inventory when no messaging routes exist", async () => {
     const { desktopApi } = buildDesktopApi({
       eligibleAgents: [],

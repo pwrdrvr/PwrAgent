@@ -645,6 +645,22 @@ export function MessagingSettings(props: {
           agentRouteToolUpdateMode={managerToolUpdateMode.value}
           configuredPlatforms={configuredRoutePlatforms}
           desktopApi={props.desktopApi}
+          discordResponseBehavior={discordIdentityConfigured
+            ? {
+                disabled: props.saving,
+                source: optionalListSourceBadge(discord.responseModeOverrides),
+                value: discord.responseModeOverrides.value,
+                onSave: (responseModeOverrides) => {
+                  void props.onSaveDiscord({
+                    ...discord,
+                    responseModeOverrides: {
+                      ...discord.responseModeOverrides,
+                      value: responseModeOverrides,
+                    },
+                  });
+                },
+              }
+            : undefined}
           onOpenThread={props.onOpenThread}
         />
       ) : null}
@@ -802,6 +818,7 @@ export function MessagingSettings(props: {
             validateEntry={validateTelegramGroupChatEntry}
             value={telegram.authorizedSupergroups.value}
             responseModePolicy
+            responseModeScopeNoun="group"
             onSave={(authorizedSupergroups) => {
               void props.onSaveTelegram({
                 ...telegram,
@@ -914,10 +931,10 @@ export function MessagingSettings(props: {
           />
           <SegmentedField
             disabled={props.saving || !discordIdentityConfigured}
-            label="Discord response default"
+            label="When PwrAgent responds"
             sub={discordIdentityConfigured
-              ? "Global default for Discord servers, channels, and native threads unless a server, channel/thread, or bound PwrAgent thread override is more specific."
-              : "Configure a bot token before enabling leading @bot mention response modes."}
+              ? "Discord-wide default for servers, channels, and native threads. An authorized server row is more specific, an exact channel or native thread in Routes is more specific still, and a bound PwrAgent thread wins over all of them."
+              : "Configure a bot token before choosing to respond only to leading @bot mentions."}
             options={RESPONSE_MODE_OPTIONS}
             source={sourceBadge(discord.responseMode)}
             value={discord.responseMode.value}
@@ -967,13 +984,15 @@ export function MessagingSettings(props: {
               "discord",
               "guild",
             )}
-            label="Authorized Guilds"
-            sub="Discord guild (server) IDs that may host bound threads. A row response mode overrides the global Discord default for that server."
-            help="Snowflake (17-19 digit number), e.g. 1480554271907905731. Rejected server messages show the guild ID in Messaging Activity. Channel, native-thread, and bound-thread overrides remain more specific."
+            label="Authorized Servers"
+            sub="Discord servers PwrAgent accepts messages from. Authorizing a server covers every channel and native thread in it that the bot can see."
+            help="Discord's API calls a server a guild, so a server ID is the same value Discord documents as a guild ID: a snowflake (17-19 digit number), e.g. 1480554271907905731. Rejected server messages show the server ID in Messaging Activity."
             source={optionalListSourceBadge(discord.authorizedGuilds)}
             validateEntry={validateDiscordGuildIdEntry}
             value={discord.authorizedGuilds.value}
+            refreshNamesLabel="Refresh server names"
             responseModePolicy={discordIdentityConfigured}
+            responseModeScopeNoun="server"
             onSave={(authorizedGuilds) => {
               void props.onSaveDiscord({
                 ...discord,
@@ -984,27 +1003,6 @@ export function MessagingSettings(props: {
               });
             }}
           />
-          {discordIdentityConfigured ? (
-            <AuthorizedListField
-              disabled={props.saving}
-              label="Channel / Thread Response Overrides"
-              sub="Optional response behavior for one Discord channel or native thread. An exact native-thread override beats its parent channel; either beats the server and global defaults."
-              help="Use the Discord channel or native thread snowflake. Bound PwrAgent thread controls remain the most specific override."
-              source={optionalListSourceBadge(discord.responseModeOverrides)}
-              validateEntry={validateDiscordConversationIdEntry}
-              value={discord.responseModeOverrides.value}
-              responseModePolicy
-              onSave={(responseModeOverrides) => {
-                void props.onSaveDiscord({
-                  ...discord,
-                  responseModeOverrides: {
-                    ...discord.responseModeOverrides,
-                    value: responseModeOverrides,
-                  },
-                });
-              }}
-            />
-          ) : null}
         </div>
       </SettingsSection>
       ) : null}
@@ -1477,6 +1475,7 @@ export function MessagingSettings(props: {
               validateEntry={validateSlackChannelIdEntry}
               value={slack.authorizedChannels.value}
               responseModePolicy
+              responseModeScopeNoun="channel"
               onSave={(authorizedChannels) => {
                 void props.onSaveSlack({
                   ...slack,
@@ -3330,7 +3329,13 @@ function AuthorizedListField(props: {
   help?: ReactNode;
   label: string;
   lookup?: (id: string) => Promise<DesktopMessagingContactLookupResponse>;
+  // Label for an explicit bulk name repair. Omitted callers get no button:
+  // names are never rewritten in the background or by heuristic.
+  refreshNamesLabel?: string;
   responseModePolicy?: boolean;
+  // Names what a row stands for, so the response control never claims a server
+  // row is "this channel". Every caller that sets responseModePolicy sets this.
+  responseModeScopeNoun?: string;
   showUsername?: boolean;
   sub?: ReactNode;
   source: string;
@@ -3353,10 +3358,15 @@ function AuthorizedListField(props: {
   const [lookupState, setLookupState] = useState<
     Record<number, { loading?: boolean; message?: string }>
   >({});
+  const [refreshState, setRefreshState] = useState<{
+    message?: string;
+    running?: boolean;
+  }>({});
   useEffect(() => {
     rowsRef.current = props.value;
     setRowsState(props.value);
     setLookupState({});
+    setRefreshState({});
   }, [props.value]);
   const normalizedRows = rows.map(normalizeAuthorizedContactRow);
   const invalidEntries = props.validateEntry
@@ -3502,6 +3512,73 @@ function AuthorizedListField(props: {
         message: lookupFailureMessage(result),
       },
     }));
+  };
+
+  /**
+   * Re-resolve every configured ID and adopt only the names the provider
+   * actually returned. A failed or empty lookup leaves that row exactly as it
+   * was: this repairs a stale label, it never invents or clears one. Rows are
+   * matched by ID against the latest state, so ordering, response settings, and
+   * every other field survive untouched, and the whole pass saves once.
+   */
+  const refreshNames = async () => {
+    const lookup = props.lookup;
+    if (!lookup || refreshState.running) return;
+    const uniqueIds = [...new Set(
+      rowsRef.current
+        .map(normalizeAuthorizedContactRow)
+        .filter((row) => row.id.length > 0 && !props.validateEntry?.(row.id))
+        .map((row) => row.id),
+    )];
+    if (uniqueIds.length === 0) {
+      setRefreshState({ message: "No valid IDs to refresh." });
+      return;
+    }
+
+    setRefreshState({ running: true });
+    const resolvedNames = new Map<string, string>();
+    let failures = 0;
+    for (const id of uniqueIds) {
+      let result: DesktopMessagingContactLookupResponse;
+      try {
+        result = await lookup(id);
+      } catch (error) {
+        result = {
+          status: "failed",
+          id,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        };
+      }
+      const resolved = result.status === "ok"
+        ? sanitizeMessagingContactLabel(result.displayName)
+        : "";
+      if (resolved) {
+        resolvedNames.set(id, resolved);
+      } else {
+        failures += 1;
+      }
+    }
+
+    let renamed = 0;
+    const nextRows = rowsRef.current.map((row) => {
+      const resolved = resolvedNames.get(
+        normalizeAuthorizedContactRow(row).id,
+      );
+      if (!resolved || resolved === row.displayName) return row;
+      renamed += 1;
+      return { ...row, displayName: resolved };
+    });
+    if (renamed > 0) {
+      setRows(nextRows);
+      saveIfValid(nextRows);
+    }
+    setRefreshState({
+      message: refreshSummary({
+        checked: uniqueIds.length,
+        failures,
+        renamed,
+      }),
+    });
   };
 
   return (
@@ -3690,14 +3767,16 @@ function AuthorizedListField(props: {
                         className="settings-authorized-list__policy-label"
                         htmlFor={responseModeSelectId}
                       >
-                        Response mode
+                        Responds to
                       </label>
                       <select
-                        aria-label={`${props.label} response mode ${index + 1}`}
+                        aria-label={`${props.label} responds to ${index + 1}`}
                         className="settings-input settings-authorized-list__response-mode"
                         disabled={props.disabled}
                         id={responseModeSelectId}
-                        title="Overrides whether this channel responds to every message or only @ mentions."
+                        title={`Sets whether PwrAgent replies to every message in this ${
+                          props.responseModeScopeNoun ?? "conversation"
+                        } or only when @ mentioned. This does not choose an Agent or authorize access.`}
                         value={row.responseMode ?? ""}
                         onBlur={() => {
                           const nextRows = rows.map((current, rowIndex) =>
@@ -3761,26 +3840,51 @@ function AuthorizedListField(props: {
                 </div>
               );
             })}
-            <button
-              className="button button--secondary settings-authorized-list__add"
-              disabled={props.disabled}
-              type="button"
-              onClick={() =>
-                setRows((current) => [
-                  ...current,
-                  {
-                    id: "",
-                    displayName: "",
-                    ...(props.fullAccessWarningPolicy
-                      ? { fullAccessWarningOverride: "default" as const }
-                      : {}),
-                  },
-                ])
-              }
-            >
-              Add
-            </button>
+            <div className="settings-authorized-list__actions">
+              <button
+                className="button button--secondary settings-authorized-list__add"
+                disabled={props.disabled}
+                type="button"
+                onClick={() =>
+                  setRows((current) => [
+                    ...current,
+                    {
+                      id: "",
+                      displayName: "",
+                      ...(props.fullAccessWarningPolicy
+                        ? { fullAccessWarningOverride: "default" as const }
+                        : {}),
+                    },
+                  ])
+                }
+              >
+                Add
+              </button>
+              {props.refreshNamesLabel && props.lookup ? (
+                <button
+                  className="button button--secondary settings-authorized-list__refresh"
+                  disabled={props.disabled || refreshState.running}
+                  type="button"
+                  onClick={() => {
+                    void refreshNames();
+                  }}
+                >
+                  {refreshState.running
+                    ? "Refreshing..."
+                    : props.refreshNamesLabel}
+                </button>
+              ) : null}
+            </div>
           </div>
+          {refreshState.message ? (
+            <div className="settings-list-validation" role="status">
+              <div className="settings-list-validation__item">
+                <span className="settings-list-validation__message">
+                  {refreshState.message}
+                </span>
+              </div>
+            </div>
+          ) : null}
           {Object.entries(lookupState).some(([, state]) => state.message) ? (
             <div className="settings-list-validation" role="status">
               {Object.entries(lookupState)
@@ -3925,20 +4029,31 @@ function validateDiscordUserIdEntry(value: string): string | undefined {
   });
 }
 
-function validateDiscordGuildIdEntry(value: string): string | undefined {
-  return validationMessage(validateDiscordSnowflake(value), "Discord guild ID", {
-    format: "Use the numeric Discord guild snowflake, e.g. 1480554271907905731.",
-    future: "That snowflake timestamp is in the future. Copy the guild ID from Messaging Activity.",
-    length: "Discord guild IDs are snowflakes: 17-19 digits.",
-    range: "Use a positive Discord guild snowflake, e.g. 1480554271907905731.",
-  });
+function refreshSummary(counts: {
+  checked: number;
+  failures: number;
+  renamed: number;
+}): string {
+  const parts = [
+    `Checked ${counts.checked} ${counts.checked === 1 ? "ID" : "IDs"}.`,
+    counts.renamed > 0
+      ? `Updated ${counts.renamed} ${counts.renamed === 1 ? "name" : "names"}.`
+      : "No names changed.",
+  ];
+  if (counts.failures > 0) {
+    parts.push(counts.failures === 1
+      ? "1 lookup failed and was left unchanged."
+      : `${counts.failures} lookups failed and were left unchanged.`);
+  }
+  return parts.join(" ");
 }
 
-function validateDiscordConversationIdEntry(value: string): string | undefined {
-  return validationMessage(validateDiscordSnowflake(value), "Discord channel or thread ID", {
-    format: "Use the numeric Discord snowflake, e.g. 1480556454498009352.",
-    length: "Discord IDs are snowflakes: 17-19 digits.",
-    range: "Use a positive Discord snowflake, e.g. 1480556454498009352.",
+function validateDiscordGuildIdEntry(value: string): string | undefined {
+  return validationMessage(validateDiscordSnowflake(value), "Discord server ID", {
+    format: "Use the numeric Discord server snowflake, e.g. 1480554271907905731.",
+    future: "That snowflake timestamp is in the future. Copy the server ID from Messaging Activity.",
+    length: "Discord server IDs are snowflakes: 17-19 digits.",
+    range: "Use a positive Discord server snowflake, e.g. 1480554271907905731.",
   });
 }
 

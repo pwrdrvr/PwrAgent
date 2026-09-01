@@ -4808,19 +4808,21 @@ describe("SettingsScreen", () => {
     expect(discordSection).not.toBeNull();
     const discordControls = within(discordSection as HTMLElement);
 
-    expect(discordControls.getByText("Discord response default")).toBeInTheDocument();
+    expect(discordControls.getByText("When PwrAgent responds")).toBeInTheDocument();
     expect(discordControls.getByText("automatic")).toBeInTheDocument();
     expect(
       discordControls.getByRole("textbox", {
         name: "Application ID Override (Advanced)",
       }),
     ).toHaveAttribute("placeholder", "Auto-discovered from bot token");
+    // Exact channel and native-thread behavior now lives beside Routes with a
+    // named surface picker, so the Discord screen offers no raw-ID editor.
     expect(
-      discordControls.getByText("Channel / Thread Response Overrides"),
-    ).toBeInTheDocument();
+      discordControls.queryByText("Channel / Thread Response Overrides"),
+    ).toBeNull();
     expect(
       discordControls.getByRole("combobox", {
-        name: "Authorized Guilds response mode 1",
+        name: "Authorized Servers responds to 1",
       }),
     ).toBeInTheDocument();
 
@@ -4836,6 +4838,130 @@ describe("SettingsScreen", () => {
         },
       });
     });
+  });
+
+  it("names Discord servers and scopes the response control to the server", async () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.discord.botToken = {
+      configured: true,
+      source: "keychain",
+      writable: true,
+    };
+    snapshot.messaging.discord.authorizedGuilds.value = [
+      { id: "1480556454498009353", displayName: "Test server" },
+    ];
+    const settings = createSettingsState(snapshot);
+
+    render(
+      <SettingsScreen
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const discordHeader = screen.getByRole("button", { name: "Discord" });
+    if (discordHeader.getAttribute("aria-expanded") !== "true") {
+      fireEvent.click(discordHeader);
+    }
+    const discordControls = within(discordHeader.closest("section") as HTMLElement);
+
+    expect(discordControls.getByText("Authorized Servers")).toBeInTheDocument();
+    expect(discordControls.queryByText("Authorized Guilds")).toBeNull();
+    // Authorization is whole-server, and the copy has to say so rather than
+    // implying a row only covers the channel an operator happened to see.
+    expect(
+      discordControls.getByText(/covers every channel and native thread/i),
+    ).toBeInTheDocument();
+
+    // The tooltip is shared with Slack and Telegram rows, so it has to name
+    // the row's own scope instead of always claiming "this channel".
+    const responseControl = discordControls.getByRole("combobox", {
+      name: "Authorized Servers responds to 1",
+    });
+    expect(responseControl).toHaveAttribute(
+      "title",
+      expect.stringContaining("in this server"),
+    );
+    expect(responseControl.getAttribute("title")).not.toContain("this channel");
+    expect(responseControl).toHaveAttribute(
+      "title",
+      expect.stringContaining("does not choose an Agent or authorize access"),
+    );
+  });
+
+  it("refreshes server names without disturbing other row settings", async () => {
+    const snapshot = createSnapshot();
+    snapshot.messaging.discord.botToken = {
+      configured: true,
+      source: "keychain",
+      writable: true,
+    };
+    snapshot.messaging.discord.authorizedGuilds.value = [
+      {
+        id: "1480556454498009353",
+        displayName: "stale-name",
+        responseMode: "every_message",
+      },
+      { id: "1480556454498009354", displayName: "kept-name" },
+    ];
+    const settings = createSettingsState(snapshot);
+    const resolveMessagingContact = vi.fn(async (request: { id: string }) =>
+      request.id === "1480556454498009353"
+        ? {
+            status: "ok" as const,
+            id: request.id,
+            displayName: "resolved-name",
+          }
+        : { status: "not_found" as const, id: request.id });
+
+    render(
+      <SettingsScreen
+        desktopApi={{ resolveMessagingContact } as never}
+        settings={settings}
+        initialSection="messaging"
+        onClose={() => undefined}
+      />,
+    );
+
+    const discordHeader = screen.getByRole("button", { name: "Discord" });
+    if (discordHeader.getAttribute("aria-expanded") !== "true") {
+      fireEvent.click(discordHeader);
+    }
+    const discordControls = within(discordHeader.closest("section") as HTMLElement);
+
+    fireEvent.click(
+      discordControls.getByRole("button", { name: "Refresh server names" }),
+    );
+
+    await waitFor(() => {
+      expect(settings.writeConfig).toHaveBeenCalled();
+    });
+
+    // Only the resolved row is renamed. The failed lookup keeps its stored
+    // name, and every row keeps its ID, order, and response setting.
+    expect(settings.writeConfig).toHaveBeenCalledWith({
+      messaging: {
+        discord: {
+          authorizedGuilds: [
+            {
+              id: "1480556454498009353",
+              displayName: "resolved-name",
+              responseMode: "every_message",
+            },
+            { id: "1480556454498009354", displayName: "kept-name" },
+          ],
+        },
+      },
+    });
+    expect(resolveMessagingContact).toHaveBeenCalledTimes(2);
+    // One save for the whole pass, not one per resolved row.
+    expect(settings.writeConfig).toHaveBeenCalledTimes(1);
+    expect(
+      await discordControls.findByText(
+        "Checked 2 IDs. Updated 1 name. 1 lookup failed and was left unchanged.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("disables Discord mention modes until a bot identity can be resolved", () => {
