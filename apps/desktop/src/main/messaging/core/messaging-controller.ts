@@ -307,6 +307,9 @@ const DEFAULT_INPUT_DEBOUNCE_MS = 500;
 const MAX_DELIVERED_AUTOMATION_KEYS = 1_000;
 const MAX_TRACKED_REVIEW_TURNS = 1_000;
 const MAX_TRACKED_TURN_PROSE = 256;
+const MIN_NEAR_DUPLICATE_ASSISTANT_WORDS = 12;
+const MIN_NEAR_DUPLICATE_ASSISTANT_LENGTH_RATIO = 0.7;
+const MIN_NEAR_DUPLICATE_ASSISTANT_BIGRAM_OVERLAP = 0.8;
 const MESSAGING_ENVIRONMENT_SETUP_PROGRESS_INTERVAL_MS = 15_000;
 
 type MessagingTurnProseState = {
@@ -20710,6 +20713,14 @@ function assistantTextForBackendEvent(event: AgentEvent): string | undefined {
 function assistantOutputTextFragmentsForBackendEvent(
   event: AgentEvent,
 ): string[] {
+  return deduplicateAssistantOutputTextFragments(
+    rawAssistantOutputTextFragmentsForBackendEvent(event),
+  );
+}
+
+function rawAssistantOutputTextFragmentsForBackendEvent(
+  event: AgentEvent,
+): string[] {
   if (event.notification.method !== "turn/completed") {
     return [];
   }
@@ -20730,6 +20741,75 @@ function assistantOutputTextFragmentsForBackendEvent(
     .filter((value): value is string => typeof value === "string")
     .map((value) => value.trim())
     .filter(Boolean);
+}
+
+function deduplicateAssistantOutputTextFragments(fragments: string[]): string[] {
+  // Some backends expose commentary and a rewritten final answer only through
+  // turn/completed. Keep the later fragment when the two are substantially the
+  // same response, but require enough ordered overlap that short acknowledgments
+  // and related multi-part answers remain separate.
+  const preserved: string[] = [];
+  for (let index = fragments.length - 1; index >= 0; index -= 1) {
+    const fragment = fragments[index]!;
+    if (
+      preserved.some((laterFragment) =>
+        areNearDuplicateAssistantTextFragments(fragment, laterFragment)
+      )
+    ) {
+      continue;
+    }
+    preserved.unshift(fragment);
+  }
+  return preserved;
+}
+
+function areNearDuplicateAssistantTextFragments(
+  left: string,
+  right: string,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  const leftWords = normalizedAssistantTextWords(left);
+  const rightWords = normalizedAssistantTextWords(right);
+  const shorterWords = leftWords.length <= rightWords.length
+    ? leftWords
+    : rightWords;
+  const longerWords = leftWords.length <= rightWords.length
+    ? rightWords
+    : leftWords;
+  if (
+    shorterWords.length < MIN_NEAR_DUPLICATE_ASSISTANT_WORDS
+    || shorterWords.length / longerWords.length
+      < MIN_NEAR_DUPLICATE_ASSISTANT_LENGTH_RATIO
+  ) {
+    return false;
+  }
+
+  const shorterBigrams = assistantTextBigrams(shorterWords);
+  const longerBigramCounts = new Map<string, number>();
+  for (const bigram of assistantTextBigrams(longerWords)) {
+    longerBigramCounts.set(bigram, (longerBigramCounts.get(bigram) ?? 0) + 1);
+  }
+  let overlap = 0;
+  for (const bigram of shorterBigrams) {
+    const remaining = longerBigramCounts.get(bigram) ?? 0;
+    if (remaining === 0) {
+      continue;
+    }
+    overlap += 1;
+    longerBigramCounts.set(bigram, remaining - 1);
+  }
+  return overlap / shorterBigrams.length
+    >= MIN_NEAR_DUPLICATE_ASSISTANT_BIGRAM_OVERLAP;
+}
+
+function normalizedAssistantTextWords(text: string): string[] {
+  return text.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+}
+
+function assistantTextBigrams(words: string[]): string[] {
+  return words.slice(1).map((word, index) => `${words[index]}\0${word}`);
 }
 
 /**
@@ -20969,7 +21049,7 @@ function assistantMessageDeliveryKeys(
   // the repeated aggregate without changing completion-only aggregation.
   const contentKeys = [
     contentKey,
-    ...assistantOutputTextFragmentsForBackendEvent(event).map((fragment) =>
+    ...rawAssistantOutputTextFragmentsForBackendEvent(event).map((fragment) =>
       assistantMessageContentDeliveryKey(event, binding, fragment, identity)
     ),
   ];
