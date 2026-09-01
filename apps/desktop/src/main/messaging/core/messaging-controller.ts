@@ -4481,15 +4481,14 @@ export class MessagingController {
         }
         return "failed";
       }
-      // A Default Agent route that cannot start its turn is the only report we
-      // get that its target is gone. Nothing else says so: `agent` lives in the
-      // thread's overlay row, which outlives the thread, so the pre-flight
-      // check cannot tell a live target from a deleted one, and archival is
-      // announced only for threads this process is around to hear about.
-      // Without this the channel keeps routing every later message to the same
-      // dead thread and failing identically, with no way back to a working
-      // default short of the operator clearing it by hand.
-      await this.revokeDefaultAgentRouteForFailedStart(params.binding);
+      // The durable overlay outlives its provider thread, so a targeted
+      // missing-thread response is the one reliable signal that a Default
+      // Agent assignment is dead. Other start failures are recoverable: a
+      // disconnect, rate limit, or invalid runtime option must not destroy the
+      // operator's persisted route.
+      if (isMissingTurnTargetStartError(error, params.binding)) {
+        await this.revokeDefaultAgentRouteForFailedStart(params.binding);
+      }
       await this.deliver(
         buildErrorIntent({
           id: this.newIntentId("turn-start-failed"),
@@ -21352,6 +21351,26 @@ function truncateText(text: string, limit: number): string {
 function isTurnInProgressStartError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /\b(active turn|turn already|already active|in progress)\b/i.test(message);
+}
+
+function isMissingTurnTargetStartError(
+  error: unknown,
+  binding: MessagingBindingRecord,
+): boolean {
+  const message = (error instanceof Error ? error.message : String(error))
+    .toLowerCase();
+  const threadId = binding.threadId.trim().toLowerCase();
+  if (!threadId || !message.includes(threadId)) {
+    return false;
+  }
+  return (
+    message.includes("thread not found")
+    || message.includes("thread does not exist")
+    || message.includes("thread was deleted")
+    || message.includes("thread has been deleted")
+    || message.includes("deleted thread")
+    || message.includes("unknown thread")
+  );
 }
 
 function isPermanentMessagingTargetFailure(result: MessagingDeliveryResult): boolean {

@@ -435,6 +435,75 @@ describe("ThreadInfoStore", () => {
       expect(store.getSummary(local("t1"))?.title).toBe("Unenriched");
     });
 
+    it("invalidates summaries without losing newer field observations", () => {
+      const store = storeWithRow();
+      const staleListSequence = store.reserveObservationSequence();
+      store.observe({
+        identity: local("t1"),
+        observationSequence: store.reserveObservationSequence(),
+        source: "lifecycle-notification",
+        archived: false,
+        title: "Renamed while listing",
+        titleSource: "explicit",
+      });
+
+      store.invalidateSummaries(local("t1"));
+      store.observe({
+        identity: local("t1"),
+        observationSequence: staleListSequence,
+        source: "provider-list",
+        title: "Old Name",
+        titleSource: "explicit",
+      });
+      store.observeSummary({
+        enriched: true,
+        identity: local("t1"),
+        observationSequence: staleListSequence,
+        summary: rowFor("Old Name"),
+      });
+
+      expect(store.get(local("t1"))).toMatchObject({
+        archived: false,
+        title: "Renamed while listing",
+      });
+      expect(store.getSummary(local("t1"))).toBeUndefined();
+      expect(store.getSummary(local("t1"), { requireEnriched: true }))
+        .toBeUndefined();
+    });
+
+    it("accepts a summary from a listing started after invalidation", () => {
+      const store = storeWithRow();
+      store.invalidateSummaries(local("t1"));
+      const freshListSequence = store.reserveObservationSequence();
+
+      store.observeSummary({
+        enriched: true,
+        identity: local("t1"),
+        observationSequence: freshListSequence,
+        summary: rowFor("Fresh row"),
+      });
+
+      expect(store.getSummary(local("t1"), { requireEnriched: true })?.title)
+        .toBe("Fresh row");
+    });
+
+    it("blocks an in-flight summary for an otherwise unobserved thread", () => {
+      const store = new ThreadInfoStore();
+      const staleListSequence = store.reserveObservationSequence();
+      store.invalidateSummaries(local("t1"));
+
+      store.observeSummary({
+        enriched: true,
+        identity: local("t1"),
+        observationSequence: staleListSequence,
+        summary: rowFor("Stale row"),
+      });
+
+      expect(store.get(local("t1"))).toBeUndefined();
+      expect(store.getSummary(local("t1"))).toBeUndefined();
+      expect(store.size).toBe(0);
+    });
+
     // Thread ids are unique per backend, not across them, and an ACP adapter
     // picks its own.
     it("refuses an ambiguous backend-less lookup", () => {
@@ -504,6 +573,27 @@ describe("ThreadInfoStore", () => {
       expect(
         store.getTitle({ backend: "codex", instanceId: "peer-a::b", threadId: "t1" }),
       ).toBe("Thread on peer-a::b");
+    });
+
+    it("keeps delimiter-bearing remote identities distinct", () => {
+      const store = new ThreadInfoStore();
+      const identities = [
+        { backend: "codex" as const, instanceId: "p", threadId: "x::codex:y" },
+        { backend: "codex" as const, instanceId: "p::codex:x", threadId: "y" },
+      ];
+      identities.forEach((identity, index) => {
+        store.observe({
+          identity,
+          observationSequence: store.reserveObservationSequence(),
+          source: "remote-navigation",
+          title: `Remote ${index + 1}`,
+          titleSource: "explicit",
+        });
+      });
+
+      expect(store.getTitle(identities[0]!)).toBe("Remote 1");
+      expect(store.getTitle(identities[1]!)).toBe("Remote 2");
+      expect(store.size).toBe(2);
     });
 
     it("forgets an entry whose id needed normalizing", () => {

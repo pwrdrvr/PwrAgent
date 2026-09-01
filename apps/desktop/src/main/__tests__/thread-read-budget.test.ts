@@ -388,12 +388,10 @@ describe("archival is an observation, not a cache eviction", () => {
 });
 
 describe("messaging admission reads what this process already knows", () => {
-  // resolveThread falls back to listThreads({ forceRefresh: true }) — a full
-  // paged provider walk — whenever the cached summary comes back empty. The
-  // thread-list cache is emptied by every mutation, so before the information
-  // store answered here, an inbound reply to a thread this window listed
-  // minutes ago paid that walk because something unrelated had invalidated the
-  // cache in between.
+  // Messaging admission deliberately uses the last observation: it only needs
+  // settings and occupancy for one known target, not ownership proof. The
+  // thread-list cache is emptied by every mutation, so the information store
+  // keeps this path from paying a fleet walk after an unrelated invalidation.
   it("admits a reply after an invalidation without listing the provider", async () => {
     const { client, registry } = build();
     await registry.listThreads(NAVIGATION_REFRESH);
@@ -406,15 +404,50 @@ describe("messaging admission reads what this process already knows", () => {
       threadId: "thread-alpha",
     });
     expect(summary?.title).toBe("Rework the quit dialog");
-    await expect(
-      registry.resolveThread({ threadId: "thread-alpha" }),
-    ).resolves.toMatchObject({ id: "thread-alpha" });
 
     expectThreadReadBudget({
       note: "messaging admission for a listed thread whose list cache was invalidated",
       reads: client.counts,
       scenario: "messaging-admission-after-invalidation",
     });
+  });
+
+  it("refreshes the provider when resolving authoritative ownership", async () => {
+    const { client, registry } = build();
+    await registry.listThreads(NAVIGATION_REFRESH);
+    await registry.archiveThread({ backend: "codex", threadId: "thread-beta" });
+    client.setThreads([SECOND_THREAD]);
+    client.resetCounts();
+
+    expect(
+      registry.getCachedThreadSummary({
+        backend: "codex",
+        threadId: "thread-alpha",
+      })?.title,
+    ).toBe("Rework the quit dialog");
+    await expect(
+      registry.resolveThread({ backend: "codex", threadId: "thread-alpha" }),
+    ).resolves.toBeUndefined();
+    expect(client.counts.providerListCalls).toBeGreaterThan(0);
+  });
+
+  it("does not use an expired query cache as ownership proof", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1_000);
+      const { client, registry } = build();
+      await registry.listThreads(NAVIGATION_REFRESH);
+      client.setThreads([SECOND_THREAD]);
+      client.resetCounts();
+      vi.setSystemTime(10 * 60_000);
+
+      await expect(
+        registry.resolveThread({ backend: "codex", threadId: "thread-alpha" }),
+      ).resolves.toBeUndefined();
+      expect(client.counts.providerListCalls).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // The caller does not always know which backend owns the thread an inbound
@@ -450,9 +483,6 @@ describe("what the store serves stays current", () => {
         threadId: "thread-alpha",
       })?.title,
     ).toBe("Renamed after listing");
-    await expect(
-      registry.resolveThread({ threadId: "thread-alpha" }),
-    ).resolves.toMatchObject({ title: "Renamed after listing" });
   });
 
   // resolveThread's provider fallback filters archived:false. Answering from

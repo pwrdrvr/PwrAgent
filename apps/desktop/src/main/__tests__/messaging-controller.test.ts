@@ -4674,7 +4674,9 @@ describe("MessagingController", () => {
         },
       }),
     });
-    harness.startTurn.mockRejectedValue(new Error("thread not found"));
+    harness.startTurn.mockRejectedValue(
+      new Error("thread not found: deleted-thread"),
+    );
     const channel = buildTopicChannel("13123");
     await harness.store.upsertDefaultAgentAssignment({
       id: "default-agent:deleted-target",
@@ -4694,6 +4696,50 @@ describe("MessagingController", () => {
     await expect(
       harness.store.getDefaultAgentAssignment("default-agent:deleted-target"),
     ).resolves.toMatchObject({ revokedAt: expect.any(Number) });
+  });
+
+  it("preserves a default-agent route after a transient start failure", async () => {
+    const navigation = buildNavigationSnapshot();
+    const harness = await createHarness({
+      navigation,
+      getThreadAdmissionState: async (request) => ({
+        thread: {
+          ...navigation.threads[0]!,
+          id: request.threadId,
+          source: request.backend,
+          agent: {
+            name: "Provider Agent",
+            instructionLineCount: 1,
+            instructionsTooLong: false,
+            updatedAt: 1500,
+          },
+        },
+      }),
+    });
+    harness.startTurn.mockRejectedValueOnce(
+      new Error("provider unavailable for thread thread-1"),
+    );
+    const channel = buildTopicChannel("13124");
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:transient-failure",
+      scope: { kind: "conversation", channel },
+      target: { kind: "agent", backend: "codex", threadId: "thread-1" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("retry later", { botMention: true, channel }),
+    );
+
+    await expect(
+      harness.store.getDefaultAgentAssignment("default-agent:transient-failure"),
+    ).resolves.not.toMatchObject({ revokedAt: expect.any(Number) });
+    expect(harness.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Turn could not start",
+      body: "provider unavailable for thread thread-1",
+    });
   });
 
   it("preserves the messaging location for queued Agent-thread turns", async () => {

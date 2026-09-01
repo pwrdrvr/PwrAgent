@@ -9539,6 +9539,11 @@ export class DesktopBackendRegistry {
     return await promise;
   }
 
+  /**
+   * Resolve provider ownership for one thread. A process-lifetime observation
+   * is not proof that the provider still owns it, so only the bounded query
+   * cache may satisfy this read before its forced provider refresh.
+   */
   async resolveThread(params: {
     backend?: AppServerBackendKind;
     threadId: string;
@@ -9547,10 +9552,13 @@ export class DesktopBackendRegistry {
     if (!threadId) {
       return undefined;
     }
-    const cached = this.getCachedThreadSummary({
-      backend: params.backend,
-      threadId,
-    });
+    const cached = this.findThreadListCachedSummary(
+      {
+        backend: params.backend,
+        threadId,
+      },
+      { requireFresh: true },
+    );
     if (cached) {
       return cached;
     }
@@ -9576,6 +9584,9 @@ export class DesktopBackendRegistry {
    * second tier, admission for a thread this process listed minutes ago falls
    * through to `resolveThread`'s forced full listing purely because something
    * unrelated invalidated the cache in between.
+   *
+   * This is last-observed state, not ownership proof. Consumers validating a
+   * provider or federation owner must call `resolveThread`.
    */
   getCachedThreadSummary(params: {
     backend?: AppServerBackendKind;
@@ -9585,20 +9596,37 @@ export class DesktopBackendRegistry {
     if (!threadId) {
       return undefined;
     }
+    return this.findThreadListCachedSummary({
+      ...params,
+      threadId,
+    }) ?? this.threadInfoStore.findLocalSummary({
+      ...(params.backend ? { backend: params.backend } : {}),
+      threadId,
+    });
+  }
+
+  private findThreadListCachedSummary(
+    params: {
+      backend?: AppServerBackendKind;
+      threadId: string;
+    },
+    options?: { requireFresh?: boolean },
+  ): AppServerThreadSummary | undefined {
+    const now = options?.requireFresh === true ? Date.now() : undefined;
     for (const state of this.threadListCache.values()) {
+      if (now !== undefined && (state.expiresAt ?? 0) <= now) {
+        continue;
+      }
       const cached = state.threads?.find(
         (thread) =>
           (!params.backend || thread.source === params.backend)
-          && thread.id === threadId,
+          && thread.id === params.threadId,
       );
       if (cached) {
         return cached;
       }
     }
-    return this.threadInfoStore.findLocalSummary({
-      ...(params.backend ? { backend: params.backend } : {}),
-      threadId,
-    });
+    return undefined;
   }
 
   /**
@@ -21470,8 +21498,8 @@ export class DesktopBackendRegistry {
   }
 
   /**
-   * Rebind a thread's workspace directory, and drop what the store remembers
-   * about that thread.
+   * Rebind a thread's workspace directory, and drop the remembered provider
+   * rows whose directory data is now stale.
    *
    * A remembered row carries the directory set the provider last reported, and
    * `resolveThreadWorkspaceCwd` ranks those ahead of the overlay whenever they
@@ -21492,7 +21520,7 @@ export class DesktopBackendRegistry {
   }): Promise<ThreadOverlayState> {
     const overlay =
       await this.overlayStore.replaceWorkspaceLinkedDirectory(params);
-    this.threadInfoStore.forget({
+    this.threadInfoStore.invalidateSummaries({
       backend: params.backend,
       threadId: params.threadId,
     });

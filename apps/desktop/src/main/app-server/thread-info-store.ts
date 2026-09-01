@@ -1,5 +1,4 @@
 import {
-  buildThreadIdentityKey,
   type AppServerBackendKind,
   type AppServerThreadSummary,
   type AppServerThreadTitleSource,
@@ -124,8 +123,11 @@ const TRACKED_FIELDS: readonly ThreadInfoFieldName[] = [
 ];
 
 function identityKey(identity: ThreadInfoIdentity): string {
-  const threadKey = buildThreadIdentityKey(identity.backend, identity.threadId);
-  return identity.instanceId ? `${identity.instanceId}::${threadKey}` : threadKey;
+  return JSON.stringify([
+    identity.instanceId || null,
+    identity.backend,
+    identity.threadId,
+  ]);
 }
 
 /**
@@ -165,6 +167,10 @@ function isUsableTitle(
  */
 export class ThreadInfoStore {
   private readonly entries = new Map<string, ThreadInfoEntry>();
+  private readonly summaryInvalidations = new Map<
+    string,
+    { identity: ThreadInfoIdentity; observationSequence: number }
+  >();
   private observationSequence = 0;
 
   /**
@@ -344,6 +350,10 @@ export class ThreadInfoStore {
       observationSequence: params.observationSequence,
       value: params.summary,
     };
+    const invalidation = this.summaryInvalidations.get(key);
+    if (params.observationSequence <= (invalidation?.observationSequence ?? 0)) {
+      return;
+    }
     if (
       !entry.summary
       || entry.summary.observationSequence <= params.observationSequence
@@ -497,6 +507,33 @@ export class ThreadInfoStore {
     return match ? this.projectSummary(match, false) : undefined;
   }
 
+  /**
+   * Invalidate provider rows without discarding independently observed fields.
+   *
+   * A workspace rebind makes remembered directories stale, but a title or
+   * archival notification that arrived while a listing was in flight remains
+   * authoritative. The sequence floor also stops that older listing from
+   * repopulating its stale row after this invalidation completes.
+   */
+  invalidateSummaries(identity: ThreadInfoIdentity): void {
+    const threadId = identity.threadId.trim();
+    if (!threadId) {
+      return;
+    }
+    const normalizedIdentity = { ...identity, threadId };
+    const key = identityKey(normalizedIdentity);
+    const invalidatedAtSequence = this.reserveObservationSequence();
+    const entry = this.entries.get(key);
+    if (entry) {
+      entry.summary = undefined;
+      entry.enrichedSummary = undefined;
+    }
+    this.summaryInvalidations.set(key, {
+      identity: normalizedIdentity,
+      observationSequence: invalidatedAtSequence,
+    });
+  }
+
   /** The display title, or `undefined` when none has ever been observed. */
   getTitle(identity: ThreadInfoIdentity): string | undefined {
     return this.get(identity)?.title;
@@ -513,21 +550,27 @@ export class ThreadInfoStore {
     if (!threadId) {
       return;
     }
-    this.entries.delete(identityKey({ ...identity, threadId }));
+    const key = identityKey({ ...identity, threadId });
+    this.entries.delete(key);
+    this.summaryInvalidations.delete(key);
   }
 
   /**
    * Drop every thread belonging to a peer that unmounted.
    *
-   * Matched on the entry's own instance id rather than on a key prefix. The
-   * key joins its parts with `::`, and an instance id is peer-supplied text
-   * that may contain one, so a prefix scan for `peer-a` also claims the
-   * entries of a peer named `peer-a::b`.
+   * Matched on the entry's own instance id rather than parsing the encoded key.
+   * Peer ids are arbitrary strings, so their original values remain the only
+   * authoritative comparison surface.
    */
   forgetInstance(instanceId: string): void {
     for (const [key, entry] of this.entries) {
       if (entry.identity.instanceId === instanceId) {
         this.entries.delete(key);
+      }
+    }
+    for (const [key, invalidation] of this.summaryInvalidations) {
+      if (invalidation.identity.instanceId === instanceId) {
+        this.summaryInvalidations.delete(key);
       }
     }
   }
@@ -539,5 +582,6 @@ export class ThreadInfoStore {
 
   clear(): void {
     this.entries.clear();
+    this.summaryInvalidations.clear();
   }
 }
