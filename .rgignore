@@ -5,8 +5,8 @@
 #
 # Override per-search with: `rg --no-ignore <pattern>` or `rg -u`.
 
-# Decision-artifact directories. See `docs/plans/AGENTS.md` for the
-# don't-edit-historical-plans rule that motivates this exclusion.
+# Historical record directories. See the root `AGENTS.md` for the
+# preservation rule that motivates this exclusion.
 docs/plans/
 docs/brainstorms/
 docs/solutions/
