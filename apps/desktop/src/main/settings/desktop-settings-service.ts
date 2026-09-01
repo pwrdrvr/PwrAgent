@@ -103,6 +103,8 @@ import type {
 import {
   CONFIG_DOMAIN_KEYS,
   normalizeConfigDomains,
+  resolveSpendAlertPolicy,
+  resolveToolOutputAlertPolicy,
   type ConfigDomainMap,
 } from "./config-store/config-domains";
 import { resolveRuntimeMessagingOverride } from "../runtime-flags";
@@ -469,7 +471,9 @@ export class DesktopSettingsService {
       resolveDesktopConfigPath({ argv: this.argv, env: this.env });
     this.now = options.now ?? Date.now;
     this.startupCodexHome = resolveCodexHomeForProfile(
-      this.readConfig().config.models?.codex?.profile,
+      options.configStore
+        ? options.configStore.read("models").codex?.profile
+        : this.readConfig().config.models?.codex?.profile,
       { env: this.env },
     );
     this.codexDiscoveryCoordinator =
@@ -1442,88 +1446,100 @@ export class DesktopSettingsService {
   }
 
   resolveWorktreeStorage(): DesktopWorktreeStorageLocation {
-    return this.resolveWorktrees(this.readConfig().config.worktrees?.storage)
+    const storage = this.options.configStore
+      ? this.options.configStore.read("worktrees").storage
+      : this.readConfig().config.worktrees?.storage;
+    return this.resolveWorktrees(storage)
       .storage.value;
   }
 
   resolveUpdateChannel(): DesktopUpdateChannel {
-    return this.resolveUpdateSelection(this.readConfig().config.updates).channel
+    const updates = this.options.configStore
+      ? this.options.configStore.read("updates")
+      : this.readConfig().config.updates;
+    return this.resolveUpdateSelection(updates).channel
       .value;
   }
 
   resolveUpdateTrain(): DesktopUpdateTrain {
-    return this.resolveUpdateSelection(this.readConfig().config.updates).train
+    const updates = this.options.configStore
+      ? this.options.configStore.read("updates")
+      : this.readConfig().config.updates;
+    return this.resolveUpdateSelection(updates).train
       .value;
   }
 
   resolveDeveloperMode(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.general?.developerMode,
+      this.readGeneralConfig().developerMode,
       this.defaultDeveloperMode(),
     ).value;
   }
 
   resolveHotCpuProfilingEnabled(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.general?.hotCpuProfilingEnabled,
+      this.readGeneralConfig().hotCpuProfilingEnabled,
       false,
     ).value;
   }
 
   resolveHotCpuProfilingCaptureHeapSnapshot(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.general?.hotCpuProfilingCaptureHeapSnapshot,
+      this.readGeneralConfig().hotCpuProfilingCaptureHeapSnapshot,
       false,
     ).value;
   }
 
   resolveHotCpuProfilingStartDelayMs(): DesktopHotCpuProfileStartDelayMs {
     return this.resolveHotCpuProfileStartDelayMs(
-      this.readConfig().config.general?.hotCpuProfilingStartDelayMs,
+      this.readGeneralConfig().hotCpuProfilingStartDelayMs,
     ).value;
   }
 
   resolveHotCpuProfilingTriggerMode(): DesktopHotCpuProfileTriggerMode {
     return this.resolveHotCpuProfileTriggerMode(
-      this.readConfig().config.general?.hotCpuProfilingTriggerMode,
+      this.readGeneralConfig().hotCpuProfilingTriggerMode,
     ).value;
   }
 
   resolveHotCpuProfilingSlowburnThresholdPercent(): number {
     return this.resolveHotCpuSlowburnThresholdPercent(
-      this.readConfig().config.general?.hotCpuProfilingSlowburnThresholdPercent,
+      this.readGeneralConfig().hotCpuProfilingSlowburnThresholdPercent,
     ).value;
   }
 
   resolveHotCpuProfilingHeapSnapshotLimit(): number {
     return this.resolveHotCpuHeapSnapshotLimit(
-      this.readConfig().config.general?.hotCpuProfilingHeapSnapshotLimit,
+      this.readGeneralConfig().hotCpuProfilingHeapSnapshotLimit,
     ).value;
   }
 
   resolveIntegratedTerminalWindowsShell(): DesktopIntegratedTerminalWindowsShell {
+    const windowsShell = this.options.configStore
+      ? this.options.configStore.read("integratedTerminal").windowsShell
+      : this.readConfig().config.integratedTerminal?.windowsShell;
     return this.resolveIntegratedTerminalWindowsShellValue(
-      this.readConfig().config.integratedTerminal?.windowsShell,
+      windowsShell,
     ).value;
   }
 
   resolveConfirmQuitWithInProgressThreads(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.general?.confirmQuitWithInProgressThreads,
+      this.readGeneralConfig().confirmQuitWithInProgressThreads,
       true,
     ).value;
   }
 
   resolvePdfAnalysisEnabled(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.general?.pdfAnalysisEnabled,
+      this.readGeneralConfig().pdfAnalysisEnabled,
       true,
     ).value;
   }
 
   resolveNotificationsEnabled(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.general?.notificationsEnabled,
+      this.readGeneralConfig().notificationsEnabled,
       false,
     ).value;
   }
@@ -1551,6 +1567,11 @@ export class DesktopSettingsService {
   }
 
   resolveToolOutputAlertPolicy(): DesktopToolOutputAlertPolicy {
+    if (this.options.configStore) {
+      return resolveToolOutputAlertPolicy(
+        this.options.configStore.read("general"),
+      );
+    }
     const config = this.readConfig().config.general?.toolOutputAlerts;
     return {
       outputCapHitsEnabled: this.resolveConfigBoolean(
@@ -1581,6 +1602,11 @@ export class DesktopSettingsService {
   }
 
   resolveSpendAlertPolicy(): DesktopSpendAlertPolicy {
+    if (this.options.configStore) {
+      return resolveSpendAlertPolicy(
+        this.options.configStore.read("general"),
+      );
+    }
     const config = this.readConfig().config.general?.spendAlerts;
     return {
       activeTurnSpendEnabled: this.resolveConfigBoolean(
@@ -1608,21 +1634,24 @@ export class DesktopSettingsService {
 
   resolveCodexDefaultModeRequestUserInput(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.experimental?.codexDefaultModeRequestUserInput,
+      this.readExperimentalConfig().codexDefaultModeRequestUserInput,
       false,
     ).value;
   }
 
   resolveManagedReviewEnabled(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.experimental?.managedReview,
+      this.readExperimentalConfig().managedReview,
       false,
     ).value;
   }
 
   resolveDefaultPrAutoDispatchEnabled(): boolean {
+    const git = this.options.configStore
+      ? this.options.configStore.read("git")
+      : this.readConfig().config.git;
     return this.resolveConfigBoolean(
-      this.readConfig().config.git?.defaultPrAutoDispatchEnabled,
+      git?.defaultPrAutoDispatchEnabled,
       DEFAULT_PR_AUTO_DISPATCH_ENABLED_FOR_NEW_THREADS,
     ).value;
   }
@@ -1642,6 +1671,9 @@ export class DesktopSettingsService {
    * gate stays dormant until the wizard PR flips the constant.
    */
   resolveOnboardingCompleted(): boolean {
+    if (this.options.configStore) {
+      return this.options.configStore.read("onboarding").completed;
+    }
     return this.resolveOnboarding(this.readConfig().config.onboarding)
       .completed.value;
   }
@@ -1944,7 +1976,7 @@ export class DesktopSettingsService {
   resolveMattermostServerUrlSync(): string | undefined {
     return (
       readEnvString(this.env, MATTERMOST_SERVER_URL_ENV)
-      ?? this.readConfig().config.messaging?.mattermost?.serverUrl
+      ?? this.readMessagingConfig().mattermost?.serverUrl
       ?? undefined
     );
   }
@@ -1981,7 +2013,7 @@ export class DesktopSettingsService {
   }
 
   resolveFeishuTenantUrlSync(): string | undefined {
-    const config = this.readConfig().config.messaging?.feishu;
+    const config = this.readMessagingConfig().feishu;
     const tenantRegion = this.resolveFeishuTenantRegion(config?.tenantRegion).value;
     const configTenantUrl =
       config?.tenantUrl === FEISHU_DEFAULT_TENANT_URL ||
@@ -2007,7 +2039,9 @@ export class DesktopSettingsService {
   }
 
   resolveCodexCommandPreference(): string | undefined {
-    return this.resolveCodexCommandPreferenceFromConfig(this.readConfig().config);
+    return this.resolveCodexCommandPreferenceFromConfig({
+      models: this.readModelsConfig(),
+    });
   }
 
   /** Codex home pinned when this process started; config changes need restart. */
@@ -2021,7 +2055,6 @@ export class DesktopSettingsService {
   }
 
   async resolveCodexCommand(): Promise<ResolvedCodexCommandCandidate> {
-    const config = this.readConfig().config;
     const managedRuntime = await this.ensureManagedCodexRuntimeIfEnabled("ttl");
     if (managedRuntime) {
       return {
@@ -2031,7 +2064,7 @@ export class DesktopSettingsService {
       };
     }
     return await this.codexDiscoveryCoordinator.resolve(
-      this.resolveCodexCommandPreferenceFromConfig(config),
+      this.resolveCodexCommandPreference(),
     );
   }
 
@@ -2184,16 +2217,16 @@ export class DesktopSettingsService {
   }
 
   resolveProviderModelDefaults() {
-    return this.readConfig().config.models?.providerDefaults ?? {};
+    return this.readModelsConfig().providerDefaults ?? {};
   }
 
   resolveProviderThreadModelMigrations() {
-    return this.readConfig().config.models?.providerThreadMigrations ?? {};
+    return this.readModelsConfig().providerThreadMigrations ?? {};
   }
 
   resolveCodexFastAllowed(): boolean {
     return this.resolveConfigBoolean(
-      this.readConfig().config.models?.codex?.allowFast,
+      this.readModelsConfig().codex?.allowFast,
       true,
     ).value;
   }
@@ -2373,7 +2406,7 @@ export class DesktopSettingsService {
     } = {},
   ): Promise<ManagedCodexRuntime | undefined> {
     return await this.resolveManagedCodexRuntime(
-      this.readConfig().config,
+      { experimental: this.readExperimentalConfig() },
       checkMode,
       options,
     );
@@ -2431,9 +2464,12 @@ export class DesktopSettingsService {
   }
 
   resolveGhCommandPreference(): string | undefined {
+    const configured = this.options.configStore
+      ? this.options.configStore.read("applications").gh?.path
+      : this.readConfig().config.applications?.gh?.path;
     return (
       readEnvString(this.env, GH_COMMAND_ENV)
-      || this.readConfig().config.applications?.gh?.path
+      || configured
       || undefined
     );
   }

@@ -41,6 +41,71 @@ function existsOrEmpty(filePath: string): boolean {
 }
 
 describe("DesktopSettingsService", () => {
+  it("resolves routine runtime settings from narrow store domains", () => {
+    const root = createTempRoot();
+    const configPath = path.join(root, "missing-config.toml");
+    const domains = {
+      applications: { gh: { path: "/store/bin/gh" } },
+      experimental: {
+        codexDefaultModeRequestUserInput: true,
+        managedReview: true,
+      },
+      general: {
+        appearance: {
+          theme: "system",
+          density: "mission-control",
+          sidebarTextSize: "md",
+          transcriptTextSize: "md",
+        },
+        settings: {
+          confirmQuitWithInProgressThreads: false,
+          developerMode: true,
+          notificationsEnabled: true,
+          pdfAnalysisEnabled: false,
+        },
+      },
+      git: { defaultPrAutoDispatchEnabled: false },
+      integratedTerminal: { windowsShell: "pwsh" },
+      messaging: {
+        feishu: { tenantRegion: "lark" },
+        mattermost: { serverUrl: "https://chat.example.com" },
+      },
+      models: {
+        codex: { allowFast: false, path: "/store/bin/codex" },
+        providerDefaults: { codex: { model: "gpt-test" } },
+        providerThreadMigrations: { codex: { fromModel: "old", toModel: "new" } },
+      },
+      onboarding: { completed: false, completedSource: "" },
+      updates: { channel: "prerelease", train: "beta" },
+      worktrees: { storage: "in-repo" },
+    };
+    const read = vi.fn((domain: keyof typeof domains) => domains[domain]);
+    const service = new DesktopSettingsService({
+      configPath,
+      configStore: { read } as never,
+      env: {},
+      secretStore: new MemoryDesktopSecretStore(),
+    });
+
+    expect(service.resolveCodexCommandPreference()).toBe("/store/bin/codex");
+    expect(service.resolveCodexFastAllowed()).toBe(false);
+    expect(service.resolveConfirmQuitWithInProgressThreads()).toBe(false);
+    expect(service.resolveDeveloperMode()).toBe(true);
+    expect(service.resolveGhCommandPreference()).toBe("/store/bin/gh");
+    expect(service.resolveIntegratedTerminalWindowsShell()).toBe("pwsh");
+    expect(service.resolveManagedReviewEnabled()).toBe(true);
+    expect(service.resolveMattermostServerUrlSync()).toBe(
+      "https://chat.example.com",
+    );
+    expect(service.resolveNotificationsEnabled()).toBe(true);
+    expect(service.resolveOnboardingCompleted()).toBe(false);
+    expect(service.resolvePdfAnalysisEnabled()).toBe(false);
+    expect(service.resolveUpdateChannel()).toBe("prerelease");
+    expect(service.resolveUpdateTrain()).toBe("beta");
+    expect(service.resolveWorktreeStorage()).toBe("in-repo");
+    expect(fs.existsSync(configPath)).toBe(false);
+  });
+
   it("forces discovery refresh and invalidates command-setting writes", async () => {
     const root = createTempRoot();
     const configPath = path.join(root, "config.toml");
