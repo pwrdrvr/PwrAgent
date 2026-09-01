@@ -34790,12 +34790,16 @@ export class DesktopBackendRegistry {
         const trimmed = threadName.trim();
         if (trimmed) {
           const key = buildThreadIdentityKey(event.backend, threadId);
+          const titleSource = this.renamedThreadTitleSource(
+            event.backend,
+            threadId,
+          );
           this.threadInfoStore.observe({
             identity: { backend: event.backend, threadId },
             observationSequence: this.reserveThreadInfoObservation(),
             source: "lifecycle-notification",
             title: trimmed,
-            titleSource: "explicit",
+            ...(titleSource ? { titleSource } : {}),
           });
           this.observedThreadNames.set(key, trimmed);
         }
@@ -34818,6 +34822,49 @@ export class DesktopBackendRegistry {
         this.reserveThreadInfoObservation(),
       );
     }
+  }
+
+  /**
+   * Where the name on a `thread/name/updated` came from.
+   *
+   * The notification carries `{ threadId, threadName }` and no provenance, so
+   * this used to record every rename as `explicit`. Three of the four emitters
+   * are not operators: `applyGeneratedThreadTitle` renames with `derived`, its
+   * prompt-derived stopgap renames with `fallback`, and the ACP adapter
+   * forwards an agent's own session summary. For an ACP backend the session
+   * store is PwrAgent's own durable record of which one it was — it is
+   * written before the notification is emitted, and it is what `listThreads`
+   * reports — so read it instead of guessing, and the two readers agree by
+   * construction rather than until the next listing.
+   *
+   * Codex is deliberately left alone. Its provenance is not stored but
+   * inferred from record shape (`getThreadTitleInfo`): a title that differs
+   * from the thread preview reads as `explicit`, which a generated title
+   * always does. The provider therefore reports `explicit` on the very next
+   * listing, and the rename invalidates the list cache, so overriding it here
+   * would buy one listing of accuracy and then flip a status card from
+   * shortened back to full length. Making Codex honest needs durable
+   * PwrAgent-owned provenance that outranks the provider, which is a design
+   * change and not this.
+   *
+   * `fallback` is returned as `undefined` on purpose: the information store
+   * refuses a fallback-sourced title (`isUsableTitle`), so passing it through
+   * would drop a real prompt-derived name and strand the placeholder it
+   * replaced. Recording the title without a source lets the store apply its
+   * own rule and report the name as `derived`, which is what it is.
+   */
+  private renamedThreadTitleSource(
+    backend: AppServerBackendKind,
+    threadId: string,
+  ): AppServerThreadTitleSource | undefined {
+    if (!isAcpBackendId(backend)) {
+      return "explicit";
+    }
+    const titleSource = this.acpBackend.getSession(
+      backend,
+      threadId,
+    )?.titleSource;
+    return titleSource === "fallback" ? undefined : titleSource;
   }
 
   private withObservedThreadName(
