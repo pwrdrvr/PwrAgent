@@ -2246,6 +2246,9 @@ describe("TelegramAdapter", () => {
       authorizedActorIds: ["42"],
       backend: {
         getNavigationSnapshot: async () => buildNavigationSnapshot(),
+        getThreadAdmissionState: async () => ({
+          thread: buildNavigationSnapshot().threads[0],
+        }),
         interruptTurn: restartedInterruptTurn,
         startTurn: async (request: StartTurnRequest) => ({
           backend: request.backend,
@@ -3073,6 +3076,9 @@ async function createControllerHarness(): Promise<{
     authorizedActorIds: ["42"],
     backend: {
       getNavigationSnapshot,
+      getThreadAdmissionState: async () => ({
+        thread: buildNavigationSnapshot().threads[0],
+      }),
       startTurn,
     },
     inputDebounceMs: 0,

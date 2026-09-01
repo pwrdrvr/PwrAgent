@@ -3818,6 +3818,9 @@ function createBackendBridge(): MessagingBackendBridge & {
 
   return {
     getNavigationSnapshot: vi.fn(async () => buildNavigationSnapshot()),
+    getThreadAdmissionState: vi.fn(async () => ({
+      thread: buildNavigationSnapshot().threads[0],
+    })),
     startTurn: vi.fn(async (request: StartTurnRequest) => ({
       backend: request.backend,
       threadId: request.threadId,

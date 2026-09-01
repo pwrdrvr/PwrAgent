@@ -4770,6 +4770,10 @@ function localBackendOperations(): FederationBackendOperations {
       const thread = await getDesktopBackendRegistry().resolveThread(request);
       return thread ? { thread } : {};
     },
+    async resolveThreadAdmissionState(request) {
+      return await new DesktopMessagingBackendBridge()
+        .getThreadAdmissionState(request);
+    },
     async readThread(
       request: AppServerReadThreadRequest,
     ): Promise<AppServerReadThreadResponse> {

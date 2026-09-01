@@ -35,6 +35,7 @@ import type {
   MaterializeDirectoryLaunchpadRequest,
   MaterializeDirectoryLaunchpadResponse,
   NavigationSnapshot,
+  NavigationThreadSummary,
   SetAcpSessionRuntimeOptionRequest,
   SetAcpSessionRuntimeOptionResponse,
   SetThreadExecutionModeRequest,
@@ -54,18 +55,21 @@ import type {
   SubmitServerRequestResponse,
   ThreadAgentMetadata,
   ThreadMessagingBindingTransition,
+  ThreadOverlayState,
   UpdateScheduledThreadActionRequest,
   UpdateDirectoryLaunchpadRequest,
   UpdateDirectoryLaunchpadResponse,
 } from "@pwragent/shared";
 import type { MessagingImagePart } from "@pwragent/messaging-interface";
 import {
+  buildThreadIdentityKey,
   buildFederatedThreadRef,
   isRemoteFederationTarget,
 } from "@pwragent/shared";
 import type {
   MessagingBackendBridge,
   MessagingLastAssistantReply,
+  MessagingThreadAdmissionState,
 } from "./core/messaging-adapter";
 import { MessagingFederatedThreadTargetError } from "./core/messaging-adapter";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
@@ -81,6 +85,7 @@ import {
   resolveFederatedThreadTarget,
 } from "../federation/federated-thread-target-service";
 import { getScheduledThreadActionService } from "../scheduled-actions/scheduled-thread-action-service";
+import { selectStaleDirectoryGitStatusKeys } from "../app-server/directory-git-status-refresh-policy";
 
 export type DesktopMessagingFederationBridge = {
   connectedPeerTargets(): Array<{
@@ -117,6 +122,136 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
 
   getLocalFilePrivateStorageRoots(): readonly string[] {
     return this.registry.getLocalFilePrivateStorageRoots();
+  }
+
+  async getThreadAdmissionState(request: {
+    backend: AppServerBackendKind;
+    federationTarget?: FederationTarget;
+    threadId: string;
+  }): Promise<MessagingThreadAdmissionState> {
+    const remote = this.remoteBackend(request.federationTarget);
+    if (remote) {
+      const target = request.federationTarget;
+      if (!target || !isRemoteFederationTarget(target) || !this.federation) {
+        throw new Error(
+          "Remote messaging admission requires a federation target.",
+        );
+      }
+      let state: MessagingThreadAdmissionState;
+      if (!remote.resolveThreadAdmissionState) {
+        state = await this.readLegacyRemoteThreadAdmissionState(
+          target,
+          request,
+        );
+      } else {
+        try {
+          state = await remote.resolveThreadAdmissionState({
+            backend: request.backend,
+            threadId: request.threadId,
+          });
+        } catch (error) {
+          if (!isFederationMethodNotFoundError(error)) {
+            throw error;
+          }
+          state = await this.readLegacyRemoteThreadAdmissionState(
+            target,
+            request,
+          );
+        }
+      }
+      const instanceLabel = this.federation.connectedPeerTargets().find(
+        (peer) => peer.target.instanceId === target.instanceId,
+      )?.label ?? target.instanceId;
+      return {
+        ...state,
+        ...(state.thread
+          ? {
+              thread: {
+                ...state.thread,
+                federation: {
+                  instanceLabel,
+                  ref: buildFederatedThreadRef({
+                    backend: request.backend,
+                    instanceId: target.instanceId,
+                    threadId: request.threadId,
+                  }),
+                },
+              },
+            }
+          : {}),
+      };
+    }
+
+    const store = getDesktopOverlayStore();
+    const [overlay, cached] = await Promise.all([
+      store.getThreadOverlayState({
+        backend: request.backend,
+        threadId: request.threadId,
+      }),
+      Promise.resolve(this.registry.getCachedThreadSummary({
+        backend: request.backend,
+        threadId: request.threadId,
+      })),
+    ]);
+    const activeTurn = this.registry.getActiveTurnForThread(request);
+    const threadStatus = this.registry.isThreadTurnOccupied(request)
+      ? "active"
+      : "idle";
+    const threadKey = buildThreadIdentityKey(request.backend, request.threadId);
+    const queuedExecutionMode =
+      this.registry.getQueuedExecutionModesSnapshot()[threadKey];
+    const queuedTurns = this.registry.getQueuedTurnsSnapshot()[threadKey];
+    const thread = cached || overlay
+      ? buildAdmissionThreadSummary({
+          overlay,
+          queuedExecutionMode,
+          queuedTurns,
+          summary: cached ?? {
+            id: request.threadId,
+            title: request.threadId,
+            titleSource: "fallback",
+            source: request.backend,
+            linkedDirectories: overlay?.extraLinkedDirectories ?? [],
+          },
+        })
+      : undefined;
+    return {
+      ...(activeTurn ? { activeTurn } : {}),
+      ...(thread ? { thread } : {}),
+      threadStatus,
+    };
+  }
+
+  private async readLegacyRemoteThreadAdmissionState(
+    target: FederationRemoteTarget,
+    request: {
+      backend: AppServerBackendKind;
+      federationTarget?: FederationTarget;
+      threadId: string;
+    },
+  ): Promise<MessagingThreadAdmissionState> {
+    if (!this.federation) {
+      throw new Error("Remote messaging admission requires federation.");
+    }
+    const navigation = await this.federation.remoteNavigationSnapshot(
+      target,
+      {
+        backend: request.backend,
+        federationTarget: target,
+      },
+      {
+        kind: "threads",
+        threads: [{ backend: request.backend, threadId: request.threadId }],
+      },
+    );
+    const thread = navigation.threads.find(
+      (candidate) => candidate.source === request.backend
+        && candidate.id === request.threadId,
+    );
+    return {
+      ...(thread ? { thread } : {}),
+      ...(thread?.threadStatus ? { threadStatus: thread.threadStatus } : {}),
+    };
   }
 
   async getNavigationSnapshot(
@@ -183,9 +318,24 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
     ) {
       this.registry.rememberCompleteNavigationSnapshot(hydratedSnapshot);
     }
-    const directoryStatuses = await this.registry.readDirectoryStatuses(
-      hydratedSnapshot.directories,
-    );
+    const directoryStatusCache =
+      await getDesktopOverlayStore().readDirectoryGitStatusCache();
+    const staleDirectoryKeys = selectStaleDirectoryGitStatusKeys({
+      cache: directoryStatusCache,
+      directories: hydratedSnapshot.directories,
+    });
+    if (
+      staleDirectoryKeys.length > 0
+      && typeof this.registry.refreshDirectoryGitStatuses === "function"
+    ) {
+      void this.registry.refreshDirectoryGitStatuses({
+        directoryKeys: staleDirectoryKeys,
+        force: false,
+      }).catch(() => {
+        // Directory status is optional navigation context. The registry logs
+        // probe failures and publishes successful per-directory updates.
+      });
+    }
 
     // The renderer's local snapshot path (ipc/app-server.ts) hydrates
     // each directory launchpad's Codex environment options. This bridge
@@ -197,7 +347,7 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       hydratedSnapshot.directories.map(async (directory) => {
         const withStatus = {
           ...directory,
-          gitStatus: directoryStatuses[directory.key],
+          gitStatus: directoryStatusCache[directory.key]?.gitStatus,
         };
         if (!withStatus.launchpad) {
           return withStatus;
@@ -962,6 +1112,52 @@ function findLastAssistantMessageReply(
     };
   }
   return undefined;
+}
+
+function buildAdmissionThreadSummary(params: {
+  federation?: NonNullable<NavigationThreadSummary["federation"]>;
+  overlay?: ThreadOverlayState;
+  queuedExecutionMode?: {
+    mode: NonNullable<NavigationThreadSummary["queuedExecutionMode"]>;
+    queuedAt: number;
+  };
+  queuedTurns?: NavigationThreadSummary["queuedTurns"];
+  summary: Omit<NavigationThreadSummary, "inbox"> | NavigationThreadSummary;
+}): NavigationThreadSummary {
+  const { overlay, summary } = params;
+  return {
+    ...summary,
+    inbox: "inbox" in summary ? summary.inbox : { inInbox: false },
+    executionMode: overlay?.executionMode ?? summary.executionMode,
+    fastMode: overlay?.fastMode ?? summary.fastMode,
+    gitBranch: overlay?.gitBranch ?? summary.gitBranch,
+    linkedDirectories:
+      summary.linkedDirectories.length > 0
+        ? summary.linkedDirectories
+        : overlay?.extraLinkedDirectories ?? [],
+    model: overlay?.model ?? summary.model,
+    observedGitBranch:
+      overlay?.observedGitBranch ?? summary.observedGitBranch,
+    reasoningEffort: overlay?.reasoningEffort ?? summary.reasoningEffort,
+    serviceTier: overlay?.serviceTier ?? summary.serviceTier,
+    ...(overlay?.agent ? { agent: overlay.agent } : {}),
+    ...(overlay?.handoffOrigin ? { handoffOrigin: overlay.handoffOrigin } : {}),
+    ...(params.federation ? { federation: params.federation } : {}),
+    ...(params.queuedExecutionMode
+      ? {
+          queuedExecutionMode: params.queuedExecutionMode.mode,
+          queuedExecutionModeAt: params.queuedExecutionMode.queuedAt,
+        }
+      : {}),
+    ...(params.queuedTurns ? { queuedTurns: params.queuedTurns } : {}),
+  };
+}
+
+function isFederationMethodNotFoundError(error: unknown): boolean {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && error.code === "method_not_found";
 }
 
 function findLastAssistantEntryReply(

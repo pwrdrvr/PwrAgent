@@ -7,6 +7,7 @@ import type {
   AppServerThreadReplay,
   CreateScheduledThreadActionRequest,
   NavigationSnapshot,
+  ThreadOverlayState,
 } from "@pwragent/shared";
 import type { DesktopBackendRegistry } from "../app-server/backend-registry";
 import type { FederationBackendOperations } from "../federation/federation-backend-bridge";
@@ -15,7 +16,15 @@ import {
   type DesktopMessagingFederationBridge,
 } from "../messaging/desktop-backend-bridge";
 
-const { reconcileNavigationSnapshot } = vi.hoisted(() => ({
+const {
+  getThreadOverlayState,
+  readDirectoryGitStatusCache,
+  reconcileNavigationSnapshot,
+} = vi.hoisted(() => ({
+  getThreadOverlayState: vi.fn(
+    async (): Promise<ThreadOverlayState | undefined> => undefined,
+  ),
+  readDirectoryGitStatusCache: vi.fn(async () => ({})),
   reconcileNavigationSnapshot: vi.fn(async (params: {
     backend: NavigationSnapshot["backend"];
     fetchedAt: number;
@@ -38,7 +47,11 @@ const { reconcileNavigationSnapshot } = vi.hoisted(() => ({
 }));
 
 vi.mock("../app-server/desktop-overlay-store", () => ({
-  getDesktopOverlayStore: () => ({ reconcileNavigationSnapshot }),
+  getDesktopOverlayStore: () => ({
+    getThreadOverlayState,
+    readDirectoryGitStatusCache,
+    reconcileNavigationSnapshot,
+  }),
 }));
 
 const { hydrateLaunchpadCodexEnvironmentOptions } = vi.hoisted(() => ({
@@ -62,6 +75,245 @@ vi.mock("../app-server/codex-environment-config", () => ({
 }));
 
 describe("DesktopMessagingBackendBridge", () => {
+  it("resolves admission state from one thread cache and overlay only", async () => {
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-1",
+      executionMode: "default",
+      extraLinkedDirectories: [],
+      fastMode: true,
+      handoffOrigin: {
+        sourceBackend: "codex",
+        sourceThreadId: "parent-1",
+        seedMode: "clean",
+        groupingMode: "none",
+        createdAt: 1_000,
+        workspace: {
+          mode: "same",
+          cwd: "/repos/PwrAgnt",
+          git: {
+            kind: "git_local",
+            worktreeCreationAvailable: true,
+          },
+        },
+      },
+      model: "gpt-5.5",
+    });
+    const getCachedThreadSummary = vi.fn(() => ({
+      id: "thread-1",
+      title: "Cached thread",
+      titleSource: "explicit" as const,
+      source: "codex" as const,
+      linkedDirectories: [],
+      executionMode: "full-access" as const,
+      threadStatus: "idle" as const,
+    }));
+    const listThreads = vi.fn(async () => []);
+    const readDirectoryStatuses = vi.fn(async () => ({}));
+    const registry = {
+      getActiveTurnForThread: vi.fn(() => ({
+        backend: "codex",
+        threadId: "thread-1",
+        turnId: "turn-live",
+      })),
+      getCachedThreadSummary,
+      isThreadTurnOccupied: vi.fn(() => true),
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({
+        "codex:thread-1": { mode: "full-access", queuedAt: 2_000 },
+      })),
+      getQueuedTurnsSnapshot: vi.fn(() => ({
+        "codex:thread-1": [
+          {
+            queueEntryId: "queue-1",
+            origin: "messaging",
+            displayText: "queued reply",
+            createdAt: 2_100,
+            position: 0,
+          },
+        ],
+      })),
+      listThreads,
+      readDirectoryStatuses,
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    const state = await bridge.getThreadAdmissionState({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+
+    expect(state).toMatchObject({
+      activeTurn: { turnId: "turn-live" },
+      threadStatus: "active",
+      thread: {
+        executionMode: "default",
+        fastMode: true,
+        handoffOrigin: { sourceThreadId: "parent-1" },
+        model: "gpt-5.5",
+        queuedExecutionMode: "full-access",
+        queuedTurns: [{ queueEntryId: "queue-1" }],
+        title: "Cached thread",
+      },
+    });
+    expect(getCachedThreadSummary).toHaveBeenCalledExactlyOnceWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
+    expect(listThreads).not.toHaveBeenCalled();
+    expect(readDirectoryStatuses).not.toHaveBeenCalled();
+  });
+
+  it("preserves overlay branch metadata when the thread summary cache is cold", async () => {
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-cold",
+      extraLinkedDirectories: [
+        {
+          id: "directory:/repos/PwrAgnt",
+          kind: "local",
+          label: "PwrAgnt",
+          path: "/repos/PwrAgnt",
+        },
+      ],
+      gitBranch: "feature/cache-owner",
+      observedGitBranch: "feature/cache-owner-observed",
+    });
+    const registry = {
+      getActiveTurnForThread: vi.fn(() => undefined),
+      getCachedThreadSummary: vi.fn(() => undefined),
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      isThreadTurnOccupied: vi.fn(() => false),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    await expect(bridge.getThreadAdmissionState({
+      backend: "codex",
+      threadId: "thread-cold",
+    })).resolves.toMatchObject({
+      thread: {
+        gitBranch: "feature/cache-owner",
+        observedGitBranch: "feature/cache-owner-observed",
+        linkedDirectories: [
+          expect.objectContaining({ path: "/repos/PwrAgnt" }),
+        ],
+      },
+      threadStatus: "idle",
+    });
+  });
+
+  it("serves cached directory status without awaiting a fleet refresh", async () => {
+    const cachedGitStatus = {
+      currentBranch: "main",
+      syncState: "in-sync" as const,
+    };
+    reconcileNavigationSnapshot.mockResolvedValueOnce({
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [],
+      inboxThreadKeys: [],
+      directories: [
+        {
+          key: "directory:/repos/PwrAgnt",
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/repos/PwrAgnt",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
+    readDirectoryGitStatusCache.mockResolvedValueOnce({
+      "directory:/repos/PwrAgnt": {
+        directoryKey: "directory:/repos/PwrAgnt",
+        directoryPath: "/repos/PwrAgnt",
+        fetchedAt: Date.now(),
+        gitStatus: cachedGitStatus,
+      },
+    });
+    const readDirectoryStatuses = vi.fn(async () => ({}));
+    const refreshDirectoryGitStatuses = vi.fn(async () => ({ scheduledCount: 0 }));
+    const registry = {
+      canonicalizeNavigationThreadPullRequests: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      hydrateThreadGitWorkingStates: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
+      listThreads: vi.fn(async () => []),
+      readDirectoryStatuses,
+      refreshDirectoryGitStatuses,
+      rememberCompleteNavigationSnapshot: vi.fn(),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    const snapshot = await bridge.getNavigationSnapshot({});
+
+    expect(snapshot.directories[0]?.gitStatus).toEqual(cachedGitStatus);
+    expect(readDirectoryStatuses).not.toHaveBeenCalled();
+  });
+
+  it("returns a broad snapshot before its stale directory batch finishes", async () => {
+    reconcileNavigationSnapshot.mockResolvedValueOnce({
+      backend: "all",
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [],
+      inboxThreadKeys: [],
+      directories: [
+        {
+          key: "directory:/repos/PwrAgnt",
+          kind: "directory",
+          label: "PwrAgnt",
+          path: "/repos/PwrAgnt",
+          threadKeys: [],
+          needsAttentionCount: 0,
+        },
+      ],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
+    readDirectoryGitStatusCache.mockResolvedValueOnce({});
+    let finishRefresh: (() => void) | undefined;
+    const refreshDirectoryGitStatuses = vi.fn(
+      async () => await new Promise<{ scheduledCount: number }>((resolve) => {
+        finishRefresh = () => resolve({ scheduledCount: 1 });
+      }),
+    );
+    const registry = {
+      canonicalizeNavigationThreadPullRequests: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      hydrateThreadGitWorkingStates: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
+      listThreads: vi.fn(async () => []),
+      refreshDirectoryGitStatuses,
+      rememberCompleteNavigationSnapshot: vi.fn(),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    await expect(bridge.getNavigationSnapshot({})).resolves.toMatchObject({
+      directories: [{ key: "directory:/repos/PwrAgnt" }],
+    });
+    expect(refreshDirectoryGitStatuses).toHaveBeenCalledExactlyOnceWith({
+      directoryKeys: ["directory:/repos/PwrAgnt"],
+      force: false,
+    });
+    finishRefresh?.();
+  });
+
   it("hydrates review working state before the messenger chooses a project", async () => {
     const pwrAgentWorktree = "/worktrees/PwrAgnt";
     const listedThread: AppServerThreadSummary = {
@@ -748,6 +1000,17 @@ describe("DesktopMessagingBackendBridge", () => {
       },
     };
     const remoteNavigationSnapshot = vi.fn(async () => remoteNavigation);
+    const resolveThreadAdmissionState = vi.fn(async () => ({
+      thread: {
+        id: "thread-1",
+        title: "Remote thread",
+        titleSource: "explicit" as const,
+        source: "codex" as const,
+        linkedDirectories: [],
+        inbox: { inInbox: false },
+      },
+      threadStatus: "idle" as const,
+    }));
     const listBackends = vi.fn(async () => ({
       fetchedAt: 2_000,
       backends: [
@@ -787,6 +1050,7 @@ describe("DesktopMessagingBackendBridge", () => {
         createScheduledThreadAction,
         listBackends,
         listScheduledThreadActions,
+        resolveThreadAdmissionState,
         startTurn,
       } as unknown as FederationBackendOperations),
       remoteNavigationSnapshot,
@@ -813,6 +1077,25 @@ describe("DesktopMessagingBackendBridge", () => {
         federationTarget: target,
       }),
     ).resolves.toBe(remoteNavigation);
+    await expect(
+      bridge.getThreadAdmissionState({
+        backend: "codex",
+        federationTarget: target,
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      thread: {
+        id: "thread-1",
+        federation: {
+          instanceLabel: "client_one",
+          ref: {
+            backend: "codex",
+            threadId: "thread-1",
+            target: { scope: "remote", instanceId: "client_one" },
+          },
+        },
+      },
+    });
     await expect(
       bridge.listBackends({
         includeUnavailable: true,
@@ -848,6 +1131,10 @@ describe("DesktopMessagingBackendBridge", () => {
       backend: "all",
       federationTarget: target,
     });
+    expect(resolveThreadAdmissionState).toHaveBeenCalledWith({
+      backend: "codex",
+      threadId: "thread-1",
+    });
     expect(listBackends).toHaveBeenCalledWith({
       includeUnavailable: true,
     });
@@ -864,6 +1151,83 @@ describe("DesktopMessagingBackendBridge", () => {
       backend: "codex",
       threadId: "thread-1",
     });
+  });
+
+  it("falls back to remote navigation when an older peer lacks targeted admission", async () => {
+    const methodNotFound = Object.assign(
+      new Error("Unknown federation method: resolve_thread_admission_state"),
+      { code: "method_not_found" },
+    );
+    const resolveThreadAdmissionState = vi.fn(async () => {
+      throw methodNotFound;
+    });
+    const remoteNavigation: NavigationSnapshot = {
+      backend: "codex",
+      fetchedAt: 2_000,
+      unchanged: false,
+      threads: [
+        {
+          id: "thread-1",
+          title: "Remote thread",
+          titleSource: "explicit",
+          source: "codex",
+          threadStatus: "active",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+      ],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const remoteNavigationSnapshot = vi.fn(async () => remoteNavigation);
+    const target = { scope: "remote" as const, instanceId: "legacy_peer" };
+    const federation = {
+      connectedPeerTargets: () => [
+        {
+          capabilities: ["messaging_route"],
+          label: "Legacy Peer",
+          target,
+        },
+      ],
+      onRemoteBackendEvent: () => () => undefined,
+      remoteBackend: () => ({
+        resolveThreadAdmissionState,
+      } as unknown as FederationBackendOperations),
+      remoteNavigationSnapshot,
+    } as unknown as DesktopMessagingFederationBridge;
+    const bridge = new DesktopMessagingBackendBridge(
+      {} as DesktopBackendRegistry,
+      federation,
+    );
+
+    await expect(
+      bridge.getThreadAdmissionState({
+        backend: "codex",
+        federationTarget: target,
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      thread: {
+        id: "thread-1",
+        federation: { instanceLabel: "Legacy Peer" },
+      },
+      threadStatus: "active",
+    });
+    expect(remoteNavigationSnapshot).toHaveBeenCalledWith(
+      target,
+      {
+        backend: "codex",
+        federationTarget: target,
+      },
+      {
+        kind: "threads",
+        threads: [{ backend: "codex", threadId: "thread-1" }],
+      },
+    );
   });
 
   it("subscribes messaging controllers to local and remote backend events", async () => {

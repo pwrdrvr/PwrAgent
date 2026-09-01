@@ -1328,6 +1328,9 @@ async function createControllerHarness(options: {
     authorizedActorIds: [DISCORD_USER_ID],
     backend: {
       getNavigationSnapshot,
+      getThreadAdmissionState: async () => ({
+        thread: (options.navigationSnapshot ?? buildNavigationSnapshot()).threads[0],
+      }),
       startTurn,
     },
     inputDebounceMs: 0,

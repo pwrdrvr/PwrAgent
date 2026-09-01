@@ -7,6 +7,7 @@ import type {
   AppServerThreadActivityEntry,
   AppServerThreadImagePart,
   AppServerThreadReviewEntry,
+  AppServerThreadStatus,
   AppServerThreadSummary,
   CodexEnvironmentAction,
   CodexEnvironmentExecutionTarget,
@@ -261,6 +262,20 @@ export type ThreadQueuedTurnSummary = {
   createdAt: number;
   /** 0-based dispatch position within the thread's queue. */
   position: number;
+};
+
+/**
+ * One-thread projection used by latency-sensitive turn admission. Producers
+ * must not populate it by building a navigation-wide snapshot.
+ */
+export type ThreadAdmissionState = {
+  activeTurn?: {
+    backend: AppServerBackendKind;
+    threadId: ThreadIdentifier;
+    turnId: string;
+  };
+  thread?: NavigationThreadSummary;
+  threadStatus?: AppServerThreadStatus;
 };
 
 export type ThreadSubAgentStatus =

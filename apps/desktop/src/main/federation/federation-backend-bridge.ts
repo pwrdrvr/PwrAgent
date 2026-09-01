@@ -1,6 +1,7 @@
 import type {
   AnalyzeThreadToolHistoryRequest,
   AnalyzeThreadToolHistoryResponse,
+  AppServerBackendKind,
   AppServerListSkillsRequest,
   AppServerListSkillsResponse,
   AppServerListThreadsRequest,
@@ -139,6 +140,7 @@ import type {
   SubmitServerRequestResponse,
   TrustCodexProjectRequest,
   TrustCodexProjectResponse,
+  ThreadAdmissionState,
   UpdateSubthreadOrderRequest,
   UpdateSubthreadOrderResponse,
   UpdateScheduledThreadActionRequest,
@@ -350,6 +352,7 @@ export const FEDERATION_BACKEND_METHODS = {
   getNavigationSnapshot: "backend.getNavigationSnapshot",
   listThreads: "backend.listThreads",
   resolveThread: "backend.resolveThread",
+  resolveThreadAdmissionState: "backend.resolveThreadAdmissionState",
   readThread: "backend.readThread",
   analyzeThreadToolHistory: "backend.analyzeThreadToolHistory",
   readTranscriptImage: "backend.readTranscriptImage",
@@ -445,6 +448,7 @@ export const FEDERATION_BACKEND_METHOD_CAPABILITIES: Record<
   [FEDERATION_BACKEND_METHODS.getNavigationSnapshot]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.listThreads]: "thread_navigation",
   [FEDERATION_BACKEND_METHODS.resolveThread]: "thread_navigation",
+  [FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState]: "messaging_route",
   [FEDERATION_BACKEND_METHODS.readThread]: "thread_detail",
   /* Reads the thread's own transcript history; same data class as reading it. */
   [FEDERATION_BACKEND_METHODS.analyzeThreadToolHistory]: "thread_detail",
@@ -552,6 +556,10 @@ export type FederationBackendOperations = {
     request?: AppServerListThreadsRequest,
   ): Promise<AppServerListThreadsResponse>;
   resolveThread(request: ResolveThreadRequest): Promise<ResolveThreadResponse>;
+  resolveThreadAdmissionState?(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadAdmissionState>;
   readThread(
     request: AppServerReadThreadRequest,
   ): Promise<AppServerReadThreadResponse>;
@@ -812,6 +820,20 @@ export function registerFederationBackendHandlers(params: {
       await params.backend.resolveThread(
         envelope.params as ResolveThreadRequest,
       ),
+  );
+  params.router.registerHandler(
+    FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState,
+    async (envelope) => {
+      if (!params.backend.resolveThreadAdmissionState) {
+        throw new Error("Targeted thread admission state is unavailable.");
+      }
+      return await params.backend.resolveThreadAdmissionState(
+        envelope.params as {
+          backend: AppServerBackendKind;
+          threadId: string;
+        },
+      );
+    },
   );
   params.router.registerHandler(
     FEDERATION_BACKEND_METHODS.analyzeThreadToolHistory,
@@ -1490,6 +1512,16 @@ export class FederationRemoteBackendClient implements FederationBackendOperation
   ): Promise<ResolveThreadResponse> {
     return await this.rpc.request<ResolveThreadResponse>({
       method: FEDERATION_BACKEND_METHODS.resolveThread,
+      params: request,
+    });
+  }
+
+  async resolveThreadAdmissionState(request: {
+    backend: AppServerBackendKind;
+    threadId: string;
+  }): Promise<ThreadAdmissionState> {
+    return await this.rpc.request<ThreadAdmissionState>({
+      method: FEDERATION_BACKEND_METHODS.resolveThreadAdmissionState,
       params: request,
     });
   }

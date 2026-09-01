@@ -156,6 +156,7 @@ import type {
   MessagingAdapter,
   MessagingBackendBridge,
   MessagingLastAssistantReply,
+  MessagingThreadAdmissionState,
 } from "./messaging-adapter.js";
 import { MessagingFederatedThreadTargetError } from "./messaging-adapter.js";
 import type { MessagingActivityLog } from "../messaging-activity-log.js";
@@ -518,6 +519,24 @@ function findThreadForBinding(
       thread.id === binding.threadId &&
       federationRefsMatch(thread.federation?.ref, binding.federatedThread),
   );
+}
+
+function navigationSnapshotForAdmissionState(
+  binding: MessagingBindingRecord,
+  state: MessagingThreadAdmissionState,
+): NavigationSnapshot {
+  return {
+    backend: binding.backend,
+    directories: [],
+    fetchedAt: Date.now(),
+    inboxThreadKeys: [],
+    launchpadDefaults: {
+      backend: binding.backend,
+      executionMode: "default",
+    },
+    threads: state.thread ? [state.thread] : [],
+    unchanged: false,
+  };
 }
 
 function federationRefsMatch(
@@ -2007,12 +2026,22 @@ export class MessagingController {
     if (renderableBindings.length === 0) {
       return;
     }
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
-      ...(federationTarget ? { federationTarget } : {}),
-    });
+    const navigationByThreadKey = new Map<string, NavigationSnapshot>();
     for (const binding of renderableBindings) {
       try {
+        const threadKey = threadKeyForBinding(binding);
+        let navigation = navigationByThreadKey.get(threadKey);
+        if (!navigation) {
+          navigation = navigationSnapshotForAdmissionState(
+            binding,
+            await this.options.backend.getThreadAdmissionState({
+              backend: binding.backend,
+              federationTarget: federationTargetForBinding(binding),
+              threadId: binding.threadId,
+            }),
+          );
+          navigationByThreadKey.set(threadKey, navigation);
+        }
         await this.renderBindingStatus(binding, undefined, navigation);
       } catch (error) {
         this.logger.debug?.("messaging backend status refresh failed", {
@@ -3583,10 +3612,35 @@ export class MessagingController {
     const consumedSkillBinding = currentBinding.pendingSkillSelection
       ? bindingWithoutPendingSkillSelection(currentBinding)
       : currentBinding;
+    let admissionState: MessagingThreadAdmissionState | undefined;
+    try {
+      admissionState = await this.options.backend.getThreadAdmissionState({
+        backend: consumedSkillBinding.backend,
+        federationTarget: federationTargetForBinding(consumedSkillBinding),
+        threadId: consumedSkillBinding.threadId,
+      });
+    } catch (error) {
+      await this.deliver(
+        buildErrorIntent({
+          id: this.newIntentId("turn-start-failed"),
+          createdAt: this.now(),
+          title: "Turn could not start",
+          body: error instanceof Error ? error.message : String(error),
+          recoverable: true,
+        }),
+        consumedSkillBinding,
+        bundle.events[0],
+      );
+      return;
+    }
 
     if (
       !isDefaultAgentRouteBinding(currentBinding)
-      && await this.isTurnOccupied(currentBinding, bundle.threadKey)
+      && await this.isTurnOccupied(
+        currentBinding,
+        bundle.threadKey,
+        admissionState,
+      )
     ) {
       await this.queuePreparedInput({
         binding: consumedSkillBinding,
@@ -3611,6 +3665,7 @@ export class MessagingController {
       preview: preparedWithSkill.preview,
       threadKey: bundle.threadKey,
       event: bundle.events[0],
+      admissionState,
     });
     if (startResult !== "failed" && currentBinding.pendingSkillSelection) {
       const updatedBinding = await this.clearPendingSkillSelection(currentBinding);
@@ -3976,6 +4031,7 @@ export class MessagingController {
   }
 
   private async startPreparedInput(params: {
+    admissionState?: MessagingThreadAdmissionState;
     binding: MessagingBindingRecord;
     event?: MessagingInboundEvent;
     input: AppServerTurnInputItem[];
@@ -3995,9 +4051,14 @@ export class MessagingController {
     );
 
     try {
-      const navigation = params.navigation ?? await this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      });
+      const admissionState = params.admissionState
+        ?? await this.options.backend.getThreadAdmissionState({
+          backend: params.binding.backend,
+          federationTarget: federationTargetForBinding(params.binding),
+          threadId: params.binding.threadId,
+        });
+      const navigation = params.navigation
+        ?? navigationSnapshotForAdmissionState(params.binding, admissionState);
       startingOrigin = await this.buildAgentMessagingOrigin({
         binding: params.binding,
         event: params.event,
@@ -4162,21 +4223,27 @@ export class MessagingController {
   private async isTurnOccupied(
     binding: MessagingBindingRecord,
     threadKey: string,
+    admissionState: MessagingThreadAdmissionState,
   ): Promise<boolean> {
     if (this.turnAdmission.isStarting(threadKey)) {
       return true;
     }
 
-    const activeTurn = await this.reconcileActiveTurnFromBackendStatus(
+    const rememberedTurn = await this.reconcileActiveTurnFromThreadStatus(
       binding,
       "turn_admission",
+      admissionState.threadStatus,
     );
-    if (activeTurn && ["working", "waiting"].includes(activeTurn.status)) {
+    if (
+      rememberedTurn
+      && ["working", "waiting"].includes(rememberedTurn.status)
+    ) {
       return true;
     }
-
-    const threadStatus = await this.readBackendThreadStatus(binding);
-    return threadStatus === "active";
+    return Boolean(
+      admissionState.activeTurn
+      || admissionState.threadStatus === "active",
+    );
   }
 
   private async adoptStartedTurn(params: {
@@ -4409,7 +4476,12 @@ export class MessagingController {
 
   private async startNextQueuedTurn(binding: MessagingBindingRecord): Promise<void> {
     const threadKey = this.threadKeyForBinding(binding);
-    if (await this.isTurnOccupied(binding, threadKey)) {
+    const admissionState = await this.options.backend.getThreadAdmissionState({
+      backend: binding.backend,
+      federationTarget: federationTargetForBinding(binding),
+      threadId: binding.threadId,
+    });
+    if (await this.isTurnOccupied(binding, threadKey, admissionState)) {
       return;
     }
 
@@ -4427,6 +4499,7 @@ export class MessagingController {
       preview: entry.preview,
       queueOnConcurrentStart: false,
       threadKey,
+      admissionState,
     });
     if (startResult !== "started") {
       return;
@@ -5566,14 +5639,18 @@ export class MessagingController {
     if (renderableBindings.length === 0) {
       return;
     }
-    // Fetch the navigation snapshot once and reuse it across every binding's
-    // render. Without this, each renderBindingStatus call would issue its own
-    // getNavigationSnapshot — N bindings on the same thread = N redundant
-    // backend calls.
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
+    // Resolve one targeted thread projection and reuse it across every
+    // binding. Thread-state bus fan-out must not rebuild unrelated navigation,
+    // Git, PR, launchpad, or federation state just to repaint a status card.
+    const admissionState = await this.options.backend.getThreadAdmissionState({
+      backend,
       ...(federationTarget ? { federationTarget } : {}),
+      threadId,
     });
+    const navigation = navigationSnapshotForAdmissionState(
+      renderableBindings[0]!,
+      admissionState,
+    );
     for (const binding of renderableBindings) {
       try {
         await this.renderBindingStatus(binding, undefined, navigation);
@@ -5593,7 +5670,7 @@ export class MessagingController {
    * Post a "Permissions queued" audit message in every active binding for
    * the thread, mirroring the desktop transcript audit entry. The
    * registry's `thread/executionMode/queued` notification is the trigger;
-   * we resolve from/to mode labels off the navigation snapshot at the
+   * we resolve from/to mode labels from the targeted thread projection at the
    * time the notification fires.
    */
   private async handleExecutionModeQueued(
@@ -5614,13 +5691,12 @@ export class MessagingController {
       return;
     }
 
-    const navigation = await this.options.backend.getNavigationSnapshot({
-      backend: "all",
+    const admissionState = await this.options.backend.getThreadAdmissionState({
+      backend,
+      federationTarget: federationTargetForBinding(bindings[0]!),
+      threadId: params.threadId,
     });
-    const thread = navigation.threads.find(
-      (candidate) =>
-        candidate.source === backend && candidate.id === params.threadId,
-    );
+    const thread = admissionState?.thread;
     const fromExecutionMode = thread?.executionMode ?? "default";
     const toExecutionMode = params.queuedExecutionMode;
 
@@ -13983,7 +14059,16 @@ export class MessagingController {
     ) {
       return binding;
     }
-    return await this.renderBindingStatus(binding, event, navigation);
+    const targetedNavigation = navigation
+      ?? navigationSnapshotForAdmissionState(
+        binding,
+        await this.options.backend.getThreadAdmissionState({
+          backend: binding.backend,
+          federationTarget: federationTargetForBinding(binding),
+          threadId: binding.threadId,
+        }),
+      );
+    return await this.renderBindingStatus(binding, event, targetedNavigation);
   }
 
   private async navigationSnapshotWithThreadNameFromEvent(
@@ -14379,6 +14464,26 @@ export class MessagingController {
     }
 
     const threadStatus = await this.readBackendThreadStatus(binding);
+    return await this.reconcileActiveTurnFromThreadStatus(
+      binding,
+      reason,
+      threadStatus,
+    );
+  }
+
+  private async reconcileActiveTurnFromThreadStatus(
+    binding: MessagingBindingRecord,
+    reason: string,
+    threadStatus: string | undefined,
+  ): Promise<MessagingActiveTurnSummary | undefined> {
+    const activeTurn = this.getActiveTurn(binding);
+    if (
+      !activeTurn ||
+      !["working", "waiting"].includes(activeTurn.status)
+    ) {
+      return activeTurn;
+    }
+
     if (threadStatus !== "idle") {
       return activeTurn;
     }
