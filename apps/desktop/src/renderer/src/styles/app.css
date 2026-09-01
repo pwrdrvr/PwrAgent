@@ -8215,40 +8215,28 @@ textarea,
    lane (`.sidebar__scroll-region` + `.sidebar-list--dense`).
 
    Before this wrapper the rows were direct nav children, so the nav's
-   own `overflow: hidden` CLIPPED them: at the 640px
-   `MAIN_WINDOW_MIN_HEIGHT` (window.ts) the list is 868px against a
-   523px lane with the Plugins / AI Providers / Messaging groups
-   expanded, and its tail — Experimental, Troubleshooting, About —
-   painted below the clip with no scrollbar and no wheel scrolling,
-   out of a pointer's reach. (A clipped box still scrolls
-   programmatically, so tabbing into one of those rows dragged the
-   whole nav up behind the stoplights with no way to put it back.
-   That was the only thing that moved the list.) Collapsing every
-   group fits, at exactly 523px — which is the margin this is one
-   added section away from losing again.
-
-   `flex: 1` + `min-height: 0` lets the lane shrink below its content
-   inside the nav's flex column; the `gap` re-establishes the 2px row
-   rhythm the rows used to inherit from the nav.
+   own `overflow: hidden` CLIPPED them instead of scrolling: at the
+   640px `MAIN_WINDOW_MIN_HEIGHT` (window.ts) the tail of an expanded
+   list — Experimental, Troubleshooting, About — painted below the clip
+   with no scrollbar and no wheel scrolling, out of a pointer's reach.
+   Collapsing every group fits, but with no margin to spare.
 
    The bleed-then-re-inset is `.sidebar-list--dense`'s move, at the
-   same 8px the nav already runs in — the whole point of that inset is
-   that this list reads at the thread list's density, so the lane
-   holds it rather than picking its own. The bleed buys exactly one
-   thing: the reserved gutter lands between the padding edge and the
-   nav wall, parking the thumb AT the wall instead of 8px inside it.
-   Keep the two in lockstep — a bleed that stops matching the nav's
-   padding moves every row sideways.
+   same inset the nav already runs in (that inset is the point — it is
+   what makes this list read at the thread list's density). The bleed
+   buys exactly one thing: the reserved gutter lands between the
+   padding edge and the nav wall, so the thumb parks AT the wall
+   instead of inside it. Keep the two in lockstep — a bleed that stops
+   matching the nav's padding moves every row sideways.
+   `theme-contract.test.tsx` derives both from `.settings-nav` and
+   pins them, along with `flex`, `min-height` and `gap`.
 
    `scrollbar-gutter: stable` reserves the space permanently so no row
-   jumps sideways the moment the bar appears — which it does on
-   Windows and Linux, where classic scrollbars take layout width (and
-   on macOS under "Show scroll bars: Always"). Under an overlay
-   scrollbar the gutter is zero and every row's box is unchanged from
-   before this rule existed; where the bar does take width, a ~11px
-   thin classic one leaves the row box 128px instead of 139px, which
-   at this density costs no new wrapping and no new truncation —
-   "Thread Management" wraps either way.
+   jumps sideways the moment the bar appears — which it does on Windows
+   and Linux, where classic scrollbars take layout width (and on macOS
+   under "Show scroll bars: Always"). Under an overlay scrollbar the
+   gutter is zero and every row's box is unchanged from before this
+   rule existed.
 
    Do NOT add a `::-webkit-scrollbar` block here — see
    `.sidebar-list--dense` for why the universal `scrollbar-width: thin`

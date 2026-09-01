@@ -782,7 +782,10 @@ describe("SettingsScreen", () => {
     // row inside the lane, and the masthead + Exit deliberately outside
     // it so they stay put while the list scrolls under them.
     const { container } = render(
-      <SettingsScreen settings={createSettingsState()} onClose={() => undefined} />,
+      <SettingsScreen
+        settings={createSettingsState()}
+        onClose={() => undefined}
+      />,
     );
 
     const nav = container.querySelector(".settings-nav");
@@ -790,10 +793,21 @@ describe("SettingsScreen", () => {
     expect(nav).not.toBeNull();
     expect(lane).not.toBeNull();
 
-    const rows = [...container.querySelectorAll(".settings-nav__row")];
-    expect(rows.length).toBeGreaterThan(0);
-    for (const row of rows) {
-      expect(lane?.contains(row)).toBe(true);
+    // Every scrolling part, not just the rows: the collapsible sublists and
+    // the divider come out of the same map, and a refactor that hoisted the
+    // sublists out — to stop the scroller clipping them, say — would leave a
+    // rows-only assertion green while group children stopped scrolling with
+    // their parent row.
+    for (const selector of [
+      ".settings-nav__row",
+      ".settings-nav__sublist",
+      ".settings-nav__divider",
+    ]) {
+      const members = [...container.querySelectorAll(selector)];
+      expect(members.length).toBeGreaterThan(0);
+      for (const member of members) {
+        expect(lane?.contains(member)).toBe(true);
+      }
     }
 
     // The pinned chrome is a sibling of the lane, not a passenger in it.
