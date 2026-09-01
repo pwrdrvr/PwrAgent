@@ -4,7 +4,11 @@ import type {
   AgentSessionStoppedEvent,
   AgentSessionTitleChangedEvent,
 } from "@slack/types";
-import { WebClient } from "@slack/web-api";
+import {
+  WebClient,
+  type AgentsSessionsRenameResponse,
+  type AgentsSessionsSetStatusResponse,
+} from "@slack/web-api";
 import type {
   MessagingActorIdentity,
   MessagingAdapterState,
@@ -4038,14 +4042,17 @@ export function createSlackApi(botToken: string): SlackApi {
       });
     },
     async setAgentSessionStatus(params) {
-      const response = await client.agents.sessions.setStatus({
-        channel_id: params.channelId,
-        status: params.status,
-        thread_ts: params.threadTs,
-        ...(params.initiatorUserId
-          ? { initiator_user_id: params.initiatorUserId }
-          : {}),
-      });
+      const response = await client.apiCall(
+        "agents.sessions.setStatus",
+        {
+          channel_id: params.channelId,
+          status: params.status,
+          thread_ts: params.threadTs,
+          ...(params.initiatorUserId
+            ? { initiator_user_id: params.initiatorUserId }
+            : {}),
+        },
+      ) as AgentsSessionsSetStatusResponse;
       return {
         ...(normalizeSlackAgentSessionStatus(response.status ?? response.agent_status)
           ? {
@@ -4063,11 +4070,14 @@ export function createSlackApi(botToken: string): SlackApi {
       };
     },
     async renameAgentSession(params) {
-      const response = await client.agents.sessions.rename({
-        channel_id: params.channelId,
-        thread_ts: params.threadTs,
-        title: params.title,
-      });
+      const response = await client.apiCall(
+        "agents.sessions.rename",
+        {
+          channel_id: params.channelId,
+          thread_ts: params.threadTs,
+          title: params.title,
+        },
+      ) as AgentsSessionsRenameResponse;
       return {
         ...(normalizeSlackAgentSessionTitle(response.title)
           ? { title: normalizeSlackAgentSessionTitle(response.title) }

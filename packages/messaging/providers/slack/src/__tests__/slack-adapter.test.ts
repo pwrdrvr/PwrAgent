@@ -1,7 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  WebClient,
+  type AgentsSessionsRenameResponse,
+  type AgentsSessionsSetStatusResponse,
+} from "@slack/web-api";
+import {
   SlackAdapter,
   SlackSocketModeConnection,
+  createSlackApi,
   type SlackApi,
   type SlackStreamChunk,
   type SlackSocketClient,
@@ -15,6 +21,61 @@ import type {
   MessagingRejectedInboundEvent,
   MessagingSurfaceIntent,
 } from "@pwragent/messaging-interface";
+
+describe("createSlackApi", () => {
+  it("calls Agent Session methods through the generic Web API surface", async () => {
+    const apiCall = vi.spyOn(WebClient.prototype, "apiCall")
+      .mockResolvedValueOnce({
+        ok: true,
+        status: "processing",
+        title: "Existing title",
+      } as AgentsSessionsSetStatusResponse)
+      .mockResolvedValueOnce({
+        ok: true,
+        title: "Renamed session",
+      } as AgentsSessionsRenameResponse);
+    try {
+      const api = createSlackApi("xoxb-test");
+
+      await expect(api.setAgentSessionStatus?.({
+        channelId: "D012ABCDEF0",
+        initiatorUserId: "U012ABCDEF0",
+        status: "processing",
+        threadTs: "1782234671.392669",
+      })).resolves.toEqual({
+        status: "processing",
+        title: "Existing title",
+      });
+      await expect(api.renameAgentSession?.({
+        channelId: "D012ABCDEF0",
+        threadTs: "1782234671.392669",
+        title: "Renamed session",
+      })).resolves.toEqual({ title: "Renamed session" });
+
+      expect(apiCall).toHaveBeenNthCalledWith(
+        1,
+        "agents.sessions.setStatus",
+        {
+          channel_id: "D012ABCDEF0",
+          initiator_user_id: "U012ABCDEF0",
+          status: "processing",
+          thread_ts: "1782234671.392669",
+        },
+      );
+      expect(apiCall).toHaveBeenNthCalledWith(
+        2,
+        "agents.sessions.rename",
+        {
+          channel_id: "D012ABCDEF0",
+          thread_ts: "1782234671.392669",
+          title: "Renamed session",
+        },
+      );
+    } finally {
+      apiCall.mockRestore();
+    }
+  });
+});
 
 const baseConfig = {
   channel: "slack" as const,
