@@ -1340,6 +1340,14 @@ export type GetNavigationSnapshotRequest = {
   filter?: string;
   forceRefresh?: boolean;
   refreshMode?: "active-recent" | "full";
+  /**
+   * Await per-thread Git working state instead of serving the cache. Only a
+   * caller that reads `thread.gitWorkingState` to make a decision — the
+   * messenger's review picker, which compares dirt and base-branch drift
+   * across a multi-project thread's workspaces — should set this. Every other
+   * snapshot serves the durable cache and converges in the background.
+   */
+  probeWorkingStates?: boolean;
 };
 
 /**

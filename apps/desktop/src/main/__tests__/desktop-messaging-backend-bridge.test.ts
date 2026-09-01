@@ -248,6 +248,7 @@ describe("DesktopMessagingBackendBridge", () => {
         async (threads: NavigationSnapshot["threads"]) => threads,
       ),
       listThreads: vi.fn(async () => []),
+      refreshThreadGitWorkingStates: vi.fn(async () => ({ scheduledCount: 0 })),
       readDirectoryStatuses,
       refreshDirectoryGitStatuses,
       rememberCompleteNavigationSnapshot: vi.fn(),
@@ -299,6 +300,7 @@ describe("DesktopMessagingBackendBridge", () => {
         async (threads: NavigationSnapshot["threads"]) => threads,
       ),
       listThreads: vi.fn(async () => []),
+      refreshThreadGitWorkingStates: vi.fn(async () => ({ scheduledCount: 0 })),
       refreshDirectoryGitStatuses,
       rememberCompleteNavigationSnapshot: vi.fn(),
     } as unknown as DesktopBackendRegistry;
@@ -314,7 +316,7 @@ describe("DesktopMessagingBackendBridge", () => {
     finishRefresh?.();
   });
 
-  it("hydrates review working state before the messenger chooses a project", async () => {
+  it("serves cached review working state and probes in the background", async () => {
     const pwrAgentWorktree = "/worktrees/PwrAgnt";
     const listedThread: AppServerThreadSummary = {
       id: "thread-1",
@@ -379,6 +381,8 @@ describe("DesktopMessagingBackendBridge", () => {
       ),
       listThreads: vi.fn(async () => [listedThread]),
       readDirectoryStatuses: vi.fn(async () => ({})),
+      // A Git fleet that never settles: the snapshot must not wait on it.
+      refreshThreadGitWorkingStates: vi.fn(() => new Promise(() => {})),
       rememberCompleteNavigationSnapshot: vi.fn(),
     } as unknown as DesktopBackendRegistry;
     const bridge = new DesktopMessagingBackendBridge(registry);
@@ -387,8 +391,109 @@ describe("DesktopMessagingBackendBridge", () => {
 
     expect(registry.hydrateThreadGitWorkingStates).toHaveBeenCalledWith(
       [reconciledThread],
+      { probeMissing: false },
+    );
+    // The canonical threads, not the hydrated ones: scheduling reads the
+    // cache to decide staleness, and passing threads that hydration just
+    // stamped from that same cache is how a probe stops converging.
+    expect(registry.refreshThreadGitWorkingStates).toHaveBeenCalledExactlyOnceWith(
+      [reconciledThread],
+    );
+    expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(
+      pwrAgentWorktree,
+    );
+  });
+
+  it("awaits the working-state fleet when the caller opts in", async () => {
+    // The messenger's review picker resolves a multi-project thread's
+    // workspace from working state (findPreferredReviewWorkspaceCwd) and
+    // infers its base branch from it (buildReviewBranchOptions), so it cannot
+    // race a background probe: on a cold cache it would pick linkedDirectories[0].
+    const pwrAgentWorktree = "/worktrees/PwrAgnt";
+    const listedThread: AppServerThreadSummary = {
+      id: "thread-1",
+      title: "PwrAgent federation dogfood PR #735",
+      titleSource: "explicit",
+      source: "codex",
+      projectKey: pwrAgentWorktree,
+      linkedDirectories: [
+        {
+          id: "pwrsnap",
+          kind: "local",
+          label: "PwrSnap",
+          path: "/repos/PwrSnap",
+        },
+        {
+          id: "pwragent",
+          kind: "worktree",
+          label: "PwrAgnt",
+          path: "/repos/PwrAgnt",
+          worktreePath: pwrAgentWorktree,
+        },
+      ],
+    };
+    const reconciledThread: NavigationSnapshot["threads"][number] = {
+      ...listedThread,
+      inbox: { inInbox: false },
+    };
+    reconcileNavigationSnapshot.mockResolvedValueOnce({
+      backend: "codex",
+      fetchedAt: 1_000,
+      unchanged: false,
+      threads: [reconciledThread],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    });
+    const registry = {
+      canonicalizeNavigationThreadPullRequests: vi.fn(
+        async (threads: NavigationSnapshot["threads"]) => threads,
+      ),
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      // Only the awaited probe answers here; a cached read returns the
+      // threads untouched, which is what a cold cache looks like.
+      hydrateThreadGitWorkingStates: vi.fn(async (
+        threads: NavigationSnapshot["threads"],
+        options?: { probeMissing?: boolean },
+      ) =>
+        options?.probeMissing
+          ? threads.map((thread) => ({
+            ...thread,
+            gitWorkingState: {
+              dirtyFiles: 2,
+              dirtyAdditions: 9,
+              dirtyDeletions: 1,
+              untrackedFiles: 0,
+              unpushedCommits: 0,
+              baseBranch: "main",
+              baseAheadCommitCount: 16,
+            },
+          }))
+          : threads
+      ),
+      listThreads: vi.fn(async () => [listedThread]),
+      readDirectoryStatuses: vi.fn(async () => ({})),
+      refreshThreadGitWorkingStates: vi.fn(async () => ({ scheduledCount: 0 })),
+      rememberCompleteNavigationSnapshot: vi.fn(),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    const snapshot = await bridge.getNavigationSnapshot({
+      backend: "codex",
+      probeWorkingStates: true,
+    });
+
+    expect(registry.hydrateThreadGitWorkingStates).toHaveBeenCalledWith(
+      [reconciledThread],
       { probeMissing: true },
     );
+    // An opted-in caller already awaited the fleet; scheduling a second
+    // round behind it would re-probe the paths it just read.
+    expect(registry.refreshThreadGitWorkingStates).not.toHaveBeenCalled();
     expect(findPreferredReviewWorkspaceCwd(snapshot.threads[0])).toBe(
       pwrAgentWorktree,
     );
@@ -441,6 +546,7 @@ describe("DesktopMessagingBackendBridge", () => {
         async (threads: NavigationSnapshot["threads"]) => threads,
       ),
       listThreads: vi.fn(async () => []),
+      refreshThreadGitWorkingStates: vi.fn(async () => ({ scheduledCount: 0 })),
       readDirectoryStatuses: vi.fn(async () => ({})),
       rememberCompleteNavigationSnapshot: vi.fn(),
     } as unknown as DesktopBackendRegistry;
@@ -529,6 +635,7 @@ describe("DesktopMessagingBackendBridge", () => {
       hydrateThreadGitWorkingStates,
       listThreads: vi.fn(async () => []),
       readDirectoryStatuses: vi.fn(async () => ({})),
+      refreshThreadGitWorkingStates: vi.fn(async () => ({ scheduledCount: 0 })),
       rememberCompleteNavigationSnapshot: vi.fn(),
     } as unknown as DesktopBackendRegistry;
     const bridge = new DesktopMessagingBackendBridge(registry);

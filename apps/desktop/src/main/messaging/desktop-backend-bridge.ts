@@ -303,10 +303,26 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       await this.registry.canonicalizeNavigationThreadPullRequests(
         snapshot.threads,
       );
+    // Working state is chip data for almost every caller, and the review
+    // picker is the exception that has to await it: it compares dirt and
+    // base-branch drift across a thread's workspaces to pick one
+    // (findPreferredReviewWorkspaceCwd, buildReviewBranchOptions). Everything
+    // else serves the durable cache the way the renderer's own navigation path
+    // does (ipc/app-server.ts) and lets a bounded background probe converge
+    // the rest, instead of holding every messaging command and every remote
+    // viewer's snapshot behind a Git fleet.
+    const probeWorkingStates = request.probeWorkingStates === true;
     const threads = await this.registry.hydrateThreadGitWorkingStates(
       canonicalThreads,
-      { probeMissing: true },
+      { probeMissing: probeWorkingStates },
     );
+    if (!probeWorkingStates) {
+      void this.registry
+        .refreshThreadGitWorkingStates(canonicalThreads)
+        .catch(() => {
+          // Background convergence: the next snapshot reads whatever landed.
+        });
+    }
     const hydratedSnapshot = {
       ...snapshot,
       threads,
