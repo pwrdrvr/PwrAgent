@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import {
+  canIsolateMcpProviderServers,
   isAcpBackendId,
   mcpSelectionApplyTiming,
   type AppServerBackendKind,
@@ -60,8 +61,9 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
   const backendSupported =
     props.backend === "codex" || isAcpBackendId(props.backend);
   // Only Codex can suppress the servers the agent loads for itself, so the
-  // control is offered only where it can be honored.
-  const canIsolate = props.backend === "codex";
+  // control is offered only where it can be honored. The main-process writer
+  // reads the same predicate, so it cannot store a value this hides.
+  const canIsolate = canIsolateMcpProviderServers(props.backend);
 
   const refresh = useCallback(async () => {
     if (!props.desktopApi?.listMcpConnections) {
@@ -82,14 +84,21 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
     void refresh();
   }, [refresh]);
 
+  // The caller owns the selection and refreshes it only once its write
+  // resolves, so every control has to be inert while one is in flight. A
+  // second toggle would otherwise compose against the pre-write value and
+  // silently revert the first one.
+  const busy = busyId !== undefined;
+
   const apply = async (
-    next: McpAccessSelection,
+    update: (current: McpAccessSelection) => McpAccessSelection,
     busyKey: string,
   ): Promise<void> => {
+    if (busy) return;
     setBusyId(busyKey);
     setError(undefined);
     try {
-      await props.onSelectionChange(next);
+      await props.onSelectionChange(update(props.selection));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -99,6 +108,18 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
 
   const available = connections?.filter((connection) => connection.enabled);
   const parked = connections?.filter((connection) => !connection.enabled);
+  // A selected connection that has since been parked or removed keeps riding
+  // along on every write. Nothing prunes it from the thread, and the bridge
+  // for it is refused on every turn, so it needs a row of its own — without
+  // one there is no way to clear it from inside the app.
+  const stranded = connections === undefined
+    ? []
+    : props.selection.connectionIds.filter(
+        (id) => !available?.some((connection) => connection.id === id),
+      );
+  const parkedOnly = parked?.filter(
+    (connection) => !stranded.includes(connection.id),
+  );
 
   return (
     <aside className="live-work-rail mcp-access-panel" aria-label="MCP access">
@@ -135,7 +156,7 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
           <p className="mcp-access-panel__state" role="status">
             Reading connections…
           </p>
-        ) : connections.length === 0 ? (
+        ) : connections.length === 0 && stranded.length === 0 ? (
           <div className="mcp-access-panel__empty">
             <p>No managed connections yet.</p>
             {props.onOpenSettings ? (
@@ -174,23 +195,23 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
                   {healthy ? (
                     <SettingsSwitch
                       checked={checked}
-                      disabled={
-                        !backendSupported || busyId === connection.id
-                      }
+                      disabled={!backendSupported || busy}
                       label={`Use ${connection.displayName} in this thread`}
                       onChange={(enabled) => {
-                        const ids = enabled
-                          ? [
-                              ...new Set([
-                                ...props.selection.connectionIds,
-                                connection.id,
-                              ]),
-                            ]
-                          : props.selection.connectionIds.filter(
-                              (id) => id !== connection.id,
-                            );
                         void apply(
-                          { ...props.selection, connectionIds: ids },
+                          (current) => ({
+                            ...current,
+                            connectionIds: enabled
+                              ? [
+                                  ...new Set([
+                                    ...current.connectionIds,
+                                    connection.id,
+                                  ]),
+                                ]
+                              : current.connectionIds.filter(
+                                  (id) => id !== connection.id,
+                                ),
+                          }),
                           connection.id,
                         );
                       }}
@@ -211,9 +232,41 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
                 </li>
               );
             })}
+            {stranded.map((id) => {
+              const known = parked?.find((connection) => connection.id === id);
+              const name = known?.displayName ?? id;
+              return (
+                <li className="mcp-access-panel__row" key={id}>
+                  <div className="mcp-access-panel__row-body">
+                    <span className="mcp-access-panel__name">{name}</span>
+                    <span className="mcp-access-panel__detail">
+                      {known
+                        ? "Turned off for every thread. Turn it back on in Settings, or drop it here."
+                        : "No longer a managed connection. Drop it from this thread."}
+                    </span>
+                  </div>
+                  <SettingsSwitch
+                    checked
+                    disabled={!backendSupported || busy}
+                    label={`Use ${name} in this thread`}
+                    onChange={() => {
+                      void apply(
+                        (current) => ({
+                          ...current,
+                          connectionIds: current.connectionIds.filter(
+                            (entry) => entry !== id,
+                          ),
+                        }),
+                        id,
+                      );
+                    }}
+                  />
+                </li>
+              );
+            })}
           </ul>
         )}
-        {canIsolate && connections?.length ? (
+        {canIsolate ? (
           <div className="mcp-access-panel__policy">
             <div className="mcp-access-panel__row-body">
               <span className="mcp-access-panel__name">
@@ -225,22 +278,25 @@ export function McpAccessPanel(props: McpAccessPanelProps) {
             </div>
             <SettingsSwitch
               checked={props.selection.providerServersEnabled}
-              disabled={busyId === "provider" || !backendSupported}
+              disabled={busy || !backendSupported}
               label="Use the agent's own MCP servers in this thread"
               onChange={(enabled) => {
                 void apply(
-                  { ...props.selection, providerServersEnabled: enabled },
+                  (current) => ({
+                    ...current,
+                    providerServersEnabled: enabled,
+                  }),
                   "provider",
                 );
               }}
             />
           </div>
         ) : null}
-        {parked?.length ? (
+        {parkedOnly?.length ? (
           <p className="mcp-access-panel__state">
-            {parked.length === 1
-              ? `${parked[0].displayName} is turned off for every thread.`
-              : `${parked.length} connections are turned off for every thread.`}
+            {parkedOnly.length === 1
+              ? `${parkedOnly[0].displayName} is turned off for every thread.`
+              : `${parkedOnly.length} connections are turned off for every thread.`}
           </p>
         ) : null}
         <footer className="mcp-access-panel__footer">

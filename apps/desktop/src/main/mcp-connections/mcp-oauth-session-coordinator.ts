@@ -53,6 +53,16 @@ export class McpOAuthSessionCoordinator {
   private credential?: McpOAuthCredential;
   private loaded = false;
   private generation = 0;
+  /**
+   * Bumped only when a credential is deliberately dropped.
+   *
+   * `generation` moves for every commit, load, and recovery, so it cannot
+   * tell a routine token write apart from one that arrives after the
+   * operator revoked. This counter moves only on `disconnect()` — which the
+   * remove path also runs — and every commit carries the epoch its session
+   * started under.
+   */
+  private revocationEpoch = 0;
   private loadPromise?: Promise<void>;
   private refreshPromise?: Promise<void>;
   private runtimeState: McpConnectionRuntimeState = "disconnected";
@@ -114,13 +124,15 @@ export class McpOAuthSessionCoordinator {
       }
     }
     const authorizationScope = this.authorizationScope(working);
+    const epoch = this.revocationEpoch;
     const provider = new CoordinatedOAuthProvider({
       callbackUrl: params.redirectUrl,
       credential: working,
       authorizationState:
         params.state ?? randomBytes(24).toString("base64url"),
       onRedirect: params.onRedirect,
-      onCommit: async (credential) => await this.commitCredential(credential),
+      onCommit: async (credential) =>
+        await this.commitCredential(credential, epoch),
       retainRefreshToken: false,
     });
     try {
@@ -155,6 +167,7 @@ export class McpOAuthSessionCoordinator {
     this.credential = undefined;
     this.loaded = true;
     this.generation += 1;
+    this.revocationEpoch += 1;
     this.setState("disconnected");
   }
 
@@ -219,6 +232,7 @@ export class McpOAuthSessionCoordinator {
       );
     }
     this.setState("refreshing");
+    const epoch = this.revocationEpoch;
     const provider = new CoordinatedOAuthProvider({
       callbackUrl: new URL(
         current.redirectUrl ?? "http://127.0.0.1/oauth/callback",
@@ -228,7 +242,8 @@ export class McpOAuthSessionCoordinator {
       onRedirect: async () => {
         throw new McpReauthorizationRequiredError();
       },
-      onCommit: async (credential) => await this.commitCredential(credential),
+      onCommit: async (credential) =>
+        await this.commitCredential(credential, epoch),
       retainRefreshToken: true,
     });
     try {
@@ -240,15 +255,21 @@ export class McpOAuthSessionCoordinator {
       if (result !== "AUTHORIZED") {
         throw new McpReauthorizationRequiredError();
       }
+      // A revocation that landed mid-refresh already reported "disconnected".
+      // Reporting "ready" over it would leave a revoked connection claiming
+      // it is usable.
+      if (this.revocationEpoch !== epoch) return;
       this.setState("ready");
     } catch (error) {
       if (isAuthorizationFailure(error)) {
+        if (this.revocationEpoch !== epoch) return;
         const durable = await this.vault.read(
           this.connectionId,
           this.serverUrl.href,
         );
         if (
-          durable?.tokens?.access_token
+          this.revocationEpoch === epoch
+          && durable?.tokens?.access_token
           && durable.tokens.access_token !== current.tokens?.access_token
         ) {
           this.credential = durable;
@@ -327,8 +348,19 @@ export class McpOAuthSessionCoordinator {
 
   private async commitCredential(
     credential: McpOAuthCredential,
+    expectedEpoch: number,
   ): Promise<void> {
+    if (this.revocationEpoch !== expectedEpoch) return;
     await this.vault.write(this.connectionId, credential);
+    if (this.revocationEpoch !== expectedEpoch) {
+      // The revocation landed while this write was in flight. Undo it: for a
+      // removed connection the coordinator is already gone from the map, so
+      // the entry would be an orphan nothing can reach — and ids are derived
+      // from the server name, so re-adding the same server would reclaim it
+      // and boot already authorized on the revoked tokens.
+      await this.vault.delete(this.connectionId).catch(() => undefined);
+      return;
+    }
     this.credential = structuredClone(credential);
     this.generation += 1;
   }

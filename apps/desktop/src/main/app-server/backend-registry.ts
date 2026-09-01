@@ -74,6 +74,7 @@ import {
   buildAppendPinRank,
   buildThreadMarkdownLink,
   buildThreadUrl,
+  canIsolateMcpProviderServers,
   estimateTokenUsageCost,
   formatTokenUsageUsd,
   isCodexNativeSubAgentVisibleInNavigation,
@@ -15781,9 +15782,22 @@ export class DesktopBackendRegistry {
     }
     const registrations: McpConnectionBridgeRegistration[] = [];
     for (const connectionId of selected) {
-      registrations.push(
-        await this.mcpConnectionService.registerBridge(connectionId, threadId),
-      );
+      try {
+        registrations.push(
+          await this.mcpConnectionService.registerBridge(connectionId, threadId),
+        );
+      } catch (error) {
+        // A connection the operator parked, removed, or locked behind the
+        // gateway switch must drop out of the turn, not fail it. The
+        // selection is sticky and there is no path that prunes a stale id
+        // from a thread, so throwing here would brick every later turn on
+        // that thread with no way to recover from inside the app.
+        backendRegistryLog.warn("connection_mcp_bridge_unavailable", {
+          connectionId,
+          error: error instanceof Error ? error.message : String(error),
+          threadId: threadId ?? null,
+        });
+      }
     }
     return registrations;
   }
@@ -19636,7 +19650,9 @@ export class DesktopBackendRegistry {
     });
     return {
       connectionIds: overlay?.mcpConnectionIds ?? [],
-      providerServersEnabled: overlay?.mcpProviderServersEnabled !== false,
+      providerServersEnabled:
+        !canIsolateMcpProviderServers(request.backend)
+        || overlay?.mcpProviderServersEnabled !== false,
     };
   }
 
@@ -19652,11 +19668,18 @@ export class DesktopBackendRegistry {
   async setThreadMcpConnections(
     request: SetThreadMcpConnectionsRequest,
   ): Promise<SetThreadMcpConnectionsResponse> {
+    // A backend that cannot suppress its own servers must never be left
+    // holding an "off" it will ignore. The flag is sticky and its control is
+    // hidden for those backends, so a value stored once — by an older build,
+    // a peer, or a launchpad draft that changed provider — would otherwise
+    // never be reachable again.
     const state = await this.overlayStore.setThreadMcpConnectionIds({
       backend: request.backend,
       threadId: request.threadId,
       connectionIds: request.connectionIds,
-      providerServersEnabled: request.providerServersEnabled,
+      providerServersEnabled: canIsolateMcpProviderServers(request.backend)
+        ? request.providerServersEnabled
+        : true,
     });
     const connectionIds = state.mcpConnectionIds ?? [];
     const providerServersEnabled = state.mcpProviderServersEnabled !== false;
@@ -21492,7 +21515,13 @@ export class DesktopBackendRegistry {
       serviceTier: launchpad.serviceTier,
       fastMode: launchpad.backend === "codex" ? launchpad.fastMode : undefined,
       mcpConnectionIds: launchpad.mcpConnectionIds,
-      mcpProviderServersEnabled: launchpad.mcpProviderServersEnabled,
+      // Same Codex-only guard as `fastMode` above: switching a draft's
+      // provider leaves the stale isolation flag behind, and the ACP path
+      // would then run with the agent's own servers live while the thread
+      // claims otherwise.
+      mcpProviderServersEnabled: canIsolateMcpProviderServers(launchpad.backend)
+        ? launchpad.mcpProviderServersEnabled
+        : undefined,
       prAutoDispatchEnabled:
         launchpad.prAutoDispatchEnabled ?? this.resolveDefaultPrAutoDispatchEnabledFn(),
       tokenMiserEnabled: launchpad.tokenMiserEnabled,

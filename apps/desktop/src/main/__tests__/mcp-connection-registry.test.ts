@@ -100,6 +100,89 @@ describe("McpConnectionRegistry", () => {
     ).toBe(false);
   });
 
+  it("keeps rows it cannot parse when an unrelated connection is toggled", () => {
+    const target = configPath();
+    fs.writeFileSync(target, [
+      "[[mcp_connections.connections]]",
+      "id = \"acme\"",
+      "display_name = \"Acme\"",
+      "server_url = \"https://mcp.acme.example/mcp\"",
+      "auth_mode = \"oauth\"",
+      "enabled = true",
+      "created_at = 1",
+      "updated_at = 1",
+      "",
+      "[[mcp_connections.connections]]",
+      "id = \"corp-tools\"",
+      "display_name = \"Corp Tools\"",
+      // Plain HTTP on a non-loopback host: this build rejects the row.
+      "server_url = \"http://tools.corp.example/mcp\"",
+      "",
+    ].join("\n"));
+    const registry = new McpConnectionRegistry({
+      configPath: target,
+      now: () => 2,
+    });
+
+    expect(registry.list().map((connection) => connection.id))
+      .toEqual(["pwrsnap", "acme"]);
+
+    registry.setEnabled("acme", false);
+
+    const written = fs.readFileSync(target, "utf8");
+    expect(written).toContain("corp-tools");
+    expect(written).toContain("http://tools.corp.example/mcp");
+  });
+
+  it("keeps fields it does not recognize on a row it rewrites", () => {
+    const target = configPath();
+    fs.writeFileSync(target, [
+      "[[mcp_connections.connections]]",
+      "id = \"acme\"",
+      "display_name = \"Acme\"",
+      "server_url = \"https://mcp.acme.example/mcp\"",
+      "auth_mode = \"oauth\"",
+      "enabled = true",
+      "created_at = 1",
+      "updated_at = 1",
+      // A field a newer build wrote. Downgrading must not discard it.
+      "transport = \"streamable-http\"",
+      "",
+    ].join("\n"));
+    const registry = new McpConnectionRegistry({
+      configPath: target,
+      now: () => 2,
+    });
+
+    registry.setEnabled("acme", false);
+
+    const written = fs.readFileSync(target, "utf8");
+    expect(written).toContain("transport = \"streamable-http\"");
+    expect(written).toContain("enabled = false");
+  });
+
+  it("does not resurrect a removed connection from a duplicate row", () => {
+    const target = configPath();
+    const row = (updatedAt: number): string[] => [
+      "[[mcp_connections.connections]]",
+      "id = \"acme\"",
+      "display_name = \"Acme\"",
+      "server_url = \"https://mcp.acme.example/mcp\"",
+      "auth_mode = \"oauth\"",
+      "enabled = true",
+      "created_at = 1",
+      `updated_at = ${updatedAt}`,
+      "",
+    ];
+    fs.writeFileSync(target, [...row(1), ...row(2)].join("\n"));
+    const registry = new McpConnectionRegistry({ configPath: target });
+
+    expect(registry.remove("acme")).toBe(true);
+    expect(registry.list().map((connection) => connection.id))
+      .toEqual(["pwrsnap"]);
+    expect(fs.readFileSync(target, "utf8")).not.toContain("acme");
+  });
+
   it("refuses to park a connection that no longer exists", () => {
     const registry = new McpConnectionRegistry({ configPath: configPath() });
     expect(() => registry.setEnabled("ghost", false))

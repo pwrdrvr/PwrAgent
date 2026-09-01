@@ -1380,6 +1380,17 @@ export function bootstrapApp(): void {
           // and leave the runtime serving an obsolete mode.
           await getDesktopFederationRuntime().restart();
         }
+        if (patch.general?.mcpGatewayEnabled === false) {
+          // The switch forbids new bridges on its own, but a session opened
+          // while it was on stays authorized until something ends it.
+          await getMcpConnectionGatewayService()
+            .closeAllUpstreamSessions()
+            .catch((error) => {
+              mainLog.error("MCP connection gateway failed to close sessions", {
+                error: error instanceof Error ? error.message : String(error),
+              });
+            });
+        }
         if (
           patch.general?.developerMode !== undefined ||
           patch.general?.hotCpuProfilingEnabled !== undefined ||

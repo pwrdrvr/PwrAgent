@@ -847,6 +847,7 @@ export function PluginsSettings(props: {
                       disabled={Boolean(connectionPending)}
                       onAuthorize={() => void authorizeConnection(connection)}
                       onChanged={() => void loadConnections()}
+                      onNotice={setConnectionNotice}
                     />
                   ) : undefined
                 }
@@ -1196,6 +1197,7 @@ function PwrSnapConnectionActions(props: {
   disabled: boolean;
   onAuthorize: () => void;
   onChanged: () => void;
+  onNotice: (notice: ActionNotice) => void;
 }) {
   const [status, setStatus] = useState<PwrSnapConnectionStatus>();
   const [pending, setPending] = useState(false);
@@ -1223,12 +1225,24 @@ function PwrSnapConnectionActions(props: {
     return () => window.removeEventListener("focus", onFocus);
   }, [refresh]);
 
-  const run = async (action: () => Promise<void>): Promise<void> => {
+  // Every action here is invoked as `void run(...)`, so a rejection would
+  // escape as an unhandled rejection and the button would simply revert —
+  // indistinguishable from a click that did nothing. On a federated window
+  // the pairing IPC always rejects, so that state would be permanent.
+  const run = async (
+    action: () => Promise<ActionNotice | undefined>,
+  ): Promise<void> => {
     setPending(true);
     try {
-      await action();
+      const notice = await action();
       await refresh();
       props.onChanged();
+      if (notice) props.onNotice(notice);
+    } catch (cause) {
+      props.onNotice({
+        kind: "error",
+        text: cause instanceof Error ? cause.message : String(cause),
+      });
     } finally {
       setPending(false);
     }
@@ -1258,7 +1272,16 @@ function PwrSnapConnectionActions(props: {
         disabled={busy}
         type="button"
         onClick={() => void run(async () => {
-          await desktopApi?.openPwrSnapDownload?.();
+          const response = await desktopApi?.openPwrSnapDownload?.();
+          if (response && !response.opened) {
+            return {
+              kind: "error",
+              text:
+                response.error
+                ?? "PwrAgent could not open the PwrSnap download page.",
+            };
+          }
+          return undefined;
         })}
       >
         Get PwrSnap
@@ -1273,7 +1296,14 @@ function PwrSnapConnectionActions(props: {
         disabled={busy}
         type="button"
         onClick={() => void run(async () => {
-          await desktopApi?.openPwrSnap?.();
+          const response = await desktopApi?.openPwrSnap?.();
+          if (response && !response.opened) {
+            return {
+              kind: "error",
+              text: response.error ?? "PwrAgent could not open PwrSnap.",
+            };
+          }
+          return undefined;
         })}
       >
         Open PwrSnap
@@ -1288,7 +1318,18 @@ function PwrSnapConnectionActions(props: {
         disabled={busy}
         type="button"
         onClick={() => void run(async () => {
-          await desktopApi?.connectPwrSnap?.();
+          const response = await desktopApi?.connectPwrSnap?.();
+          // A `needs_local_agent_access` result is not a failure and not a
+          // success: PwrSnap is running but has not been told to accept
+          // PwrAgent. Reporting it as connected would send the operator
+          // looking for a bug instead of a setting.
+          if (response?.outcome === "needs_local_agent_access") {
+            return {
+              kind: "info",
+              text: "Turn on Local Agent Access in PwrSnap, then try Connect again.",
+            };
+          }
+          return undefined;
         })}
       >
         {busy ? "Connecting..." : "Connect"}

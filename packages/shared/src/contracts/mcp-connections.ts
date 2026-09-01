@@ -152,3 +152,18 @@ export function mcpSelectionApplyTiming(
 ): McpSelectionApplyTiming {
   return backend === "codex" ? "next_turn" : "next_session_load";
 }
+
+/**
+ * Whether a backend can suppress the MCP servers it loads for itself.
+ *
+ * Only the Codex path can: it writes a per-thread config that disables each
+ * inherited server by name. An ACP agent resolves its own servers internally
+ * and takes no such instruction, so a stored "off" there would be a promise
+ * nothing keeps. Both the renderer control and the main-process writer read
+ * this, so a thread cannot end up holding a flag its backend ignores.
+ */
+export function canIsolateMcpProviderServers(
+  backend: AppServerBackendKind,
+): boolean {
+  return backend === "codex";
+}
