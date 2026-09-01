@@ -3464,6 +3464,7 @@ export class MessagingController {
       "handledPrivateContinuationExpirationMs",
       async () => await this.revokeExpiredPrivateReplyContinuation(binding),
     );
+    binding = bindingWithInboundRoutingState(binding, event.routingState);
     if (!binding) {
       if (!await this.measureHandledToRoutedSubspan(
         event,
@@ -3775,6 +3776,7 @@ export class MessagingController {
       "handledPrivateContinuationExpirationMs",
       async () => await this.revokeExpiredPrivateReplyContinuation(binding),
     );
+    binding = bindingWithInboundRoutingState(binding, event.routingState);
     if (!binding) {
       if (!await this.measureHandledToRoutedSubspan(
         event,
@@ -22358,6 +22360,18 @@ function readAcpRuntimeOptionSource(
   return source === "mode" || source === "configOption" || source === "model"
     ? source
     : undefined;
+}
+
+function bindingWithInboundRoutingState(
+  binding: MessagingBindingRecord | undefined,
+  routingState: MessagingAdapterState | undefined,
+): MessagingBindingRecord | undefined {
+  // Metadata persistence is intentionally off-path, but this event's delivery
+  // state is already authoritative for replies and typing activity on the same
+  // route. Use it immediately without waiting for the merge-safe store update.
+  return binding && routingState
+    ? { ...binding, routingState }
+    : binding;
 }
 
 function messageOriginForInboundEvent(
