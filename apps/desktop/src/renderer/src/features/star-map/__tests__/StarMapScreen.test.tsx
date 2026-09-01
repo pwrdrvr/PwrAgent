@@ -147,9 +147,12 @@ describe("StarMapScreen", () => {
   });
 
   it("writes load-card membership into the synced arrangement", async () => {
+    const healthResponse = await buildDesktopApi().readFederationHealth!({});
+    const health = createDeferred<typeof healthResponse>();
     const setStarMapCardPosition = vi.fn(async () => ({ entries: [] }));
     const desktopApi: DesktopApi = {
       ...buildDesktopApi(),
+      readFederationHealth: vi.fn(async () => await health.promise),
       readStarMapArrangement: vi.fn(async () => ({ entries: [] })),
       setStarMapCardPosition,
       readFederationInstanceLoad: vi.fn(async () => ({})),
@@ -165,6 +168,13 @@ describe("StarMapScreen", () => {
       />,
     );
 
+    expect(
+      screen.queryByRole("button", { name: /^Show load for/ }),
+    ).toBeNull();
+    await act(async () => {
+      health.resolve(healthResponse);
+      await health.promise;
+    });
     await waitFor(() => {
       expect(
         screen.queryByRole("button", { name: /^Show load for/ }),

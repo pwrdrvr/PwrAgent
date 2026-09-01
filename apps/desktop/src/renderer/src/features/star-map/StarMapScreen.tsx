@@ -4781,6 +4781,7 @@ export function StarMapScreen(props: StarMapScreenProps) {
                 onOpen={() => openInstance(position.instanceId)}
                 onToggleLoad={
                   props.desktopApi?.readFederationInstanceLoad
+                  && health
                   && (position.instanceId === localInstanceId
                     || entry.peer?.status === "connected")
                     ? () => toggleLoadCard(position.instanceId)
