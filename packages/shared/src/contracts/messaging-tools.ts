@@ -133,11 +133,19 @@ export type PwrAgentMessagingOutboundAttachmentSummary = {
   supportsImageUpload: boolean;
 };
 
+export type PwrAgentMessagingConversationCapabilitiesSummary = {
+  rename: {
+    allowed: boolean;
+    supported: boolean;
+  };
+};
+
 export type PwrAgentMessagingLocationSummary = {
   actor?: PwrAgentMessagingActorSummary;
   binding?: PwrAgentMessagingBindingSummary;
   channel: MessagingChannelKind;
   conversation: PwrAgentMessagingConversationSummary;
+  conversationCapabilities: PwrAgentMessagingConversationCapabilitiesSummary;
   managedConversation: PwrAgentMessagingManagedConversationSummary;
   outboundAttachments: PwrAgentMessagingOutboundAttachmentSummary;
 };

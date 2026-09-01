@@ -10,6 +10,7 @@ import type { MessagingStoreLike } from "../state/messaging-store-sqlite";
 import type {
   MessagingAdapter,
   MessagingBackendBridge,
+  MessagingConversationTitleSupportRequest,
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
 } from "./core/messaging-adapter";
@@ -158,6 +159,9 @@ export type DesktopMessagingAdapter = {
   setConversationTitle?(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
+  supportsConversationTitle?(
+    request: MessagingConversationTitleSupportRequest,
+  ): boolean;
   getManagedConversationRights?(
     request: MessagingManagedConversationRightsRequest,
   ): Promise<MessagingManagedConversationRightsResult>;

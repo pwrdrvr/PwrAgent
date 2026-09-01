@@ -157,6 +157,12 @@ no provider token and cannot select another channel. This is distinct from
 renaming the PwrAgent thread. Provider title-change events remain responsible
 for refreshing stored binding metadata.
 
+`get_current_messaging_surface` exposes rename discovery as two independent
+facts under `conversationCapabilities.rename`: `supported` comes from the
+provider's current-surface predicate, while `allowed` reflects the initiating
+actor's `thread.settings.name` permission. Keeping them separate distinguishes
+a provider limitation from an RBAC denial before the Agent attempts the tool.
+
 `send_messaging_file` is the opt-in companion for generated files that are not
 already in the assistant response (rendered PDFs, zips, installers). Do not use
 it for images the model will embed in the final reply; those already mirror to

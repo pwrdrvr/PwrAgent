@@ -57,6 +57,7 @@ import type {
   MessagingPermissionId,
   MessagingToolUpdateMode,
   PwrAgentMessagingBoundThreadSummary,
+  PwrAgentMessagingConversationCapabilitiesSummary,
   PwrAgentMessagingLocationSummary,
   PwrAgentMessagingManagedConversationSummary,
   PwrAgentMessagingOutboundAttachmentSummary,
@@ -18420,8 +18421,27 @@ export class MessagingController {
         : {}),
       channel: origin.event.channel.channel,
       conversation: summarizeMessagingConversation(origin.event.channel.conversation),
+      conversationCapabilities: this.summarizeConversationCapabilities(origin),
       managedConversation: await this.resolveManagedConversationSummary(origin),
       outboundAttachments: this.summarizeOutboundAttachments(),
+    };
+  }
+
+  private summarizeConversationCapabilities(
+    origin: ActiveAgentMessagingOrigin,
+  ): PwrAgentMessagingConversationCapabilitiesSummary {
+    const permissions = this.resolveActorPermissions(origin.event);
+    return {
+      rename: {
+        allowed:
+          permissions === null
+          || permissions.permissions.has("thread.settings.name"),
+        supported: this.options.adapter.supportsConversationTitle?.({
+          actor: origin.event.actor,
+          channel: origin.event.channel,
+          routingState: origin.event.routingState ?? origin.binding?.routingState,
+        }) === true,
+      },
     };
   }
 

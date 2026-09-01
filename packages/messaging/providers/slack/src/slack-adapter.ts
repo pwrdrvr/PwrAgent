@@ -29,6 +29,7 @@ import type {
   MessagingChannelRef,
   MessagingClientRateLimitStrategy,
   MessagingConversationKind,
+  MessagingConversationTitleSupportRequest,
   MessagingConversationTitleUpdateRequest,
   MessagingConversationTitleUpdateResult,
   MessagingDeliveryResult,
@@ -348,6 +349,9 @@ export type SlackProviderAdapter = {
   setConversationTitle(
     request: MessagingConversationTitleUpdateRequest,
   ): Promise<MessagingConversationTitleUpdateResult>;
+  supportsConversationTitle(
+    request: MessagingConversationTitleSupportRequest,
+  ): boolean;
   start(listener: (event: MessagingInboundEvent) => Promise<void>): Promise<void>;
   stop(): Promise<void>;
 };
@@ -1128,6 +1132,12 @@ export class SlackAdapter implements SlackProviderAdapter {
         updatedAt: this.now(),
       };
     }
+  }
+
+  supportsConversationTitle(
+    request: MessagingConversationTitleSupportRequest,
+  ): boolean {
+    return slackAgentSessionTarget(request.channel, request.routingState) !== undefined;
   }
 
   async getManagedConversationRights(

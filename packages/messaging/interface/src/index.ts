@@ -1348,6 +1348,11 @@ export type MessagingConversationTitleUpdateRequest = {
   title: string;
 };
 
+export type MessagingConversationTitleSupportRequest = Omit<
+  MessagingConversationTitleUpdateRequest,
+  "title"
+>;
+
 export type MessagingConversationTitleUpdateResult = {
   channel: MessagingChannelKind;
   conversation: MessagingConversationRef;

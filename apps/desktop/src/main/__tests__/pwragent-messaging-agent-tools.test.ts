@@ -26,6 +26,12 @@ describe("PwrAgent messaging agent tools", () => {
             id: "topic-1",
             kind: "topic" as const,
           },
+          conversationCapabilities: {
+            rename: {
+              allowed: true,
+              supported: true,
+            },
+          },
           managedConversation: {
             canCreateChild: false,
             operations: [],

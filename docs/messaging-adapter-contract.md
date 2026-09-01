@@ -218,6 +218,11 @@ Sync Name action. The tool cannot supply an arbitrary destination, and the
 adapter continues to own provider-specific identifiers, title limits, and API
 translation. Agents should use this operation instead of Browser or Computer
 Use when the user asks to name the current platform thread or conversation.
+Adapters that implement title updates should also implement
+`supportsConversationTitle` with the same surface predicate they use before a
+title update. `get_current_messaging_surface` reports that result separately
+from the initiating actor's `thread.settings.name` permission as
+`conversationCapabilities.rename.supported` and `.allowed`.
 
 `agent_session_stopped` is normalized as the existing `status:stop` callback,
 so it passes through the same RBAC and active-turn checks as PwrAgent's status

@@ -117,7 +117,7 @@ function descriptionForOperation(operation: PwrAgentMessagingOperationName): str
     case "get_current_location":
       return "Deprecated alias for get_current_messaging_surface. Inspect the messaging platform, actor, conversation, binding, compact bound-thread identity, and native thread/topic creation capability for the surface that started this Agent turn.";
     case "get_current_messaging_surface":
-      return "Inspect the current messaging surface, actor, conversation, binding, bound thread, and native child-topic support. Also returns this surface's outbound attachment limits.";
+      return "Inspect the current messaging surface, actor, conversation, binding, bound thread, and native child-topic support. Also returns rename support, current-actor permission, and outbound attachment limits.";
     case "rename_current_messaging_conversation":
       return "Rename the current messaging conversation or thread that started this Agent turn. Use when the user asks to name the current Slack thread, Agent Session, Telegram topic, or equivalent surface. Use this PwrAgent operation instead of Browser or Computer Use. This cannot target another conversation and does not rename the PwrAgent Agent thread.";
     case "send_private_response":

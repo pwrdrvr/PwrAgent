@@ -1336,17 +1336,29 @@ describe("SlackAdapter", () => {
       api: fakeApi({ agentRenames }),
       socketClient: fakeSocket(),
     });
+    const channel = {
+      channel: "slack" as const,
+      conversation: {
+        id: "C012ABCDEF0",
+        kind: "thread" as const,
+        parentId: "1712023030.000000",
+        parentConversationId: "C012ABCDEF0",
+      },
+    };
 
-    await expect(adapter.setConversationTitle({
+    expect(adapter.supportsConversationTitle({ channel })).toBe(true);
+    expect(adapter.supportsConversationTitle({
       channel: {
         channel: "slack",
         conversation: {
           id: "C012ABCDEF0",
-          kind: "thread",
-          parentId: "1712023030.000000",
-          parentConversationId: "C012ABCDEF0",
+          kind: "channel",
         },
       },
+    })).toBe(false);
+
+    await expect(adapter.setConversationTitle({
+      channel,
       title: "Agent Sessions migration",
     })).resolves.toMatchObject({
       outcome: "updated",

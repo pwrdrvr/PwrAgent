@@ -4662,6 +4662,12 @@ describe("MessagingController", () => {
             kind: "channel",
             title: "Ops",
           },
+          conversationCapabilities: {
+            rename: {
+              allowed: true,
+              supported: false,
+            },
+          },
           managedConversation: {
             canCreateChild: true,
             providerSupportsCreation: true,
@@ -4707,6 +4713,73 @@ describe("MessagingController", () => {
         routingState: event.routingState,
       }),
     );
+  });
+
+  it("reports conversation rename support separately from actor permission", async () => {
+    const supportsConversationTitle = vi.fn(() => true);
+    const harness = await createHarness({
+      channel: "slack",
+      rbacPolicy: rbacProviderGranting(["message.reply"]),
+      supportsConversationTitle,
+    });
+    const event = buildTextEvent("Can this Slack thread be renamed?", {
+      channel: {
+        channel: "slack",
+        conversation: {
+          id: "D012ABCDEF0",
+          kind: "thread",
+          parentConversationId: "D012ABCDEF0",
+          parentId: "1782234671.392669",
+        },
+      },
+      routingState: {
+        opaque: {
+          channelId: "D012ABCDEF0",
+          threadTs: "1782234671.392669",
+        },
+      },
+    });
+    await harness.store.upsertBinding({
+      id: "binding:slack:thread:1782234671.392669:D012ABCDEF0:codex:thread-1",
+      authorizedActorIds: ["user-1"],
+      backend: "codex",
+      channel: event.channel,
+      createdAt: 1000,
+      routingState: event.routingState,
+      targetKind: "agent_thread",
+      threadId: "thread-1",
+      updatedAt: 1000,
+    });
+    await harness.controller.handleInboundEvent(event);
+
+    await expect(
+      harness.controller.handlePwrAgentMessagingRequest({
+        operation: "get_current_messaging_surface",
+        context: {
+          backend: "codex",
+          threadId: "thread-1",
+          turnId: "turn-1",
+        },
+        args: {},
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        location: {
+          conversationCapabilities: {
+            rename: {
+              allowed: false,
+              supported: true,
+            },
+          },
+        },
+      },
+    });
+    expect(supportsConversationTitle).toHaveBeenCalledWith({
+      actor: event.actor,
+      channel: event.channel,
+      routingState: event.routingState,
+    });
   });
 
   it("lets an Agent rename the messaging conversation that started its turn", async () => {
@@ -24283,6 +24356,7 @@ async function createHarness<
     MessagingBackendBridge["setAcpSessionRuntimeOption"]
   >;
   setConversationTitle?: MessagingAdapter["setConversationTitle"];
+  supportsConversationTitle?: MessagingAdapter["supportsConversationTitle"];
   supportsMessagingPdfTools?: NonNullable<
     MessagingBackendBridge["supportsMessagingPdfTools"]
   >;
@@ -24376,6 +24450,9 @@ async function createHarness<
     ),
     ...(options?.setConversationTitle
       ? { setConversationTitle: options.setConversationTitle }
+      : {}),
+    ...(options?.supportsConversationTitle
+      ? { supportsConversationTitle: options.supportsConversationTitle }
       : {}),
     ...(options?.getManagedConversationRights
       ? { getManagedConversationRights: options.getManagedConversationRights }
