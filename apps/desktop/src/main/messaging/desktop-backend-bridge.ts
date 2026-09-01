@@ -131,39 +131,51 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
   }): Promise<MessagingThreadAdmissionState> {
     const remote = this.remoteBackend(request.federationTarget);
     if (remote) {
-      if (!remote.resolveThreadAdmissionState) {
+      const target = request.federationTarget;
+      if (!target || !isRemoteFederationTarget(target) || !this.federation) {
         throw new Error(
-          "The remote instance does not support targeted messaging admission.",
+          "Remote messaging admission requires a federation target.",
         );
       }
-      const state = await remote.resolveThreadAdmissionState({
-        backend: request.backend,
-        threadId: request.threadId,
-      });
-      const target = request.federationTarget;
-      const instanceLabel = target?.scope === "remote"
-        ? this.federation?.connectedPeerTargets().find(
-            (peer) => peer.target.instanceId === target.instanceId,
-          )?.label ?? target.instanceId
-        : undefined;
+      let state: MessagingThreadAdmissionState;
+      if (!remote.resolveThreadAdmissionState) {
+        state = await this.readLegacyRemoteThreadAdmissionState(
+          target,
+          request,
+        );
+      } else {
+        try {
+          state = await remote.resolveThreadAdmissionState({
+            backend: request.backend,
+            threadId: request.threadId,
+          });
+        } catch (error) {
+          if (!isFederationMethodNotFoundError(error)) {
+            throw error;
+          }
+          state = await this.readLegacyRemoteThreadAdmissionState(
+            target,
+            request,
+          );
+        }
+      }
+      const instanceLabel = this.federation.connectedPeerTargets().find(
+        (peer) => peer.target.instanceId === target.instanceId,
+      )?.label ?? target.instanceId;
       return {
         ...state,
         ...(state.thread
           ? {
               thread: {
                 ...state.thread,
-                ...(target?.scope === "remote" && instanceLabel
-                  ? {
-                      federation: {
-                        instanceLabel,
-                        ref: buildFederatedThreadRef({
-                          backend: request.backend,
-                          instanceId: target.instanceId,
-                          threadId: request.threadId,
-                        }),
-                      },
-                    }
-                  : {}),
+                federation: {
+                  instanceLabel,
+                  ref: buildFederatedThreadRef({
+                    backend: request.backend,
+                    instanceId: target.instanceId,
+                    threadId: request.threadId,
+                  }),
+                },
               },
             }
           : {}),
@@ -207,6 +219,38 @@ export class DesktopMessagingBackendBridge implements MessagingBackendBridge {
       ...(activeTurn ? { activeTurn } : {}),
       ...(thread ? { thread } : {}),
       threadStatus,
+    };
+  }
+
+  private async readLegacyRemoteThreadAdmissionState(
+    target: FederationRemoteTarget,
+    request: {
+      backend: AppServerBackendKind;
+      federationTarget?: FederationTarget;
+      threadId: string;
+    },
+  ): Promise<MessagingThreadAdmissionState> {
+    if (!this.federation) {
+      throw new Error("Remote messaging admission requires federation.");
+    }
+    const navigation = await this.federation.remoteNavigationSnapshot(
+      target,
+      {
+        backend: request.backend,
+        federationTarget: target,
+      },
+      {
+        kind: "threads",
+        threads: [{ backend: request.backend, threadId: request.threadId }],
+      },
+    );
+    const thread = navigation.threads.find(
+      (candidate) => candidate.source === request.backend
+        && candidate.id === request.threadId,
+    );
+    return {
+      ...(thread ? { thread } : {}),
+      ...(thread?.threadStatus ? { threadStatus: thread.threadStatus } : {}),
     };
   }
 
@@ -1086,11 +1130,14 @@ function buildAdmissionThreadSummary(params: {
     inbox: "inbox" in summary ? summary.inbox : { inInbox: false },
     executionMode: overlay?.executionMode ?? summary.executionMode,
     fastMode: overlay?.fastMode ?? summary.fastMode,
+    gitBranch: overlay?.gitBranch ?? summary.gitBranch,
     linkedDirectories:
       summary.linkedDirectories.length > 0
         ? summary.linkedDirectories
         : overlay?.extraLinkedDirectories ?? [],
     model: overlay?.model ?? summary.model,
+    observedGitBranch:
+      overlay?.observedGitBranch ?? summary.observedGitBranch,
     reasoningEffort: overlay?.reasoningEffort ?? summary.reasoningEffort,
     serviceTier: overlay?.serviceTier ?? summary.serviceTier,
     ...(overlay?.agent ? { agent: overlay.agent } : {}),
@@ -1104,6 +1151,13 @@ function buildAdmissionThreadSummary(params: {
       : {}),
     ...(params.queuedTurns ? { queuedTurns: params.queuedTurns } : {}),
   };
+}
+
+function isFederationMethodNotFoundError(error: unknown): boolean {
+  return typeof error === "object"
+    && error !== null
+    && "code" in error
+    && error.code === "method_not_found";
 }
 
 function findLastAssistantEntryReply(

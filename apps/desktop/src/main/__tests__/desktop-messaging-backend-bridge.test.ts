@@ -163,6 +163,45 @@ describe("DesktopMessagingBackendBridge", () => {
     expect(readDirectoryStatuses).not.toHaveBeenCalled();
   });
 
+  it("preserves overlay branch metadata when the thread summary cache is cold", async () => {
+    getThreadOverlayState.mockResolvedValueOnce({
+      backend: "codex",
+      threadId: "thread-cold",
+      extraLinkedDirectories: [
+        {
+          id: "directory:/repos/PwrAgnt",
+          kind: "local",
+          label: "PwrAgnt",
+          path: "/repos/PwrAgnt",
+        },
+      ],
+      gitBranch: "feature/cache-owner",
+      observedGitBranch: "feature/cache-owner-observed",
+    });
+    const registry = {
+      getActiveTurnForThread: vi.fn(() => undefined),
+      getCachedThreadSummary: vi.fn(() => undefined),
+      getQueuedExecutionModesSnapshot: vi.fn(() => ({})),
+      getQueuedTurnsSnapshot: vi.fn(() => ({})),
+      isThreadTurnOccupied: vi.fn(() => false),
+    } as unknown as DesktopBackendRegistry;
+    const bridge = new DesktopMessagingBackendBridge(registry);
+
+    await expect(bridge.getThreadAdmissionState({
+      backend: "codex",
+      threadId: "thread-cold",
+    })).resolves.toMatchObject({
+      thread: {
+        gitBranch: "feature/cache-owner",
+        observedGitBranch: "feature/cache-owner-observed",
+        linkedDirectories: [
+          expect.objectContaining({ path: "/repos/PwrAgnt" }),
+        ],
+      },
+      threadStatus: "idle",
+    });
+  });
+
   it("serves cached directory status without awaiting a fleet refresh", async () => {
     const cachedGitStatus = {
       currentBranch: "main",
@@ -1112,6 +1151,83 @@ describe("DesktopMessagingBackendBridge", () => {
       backend: "codex",
       threadId: "thread-1",
     });
+  });
+
+  it("falls back to remote navigation when an older peer lacks targeted admission", async () => {
+    const methodNotFound = Object.assign(
+      new Error("Unknown federation method: resolve_thread_admission_state"),
+      { code: "method_not_found" },
+    );
+    const resolveThreadAdmissionState = vi.fn(async () => {
+      throw methodNotFound;
+    });
+    const remoteNavigation: NavigationSnapshot = {
+      backend: "codex",
+      fetchedAt: 2_000,
+      unchanged: false,
+      threads: [
+        {
+          id: "thread-1",
+          title: "Remote thread",
+          titleSource: "explicit",
+          source: "codex",
+          threadStatus: "active",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        },
+      ],
+      inboxThreadKeys: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const remoteNavigationSnapshot = vi.fn(async () => remoteNavigation);
+    const target = { scope: "remote" as const, instanceId: "legacy_peer" };
+    const federation = {
+      connectedPeerTargets: () => [
+        {
+          capabilities: ["messaging_route"],
+          label: "Legacy Peer",
+          target,
+        },
+      ],
+      onRemoteBackendEvent: () => () => undefined,
+      remoteBackend: () => ({
+        resolveThreadAdmissionState,
+      } as unknown as FederationBackendOperations),
+      remoteNavigationSnapshot,
+    } as unknown as DesktopMessagingFederationBridge;
+    const bridge = new DesktopMessagingBackendBridge(
+      {} as DesktopBackendRegistry,
+      federation,
+    );
+
+    await expect(
+      bridge.getThreadAdmissionState({
+        backend: "codex",
+        federationTarget: target,
+        threadId: "thread-1",
+      }),
+    ).resolves.toMatchObject({
+      thread: {
+        id: "thread-1",
+        federation: { instanceLabel: "Legacy Peer" },
+      },
+      threadStatus: "active",
+    });
+    expect(remoteNavigationSnapshot).toHaveBeenCalledWith(
+      target,
+      {
+        backend: "codex",
+        federationTarget: target,
+      },
+      {
+        kind: "threads",
+        threads: [{ backend: "codex", threadId: "thread-1" }],
+      },
+    );
   });
 
   it("subscribes messaging controllers to local and remote backend events", async () => {

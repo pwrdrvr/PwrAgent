@@ -13755,6 +13755,33 @@ describe("MessagingController", () => {
     });
   });
 
+  it("starts a new turn when targeted admission reports idle after a missed completion", async () => {
+    const harness = await createHarness();
+    await bindThread(harness);
+
+    await harness.controller.handleInboundEvent(buildTextEvent("first turn"));
+    const navigation = buildNavigationSnapshot();
+    harness.getThreadAdmissionState.mockResolvedValue({
+      thread: navigation.threads[0],
+      threadStatus: "idle",
+    });
+
+    await harness.controller.handleInboundEvent(buildTextEvent("next turn"));
+
+    expect(harness.startTurn).toHaveBeenCalledTimes(2);
+    expect(harness.startTurn).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        input: [{ type: "text", text: "next turn" }],
+      }),
+    );
+    expect(harness.delivered).not.toContainEqual(
+      expect.objectContaining({
+        kind: "confirmation",
+        title: "Message queued",
+      }),
+    );
+  });
+
   it("queues a second surface message on the same Agent thread without creating a shadow thread", async () => {
     const harness = await createHarness();
     const telegramChannel = buildTextEvent("ignored").channel;

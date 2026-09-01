@@ -4226,7 +4226,11 @@ export class MessagingController {
       return true;
     }
 
-    const rememberedTurn = this.getActiveTurn(binding);
+    const rememberedTurn = await this.reconcileActiveTurnFromThreadStatus(
+      binding,
+      "turn_admission",
+      admissionState.threadStatus,
+    );
     if (
       rememberedTurn
       && ["working", "waiting"].includes(rememberedTurn.status)
@@ -14457,6 +14461,26 @@ export class MessagingController {
     }
 
     const threadStatus = await this.readBackendThreadStatus(binding);
+    return await this.reconcileActiveTurnFromThreadStatus(
+      binding,
+      reason,
+      threadStatus,
+    );
+  }
+
+  private async reconcileActiveTurnFromThreadStatus(
+    binding: MessagingBindingRecord,
+    reason: string,
+    threadStatus: string | undefined,
+  ): Promise<MessagingActiveTurnSummary | undefined> {
+    const activeTurn = this.getActiveTurn(binding);
+    if (
+      !activeTurn ||
+      !["working", "waiting"].includes(activeTurn.status)
+    ) {
+      return activeTurn;
+    }
+
     if (threadStatus !== "idle") {
       return activeTurn;
     }
