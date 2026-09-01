@@ -30,7 +30,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import type { DesktopAppearanceTheme } from "@pwragent/shared";
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { stateDbPathForHomeRoot } from "./fixtures/readme-state-seeding";
 import { openStarMapWindow } from "./fixtures/star-map-window";
@@ -38,10 +38,8 @@ import {
   buildAuditSubAgents,
   seedThreadSubAgents,
 } from "./fixtures/sub-agent-state-seeding";
-import {
-  buildAuditDirectoryPins,
-  seedThreadPinnedRanks,
-} from "./fixtures/directory-pin-state-seeding";
+import { StateDb } from "../src/main/state/state-db";
+import { SqliteOverlayStore } from "../src/main/state/overlay-store-sqlite";
 
 const specDir = path.dirname(fileURLToPath(import.meta.url));
 
@@ -65,12 +63,23 @@ async function launchAuditApp(options?: {
   fixturePath?: string;
   /** Defaults to the harness default (dark). */
   theme?: DesktopAppearanceTheme;
+  /**
+   * Seed overlay state into the profile before boot. Prefer this to seeding
+   * after launch and reloading — the renderer does not re-poll on a direct
+   * sqlite mutation, so a post-launch seed costs a full renderer reload per
+   * theme. `StateDb.open` creates the profile directory, so the hook can run
+   * before anything else has.
+   */
+  preLaunchHook?: (homeRoot: string) => Promise<void>;
 }) {
   const app = await launchElectronApp({
     fixturePath:
       options?.fixturePath
       ?? path.resolve(specDir, "fixtures/smoke/replay.fixture.json"),
     ...(options?.theme ? { appearance: { theme: options.theme } } : {}),
+    ...(options?.preLaunchHook
+      ? { preLaunchHook: options.preLaunchHook }
+      : {}),
   });
   await app.window.emulateMedia({ reducedMotion: "reduce" });
   return app;
@@ -128,6 +137,13 @@ const DIRECTORIES_FIXTURE = path.resolve(
   "fixtures/a11y-directories/replay.fixture.json",
 );
 
+// The two threads the block pins, both on the audited directory. They are the
+// fixture's first two, so the pinned lane keeps the order the file lists.
+const DIRECTORIES_PINNED_THREAD_IDS = [
+  "thread-directories-01",
+  "thread-directories-02",
+];
+
 const WCAG_AA_TAGS = [
   "wcag2a",
   "wcag2aa",
@@ -147,6 +163,15 @@ const KNOWN_VIOLATIONS: ReadonlyArray<{
   rule: string;
   reason: string;
 }> = [];
+
+/**
+ * Direct `listitem` children of a list. `Locator.getByRole` matches every
+ * descendant, so a nested list's rows would be counted as though they were the
+ * outer list's own.
+ */
+function listItems(list: Locator): Locator {
+  return list.locator("> [role=listitem]");
+}
 
 async function runAxe(
   window: Page,
@@ -521,31 +546,61 @@ for (const theme of AUDIT_THEMES) {
       const app = await launchAuditApp({
         fixturePath: DIRECTORIES_FIXTURE,
         theme,
-      });
-      try {
         // Pins are desktop-local overlay state, not `thread/list` data, so no
         // fixture can produce them and the only UI path is a native context
         // menu. Without a pinned lane the directory renders undivided and the
-        // "Directory threads" disclosure never mounts.
-        seedThreadPinnedRanks({
-          pins: buildAuditDirectoryPins(),
-          stateDbPath: stateDbPathForHomeRoot(app.homeRoot),
-        });
-        // The renderer does not re-poll on a direct sqlite mutation.
-        await app.window.reload();
-
+        // "Directory threads" disclosure never mounts — the disclosure is what
+        // needs a pin, not the pin-drop boundary, which mounts off
+        // `onReorderThreadPins && directoryUnpinnedThreadCount > 0` and does
+        // not read the pinned count at all. Two rather than one so the lane
+        // has an order to get wrong.
+        //
+        // Through the app's own `setThreadPin` rather than a hand-written row:
+        // the storage key format and the overlay payload shape then have one
+        // owner instead of two that can drift apart silently.
+        preLaunchHook: async (homeRoot) => {
+          const stateDb = StateDb.open(stateDbPathForHomeRoot(homeRoot), {
+            profileName: "default",
+          });
+          try {
+            const overlay = new SqliteOverlayStore(stateDb);
+            for (const [index, threadId] of DIRECTORIES_PINNED_THREAD_IDS.entries()) {
+              await overlay.setThreadPin({
+                backend: "codex",
+                threadId,
+                pinnedRank: String((index + 1) * 1024),
+              });
+            }
+          } finally {
+            stateDb.close();
+          }
+        },
+      });
+      try {
         await app.window.getByRole("tab", { name: "directories" }).click();
 
         // Anchored, because Playwright matches an accessible name as a
         // substring by default and "Open new thread launchpad for PwrAgent"
         // is a sibling control on the same row. Anchored rather than `exact`
         // because the header's label is built by joining the directory name
-        // with its state — ", not configured on this instance" and the
-        // active/review counts all append to it.
+        // with its state (`[label, "not configured on this instance",
+        // activeCount, reviewCount].filter(Boolean).join(", ")`). `(,|$)`
+        // rather than `\b`, which only stops a WORD character — `^PwrAgent\b`
+        // also matches a sibling checkout called "PwrAgent-docs".
         const directory = app.window.getByRole("button", {
-          name: /^PwrAgent\b/,
+          name: /^PwrAgent(,|$)/,
         });
         await expect(directory).toBeVisible();
+
+        // Scoped to this directory's row. `Threads in ${label}` is only as
+        // unique as the label, which is a path basename — two checkouts of the
+        // same repo give two lists the same name, and an unscoped locator then
+        // fails Playwright strict mode rather than reporting anything about
+        // accessibility.
+        const threads = app.window
+          .locator(".directory-row")
+          .filter({ has: directory })
+          .getByRole("list", { name: /^Threads in PwrAgent/ });
 
         await test.step("expanded directory thread list", async () => {
           // The launch selection lands on `thread-directories-01`, and a
@@ -559,21 +614,21 @@ for (const theme of AUDIT_THEMES) {
           // rendered no threads would pass the axe scan below while auditing
           // nothing, and each control named here is one the fix had to keep
           // valid inside the list.
-          const threads = app.window.getByRole("list", {
-            name: "Threads in PwrAgent",
-          });
           await expect(threads).toBeVisible();
           await expect(
             threads.getByRole("button", {
               name: "Hide directory threads for PwrAgent",
+              exact: true,
             }),
           ).toBeVisible();
           await expect(
-            threads.getByRole("button", { name: "Show 2 more" }),
+            threads.getByRole("button", { name: "Show 2 more", exact: true }),
           ).toBeVisible();
           // Two pinned rows + the ten-row unpinned cap + the two controls,
           // each of which has to be a `listitem` for the list to be valid.
-          await expect(threads.getByRole("listitem")).toHaveCount(14);
+          // Direct children: `getByRole` matches DESCENDANTS, so it would also
+          // count a sub-thread list's own rows and read as fixture drift.
+          await expect(listItems(threads)).toHaveCount(14);
 
           await runAxe(app.window, "directories lens, expanded directory");
         });
@@ -582,11 +637,10 @@ for (const theme of AUDIT_THEMES) {
           // "Show more" reveals the rows past the cap. They mount as
           // siblings of the control rather than inside a second list, so the
           // scan is worth repeating with them present.
-          const threads = app.window.getByRole("list", {
-            name: "Threads in PwrAgent",
-          });
-          await threads.getByRole("button", { name: "Show 2 more" }).click();
-          await expect(threads.getByRole("listitem")).toHaveCount(16);
+          await threads
+            .getByRole("button", { name: "Show 2 more", exact: true })
+            .click();
+          await expect(listItems(threads)).toHaveCount(16);
           await runAxe(app.window, "directories lens, unpinned overflow");
         });
 
@@ -596,9 +650,7 @@ for (const theme of AUDIT_THEMES) {
           // directory that does not hold the selected thread.
           await directory.click();
           await expect(directory).toHaveAttribute("aria-expanded", "false");
-          await expect(
-            app.window.getByRole("list", { name: "Threads in PwrAgent" }),
-          ).toHaveCount(0);
+          await expect(threads).toHaveCount(0);
           await runAxe(app.window, "directories lens, collapsed");
         });
       } finally {

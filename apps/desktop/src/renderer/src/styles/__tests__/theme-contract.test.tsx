@@ -210,9 +210,39 @@ describe("Tangerine Terminal theme contract", () => {
     expect(painted).toEqual(["running", "failed"]);
   });
 
+  it("keeps the Directories list-item shim boxless", () => {
+    // `.directory-row__threads-slot` exists only to carry `role="listitem"`
+    // for the controls and sub-thread list inside `.directory-row__threads`
+    // (a `role="list"`, which owns only listitem). `display: contents` is what
+    // makes that free: the wrapper generates no box, so each child stays a
+    // direct flex item of the list. Swap it for a box and a <button> child
+    // re-parents into a block container, where it sizes to fit-content
+    // whatever its own `display` is — that alone cuts the full-width divider
+    // band down to its label, with nothing red anywhere (the Directories lens
+    // has no visual-regression snapshot).
+    expect(extractRuleBody(css, ".directory-row__threads-slot")).toMatch(
+      /display:\s*contents;/,
+    );
+  });
+
   it("keeps compact row actions at the WCAG 2.2 target-size floor", () => {
     // 2.5.8 AA is 24x24. Padding alone left these around 22px.
     expect(extractRuleBody(css, ".live-strip__item-action")).toMatch(
+      /min-height:\s*24px;/,
+    );
+
+    // The Directories lane's two in-list controls. The "Directory threads"
+    // disclosure is an 11px uppercase label, which left the button 13px tall
+    // — under the floor, with 23px of safe clickable space between the rows
+    // above and below it. Its sibling "Show more" lands at ~24.4px on font
+    // metrics alone (8px padding + 2px border + a 12px `normal` line box), so
+    // it clears the floor only by rounding and a `line-height` anywhere
+    // upstream would drop it under. Both are pinned because the CSS comments
+    // say "do not trade this back for density" and a comment is not a gate.
+    expect(extractRuleBody(css, ".directory-row__thread-divider")).toMatch(
+      /min-height:\s*24px;/,
+    );
+    expect(extractRuleBody(css, ".directory-row__show-more")).toMatch(
       /min-height:\s*24px;/,
     );
 

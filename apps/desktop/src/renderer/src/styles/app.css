@@ -6191,20 +6191,24 @@ textarea,
   padding-right: 8px;
 }
 
-.directory-row__threads-control {
-  /* `role="listitem"` box around the two controls that sit between the
-     rows (the "Directory threads" disclosure and "Show more"), so they
-     are valid children of the list the thread rows need as their parent
-     — a bare <button> child fails `aria-required-children`.
+.directory-row__threads-slot {
+  /* `role="listitem"` box around the children of `.directory-row__threads`
+     that are not thread rows: the "Directory threads" disclosure, "Show
+     more", and a row's sub-thread list. That container is a `role="list"`
+     (its rows carry `role="listitem"` and need it), and a list owns only
+     listitem — so a bare <button> or a nested `role="list"` there fails
+     `aria-required-children`. Wrapping the sub-thread list gives the
+     `<li><ul>...</ul></li>` shape.
 
-     Flex column rather than a plain block: a <button> sizes to
-     fit-content in a block box whatever its own `display` is, which cut
-     the full-width divider band down to its label. As a flex item again
-     it stretches exactly as it did when `.directory-row__threads` was
-     its direct parent. `.directory-row__show-more` keeps its own
-     `align-self: flex-start`, so it still hugs its text. */
-  display: flex;
-  flex-direction: column;
+     `display: contents` for the same reason `.transcript-list__item`
+     uses it (see TranscriptList.tsx): the wrapper generates no box, so
+     each control stays a direct flex child of `.directory-row__threads`
+     and its layout is unchanged by construction rather than by argument.
+     A wrapper that generated a box would re-parent a <button> into a
+     block container, where it sizes to fit-content whatever its own
+     `display` is — that alone cut the full-width divider band down to
+     its label. */
+  display: contents;
 }
 
 .directory-row__pin-drop-boundary {
@@ -6366,6 +6370,12 @@ textarea,
 .directory-row__show-more {
   align-self: flex-start;
   margin-top: 2px;
+  /* WCAG 2.5.8, same as the divider above. Without it this lands at
+     ~24.4px — 8px padding + 2px border + a 12px font's `normal` line box —
+     so it clears the 24px floor on font metrics alone. Adding a
+     `line-height` anywhere upstream would drop it under with no other
+     visible cause. */
+  min-height: 24px;
   padding: 4px 10px;
   border: 1px solid transparent;
   border-radius: 6px;

@@ -112,14 +112,27 @@ function renderSidebar(params: {
 }
 
 // `listitem` is no longer a synonym for "thread row": the Directories lane's
-// "Directory threads" disclosure and "Show more" are wrapped in one each, so
-// they are valid children of the list its rows need as their parent. Filter to
-// the row shell, or every ordering assertion below picks up a control as an
-// untitled row.
+// "Directory threads" disclosure, "Show more", a row's sub-thread list, and the
+// pin-drop boundary are each wrapped in one, so they are valid children of the
+// list its rows need as their parent. Without filtering, every ordering
+// assertion below picks a control up as an untitled row.
+//
+// Excluding the known non-rows rather than including `.thread-row-shell` keeps
+// what the old unfiltered helper also asserted: that nothing UNEXPECTED is in
+// this list. `NativeSubAgentsDisclosure` is a `listitem` too and is reachable
+// from these lenses, so an inclusion filter would silently stop covering it —
+// and would survive a rename of the wrapper class, where this fails loudly.
+const NON_ROW_LIST_ITEM_CLASSES = [
+  "directory-row__threads-slot",
+  "directory-row__pin-drop-boundary",
+];
+
 function threadRows(scope: HTMLElement): HTMLElement[] {
   return within(scope)
     .getAllByRole("listitem")
-    .filter((row) => row.classList.contains("thread-row-shell"));
+    .filter((row) =>
+      !NON_ROW_LIST_ITEM_CLASSES.some((name) => row.classList.contains(name)),
+    );
 }
 
 function threadTitles(): string[] {
