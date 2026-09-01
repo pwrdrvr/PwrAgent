@@ -353,6 +353,97 @@ describe("useThreadNavigation", () => {
     ]);
   });
 
+  it("never displays startup rows without their initial fallback selection", async () => {
+    const emptySnapshot: NavigationSnapshot = {
+      backend: "all",
+      fetchedAt: 1,
+      unchanged: false,
+      inboxThreadKeys: [],
+      threads: [],
+      directories: [],
+      launchpadDefaults: {
+        backend: "codex",
+        executionMode: "default",
+      },
+    };
+    const populatedSnapshot: NavigationSnapshot = {
+      ...emptySnapshot,
+      fetchedAt: 2,
+      inboxThreadKeys: ["codex:thread-1"],
+      threads: [
+        {
+          id: "thread-1",
+          title: "First discovered thread",
+          titleSource: "explicit",
+          source: "codex",
+          linkedDirectories: [],
+          inbox: { inInbox: true },
+          updatedAt: 1_000,
+        },
+      ],
+    };
+    const recentResponse = createDeferred<
+      Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>>
+    >();
+    const fullResponse = createDeferred<
+      Awaited<ReturnType<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>>
+    >();
+    const getNavigationSnapshotTransport = vi
+      .fn<NonNullable<DesktopApi["getNavigationSnapshotTransport"]>>()
+      .mockReturnValueOnce(recentResponse.promise)
+      .mockReturnValueOnce(fullResponse.promise);
+    const renderedStates: Array<{
+      selectedThreadId?: string;
+      threadCount: number;
+    }> = [];
+    const desktopApi: DesktopApi = {
+      getNavigationSnapshotTransport,
+      onAgentEvent: () => () => undefined,
+    };
+
+    const { result } = renderHook(() => {
+      const navigation = useThreadNavigation(desktopApi, {
+        progressiveInitialRefresh: true,
+      });
+      renderedStates.push({
+        selectedThreadId: navigation.selectedThread?.id,
+        threadCount: navigation.threads.length,
+      });
+      return navigation;
+    });
+
+    act(() => {
+      recentResponse.resolve({
+        kind: "full",
+        revision: "empty-revision",
+        snapshot: emptySnapshot,
+      });
+    });
+    await waitFor(() => {
+      expect(getNavigationSnapshotTransport).toHaveBeenCalledTimes(2);
+    });
+
+    act(() => {
+      fullResponse.resolve({
+        kind: "full",
+        revision: "populated-revision",
+        snapshot: populatedSnapshot,
+      });
+    });
+    await waitFor(() => {
+      expect(result.current.selectedThread?.id).toBe("thread-1");
+    });
+
+    expect(
+      renderedStates.filter((state) => state.threadCount > 0),
+    ).toEqual([
+      {
+        selectedThreadId: "thread-1",
+        threadCount: 1,
+      },
+    ]);
+  });
+
   it("defers navigation deltas during a drag and preserves the dropped pin rank", async () => {
     const buildSnapshot = (title: string): NavigationSnapshot => ({
       backend: "all",

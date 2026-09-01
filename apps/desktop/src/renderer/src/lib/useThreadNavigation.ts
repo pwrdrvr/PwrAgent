@@ -3217,6 +3217,7 @@ export function useThreadNavigation(
   const threadViewVisible = options.threadViewVisible ?? true;
   const [browseMode, setBrowseMode] = useState<BrowseMode>(readBridgedBrowseMode);
   const [selectedItemKey, setSelectedItemKey] = useState<string>();
+  const initialSelectionEstablishedRef = useRef(false);
   const [pendingSeenThreadKey, setPendingSeenThreadKey] = useState<string>();
   const [retainedUnreadThread, setRetainedUnreadThread] =
     useState<NavigationThreadSummary>();
@@ -5076,9 +5077,59 @@ export function useThreadNavigation(
     [threads],
   );
 
+  const initialFallbackSelectionKey = useMemo(() => {
+    if (
+      selectedItemKey
+      || initialSelectionEstablishedRef.current
+      || !state.response
+    ) {
+      return undefined;
+    }
+
+    return getFallbackSelectionKey(
+      {
+        ...state.response,
+        directories,
+        threads,
+      },
+      optimisticThread
+        ? threadSummaryIdentityKey(optimisticThread)
+        : undefined,
+    );
+  }, [directories, optimisticThread, selectedItemKey, state.response, threads]);
+  const displaySelectionKey = selectedItemKey ?? initialFallbackSelectionKey;
+  useEffect(() => {
+    if (selectedItemKey) {
+      initialSelectionEstablishedRef.current = true;
+      return;
+    }
+    if (!initialFallbackSelectionKey) {
+      if (
+        state.response
+        && state.response.providerRefresh?.state !== "checking"
+      ) {
+        // An empty settled startup is still a completed selection decision.
+        // Do not let a later operator action that adds a directory turn into
+        // an implicit navigation to its launchpad.
+        initialSelectionEstablishedRef.current = true;
+      }
+      return;
+    }
+
+    // The startup snapshot and its selection are separate React state writes.
+    // Under a loaded renderer the selectable rows can commit first, leaving a
+    // visible but unselected thread or launchpad until the selection update is
+    // scheduled. Derive the first display selection from the published rows,
+    // then commit it for subsequent user-driven navigation. Once a real
+    // selection has existed, an intentional clear (for example Cancel on a
+    // launchpad) remains clear instead of being auto-selected again.
+    initialSelectionEstablishedRef.current = true;
+    setSelectedItemKey(initialFallbackSelectionKey);
+  }, [initialFallbackSelectionKey, selectedItemKey, state.response]);
+
   const activeFederatedLaunchpad =
     federatedLaunchpad
-    && selectedItemKey === buildFederatedLaunchpadSelectionKey(
+    && displaySelectionKey === buildFederatedLaunchpadSelectionKey(
       federatedLaunchpad.target,
     )
       ? federatedLaunchpad
@@ -5087,15 +5138,15 @@ export function useThreadNavigation(
 
   const selectedThreadKey = useMemo(() => {
     if (
-      selectedItemKey
-      && !getDirectoryKeyFromLaunchpadSelection(selectedItemKey)
-      && !isFederatedLaunchpadSelectionKey(selectedItemKey)
+      displaySelectionKey
+      && !getDirectoryKeyFromLaunchpadSelection(displaySelectionKey)
+      && !isFederatedLaunchpadSelectionKey(displaySelectionKey)
     ) {
-      return selectedItemKey;
+      return displaySelectionKey;
     }
 
     return undefined;
-  }, [selectedItemKey]);
+  }, [displaySelectionKey]);
 
   const selectedThread = useMemo<NavigationThreadSummary | undefined>(
     () =>
@@ -5112,7 +5163,9 @@ export function useThreadNavigation(
       return activeFederatedLaunchpad.directory;
     }
 
-    const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
+    const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(
+      displaySelectionKey,
+    );
     if (launchpadDirectoryKey) {
       return directories.find((directory) => directory.key === launchpadDirectoryKey);
     }
@@ -5124,20 +5177,27 @@ export function useThreadNavigation(
     return directories.find((directory) =>
       directory.threadKeys.includes(selectedThreadKey)
     );
-  }, [activeFederatedLaunchpad, directories, selectedItemKey, selectedThreadKey]);
+  }, [
+    activeFederatedLaunchpad,
+    directories,
+    displaySelectionKey,
+    selectedThreadKey,
+  ]);
   const selectedLaunchpad = useMemo(() => {
     if (activeFederatedLaunchpad) {
       return activeFederatedLaunchpad.launchpad;
     }
 
-    const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(selectedItemKey);
+    const launchpadDirectoryKey = getDirectoryKeyFromLaunchpadSelection(
+      displaySelectionKey,
+    );
     if (!launchpadDirectoryKey) {
       return undefined;
     }
 
     return directories.find((directory) => directory.key === launchpadDirectoryKey)
       ?.launchpad;
-  }, [activeFederatedLaunchpad, directories, selectedItemKey]);
+  }, [activeFederatedLaunchpad, directories, displaySelectionKey]);
 
   // The directory label the New Thread button would resolve to with its
   // default (context-aware) behavior, or undefined when that resolves to the
@@ -8590,7 +8650,7 @@ export function useThreadNavigation(
     removeDirectory,
     selectDirectoryLaunchpad,
     selectedDirectory,
-    selectedItemKey,
+    selectedItemKey: displaySelectionKey,
     selectedLaunchpad,
     selectedThread,
     selectedThreadKey,
