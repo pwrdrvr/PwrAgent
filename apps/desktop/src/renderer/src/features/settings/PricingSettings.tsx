@@ -18,6 +18,7 @@ import {
   SettingsSection,
   SettingsSectionStack,
   ToggleField,
+  useSettingsFieldPending,
 } from "./SettingsLayout";
 import { sourceBadge } from "./settings-fields";
 
@@ -67,6 +68,13 @@ export function PricingSettings(props: {
     || toolOutputAlerts.repeatedLargeOutputsEnabled.value
     || toolOutputAlerts.repeatedQueuedChecksEnabled.value;
   const displayControlsDisabled = props.saving || !threadPricingSummary.value;
+  // "Price displays" is a multi-select pair, not a radio group, so it cannot
+  // use `SegmentedField` — but it sits directly under a `ToggleField` and
+  // writes the same config, and a silent neighbour reads as the pending
+  // affordance being broken. One tracker per button so the ring lands on the
+  // one the operator pressed.
+  const usdDisplayPending = useSettingsFieldPending();
+  const creditsDisplayPending = useSettingsFieldPending();
   const repeatedLargeOutputDescription =
     `Alert after ${toolOutputAlerts.repeatedLargeOutputMinimumCalls.value.toLocaleString()} tool calls in one turn each produce at least ${toolOutputAlerts.repeatedLargeOutputMinimumPercent.value.toLocaleString()}% of the model-visible output cap.`;
 
@@ -101,6 +109,7 @@ export function PricingSettings(props: {
             label="Price displays"
             sub="Choose one or both estimates to show with thread usage."
             help="List Price uses each provider's published rates. Codex Credits use Codex's token-based credit rate card."
+            pending={usdDisplayPending.pending || creditsDisplayPending.pending}
             control={
               <div
                 className="settings-segmented"
@@ -108,6 +117,7 @@ export function PricingSettings(props: {
                 aria-label="Price displays"
               >
                 <button
+                  aria-busy={usdDisplayPending.pending || undefined}
                   aria-pressed={threadPricingDisplayUsd.value}
                   className={`settings-segmented__button${
                     threadPricingDisplayUsd.value ? " is-active" : ""
@@ -115,14 +125,17 @@ export function PricingSettings(props: {
                   disabled={displayControlsDisabled}
                   type="button"
                   onClick={() => {
-                    void props.onThreadPricingDisplayUsdChange(
-                      !threadPricingDisplayUsd.value,
+                    usdDisplayPending.track(
+                      props.onThreadPricingDisplayUsdChange(
+                        !threadPricingDisplayUsd.value,
+                      ),
                     );
                   }}
                 >
                   List Price
                 </button>
                 <button
+                  aria-busy={creditsDisplayPending.pending || undefined}
                   aria-pressed={threadPricingDisplayCodexCredits.value}
                   className={`settings-segmented__button${
                     threadPricingDisplayCodexCredits.value ? " is-active" : ""
@@ -130,8 +143,10 @@ export function PricingSettings(props: {
                   disabled={displayControlsDisabled}
                   type="button"
                   onClick={() => {
-                    void props.onThreadPricingDisplayCodexCreditsChange(
-                      !threadPricingDisplayCodexCredits.value,
+                    creditsDisplayPending.track(
+                      props.onThreadPricingDisplayCodexCreditsChange(
+                        !threadPricingDisplayCodexCredits.value,
+                      ),
                     );
                   }}
                 >

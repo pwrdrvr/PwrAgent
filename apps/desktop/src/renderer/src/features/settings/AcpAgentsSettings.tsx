@@ -391,7 +391,7 @@ function AcpAgentSection(props: {
             checked={enabled}
             disabled={props.saving || pathUpdating || props.refreshing}
             label="Enabled"
-            switchLabel={`Enable ${entry.name}`}
+            switchQualifier={entry.name}
             sub="Show this agent in the model picker and launch threads with it."
             onChange={(next) => {
               // Guarded above, but the optional call still types as possibly
@@ -407,7 +407,11 @@ function AcpAgentSection(props: {
             checked={props.managedGrokBuilds}
             disabled={props.saving || pathUpdating || props.refreshing || !enabled}
             label="PwrAgent build"
-            switchLabel="Use managed PwrAgent Grok builds"
+            switchQualifier="Grok"
+            // The row holds pending across the config write AND the agent
+            // rescan chained below, so "Saving…" would name only the first
+            // and shortest part of the wait.
+            pendingLabel="Saving and rescanning…"
             sub="Download verified releases from pwrdrvr/grok-build and prefer the newest one for new threads. Packaged macOS and Windows apps require platform signing; manual paths still win."
             onChange={(next) => {
               // The refresh is awaited rather than floated, so the row stays

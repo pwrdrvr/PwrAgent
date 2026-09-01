@@ -173,7 +173,7 @@ export function ExperimentalSettings(props: {
             checked={tokenMiserDefaultEnabled.value}
             disabled={props.saving || !tokenMiserEnabled.value}
             label="Enable on threads by default"
-            switchLabel="Enable Token Miser on threads by default"
+            switchQualifier="Token Miser"
             sub="Threads without an explicit override inherit this setting. Individual threads can still turn Token Miser on or off from the composer menu."
             help="On preserves the original Token Miser behavior: every Codex thread uses it unless opted out. Off makes Token Miser available as a per-thread opt-in."
             source={sourceBadge(tokenMiserDefaultEnabled)}

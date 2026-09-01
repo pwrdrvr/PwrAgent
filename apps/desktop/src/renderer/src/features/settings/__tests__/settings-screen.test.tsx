@@ -3051,7 +3051,7 @@ describe("SettingsScreen", () => {
 
     expect(screen.getByText("Opt-in")).toBeInTheDocument();
     const defaultSwitch = screen.getByRole("switch", {
-      name: "Enable Token Miser on threads by default",
+      name: "Enable on threads by default — Token Miser",
     });
     expect(defaultSwitch).toHaveAttribute("aria-checked", "false");
     expect(defaultSwitch).not.toBeDisabled();

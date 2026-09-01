@@ -11,6 +11,10 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from "react";
+import {
+  createRendererErrorReport,
+  reportRendererError,
+} from "../../lib/renderer-error-reporting";
 import { SettingsSwitch } from "./SettingsSwitch";
 
 /**
@@ -591,14 +595,23 @@ export function SettingsField(props: {
    *  or a segmented group. A full-width input has none, and the indicator
    *  would wrap under it. */
   pending?: boolean;
+  /** Overrides the indicator's "Saving…" wording, for a wait that is not a
+   *  config write — a probe or a count the row is holding open. */
+  pendingLabel?: string;
 }) {
   const control = props.pending === undefined ? (
     props.control
   ) : (
-    <span className="settings-control-row">
+    // A div, not a span: `SegmentedField`'s control is a `role="radiogroup"`
+    // div, and flow content inside phrasing content is invalid markup that an
+    // HTML parser reparents out of the flex row.
+    <div className="settings-control-row">
       {props.control}
-      <SettingsPendingIndicator pending={props.pending} />
-    </span>
+      <SettingsPendingIndicator
+        label={props.pendingLabel}
+        pending={props.pending}
+      />
+    </div>
   );
 
   return (
@@ -649,26 +662,31 @@ export function useSettingsFieldPending(): {
   track: (result: Promise<unknown>) => void;
 } {
   const [inFlight, setInFlight] = useState(0);
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
 
   const track = useCallback((result: Promise<unknown>): void => {
     setInFlight((current) => current + 1);
     const settle = () => {
-      // Switching panes can unmount the field before the write returns.
-      if (mountedRef.current) {
-        setInFlight((current) => Math.max(0, current - 1));
-      }
+      setInFlight((current) => Math.max(0, current - 1));
     };
-    // Attaching a rejection handler here also keeps a failed write from
-    // surfacing as an unhandled rejection; `writeConfig` owns the error copy.
-    result.then(settle, settle);
+    // `Promise.resolve` rather than `result.then`: `track` is exported, and a
+    // caller handing it a non-thenable would otherwise throw out of the click
+    // handler with `inFlight` already incremented — a row stuck at "Saving…"
+    // with no write outstanding.
+    //
+    // Settling on rejection is what clears the row, but the handler must not
+    // be where the error stops. `void save(...)` used to let a rejection reach
+    // the `unhandledrejection` reporter in lib/renderer-error-reporting.ts;
+    // most writes go through `writeConfig`, which catches and owns the error
+    // copy, but not all of them do (`onMessagingEnabledChange` calls
+    // `setMessagingEnabled` directly), so re-report rather than swallow.
+    Promise.resolve(result).then(settle, (error: unknown) => {
+      settle();
+      // "unhandled-rejection" is the honest source: this is the report the
+      // global handler would have filed before `track` attached a handler.
+      reportRendererError(
+        createRendererErrorReport("unhandled-rejection", error),
+      );
+    });
   }, []);
 
   return { pending: inFlight > 0, track };
@@ -710,16 +728,20 @@ export function ToggleField(props: {
   checked: boolean;
   disabled?: boolean;
   label: string;
-  /** Accessible name for the switch itself, when the row's label only reads
-   *  correctly beside it — an "Enabled" row inside a named agent's card needs
-   *  the switch to say which agent. Defaults to `label`. */
-  switchLabel?: string;
+  /** Disambiguates the switch when the row's label only reads correctly in
+   *  place — an "Enabled" row inside a named agent's card needs the switch to
+   *  say which agent. Appended to `label` rather than replacing it: WCAG 2.5.3
+   *  Label in Name requires the visible text to appear in the accessible name,
+   *  or a Voice Control user saying "click Enabled" matches nothing. */
+  switchQualifier?: string;
   sub?: ReactNode;
   help?: ReactNode;
   source?: ReactNode;
   /** Follow-on controls for the row (a confirmation prompt, an apply button),
    *  rendered under the switch rather than beside it. */
   actions?: ReactNode;
+  /** Overrides the pending indicator's "Saving…" wording. */
+  pendingLabel?: string;
   onChange: (value: boolean) => Promise<unknown>;
 }) {
   const { pending, track } = useSettingsFieldPending();
@@ -732,11 +754,16 @@ export function ToggleField(props: {
       source={props.source}
       actions={props.actions}
       pending={pending}
+      pendingLabel={props.pendingLabel}
       control={
         <SettingsSwitch
           checked={props.checked}
           disabled={props.disabled}
-          label={props.switchLabel ?? props.label}
+          label={
+            props.switchQualifier
+              ? `${props.label} — ${props.switchQualifier}`
+              : props.label
+          }
           pending={pending}
           onChange={(value) => track(props.onChange(value))}
         />
@@ -761,10 +788,11 @@ export function SegmentedField<TValue extends string>(props: {
   onChange: (value: TValue) => Promise<unknown>;
 }) {
   const { pending, track } = useSettingsFieldPending();
-  const [lastPicked, setLastPicked] = useState<TValue>();
-  // Derived rather than cleared on settle: once the field is idle there is
-  // no busy segment, whatever was picked last.
-  const busyValue = pending ? lastPicked : undefined;
+  // Which segments have a write outstanding, counted per value. A single
+  // "last picked" would mark the wrong segment busy as soon as two writes
+  // overlap: pick A, pick B before A returns, B settles first, and the ring
+  // sits on B while A is still going.
+  const [busyValues, setBusyValues] = useState<ReadonlyArray<TValue>>([]);
 
   return (
     <SettingsField
@@ -782,7 +810,7 @@ export function SegmentedField<TValue extends string>(props: {
           {props.options.map((option) => (
             <button
               key={option.value}
-              aria-busy={busyValue === option.value ? true : undefined}
+              aria-busy={busyValues.includes(option.value) ? true : undefined}
               aria-checked={props.value === option.value}
               className={`settings-segmented__button${
                 props.value === option.value ? " is-active" : ""
@@ -791,8 +819,29 @@ export function SegmentedField<TValue extends string>(props: {
               role="radio"
               type="button"
               onClick={() => {
-                setLastPicked(option.value);
-                track(props.onChange(option.value));
+                // Re-clicking the selected segment is not a change. Several
+                // panes route through a delta builder that bails when nothing
+                // moved, so tracking it would announce "Saving…" for a write
+                // that never happens.
+                if (option.value === props.value) {
+                  return;
+                }
+                setBusyValues((current) => [...current, option.value]);
+                const clear = () => {
+                  setBusyValues((current) => {
+                    const at = current.indexOf(option.value);
+                    if (at < 0) {
+                      return current;
+                    }
+                    return [
+                      ...current.slice(0, at),
+                      ...current.slice(at + 1),
+                    ];
+                  });
+                };
+                const result = Promise.resolve(props.onChange(option.value));
+                result.then(clear, clear);
+                track(result);
               }}
             >
               {option.label}

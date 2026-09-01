@@ -1,6 +1,6 @@
 import "@testing-library/jest-dom/vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SegmentedField, SettingsField, ToggleField } from "../SettingsLayout";
 
 afterEach(() => {
@@ -9,14 +9,14 @@ afterEach(() => {
 
 /** A write whose settle point the test controls, standing in for the
  *  config-write + adapter-reload round trip a real toggle triggers. */
-function deferred(): {
-  promise: Promise<void>;
-  resolve: () => void;
+function deferred<TValue = void>(): {
+  promise: Promise<TValue>;
+  resolve: (value: TValue) => void;
   reject: (error: Error) => void;
 } {
-  let resolve!: () => void;
+  let resolve!: (value: TValue) => void;
   let reject!: (error: Error) => void;
-  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+  const promise = new Promise<TValue>((resolvePromise, rejectPromise) => {
     resolve = resolvePromise;
     reject = rejectPromise;
   });
@@ -98,6 +98,106 @@ describe("settings field pending state", () => {
     expect(
       screen.getByRole("switch", { name: "Slack" }),
     ).not.toHaveAttribute("aria-busy");
+  });
+
+  it("clears pending when the write resolves false, the way writeConfig fails", async () => {
+    // `writeConfig` catches its own errors and resolves `false` — it never
+    // rejects — so the rejecting test above does not cover the shape the app
+    // actually produces. The row has to come back to rest either way.
+    const write = deferred<boolean>();
+    render(
+      <ToggleField
+        checked={false}
+        label="Slack"
+        source="config"
+        onChange={() => write.promise}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("switch", { name: "Slack" }));
+    await waitFor(() => {
+      expect(spinner()).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      write.resolve(false);
+      await write.promise;
+    });
+
+    expect(spinner()).toBeNull();
+    expect(
+      screen.getByRole("switch", { name: "Slack" }),
+    ).not.toHaveAttribute("aria-busy");
+  });
+
+  it("marks the segment still writing, not the one clicked last", async () => {
+    const first = deferred();
+    const second = deferred();
+    const writes = [first, second];
+    render(
+      <SegmentedField
+        label="Tool updates"
+        options={[
+          { label: "Every message", value: "every" },
+          { label: "@ mention only", value: "mention" },
+          { label: "Off", value: "off" },
+        ]}
+        source="config"
+        value="off"
+        onChange={() => writes.shift()?.promise ?? Promise.resolve()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "Every message" }));
+    fireEvent.click(screen.getByRole("radio", { name: "@ mention only" }));
+
+    // The second pick settles first; the first write is still out.
+    await act(async () => {
+      second.resolve();
+      await second.promise;
+    });
+
+    expect(
+      screen.getByRole("radio", { name: "Every message" }),
+    ).toHaveAttribute("aria-busy", "true");
+    expect(
+      screen.getByRole("radio", { name: "@ mention only" }),
+    ).not.toHaveAttribute("aria-busy");
+    expect(spinner()).toBeInTheDocument();
+
+    await act(async () => {
+      first.resolve();
+      await first.promise;
+    });
+
+    expect(spinner()).toBeNull();
+    expect(
+      screen.getByRole("radio", { name: "Every message" }),
+    ).not.toHaveAttribute("aria-busy");
+  });
+
+  it("does not announce a save when the selected segment is re-clicked", () => {
+    const onChange = vi.fn(() => Promise.resolve());
+    render(
+      <SegmentedField
+        label="Tool updates"
+        options={[
+          { label: "Every message", value: "every" },
+          { label: "Off", value: "off" },
+        ]}
+        source="config"
+        value="off"
+        onChange={onChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("radio", { name: "Off" }));
+
+    // Several panes route through a delta builder that bails when nothing
+    // moved, so a tracked re-click would show "Saving…" for no write at all.
+    expect(onChange).not.toHaveBeenCalled();
+    expect(spinner()).toBeNull();
+    expect(document.querySelector(".settings-pending")).toBeNull();
   });
 
   it("leaves a sibling field untouched while one field saves", async () => {
@@ -247,16 +347,19 @@ describe("settings field pending state", () => {
       <ToggleField
         checked={false}
         label="Enabled"
-        switchLabel="Enable Grok"
+        switchQualifier="Grok"
         source="config"
         onChange={() => Promise.resolve()}
       />,
     );
 
-    // The row reads "Enabled" beside its card heading; the switch has to
-    // stand alone in a screen reader's control list.
-    expect(screen.getByRole("switch", { name: "Enable Grok" })).toBeInTheDocument();
-    expect(screen.queryByRole("switch", { name: "Enabled" })).toBeNull();
+    // The row reads "Enabled" beside its card heading, so the switch has to
+    // name the agent to stand alone in a screen reader's control list — but
+    // WCAG 2.5.3 Label in Name requires the visible text to survive inside
+    // the accessible name, or Voice Control's "click Enabled" matches nothing.
+    const toggle = screen.getByRole("switch", { name: "Enabled — Grok" });
+    expect(toggle).toBeInTheDocument();
+    expect(toggle.getAttribute("aria-label")).toContain("Enabled");
   });
 
   it("keeps a toggle's actions out of the control row", () => {
@@ -279,14 +382,26 @@ describe("settings field pending state", () => {
 
   it("renders no pending affordance for a field that did not opt in", () => {
     render(
-      <SettingsField
-        label="Workspace URL"
-        control={<input aria-label="Workspace URL" />}
-      />,
+      <>
+        <SettingsField
+          label="Workspace URL"
+          control={<input aria-label="Workspace URL" />}
+        />
+        <SettingsField
+          label="Signing secret"
+          pending={false}
+          control={<input aria-label="Signing secret" />}
+        />
+      </>,
     );
 
+    // Both halves matter: asserting only absence would keep passing if the
+    // whole affordance were deleted, so the opted-in field has to prove the
+    // row is there to be absent from.
+    const rows = document.querySelectorAll(".settings-control-row");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.querySelector("input[aria-label='Signing secret']")).not.toBeNull();
     expect(document.querySelector(".settings-pending")).toBeNull();
-    expect(document.querySelector(".settings-control-row")).toBeNull();
   });
 
   it("keeps a segmented field's actions out of the control row", () => {

@@ -947,11 +947,13 @@ function ProviderModelDefaultsSettings(props: {
                         }
                       });
                     }
-                    // Turning it off writes nothing: it counts the affected
-                    // threads and renders a confirmation, which is its own
-                    // feedback. A "Saving…" ring would name the wrong work.
-                    void previewFastAction("disable");
-                    return Promise.resolve();
+                    // Turning it off writes nothing, but it is not instant:
+                    // the confirmation cannot render until an IPC navigation
+                    // snapshot comes back with the affected thread count, and
+                    // the switch is neither disabled nor changed while it is
+                    // out. Hold pending across that with wording that names
+                    // the count rather than a save.
+                    return previewFastAction("disable");
                   },
                   onCancel: () => setPendingFastAction(undefined),
                   onConfirm: () => void applyFastAction(),
@@ -1460,20 +1462,17 @@ function ProviderModelDefaultField(props: {
                 />
               ) : (
                 <div className="settings-inline-actions">
-                  <span className="settings-control-row">
-                    <SettingsSwitch
-                      checked={props.fastMode.allowed}
-                      disabled={props.disabled}
-                      label="Allow Codex Fast mode"
-                      pending={fastAllowPending}
-                      onChange={(allowed) =>
-                        trackFastAllow(
-                          props.fastMode?.onAllowChange(allowed)
-                            ?? Promise.resolve(),
-                        )}
-                    />
-                    <SettingsPendingIndicator pending={fastAllowPending} />
-                  </span>
+                  <SettingsSwitch
+                    checked={props.fastMode.allowed}
+                    disabled={props.disabled}
+                    label="Allow Codex Fast mode"
+                    pending={fastAllowPending}
+                    onChange={(allowed) =>
+                      trackFastAllow(
+                        props.fastMode?.onAllowChange(allowed)
+                          ?? Promise.resolve(),
+                      )}
+                  />
                   <button
                     aria-label="Turn Fast off everywhere"
                     className="button button--secondary"
@@ -1483,6 +1482,17 @@ function ProviderModelDefaultField(props: {
                   >
                     Turn off everywhere
                   </button>
+                  {/* A sibling of the row rather than a `.settings-control-row`
+                      wrapper: `.settings-inline-actions` wraps and centers, so
+                      wrapping the switch would top-align it and could push
+                      "Turn off everywhere" to a second line mid-save. Last in
+                      the row, the indicator has nothing to displace. */}
+                  <SettingsPendingIndicator
+                    label={
+                      props.fastMode.allowed ? "Checking…" : undefined
+                    }
+                    pending={fastAllowPending}
+                  />
                 </div>
               )}
             </div>

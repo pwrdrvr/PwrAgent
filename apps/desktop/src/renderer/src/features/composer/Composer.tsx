@@ -12015,6 +12015,7 @@ export function Composer(props: ComposerProps) {
               // command picker. Click left to run, right to choose.
               <div className="composer__run-split">
                 <button
+                  aria-busy={currentThreadEnvActionStarting || undefined}
                   aria-label="Run"
                   className="composer__run-split-play tooltip-target"
                   data-tooltip={

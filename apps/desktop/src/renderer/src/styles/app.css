@@ -29387,8 +29387,11 @@ button.pricing-token-miser__folded:focus-visible {
    The ring reads --border-subtle and the moving arc reads --accent, per
    docs/UI-THEME.md.
 
-   Always decorative: pair it with text that names what is happening
-   (`.settings-pending` does). A bare ring is not an accessible status. */
+   Always decorative — `aria-hidden` it and give the busy state to something
+   a screen reader can read: adjacent text naming the work (`.settings-pending`
+   does) or `aria-busy` on the control. A bare ring is not an accessible
+   status. Whether a ring stands alone also decides its reduced-motion
+   behavior; see the media query below. */
 
 .pending-spinner {
   flex: 0 0 auto;
@@ -29418,11 +29421,17 @@ button.pricing-token-miser__folded:focus-visible {
   }
 }
 
-/* A stopped arc reads as a stalled spinner rather than a still one, so the
-   reduced-motion ring goes uniformly accent-tinted and the adjacent text
-   carries the state on its own. */
+/* Reduced motion is scoped to the rings that sit beside text. A stopped arc
+   reads as a stalled spinner rather than a still one, so the paired ring goes
+   uniformly accent-tinted and "Saving…" carries the state on its own.
+
+   A ring that is the only signal its surface has — the composer's Run button
+   swaps the play glyph for a bare, aria-hidden ring — keeps spinning. The
+   preference asks for non-essential motion to stop, and motion that is the
+   sole indication of progress is not that. Give a standalone ring a text or
+   `aria-busy` companion and it belongs in the selector below. */
 @media (prefers-reduced-motion: reduce) {
-  .pending-spinner {
+  .settings-pending .pending-spinner {
     border-color: var(--accent);
     animation: none;
   }
@@ -29454,6 +29463,21 @@ button.pricing-token-miser__folded:focus-visible {
   align-items: center;
   gap: 10px;
   min-width: 0;
+}
+
+/* The control keeps its measured width when the indicator arrives. Without
+   this the indicator's 67px competes with the control for a narrow column,
+   the segmented buttons compress until their labels wrap, and the row grows
+   ~12px taller mid-save — the layout shift docs/UI-THEME.md rules out for
+   loading states. The indicator absorbs the shortfall instead: its ring is
+   already `flex: 0 0 auto`, so the word clips and the ring survives. */
+.settings-control-row > :first-child {
+  flex: 0 0 auto;
+}
+
+.settings-control-row > .settings-pending {
+  min-width: 0;
+  overflow: hidden;
 }
 
 .settings-acp-agents {

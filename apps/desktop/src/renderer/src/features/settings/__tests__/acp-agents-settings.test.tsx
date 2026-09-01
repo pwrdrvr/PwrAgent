@@ -98,7 +98,7 @@ describe("AcpAgentsSettings", () => {
     );
 
     const toggle = await screen.findByRole("switch", {
-      name: "Use managed PwrAgent Grok builds",
+      name: "PwrAgent build — Grok",
     });
     await waitFor(() => expect(toggle).toBeEnabled());
     toggle.click();
