@@ -13843,6 +13843,124 @@ describe("MessagingController", () => {
     );
   });
 
+  it("does not resolve PDF handling for plain-text turns", async () => {
+    const info = vi.fn();
+    let markPdfPolicyEntered!: () => void;
+    let releasePdfPolicy!: (enabled: boolean) => void;
+    const pdfPolicyEntered = new Promise<void>((resolve) => {
+      markPdfPolicyEntered = resolve;
+    });
+    const pdfPolicyGate = new Promise<boolean>((resolve) => {
+      releasePdfPolicy = resolve;
+    });
+    const pdfAnalysisEnabled = vi.fn(() => {
+      markPdfPolicyEntered();
+      return pdfPolicyGate;
+    });
+    const supportsMessagingPdfTools = vi.fn(async () => true);
+    const harness = await createHarness({
+      logger: { info },
+      pdfAnalysisEnabled,
+      supportsMessagingPdfTools,
+    });
+    await bindThread(harness);
+    info.mockClear();
+
+    const handling = harness.controller.handleInboundEvent(
+      buildTextEvent("This turn has no attachments."),
+    );
+    const firstCompletedOperation = await Promise.race([
+      handling.then(() => "turn" as const),
+      pdfPolicyEntered.then(() => "pdf-policy" as const),
+    ]);
+    releasePdfPolicy(true);
+    await handling;
+
+    expect(firstCompletedOperation).toBe("turn");
+    expect(pdfAnalysisEnabled).not.toHaveBeenCalled();
+    expect(supportsMessagingPdfTools).not.toHaveBeenCalled();
+    expect(harness.startTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        input: [{ type: "text", text: "This turn has no attachments." }],
+      }),
+    );
+    const startingTurn = info.mock.calls.find(
+      (call) => call[0] === "messaging starting turn",
+    );
+    expect(startingTurn?.[1]).toMatchObject({
+      bundleReadyToInputPreparedMs: 0,
+      inboundEventId: "event-text",
+      inputPrepPrivateResponseMs: 0,
+      inputPrepTextConstructionMs: 0,
+    });
+    expect(startingTurn?.[1]).not.toHaveProperty(
+      "inputPrepPdfAnalysisPolicyMs",
+    );
+    expect(startingTurn?.[1]).not.toHaveProperty(
+      "inputPrepPdfToolSupportProbeMs",
+    );
+  });
+
+  it("logs bounded PDF preparation subspans on the start-turn event", async () => {
+    let clock = 1_000;
+    const info = vi.fn();
+    const pdfData = new TextEncoder().encode("%PDF-1.7\n/timed PDF\n");
+    const harness = await createHarness({
+      downloadAttachment: vi.fn(async ({ attachment }) => {
+        clock += 400;
+        return {
+          data: pdfData,
+          fileName: attachment.name,
+          mimeType: attachment.mimeType,
+          sizeBytes: pdfData.byteLength,
+        };
+      }),
+      logger: { info },
+      now: () => clock,
+      pdfAnalysisEnabled: async () => {
+        clock += 2_300;
+        return true;
+      },
+      supportsMessagingPdfTools: async () => {
+        clock += 300;
+        return true;
+      },
+    });
+    await bindThread(harness);
+    info.mockClear();
+
+    await harness.controller.handleInboundEvent({
+      ...buildTextEvent("Inspect this."),
+      attachments: [
+        {
+          id: "pdf-timing",
+          kind: "file",
+          name: "timing.pdf",
+          disposition: "available",
+          mimeType: "application/pdf",
+          sizeBytes: pdfData.byteLength,
+        },
+      ],
+      id: "event-pdf-timing",
+      kind: "media",
+      text: "Inspect this.",
+      disposition: "available",
+    });
+
+    const startingTurn = info.mock.calls.find(
+      (call) => call[0] === "messaging starting turn",
+    );
+    expect(startingTurn?.[1]).toMatchObject({
+      bundleReadyToInputPreparedMs: 3_000,
+      inboundEventId: "event-pdf-timing",
+      inputPrepAttachmentProcessingMs: 400,
+      inputPrepPdfAnalysisPolicyMs: 2_300,
+      inputPrepPdfHandlingResolutionMs: 2_600,
+      inputPrepPdfToolSupportProbeMs: 300,
+      inputPrepPrivateResponseMs: 0,
+    });
+  });
+
   it("routes inbound PDFs into bound thread turns as rendered page images", async () => {
     const pdfData = new TextEncoder().encode("%PDF-1.7\n/image data\n");
     vi.mocked(renderPdfPages).mockResolvedValueOnce([

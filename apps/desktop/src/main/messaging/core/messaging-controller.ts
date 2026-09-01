@@ -351,9 +351,21 @@ type MessagingHandledToRoutedSubspan =
   | "handledTextParsingMs"
   | "finalAdmissionAppendAwaitMs";
 
+type MessagingInputPreparationSpan =
+  | "inputPrepPendingSkillBindingReloadMs"
+  | "inputPrepPdfHandlingResolutionMs"
+  | "inputPrepPdfAnalysisPolicyMs"
+  | "inputPrepPdfToolSupportProbeMs"
+  | "inputPrepPrivateResponseMs"
+  | "inputPrepTextConstructionMs"
+  | "inputPrepAttachmentProcessingMs";
+
 type MessagingAdmissionTimingRecord = {
   marks: Partial<Record<MessagingAdmissionStage, number>>;
-  subspans: Partial<Record<MessagingHandledToRoutedSubspan, number>>;
+  subspans: Partial<Record<
+    MessagingHandledToRoutedSubspan | MessagingInputPreparationSpan,
+    number
+  >>;
 };
 // Upper bound on retained automation start/final delivery-dedup keys. Each entry
 // embeds the full rendered message text and is only consulted while a run's
@@ -4026,6 +4038,24 @@ export class MessagingController {
   }
 
   /**
+   * Add one bounded subspan to the existing start-turn admission log.
+   *
+   * A bundle can contain several text or media events, so repeated spans add
+   * together. The record is keyed by the provider event id and never includes
+   * message content, attachment names, or actor identifiers.
+   */
+  private addInputPreparationTiming(
+    event: MessagingInboundEvent | undefined,
+    span: MessagingInputPreparationSpan,
+    startedAt: number,
+  ): void {
+    if (!event) return;
+    const timing = this.admissionTimingForEvent(event);
+    timing.subspans[span] =
+      (timing.subspans[span] ?? 0) + (this.now() - startedAt);
+  }
+
+  /**
    * Consume this message's marks as span durations for the start-turn log.
    *
    * A span is emitted only when both of its ends were reached, so a path that
@@ -4093,9 +4123,21 @@ export class MessagingController {
     for (const event of bundle.events.slice(1)) {
       this.admissionStageMarks.delete(event.id);
     }
-    const currentBinding = bundle.binding.pendingSkillSelection
-      ? await this.options.store.getBinding(bundle.binding.id) ?? bundle.binding
-      : bundle.binding;
+    let currentBinding = bundle.binding;
+    if (bundle.binding.pendingSkillSelection) {
+      const pendingSkillBindingReloadStartedAt = this.now();
+      try {
+        currentBinding =
+          await this.options.store.getBinding(bundle.binding.id)
+          ?? bundle.binding;
+      } finally {
+        this.addInputPreparationTiming(
+          bundle.events[0],
+          "inputPrepPendingSkillBindingReloadMs",
+          pendingSkillBindingReloadStartedAt,
+        );
+      }
+    }
     const prepared = await this.prepareTurnInput(bundle.events, currentBinding, bundle.events[0]);
     if (!prepared) {
       return;
@@ -4359,7 +4401,12 @@ export class MessagingController {
     const pdfAttachments: PendingPdfAttachment[] = [];
     const previewParts: string[] = [];
     const rejections: MessagingAttachmentRejection[] = [];
-    const pdfHandling = await this.resolveMessagingPdfHandling(binding);
+    let pdfHandling:
+      | "model_directed"
+      | "render_initial_pages"
+      | "pass_through"
+      | undefined;
+    const privateResponseStartedAt = this.now();
     const privateReplyContinuation = binding?.privateReplyContinuation;
     if (
       privateReplyContinuation
@@ -4385,17 +4432,41 @@ export class MessagingController {
         text: PRIVATE_RESPONSE_FALLBACK_INSTRUCTION,
       });
     }
+    this.addInputPreparationTiming(
+      event,
+      "inputPrepPrivateResponseMs",
+      privateResponseStartedAt,
+    );
 
     for (const turnEvent of events) {
       if (turnEvent.kind === "text") {
+        const textConstructionStartedAt = this.now();
         const previewText = turnEvent.text.trim();
         if (previewText) {
           input.push({ type: "text", text: turnEvent.text });
           previewParts.push(previewText);
         }
+        this.addInputPreparationTiming(
+          event,
+          "inputPrepTextConstructionMs",
+          textConstructionStartedAt,
+        );
         continue;
       }
 
+      if (turnEvent.attachments.length > 0 && pdfHandling === undefined) {
+        const pdfHandlingStartedAt = this.now();
+        try {
+          pdfHandling = await this.resolveMessagingPdfHandling(binding, event);
+        } finally {
+          this.addInputPreparationTiming(
+            event,
+            "inputPrepPdfHandlingResolutionMs",
+            pdfHandlingStartedAt,
+          );
+        }
+      }
+      const attachmentProcessingStartedAt = this.now();
       const processed = await processMessagingAttachments({
         adapter: this.options.adapter,
         attachments: turnEvent.attachments,
@@ -4406,6 +4477,11 @@ export class MessagingController {
         pdfHandling,
         text: turnEvent.text,
       });
+      this.addInputPreparationTiming(
+        event,
+        "inputPrepAttachmentProcessingMs",
+        attachmentProcessingStartedAt,
+      );
 
       input.push(...processed.input);
       pdfAttachments.push(...processed.pdfAttachments);
@@ -4450,11 +4526,19 @@ export class MessagingController {
       );
     }
 
+    const previewConstructionStartedAt = this.now();
+    const preview = buildQueuedInputPreview(previewParts);
+    this.addInputPreparationTiming(
+      event,
+      "inputPrepTextConstructionMs",
+      previewConstructionStartedAt,
+    );
+
     return {
       input,
       pdfAttachments,
       privateResponseRequested,
-      preview: buildQueuedInputPreview(previewParts),
+      preview,
     };
   }
 
@@ -4497,8 +4581,9 @@ export class MessagingController {
 
   private async resolveMessagingPdfHandling(
     binding: MessagingBindingRecord | undefined,
+    event?: MessagingInboundEvent,
   ): Promise<"model_directed" | "render_initial_pages" | "pass_through"> {
-    if (!(await this.resolvePdfAnalysisEnabled())) {
+    if (!(await this.resolvePdfAnalysisEnabled(event))) {
       return "pass_through";
     }
     if (
@@ -4507,6 +4592,7 @@ export class MessagingController {
     ) {
       return "render_initial_pages";
     }
+    const pdfToolSupportStartedAt = this.now();
     try {
       return await this.options.backend.supportsMessagingPdfTools({
         backend: binding.backend,
@@ -4521,15 +4607,32 @@ export class MessagingController {
         threadId: binding.threadId,
       });
       return "render_initial_pages";
+    } finally {
+      this.addInputPreparationTiming(
+        event,
+        "inputPrepPdfToolSupportProbeMs",
+        pdfToolSupportStartedAt,
+      );
     }
   }
 
-  private async resolvePdfAnalysisEnabled(): Promise<boolean> {
+  private async resolvePdfAnalysisEnabled(
+    event?: MessagingInboundEvent,
+  ): Promise<boolean> {
+    const pdfAnalysisPolicyStartedAt = this.now();
     const configured = this.options.pdfAnalysisEnabled;
-    if (typeof configured === "function") {
-      return (await configured()) !== false;
+    try {
+      if (typeof configured === "function") {
+        return (await configured()) !== false;
+      }
+      return configured !== false;
+    } finally {
+      this.addInputPreparationTiming(
+        event,
+        "inputPrepPdfAnalysisPolicyMs",
+        pdfAnalysisPolicyStartedAt,
+      );
     }
-    return configured !== false;
   }
 
   private async startPreparedInput(params: {
