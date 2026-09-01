@@ -2189,9 +2189,10 @@ textarea,
 }
 
 /* Title-bar strip — single-row chrome. Base padding keeps macOS
-   stoplight clearance on the left: `.settings-nav__masthead`
-   (10/0/0/96) alignment, stoplights end at ~x=72, brand lands at
-   x=96. Platforms without macOS/Windows chrome conventions override
+   stoplight clearance on the left: the same x=96 the two nav mastheads
+   reach (`.sidebar__masthead` pads 80px inside a 16px rail,
+   `.settings-nav__masthead` 88px inside an 8px lane); stoplights end at
+   ~x=72, brand lands at x=96. Platforms without macOS/Windows chrome conventions override
    the left padding below so auxiliary-window titles don't float
    awkwardly away from the window edge. */
 .activity-titlebar {
@@ -8049,23 +8050,28 @@ textarea,
 .settings-nav {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
   /* No top padding — the masthead handles its own top spacing.
-     16px horizontal mirrors the main `.sidebar`'s padding so the
-     section rows align with where main-screen tabs sit. */
-  padding: 0 16px 12px;
+     8px horizontal is `--sidebar-lane-inset`, the same lane the main
+     screen's thread list runs in, so the two lists read at one
+     density. The masthead adds the missing 8px back below to keep the
+     brand on the main sidebar's rail. */
+  padding: 0 8px 10px;
   border-right: 1px solid var(--border-subtle);
   background: var(--bg-sidebar);
   overflow: hidden;
 }
 
-/* Masthead — brand + 80px stoplight gutter. Borrows the
-   `.sidebar__masthead` pattern verbatim:
-   - Lives inside the nav's own 16px horizontal padding, so
-     `padding-left: 80px` puts the brand at x≈96 from the window
+/* Masthead — brand + stoplight gutter. Borrows the
+   `.sidebar__masthead` pattern:
+   - Lives inside the nav's own 8px horizontal padding, so
+     `padding-left: 88px` puts the brand at x≈96 from the window
      edge (stoplights end at ~x=72 with
      `trafficLightPosition: { x: 20, y: 18 }` from window.ts).
-   - `padding: 10px 0 0 80px` mirrors main exactly.
+   - Main's rail is 16px and its masthead pads 80px to the same x=96.
+     The nav runs its rows in a tighter lane, so the masthead carries
+     the difference: every platform branch below re-inserts 8px too,
+     which is why the brand lands identically on both screens.
    - `min-height: 44px` gives the masthead the same effective
      height that `.sidebar__masthead` has on the main screen
      (10px top padding + 34px from the icon buttons it contains).
@@ -8078,13 +8084,13 @@ textarea,
   align-items: center;
   gap: 16px;
   min-height: 44px;
-  padding: 10px 0 0 80px;
+  padding: 10px 0 0 88px;
   -webkit-app-region: drag;
 }
 
 :root[data-platform]:not([data-platform="darwin"]):not([data-platform="win32"])
   .settings-nav__masthead {
-  padding-left: 0;
+  padding-left: 8px;
 }
 
 /* Windows already carries the PwrAgent wordmark in its custom title strip.
@@ -8097,10 +8103,11 @@ textarea,
 }
 
 /* macOS fullscreen drops the stoplights, so the Settings nav masthead
-   collapses its 80px reservation to the left edge too — mirrors the main
-   `.sidebar__masthead` fullscreen behavior so the two screens stay aligned. */
+   releases its stoplight reservation back to the nav's own lane — mirrors the
+   main `.sidebar__masthead` fullscreen behavior so the two screens stay
+   aligned (main falls to its 16px rail, this to the 8px lane + 8px here). */
 :root[data-platform="darwin"][data-fullscreen="true"] .settings-nav__masthead {
-  padding-left: 0;
+  padding-left: 8px;
 }
 
 .settings-nav__masthead * {
@@ -8132,8 +8139,8 @@ textarea,
   appearance: none;
   cursor: pointer;
   gap: 6px;
-  margin: 8px 0 4px;
-  padding: 6px 12px;
+  margin: 6px 0 2px;
+  padding: 6px 8px;
   border: none;
   background: transparent;
   color: var(--text-secondary);
@@ -8154,11 +8161,12 @@ textarea,
    rail) — a full-accent button across the empty canvas made the create action
    the farthest thing from the pointer. Only the plus carries accent.
 
-   The nav is a flex column with a 4px gap and Exit carries a 4px bottom
-   margin, so `margin: 4px 0` here puts both the Exit→New and New→group-label
-   gaps at 12px — the same Exit-to-next-thing rhythm Settings has. It was
-   `0 0 8px`, which left 8px above and 16px below: two rows of identical size,
-   weight, and color clumped together with a hole beneath them. */
+   The nav is a flex column with a 2px gap; Exit carries a 2px bottom margin
+   and the group label an 8px top margin, so `margin: 8px 0 2px` here puts
+   both the Exit→New and New→group-label gaps at 12px — the same
+   Exit-to-next-thing rhythm Settings has. It was `0 0 8px`, which left 8px
+   above and 16px below: two rows of identical size, weight, and color
+   clumped together with a hole beneath them. */
 .settings-nav__new {
   display: inline-flex;
   width: 100%;
@@ -8166,8 +8174,8 @@ textarea,
   appearance: none;
   cursor: pointer;
   gap: 6px;
-  margin: 4px 0;
-  padding: 6px 12px;
+  margin: 8px 0 2px;
+  padding: 6px 8px;
   border: none;
   border-radius: 6px;
   background: transparent;
@@ -8190,7 +8198,7 @@ textarea,
 }
 
 .settings-nav__group-label {
-  margin: 4px 12px 6px;
+  margin: 8px 8px 2px;
   color: var(--text-muted);
   font-size: 10px;
   font-weight: 700;
@@ -8264,7 +8272,7 @@ textarea,
   justify-content: flex-start;
   appearance: none;
   cursor: pointer;
-  padding: 10px 12px;
+  padding: 5px 8px;
   border: 1px solid transparent;
   border-radius: 6px;
   background: transparent;
@@ -8274,13 +8282,17 @@ textarea,
   text-align: left;
 }
 
-/* Inside a caret row the label shares the width with the 22px gutter.
-   (Automations reuses `.settings-nav__button` without rows, where the
-   bare `width: 100%` still applies.) */
+/* Inside a caret row the label shares the width with the 24px gutter, and
+   that gutter already supplies the row's left inset — so the label drops
+   most of its own left padding and sits close to the caret instead of
+   floating a second inset away from it. (Automations reuses
+   `.settings-nav__button` without rows, where the bare `width: 100%` and
+   the symmetric padding above still apply.) */
 .settings-nav__row .settings-nav__button {
   flex: 1 1 auto;
   width: auto;
   min-width: 0;
+  padding-left: 4px;
 }
 
 .settings-nav__button:hover,
@@ -8323,18 +8335,22 @@ textarea,
   overflow: hidden;
 }
 
-/* Indent = the row's 24px caret gutter + the label button's 12px
+/* Indent = the row's 24px caret gutter + the label button's 4px left
    padding, so the sublist's left rule lands under the section label's
-   first character. */
+   first character. The explicit width is load-bearing and must track the
+   margin: a form control shrink-to-fits even as a block-level flex box,
+   so `width: auto` collapses this row to its label instead of filling
+   the clip. (`.settings-nav__divider` needs no such width — an `<hr>` is
+   a plain flex item and stretches.) */
 .settings-nav__subbutton {
   display: flex;
   align-items: center;
   gap: 8px;
-  width: calc(100% - 36px);
+  width: calc(100% - 28px);
   appearance: none;
   cursor: pointer;
-  margin: 0 0 2px 36px;
-  padding: 6px 10px;
+  margin: 0 0 2px 28px;
+  padding: 6px 8px;
   border: 0;
   border-left: 1px solid var(--border-subtle);
   background: transparent;
@@ -8345,7 +8361,7 @@ textarea,
 }
 
 .settings-nav__subbutton:last-child {
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .settings-nav__subbutton:hover,
@@ -8391,10 +8407,11 @@ textarea,
   text-transform: uppercase;
 }
 
+/* Margins alone set the width — a flex item stretches across the
+   column, so the inset is stated once. */
 .settings-nav__divider {
-  width: calc(100% - 24px);
   height: 1px;
-  margin: 8px 12px;
+  margin: 6px 8px;
   border: 0;
   background: var(--border-subtle);
 }

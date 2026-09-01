@@ -55,14 +55,15 @@ describe("Automations chrome matches Settings", () => {
   });
 
   it("gives the nav's create row the same rhythm Exit has in Settings", () => {
-    // `.settings-nav` is a flex column with `gap: 4px`, and `.settings-nav__exit`
-    // carries `margin: 8px 0 4px`. In Settings that yields exit → group label
-    // = 4 + 4 + 4 = 12px. Automations inserts this row into that gap, so it
-    // needs 4px on both sides to keep both halves at 12px; `0 0 8px` left 8px
-    // above and 16px below, clumping Exit and New together.
-    expect(ruleBody(".settings-nav")).toMatch(/gap:\s*4px;/);
-    expect(ruleBody(".settings-nav__exit")).toMatch(/margin:\s*8px 0 4px;/);
-    expect(ruleBody(".settings-nav__group-label")).toMatch(/margin:\s*4px 12px 6px;/);
-    expect(ruleBody(".settings-nav__new")).toMatch(/margin:\s*4px 0;/);
+    // `.settings-nav` is a flex column with `gap: 2px`, `.settings-nav__exit`
+    // carries `margin: 6px 0 2px`, and the group label leads with `8px`. In
+    // Settings that yields exit → group label = 2 + 2 + 8 = 12px. Automations
+    // inserts this row into that gap, so `8px 0 2px` keeps both halves at
+    // 12px; `0 0 8px` left 8px above and 16px below, clumping Exit and New
+    // together.
+    expect(ruleBody(".settings-nav")).toMatch(/gap:\s*2px;/);
+    expect(ruleBody(".settings-nav__exit")).toMatch(/margin:\s*6px 0 2px;/);
+    expect(ruleBody(".settings-nav__group-label")).toMatch(/margin:\s*8px 8px 2px;/);
+    expect(ruleBody(".settings-nav__new")).toMatch(/margin:\s*8px 0 2px;/);
   });
 });
