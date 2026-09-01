@@ -2125,6 +2125,13 @@ class DesktopAppServerService {
         ...request,
         federationTarget,
       });
+      // Reserved before the peer round trip. Two navigation refreshes for one
+      // peer can be in flight together and can finish out of order; without
+      // this, the older snapshot's rows land last and revert a rename the
+      // operator has already seen.
+      const nameObservationSequence = getDesktopFederationRuntime()
+        .remoteThreadSummaries()
+        .reserveThreadNameObservation();
       try {
         const snapshot = await getDesktopFederationRuntime()
           .remoteNavigationSnapshot(
@@ -2147,7 +2154,11 @@ class DesktopAppServerService {
         try {
           getDesktopFederationRuntime()
             .remoteThreadSummaries()
-            .rememberThreadNames(federationTarget.instanceId, snapshot.threads);
+            .rememberThreadNames(
+              federationTarget.instanceId,
+              snapshot.threads,
+              nameObservationSequence,
+            );
         } catch (error) {
           logDebug("rememberRemoteThreadNames failed", {
             error: error instanceof Error ? error.message : String(error),

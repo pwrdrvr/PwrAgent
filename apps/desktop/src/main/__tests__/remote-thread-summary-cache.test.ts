@@ -388,12 +388,18 @@ describe("RemoteThreadSummaryCache — threadFromPeer", () => {
 });
 
 describe("RemoteThreadSummaryCache — remembered thread names", () => {
-  const nameOf = (cache: RemoteThreadSummaryCache, threadId: string) =>
+  const nameOnPeer = (
+    cache: RemoteThreadSummaryCache,
+    instanceId: string,
+    threadId: string,
+  ) =>
     cache.cachedThreadNameFromPeer({
-      target: remoteTarget("peer-a"),
+      target: remoteTarget(instanceId),
       backend: "codex",
       threadId,
     })?.title;
+  const nameOf = (cache: RemoteThreadSummaryCache, threadId: string) =>
+    nameOnPeer(cache, "peer-a", threadId);
 
   it("answers from remembered names without ever contacting the peer", async () => {
     const fetchSnapshot = vi.fn(async () =>
@@ -493,6 +499,101 @@ describe("RemoteThreadSummaryCache — remembered thread names", () => {
 
     expect(nameOf(cache, "t1")).toBe("Parent");
     expect(fetchSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  // Two navigation refreshes for one peer can be in flight at once and can
+  // finish out of order. The sequence each one records at is taken before its
+  // fetch starts, so the loser is decided by when the read began rather than
+  // by which reply happened to arrive last.
+  it("does not let a slow earlier snapshot revert a newer name", () => {
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    // Both refreshes start; the first one is the slower of the two.
+    const slower = cache.reserveThreadNameObservation();
+    const faster = cache.reserveThreadNameObservation();
+
+    cache.rememberThreadNames(
+      "peer-a",
+      [stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Renamed" })],
+      faster,
+    );
+    cache.rememberThreadNames(
+      "peer-a",
+      [stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Parent" })],
+      slower,
+    );
+
+    expect(nameOf(cache, "t1")).toBe("Renamed");
+  });
+
+  // A rename recorded after both are in hand still wins: ordering is by
+  // observation sequence, not by a rule that the first writer keeps the field.
+  it("takes a rename that comes after the reverting snapshot", () => {
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a")],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    cache.rememberThreadNames("peer-a", [
+      stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Parent" }),
+    ]);
+    cache.rememberThreadNames("peer-a", [
+      stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Renamed" }),
+    ]);
+
+    expect(nameOf(cache, "t1")).toBe("Renamed");
+  });
+
+  // Thread ids are only unique within the instance that minted them. Two peers
+  // reusing one id must never answer for each other.
+  it("keeps identically-numbered threads on different peers apart", () => {
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a"), peer("peer-b")],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    cache.rememberThreadNames("peer-a", [
+      stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Alpha" }),
+    ]);
+    cache.rememberThreadNames("peer-b", [
+      stampedThread({ instanceId: "peer-b", threadId: "t1", title: "Beta" }),
+    ]);
+
+    expect(nameOnPeer(cache, "peer-a", "t1")).toBe("Alpha");
+    expect(nameOnPeer(cache, "peer-b", "t1")).toBe("Beta");
+
+    // And a peer that never saw the thread has no opinion about it.
+    expect(nameOnPeer(cache, "peer-b", "t2")).toBeUndefined();
+  });
+
+  it("drops only the unmounted peer's names", () => {
+    const cache = new RemoteThreadSummaryCache({
+      peers: () => [peer("peer-a"), peer("peer-b")],
+      fetchSnapshot: async () => snapshotOf([]),
+      fetchArchivedThreads: noArchivedThreads,
+      peerStatus: () => ({}),
+    });
+
+    cache.rememberThreadNames("peer-a", [
+      stampedThread({ instanceId: "peer-a", threadId: "t1", title: "Alpha" }),
+    ]);
+    cache.rememberThreadNames("peer-b", [
+      stampedThread({ instanceId: "peer-b", threadId: "t1", title: "Beta" }),
+    ]);
+
+    cache.forgetInstanceThreadNames("peer-a");
+
+    expect(nameOnPeer(cache, "peer-a", "t1")).toBeUndefined();
+    expect(nameOnPeer(cache, "peer-b", "t1")).toBe("Beta");
   });
 });
 

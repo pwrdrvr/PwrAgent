@@ -15,6 +15,7 @@ import {
   threadHasExactPrNumberMatch,
   threadMatchesQuery,
 } from "@pwragent/shared";
+import { ThreadInfoStore } from "../app-server/thread-info-store";
 
 export type RemoteThreadSummaryPeer = {
   target: FederationRemoteTarget;
@@ -132,15 +133,15 @@ export class RemoteThreadSummaryCache {
     { fetchedAt: number; threadKeys: Set<string> }
   >();
   /**
-   * Display names per instance, keyed by thread identity. Deliberately NOT
-   * cleared by `invalidate` — see `cachedThreadNameFromPeer`. Dropping a name
-   * can only send a row back to its thread id, and a name is stale-tolerant
-   * in a way the snapshots above are not.
+   * Display names for threads owned by peers, held in the same information
+   * store the local side uses and keyed by instance so two peers reusing a
+   * thread id cannot answer for each other.
+   *
+   * Deliberately NOT cleared by `invalidate` — see `cachedThreadNameFromPeer`.
+   * Dropping a name can only send a row back to its thread id, and a name is
+   * stale-tolerant in a way the snapshots above are not.
    */
-  private readonly threadNames = new Map<
-    string,
-    Map<string, RemoteThreadName>
-  >();
+  private readonly threadNames = new ThreadInfoStore();
   private readonly peerInterests = new Map<
     string,
     Map<
@@ -305,22 +306,39 @@ export class RemoteThreadSummaryCache {
   rememberThreadNames(
     instanceId: string,
     threads: readonly NavigationThreadSummary[],
+    observationSequence = this.reserveThreadNameObservation(),
   ): void {
-    let names = this.threadNames.get(instanceId);
     for (const thread of threads) {
-      const title = thread.title?.trim();
-      if (!title || thread.titleSource === "fallback") {
-        continue;
-      }
-      names ??= new Map();
-      names.set(buildThreadIdentityKey(thread.source, thread.id), {
-        title,
-        titleSource: thread.titleSource,
+      this.threadNames.observe({
+        identity: {
+          backend: thread.source,
+          instanceId,
+          threadId: thread.id,
+        },
+        observationSequence,
+        source: "remote-navigation",
+        ...(thread.title !== undefined ? { title: thread.title } : {}),
+        ...(thread.titleSource ? { titleSource: thread.titleSource } : {}),
       });
     }
-    if (names) {
-      this.threadNames.set(instanceId, names);
-    }
+  }
+
+  /**
+   * Take the sequence a peer snapshot's names will be recorded at, BEFORE the
+   * fetch starts.
+   *
+   * Two refreshes for one peer can be in flight at once and can complete out of
+   * order. Without this, the older snapshot's rows would land last and revert a
+   * rename the operator has already seen — the remote half of the regression
+   * the information store exists to prevent.
+   */
+  reserveThreadNameObservation(): number {
+    return this.threadNames.reserveObservationSequence();
+  }
+
+  /** Drop a peer's names when it unmounts and can no longer be asked. */
+  forgetInstanceThreadNames(instanceId: string): void {
+    this.threadNames.forgetInstance(instanceId);
   }
 
   /**
@@ -348,9 +366,15 @@ export class RemoteThreadSummaryCache {
     backend: NavigationThreadSummary["source"];
     threadId: string;
   }): RemoteThreadName | undefined {
-    return this.threadNames
-      .get(params.target.instanceId)
-      ?.get(buildThreadIdentityKey(params.backend, params.threadId));
+    const info = this.threadNames.get({
+      backend: params.backend,
+      instanceId: params.target.instanceId,
+      threadId: params.threadId,
+    });
+    if (!info?.title || !info.titleSource) {
+      return undefined;
+    }
+    return { title: info.title, titleSource: info.titleSource };
   }
 
   /**
@@ -780,6 +804,10 @@ export class RemoteThreadSummaryCache {
       }
       return await this.threadsForPeer(target, selection, interestKey);
     }
+    // Reserved before the fetch, not after it: a snapshot that starts first and
+    // finishes last must not overwrite the names a later refresh already
+    // recorded.
+    const nameObservationSequence = this.reserveThreadNameObservation();
     const promise = (async () => {
       const timeoutMs =
         this.options.peerTimeoutMs ?? REMOTE_SNAPSHOT_PEER_TIMEOUT_MS;
@@ -797,7 +825,11 @@ export class RemoteThreadSummaryCache {
         selection,
         threads,
       });
-      this.rememberThreadNames(target.instanceId, threads);
+      this.rememberThreadNames(
+        target.instanceId,
+        threads,
+        nameObservationSequence,
+      );
       this.touchPeerInterest(
         target.instanceId,
         interestKey,
