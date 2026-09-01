@@ -74,6 +74,7 @@ import type {
   ThreadStartParams as CodexThreadStartParams,
 } from "@pwrdrvr/codex-app-server-protocol/v2";
 import {
+  BACKGROUND_THREAD_WORKING_STATE_BATCH_SIZE,
   buildCodexFastModeMismatchNotificationParams,
   CODEX_MISSING_THREAD_EVALUATION_DELAY_MS,
   DesktopBackendRegistry,
@@ -3432,7 +3433,7 @@ describe("DesktopBackendRegistry", () => {
       })(),
     );
     const worktreePaths = Array.from(
-      { length: 9 },
+      { length: BACKGROUND_THREAD_WORKING_STATE_BATCH_SIZE + 1 },
       (_unused, index) => `/worktrees/repo-${index}`,
     );
     const overlayStore = {
@@ -3467,11 +3468,62 @@ describe("DesktopBackendRegistry", () => {
             .map((worktreePath) => multiProjectThread({ worktreePath }))
             .reverse(),
         ),
-      ).resolves.toEqual({ scheduledCount: 8 });
+      ).resolves.toEqual({
+        scheduledCount: BACKGROUND_THREAD_WORKING_STATE_BATCH_SIZE,
+      });
+      // The round is scheduled, not awaited, so the fleet call lands some
+      // microtasks after the promise above settles.
+      await expectEventually(
+        async () => readWorkingStateEntries.mock.calls.length,
+        1,
+      );
       expect(readWorkingStateEntries).toHaveBeenCalledWith(
-        worktreePaths.slice(0, 8),
+        worktreePaths.slice(0, BACKGROUND_THREAD_WORKING_STATE_BATCH_SIZE),
         expect.anything(),
       );
+    } finally {
+      await registry.close();
+    }
+  });
+
+  it("leaves a fresh worktree alone for the rest of its window", async () => {
+    // Freshness is the only gate on this lane. Without it every messaging
+    // command and every federated viewer's poll runs a Git fleet again —
+    // the exact cost the lane exists to remove.
+    const worktreePath = "/worktrees/PwrAgnt";
+    const readWorkingStateEntries = vi.fn((paths: string[]) =>
+      (async function* () {
+        for (const path of paths) {
+          yield { worktreePath: path, gitWorkingState: sampleGitWorkingState };
+        }
+      })(),
+    );
+    const overlayStore = {
+      ...createOverlayStoreMock(),
+      readThreadGitWorkingStateCache: vi.fn(async () => ({
+        [worktreePath]: {
+          worktreePath,
+          gitWorkingState: sampleGitWorkingState,
+          fetchedAt: Date.now(),
+        },
+      })),
+      writeThreadGitWorkingStateCacheEntry: vi.fn(async () => undefined),
+    };
+    const registry = new DesktopBackendRegistry({
+      codexClient: new MockBackendClient({ threads: [] }),
+      gitWorkingStateService: {
+        readWorkingStateEntries,
+      } as unknown as GitWorkingStateService,
+      overlayStore,
+    });
+
+    try {
+      await expect(
+        registry.refreshThreadGitWorkingStates([
+          multiProjectThread({ worktreePath }),
+        ]),
+      ).resolves.toEqual({ scheduledCount: 0 });
+      expect(readWorkingStateEntries).not.toHaveBeenCalled();
     } finally {
       await registry.close();
     }
@@ -3520,6 +3572,10 @@ describe("DesktopBackendRegistry", () => {
       await expect(
         registry.refreshThreadGitWorkingStates(threads, { limit: 1 }),
       ).resolves.toEqual({ scheduledCount: 0 });
+      await expectEventually(
+        async () => readWorkingStateEntries.mock.calls.length,
+        2,
+      );
       expect(readWorkingStateEntries.mock.calls.map(([paths]) => paths))
         .toEqual([[worktreePath], [`${worktreePath}-2`]]);
     } finally {
