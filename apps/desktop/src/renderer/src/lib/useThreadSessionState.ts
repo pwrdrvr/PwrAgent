@@ -3348,6 +3348,27 @@ function removePromotedOptimisticUserMessage(
   };
 }
 
+function findAuthoritativeUserMessageForOptimisticEntry(params: {
+  entry: AppServerThreadMessageEntry;
+  response: AppServerReadThreadResponse | undefined;
+  turnId: string | undefined;
+}): AppServerThreadMessageEntry | undefined {
+  if (!params.turnId) {
+    return undefined;
+  }
+
+  return params.response?.replay.entries.find(
+    (entry): entry is AppServerThreadMessageEntry =>
+      entry.type === "message"
+      && entry.role === "user"
+      && !entry.id.startsWith("optimistic-")
+      && entry.turn?.id === params.turnId
+      && messageMatchesOptimisticEntry(entry, params.entry, {
+        allowImageUrlMismatch: true,
+      })
+  );
+}
+
 function appendMessageEntries(
   response: AppServerReadThreadResponse | undefined,
   params: {
@@ -3598,7 +3619,7 @@ function messageContentFromUserItem(item: Record<string, unknown>): {
   };
 }
 
-function userMessageEntryFromCompletedItem(params: {
+function userMessageEntryFromItem(params: {
   turnId?: string;
   item?: {
     id?: string;
@@ -4134,7 +4155,8 @@ export function useThreadSessionState(params: {
   activeTurnStartedAt?: number;
   addOptimisticUserMessage: (
     text: string,
-    imageParts?: AppServerThreadImagePart[]
+    imageParts?: AppServerThreadImagePart[],
+    turnId?: string,
   ) => string;
   addOptimisticReviewEntry: (displayText: string) => string;
   clearPendingRequest: (requestId: string, nextStatus?: string) => void;
@@ -5136,6 +5158,86 @@ export function useThreadSessionState(params: {
           };
         }
 
+        // Queue admission can publish the authoritative user item before the
+        // Composer's startTurn promise adds its optimistic row. Materialize
+        // the started item; a later completion reconciles by the same id.
+        if (
+          event.notification.method === "item/started"
+          || event.notification.method === "item/completed"
+        ) {
+          const userMessageEntry = userMessageEntryFromItem(
+            event.notification.params
+          );
+          if (userMessageEntry) {
+            const launchpadMessageCandidate =
+              launchpadMessageCandidateRef.current?.threadKey === targetThreadKey
+                ? launchpadMessageCandidateRef.current.candidate
+                : undefined;
+            const unreconciledLaunchpadMessageCandidate =
+              reconciledLaunchpadMessageIdsRef.current[targetThreadKey]
+                === undefined
+                ? launchpadMessageCandidate
+                : undefined;
+            const reconcilesLaunchpadMessage = Boolean(
+              unreconciledLaunchpadMessageCandidate
+              && matchesAuthoritativeLaunchpadMessage(
+                userMessageEntry,
+                unreconciledLaunchpadMessageCandidate,
+              )
+            );
+            const authoritativeUserMessageEntry =
+              mergeCompletedUserMessageWithPromotedOptimisticEntry(
+                mergeCompletedUserMessageWithOptimisticEntry(
+                  userMessageEntry,
+                  reconcilesLaunchpadMessage
+                    && unreconciledLaunchpadMessageCandidate
+                    ? [unreconciledLaunchpadMessageCandidate.entry]
+                    : current.optimisticEntries
+                ),
+                current.response
+              );
+            if (reconcilesLaunchpadMessage) {
+              reconciledLaunchpadMessageIdsRef.current[targetThreadKey] =
+                authoritativeUserMessageEntry.id;
+            }
+            const nextResponse = appendMessageEntries(
+              removePromotedOptimisticUserMessage(
+                current.response,
+                authoritativeUserMessageEntry
+              ),
+              {
+                backend: event.backend,
+                threadId: notificationThreadId,
+              },
+              [authoritativeUserMessageEntry]
+            );
+
+            return {
+              ...current,
+              expectOwnUpdate: true,
+              interacted: true,
+              lastTouchedAt: nextLastTouchedAt,
+              optimisticEntries:
+                reconcilesLaunchpadMessage
+                  && unreconciledLaunchpadMessageCandidate
+                  ? current.optimisticEntries.filter(
+                      (entry) =>
+                        entry.id !== unreconciledLaunchpadMessageCandidate.entry.id
+                    )
+                  : current.optimisticEntries.filter(
+                      (entry) =>
+                        entry.id === unreconciledLaunchpadMessageCandidate?.entry.id
+                        || entry.type !== "message"
+                        || !messageTextMatchesOptimisticEntry(
+                          authoritativeUserMessageEntry,
+                          entry,
+                        )
+                    ),
+              response: nextResponse,
+            };
+          }
+        }
+
         if (event.notification.method === "item/started") {
           const item = getNotificationItem(event.notification.params);
           const details = item ? buildLiveToolDetails(item) : [];
@@ -5436,78 +5538,6 @@ export function useThreadSessionState(params: {
         }
 
         if (event.notification.method === "item/completed") {
-          const userMessageEntry = userMessageEntryFromCompletedItem(
-            event.notification.params
-          );
-          if (userMessageEntry) {
-            const launchpadMessageCandidate =
-              launchpadMessageCandidateRef.current?.threadKey === targetThreadKey
-                ? launchpadMessageCandidateRef.current.candidate
-                : undefined;
-            const unreconciledLaunchpadMessageCandidate =
-              reconciledLaunchpadMessageIdsRef.current[targetThreadKey]
-                === undefined
-                ? launchpadMessageCandidate
-                : undefined;
-            const reconcilesLaunchpadMessage = Boolean(
-              unreconciledLaunchpadMessageCandidate
-              && matchesAuthoritativeLaunchpadMessage(
-                userMessageEntry,
-                unreconciledLaunchpadMessageCandidate,
-              )
-            );
-            const completedUserMessageEntry =
-              mergeCompletedUserMessageWithPromotedOptimisticEntry(
-                mergeCompletedUserMessageWithOptimisticEntry(
-                  userMessageEntry,
-                  reconcilesLaunchpadMessage
-                    && unreconciledLaunchpadMessageCandidate
-                    ? [unreconciledLaunchpadMessageCandidate.entry]
-                    : current.optimisticEntries
-                ),
-                current.response
-              );
-            if (reconcilesLaunchpadMessage) {
-              reconciledLaunchpadMessageIdsRef.current[targetThreadKey] =
-                completedUserMessageEntry.id;
-            }
-            const nextResponse = appendMessageEntries(
-              removePromotedOptimisticUserMessage(
-                current.response,
-                completedUserMessageEntry
-              ),
-              {
-                backend: event.backend,
-                threadId: notificationThreadId,
-              },
-              [completedUserMessageEntry]
-            );
-
-            return {
-              ...current,
-              expectOwnUpdate: true,
-              interacted: true,
-              lastTouchedAt: nextLastTouchedAt,
-              optimisticEntries:
-                reconcilesLaunchpadMessage
-                  && unreconciledLaunchpadMessageCandidate
-                  ? current.optimisticEntries.filter(
-                      (entry) =>
-                        entry.id !== unreconciledLaunchpadMessageCandidate.entry.id
-                    )
-                  : current.optimisticEntries.filter(
-                      (entry) =>
-                        entry.id === unreconciledLaunchpadMessageCandidate?.entry.id
-                        || entry.type !== "message"
-                        || !messageTextMatchesOptimisticEntry(
-                          completedUserMessageEntry,
-                          entry,
-                        )
-                    ),
-              response: nextResponse,
-            };
-          }
-
           const assistantTurn = buildTurnMetadata({
             fallbackId:
               typeof event.notification.params.turnId === "string"
@@ -6359,33 +6389,63 @@ export function useThreadSessionState(params: {
   ]);
 
   const addOptimisticUserMessage = useCallback(
-    (text: string, imageParts: AppServerThreadImagePart[] = []): string => {
+    (
+      text: string,
+      imageParts: AppServerThreadImagePart[] = [],
+      turnId?: string,
+    ): string => {
       if (!thread || !threadKey) {
         return `optimistic-${Date.now()}`;
       }
 
       const id = `optimistic-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const createdAt = Date.now();
       const parts: AppServerThreadMessageEntry["parts"] = [
         ...(text ? [{ type: "text" as const, text }] : []),
         ...imageParts,
       ];
-      updateSession(threadKey, (current) => ({
-        ...current,
-        expectOwnUpdate: true,
-        interacted: true,
-        lastTouchedAt: Date.now(),
-        optimisticEntries: [
-          ...current.optimisticEntries,
-          {
-            type: "message",
-            id,
-            role: "user",
-            text,
-            parts,
-            createdAt: Date.now(),
-          },
-        ],
-      }));
+      const optimisticEntry: AppServerThreadMessageEntry = {
+        type: "message",
+        id,
+        role: "user",
+        text,
+        parts,
+        createdAt,
+      };
+      updateSession(threadKey, (current) => {
+        const authoritativeEntry =
+          findAuthoritativeUserMessageForOptimisticEntry({
+            entry: optimisticEntry,
+            response: current.response,
+            turnId: turnId ?? current.activeTurnId,
+          });
+        const nextResponse = authoritativeEntry
+          ? appendMessageEntries(
+              current.response,
+              {
+                backend: thread.source,
+                threadId: thread.id,
+              },
+              [
+                mergeCompletedUserMessageWithOptimisticEntry(
+                  authoritativeEntry,
+                  [optimisticEntry],
+                ),
+              ],
+            )
+          : current.response;
+
+        return {
+          ...current,
+          expectOwnUpdate: true,
+          interacted: true,
+          lastTouchedAt: Date.now(),
+          optimisticEntries: authoritativeEntry
+            ? current.optimisticEntries
+            : [...current.optimisticEntries, optimisticEntry],
+          response: nextResponse,
+        };
+      });
       return id;
     },
     [thread, threadKey, updateSession]
