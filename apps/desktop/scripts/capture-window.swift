@@ -15,6 +15,7 @@ import Foundation
 // Usage:
 //   capture-window.swift <owner-name-substring> <output-path>
 //   capture-window.swift <owner-name-substring> <output-path> --title=<title-substring>
+//   capture-window.swift <owner-name-substring> <output-path> --allow-low-dpi
 //
 // The owner-name substring is matched against `kCGWindowOwnerName`
 // case-insensitively. For an Electron-based app this is typically
@@ -36,6 +37,10 @@ import Foundation
 //   * `screencapture` includes the window shadow by default. Pass `-o`
 //     to drop it; we omit `-o` here so the README shots get the polished
 //     macOS framing.
+//   * `screencapture -l` renders at the backing scale of the display the
+//     window is on, with no way to ask for 2x. So the capture lands in a
+//     temp file, gets its scale verified, and only then replaces the
+//     destination — see the `minimumBackingScale` check below.
 //   * Screen Recording permission is required for `screencapture -l`.
 //     The first invocation triggers the system prompt; subsequent runs
 //     are silent. CI environments will need this granted to whichever
@@ -46,7 +51,8 @@ import Foundation
 //   2 — usage error
 //   3 — no matching window
 //   4 — screencapture failed
-//   5 — output file not produced
+//   5 — output file not produced, or could not be moved into place
+//   6 — capture came out below Retina scale (see --allow-low-dpi)
 
 let args = CommandLine.arguments
 
@@ -64,9 +70,13 @@ let ownerSubstring = args[1]
 let outputPath = args[2]
 
 var titleSubstring: String? = nil
+var allowLowResolution = false
 for raw in args.dropFirst(3) {
   if raw.hasPrefix("--title=") {
     titleSubstring = String(raw.dropFirst("--title=".count))
+  }
+  if raw == "--allow-low-dpi" {
+    allowLowResolution = true
   }
 }
 
@@ -121,6 +131,20 @@ else {
   exit(3)
 }
 
+// Logical (point) width of the window, used below to derive the backing
+// scale the capture actually came out at.
+let targetBounds = target[kCGWindowBounds as String] as? [String: CGFloat]
+let logicalWidth = targetBounds?["Width"] ?? 0
+
+// Capture to a temp file first, verify the backing scale, and only then
+// move it into place. `screencapture` writes wherever it is pointed, so
+// capturing straight to `outputPath` would clobber a committed Retina
+// asset with a 1x one before anything could object — which is exactly
+// what happened to all 21 docs-site PNGs on 2026-09-01.
+let stagingPath = FileManager.default.temporaryDirectory
+  .appendingPathComponent("capture-window-\(UUID().uuidString).png")
+  .path
+
 let process = Process()
 process.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
 // `-l <wid>`: capture the window with the given CGWindowID.
@@ -131,7 +155,7 @@ process.arguments = [
   "-l", String(windowNumber),
   "-x",
   "-t", "png",
-  outputPath,
+  stagingPath,
 ]
 
 let stderrPipe = Pipe()
@@ -156,9 +180,55 @@ if process.terminationStatus != 0 {
   exit(4)
 }
 
-guard FileManager.default.fileExists(atPath: outputPath) else {
+guard FileManager.default.fileExists(atPath: stagingPath) else {
   FileHandle.standardError.write(
-    Data("screencapture reported success but \(outputPath) does not exist\n".utf8)
+    Data("screencapture reported success but \(stagingPath) does not exist\n".utf8)
+  )
+  exit(5)
+}
+
+// `screencapture -l` renders at the backing scale of whichever display the
+// window happens to sit on. On a 1x display it silently produces a
+// half-resolution PNG that looks fine in isolation and only reveals itself
+// once it is next to the Retina asset it replaced. Refuse rather than
+// degrade the committed screenshots.
+//
+// Ratio, not exact multiple: the shadow adds ~56pt on each side, so a
+// 1440pt-wide window lands near 1.08 at 1x and near 2.16 at 2x. 1.5
+// separates them with room to spare on either side.
+let minimumBackingScale: CGFloat = 1.5
+if !allowLowResolution, logicalWidth > 0,
+  let staged = NSBitmapImageRep(data: FileManager.default.contents(atPath: stagingPath) ?? Data())
+{
+  let observedScale = CGFloat(staged.pixelsWide) / logicalWidth
+  if observedScale < minimumBackingScale {
+    try? FileManager.default.removeItem(atPath: stagingPath)
+    FileHandle.standardError.write(
+      Data(
+        """
+        refusing to write a low-resolution capture: window is \(Int(logicalWidth))pt wide \
+        but the capture is only \(staged.pixelsWide)px (~\(String(format: "%.2f", observedScale))x).
+        The window is on a non-Retina display, so screencapture rendered it at 1x. \
+        Move the app window to the built-in Retina display (or a 2x external) and re-run. \
+        \(outputPath) was left untouched. Pass --allow-low-dpi to override.
+
+        """.utf8
+      )
+    )
+    exit(6)
+  }
+}
+
+// Verified — now replace the destination.
+do {
+  if FileManager.default.fileExists(atPath: outputPath) {
+    try FileManager.default.removeItem(atPath: outputPath)
+  }
+  try FileManager.default.moveItem(atPath: stagingPath, toPath: outputPath)
+} catch {
+  try? FileManager.default.removeItem(atPath: stagingPath)
+  FileHandle.standardError.write(
+    Data("failed to move capture into \(outputPath): \(error)\n".utf8)
   )
   exit(5)
 }

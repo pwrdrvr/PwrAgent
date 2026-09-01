@@ -2,7 +2,8 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test, type ElectronApplication } from "@playwright/test";
+import { expect, test } from "@playwright/test";
+import { bringToFront } from "./fixtures/capture-window-placement";
 import { launchElectronApp } from "./fixtures/electron-app";
 import { resolveScreenshotAppearance } from "./fixtures/screenshot-appearance";
 
@@ -91,25 +92,6 @@ test.skip(
   process.env.PWRAGENT_SCREENSHOT_CAPTURE !== "1",
   "Set PWRAGENT_SCREENSHOT_CAPTURE=1 via the package script to capture README screenshots.",
 );
-
-/**
- * Bring the Electron window forward so screencapture's window-list lookup
- * resolves it. Without this, a recently-launched Electron window can
- * stay behind whatever the user/IDE had focused, and `screencapture -l`
- * silently captures a stale frame or an off-screen position.
- */
-async function bringToFront(electronApp: ElectronApplication): Promise<void> {
-  await electronApp.evaluate(({ BrowserWindow }) => {
-    const win = BrowserWindow.getAllWindows()[0];
-    if (!win) return;
-    win.show();
-    win.focus();
-    win.moveTop();
-  });
-  // Give the compositor a tick to actually raise the window before
-  // screencapture inspects the on-screen window list.
-  await new Promise((resolve) => setTimeout(resolve, 500));
-}
 
 function captureNative(
   outputBasename: string,

@@ -331,6 +331,39 @@ permission is required for whichever terminal/IDE runs the spec —
 the first invocation triggers the system prompt; subsequent runs
 are silent.
 
+**Captures must come off a Retina (2x) display**, and the specs place
+the window on one for you. `screencapture -l` renders at the backing
+scale of whichever display the window occupies and offers no flag to
+request 2x, so a run with the window on a 1x external monitor silently
+produces half-resolution PNGs. The noise filter does not catch this —
+half-res pixels *are* different pixels, so it keeps them. On
+2026-09-01 a run in exactly that state overwrote all 21 committed
+docs-site PNGs at half resolution, and 8 also caught a stray toast.
+
+Two layers now prevent it:
+
+* `e2e/fixtures/capture-window-placement.ts` centers the window on the
+  highest-backing-scale display before every capture, preferring the
+  built-in panel — the usual laptop-docked-to-a-1x-monitor case. It
+  never resizes (the committed PNGs depend on the window size the spec
+  sets) and warns if no 2x display is attached.
+* `scripts/capture-window.swift` stages each capture in a temp file,
+  checks the observed scale, and exits 6 **without touching the
+  destination** when it lands below ~1.5x. Pass `--allow-low-dpi` only
+  if you genuinely want a 1x asset.
+
+Capturing off-screen is fine: `screencapture -l` pulls the window's
+full composited image from the window server, so the shadow is never
+clipped by a screen edge. The committed shots are 1552x1012pt, larger
+than the 1496x967pt built-in panel they were taken on.
+
+Notices are suppressed during capture: unpackaged E2E launches do not
+arm the vendor Grok CLI update check (`grokUpdateChecksDisabled` in
+`main/acp/grok-cli-update.ts`), because its notice is durable and
+would otherwise paint "Grok update available" over whatever the
+capture happens to catch. `auto-updater.ts` gates PwrAgent's own
+update check on the same predicate.
+
 Pieces, all under `apps/desktop/`:
 
 | File | What it does |
@@ -339,8 +372,9 @@ Pieces, all under `apps/desktop/`:
 | `e2e/docs-site-screenshots.inspect.spec.ts` | Tests producing PNGs for `docs.pwragent.ai` (Settings panels + per-provider Messaging panels + Recents hero + composer features + first-run onboarding wizard + live work rail). Gated behind `PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE=1`. Output lands in the **sibling docs repo's** `assets/screenshots/` (default `~/github/docs.pwragent.ai/`, override with `PWRAGENT_DOCS_SITE_REPO`). |
 | `e2e/fixtures/readme-recents-hero/replay.fixture.json` | Hand-crafted populated thread list for the hero shot. Edit by hand to retune. |
 | `e2e/fixtures/readme-state-seeding.ts` | Direct sqlite/config seeders for messaging bindings, activity log entries, pairing tokens, and Telegram-enabled config. |
+| `e2e/fixtures/capture-window-placement.ts` | Shared `bringToFront` for both capture specs. Centers the window on the highest-backing-scale display (built-in first) so `screencapture` renders at 2x, then raises it so the window-list lookup resolves it. |
 | `e2e/fixtures/docs-site-state-seeding.ts` | All-providers-enabled `config.toml` seeder so the per-platform Settings → Messaging captures can scroll directly to each platform's section without driving the Enabled toggle in the UI. |
-| `scripts/capture-window.swift` | Resolves the Electron window's CGWindowID and runs `screencapture -l <wid>`. Optional `--title=<substring>` for multi-window apps. |
+| `scripts/capture-window.swift` | Resolves the Electron window's CGWindowID and runs `screencapture -l <wid>`. Stages to a temp file and refuses (exit 6) to overwrite the destination with a sub-Retina capture. Optional `--title=<substring>` for multi-window apps, `--allow-low-dpi` to bypass the scale check. |
 | `scripts/filter-noise-screenshots.mjs` | Post-capture cleanup. Iterates modified PNGs in the current repo (default: under `docs/assets/screenshots/` only) or another repo (via `--root <path>`, used by `screenshot:docs-site` against the sibling docs repo). Decodes HEAD and working-tree to TIFF via `sips`, SHA-256 compares. Identical → `git restore --source=HEAD --worktree`. Visually different → kept for review. Net-new PNGs (untracked) are left alone. |
 | `scripts/render-indicator-overlay.swift` | Paints a numbered step-indicator pill onto a single PNG via Core Graphics + Core Text. |
 | `scripts/stitch-demo-gif.ts` | Reusable GIF stitcher. Annotates each frame via the indicator-overlay Swift helper, then encodes via two-pass ffmpeg `palettegen`/`paletteuse`. CLI: `--output`, `--frame-duration-ms`, `--no-indicator`, `--indicator-position top|bottom`. |

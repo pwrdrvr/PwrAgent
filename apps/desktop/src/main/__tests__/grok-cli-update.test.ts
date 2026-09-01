@@ -3,6 +3,7 @@ import {
   checkGrokCliUpdate,
   GROK_UPDATE_FAILURE_TTL_MS,
   GROK_UPDATE_SUCCESS_TTL_MS,
+  grokUpdateChecksDisabled,
   shouldCheckGrokCliUpdate,
 } from "../acp/grok-cli-update";
 
@@ -148,5 +149,40 @@ describe("shouldCheckGrokCliUpdate", () => {
       previous: { ...previous, status: "failed" },
       previousCommand: "/grok",
     })).toBe(true);
+  });
+});
+
+describe("grokUpdateChecksDisabled", () => {
+  // Regression: on 2026-09-01 the docs-site capture run shipped the durable
+  // "Grok update available" toast into 8 of 21 PNGs, because the vendor check
+  // ran against the host's installed Grok. Unpackaged E2E must not arm it.
+  it("disables the check for an unpackaged E2E launch", () => {
+    expect(grokUpdateChecksDisabled({
+      isPackaged: false,
+      env: { PWRAGENT_E2E: "1" },
+    })).toBe(true);
+  });
+
+  it("leaves the check armed for a packaged build, E2E flag or not", () => {
+    expect(grokUpdateChecksDisabled({
+      isPackaged: true,
+      env: { PWRAGENT_E2E: "1" },
+    })).toBe(false);
+    expect(grokUpdateChecksDisabled({
+      isPackaged: true,
+      env: {},
+    })).toBe(false);
+  });
+
+  it("leaves the check armed for an ordinary unpackaged dev run", () => {
+    expect(grokUpdateChecksDisabled({
+      isPackaged: false,
+      env: {},
+    })).toBe(false);
+    // Only the exact "1" opts out, matching auto-updater.ts.
+    expect(grokUpdateChecksDisabled({
+      isPackaged: false,
+      env: { PWRAGENT_E2E: "0" },
+    })).toBe(false);
   });
 });

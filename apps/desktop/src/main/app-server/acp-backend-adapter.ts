@@ -90,6 +90,7 @@ import {
 import { AcpStdioJsonRpcTransport } from "../acp/acp-stdio-transport";
 import {
   checkGrokCliUpdate,
+  grokUpdateChecksDisabled,
   isPwrAgentOwnedGrokRuntime,
   preserveGrokUpdateAcknowledgement,
   shouldCheckGrokCliUpdate,
@@ -1111,7 +1112,10 @@ export class AcpBackendAdapter {
     this.grokUpdateChecker = options.checkGrokCliUpdate === null
       ? undefined
       : options.checkGrokCliUpdate
-        ?? (isAppStateInitialized() ? checkGrokCliUpdate : undefined);
+        ?? (isAppStateInitialized()
+            && !grokUpdateChecksDisabled({ isPackaged: app?.isPackaged === true })
+          ? checkGrokCliUpdate
+          : undefined);
     this.acpAgentStore =
       options.acpAgentStore === null
         ? undefined

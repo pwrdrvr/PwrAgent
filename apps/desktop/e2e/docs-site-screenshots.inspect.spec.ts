@@ -3,8 +3,9 @@ import { existsSync, mkdirSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expect, test, type ElectronApplication, type Page } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 import { launchElectronApp } from "./fixtures/electron-app";
+import { bringToFront } from "./fixtures/capture-window-placement";
 import { resolveScreenshotAppearance } from "./fixtures/screenshot-appearance";
 import { seedAllMessagingProvidersEnabledConfig } from "./fixtures/docs-site-state-seeding";
 import {
@@ -81,17 +82,6 @@ if (process.env.PWRAGENT_DOCS_SITE_SCREENSHOT_CAPTURE === "1") {
         `PWRAGENT_DOCS_SITE_REPO to point at your checkout.`,
     );
   }
-}
-
-async function bringToFront(electronApp: ElectronApplication): Promise<void> {
-  await electronApp.evaluate(({ BrowserWindow }) => {
-    const win = BrowserWindow.getAllWindows()[0];
-    if (!win) return;
-    win.show();
-    win.focus();
-    win.moveTop();
-  });
-  await new Promise((resolve) => setTimeout(resolve, 500));
 }
 
 function captureNative(outputBasename: string): void {
