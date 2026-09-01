@@ -28,13 +28,17 @@ function thread(
 function reviewer(
   kind: AppServerBackendKind,
   reviewRunner: boolean,
+  reviewRunMode = true,
 ): BackendSummary {
   return {
     kind,
     label: kind === "codex" ? "Codex" : "Grok",
     available: true,
     methods: [],
-    capabilities: { reviewRunner } as BackendSummary["capabilities"],
+    capabilities: {
+      reviewRunner,
+      reviewRunMode,
+    } as BackendSummary["capabilities"],
     executionModes: [],
   };
 }
@@ -42,11 +46,13 @@ function reviewer(
 describe("resolveReviewRunMode", () => {
   it("defaults same-provider reviews to this thread", () => {
     expect(resolveReviewRunMode({
+      ownerSummary: reviewer("codex", true),
       reviewerBackend: "codex",
       reviewerSummary: reviewer("codex", true),
       thread: thread(),
     })).toEqual({
       controlDisabled: false,
+      explicitRunModeSupported: true,
       runMode: "inline",
       separateThreadDisabled: false,
     });
@@ -54,6 +60,7 @@ describe("resolveReviewRunMode", () => {
 
   it("honors an optional separate-thread choice", () => {
     expect(resolveReviewRunMode({
+      ownerSummary: reviewer("codex", true),
       requestedRunMode: "managed-child",
       reviewerBackend: "codex",
       reviewerSummary: reviewer("codex", true),
@@ -63,6 +70,7 @@ describe("resolveReviewRunMode", () => {
 
   it("forces another provider into a managed child with a concrete reason", () => {
     const decision = resolveReviewRunMode({
+      ownerSummary: reviewer("codex", true),
       requestedRunMode: "inline",
       reviewerBackend: "acp:grok",
       reviewerSummary: reviewer("acp:grok", true),
@@ -83,6 +91,7 @@ describe("resolveReviewRunMode", () => {
       path: "/repo/secondary",
     });
     const decision = resolveReviewRunMode({
+      ownerSummary: reviewer("codex", true),
       reviewerBackend: "codex",
       reviewerSummary: reviewer("codex", true),
       thread: parent,
@@ -95,6 +104,7 @@ describe("resolveReviewRunMode", () => {
 
   it("forces ACP review providers into managed children", () => {
     const decision = resolveReviewRunMode({
+      ownerSummary: reviewer("acp:grok", true),
       reviewerBackend: "acp:grok",
       reviewerSummary: reviewer("acp:grok", true),
       thread: thread("acp:grok"),
@@ -106,6 +116,7 @@ describe("resolveReviewRunMode", () => {
 
   it("disables separate thread when the reviewer cannot run a managed child", () => {
     const decision = resolveReviewRunMode({
+      ownerSummary: reviewer("codex", false),
       reviewerBackend: "codex",
       reviewerSummary: reviewer("codex", false),
       thread: thread(),
@@ -116,5 +127,20 @@ describe("resolveReviewRunMode", () => {
     expect(decision.helpText).toBe(
       "Codex cannot run a managed review in a separate thread.",
     );
+  });
+
+  it("uses the owner default when a federated owner predates explicit run modes", () => {
+    const decision = resolveReviewRunMode({
+      ownerSummary: reviewer("codex", true, false),
+      requestedRunMode: "managed-child",
+      reviewerBackend: "codex",
+      reviewerSummary: reviewer("codex", true),
+      thread: thread(),
+    });
+
+    expect(decision.runMode).toBe("inline");
+    expect(decision.controlDisabled).toBe(true);
+    expect(decision.explicitRunModeSupported).toBe(false);
+    expect(decision.helpText).toMatch(/owner's configured default/);
   });
 });

@@ -283,6 +283,7 @@ function backendSummary(
       resumeThread: true,
       renameThread: false,
       readThread: true,
+      reviewRunMode: true,
       startTurn: true,
       interruptTurn: true,
       steerTurn: false,
@@ -9950,6 +9951,99 @@ describe("Composer", () => {
     );
   });
 
+  it("uses the owner default when a federated owner predates explicit run modes", () => {
+    const codexBackend = backendSummary("codex");
+    codexBackend.capabilities.startReview = true;
+    codexBackend.capabilities.reviewRunner = true;
+    delete codexBackend.capabilities.reviewRunMode;
+
+    render(
+      <Composer
+        backends={[codexBackend]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Older owner",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+    const location = screen.getByRole("button", { name: "Review location" });
+    expect(location).toBeDisabled();
+    expect(location).toHaveAttribute("data-value", "inline");
+    expect(location).toHaveTextContent("Owner default");
+    expect(
+      location.closest(".composer__review-location-chip")
+        ?.getAttribute("data-tooltip"),
+    ).toMatch(
+      /owner's configured default/,
+    );
+  });
+
+  it("closes the review location menu before Escape cancels the review", async () => {
+    const codexBackend = backendSummary("codex");
+    codexBackend.capabilities.startReview = true;
+    codexBackend.capabilities.reviewRunner = true;
+
+    render(
+      <Composer
+        backends={[codexBackend]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview: vi.fn(),
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review location",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review" },
+    });
+    fireEvent.keyDown(screen.getByLabelText("Reply"), { key: "Enter" });
+
+    const location = screen.getByRole("button", { name: "Review location" });
+    fireEvent.click(location);
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+    fireEvent.keyDown(location, { key: "Escape" });
+
+    await waitFor(() => {
+      expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+
+    fireEvent.keyDown(location, { key: "Escape" });
+
+    expect(
+      screen.queryByRole("group", { name: "Review target" }),
+    ).not.toBeInTheDocument();
+  });
+
   it("disables Separate thread with accessible help when no review child can run", () => {
     const codexBackend = backendSummary("codex");
     codexBackend.label = "Codex";
@@ -10080,6 +10174,68 @@ describe("Composer", () => {
     });
   });
 
+  it("blocks keyboard submission when a forced review child is unavailable", async () => {
+    const startReview = vi.fn();
+    const codexBackend = backendSummary("codex");
+    codexBackend.capabilities.startReview = true;
+    codexBackend.capabilities.reviewRunner = false;
+
+    render(
+      <Composer
+        backends={[codexBackend]}
+        desktopApi={{
+          onAgentEvent: () => () => undefined,
+          startReview,
+        }}
+        disabled={false}
+        skills={[]}
+        thread={{
+          id: "thread-1",
+          title: "Review thread",
+          titleSource: "explicit",
+          source: "codex",
+          executionMode: "default",
+          linkedDirectories: [
+            {
+              id: "/repo/primary",
+              kind: "worktree",
+              label: "primary",
+              path: "/repo/primary",
+              worktreePath: "/worktrees/primary",
+            },
+            {
+              id: "/repo/secondary",
+              kind: "worktree",
+              label: "secondary",
+              path: "/repo/secondary",
+              worktreePath: "/worktrees/secondary",
+            },
+          ],
+          inbox: { inInbox: false },
+        }}
+      />
+    );
+
+    fireEvent.change(screen.getByLabelText("Reply"), {
+      target: { value: "/review main" },
+    });
+    await clickButton("Send");
+    fireEvent.change(screen.getByLabelText("Review project"), {
+      target: { value: "/worktrees/secondary" },
+    });
+
+    expect(screen.getByRole("button", { name: "Start review" })).toBeDisabled();
+    fireEvent.keyDown(
+      screen.getByRole("button", {
+        name: /Compare this branch with a base branch/i,
+      }),
+      { key: "Enter" },
+    );
+
+    expect(startReview).not.toHaveBeenCalled();
+    expect(screen.getByRole("group", { name: "Review target" })).toBeInTheDocument();
+  });
+
   it("defaults a multi-project review to the changed primary workspace", async () => {
     const startReview = vi.fn(async (request: StartReviewRequest) => ({
       backend: request.backend,
@@ -10195,6 +10351,9 @@ describe("Composer", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
+    const codexBackend = backendSummary("codex");
+    codexBackend.capabilities.startReview = true;
+    codexBackend.capabilities.reviewRunner = true;
     const exampleDirectory: NavigationDirectorySummary = {
       key: "directory:/Users/example/Projects/catalog-service",
       kind: "directory",
@@ -10236,6 +10395,7 @@ describe("Composer", () => {
 
     render(
       <Composer
+        backends={[codexBackend]}
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startReview,
@@ -10322,6 +10482,9 @@ describe("Composer", () => {
       reviewThreadId: request.threadId,
       turnId: "turn-review-1",
     }));
+    const codexBackend = backendSummary("codex");
+    codexBackend.capabilities.startReview = true;
+    codexBackend.capabilities.reviewRunner = true;
     const exampleCommit = {
       sha: "1111111111111111111111111111111111111111",
       shortSha: "1111111",
@@ -10367,6 +10530,7 @@ describe("Composer", () => {
 
     render(
       <Composer
+        backends={[codexBackend]}
         desktopApi={{
           onAgentEvent: () => () => undefined,
           startReview,

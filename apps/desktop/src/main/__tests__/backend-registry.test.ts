@@ -23137,6 +23137,7 @@ command = "pnpm dev"
       await registry.listBackends({ includeUnavailable: true })
     ).backends.find((backend) => backend.kind === "codex");
     expect(codexBackend?.capabilities.reviewRunner).toBe(true);
+    expect(codexBackend?.capabilities.reviewRunMode).toBe(true);
 
     await registry.close();
   });

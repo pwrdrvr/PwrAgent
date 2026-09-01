@@ -16,7 +16,9 @@ export function ReviewLocationDropdown(props: {
 }) {
   const selectedLabel = props.decision.runMode === "managed-child"
     ? "Separate thread"
-    : "This thread";
+    : props.decision.explicitRunModeSupported
+      ? "This thread"
+      : "Owner default";
   const accessibleLabel = props.decision.helpText
     ? `Review location: ${selectedLabel}. ${props.decision.helpText}`
     : `Review location: ${selectedLabel}`;
@@ -37,6 +39,11 @@ export function ReviewLocationDropdown(props: {
         onChange={(value) => props.onChange(value as ReviewRunMode)}
         options={REVIEW_LOCATION_OPTIONS.map((option) => ({
           ...option,
+          label:
+            option.value === "inline"
+            && !props.decision.explicitRunModeSupported
+              ? "Owner default"
+              : option.label,
           disabled:
             option.value === "managed-child"
             && props.decision.separateThreadDisabled,

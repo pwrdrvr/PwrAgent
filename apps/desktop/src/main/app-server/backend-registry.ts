@@ -2146,6 +2146,7 @@ function buildCapabilities(methods: string[], backend: AppServerBackendKind): Ba
     readThread: supported.has("thread/read") || assumeCodexAppServerSurface,
     startTurn: supported.has("turn/start") || assumeCodexAppServerSurface,
     startReview: supported.has("turn/start") || assumeCodexAppServerSurface,
+    reviewRunMode: supported.has("turn/start") || assumeCodexAppServerSurface,
     startDetachedReview: nativeReview || reviewRunner,
     // A managed review child is a durable PwrAgent subagent thread plus one
     // turn, so Codex can review for another provider's thread even on builds

@@ -218,6 +218,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
   }, [branchEdited, branchOptions]);
 
   const reviewRunModeDecision = resolveReviewRunMode({
+    ownerSummary: props.backend,
     requestedRunMode: runMode,
     reviewerBackend: props.thread.source,
     reviewerSummary: props.backend,
@@ -270,7 +271,7 @@ export function StarMapReviewSetup(props: StarMapReviewSetupProps) {
         targetNode instanceof HTMLElement ? targetNode : undefined;
 
       if (event.key === "Escape" && !submitting) {
-        if (targetElement?.closest(".composer-dropdown")) {
+        if (targetElement?.closest(".composer-dropdown--open")) {
           return;
         }
         event.preventDefault();

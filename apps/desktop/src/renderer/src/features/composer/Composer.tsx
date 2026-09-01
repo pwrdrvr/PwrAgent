@@ -5924,6 +5924,13 @@ export function Composer(props: ComposerProps) {
     if (!configuredReviewCommand) {
       return;
     }
+    if (reviewSubmissionUnavailable) {
+      setSendError(
+        reviewRunModeDecision.helpText
+        ?? "A separate review thread is unavailable for this reviewer.",
+      );
+      return;
+    }
     const routedReviewCommand = {
       ...configuredReviewCommand,
       runMode: reviewRunModeDecision.runMode,
@@ -6010,6 +6017,11 @@ export function Composer(props: ComposerProps) {
     event: ReactKeyboardEvent<HTMLFieldSetElement>,
   ): void => {
     if (event.key !== "Escape") {
+      return;
+    }
+    const targetElement =
+      event.target instanceof HTMLElement ? event.target : undefined;
+    if (targetElement?.closest(".composer-dropdown--open")) {
       return;
     }
     event.preventDefault();
@@ -9037,6 +9049,9 @@ export function Composer(props: ComposerProps) {
     threadModel: selectedModelOption?.id,
     threadReasoningEffort: supportsReasoning ? selectedReasoningEffort : undefined,
   });
+  const reviewOwnerSummary = props.backends?.find(
+    (candidate) => candidate.kind === props.thread?.source,
+  );
   const reviewerModelOptions =
     reviewerSelection.summary?.launchpadOptions?.models ?? [];
   const reviewerReasoningOptions = getReasoningEffortsForModel(
@@ -9046,6 +9061,7 @@ export function Composer(props: ComposerProps) {
   const reviewerOverridden = Boolean(reviewConfig?.reviewer);
   const reviewRunModeDecision = props.thread
     ? resolveReviewRunMode({
+        ownerSummary: reviewOwnerSummary,
         requestedRunMode: reviewConfig?.runMode,
         reviewerBackend: reviewerSelection.backend,
         reviewerSummary: reviewerSelection.summary,
@@ -9054,9 +9070,13 @@ export function Composer(props: ComposerProps) {
       })
     : {
         controlDisabled: false,
+        explicitRunModeSupported: false,
         runMode: "inline" as const,
         separateThreadDisabled: true,
       };
+  const reviewSubmissionUnavailable =
+    reviewRunModeDecision.runMode === "managed-child"
+    && reviewRunModeDecision.separateThreadDisabled;
   // A remembered combination is only offered while it still resolves against
   // the owner's current catalog. Recents are disposable, so a dead row is
   // noise rather than a preference worth preserving.
@@ -10901,10 +10921,7 @@ export function Composer(props: ComposerProps) {
                 disabled={
                   !buildConfiguredReviewCommand(reviewConfig) ||
                   (reviewWorkspaceSelectionRequired && !reviewConfig?.workspaceCwd) ||
-                  (
-                    reviewRunModeDecision.runMode === "managed-child"
-                    && reviewRunModeDecision.separateThreadDisabled
-                  )
+                  reviewSubmissionUnavailable
                 }
                 onClick={() => {
                   void submitConfiguredReviewComposer();

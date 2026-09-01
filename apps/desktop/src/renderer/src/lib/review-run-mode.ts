@@ -9,6 +9,7 @@ import { formatBackendLabel } from "./backend-label";
 
 export type ReviewRunModeDecision = {
   controlDisabled: boolean;
+  explicitRunModeSupported: boolean;
   helpText?: string;
   runMode: ReviewRunMode;
   separateThreadDisabled: boolean;
@@ -46,6 +47,7 @@ function backendLabel(
 }
 
 export function resolveReviewRunMode(params: {
+  ownerSummary?: BackendSummary;
   requestedRunMode?: ReviewRunMode;
   reviewerBackend?: AppServerBackendKind;
   reviewerSummary?: BackendSummary;
@@ -54,12 +56,10 @@ export function resolveReviewRunMode(params: {
 }): ReviewRunModeDecision {
   const reviewerBackend = params.reviewerBackend ?? params.thread.source;
   const reviewerLabel = backendLabel(reviewerBackend, params.reviewerSummary);
-  // A missing summary is still loading, not proof that the owner cannot run a
-  // child. Once a summary is present, require the explicit capability probe so
-  // older federation owners and unsupported providers stay gated.
-  const managedChildSupported = params.reviewerSummary
-    ? params.reviewerSummary.capabilities.reviewRunner === true
-    : reviewerBackend === "codex";
+  const explicitRunModeSupported =
+    params.ownerSummary?.capabilities.reviewRunMode === true;
+  const managedChildSupported =
+    params.reviewerSummary?.capabilities.reviewRunner === true;
   const differentProvider = reviewerBackend !== params.thread.source;
 
   let forcedReason: string | undefined;
@@ -74,17 +74,27 @@ export function resolveReviewRunMode(params: {
       `Separate thread is required because ${reviewerLabel} runs reviews as managed child threads.`;
   }
 
-  const unavailableReason = managedChildSupported
+  const unavailableReason = params.reviewerSummary && !managedChildSupported
+    ? `${reviewerLabel} cannot run a managed review in a separate thread.`
+    : undefined;
+  const unsupportedOwnerReason = explicitRunModeSupported || forcedReason
     ? undefined
-    : `${reviewerLabel} cannot run a managed review in a separate thread.`;
-  const helpText = [forcedReason, unavailableReason].filter(Boolean).join(" ")
+    : "This thread's owner does not support choosing a review location. Reviews use the owner's configured default.";
+  const helpText = [
+    forcedReason,
+    unavailableReason,
+    unsupportedOwnerReason,
+  ].filter(Boolean).join(" ")
     || undefined;
   const runMode = forcedReason
     ? "managed-child"
-    : params.requestedRunMode ?? "inline";
+    : explicitRunModeSupported
+      ? params.requestedRunMode ?? "inline"
+      : "inline";
 
   return {
-    controlDisabled: Boolean(forcedReason),
+    controlDisabled: Boolean(forcedReason) || !explicitRunModeSupported,
+    explicitRunModeSupported,
     helpText,
     runMode,
     separateThreadDisabled: !managedChildSupported,
