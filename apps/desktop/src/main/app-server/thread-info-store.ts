@@ -423,12 +423,23 @@ export class ThreadInfoStore {
     ) {
       return summary.value;
     }
+    // A title and its source are separate fields with separate sequences, so
+    // the row's `titleSource` describes the row's title and says nothing about
+    // this one. Carrying it over mislabels provenance in both directions: a
+    // provider replay inherits `explicit` and reads as an operator rename,
+    // which suppresses generated titles and reports a rename nobody made; a
+    // real name inherits `fallback` and every `!== "fallback"` guard downstream
+    // discards it. Claim the field lane's own source only when it was observed
+    // no earlier than the title it describes, and otherwise say `derived` --
+    // the honest claim for a usable name that no operator set.
+    const titleSource = entry.fields.titleSource;
     return {
       ...summary.value,
       title: title.value,
-      ...(entry.fields.titleSource
-        ? { titleSource: entry.fields.titleSource.value }
-        : {}),
+      titleSource:
+        titleSource && titleSource.observationSequence >= title.observationSequence
+          ? titleSource.value
+          : "derived",
     };
   }
 

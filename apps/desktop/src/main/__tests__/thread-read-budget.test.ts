@@ -509,14 +509,19 @@ describe("what the store serves stays current", () => {
     ).toBe("Renamed By Operator");
   });
 
-  // An unfiltered listing returns archived and active rows alike, so it proves
-  // nothing about either.
-  it("does not read archival into a listing that did not filter for it", async () => {
-    const { registry } = build();
-    await publishNotification(registry, {
-      method: "thread/archived",
-      params: { threadId: "thread-alpha" },
-    });
+  // Archival is read off the row, not off the query. Both backends coerce an
+  // unspecified `archived` to `false`, so "the caller did not filter" is not a
+  // case that reaches a provider -- and the row's own `archivedAt` survives a
+  // listing that the caller labelled nothing at all.
+  it("records archival from a row that carries archivedAt", async () => {
+    const { registry } = build([
+      codexThread({
+        id: "thread-alpha",
+        title: "Rework the quit dialog",
+        titleSource: "explicit",
+        archivedAt: 1000,
+      }),
+    ]);
     await registry.listThreads({
       backend: "codex",
       callerReason: "navigation-snapshot",
@@ -524,10 +529,74 @@ describe("what the store serves stays current", () => {
       forceRefresh: true,
     });
 
+    // The row-derived fact is what this asserts. Withholding it from a caller
+    // is the list cache's job here, not the store's: `thread/archived`
+    // invalidates that cache, so its copy cannot outlive the archival, while
+    // the store deliberately survives invalidation and needs the fact instead.
     expect(
       registry.getThreadInfo({ backend: "codex", threadId: "thread-alpha" })
         ?.archived,
     ).toBe(true);
+  });
+
+  // The guard compares the archival sequence against the row's. A later
+  // listing that does not carry the thread must not advance the row past it,
+  // or one navigation poll un-archives it and admission serves it again.
+  it("keeps an archived thread withheld across later listings", async () => {
+    const { client, registry } = build();
+    await registry.listThreads(NAVIGATION_REFRESH);
+    await publishNotification(registry, {
+      method: "thread/archived",
+      params: { threadId: "thread-alpha" },
+    });
+    // The provider stops serving it, exactly as an active listing does.
+    client.setThreads([SECOND_THREAD]);
+    await registry.listThreads({ ...NAVIGATION_REFRESH, forceRefresh: true });
+    await registry.listThreads({ ...NAVIGATION_REFRESH, forceRefresh: true });
+
+    expect(
+      registry.getCachedThreadSummary({
+        backend: "codex",
+        threadId: "thread-alpha",
+      }),
+    ).toBeUndefined();
+  });
+
+  // ACP emits no unarchive notification, and a second process on the same
+  // profile emits none this process hears. The row coming back without
+  // `archivedAt` is the only report of that, so it has to be believed.
+  it("restores a thread the provider starts listing as active again", async () => {
+    const { client, registry } = build();
+    await registry.listThreads(NAVIGATION_REFRESH);
+    await publishNotification(registry, {
+      method: "thread/archived",
+      params: { threadId: "thread-alpha" },
+    });
+    client.setThreads([SECOND_THREAD]);
+    await registry.listThreads({ ...NAVIGATION_REFRESH, forceRefresh: true });
+    expect(
+      registry.getCachedThreadSummary({
+        backend: "codex",
+        threadId: "thread-alpha",
+      }),
+    ).toBeUndefined();
+
+    client.setThreads([NAMED_THREAD, SECOND_THREAD]);
+    await registry.listThreads({ ...NAVIGATION_REFRESH, forceRefresh: true });
+
+    // The fact itself has to flip, not merely stop being consulted. A store
+    // that leaves `archived` true and serves the row anyway because a newer
+    // summary outranks it is one poll away from withholding it again.
+    expect(
+      registry.getThreadInfo({ backend: "codex", threadId: "thread-alpha" })
+        ?.archived,
+    ).toBe(false);
+    expect(
+      registry.getCachedThreadSummary({
+        backend: "codex",
+        threadId: "thread-alpha",
+      }),
+    ).toMatchObject({ id: "thread-alpha" });
   });
 
   // A listing that failed is not an answer. Memoizing it would silence this

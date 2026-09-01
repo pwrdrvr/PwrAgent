@@ -604,6 +604,11 @@ const CODEX_WORKSPACE_CWD_SYNC_PENDING_WARNING =
  * problem the user needs visibility into.
  */
 const MAX_QUEUE_FLUSH_ATTEMPTS = 3;
+// Upper bound on remembered terminal-notification label reconciliations. Each
+// entry is one settled promise that memoizes "this thread's label has already
+// been walked for", so they are retained on purpose; the cap keeps a long-lived
+// process from holding one per thread it has ever been notified about.
+const NOTIFICATION_CONTEXT_RECONCILIATION_LIMIT = 512;
 const backendRegistryLog = getMainLogger("pwragent:backend-registry");
 const GROK_TITLE_HELPER_SESSION_POLICY = buildMinimalGrokHelperSessionPolicy({
   description: "Generate a concise title for a PwrAgent thread.",
@@ -34602,11 +34607,17 @@ export class DesktopBackendRegistry {
         identity,
         observationSequence: displayMetadataObservationSequence,
         source: "provider-list",
-        // Only a listing that actually filtered by archival proves anything
-        // about it. An unfiltered listing returns both kinds, so recording
-        // `false` for every row would overwrite an archival this store was
-        // just told about with a fact the listing never established.
-        ...(listedArchived === undefined ? {} : { archived: listedArchived }),
+        // Read archival off the row, not off the query. Both backends coerce
+        // an unspecified `archived` to `false` -- Codex requests
+        // `archived: false` pages, the ACP store filters on
+        // `Boolean(archivedAt) === (params?.archived === true)` -- so every
+        // listing is filtered whether or not the caller said so, and the row's
+        // own `archivedAt` is the fact rather than the argument that produced
+        // it. Taking it from the row keeps a row that arrives carrying
+        // `archivedAt` from being recorded as active, and keeps the store
+        // correctable: an out-of-band unarchive is a row that comes back
+        // without `archivedAt`, which no notification would have reported.
+        archived: thread.archivedAt !== undefined || listedArchived === true,
         title: thread.title,
         ...(thread.titleSource ? { titleSource: thread.titleSource } : {}),
         ...(projectLabel ? { projectLabel } : {}),
@@ -34659,12 +34670,27 @@ export class DesktopBackendRegistry {
     const key = buildThreadIdentityKey(backend, threadId);
     let reconciliation = this.notificationContextReconciliations.get(key);
     if (!reconciliation) {
+      // Retried only when the walk produced no rows at all. "Learned no label"
+      // is not a failure -- it is the answer for a thread this backend does not
+      // list, which is precisely the case this dedup exists for, so keying the
+      // retry on the label drops the entry every time and charges each of that
+      // thread's later notifications another enriched walk.
+      //
+      // Rejection is not the signal either: `listThreads` absorbs a provider
+      // error and resolves, so the `catch` below never runs for the restart it
+      // was written for. An empty result is the observable form of that
+      // failure, and it is also indistinguishable from a genuinely empty
+      // backend -- retrying both is right, because neither has an answer to
+      // memoize.
+      let walkListedRows = false;
       reconciliation = this.listThreads({
         backend,
         callerReason: "notification-context",
         enrichDirectories: true,
       })
-        .then(() => undefined)
+        .then((rows) => {
+          walkListedRows = rows.length > 0;
+        })
         .catch((error: unknown) => {
           backendRegistryLog.debug("native terminal notification context lookup failed", {
             backend,
@@ -34673,15 +34699,23 @@ export class DesktopBackendRegistry {
           });
         })
         .finally(() => {
-          // Dropped unless the walk actually taught us the label. Keeping a
-          // settled entry would memoize a FAILURE as though it were an answer:
-          // one listing that rejected while the provider was restarting would
-          // leave this thread's notifications unlabeled for the rest of the
-          // process, because every later attempt awaits the same dead promise.
-          if (!this.notificationThreadContextLabel(backend, threadId)) {
+          if (!walkListedRows) {
             this.notificationContextReconciliations.delete(key);
           }
         });
+      if (
+        this.notificationContextReconciliations.size
+        >= NOTIFICATION_CONTEXT_RECONCILIATION_LIMIT
+      ) {
+        // Settled entries are kept on purpose -- they are the memo. Insertion
+        // order makes the first key the oldest, so a process that outlives many
+        // threads reclaims them instead of holding one promise per thread it
+        // has ever been notified about.
+        const oldest = this.notificationContextReconciliations.keys().next();
+        if (!oldest.done) {
+          this.notificationContextReconciliations.delete(oldest.value);
+        }
+      }
       this.notificationContextReconciliations.set(key, reconciliation);
     }
     await reconciliation;

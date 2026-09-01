@@ -4554,9 +4554,10 @@ describe("MessagingController", () => {
     expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
   });
 
-  // Revocation is destructive, so a target this process has simply never
-  // observed must not be mistaken for one whose thread was deleted.
-  it("lists once before revoking a target it has never observed", async () => {
+  // A target with no local record at all is gone as far as this machine is
+  // concerned, and saying so costs one targeted read. The fleet snapshot this
+  // replaced charged every accepted message for the same answer.
+  it("revokes a target it has no record of without listing the fleet", async () => {
     const navigation = buildNavigationSnapshot();
     navigation.threads[0] = {
       ...navigation.threads[0]!,
@@ -4569,8 +4570,14 @@ describe("MessagingController", () => {
     };
     const harness = await createHarness({
       navigation,
-      // Nothing is cached: every target is cold.
-      getThreadAdmissionState: async () => ({}),
+      getThreadAdmissionState: async (request) => {
+        const thread = navigation.threads.find(
+          (candidate) =>
+            candidate.source === request.backend
+            && candidate.id === request.threadId,
+        );
+        return thread ? { thread } : {};
+      },
     });
     const channel = buildTopicChannel("13121");
     await harness.store.upsertDefaultAgentAssignment({
@@ -4593,15 +4600,54 @@ describe("MessagingController", () => {
       buildTextEvent("use the available Agent", { botMention: true, channel }),
     );
 
-    // The absent target is revoked, the live one still starts, and the two
-    // cold lookups share a single listing rather than taking one each.
     await expect(
       harness.store.getDefaultAgentAssignment("default-agent:cold-stale"),
     ).resolves.toMatchObject({ revokedAt: 1000 });
     expect(harness.startTurn).toHaveBeenCalledWith(
       expect.objectContaining({ backend: "codex", threadId: "thread-1" }),
     );
-    expect(harness.getNavigationSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.getNavigationSnapshot).not.toHaveBeenCalled();
+  });
+
+  // Revocation is destructive and each iteration reads state that can fail. A
+  // failure part-way through must not leave the channel half-revoked, with the
+  // assignments already rejected gone and the rest never examined.
+  it("revokes nothing when an admission read fails part-way through", async () => {
+    const harness = await createHarness({
+      getThreadAdmissionState: async (request) => {
+        if (request.threadId === "thread-1") {
+          throw new Error("backend restarting");
+        }
+        return {};
+      },
+    });
+    const channel = buildTopicChannel("13122");
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:first-rejected",
+      scope: { kind: "conversation", channel },
+      target: { kind: "agent", backend: "codex", threadId: "never-existed" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+    await harness.store.upsertDefaultAgentAssignment({
+      id: "default-agent:never-read",
+      scope: { kind: "provider", channel: "telegram" },
+      target: { kind: "agent", backend: "codex", threadId: "thread-1" },
+      createdAt: 1000,
+      updatedAt: 1000,
+    });
+
+    await harness.controller.handleInboundEvent(
+      buildTextEvent("use the available Agent", { botMention: true, channel }),
+    );
+
+    await expect(
+      harness.store.getDefaultAgentAssignment("default-agent:first-rejected"),
+    ).resolves.not.toMatchObject({ revokedAt: expect.any(Number) });
+    await expect(
+      harness.store.getDefaultAgentAssignment("default-agent:never-read"),
+    ).resolves.not.toMatchObject({ revokedAt: expect.any(Number) });
+    expect(harness.startTurn).not.toHaveBeenCalled();
   });
 
   it("preserves the messaging location for queued Agent-thread turns", async () => {

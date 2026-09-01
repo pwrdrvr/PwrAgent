@@ -3453,23 +3453,18 @@ export class MessagingController {
         }
       | undefined;
     const backendSummaries = await this.loadDefaultAgentBackendSummaries();
-    // One listing at most, and only if a target turns out to be unknown to
-    // this process. Shared across assignments so a channel with several does
-    // not pay for it more than once.
-    let navigationForColdTargets: Promise<NavigationSnapshot> | undefined;
-    const listThreadsOnce = () => {
-      navigationForColdTargets ??= this.options.backend.getNavigationSnapshot({
-        backend: "all",
-      });
-      return navigationForColdTargets;
-    };
+    // Revocations are buffered, not applied as they are decided. Every
+    // iteration reads backend state that can fail, and a failure part-way
+    // through used to leave the channel half-revoked: the assignments already
+    // rejected were gone, the ones not yet examined survived, and the operator
+    // saw only "Default Agent unavailable". Deciding first and writing after
+    // makes the pass all-or-nothing.
+    const revocations: MessagingDefaultAgentAssignmentRecord[] = [];
     for (const assignment of assignments) {
-      let thread: boolean;
+      let targetIsAgentThread: boolean;
       try {
-        thread = await this.defaultAgentTargetIsAgentThread(
-          assignment.target,
-          listThreadsOnce,
-        );
+        targetIsAgentThread =
+          await this.defaultAgentTargetIsAgentThread(assignment.target);
       } catch (error) {
         await this.deliverDefaultAgentBootstrapError(
           event,
@@ -3484,13 +3479,13 @@ export class MessagingController {
       );
       if (
         assignment.target.kind === "agent"
-        && thread
+        && targetIsAgentThread
         && backendSupport === "supported"
       ) {
         selected = { assignment };
         break;
       }
-      if (thread && backendSupport === "unknown") {
+      if (targetIsAgentThread && backendSupport === "unknown") {
         await this.deliverDefaultAgentBootstrapError(
           event,
           "Default Agent unavailable",
@@ -3498,6 +3493,9 @@ export class MessagingController {
         );
         return true;
       }
+      revocations.push(assignment);
+    }
+    for (const assignment of revocations) {
       await this.options.store.revokeDefaultAgentAssignment({
         assignmentId: assignment.id,
         revokedAt: this.now(),
@@ -3523,43 +3521,47 @@ export class MessagingController {
   /**
    * Does this assignment still point at an agent thread?
    *
-   * Answered from what this process already knows — the thread's overlay row
-   * and its remembered summary — because that is the whole question. Deciding
-   * to start or queue a turn needs the target's identity, existence, settings
-   * and occupancy; it does not need Git state, pull-request status, launchpads
-   * or the rest of the fleet.
+   * Answered from what this process already knows about the one thread whose
+   * id the assignment carries. Deciding to start or queue a turn needs the
+   * target's identity, settings and occupancy; it does not need Git state,
+   * pull-request status, launchpads or the rest of the fleet.
    *
    * This used to call `getNavigationSnapshot({ backend: "all" })` on every
    * accepted message, which enumerates every thread on every backend and then
    * hydrates overlays, canonicalizes pull requests, probes Git working state,
-   * refreshes directory status and hydrates launchpads — all to look up one
-   * thread whose id the assignment already carries. Opening the same thread in
-   * the app does none of that.
+   * refreshes directory status and hydrates launchpads — all to answer one
+   * yes-or-no question about one thread. Opening the same thread in the app
+   * does none of that.
    *
-   * The listing survives as a cold-path fallback only. An assignment is
-   * revoked when its target is gone, and a process that has simply never seen
-   * the thread must not be mistaken for one whose thread was deleted.
+   * ## What the listing proved, and what replaces it
+   *
+   * The listing proved two things at once: the thread still has an agent, and
+   * the provider still serves it. Only the first survives here, and the
+   * difference is deliberate rather than overlooked.
+   *
+   * `agent` is desktop-owned state that lives in the thread's overlay row, and
+   * a navigation row reads it from that same row — so the targeted answer and
+   * the listing's answer are the same answer.
+   *
+   * Existence is the one this cannot prove. `admission.thread` is built from
+   * the overlay when no listing row is remembered, and nothing deletes an
+   * overlay, so an agent thread deleted at the provider still presents a row
+   * here. Proving otherwise costs a provider round trip on every accepted
+   * message, and the two ways a target legitimately goes away are already
+   * covered more cheaply: archival revokes these assignments from the
+   * `thread/archived` handler, and a thread this machine has no record of at
+   * all fails the check below. What remains — an out-of-band deletion whose
+   * overlay outlives it — surfaces as a failed `startTurn` with a recoverable
+   * error rather than as a fleet walk charged to every message.
    */
   private async defaultAgentTargetIsAgentThread(
     target: MessagingDefaultAgentAssignmentRecord["target"],
-    listThreadsOnce: () => Promise<NavigationSnapshot>,
   ): Promise<boolean> {
     const admission = await this.options.backend.getThreadAdmissionState({
       backend: target.backend,
       threadId: target.threadId,
     });
-    if (admission.thread) {
-      // Both this row and a navigation row read `agent` from the same overlay
-      // record, so the targeted answer is the answer the listing would give.
-      return Boolean(admission.thread.agent);
-    }
-    const navigation = await listThreadsOnce();
-    return navigation.threads.some(
-      (candidate) =>
-        candidate.source === target.backend
-        && candidate.id === target.threadId
-        && Boolean(candidate.agent),
-    );
+    return Boolean(admission.thread?.agent);
   }
 
   private async deliverDefaultAgentBootstrapError(
