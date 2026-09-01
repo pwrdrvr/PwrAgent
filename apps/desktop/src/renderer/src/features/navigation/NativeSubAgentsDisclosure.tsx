@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { NavigationThreadSummary } from "@pwragent/shared";
 import { SubAgentsIcon } from "../../icons";
+import { threadSummaryIdentityKey } from "../../lib/federated-thread-events";
 import { useDesktopApi } from "../../lib/desktop-api";
 import { readRendererFederationTarget } from "../../lib/federation-window";
 
@@ -55,7 +56,12 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
       className={`native-subagents${props.compact ? " native-subagents--compact" : ""}${
         props.nested ? " native-subagents--nested" : ""
       }`}
-      data-subagents-thread={props.thread.id}
+      /* The tray freezes while a pointer rests on its rows. A group sits
+         BETWEEN child rows, so without this the freeze releases the moment
+         the pointer crosses one on its way down the tray, and the list can
+         reorder mid-traverse. */
+      data-hover-stable-row="subagents"
+      data-subagents-thread={threadSummaryIdentityKey(props.thread)}
       role="listitem"
     >
       <button
@@ -65,6 +71,9 @@ export function NativeSubAgentsDisclosure(props: NativeSubAgentsDisclosureProps)
            name for the buttons to be tellable apart. */
         aria-label={`${expanded ? "Collapse" : "Expand"} ${nativeSubAgents.length} native Codex sub-agents for ${props.thread.title}`}
         className={`native-subagents__toggle${expanded ? " is-open" : ""}`}
+        /* Expanding changes the tray's height, so let the frozen snapshot go,
+           the way the sibling sub-thread toggle does. */
+        data-hover-stable-release="subagents"
         type="button"
         onClick={() => {
           setExpanded((current) => !current);

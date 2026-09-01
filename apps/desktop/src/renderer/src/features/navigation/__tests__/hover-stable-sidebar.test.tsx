@@ -413,6 +413,54 @@ describe("Sidebar hover-stable thread ordering", () => {
     })).toBeInTheDocument();
   });
 
+  it("keeps the freeze when the pointer crosses a child's sub-agent group", () => {
+    const parent = thread({
+      id: "parent",
+      title: "Parent thread",
+      updatedAt: 3,
+    });
+    const child: NavigationThreadSummary = {
+      ...thread({ id: "child", title: "Child thread", updatedAt: 2 }),
+      parentThreadId: parent.id,
+      codexNativeSubAgents: [
+        {
+          threadId: "native-worker",
+          title: "Native worker",
+          depth: 1,
+          agentNickname: "worker",
+          threadStatus: "idle",
+        },
+      ],
+    };
+    const tail = thread({ id: "tail", title: "Tail thread", updatedAt: 1 });
+    const view = render(renderSidebar({
+      browseMode: "inbox",
+      threads: [parent, child, tail],
+    }));
+    const childRow = threadRow("Child thread");
+    fireEvent.pointerOver(childRow, { pointerType: "mouse" });
+
+    view.rerender(renderSidebar({
+      browseMode: "inbox",
+      threads: [parent, child],
+    }));
+    expect(threadTitles()).toContain("Tail thread");
+
+    // The child's group is the next thing under the child row, so a pointer
+    // travelling down the tray crosses it. It is a hover-stable row itself,
+    // or the list would reorder under a pointer mid-traverse.
+    const group = document.querySelector(".native-subagents");
+    expect(group).not.toBeNull();
+    fireEvent.pointerOut(childRow, {
+      pointerType: "mouse",
+      relatedTarget: group,
+    });
+    expect(threadTitles()).toContain("Tail thread");
+
+    leaveThreadBrowser();
+    expect(threadTitles()).not.toContain("Tail thread");
+  });
+
   it("releases the frozen snapshot for an explicit subthread toggle", () => {
     const parent = thread({
       id: "parent",

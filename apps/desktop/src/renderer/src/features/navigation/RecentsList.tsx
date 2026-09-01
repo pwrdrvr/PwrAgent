@@ -251,15 +251,13 @@ export function RecentsList(props: RecentsListProps) {
             // A child's workers belong to the child, so they render under its
             // own row. They follow it out of this tray when it is unlinked,
             // because the child summary is what carries them.
-            ...(child.codexNativeSubAgents?.length
-              ? [
-                  <NativeSubAgentsDisclosure
-                    key={`${childKey}:subagents`}
-                    nested
-                    thread={child}
-                  />,
-                ]
-              : []),
+            child.codexNativeSubAgents?.length ? (
+              <NativeSubAgentsDisclosure
+                key={`${childKey}:subagents`}
+                nested
+                thread={child}
+              />
+            ) : null,
           ];
         })}
       </div>
