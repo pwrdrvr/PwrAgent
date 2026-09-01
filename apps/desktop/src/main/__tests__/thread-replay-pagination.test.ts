@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type {
+  AppServerThreadActivityEntry,
   AppServerThreadEntry,
   AppServerThreadReplay,
 } from "@pwragent/shared";
-import { pageNormalizedReplay } from "../app-server/thread-replay-pagination";
+import {
+  fitNormalizedReplayWithinByteBudget,
+  pageNormalizedReplay,
+  threadReplayCursorIdSpace,
+} from "../app-server/thread-replay-pagination";
 
 describe("thread replay pagination", () => {
   it("keeps complete turns when a backend needs synthetic pagination", () => {
@@ -81,6 +86,154 @@ describe("thread replay pagination", () => {
   });
 });
 
+
+describe("thread replay pagination cursor id space", () => {
+  it("names a provider entry when overlay rows lead the page", () => {
+    // Entry-count paging, because the legacy rows carry no turn metadata. Its
+    // cut lands wherever the count falls, including on the persisted usage row
+    // that closes the turn before it.
+    const replay = buildReplay([
+      legacyEntry("legacy-user-1", "user", "Question one"),
+      legacyEntry("legacy-assistant-1", "assistant", "Answer one"),
+      usageEntry("turn-1"),
+      legacyEntry("legacy-user-2", "user", "Question two"),
+      legacyEntry("legacy-assistant-2", "assistant", "Answer two"),
+    ]);
+
+    const page = pageNormalizedReplay(replay, { limit: 3, threadId: "thread-1" });
+
+    expect(page.entries.map((entry) => entry.id)).toEqual([
+      "live-turn-usage-turn-1",
+      "legacy-user-2",
+      "legacy-assistant-2",
+    ]);
+    expect(page.pagination).toEqual({
+      supportsPagination: true,
+      hasPreviousPage: true,
+      previousCursor: "legacy-user-2",
+    });
+  });
+
+  it("reports the beginning of the thread when a cursor resolves to nothing", () => {
+    const replay = buildReplay([
+      turnEntry("turn-1", "user", "Question one"),
+      turnEntry("turn-1", "assistant", "Answer one", "final"),
+    ]);
+
+    const page = pageNormalizedReplay(replay, {
+      before: "live-turn-usage-turn-1",
+      threadId: "thread-1",
+    });
+
+    // Never the newest page: a reader asking for older history would be handed
+    // the history it already has, and would stop paging with nothing to show.
+    expect(page.entries).toEqual([]);
+    expect(page.messages).toEqual([]);
+    expect(page.pagination).toEqual({
+      supportsPagination: true,
+      hasPreviousPage: false,
+    });
+  });
+
+  it("classifies cursor ownership by backend", () => {
+    expect(threadReplayCursorIdSpace("acp:claude-code")).toBe("entry-id");
+    expect(threadReplayCursorIdSpace("codex")).toBe("provider-cursor");
+    expect(threadReplayCursorIdSpace(undefined)).toBe("provider-cursor");
+  });
+});
+
+describe("thread replay federation byte budget", () => {
+  it("mints a provider cursor when the trim leaves an overlay row leading", () => {
+    const replay = buildReplay([
+      turnEntry("turn-1", "user", "Question one"),
+      turnEntry("turn-1", "assistant", "Answer one", "final"),
+      usageEntry("turn-1"),
+      turnEntry("turn-2", "user", "Question two"),
+    ]);
+
+    const trimmed = fitNormalizedReplayWithinByteBudget({
+      cursorIdSpace: "entry-id",
+      replay,
+      maxBytes: 0,
+      measureBytes: (candidate) =>
+        candidate.entries[0]?.id === "live-turn-usage-turn-1" ? 0 : 1,
+    });
+
+    expect(trimmed.entries.map((entry) => entry.id)).toEqual([
+      "live-turn-usage-turn-1",
+      "turn-2-user-Question two",
+    ]);
+    expect(trimmed.pagination).toEqual({
+      supportsPagination: true,
+      hasPreviousPage: true,
+      previousCursor: "turn-2-user-Question two",
+    });
+  });
+
+  it("keeps a natively paginated backend's own cursor", () => {
+    const replay: AppServerThreadReplay = {
+      ...buildReplay([
+        turnEntry("turn-1", "user", "Question one"),
+        turnEntry("turn-2", "user", "Question two"),
+      ]),
+      pagination: {
+        supportsPagination: true,
+        hasPreviousPage: true,
+        previousCursor: "opaque-turns-list-cursor",
+      },
+    };
+
+    const trimmed = fitNormalizedReplayWithinByteBudget({
+      cursorIdSpace: "provider-cursor",
+      replay,
+      maxBytes: 0,
+      measureBytes: (candidate) => (candidate.entries.length > 1 ? 1 : 0),
+    });
+
+    expect(trimmed.entries.map((entry) => entry.id)).toEqual([
+      "turn-2-user-Question two",
+    ]);
+    // An entry id is not a `thread/turns/list` cursor, so the trim leaves the
+    // backend's own cursor alone rather than substituting one.
+    expect(trimmed.pagination).toEqual({
+      supportsPagination: true,
+      hasPreviousPage: true,
+      previousCursor: "opaque-turns-list-cursor",
+    });
+  });
+
+  it("stops trimming at the newest provider entry rather than lose the cursor", () => {
+    const replay = buildReplay([
+      turnEntry("turn-1", "user", "Question one"),
+      turnEntry("turn-1", "assistant", "Answer one", "final"),
+      usageEntry("turn-1"),
+    ]);
+
+    // Nothing fits, so the trim runs to its floor and the oversized-entry
+    // compaction takes over. A page trimmed down to the usage row alone would
+    // report previous history with no id left to ask for it.
+    const trimmed = fitNormalizedReplayWithinByteBudget({
+      cursorIdSpace: "entry-id",
+      replay,
+      maxBytes: 0,
+      measureBytes: (candidate) =>
+        candidate.entries[0]?.type === "message"
+        && candidate.entries[0].text.startsWith("Content omitted")
+          ? 0
+          : 1,
+    });
+
+    expect(trimmed.entries.map((entry) => entry.id)).toEqual([
+      "turn-1-assistant-Answer one",
+    ]);
+    expect(trimmed.pagination).toEqual({
+      supportsPagination: true,
+      hasPreviousPage: true,
+      previousCursor: "turn-1-assistant-Answer one",
+    });
+  });
+});
+
 function buildReplay(entries: AppServerThreadEntry[]): AppServerThreadReplay {
   return {
     entries,
@@ -131,5 +284,19 @@ function legacyEntry(
     id,
     role,
     text,
+  };
+}
+
+function usageEntry(turnId: string): AppServerThreadActivityEntry {
+  return {
+    type: "activity",
+    id: `live-turn-usage-${turnId}`,
+    summary: "Turn usage: 100 uncached in · 20 out",
+    status: "completed",
+    details: [],
+    turn: {
+      id: turnId,
+      status: "completed",
+    },
   };
 }

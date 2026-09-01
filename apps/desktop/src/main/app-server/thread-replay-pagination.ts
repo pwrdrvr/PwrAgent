@@ -1,18 +1,68 @@
-import type {
-  AppServerReadThreadRequest,
-  AppServerThreadEntry,
-  AppServerThreadReplay,
+import {
+  type AppServerBackendKind,
+  type AppServerReadThreadRequest,
+  type AppServerThreadEntry,
+  type AppServerThreadReplay,
+  isAcpBackendId,
 } from "@pwragent/shared";
+
+import { getMainLogger } from "../log";
+import { isOverlayOwnedTranscriptEntry } from "./overlay-transcript-entries";
+
+const threadReplayPaginationLog = getMainLogger(
+  "pwragent:thread-replay-pagination",
+);
 
 const FEDERATION_OMITTED_ENTRY_TEXT =
   "Content omitted because this entry exceeded the federation frame limit.";
 
+/**
+ * Which id space a replay's pagination cursor lives in.
+ *
+ * A cursor is only ever handed back to whoever can resolve it, so the two
+ * spaces never mix:
+ *
+ * - `provider-cursor` — the backend paginates natively and minted the cursor
+ *   itself. For Codex that is an opaque `thread/turns/list` cursor, not a
+ *   transcript entry id, so nothing downstream may substitute an entry id for
+ *   it.
+ * - `entry-id` — the backend does not paginate, so this module synthesizes
+ *   pages and names the cursor after a transcript entry. Only entries the
+ *   provider owns qualify; a read resolves `before` against the provider's own
+ *   replay, where an overlay-minted id does not exist.
+ */
+export type ThreadReplayCursorIdSpace = "entry-id" | "provider-cursor";
+
+/**
+ * Whose id space a backend's own page cursor lives in.
+ *
+ * Ask this only about a response the backend already paged; a page cut here
+ * is named with entry ids by construction.
+ *
+ * Codex resolves `before` by handing it straight to `thread/turns/list`, which
+ * only ever accepts a cursor it issued. An ACP thread is read whole and paged
+ * by `pageNormalizedReplay`, which resolves `before` by looking that id up
+ * among the provider's own transcript entries.
+ *
+ * A backend nobody has classified defaults to `provider-cursor`. Preserving a
+ * cursor we cannot improve on costs a page of history; inventing one the
+ * backend rejects costs every page behind it.
+ */
+export function threadReplayCursorIdSpace(
+  backend: AppServerBackendKind | undefined,
+): ThreadReplayCursorIdSpace {
+  return backend !== undefined && isAcpBackendId(backend)
+    ? "entry-id"
+    : "provider-cursor";
+}
+
+export type PageNormalizedReplayOptions =
+  Pick<AppServerReadThreadRequest, "before" | "includeTurns" | "limit">
+  & Partial<Pick<AppServerReadThreadRequest, "backend" | "threadId">>;
+
 export function pageNormalizedReplay(
   replay: AppServerThreadReplay,
-  options: Pick<
-    AppServerReadThreadRequest,
-    "before" | "includeTurns" | "limit"
-  >,
+  options: PageNormalizedReplayOptions,
 ): AppServerThreadReplay {
   if (options.includeTurns === false) {
     return {
@@ -32,17 +82,47 @@ export function pageNormalizedReplay(
     return replay;
   }
 
-  const endIndex = options.before
+  const beforeIndex = options.before
     ? replay.entries.findIndex((entry) => entry.id === options.before)
     : replay.entries.length;
-  const boundedEndIndex = endIndex >= 0 ? endIndex : replay.entries.length;
+  if (beforeIndex < 0) {
+    // The cursor names an entry this replay does not contain, so no page can
+    // be cut from it. Answering with the newest page would hand a reader who
+    // asked for older history the history it already has: every id is a
+    // duplicate, prependTranscriptHistoryPage drops all of them, and history
+    // stops advancing with nothing on screen to say why. An unresolvable
+    // cursor is indistinguishable from having reached the beginning, so say
+    // that instead, and leave a record that it happened.
+    threadReplayPaginationLog.warn("unresolved_transcript_pagination_cursor", {
+      backend: options.backend,
+      before: options.before,
+      entryCount: replay.entries.length,
+      threadId: options.threadId,
+    });
+    return {
+      ...replay,
+      entries: [],
+      messages: [],
+      lastUserMessage: undefined,
+      lastAssistantMessage: undefined,
+      pagination: {
+        supportsPagination: true,
+        hasPreviousPage: false,
+      },
+    };
+  }
+
   const limit =
     options.limit === undefined ? undefined : Math.max(0, Math.floor(options.limit));
   const startIndex = limit === undefined
     ? 0
-    : findTurnPageStartIndex(replay.entries, boundedEndIndex, limit);
-  const entries = replay.entries.slice(startIndex, boundedEndIndex);
-  return replayWithEntries(replay, entries, startIndex > 0);
+    : findTurnPageStartIndex(replay.entries, beforeIndex, limit);
+  const entries = replay.entries.slice(startIndex, beforeIndex);
+  return replayWithEntries(
+    replay,
+    entries,
+    mintedCursorPagination(entries, startIndex > 0),
+  );
 }
 
 function findTurnPageStartIndex(
@@ -93,6 +173,7 @@ function findTurnPageStartIndex(
 }
 
 export function fitNormalizedReplayWithinByteBudget(params: {
+  cursorIdSpace: ThreadReplayCursorIdSpace;
   replay: AppServerThreadReplay;
   maxBytes: number;
   measureBytes: (replay: AppServerThreadReplay) => number;
@@ -101,20 +182,62 @@ export function fitNormalizedReplayWithinByteBudget(params: {
     return params.replay;
   }
 
-  let entries = [...params.replay.entries];
-  while (entries.length > 1) {
-    entries = entries.slice(1);
-    const candidate = replayWithEntries(params.replay, entries, true);
+  // A natively paginated replay carries the backend's own cursor, which is not
+  // a transcript entry id at all — Codex hands back an opaque
+  // `thread/turns/list` cursor. Trimming for the frame ceiling must not
+  // rewrite it into an entry id the backend has never issued, so carry the
+  // backend's pagination through untouched and let the reader keep paging from
+  // the boundary the backend gave us.
+  const paginationFor = (
+    entries: AppServerThreadEntry[],
+    hasPreviousPage: boolean,
+  ): AppServerThreadReplay["pagination"] =>
+    params.cursorIdSpace === "provider-cursor"
+      ? params.replay.pagination
+      : mintedCursorPagination(entries, hasPreviousPage);
+
+  // Trimming from the front moves the page start, and the page start is what
+  // the next synthetic cursor names. Never trim past the newest provider-owned
+  // entry: a page made only of overlay rows has no id any provider could
+  // resolve, so it would report more history behind it with no way left to ask
+  // for that history.
+  const lastProviderOwnedIndex = params.replay.entries.findLastIndex(
+    (entry) => !isOverlayOwnedTranscriptEntry(entry),
+  );
+  const lastTrimmableStartIndex = Math.max(
+    0,
+    lastProviderOwnedIndex >= 0
+      ? lastProviderOwnedIndex
+      : params.replay.entries.length - 1,
+  );
+
+  let entries = params.replay.entries;
+  for (
+    let startIndex = 1;
+    startIndex <= lastTrimmableStartIndex;
+    startIndex += 1
+  ) {
+    entries = params.replay.entries.slice(startIndex);
+    const candidate = replayWithEntries(
+      params.replay,
+      entries,
+      paginationFor(entries, true),
+    );
     if (params.measureBytes(candidate) <= params.maxBytes) {
       return candidate;
     }
   }
 
-  if (entries[0]) {
+  const oversizedEntry = entries[0];
+  if (oversizedEntry) {
+    const compacted = [compactOversizedEntry(oversizedEntry)];
     const candidate = replayWithEntries(
       params.replay,
-      [compactOversizedEntry(entries[0])],
-      params.replay.pagination.hasPreviousPage || params.replay.entries.length > 1,
+      compacted,
+      paginationFor(
+        compacted,
+        params.replay.pagination.hasPreviousPage || params.replay.entries.length > 1,
+      ),
     );
     if (params.measureBytes(candidate) <= params.maxBytes) {
       return candidate;
@@ -124,17 +247,41 @@ export function fitNormalizedReplayWithinByteBudget(params: {
   return {
     entries: [],
     messages: [],
-    pagination: {
-      supportsPagination: true,
-      hasPreviousPage: false,
-    },
+    pagination: params.cursorIdSpace === "provider-cursor"
+      ? params.replay.pagination
+      : {
+          supportsPagination: true,
+          hasPreviousPage: false,
+        },
+  };
+}
+
+/**
+ * Names the page's first **provider-owned** entry, not simply its first entry.
+ *
+ * `before` is resolved against the provider's own replay, which never contains
+ * an overlay-minted row, so an overlay id as a cursor is a cursor no read can
+ * resolve. Skipping forward costs at most one overlay row repeated on the
+ * older page, which `prependTranscriptHistoryPage` already dedupes by id.
+ */
+function mintedCursorPagination(
+  entries: AppServerThreadEntry[],
+  hasPreviousPage: boolean,
+): AppServerThreadReplay["pagination"] {
+  const cursorEntry = hasPreviousPage
+    ? entries.find((entry) => !isOverlayOwnedTranscriptEntry(entry))
+    : undefined;
+  return {
+    supportsPagination: true,
+    hasPreviousPage,
+    ...(cursorEntry ? { previousCursor: cursorEntry.id } : {}),
   };
 }
 
 function replayWithEntries(
   replay: AppServerThreadReplay,
   entries: AppServerThreadEntry[],
-  hasPreviousPage: boolean,
+  pagination: AppServerThreadReplay["pagination"],
 ): AppServerThreadReplay {
   const messages = entries.flatMap((entry) =>
     entry.type === "message"
@@ -150,7 +297,6 @@ function replayWithEntries(
         ]
       : [],
   );
-  const firstEntry = entries[0];
   const lastUserMessage = messages.findLast((message) => message.role === "user")?.text;
   const lastAssistantMessage = messages.findLast(
     (message) => message.role === "assistant",
@@ -162,11 +308,7 @@ function replayWithEntries(
     messages,
     lastUserMessage,
     lastAssistantMessage,
-    pagination: {
-      supportsPagination: true,
-      hasPreviousPage,
-      ...(hasPreviousPage && firstEntry ? { previousCursor: firstEntry.id } : {}),
-    },
+    pagination,
   };
 }
 

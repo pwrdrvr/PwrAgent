@@ -55,6 +55,10 @@ import {
   formatManagedReviewOutput,
   parseManagedReviewOutput,
 } from "./managed-review";
+import {
+  isUsageActivityEntry,
+  usageActivityScope,
+} from "./overlay-transcript-entries";
 import { assertReviewWorkspaceMatchesAttachedPullRequest } from "./review-workspace-guard";
 import { pageNormalizedReplay } from "./thread-replay-pagination";
 import {
@@ -5750,41 +5754,6 @@ function readSelectedActionIdByEnvironmentIdForFork(
   return undefined;
 }
 
-function isUsageActivityEntry(
-  entry: AppServerThreadEntry,
-): entry is AppServerThreadActivityEntry {
-  return (
-    entry.type === "activity" &&
-    (entry.id.startsWith("live-token-usage-") ||
-      entry.id.startsWith("live-turn-usage-") ||
-      entry.summary.startsWith("Latest request usage:") ||
-      entry.summary.startsWith("Turn usage:") ||
-      entry.summary.startsWith("Monitor usage:") ||
-      entry.summary.startsWith("Usage:"))
-  );
-}
-
-function usageActivityScope(
-  entry: AppServerThreadActivityEntry,
-): "latest-request" | "monitor" | "total" | "turn" | undefined {
-  if (entry.id.startsWith("live-turn-usage-") || entry.summary.startsWith("Turn usage:")) {
-    return "turn";
-  }
-  if (entry.summary.startsWith("Monitor usage:")) {
-    return "monitor";
-  }
-  if (entry.summary.startsWith("Latest request usage:")) {
-    return "latest-request";
-  }
-  if (entry.summary.startsWith("Usage:")) {
-    return "total";
-  }
-  if (entry.id.startsWith("live-token-usage-")) {
-    return "latest-request";
-  }
-  return undefined;
-}
-
 function insertTranscriptEntry(
   entries: AppServerThreadEntry[],
   entry: AppServerThreadEntry,
@@ -10226,7 +10195,7 @@ export class DesktopBackendRegistry {
 
     const replay = pageNormalizedReplay(
       await this.acpBackend.readReplay(backend, request.threadId),
-      request,
+      { ...request, backend },
     );
     const overlay = await this.overlayStore.getThreadOverlayState({
       backend,
