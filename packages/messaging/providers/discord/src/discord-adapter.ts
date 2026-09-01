@@ -168,6 +168,7 @@ export type DiscordMessageCreateDispatch = {
   guild_id?: string;
   id: string;
   is_thread?: boolean;
+  parent_id?: string;
   timestamp?: string;
 };
 
@@ -189,6 +190,7 @@ export type DiscordInteractionCreateDispatch = {
   message?: {
     id: string;
   };
+  parent_id?: string;
   token: string;
   type: number;
   user?: DiscordUser;
@@ -1134,6 +1136,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         ? undefined
         : (message.author.global_name ?? message.author.username),
       isThread: message.is_thread,
+      parentChannelId: message.parent_id,
     });
     const routingState = this.routingStateFromDiscord(message.channel_id, message.guild_id, {
       channelType: message.channel_type,
@@ -1186,7 +1189,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         text: normalizedContent,
         ...(mentionRemainder !== undefined ? { botMention: true } : {}),
       };
-      await this.dispatchMessageWithBackgroundEnrichment(message, event, listener);
+      await this.dispatchWithBackgroundChannelEnrichment({
+        channelId: message.channel_id,
+        event,
+        guildId: message.guild_id,
+        isThread: message.is_thread,
+        listener,
+      });
       return;
     }
 
@@ -1219,36 +1228,44 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       sourceSurface,
       sourceUrl,
     } as MessagingInboundEvent;
-    await this.dispatchMessageWithBackgroundEnrichment(message, event, listener);
+    await this.dispatchWithBackgroundChannelEnrichment({
+      channelId: message.channel_id,
+      event,
+      guildId: message.guild_id,
+      isThread: message.is_thread,
+      listener,
+    });
   }
 
-  private async dispatchMessageWithBackgroundEnrichment(
-    message: DiscordMessageCreateDispatch,
-    event: MessagingInboundEvent,
-    listener: (event: MessagingInboundEvent) => Promise<void>,
-  ): Promise<void> {
-    const dispatched = Promise.resolve(listener(event));
-    if (message.guild_id) {
+  private async dispatchWithBackgroundChannelEnrichment(params: {
+    channelId: string;
+    event: MessagingInboundEvent;
+    guildId?: string;
+    isThread?: boolean;
+    listener: (event: MessagingInboundEvent) => Promise<void>;
+  }): Promise<void> {
+    const dispatched = Promise.resolve(params.listener(params.event));
+    if (params.guildId) {
       const enrichment = Promise.resolve().then(async () =>
-        await this.channelFromDiscord(message.channel_id, message.guild_id, {
-          isThread: message.is_thread,
+        await this.channelFromDiscord(params.channelId, params.guildId, {
+          isThread: params.isThread,
         })
       );
       void dispatched.then(async () => {
         const channel = await enrichment;
         const update = {
           channel,
-          eventId: event.id,
+          eventId: params.event.id,
           observedAt: this.now(),
-          routingState: event.routingState,
+          routingState: params.event.routingState,
         };
         for (const metadataListener of this.inboundChannelMetadataListeners) {
           await metadataListener(update);
         }
       }).catch((error) => {
         this.options.logger?.debug("discord inbound breadcrumb enrichment failed", {
-          channelId: message.channel_id,
-          eventId: event.id,
+          channelId: params.channelId,
+          eventId: params.event.id,
           error: errorMessage(error),
         });
       });
@@ -1316,10 +1333,14 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       return;
     }
 
-    const channel = await this.channelFromDiscord(
+    const channel = this.immediateChannelFromDiscord(
       interaction.channel_id,
       interaction.guild_id,
-      { isThread: interaction.is_thread },
+      {
+        channelType: interaction.channel_type,
+        isThread: interaction.is_thread,
+        parentChannelId: interaction.parent_id,
+      },
     );
     const persistedBinding = this.options.store
       ? await this.options.store.resolveCallbackHandle({
@@ -1337,7 +1358,7 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         isThread: interaction.is_thread,
       },
     );
-    await listener({
+    const event: MessagingInboundEvent = {
       id: `discord:interaction:${interaction.id}`,
       kind: "callback",
       actor: this.actorFromUser(actor, interaction.member?.nick ?? undefined),
@@ -1376,6 +1397,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         guildId: interaction.guild_id,
         messageId: interaction.message?.id,
       }),
+    };
+    await this.dispatchWithBackgroundChannelEnrichment({
+      channelId: interaction.channel_id,
+      event,
+      guildId: interaction.guild_id,
+      isThread: interaction.is_thread,
+      listener,
     });
   }
 
@@ -1391,12 +1419,16 @@ export class DiscordAdapter implements DiscordProviderAdapter {
     }
 
     const args = commandArgsFromOptions(interaction.data?.options);
-    const channel = await this.channelFromDiscord(
+    const channel = this.immediateChannelFromDiscord(
       interaction.channel_id,
       interaction.guild_id,
-      { isThread: interaction.is_thread },
+      {
+        channelType: interaction.channel_type,
+        isThread: interaction.is_thread,
+        parentChannelId: interaction.parent_id,
+      },
     );
-    await listener({
+    const event: MessagingInboundEvent = {
       id: `discord:command:${interaction.id}`,
       kind: "command",
       actor: this.actorFromUser(actor, interaction.member?.nick ?? undefined),
@@ -1418,6 +1450,13 @@ export class DiscordAdapter implements DiscordProviderAdapter {
           isThread: interaction.is_thread,
         },
       ),
+    };
+    await this.dispatchWithBackgroundChannelEnrichment({
+      channelId: interaction.channel_id,
+      event,
+      guildId: interaction.guild_id,
+      isThread: interaction.is_thread,
+      listener,
     });
   }
 
@@ -1428,6 +1467,8 @@ export class DiscordAdapter implements DiscordProviderAdapter {
       && this.validateIdentifier("user.id", message.author.id, validateDiscordSnowflake)
       && (message.guild_id === undefined
         || this.validateIdentifier("guild_id", message.guild_id, validateDiscordSnowflake))
+      && (message.parent_id === undefined
+        || this.validateIdentifier("parent_id", message.parent_id, validateDiscordSnowflake))
       && this.validateAttachments(message.attachments ?? [])
     );
   }
@@ -1453,6 +1494,8 @@ export class DiscordAdapter implements DiscordProviderAdapter {
         ))
       && (interaction.guild_id === undefined
         || this.validateIdentifier("guild_id", interaction.guild_id, validateDiscordSnowflake))
+      && (interaction.parent_id === undefined
+        || this.validateIdentifier("parent_id", interaction.parent_id, validateDiscordSnowflake))
       && (interaction.message?.id === undefined
         || this.validateIdentifier(
           "message.id",
@@ -2020,13 +2063,28 @@ export class DiscordAdapter implements DiscordProviderAdapter {
   private immediateChannelFromDiscord(
     channelId: string,
     guildId: string | undefined,
-    options?: { channelType?: number; dmPeerName?: string; isThread?: boolean },
+    options?: {
+      channelType?: number;
+      dmPeerName?: string;
+      isThread?: boolean;
+      parentChannelId?: string;
+    },
   ): MessagingInboundEvent["channel"] {
-    const channel = this.basicChannelRef(
+    const basicChannel = this.basicChannelRef(
       channelId,
       guildId,
       this.discordConversationKind(guildId, options?.channelType, options?.isThread),
     );
+    const channel = options?.isThread && options.parentChannelId
+      ? {
+          ...basicChannel,
+          conversation: {
+            ...basicChannel.conversation,
+            parentConversationId: options.parentChannelId,
+            ...(guildId ? { parentConversationParentId: guildId } : {}),
+          },
+        }
+      : basicChannel;
     return !guildId && options?.dmPeerName
       ? {
           ...channel,
@@ -2789,6 +2847,7 @@ function messageToDispatch(message: Message): DiscordMessageCreateDispatch {
     guild_id: message.guildId ?? undefined,
     id: message.id,
     is_thread: discordChannelIsThread(message.channel),
+    parent_id: discordChannelParentId(message.channel),
     timestamp: message.createdAt.toISOString(),
   };
 }
@@ -2809,6 +2868,7 @@ function interactionToDispatch(
       is_thread: buttonInteraction.channel
         ? discordChannelIsThread(buttonInteraction.channel)
         : undefined,
+      parent_id: discordChannelParentId(buttonInteraction.channel),
       member: buttonInteraction.inGuild()
         ? {
             nick:
@@ -2849,6 +2909,7 @@ function interactionToDispatch(
       is_thread: commandInteraction.channel
         ? discordChannelIsThread(commandInteraction.channel)
         : undefined,
+      parent_id: discordChannelParentId(commandInteraction.channel),
       member: commandInteraction.inGuild()
         ? {
             nick:
@@ -3015,6 +3076,14 @@ function discordChannelIsThread(channel: unknown): boolean {
   }
   const isThread = (channel as { isThread?: unknown }).isThread;
   return typeof isThread === "function" && Boolean(isThread.call(channel));
+}
+
+function discordChannelParentId(channel: unknown): string | undefined {
+  if (!channel || typeof channel !== "object" || !("parentId" in channel)) {
+    return undefined;
+  }
+  const parentId = (channel as { parentId?: unknown }).parentId;
+  return typeof parentId === "string" ? parentId : undefined;
 }
 
 function errorMessage(error: unknown): string {
