@@ -71,7 +71,10 @@ type ThreadMigrationServiceOptions = {
     "readSettings" | "resolveCodexCommandPreference" | "resolveCodexSpawnEnv"
   > & Partial<Pick<
     DesktopSettingsService,
-    "resolveCodexCommand" | "resolveCodexSpawnEnvAsync"
+    | "readCodexProfiles"
+    | "readModelsConfig"
+    | "resolveCodexCommand"
+    | "resolveCodexSpawnEnvAsync"
   >>;
   sourceClientFactory?: (params: {
     codexHome: string;
@@ -106,13 +109,19 @@ export class ThreadMigrationService {
 
   async listSources(): Promise<ListThreadMigrationSourcesResponse> {
     const settingsService = this.getSettingsService();
-    const settings = await settingsService.readSettings();
+    const legacySettings = settingsService.readModelsConfig
+      && settingsService.readCodexProfiles
+      ? undefined
+      : await settingsService.readSettings();
+    const configuredProfile = settingsService.readModelsConfig
+      ? settingsService.readModelsConfig().codex?.profile
+      : legacySettings?.models.codex.profile.value;
     const activeCodexProfile = normalizeSourceProfile(
-      settings.models.codex.profile.value,
+      configuredProfile,
     );
-    const discovery =
-      settings.models.codex.profiles ??
-      discoverCodexAuthProfiles({
+    const discovery = settingsService.readCodexProfiles?.()
+      ?? legacySettings?.models.codex.profiles
+      ?? discoverCodexAuthProfiles({
         configuredProfile: activeCodexProfile,
         env: this.options.env,
         homeDir: this.options.homeDir,
@@ -727,7 +736,10 @@ export class ThreadMigrationService {
     "readSettings" | "resolveCodexCommandPreference" | "resolveCodexSpawnEnv"
   > & Partial<Pick<
     DesktopSettingsService,
-    "resolveCodexCommand" | "resolveCodexSpawnEnvAsync"
+    | "readCodexProfiles"
+    | "readModelsConfig"
+    | "resolveCodexCommand"
+    | "resolveCodexSpawnEnvAsync"
   >> {
     return this.options.settingsService ?? getDesktopSettingsService();
   }

@@ -7318,12 +7318,13 @@ class DesktopAppServerService {
     // exercise the focused-diff path keep working with the default-off
     // setting; without that bypass the override (consumed inside
     // FocusedDiffService.analyze) never gets a chance to run.
-    const settings = await getDesktopSettingsService().readSettings();
-    const condensation = settings.experimental.diffCondensation;
+    const condensation = getDesktopSettingsService()
+      .readExperimentalConfig()
+      .diffCondensation;
     const testOverridePresent = Boolean(
       process.env.PWRAGENT_FOCUSED_DIFF_TEST_RESPONSE,
     );
-    if (!condensation.enabled.value && !testOverridePresent) {
+    if (condensation?.enabled !== true && !testOverridePresent) {
       logDebug("analyzeFocusedDiff", {
         filePath: request.filePath ?? null,
         hunkCount: request.hunks.length,

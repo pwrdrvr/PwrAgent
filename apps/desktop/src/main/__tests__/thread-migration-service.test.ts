@@ -92,10 +92,16 @@ function makeSourceThread(
 
 describe("ThreadMigrationService", () => {
   it("lists source profiles without the active Codex profile", async () => {
+    const snapshot = makeSettingsSnapshot("work");
+    const readSettings = vi.fn(async () => snapshot);
     const service = new ThreadMigrationService({
       destination: {} as never,
       settingsService: {
-        readSettings: async () => makeSettingsSnapshot("work"),
+        readSettings,
+        readModelsConfig: () => ({
+          codex: { profile: "work" },
+        }),
+        readCodexProfiles: () => snapshot.models.codex.profiles,
         resolveCodexCommandPreference: () => "codex",
         resolveCodexSpawnEnv: () => ({}),
       },
@@ -117,6 +123,7 @@ describe("ThreadMigrationService", () => {
       available: false,
       unavailableReason: "Codex profile directory does not exist.",
     });
+    expect(readSettings).not.toHaveBeenCalled();
   });
 
   it("lists source threads through a captive CAS client without exposing rollout paths", async () => {

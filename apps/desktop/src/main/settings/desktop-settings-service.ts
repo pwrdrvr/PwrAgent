@@ -1376,6 +1376,33 @@ export class DesktopSettingsService {
       : this.readConfig().config.general ?? {};
   }
 
+  readExperimentalConfig(): ConfigDomainMap["experimental"] {
+    return this.options.configStore
+      ? this.options.configStore.read("experimental")
+      : this.readConfig().config.experimental ?? {};
+  }
+
+  readFederationConfig(): ConfigDomainMap["federation"] {
+    return this.options.configStore
+      ? this.options.configStore.read("federation")
+      : this.readConfig().config.federation ?? {};
+  }
+
+  readModelsConfig(): ConfigDomainMap["models"] {
+    return this.options.configStore
+      ? this.options.configStore.read("models")
+      : this.readConfig().config.models ?? {};
+  }
+
+  readCodexProfiles(): DesktopCodexAuthProfileDiscoverySnapshot {
+    return normalizeCodexProfilesSnapshot(
+      discoverCodexAuthProfiles({
+        configuredProfile: this.readModelsConfig().codex?.profile,
+        env: this.env,
+      }),
+    );
+  }
+
   // git/applications discovery is config-independent (depends only on this.env
   // + filesystem), so memoize the promise per instance to avoid re-spawning the
   // same probe child processes on every readSettings() call. See the cache
