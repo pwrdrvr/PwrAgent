@@ -517,11 +517,10 @@ type ExecutionModeResolution = {
   source: "thread" | "binding-preferences" | "permissions-mode" | "unset";
 };
 
-function resolveExecutionModeForBinding(
+function resolveExecutionModeForThread(
   binding: MessagingBindingRecord,
-  navigation?: NavigationSnapshot,
+  thread: NavigationThreadSummary | undefined,
 ): ExecutionModeResolution {
-  const thread = findThreadForBinding(navigation, binding);
   if (thread?.executionMode) {
     return { mode: thread.executionMode, source: "thread" };
   }
@@ -535,6 +534,16 @@ function resolveExecutionModeForBinding(
     return { mode: "default", source: "permissions-mode" };
   }
   return { mode: undefined, source: "unset" };
+}
+
+function resolveExecutionModeForBinding(
+  binding: MessagingBindingRecord,
+  navigation?: NavigationSnapshot,
+): ExecutionModeResolution {
+  return resolveExecutionModeForThread(
+    binding,
+    findThreadForBinding(navigation, binding),
+  );
 }
 
 function executionModeForBinding(
@@ -555,8 +564,26 @@ function turnSettingsForBinding(
   serviceTier?: string;
 } {
   const thread = findThreadForBinding(navigation, binding);
+  return turnSettingsForThread(
+    binding,
+    thread,
+    resolveExecutionModeForThread(binding, thread),
+  );
+}
+
+function turnSettingsForThread(
+  binding: MessagingBindingRecord,
+  thread: NavigationThreadSummary | undefined,
+  executionResolution: ExecutionModeResolution,
+): {
+  executionMode?: ThreadExecutionMode;
+  fastMode?: boolean;
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+} {
   return {
-    executionMode: executionModeForBinding(binding, navigation),
+    executionMode: executionResolution.mode,
     fastMode: thread?.fastMode ?? binding.preferences?.fastMode,
     model: thread?.model ?? binding.preferences?.model,
     reasoningEffort: thread?.reasoningEffort ?? binding.preferences?.reasoningEffort,
@@ -721,6 +748,23 @@ type MessagingFullAccessControlsResolverFn = () =>
 type MessagingFullAccessControlsResolver =
   | MessagingFullAccessControls
   | MessagingFullAccessControlsResolverFn;
+
+function normalizeMessagingFullAccessControls(
+  resolved: MessagingFullAccessControls | undefined,
+): MessagingFullAccessControls {
+  return {
+    allowEscalation: resolved?.allowEscalation ?? true,
+    allowThreadResume: resolved?.allowThreadResume ?? true,
+    warningPolicy: resolved?.warningPolicy ?? "dismissable",
+    authorizedUsers: resolved?.authorizedUsers ?? {},
+    dismissWarning: resolved?.dismissWarning,
+    canDismissWarning: resolved?.canDismissWarning,
+  };
+}
+
+function isPromiseLike<T>(value: T | PromiseLike<T>): value is PromiseLike<T> {
+  return typeof (value as PromiseLike<T>)?.then === "function";
+}
 
 type FullAccessEscalationContext =
   | {
@@ -896,6 +940,8 @@ export type MessagingControllerOptions = {
   ) => Promise<MessagingResponseMode> | MessagingResponseMode;
   toolUpdateDefaultMode?: MessagingToolUpdateDefaultModeResolver;
   fullAccessControls?: MessagingFullAccessControlsResolver;
+  fullAccessControlsSource?: "dynamic" | "runtime-snapshot";
+  fullAccessPolicyRevision?: () => number;
   deliveryBudget?: MessagingDeliveryBudget;
   sleepUntil?: (retryAt: number, now: () => number) => Promise<void>;
   activityLog?: () => MessagingActivityLog;
@@ -4575,23 +4621,89 @@ export class MessagingController {
         );
       }
       this.markAdmissionStage(params.event, "originBuilt");
-      const turnSettings = turnSettingsForBinding(params.binding, navigation);
-      const executionResolution = resolveExecutionModeForBinding(
+      const targetThreadLookupStartedAt = this.now();
+      const targetThread = findThreadForBinding(navigation, params.binding);
+      const targetThreadLookupCompletedAt = this.now();
+      const executionModeResolutionStartedAt = this.now();
+      const executionResolution = resolveExecutionModeForThread(
         params.binding,
-        navigation,
+        targetThread,
       );
+      const executionModeResolutionCompletedAt = this.now();
+      const turnSettingsResolutionStartedAt = this.now();
+      const turnSettings = turnSettingsForThread(
+        params.binding,
+        targetThread,
+        executionResolution,
+      );
+      const turnSettingsResolutionCompletedAt = this.now();
       if (
         turnSettings.executionMode === "full-access" &&
-        !(await this.canUseFullAccessThread(params.binding, navigation))
+        targetThread?.executionMode === "full-access"
       ) {
-        await this.deliverFullAccessPolicyError(
-          params.binding,
-          params.event,
-          "Full Access threads cannot be resumed from messaging with the current settings.",
-        );
-        return "failed";
+        const fullAccessControlsLoadStartedAt = this.now();
+        const controlsResolution = this.resolveFullAccessControls();
+        const fullAccessControlsLoadAwaitCount = isPromiseLike(controlsResolution)
+          ? 1
+          : 0;
+        const controls = isPromiseLike(controlsResolution)
+          ? await controlsResolution
+          : controlsResolution;
+        const fullAccessControlsLoadCompletedAt = this.now();
+        const resumeSettingCheckStartedAt = this.now();
+        const allowed = controls.allowThreadResume;
+        const resumeSettingCheckCompletedAt = this.now();
+        const policyResolvedAt = this.now();
+        const controlsSource = this.options.fullAccessControlsSource
+          ?? (typeof this.options.fullAccessControls === "function"
+            ? "dynamic"
+            : "static");
+        this.markAdmissionStage(params.event, "policyResolved");
+        this.logger.info?.("messaging Full Access resume policy evaluated", {
+          inboundEventId: params.event?.id,
+          channel: params.binding.channel.channel,
+          allowed,
+          controlsSource,
+          policyRevision: this.options.fullAccessPolicyRevision?.(),
+          targetThreadFound: true,
+          targetThreadLookupMs:
+            targetThreadLookupCompletedAt - targetThreadLookupStartedAt,
+          executionModeResolutionMs:
+            executionModeResolutionCompletedAt - executionModeResolutionStartedAt,
+          turnSettingsResolutionMs:
+            turnSettingsResolutionCompletedAt - turnSettingsResolutionStartedAt,
+          fullAccessControlsLoadMs:
+            fullAccessControlsLoadCompletedAt - fullAccessControlsLoadStartedAt,
+          fullAccessControlsLoadAwaitCount,
+          settingsConfigReadMs:
+            controlsSource === "runtime-snapshot"
+              ? 0
+              : fullAccessControlsLoadCompletedAt - fullAccessControlsLoadStartedAt,
+          settingsConfigReadAwaitCount:
+            controlsSource === "runtime-snapshot"
+              ? 0
+              : fullAccessControlsLoadAwaitCount,
+          resumeSettingCheckMs:
+            resumeSettingCheckCompletedAt - resumeSettingCheckStartedAt,
+          authorizedUserPolicyCheckMs: 0,
+          authorizedUserPolicyCheckAwaitCount: 0,
+          allowedPathAuditPersistenceMs: 0,
+          allowedPathAuditPersistenceAwaitCount: 0,
+          fullAccessPolicyTotalMs: policyResolvedAt - targetThreadLookupStartedAt,
+        });
+        // Provider authorization already completed before turn admission.
+        // An allowed Full Access resume performs no audit or persistence.
+        if (!allowed) {
+          await this.deliverFullAccessPolicyError(
+            params.binding,
+            params.event,
+            "Full Access threads cannot be resumed from messaging with the current settings.",
+          );
+          return "failed";
+        }
+      } else {
+        this.markAdmissionStage(params.event, "policyResolved");
       }
-      this.markAdmissionStage(params.event, "policyResolved");
       // Diagnostic for #203-class regressions: a turn that the UI shows
       // as Default Access but routes to the Full Access codex client is
       // a silent security bug — the user thinks they're sandboxed but
@@ -13645,17 +13757,6 @@ export class MessagingController {
     return (await this.resolveFullAccessControls()).allowThreadResume;
   }
 
-  private async canUseFullAccessThread(
-    binding: MessagingBindingRecord,
-    navigation: NavigationSnapshot,
-  ): Promise<boolean> {
-    const thread = findThreadForBinding(navigation, binding);
-    if (thread?.executionMode !== "full-access") {
-      return true;
-    }
-    return await this.canResumeFullAccessThreads();
-  }
-
   private async resolveFullAccessRiskForSession(
     session: MessagingBrowseSessionRecord,
     event: MessagingInboundEvent,
@@ -13687,18 +13788,15 @@ export class MessagingController {
     return warning.shouldWarn ? "warning" : "accepted";
   }
 
-  private async resolveFullAccessControls(): Promise<MessagingFullAccessControls> {
+  private resolveFullAccessControls():
+    | MessagingFullAccessControls
+    | Promise<MessagingFullAccessControls> {
     const controls = this.options.fullAccessControls;
     const resolved =
-      typeof controls === "function" ? await controls() : controls;
-    return {
-      allowEscalation: resolved?.allowEscalation ?? true,
-      allowThreadResume: resolved?.allowThreadResume ?? true,
-      warningPolicy: resolved?.warningPolicy ?? "dismissable",
-      authorizedUsers: resolved?.authorizedUsers ?? {},
-      dismissWarning: resolved?.dismissWarning,
-      canDismissWarning: resolved?.canDismissWarning,
-    };
+      typeof controls === "function" ? controls() : controls;
+    return isPromiseLike(resolved)
+      ? Promise.resolve(resolved).then(normalizeMessagingFullAccessControls)
+      : normalizeMessagingFullAccessControls(resolved);
   }
 
   private async resolveFullAccessWarning(

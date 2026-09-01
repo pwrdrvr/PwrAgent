@@ -23,9 +23,11 @@ import type {
 import { PERMISSIVE_CAPABILITY_PROFILE } from "@pwragent/messaging-interface/testing";
 import type { MessagingBackendBridge } from "../messaging/core/messaging-adapter";
 import type { MessagingControllerDeliveryBudgetEvent } from "../messaging/core/messaging-controller";
+import type { DesktopMessagingConfig } from "../messaging/messaging-config";
 import type {
   DesktopMessagingAdapter,
   DesktopMessagingAdapterFactory,
+  DesktopMessagingConfigLoader,
   DesktopMessagingRuntime,
   MessagingAutomationInboundHandler,
   MessagingAutomationInboundMatcher,
@@ -125,6 +127,105 @@ describe("DesktopMessagingRuntime", () => {
     await expect(adapter.listener?.(invalidEvent)).rejects.toThrow(
       "omitted a finite first-boundary receivedAt",
     );
+  });
+
+  it("does not reload config to authorize an allowed Full Access bound reply", async () => {
+    const config = buildFullAccessRuntimeConfig(true);
+    let configLoadsAtStartTurn = -1;
+    const loadConfig = vi.fn()
+      .mockResolvedValueOnce(config)
+      // PDF policy remains outside this span and still resolves dynamically.
+      .mockResolvedValueOnce(config)
+      .mockResolvedValue(config);
+    const { runtime, adapter, bridge } = await createFullAccessRuntimeHarness(
+      loadConfig,
+    );
+    vi.mocked(bridge.startTurn).mockImplementation(async (request) => {
+      configLoadsAtStartTurn = loadConfig.mock.calls.length;
+      return {
+        backend: request.backend,
+        threadId: request.threadId,
+        turnId: "turn-1",
+      };
+    });
+
+    await runtime.start();
+    await adapter.listener!(buildTextEvent("continue"));
+
+    expect(bridge.startTurn).toHaveBeenCalledTimes(1);
+    expect(configLoadsAtStartTurn).toBe(2);
+    const policy = messagingLog.info.mock.calls.find(
+      (call) => call[0] === "messaging Full Access resume policy evaluated",
+    );
+    expect(policy?.[1]).toMatchObject({
+      inboundEventId: "event-text",
+      allowed: true,
+      controlsSource: "runtime-snapshot",
+      policyRevision: 1,
+      fullAccessControlsLoadAwaitCount: 0,
+      settingsConfigReadMs: 0,
+      settingsConfigReadAwaitCount: 0,
+      authorizedUserPolicyCheckAwaitCount: 0,
+      allowedPathAuditPersistenceAwaitCount: 0,
+    });
+  });
+
+  it("denies a Full Access bound reply from the applied runtime policy", async () => {
+    const { runtime, adapter, bridge } = await createFullAccessRuntimeHarness(
+      buildFullAccessRuntimeConfig(false),
+    );
+
+    await runtime.start();
+    await adapter.listener!(buildTextEvent("continue"));
+
+    expect(bridge.startTurn).not.toHaveBeenCalled();
+    expect(adapter.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Full Access blocked",
+      body: expect.stringContaining("cannot be resumed"),
+    });
+  });
+
+  it("applies a hot Full Access resume policy change without restarting adapters", async () => {
+    const { runtime, adapter, bridge } = await createFullAccessRuntimeHarness(
+      buildFullAccessRuntimeConfig(true),
+    );
+    await runtime.start();
+
+    await runtime.applyConfig(buildFullAccessRuntimeConfig(false));
+    await adapter.listener!(buildTextEvent("continue"));
+
+    expect(adapter.start).toHaveBeenCalledTimes(1);
+    expect(adapter.stop).not.toHaveBeenCalled();
+    expect(bridge.startTurn).not.toHaveBeenCalled();
+    expect(adapter.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Full Access blocked",
+    });
+  });
+
+  it("fails closed after a lifecycle config read fails", async () => {
+    const config = buildFullAccessRuntimeConfig(true);
+    const loadConfig = vi.fn()
+      .mockResolvedValueOnce(config)
+      .mockRejectedValueOnce(new Error("settings unavailable"))
+      // Keep the separately owned PDF setting read out of this policy test.
+      .mockResolvedValue(config);
+    const { runtime, adapter, bridge } = await createFullAccessRuntimeHarness(
+      loadConfig,
+    );
+    await runtime.start();
+
+    await expect(runtime.applyLatestConfig()).rejects.toThrow(
+      "settings unavailable",
+    );
+    await adapter.listener!(buildTextEvent("continue"));
+
+    expect(bridge.startTurn).not.toHaveBeenCalled();
+    expect(adapter.delivered.at(-1)).toMatchObject({
+      kind: "error",
+      title: "Full Access blocked",
+    });
   });
 
   it("subscribes only to federated bindings on running adapters", async () => {
@@ -3844,6 +3945,71 @@ function buildRejectedSlackEvent(
     receivedAt: 1234,
     reason: "unauthorized-actor",
   };
+}
+
+function buildFullAccessRuntimeConfig(
+  allowThreadResume: boolean,
+): DesktopMessagingConfig {
+  return {
+    inputDebounceMs: 0,
+    fullAccessControls: {
+      allowEscalation: true,
+      allowThreadResume,
+      warningPolicy: "dismissable",
+      authorizedUsers: {
+        telegram: [{ id: "user-1", displayName: "" }],
+      },
+    },
+    telegram: {
+      channel: "telegram",
+      botToken: "telegram-token",
+      authorizedActorIds: [{ id: "user-1", displayName: "" }],
+    },
+  };
+}
+
+async function createFullAccessRuntimeHarness(
+  config: DesktopMessagingConfig | DesktopMessagingConfigLoader,
+): Promise<{
+  adapter: ReturnType<typeof createAdapter>;
+  bridge: ReturnType<typeof createBackendBridge>;
+  runtime: DesktopMessagingRuntime;
+}> {
+  await prepareRuntimeStore();
+  const adapter = createAdapter("telegram");
+  const bridge = createBackendBridge();
+  const navigation = buildNavigationSnapshot();
+  vi.mocked(bridge.getNavigationSnapshot).mockResolvedValue({
+    ...navigation,
+    threads: [{
+      ...navigation.threads[0]!,
+      executionMode: "full-access",
+    }],
+  });
+  const { DesktopMessagingRuntime: Runtime } = await import(
+    "../messaging/messaging-runtime"
+  );
+  const runtime = trackRuntime(new Runtime({
+    adapterFactory: () => [adapter],
+    backendBridge: bridge,
+    config,
+  }));
+  const { getDesktopMessagingStore } = await import(
+    "../messaging/desktop-messaging-store"
+  );
+  await getDesktopMessagingStore().upsertBinding({
+    id: "binding:full-access",
+    channel: {
+      channel: "telegram",
+      conversation: { id: "chat-1", kind: "dm" },
+    },
+    backend: "codex",
+    threadId: "thread-1",
+    authorizedActorIds: ["user-1"],
+    createdAt: 1_000,
+    updatedAt: 1_000,
+  });
+  return { adapter, bridge, runtime };
 }
 
 async function createRuntimeHarness(options: {
