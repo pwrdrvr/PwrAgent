@@ -5917,40 +5917,95 @@ function attachReviewEntryReviewers(params: {
   return changed ? { ...params.replay, entries } : params.replay;
 }
 
-function mergeImmutableUsageActivities(params: {
+/**
+ * Weaves overlay-owned usage rows into one already-ordered transcript page.
+ *
+ * Placement is turn-anchored: a usage row is inserted after the last entry of
+ * its own turn *within this page*, and is omitted when that turn is not on
+ * this page at all. The transcript therefore drives which usage is sent, and
+ * a page never carries usage for turns the reader has not loaded.
+ *
+ * Scoping is what makes this correct, not just cheap. The overlay retains up
+ * to MAX_IMMUTABLE_USAGE_ACTIVITY_ENTRIES finalized rows spanning the whole
+ * thread, so merging all of them into the newest page put weeks-old usage
+ * under recent messages. Pages are cut on turn boundaries
+ * (findTurnPageStartIndex, and each page's cursor is its own first entry), so
+ * exactly one page owns any given turn. Where an older replay format forces
+ * entry-count paging and splits a turn, prependTranscriptHistoryPage already
+ * drops entry ids it has seen, so a row cannot render twice.
+ *
+ * One forward pass, O(page + usage). The previous per-activity filter and
+ * insert rebuilt the whole page array for each of up to 100 rows: 217,000
+ * element visits for a 500-entry page where 1,000 suffice.
+ */
+function mergeTurnAnchoredUsageActivities(params: {
   replay: AppServerThreadReplay;
   activities?: AppServerThreadActivityEntry[];
 }): AppServerThreadReplay {
-  const immutableUsageActivities = params.activities?.filter(
-    (activity) => {
-      const scope = usageActivityScope(activity);
-      return scope === "turn" || scope === "monitor";
-    },
-  );
-  if (!immutableUsageActivities?.length) {
+  const usageActivities = params.activities?.filter((activity) => {
+    const scope = usageActivityScope(activity);
+    return scope === "turn" || scope === "monitor";
+  });
+  if (!usageActivities?.length) {
     return params.replay;
   }
 
-  let entries = params.replay.entries;
-  for (const activity of immutableUsageActivities) {
-    const activityScope = usageActivityScope(activity);
-    const activityTurnId = activity.turn?.id;
-    entries = entries.filter((entry) => {
-      if (entry.id === activity.id) {
-        return false;
-      }
-      if (
-        activityScope === "turn" &&
-        activityTurnId &&
-        isUsageActivityEntry(entry) &&
-        entry.turn?.id === activityTurnId
-      ) {
-        const entryScope = usageActivityScope(entry);
-        return entryScope !== "latest-request" && entryScope !== "total";
-      }
-      return true;
-    });
-    entries = insertTranscriptEntry(entries, activity);
+  const lastEntryIndexByTurnId = new Map<string, number>();
+  for (let index = 0; index < params.replay.entries.length; index += 1) {
+    const turnId = params.replay.entries[index]?.turn?.id;
+    if (turnId) {
+      lastEntryIndexByTurnId.set(turnId, index);
+    }
+  }
+
+  const anchoredUsageByIndex = new Map<number, AppServerThreadActivityEntry[]>();
+  const anchoredUsageIds = new Set<string>();
+  const supersededTurnIds = new Set<string>();
+  for (const activity of usageActivities) {
+    const turnId = activity.turn?.id;
+    const anchorIndex = turnId === undefined
+      ? undefined
+      : lastEntryIndexByTurnId.get(turnId);
+    if (anchorIndex === undefined) {
+      continue;
+    }
+    const anchored = anchoredUsageByIndex.get(anchorIndex);
+    if (anchored) {
+      anchored.push(activity);
+    } else {
+      anchoredUsageByIndex.set(anchorIndex, [activity]);
+    }
+    anchoredUsageIds.add(activity.id);
+    // A finalized turn total supersedes the provider's narrower per-request
+    // rows for the same turn. Monitor usage annotates a delegated child and
+    // supersedes nothing.
+    if (turnId && usageActivityScope(activity) === "turn") {
+      supersededTurnIds.add(turnId);
+    }
+  }
+  if (anchoredUsageByIndex.size === 0) {
+    return params.replay;
+  }
+
+  const entries: AppServerThreadEntry[] = [];
+  for (let index = 0; index < params.replay.entries.length; index += 1) {
+    const entry = params.replay.entries[index]!;
+    const entryTurnId = entry.turn?.id;
+    const supersededByTurnTotal =
+      entryTurnId !== undefined
+      && supersededTurnIds.has(entryTurnId)
+      && isUsageActivityEntry(entry)
+      && (
+        usageActivityScope(entry) === "latest-request"
+        || usageActivityScope(entry) === "total"
+      );
+    if (!anchoredUsageIds.has(entry.id) && !supersededByTurnTotal) {
+      entries.push(entry);
+    }
+    const anchored = anchoredUsageByIndex.get(index);
+    if (anchored) {
+      entries.push(...anchored);
+    }
   }
 
   return {
@@ -10235,8 +10290,7 @@ export class DesktopBackendRegistry {
     // A managed review runs in a hidden child session, so its transcript
     // entries and its usage line live in this thread's overlay rather than in
     // the provider's rollout. Splice them back in on the same terms as the
-    // Codex path: only for a live, turn-bearing read, never into an older
-    // pagination page.
+    // Codex path.
     //
     // Only monitor-scope usage is merged here. Turn-scope usage is persisted
     // for ACP threads too, but merging it would also apply the Codex
@@ -10244,14 +10298,23 @@ export class DesktopBackendRegistry {
     // transcript change for every ACP thread, well beyond managed review.
     // Replaying turn-scope usage for ACP is worth doing deliberately, with
     // its own tests; it is not this change.
-    const appendTranscriptOverlays =
-      !request.before && request.includeTurns !== false;
+    //
+    // Usage merges into an older pagination page too. It is turn-anchored, so
+    // a page only ever receives usage for turns it actually carries, and the
+    // reader sees each row beside its own turn as history loads.
+    //
+    // Managed review entries stay on the live page only. They originate a
+    // turn rather than annotate one, so their turn id need not appear in the
+    // provider rollout at all and they have no anchor to page against.
+    const appendTranscriptOverlays = request.includeTurns !== false;
     const replayWithTranscriptOverlays = appendTranscriptOverlays
-      ? mergeImmutableUsageActivities({
-          replay: mergeManagedReviewEntries({
-            replay,
-            entries: overlay?.managedReviewEntries,
-          }),
+      ? mergeTurnAnchoredUsageActivities({
+          replay: request.before
+            ? replay
+            : mergeManagedReviewEntries({
+                replay,
+                entries: overlay?.managedReviewEntries,
+              }),
           activities: overlay?.immutableUsageActivities?.filter(
             (activity) => usageActivityScope(activity) === "monitor",
           ),
@@ -12025,13 +12088,17 @@ export class DesktopBackendRegistry {
             replay: replayWithEnvironment,
             entries: overlay?.managedReviewEntries,
           });
-    const replayWithImmutableUsage =
-      request.before || !shouldAppendTranscriptOverlays
-        ? replayWithManagedReviews
-        : mergeImmutableUsageActivities({
-            replay: replayWithManagedReviews,
-            activities: overlay?.immutableUsageActivities,
-          });
+    // Usage merges into an older pagination page too. It is turn-anchored, so
+    // a page only ever receives usage for turns it actually carries, and the
+    // reader sees each row beside its own turn as history loads. Managed
+    // reviews above stay on the live page: they originate a turn rather than
+    // annotate one, so they have no anchor to page against.
+    const replayWithImmutableUsage = shouldAppendTranscriptOverlays
+      ? mergeTurnAnchoredUsageActivities({
+          replay: replayWithManagedReviews,
+          activities: overlay?.immutableUsageActivities,
+        })
+      : replayWithManagedReviews;
     const messageIds = [
       ...replayWithImmutableUsage.entries.flatMap((entry) =>
         entry.type === "message" && entry.role === "user"
